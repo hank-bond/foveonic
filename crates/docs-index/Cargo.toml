@@ -1,0 +1,9 @@
+[package]
+name = "docs-index"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+regex = "1"

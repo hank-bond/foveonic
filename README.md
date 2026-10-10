@@ -1,16 +1,19 @@
 # Foveonic GPU
 
-An X3F-to-DNG processor: Sigma-like tone and color, with modern treatment of sensor noise, detail and dynamic range, and maximum useful editing latitude.
+A personal Merrill X3F processing app with a GUI and a batch CLI, focused on attractive photographs and further editing latitude.
 
-## Brief
+A shared shader-based image engine builds internal processing graphs from selected settings and algorithms. Separate output recipes produce compressed DNGs with editable samples and embedded looks, or TIFFs with white balance, color, and tone baked in.
 
-- Use three-layer sensor data for noise reduction, detail recovery, highlight recovery and monochrome conversion.
-- Use X3F calibration and color-mode metadata as the foundation, retaining distinct sRGB/AdobeRGB source-profile paths.
-- Bake sensor improvements into linear samples; keep color and tone presentation in DNG profiles.
-- Preserve signed values and useful headroom with float32 processing intermediates.
+Development starts with the shortest useful end-to-end conversion path. Detail recovery, denoising, and highlight reconstruction follow incrementally.
 
-## Initial scope
+## Project documents
 
-One statically configured CLI pipeline, implemented with Rust and `wgpu`/WGSL: Metal on macOS, Vulkan on Linux. Target roughly 1 GiB typical working memory and 2 GiB peak.
+Start at [`AGENTS.md`](./AGENTS.md) for repository instructions, specifications, and progress plans.
 
-Named stages can write diagnostic images, masks and measurements for photographic review. These boundaries support future interactive inspection; the initial product is a converter, not an editor.
+Maintain the documentation and Rust source indexes with:
+
+```sh
+cargo run -p docs-index
+cargo run -p docs-index -- --check
+cargo test -p docs-index
+```
