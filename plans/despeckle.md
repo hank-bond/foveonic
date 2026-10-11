@@ -1,5 +1,5 @@
 ---
-summary: "GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on."
+summary: "GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated."
 ---
 
 # Add reference despeckling
@@ -14,6 +14,7 @@ The owner approved the stage after the [two residual-defect diagnosis](./editor-
 - [x] Add typed graph operation, selective inspection, retained settings, and shared GUI/CLI controls/defaults.
 - [x] Test peaks/valleys, headroom clamping, margins, all layer combinations, sequential neighbors, independent toggles, and zero/positive Sensor gain.
 - [x] Check both known defects and all six originals, unchanged disabled output, photographic/native captures, timing, and memory.
+- [x] Import and frame the owner's SVG, generate transparent runtime PNG, and set window/macOS Dock icons.
 - [x] Update indexes and run workspace/ignored GPU tests, Clippy, formatting, and documentation checks.
 - [x] Owner authorized grouped commits after code and automated checks.
 - [ ] Owner photographic review and cross-platform runtime checks.
@@ -27,6 +28,10 @@ Reference `repair::bad_pixels` trims neighbor minima/maxima and uses unaffected 
 The independent stage uses unscaled selected WB factors and the native diagnostic's 1× threshold adjustment; it is not driven by reconstruction presets. Production noise-recipe coupling remains deferred. The [node audit](./ordered-repair-and-node-audit.md#despeckle-wb-scale-and-recipe-coupling) quantifies the additional sensitivity caused by using raw diagnostic WB thresholds on calibration's 2× WB signal. Positive Sensor gain is divided out during detection; correction acts on the scaled samples. Zero gain skips detection and stays black. Supported Merrill full-keep geometry aligns eight bands to 256-pixel blocks; unsupported geometry is rejected.
 
 `Settings::repair` now starts at `Some(Camera)` and `Settings::despeckle` at `true`. GUI checkboxes remain independent and session-only. CLI adds `--no-repair`, `--despeckle`, and `--no-despeckle`; `--repair-badness` still selects a manual cutoff. `despeckle.layers` is a selectively retained, cropped/oriented three-layer artifact. Earlier roots finish before preparation of either later stage.
+
+## Artwork
+
+The owner supplied `/Users/work/Downloads/logo.svg`, preserved in [`crates/foveonic-gui/assets/`](../crates/foveonic-gui/assets/AGENTS.md) alongside the editable revision. The initial static Dock override was subsequently replaced by a local macOS app bundle with native automatic light/dark appearances. Non-macOS window icons use the compiled default PNG. The [icon plan](./icon-background.md) records the selected workflow, composition, source preservation, and checks. Nothing was installed or published.
 
 ## Evidence
 

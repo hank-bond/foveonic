@@ -8,11 +8,15 @@ TIFF rendering and an opt-in full-resolution noise/detail baseline are implement
 
 ## Run the GUI
 
+On macOS 26 with Xcode 26 or later, build and launch the local app bundle:
+
 ```sh
-cargo run --release -p foveonic-gui -- {X3F_OR_FOLDER}
+python3 crates/foveonic-gui/build-macos-app.py -- {X3F_OR_FOLDER}
 ```
 
-The egui desktop app keeps an embedded-JPEG organizer, GPU image viewport, and tools visible in three resizable panes. Switch the organizer between icons and compact list; drag tool headers to reorder them or click to collapse. Tools include a draggable navigator (double-click to fit), current-buffer histogram/parade/waveform scopes, processing controls, and photographic metadata. Sliders have editable values and double-click reset. Focused value boxes support Up/Down nudging (0.1 for floats, 1 for integers unless overridden). One Sensor gain scales the calibrated layers before color conversion.
+This creates `target/release/Foveonic.app` and lets macOS select the light/dark icon according to system icon appearance settings. Nothing is installed or published. Omit the input to reopen the last folder; `--debug` selects the debug profile and `--build-only` skips launching. Other platforms use `cargo run --release -p foveonic-gui -- {X3F_OR_FOLDER}`.
+
+The egui desktop app uses the owner's [layered-X application icon](./crates/foveonic-gui/assets/AGENTS.md) and keeps an embedded-JPEG organizer, GPU image viewport, and tools visible in three resizable panes. Switch the organizer between icons and compact list; drag tool headers to reorder them or click to collapse. Tools include a draggable navigator (double-click to fit), current-buffer histogram/parade/waveform scopes, processing controls, and photographic metadata. Sliders have editable values and double-click reset. Focused value boxes support Up/Down nudging (0.1 for floats, 1 for integers unless overridden). One Sensor gain scales the calibrated layers before color conversion.
 
 Selection renders automatically using the X3F's recorded WB and color mode; `--wb`/`--mode` override them. Inspection offers visual image buffers, including grayscale sensor layers; non-image node diagnostics are deferred. Export always runs the final TIFF recipe. UI layout, scope/organizer choices, and the last opened folder persist; an explicit launch path takes precedence. Editing changes remain session-only. A bar below the image shows capture settings, filename, and visible image-pixel bounds. Inspect groups RGB channels and sensor layers under their processing buffers. Presentation uses sRGB SDR; monitor-profile correction is pending. Scopes show values in the buffer's signal space.
 

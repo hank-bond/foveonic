@@ -3,6 +3,7 @@
 mod advanced;
 mod browser;
 mod controls;
+mod icon;
 mod information;
 mod inspect;
 mod metadata;
@@ -501,6 +502,7 @@ fn main() -> eframe::Result {
             .map(|d| d.join("app.ron")),
         viewport: egui::ViewportBuilder::default()
             .with_app_id(preferences::APP_ID)
+            .with_icon(icon::window_icon())
             .with_inner_size([1440., 1000.])
             .with_min_inner_size([1000., 600.]),
         wgpu_options: egui_wgpu::WgpuConfiguration {
