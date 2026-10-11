@@ -1,4 +1,4 @@
-//! Persists organizer, scope, and tool-section preferences.
+//! Persists the last organizer folder, scope, and tool-section preferences separately from image edits.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -39,6 +39,7 @@ impl Section {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    pub last_folder: Option<std::path::PathBuf>,
     pub organizer: Organizer,
     pub scope: Scope,
     pub sections: Vec<Section>,
@@ -47,6 +48,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            last_folder: None,
             organizer: Organizer::Icons,
             scope: Scope::Histogram,
             sections: Section::ALL.to_vec(),
@@ -69,6 +71,15 @@ impl Preferences {
             if seen.insert(section) {
                 self.sections.push(section);
             }
+        }
+    }
+    /// An explicit launch path wins; a stale saved folder is left for the app to report gracefully.
+    pub fn startup_path(&self, explicit: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+        explicit.or_else(|| self.last_folder.clone())
+    }
+    pub fn remember_folder(&mut self, path: &std::path::Path) {
+        if let Ok(folder) = std::fs::canonicalize(path) {
+            self.last_folder = Some(folder);
         }
     }
     pub fn save(&self, storage: &mut dyn eframe::Storage) {
@@ -101,6 +112,20 @@ mod tests {
             self.0.insert(k.into(), v);
         }
         fn flush(&mut self) {}
+    }
+    #[test]
+    fn last_folder_survives_restart_and_explicit_launch_wins() {
+        let mut prefs = Preferences::default();
+        let folder = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        prefs.remember_folder(&folder);
+        prefs.remember_folder(&folder.join("foveonic-nonexistent-saved-folder"));
+        assert_eq!(prefs.last_folder.as_ref(), Some(&folder));
+        let mut store = Storage::default();
+        prefs.save(&mut store);
+        let loaded = Preferences::load(Some(&store));
+        assert_eq!(loaded.startup_path(None), Some(folder));
+        let explicit = std::path::PathBuf::from("explicit.x3f");
+        assert_eq!(loaded.startup_path(Some(explicit.clone())), Some(explicit));
     }
     #[test]
     fn layout_round_trip_and_reorder() {

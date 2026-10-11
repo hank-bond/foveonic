@@ -15,7 +15,7 @@ The plans outline implementation work for review. Implementation begins with own
 - **[camera-repair-default](./camera-repair-default.md)** Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
 - **[despeckle](./despeckle.md)** GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on.
 - **[detail-and-noise](./detail-and-noise.md)** The reference-style full-resolution noise/detail shader slice is implemented and validated, with owner photographic review pending.
-- **[editor-review-focus](./editor-review-focus.md)** Linked reconstruction controls, grouped inspection and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
+- **[editor-review-focus](./editor-review-focus.md)** Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** Ordered camera repair fixes the leaf defect; the node audit identifies remaining camera coverage and WB-scale gaps.

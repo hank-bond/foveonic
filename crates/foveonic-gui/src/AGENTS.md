@@ -23,7 +23,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[inspect.rs](./inspect.rs)** Groups pipeline buffers and component views in one inspection selector without scheduling component-only changes.
 - **[main.rs](./main.rs)** Runs a three-pane Merrill workspace with current-buffer inspection, reorderable tools, and UI-only persistence.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
-- **[preferences.rs](./preferences.rs)** Persists organizer, scope, and tool-section preferences.
+- **[preferences.rs](./preferences.rs)** Persists the last organizer folder, scope, and tool-section preferences separately from image edits.
 - **[scopes.rs](./scopes.rs)** Displays sampled current-buffer histograms and density scopes with explicit signal meaning and range diagnostics.
 - **[sections.rs](./sections.rs)** Draws collapse/drag headers and accepts section drops only inside the tools pane.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks using isolated preferences and real egui/wgpu frames.

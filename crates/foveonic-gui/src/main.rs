@@ -61,6 +61,7 @@ impl App {
         )?;
         let overrides = [settings.white_balance.clone(), settings.color_mode.clone()];
         let preferences = preferences::Preferences::load(cc.storage);
+        let path = preferences.startup_path(path);
         let mut app = Self {
             browser: browser::Browser::new(cc.egui_ctx.clone()),
             worker: worker::Worker::new(engine, cc.egui_ctx.clone()),
@@ -90,6 +91,14 @@ impl App {
     fn open(&mut self, path: PathBuf) {
         match self.browser.open(&path) {
             Ok(()) => {
+                let folder = if path.is_dir() {
+                    path.as_path()
+                } else {
+                    path.parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .unwrap_or(std::path::Path::new("."))
+                };
+                self.preferences.remember_folder(folder);
                 let selected = if path.is_file() {
                     Some(path)
                 } else {
@@ -110,7 +119,7 @@ impl App {
                     self.status = "No X3F files in this folder".into();
                 }
             }
-            Err(e) => self.status = e.to_string(),
+            Err(e) => self.status = format!("Cannot open {}: {e}", path.display()),
         }
     }
     fn select(&mut self, path: PathBuf) {

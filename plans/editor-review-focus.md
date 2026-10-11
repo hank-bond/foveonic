@@ -1,5 +1,5 @@
 ---
-summary: "Linked reconstruction controls, grouped inspection and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage."
+summary: "Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage."
 ---
 
 # Implement editor review focuses
@@ -13,7 +13,7 @@ Requirements: [GUI workspace](../docs/specs/gui-workspace.md), [information bar]
 - [x] Record the owner's focuses before inspecting the supplied screenshots.
 - [x] Implement preset-linked advanced fields, captured overrides, darker/read-only linked styling, and shared GUI/engine calculation.
 - [x] Fold RGB channels and sensor layers into the grouped Inspect menu; reuse textures for component changes.
-- [ ] Persist and reopen the last successful folder, respect explicit launch paths, and report stale paths without opening their parents.
+- [x] Persist and reopen the last successful folder, respect explicit launch paths, and report stale paths without opening their parents.
 - [x] Add capture settings / centered filename / visible image-pixel bounds below the viewport.
 - [x] Use the cropped/oriented image grid, 0-based inclusive bounds, and visible pixel counts including partial boundary pixels.
 - [x] Implement per-source automatic repair cutoff and explicit GUI/CLI override.

@@ -318,7 +318,9 @@ impl App {
                 "collapsed" => self.preferences.toggle(Section::Editing),
                 name => {
                     self.viewport.reset();
+                    let last_folder = self.preferences.last_folder.clone();
                     self.preferences = Default::default();
+                    self.preferences.last_folder = last_folder;
                     self.output = name.into();
                     self.submit(None);
                 }

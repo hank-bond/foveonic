@@ -76,10 +76,18 @@ impl Browser {
         }
     }
     pub fn open(&mut self, path: &Path) -> std::io::Result<()> {
-        let dir = if path.is_dir() {
+        let info = std::fs::metadata(path)?;
+        let dir = if info.is_dir() {
             path
+        } else if info.is_file() {
+            path.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
         } else {
-            path.parent().unwrap_or(Path::new("."))
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "not a file or folder",
+            ));
         };
         let mut files = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -261,6 +269,15 @@ fn icon_columns(width: f32) -> usize {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unavailable_folder_does_not_open_its_parent_or_replace_the_organizer() {
+        let mut browser = super::Browser::new(eframe::egui::Context::default());
+        browser.files = vec![std::path::PathBuf::from("retained.x3f")];
+        let missing =
+            std::env::temp_dir().join(format!("foveonic-missing-folder-{}", std::process::id()));
+        assert!(browser.open(&missing).is_err());
+        assert_eq!(browser.files, [std::path::PathBuf::from("retained.x3f")]);
+    }
     #[test]
     fn pane_width_reflows_icon_columns() {
         for (width, count) in [(150., 1), (280., 1), (330., 2), (500., 3)] {
