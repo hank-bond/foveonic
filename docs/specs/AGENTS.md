@@ -15,5 +15,6 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[application-workflows](./application-workflows.md)** _(accepted, incomplete, reference)._ A personal Merrill X3F app shares processing settings and one image engine between its GUI and batch CLI.
 - **[output-strategies](./output-strategies.md)** _(accepted, incomplete, reference)._ Compressed DNG preserves editing latitude and embeds color-mode presentation, while TIFF bakes the selected rendering.
 - **[processing-graphs](./processing-graphs.md)** _(accepted, incomplete, reference)._ Internal processing DAGs use typed connections, shared metadata, node settings, and selectable algorithms for sensor and tone processing.
+- **[render-resources](./render-resources.md)** _(accepted, conforming, reference)._ Owned GPU render results separate image processing from display and export, with explicit pixel meaning and geometry.
 
 <!-- INDEX:END -->

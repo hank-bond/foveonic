@@ -14,5 +14,7 @@ The plans outline implementation work for review. Implementation begins with own
 
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
+- **[render-resources-and-optimization](./render-resources-and-optimization.md)** Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
+- **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
 
 <!-- INDEX:END -->

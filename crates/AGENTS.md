@@ -13,5 +13,6 @@ Read a crate's local instructions before changing it. Follow [`contributing.md`]
 ### Directories
 
 - **[docs-index/](./docs-index/AGENTS.md)** The Rust documentation tool generates directory indexes and checks document fields, titles, and relative links.
+- **[foveonic/](./foveonic/AGENTS.md)** The processor crate decodes Merrill X3Fs and renders RGB16 TIFFs through a shared GPU graph.
 
 <!-- INDEX:END -->
