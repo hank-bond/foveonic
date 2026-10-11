@@ -38,6 +38,53 @@ fn metadata_preserves_matrix_encoding_and_property_order() {
 }
 
 #[test]
+fn recorded_camera_choices_resolve_aliases_and_reject_unknown_presets() {
+    let mut metadata = Metadata {
+        width: 1,
+        height: 1,
+        rotation: 0,
+        properties: [
+            ("WB_DESC".into(), " Daylight ".into()),
+            ("CM_DESC".into(), "vivid".into()),
+        ]
+        .into(),
+        matrices: BTreeMap::new(),
+        lists: [
+            (
+                "WhiteBalanceGains".into(),
+                PropertyList::new(vec![
+                    ("Sunlight".into(), "s".into()),
+                    ("Auto".into(), "a".into()),
+                    ("Custom".into(), "c".into()),
+                ])
+                .unwrap(),
+            ),
+            (
+                "ColorModeCompensations".into(),
+                PropertyList::new(vec![
+                    ("Standard".into(), "s".into()),
+                    ("Vivid".into(), "v".into()),
+                ])
+                .unwrap(),
+            ),
+        ]
+        .into(),
+    };
+    assert_eq!(metadata.recorded_white_balance().unwrap(), "Sunlight");
+    assert_eq!(metadata.recorded_color_mode().unwrap(), "Vivid");
+    for name in ["Auto", "Custom"] {
+        metadata.properties.insert("WB_DESC".into(), name.into());
+        assert_eq!(metadata.recorded_white_balance().unwrap(), name);
+    }
+    metadata
+        .properties
+        .insert("WB_DESC".into(), "Unknown".into());
+    assert!(metadata.recorded_white_balance().is_err());
+    metadata.properties.remove("CM_DESC");
+    assert!(metadata.recorded_color_mode().is_err());
+}
+
+#[test]
 fn matrix_lookup_preserves_names_and_ignores_ascii_case() {
     let metadata = Metadata {
         width: 0,

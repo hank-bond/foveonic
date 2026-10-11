@@ -22,7 +22,7 @@ Options (also available for batch):
   --shadows VALUE           -2..2, default 0
   --highlights VALUE        -2..2, default 0
   --saturation FACTOR       Nonnegative, default 1; 0 produces grayscale
-  --channel-gains R,G,B      Nonnegative RGB factors before tone, default 1,1,1
+  --sensor-gain FACTOR      Nonnegative uniform sensor-layer multiplier, default 1
   --color-dq-gain FACTOR     Camera ColorDQ amplitude multiplier, default 0 (off)
   --repair-badness MIN       Select isolated camera-record repairs; 0..15
   --sharpen AMOUNT           Nonnegative unsharp-mask amount, default 0 (off)
@@ -59,15 +59,7 @@ fn parse_settings(args: impl Iterator<Item = OsString>) -> Result<(Settings, Vec
             "--shadows" => settings.tone.shadows = value.parse()?,
             "--highlights" => settings.tone.highlights = value.parse()?,
             "--saturation" => settings.saturation = value.parse()?,
-            "--channel-gains" => {
-                let values: Vec<f32> = value
-                    .split(',')
-                    .map(str::parse)
-                    .collect::<std::result::Result<_, _>>()?;
-                settings.channel_gains = values
-                    .try_into()
-                    .map_err(|_| "channel gains require R,G,B")?;
-            }
+            "--sensor-gain" => settings.sensor_gain = value.parse()?,
             "--color-dq-gain" => settings.color_dq_gain = value.parse()?,
             "--repair-badness" => settings.repair_badness = Some(value.parse()?),
             "--sharpen" => settings.sharpen_amount = value.parse()?,
@@ -240,18 +232,18 @@ mod tests {
         assert!(parse("--profile --wb Sunlight --mode Standard").unwrap().2);
         assert!(paths.is_empty());
         assert_eq!(neutral.exposure, 0.);
-        assert_eq!(neutral.channel_gains, [1.; 3]);
+        assert_eq!(neutral.sensor_gain, 1.);
         assert_eq!(neutral.saturation, 1.);
         assert_eq!(neutral.color_dq_gain, 0.);
         assert_eq!(neutral.sharpen_amount, 0.);
         assert!(neutral.repair_badness.is_none());
         assert!(neutral.output_size.is_none());
-        let (settings, paths, _) = parse("a.x3f --wb Auto --mode Vivid --contrast 0.5 --shadows -1 --highlights 1 --channel-gains 1,0.8,0.9 --saturation 1.2 --color-dq-gain 1.5 --repair-badness 8 --sharpen 0.5 --sharpen-radius 1.5 --size 600x400 b.x3f").unwrap();
+        let (settings, paths, _) = parse("a.x3f --wb Auto --mode Vivid --contrast 0.5 --shadows -1 --highlights 1 --sensor-gain 1.3 --saturation 1.2 --color-dq-gain 1.5 --repair-badness 8 --sharpen 0.5 --sharpen-radius 1.5 --size 600x400 b.x3f").unwrap();
         assert_eq!(paths, [PathBuf::from("a.x3f"), PathBuf::from("b.x3f")]);
         assert_eq!(settings.tone.contrast, 0.5);
         assert_eq!(settings.tone.shadows, -1.);
         assert_eq!(settings.tone.highlights, 1.);
-        assert_eq!(settings.channel_gains, [1., 0.8, 0.9]);
+        assert_eq!(settings.sensor_gain, 1.3);
         assert_eq!(settings.output_size, Some([600, 400]));
         assert_eq!(settings.color_dq_gain, 1.5);
         assert_eq!(
@@ -264,7 +256,10 @@ mod tests {
         for invalid in [
             "--contrast NaN",
             "--shadows 3",
-            "--channel-gains 1,2",
+            "--channel-gains 1,1,1", // retired CLI option
+            "--sensor-gain -1",
+            "--sensor-gain NaN",
+            "--sensor-gain inf",
             "--saturation -1",
             "--color-dq-gain -1",
             "--color-dq-gain NaN",

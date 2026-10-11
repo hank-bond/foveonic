@@ -70,6 +70,23 @@ pub fn rectangle(metadata: &Metadata, name: &str) -> Result<[u32; 4]> {
     Ok([left, top, right + 1, bottom + 1])
 }
 
+pub fn black(metadata: &Metadata) -> Result<CalibrationParams> {
+    let dark = rectangle(metadata, "DarkShieldTop")?;
+    let dark_count = (dark[2] - dark[0]) * (dark[3] - dark[1]);
+    // Histogram sums use u32 and raw Merrill samples are twelve-bit integers.
+    if !(3..=u32::MAX / 4095).contains(&dark_count) {
+        return Err("unsupported dark-shield count".into());
+    }
+    Ok(CalibrationParams {
+        source: [metadata.width as u32, metadata.height as u32, dark_count, 0],
+        dark,
+        gains: [0.; 4],
+        shading: [0.; 4],
+        shading_geometry: [0.; 4],
+        grids: [[0; 4]; 3],
+    })
+}
+
 pub fn prepare(metadata: &Metadata, wb: &str) -> Result<Calibration> {
     let aperture: f32 = metadata
         .properties
@@ -121,12 +138,7 @@ pub fn prepare(metadata: &Metadata, wb: &str) -> Result<Calibration> {
     if radius <= 0. || !radius.is_finite() {
         return Err("invalid shading geometry".into());
     }
-    let dark = rectangle(metadata, "DarkShieldTop")?;
-    let dark_count = (dark[2] - dark[0]) * (dark[3] - dark[1]);
-    // Histogram sums use u32 and raw Merrill samples are twelve-bit integers.
-    if !(3..=u32::MAX / 4095).contains(&dark_count) {
-        return Err("unsupported dark-shield count".into());
-    }
+    let black = black(metadata)?;
     let mut grid_values = Vec::new();
     let mut grids = [[0; 4]; 3];
     for (c, table) in tables.into_iter().enumerate() {
@@ -140,8 +152,8 @@ pub fn prepare(metadata: &Metadata, wb: &str) -> Result<Calibration> {
     }
     Ok(Calibration {
         params: CalibrationParams {
-            source: [metadata.width as u32, metadata.height as u32, dark_count, 0],
-            dark,
+            source: black.source,
+            dark: black.dark,
             gains: [gains[0], gains[1], gains[2], 0.],
             shading: shading.map(|v| v as f32),
             shading_geometry: [left + half_width, top + half_height, radius, 0.],

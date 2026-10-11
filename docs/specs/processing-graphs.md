@@ -15,6 +15,7 @@ implementation: incomplete
 - Connections **must** identify the supported data format and processing space. The graph **must** reject incompatible connections.
 - Nodes **must** be able to access the input file's metadata.
 - The graph **must** distinguish sensor-signal processing from color and tone processing.
+- Global Sensor gain **must** multiply all three calibrated, black-corrected sensor layers equally before repair and color conversion, preserving negative samples and headroom. Neutral gain is 1×; shared GUI/CLI settings **must** accept finite nonnegative factors.
 - Supported operations **must** allow alternative algorithm implementations with their own settings and dependencies.
 - User-adjustable values **must** be node settings. Graph structure and wiring remain internal to the application.
 - Nodes **may** keep intermediate data internal, including color fields created during highlight reconstruction.

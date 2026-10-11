@@ -24,14 +24,17 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
 - **[graph.rs](./graph.rs)** Builds typed, dependency-ordered image graphs and validates their connections.
 - **[image.rs](./image.rs)** Describes owned GPU image snapshots, their source context, and logical output views.
+- **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
 - **[lib.rs](./lib.rs)** Provides Merrill source decoding and a shared GPU TIFF rendering engine.
 - **[main.rs](./main.rs)** Inspects Merrill X3Fs and exports single images or batches through shared TIFF settings.
 - **[output.rs](./output.rs)** Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
+- **[preview.rs](./preview.rs)** Reads embedded JPEG previews and presentation dimensions from X3F sections.
 - **[profile.rs](./profile.rs)** Collects lightweight host wall timings and optional GPU timestamp measurements.
 - **[render.rs](./render.rs)** Builds typed processing and export recipes around owned GPU images and execution-local scratch.
 - **[repair.rs](./repair.rs)** Expands selected camera bad-pixel records into an immutable per-pixel repair map.
+- **[scopes.rs](./scopes.rs)** Samples the current floating GPU buffer into compact histogram and waveform counts.
 - **[scratch.rs](./scratch.rs)** Reuses exclusively owned, fully overwritten buffers within one ordered graph execution.
-- **[source.rs](./source.rs)** Owns decoded Merrill samples and typed metadata without photographic adjustments.
+- **[source.rs](./source.rs)** Owns original Merrill sensor samples and typed camera metadata.
 - **[spatial_tables.rs](./spatial_tables.rs)** Prepare Merrill spatial gain grids from camera byte tables, aperture, focus, and chief-ray angle.
 - **[tone.rs](./tone.rs)** Prepares a camera-derived color-mode tone table for application in a shader.
 

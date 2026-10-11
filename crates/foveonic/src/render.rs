@@ -20,8 +20,8 @@ pub struct Settings {
     /// Stops applied to linear RGB before the camera-derived tone curve.
     pub exposure: f32,
     pub tone: ToneControls,
-    /// RGB multipliers in the file's working color space, before tone.
-    pub channel_gains: [f32; 3],
+    /// Uniform multiplier for calibrated, black-corrected sensor layers before repair and color conversion.
+    pub sensor_gain: f32,
     /// A factor after tone: zero is grayscale, one leaves saturation unchanged.
     pub saturation: f32,
     /// Multiplies camera ColorDQ amplitudes after camera color conversion; zero omits conditioning.
@@ -43,7 +43,7 @@ impl Settings {
             color_mode: color_mode.into(),
             exposure: 0.,
             tone: ToneControls::default(),
-            channel_gains: [1.; 3],
+            sensor_gain: 1.,
             saturation: 1.,
             color_dq_gain: 0.,
             repair_badness: None,
@@ -57,6 +57,11 @@ impl Settings {
         if self.white_balance.is_empty() || self.color_mode.is_empty() {
             return Err("--wb and --mode are required".into());
         }
+        self.validate_values()
+    }
+
+    /// Numeric validation is shared; inspection resolves WB/mode only when its stages need them.
+    fn validate_values(&self) -> Result<()> {
         if !self.exposure.is_finite()
             || !self.exposure.exp2().is_finite()
             || self.exposure.exp2() <= 0.
@@ -69,14 +74,12 @@ impl Settings {
         {
             return Err("contrast, shadows, and highlights must be in -2..2".into());
         }
-        if self
-            .channel_gains
+        if [self.sensor_gain, self.saturation, self.sharpen_amount]
             .iter()
-            .chain([&self.saturation, &self.sharpen_amount])
             .any(|v| !v.is_finite() || *v < 0.)
         {
             return Err(
-                "channel gains, saturation, and sharpening must be finite and nonnegative".into(),
+                "sensor gain, saturation, and sharpening must be finite and nonnegative".into(),
             );
         }
         if !self.color_dq_gain.is_finite() || self.color_dq_gain < 0. {
@@ -110,17 +113,17 @@ fn gaussian_weights(sigma: f32) -> Vec<f32> {
     weights
 }
 
-fn gains(dimensions: [u32; 4], values: [f32; 3]) -> calibration::ColorParams {
+fn sensor_gain(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
     calibration::ColorParams {
         source: dimensions,
         matrix: std::array::from_fn(|row| {
-            std::array::from_fn(|col| if row == col { values[row] } else { 0. })
+            std::array::from_fn(|col| if row == col { factor } else { 0. })
         }),
     }
 }
 
 fn saturation(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
-    // Reference-style brightness weights; do not clamp RGB until output encoding.
+    // Reference-style brightness weights preserve signed RGB and headroom.
     let luma = [0.299, 0.587, 0.114];
     calibration::ColorParams {
         source: dimensions,
@@ -166,11 +169,12 @@ struct Value {
 fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
     let (layout, space) = match data {
         DataType::SensorLayers => (Layout::Rgb32Float, Space::SensorLayers),
+        DataType::ScalarField => (Layout::Scalar32Float, Space::ScalarField),
         DataType::CalibratedLayers => (Layout::Rgb32Float, Space::CalibratedLayers),
         DataType::LinearRgb(space) => (Layout::Rgb32Float, Space::LinearRgb(space)),
         DataType::ToneMappedRgb(space) => (Layout::Rgb32Float, Space::ToneMappedRgb(space)),
         DataType::EncodedRgb16(space) => (Layout::PackedRgb16, Space::EncodedRgb16(space)),
-        DataType::BlackLevels | DataType::File => return None,
+        DataType::BlackLevels | DataType::Histogram | DataType::File => return None,
     };
     Some(Description {
         extent,
@@ -211,12 +215,28 @@ impl Engine {
     pub fn queue(&self) -> &wgpu::Queue {
         &self.gpu.queue
     }
+    /// Analyze the retained buffer in its logical view.
+    pub fn scopes(
+        &self,
+        image: &RenderedImage,
+        profile: &mut Profile,
+    ) -> Result<crate::scopes::Scopes> {
+        self.check_owner(image)?;
+        if !matches!(
+            image.description.layout,
+            Layout::Rgb32Float | Layout::Scalar32Float
+        ) {
+            return Err("scope analysis requires floating image storage".into());
+        }
+        crate::scopes::analyze(&self.gpu, image, profile)
+    }
+
     pub fn adapter_name(&self) -> &str {
         &self.gpu.adapter_name
     }
 
-    /// Returns owned full-sensor, tone-mapped floating RGB with a separate logical output view.
-    /// No pixel readback or export is required. Disabled profiling does not wait for GPU completion.
+    /// Returns owned full-sensor, tone-mapped floating RGB with a logical output view.
+    /// Unprofiled rendering returns after GPU submission; profiled rendering waits for timing results.
     pub fn render(
         &self,
         source: &Source,
@@ -224,22 +244,32 @@ impl Engine {
         profile: &mut Profile,
     ) -> Result<RenderedImage> {
         settings.validate()?;
+        let artifact = self
+            .render_artifacts(source, settings, &["final"], profile)?
+            .pop()
+            .ok_or("missing final image")?;
+        let crate::inspection::Content::Image(image) = artifact.content else {
+            return Err("final output is not an image".into());
+        };
+        Ok(image)
+    }
+
+    /// Request stable named outputs. Only their dependencies execute; other outputs are transient.
+    pub fn render_artifacts(
+        &self,
+        source: &Source,
+        settings: &Settings,
+        names: &[&str],
+        profile: &mut Profile,
+    ) -> Result<Vec<crate::inspection::Artifact>> {
+        settings.validate_values()?;
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
         if profile.enabled {
             profile.host.extend_from_slice(source.load_timings());
         }
         let space = ColorSpace::from_metadata(&source.metadata)?;
-        let mode = profile.measure("prepare color mode", || {
-            crate::color_mode::prepare(&source.metadata, &settings.color_mode)
-        })?;
-        let calibration = profile.measure("prepare calibration", || {
-            calibration::prepare(&source.metadata, &settings.white_balance)
-        })?;
-        let color = profile.measure("prepare color matrix", || {
-            calibration::color(&source.metadata, &settings.white_balance, &mode)
-        })?;
-        let curve = profile.measure("prepare tone curve", || {
-            crate::tone::prepare(&source.metadata, &mode, settings.tone)
-        })?;
         let mut params = calibration::encode(&source.metadata, space)?;
         if let Some(size) = settings.output_size {
             params.output[..2].copy_from_slice(&size);
@@ -253,14 +283,51 @@ impl Engine {
         ];
         let mut graph = Graph::default();
         let input = graph.add(Operation::Source, &[])?;
-        let black = graph.add(Operation::Black(calibration.params), &[input])?;
+        macro_rules! finish {
+            () => {
+                if !names.contains(&"final")
+                    && names
+                        .iter()
+                        .all(|name| graph.outputs.iter().any(|o| o.name == *name))
+                {
+                    return self.collect_artifacts(
+                        source, settings, &graph, input, names, params, profile,
+                    );
+                }
+            };
+        }
+        finish!();
+        let black_params =
+            profile.measure("prepare black", || calibration::black(&source.metadata))?;
+        let black = graph.add(Operation::Black(black_params), &[input])?;
+        finish!();
+        let calibration = profile.measure("prepare calibration", || {
+            calibration::prepare(&source.metadata, &settings.white_balance)
+        })?;
         let mut calibrated = graph.add(Operation::Calibrate(calibration), &[input, black])?;
+        finish!();
+        if settings.sensor_gain != 1. {
+            calibrated = graph.add(
+                Operation::SensorGain {
+                    factor: settings.sensor_gain,
+                },
+                &[calibrated],
+            )?;
+            finish!();
+        }
         if let Some(minimum) = settings.repair_badness {
             let flags = profile.measure("prepare repair map", || {
                 crate::repair::flags(&source.metadata, minimum)
             })?;
             calibrated = graph.add(Operation::Repair { flags }, &[calibrated])?;
+            finish!();
         }
+        let mode = profile.measure("prepare color mode", || {
+            crate::color_mode::prepare(&source.metadata, &settings.color_mode)
+        })?;
+        let color = profile.measure("prepare color matrix", || {
+            calibration::color(&source.metadata, &settings.white_balance, &mode)
+        })?;
         let mut linear = graph.add(
             Operation::Color {
                 params: color,
@@ -268,21 +335,17 @@ impl Engine {
             },
             &[calibrated],
         )?;
+        finish!();
         if settings.color_dq_gain > 0. {
             let table = profile.measure("prepare ColorDQ", || {
                 crate::color_dq::prepare(&source.metadata, settings.color_dq_gain)
             })?;
             linear = graph.add(Operation::ColorDq { table, space }, &[linear])?;
+            finish!();
         }
-        if settings.channel_gains != [1.; 3] {
-            linear = graph.add(
-                Operation::Gains {
-                    params: gains(dimensions, settings.channel_gains),
-                    space,
-                },
-                &[linear],
-            )?;
-        }
+        let curve = profile.measure("prepare tone curve", || {
+            crate::tone::prepare(&source.metadata, &mode, settings.tone)
+        })?;
         let mut toned = graph.add(
             Operation::Tone {
                 curve,
@@ -291,6 +354,7 @@ impl Engine {
             },
             &[linear],
         )?;
+        finish!();
         if settings.saturation != 1. {
             toned = graph.add(
                 Operation::Saturation {
@@ -299,6 +363,7 @@ impl Engine {
                 },
                 &[toned],
             )?;
+            finish!();
         }
         if settings.sharpen_amount > 0. {
             let weights = gaussian_weights(settings.sharpen_radius);
@@ -310,6 +375,7 @@ impl Engine {
                 },
                 &[toned],
             )?;
+            finish!();
             let blurred = graph.add(
                 Operation::Blur {
                     axis: 1,
@@ -318,6 +384,7 @@ impl Engine {
                 },
                 &[horizontal],
             )?;
+            finish!();
             toned = graph.add(
                 Operation::Sharpen {
                     amount: settings.sharpen_amount,
@@ -326,24 +393,91 @@ impl Engine {
                 &[toned, blurred],
             )?;
         }
-        let value = self
-            .execute(Input::Source(source), &graph, Some(toned), profile)?
-            .expect("requested graph result");
-        Ok(RenderedImage {
-            buffer: value.buffer,
-            description: value.description.expect("rendered image description"),
-            view: View {
-                crop: params.crop,
-                rotation: params.source[2],
-                extent: [params.output[0], params.output[1]],
-            },
-            metadata: source.metadata.clone(),
-            settings: settings.clone(),
-            owner: self.owner.clone(),
-        })
+        self.collect_artifacts(source, settings, &graph, toned, names, params, profile)
     }
 
-    /// Exports an image created by this engine, without rerunning its processing recipe.
+    #[allow(clippy::too_many_arguments)]
+    fn collect_artifacts(
+        &self,
+        source: &Source,
+        settings: &Settings,
+        graph: &Graph,
+        final_id: usize,
+        names: &[&str],
+        params: calibration::EncodeParams,
+        profile: &mut Profile,
+    ) -> Result<Vec<crate::inspection::Artifact>> {
+        use crate::inspection::{Artifact, Content};
+        let targets: Vec<_> = names
+            .iter()
+            .map(|name| {
+                if *name == "final" {
+                    Ok(final_id)
+                } else {
+                    graph
+                        .outputs
+                        .iter()
+                        .position(|o| o.name == *name)
+                        .ok_or_else(|| format!("unavailable output {name}"))
+                }
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        if targets
+            .iter()
+            .enumerate()
+            .any(|(i, id)| targets[..i].contains(id))
+        {
+            return Err("duplicate requested output".into());
+        }
+        let values = self.execute(Input::Source(source), graph, &targets, profile)?;
+        values
+            .into_iter()
+            .zip(targets)
+            .map(|(value, id)| {
+                let output = &graph.outputs[id];
+                let content = if let Some(description) = value.description {
+                    Content::Image(RenderedImage {
+                        buffer: value.buffer,
+                        description,
+                        view: View {
+                            crop: params.crop,
+                            rotation: params.source[2],
+                            extent: [params.output[0], params.output[1]],
+                        },
+                        metadata: source.metadata.clone(),
+                        settings: settings.clone(),
+                        owner: self.owner.clone(),
+                    })
+                } else {
+                    let bytes = self.gpu.readback(&value.buffer)?;
+                    let values = match output.data {
+                        DataType::Histogram => bytemuck::cast_slice::<u8, u32>(&bytes)
+                            .iter()
+                            .map(|v| *v as f32)
+                            .collect(),
+                        DataType::BlackLevels => bytemuck::cast_slice::<u8, f32>(&bytes).to_vec(),
+                        _ => return Err("unsupported diagnostic output".into()),
+                    };
+                    Content::Table {
+                        columns: if output.data == DataType::Histogram {
+                            4096
+                        } else {
+                            1
+                        },
+                        values,
+                    }
+                };
+                Ok(Artifact {
+                    name: output.name,
+                    metadata: source.metadata.clone(),
+                    settings: settings.clone(),
+                    content,
+                })
+            })
+            .collect()
+    }
+
+    /// Encodes and exports an image created by this engine.
     pub fn write_tiff(
         &self,
         image: &RenderedImage,
@@ -359,9 +493,14 @@ impl Engine {
             return Err("TIFF requires tone-mapped RGB".into());
         };
         let mut graph = Graph::default();
-        let input = graph.add(Operation::RenderedInput { space }, &[])?;
+        let input = graph.add(
+            Operation::RenderedInput {
+                data: image.description.space.into(),
+            },
+            &[],
+        )?;
         let encoded = graph.add(Operation::Encode { params, space }, &[input])?;
-        graph.add(
+        let file = graph.add(
             Operation::Tiff {
                 path: path.to_owned(),
                 params,
@@ -369,14 +508,14 @@ impl Engine {
             },
             &[encoded],
         )?;
-        self.execute(Input::Rendered(image), &graph, None, profile)?;
+        self.execute(Input::Rendered(image), &graph, &[file], profile)?;
         Ok(image.view.extent)
     }
 
-    /// Materializes the logical view on GPU. Optional extent changes only presentation size,
-    /// not the working image or export size. RGBA32Float is unfilterable without additional
-    /// device features: presenters can use textureLoad/manual filtering. Color management is
-    /// the presentation consumer's responsibility; this texture retains its working primaries.
+    /// Materializes the logical view as an RGBA32Float texture on GPU.
+    /// Optional extent sets presentation dimensions; image storage and export dimensions stay fixed.
+    /// Presenters use textureLoad/manual filtering or enable float32 filtering on the device.
+    /// The texture retains working primaries; the presentation consumer handles color management.
     pub fn view_texture(
         &self,
         image: &RenderedImage,
@@ -384,6 +523,12 @@ impl Engine {
         profile: &mut Profile,
     ) -> Result<ImageTexture> {
         self.check_owner(image)?;
+        if !matches!(
+            image.description.layout,
+            Layout::Rgb32Float | Layout::Scalar32Float
+        ) {
+            return Err("texture preparation requires floating image storage".into());
+        }
         let mut params = image.params();
         if let Some(size) = extent {
             params.output[..2].copy_from_slice(&size);
@@ -453,55 +598,71 @@ impl Engine {
         &self,
         context: Input<'_>,
         graph: &Graph,
-        target: Option<usize>,
+        targets: &[usize],
         profile: &mut Profile,
-    ) -> Result<Option<Value>> {
+    ) -> Result<Vec<Value>> {
         let gpu = &self.gpu;
         let mut trace = gpu.trace(profile.enabled, graph.nodes.len() as u32 * 2);
         let mut scratch = Scratch::default();
-        let mut values: Vec<Option<Value>> = (0..graph.nodes.len()).map(|_| None).collect();
-        let mut consumers = vec![0; graph.nodes.len()];
-        for node in &graph.nodes {
-            for &input in &node.inputs {
+        let required = graph.required(targets)?;
+        let mut values: Vec<Option<Value>> = (0..graph.outputs.len()).map(|_| None).collect();
+        let mut reads = vec![Vec::new(); graph.nodes.len()];
+        for (id, output) in graph.outputs.iter().enumerate() {
+            if required[id] {
+                for &input in &output.dependencies {
+                    if !reads[output.producer].contains(&input) {
+                        reads[output.producer].push(input);
+                    }
+                }
+            }
+        }
+        let mut consumers = vec![0; graph.outputs.len()];
+        for inputs in &reads {
+            for &input in inputs {
                 consumers[input] += 1;
             }
         }
-        // A retained root is an extra consumer. Its buffer never enters execution scratch.
-        if let Some(target) = target {
+        for &target in targets {
             consumers[target] += 1;
         }
-        for (index, node) in graph.nodes.iter().enumerate() {
+        for (node_index, node) in graph.nodes.iter().enumerate() {
+            if !node.outputs.iter().any(|id| required[*id]) {
+                continue;
+            }
+            let index = node.outputs[0];
             let start = Instant::now();
             let input = |slot: usize| {
                 values[node.inputs[slot]]
                     .as_ref()
                     .expect("validated graph input is live")
             };
-            let inherited = if node.inputs.is_empty() {
-                match &context {
+            let inherited = reads[node_index]
+                .iter()
+                .find_map(|id| {
+                    values[*id]
+                        .as_ref()
+                        .and_then(|value| value.description)
+                        .map(|d| d.extent)
+                })
+                .unwrap_or_else(|| match &context {
                     Input::Source(source) => {
                         [source.metadata.width as u32, source.metadata.height as u32]
                     }
                     Input::Rendered(image) => image.description.extent,
-                }
-            } else {
-                input(0)
-                    .description
-                    .expect("image input description")
-                    .extent
-            };
+                });
             let extent = match &node.operation {
                 Operation::Encode { params, .. } => [params.output[0], params.output[1]],
                 _ => inherited,
             };
-            let desc = description(node.output, extent);
+            let desc = description(graph.outputs[index].data, extent);
             let groups = [inherited[0].div_ceil(8), inherited[1].div_ceil(8)];
             let dimensions = [inherited[0], inherited[1], 0, 0];
             let bytes = u64::from(inherited[0]) * u64::from(inherited[1]) * 12;
             let mut dispatch = |kernel, buffers: &[(u32, &wgpu::Buffer)], groups| {
                 gpu.dispatch(kernel, buffers, groups, &mut trace)
             };
-            let mut recyclable = desc.is_some_and(|d| d.layout == Layout::Rgb32Float);
+            let mut recyclable = desc
+                .is_some_and(|d| matches!(d.layout, Layout::Rgb32Float | Layout::Scalar32Float));
             let output = match &node.operation {
                 Operation::Source => {
                     let Input::Source(source) = &context else {
@@ -509,28 +670,48 @@ impl Engine {
                     };
                     Some(gpu.upload("Original sensor layers", &source.pixels)?)
                 }
-                Operation::RenderedInput { .. } => {
+                Operation::RenderedInput { data } => {
                     let Input::Rendered(image) = &context else {
                         return Err("rendered input context required".into());
                     };
+                    if description(*data, image.description.extent) != Some(image.description)
+                        || image.buffer.size() < image.description.byte_len()
+                    {
+                        return Err(
+                            "imported image representation does not match graph input".into()
+                        );
+                    }
                     recyclable = false;
                     Some(image.buffer.clone())
                 }
                 Operation::Black(params) => {
                     let histogram = gpu.storage("Dark-shield histogram", 3 * 4096 * 4)?;
-                    let black = gpu.storage("Black levels", 12)?;
                     let uniform = gpu.uniform(params);
                     dispatch(
                         Kernel::Histogram,
                         &[(0, &input(0).buffer), (1, &histogram), (2, &uniform)],
                         [params.source[2].div_ceil(64), 1],
                     );
-                    dispatch(
-                        Kernel::BlackMean,
-                        &[(1, &histogram), (2, &uniform), (3, &black)],
-                        [3, 1],
-                    );
-                    Some(black)
+                    let black = if required[index] {
+                        let black = gpu.storage("Black levels", 12)?;
+                        dispatch(
+                            Kernel::BlackMean,
+                            &[(1, &histogram), (2, &uniform), (3, &black)],
+                            [3, 1],
+                        );
+                        Some(black)
+                    } else {
+                        None
+                    };
+                    let side = node.outputs[1];
+                    if required[side] {
+                        values[side] = Some(Value {
+                            buffer: histogram,
+                            description: None,
+                            recyclable: false,
+                        });
+                    }
+                    black
                 }
                 Operation::Calibrate(calibration) => {
                     let metadata = context.metadata();
@@ -569,11 +750,17 @@ impl Engine {
                     );
                     Some(output)
                 }
-                Operation::Color { params, .. }
-                | Operation::Gains { params, .. }
-                | Operation::Saturation { params, .. } => {
+                Operation::Color { .. }
+                | Operation::SensorGain { .. }
+                | Operation::Saturation { .. } => {
                     let output = scratch.take(gpu, bytes)?;
-                    let mut params = *params;
+                    let mut params = match &node.operation {
+                        Operation::Color { params, .. } | Operation::Saturation { params, .. } => {
+                            *params
+                        }
+                        Operation::SensorGain { factor } => sensor_gain(dimensions, *factor),
+                        _ => unreachable!(),
+                    };
                     params.source[..2].copy_from_slice(&inherited);
                     let uniform = gpu.uniform(&params);
                     dispatch(
@@ -704,7 +891,7 @@ impl Engine {
                 description: desc,
                 recyclable,
             });
-            for &id in &node.inputs {
+            for &id in &reads[node_index] {
                 consumers[id] -= 1;
                 if consumers[id] == 0 {
                     if let Some(value) = values[id].take() {
@@ -720,7 +907,7 @@ impl Engine {
             profile.scratch_allocations += scratch.allocations;
             profile.scratch_reuses += scratch.reuses;
         }
-        Ok(target.and_then(|id| values[id].take()))
+        Ok(targets.iter().filter_map(|id| values[*id].take()).collect())
     }
 }
 

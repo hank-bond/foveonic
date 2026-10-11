@@ -10,6 +10,8 @@ use std::sync::Arc;
 pub enum Layout {
     /// Three interleaved f32 components, 12 bytes per pixel.
     Rgb32Float,
+    /// One floating component per pixel, for masks and diagnostic fields.
+    Scalar32Float,
     /// RGBA32Float texture; alpha is one and RGB retains signed floating values.
     Rgba32FloatTexture,
     /// RGB16 in two u32 words per pixel; the final 16 bits are padding.
@@ -19,16 +21,17 @@ pub enum Layout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Space {
     SensorLayers,
+    ScalarField,
     CalibratedLayers,
     LinearRgb(ColorSpace),
-    /// Tone has been applied, but components are still in linear primaries, without transfer encoding.
+    /// Tone-mapped components in linear working primaries.
     ToneMappedRgb(ColorSpace),
     EncodedRgb16(ColorSpace),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Description {
-    /// Physical storage dimensions, not the dimensions of a cropped/rotated view.
+    /// Physical storage dimensions.
     pub extent: [u32; 2],
     pub layout: Layout,
     pub space: Space,
@@ -40,6 +43,7 @@ impl Description {
             * u64::from(self.extent[1])
             * match self.layout {
                 Layout::Rgb32Float => 12,
+                Layout::Scalar32Float => 4,
                 Layout::Rgba32FloatTexture => 16,
                 Layout::PackedRgb16 => 8,
             }
@@ -55,9 +59,8 @@ pub struct View {
     pub extent: [u32; 2],
 }
 
-/// An immutable, independently owned snapshot. Buffer consumers must only read its storage.
-/// It retains metadata and a settings snapshot, but not the source's decoded CPU pixels.
-/// Graph scratch never includes this resource after it has been returned.
+/// An immutable GPU snapshot with source metadata and rendering settings.
+/// Consumers have read-only access; the snapshot owns its storage for its lifetime.
 pub struct RenderedImage {
     pub(crate) buffer: wgpu::Buffer,
     pub(crate) description: Description,
@@ -85,15 +88,18 @@ impl RenderedImage {
     }
 
     pub(crate) fn params(&self) -> EncodeParams {
-        let Space::ToneMappedRgb(space) = self.description.space else {
-            unreachable!("rendered image is tone-mapped RGB")
+        let space = match self.description.space {
+            Space::LinearRgb(space) | Space::ToneMappedRgb(space) | Space::EncodedRgb16(space) => {
+                space
+            }
+            Space::SensorLayers | Space::CalibratedLayers | Space::ScalarField => ColorSpace::Srgb,
         };
         EncodeParams {
             source: [
                 self.description.extent[0],
                 self.description.extent[1],
                 self.view.rotation,
-                0,
+                u32::from(self.description.layout == Layout::Scalar32Float),
             ],
             crop: self.view.crop,
             output: [
@@ -106,8 +112,8 @@ impl RenderedImage {
     }
 }
 
-/// Cropped/oriented floating RGB texture on the engine's device. Components are not monitor encoded;
-/// the GUI presentation shader must handle working-space conversion and display transfer encoding.
+/// Cropped/oriented floating RGB texture on the engine's device, retaining working primaries.
+/// The presentation shader handles working-space conversion and display transfer encoding.
 pub struct ImageTexture {
     pub(crate) texture: wgpu::Texture,
     pub(crate) description: Description,

@@ -1,4 +1,4 @@
-//! Owns decoded Merrill samples and typed metadata without photographic adjustments.
+//! Owns original Merrill sensor samples and typed camera metadata.
 //!
 //! Adapted from Foveonic's source types and Merrill camera checks.
 
@@ -76,6 +76,10 @@ impl PropertyList {
             .map(|(_, value)| value)
     }
 
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(|(name, _)| name.as_str())
+    }
+
     pub fn index(&self, name: &str) -> Option<usize> {
         self.0.iter().position(|(key, _)| key == name)
     }
@@ -100,6 +104,39 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    /// Resolve the recorded WB label to this file's canonical CAMF preset name.
+    pub fn recorded_white_balance(&self) -> Result<String> {
+        let recorded = self
+            .properties
+            .get("WB_DESC")
+            .ok_or("missing recorded white balance (WB_DESC)")?
+            .trim();
+        // Merrill property labels call the CAMF Sunlight preset Daylight.
+        let name = if recorded.eq_ignore_ascii_case("Daylight") {
+            "Sunlight"
+        } else {
+            recorded
+        };
+        self.recorded_preset("WhiteBalanceGains", name, "white balance")
+    }
+
+    pub fn recorded_color_mode(&self) -> Result<String> {
+        let recorded = self
+            .properties
+            .get("CM_DESC")
+            .ok_or("missing recorded color mode (CM_DESC)")?
+            .trim();
+        self.recorded_preset("ColorModeCompensations", recorded, "color mode")
+    }
+
+    fn recorded_preset(&self, list: &str, name: &str, kind: &str) -> Result<String> {
+        self.lists
+            .get(list)
+            .and_then(|list| list.names().find(|key| key.eq_ignore_ascii_case(name)))
+            .map(str::to_owned)
+            .ok_or_else(|| format!("unavailable recorded {kind}: {name}").into())
+    }
+
     /// Camera matrix names are case-insensitive. Stored spelling stays intact.
     pub fn matrix(&self, name: &str) -> Option<&Matrix> {
         self.matrices
@@ -138,7 +175,7 @@ pub struct Source {
 }
 
 impl Source {
-    /// Host wall timings from loading; concurrent plane timings overlap and must not be summed.
+    /// Host wall timings from loading; concurrent plane timings measure overlapping work.
     pub fn load_timings(&self) -> &[crate::profile::Timing] {
         &self.timings
     }

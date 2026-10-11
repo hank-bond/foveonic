@@ -1,4 +1,4 @@
-// Convert calibrated sensor layers into the camera's selected linear RGB route.
+// Apply the prepared three-channel matrix, preserving signed values and headroom.
 struct Params { source: vec4<u32>, matrix: array<vec4<f32>, 3> };
 @group(0) @binding(0) var<storage, read> input_pixels: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;

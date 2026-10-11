@@ -11,7 +11,9 @@ implementation: incomplete
 
 - The application **must** process Merrill-architecture X3F files.
 - The application **must** provide a GUI and a CLI supporting batch processing.
-- The GUI **must** offer photographic processing controls broadly comparable to the reference app in `~/git/foveonic`.
+- The GUI **must** offer photographic processing controls broadly comparable to the reference app in `~/git/foveonic` and follow [GUI workspace](./gui-workspace.md) requirements.
+- Selecting an X3F in the GUI **must** initialize white balance and color mode from that file's recorded settings and render automatically. Explicit launch overrides **may** replace those choices, and the controls **must** remain editable. Missing or unsupported recorded choices **must** require manual selection.
+- Replacing the selected image's embedded preview with its pipeline image **must** preserve the image rectangle and pan/zoom when their presentation geometry matches. Native-pixel zoom and image placement **must** use the image's presentation dimensions.
 - The GUI and CLI **must** use the same processing engine and interpretation of supported settings.
 - Image processing **must** use GPU shaders where feasible.
 - Processing **must** follow [`processing-graphs.md`](./processing-graphs.md), with outputs defined by [`output-strategies.md`](./output-strategies.md).

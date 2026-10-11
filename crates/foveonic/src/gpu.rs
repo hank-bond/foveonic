@@ -36,6 +36,7 @@ pub enum Kernel {
     Sharpen,
     ColorDq,
     View,
+    Scopes,
 }
 
 impl Kernel {
@@ -52,6 +53,7 @@ impl Kernel {
             Self::Sharpen => "sharpen",
             Self::ColorDq => "ColorDQ",
             Self::View => "view texture",
+            Self::Scopes => "current buffer scopes",
         }
     }
 }
@@ -59,7 +61,7 @@ impl Kernel {
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    pipelines: [wgpu::ComputePipeline; 11],
+    pipelines: [wgpu::ComputePipeline; 12],
     pub adapter_name: String,
 }
 
@@ -103,15 +105,21 @@ impl Gpu {
             (include_str!("shaders/sharpen.wgsl"), "main"),
             (include_str!("shaders/color_dq.wgsl"), "main"),
             (include_str!("shaders/view.wgsl"), "main"),
+            (include_str!("shaders/scopes.wgsl"), "main"),
         ];
         let pipelines = std::array::from_fn(|index| {
             let (code, entry) = kernels[index];
-            let code: std::borrow::Cow<'_, str> =
-                if index == Kernel::Encode as usize || index == Kernel::View as usize {
-                    format!("{}\n{code}", include_str!("shaders/sample.wgsl")).into()
-                } else {
-                    code.into()
-                };
+            let code: std::borrow::Cow<'_, str> = if [
+                Kernel::Encode as usize,
+                Kernel::View as usize,
+                Kernel::Scopes as usize,
+            ]
+            .contains(&index)
+            {
+                format!("{}\n{code}", include_str!("shaders/sample.wgsl")).into()
+            } else {
+                code.into()
+            };
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(entry),
                 source: wgpu::ShaderSource::Wgsl(code),

@@ -1,10 +1,12 @@
-// Shared sampling of a logical crop/orientation/size from a full-sensor floating RGB image.
+// Shared sampling of a logical crop/orientation/size from floating RGB or a scalar field.
 struct Params { source: vec4<u32>, crop: vec4<u32>, output_size: vec4<u32> };
 @group(0) @binding(0) var<storage, read> input_pixels: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 
 fn pixel(point: vec2<u32>, channel: u32) -> f32 {
-    return input_pixels[(point.y * params.source.x + point.x) * 3u + channel];
+    let index = point.y * params.source.x + point.x;
+    if params.source.w == 1u { return input_pixels[index]; }
+    return input_pixels[index * 3u + channel];
 }
 
 fn sample_rgb(id: vec2<u32>) -> vec3<f32> {

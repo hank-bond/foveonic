@@ -3,15 +3,15 @@
 use super::*;
 
 #[test]
-fn control_matrices_preserve_gray_and_signed_channel_gains() {
+fn control_matrices_preserve_gray_and_signed_uniform_sensor_gain() {
     let apply = |params: calibration::ColorParams, rgb: [f32; 3]| -> [f32; 3] {
         params
             .matrix
             .map(|row| (0..3).map(|c| row[c] * rgb[c]).sum())
     };
     assert_eq!(
-        apply(gains([1, 1, 0, 0], [1., 2., 0.5]), [-0.25, 2., 1.]),
-        [-0.25, 4., 0.5]
+        apply(sensor_gain([1, 1, 0, 0], 2.), [-0.25, 2., 1.]),
+        [-0.5, 4., 2.]
     );
     assert_eq!(
         apply(saturation([1, 1, 0, 0], 1.), [1., 0.25, 0.5]),
@@ -26,6 +26,83 @@ fn control_matrices_preserve_gray_and_signed_channel_gains() {
             assert!((value - 0.42).abs() < 1e-6);
         }
     }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn uniform_sensor_gain_preserves_signed_calibrated_layers_before_color() {
+    let engine = Engine::new().unwrap();
+    let original = [
+        -0.25_f32, 2., 1., 0.5, -0.5, 3., 1., 0., -1., 0., 0.25, 0.75, 2., 1., 0., -2., -1., -0.5,
+    ];
+    let mut input = image(&engine, &original);
+    input.description.space = Space::CalibratedLayers;
+    let matrix = [[1., 2., 3., 0.], [0., 1., -1., 0.], [2., 0., 1., 0.]];
+    for factor in [0_f32, 0.5, 2.] {
+        let mut graph = Graph::default();
+        let root = graph
+            .add(
+                Operation::RenderedInput {
+                    data: DataType::CalibratedLayers,
+                },
+                &[],
+            )
+            .unwrap();
+        let gain = graph
+            .add(Operation::SensorGain { factor }, &[root])
+            .unwrap();
+        let color = graph
+            .add(
+                Operation::Color {
+                    params: calibration::ColorParams {
+                        source: [99, 99, 0, 0],
+                        matrix,
+                    },
+                    space: ColorSpace::Srgb,
+                },
+                &[gain],
+            )
+            .unwrap();
+        let outputs = engine
+            .execute(
+                Input::Rendered(&input),
+                &graph,
+                &[gain, color],
+                &mut Profile::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            outputs[0].description.unwrap().space,
+            Space::CalibratedLayers
+        );
+        assert_eq!(
+            outputs[1].description.unwrap().space,
+            Space::LinearRgb(ColorSpace::Srgb)
+        );
+        let layers = engine.gpu.readback(&outputs[0].buffer).unwrap();
+        for (actual, source) in bytemuck::cast_slice::<u8, f32>(&layers)
+            .iter()
+            .zip(original)
+        {
+            assert!((actual - source * factor).abs() < 0.000001);
+        }
+        let rgb = engine.gpu.readback(&outputs[1].buffer).unwrap();
+        for (actual, source) in bytemuck::cast_slice::<u8, f32>(&rgb)
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(original.as_chunks::<3>().0.iter())
+        {
+            for (c, row) in matrix.iter().enumerate() {
+                let expected = (0..3).map(|k| row[k] * source[k] * factor).sum::<f32>();
+                assert!((actual[c] - expected).abs() < 0.000001);
+            }
+        }
+    }
+    assert_eq!(
+        engine.gpu.readback(&input.buffer).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&original)
+    );
 }
 
 #[test]
@@ -61,6 +138,66 @@ fn original_result_outlives_source_and_another_render() {
     settings.output_size = Some([64, 96]);
     let retained = {
         let source = Source::open(&files[0]).unwrap();
+        let mut histogram_profile = Profile::new(true);
+        let artifacts = engine
+            .render_artifacts(
+                &source,
+                &Settings::new("", ""),
+                &["black.histogram"],
+                &mut histogram_profile,
+            )
+            .unwrap();
+        assert_eq!(artifacts.len(), 1);
+        let crate::inspection::Content::Table { columns, values } = &artifacts[0].content else {
+            panic!("expected histogram");
+        };
+        assert_eq!(*columns, 4096);
+        assert_eq!(values.len(), 12288);
+        assert!(!histogram_profile
+            .host
+            .iter()
+            .any(|t| t.stage == "submit calibration" || t.stage == "prepare tone curve"));
+        assert!(!histogram_profile
+            .gpu
+            .iter()
+            .any(|t| t.stage == "black mean"));
+        engine
+            .render_artifacts(
+                &source,
+                &Settings::new("Sunlight", ""),
+                &["calibration.layers"],
+                &mut Profile::default(),
+            )
+            .unwrap();
+        let mut gain_settings = Settings::new("Sunlight", "");
+        gain_settings.sensor_gain = 1.3;
+        let mut gain_profile = Profile::new(true);
+        let gain = engine
+            .render_artifacts(&source, &gain_settings, &["gain.layers"], &mut gain_profile)
+            .unwrap();
+        let crate::inspection::Content::Image(gain) = &gain[0].content else {
+            panic!("expected gained layers")
+        };
+        assert_eq!(gain.description().space, Space::CalibratedLayers);
+        assert_eq!(gain.settings().sensor_gain, 1.3);
+        assert!(!gain_profile
+            .host
+            .iter()
+            .any(|t| t.stage == "prepare color mode" || t.stage == "prepare color matrix"));
+        assert!(engine
+            .render(&source, &Settings::new("", ""), &mut Profile::default())
+            .is_err());
+        let mut multi_profile = Profile::new(true);
+        let roots = engine
+            .render_artifacts(
+                &source,
+                &settings,
+                &["calibration.layers", "final"],
+                &mut multi_profile,
+            )
+            .unwrap();
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].name, "calibration.layers");
         engine
             .render(&source, &settings, &mut Profile::default())
             .unwrap()
@@ -116,6 +253,142 @@ fn original_result_outlives_source_and_another_render() {
     );
 }
 
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn scalar_fields_preserve_geometry_and_values_without_rgb_storage() {
+    let engine = Engine::new().unwrap();
+    let mut scalar = image(&engine, &[0.; 18]);
+    scalar.buffer = engine
+        .gpu
+        .upload("Scalar fixture", &[-10_f32, -0.25, 0.5, -0.1, 0.75, 1.5])
+        .unwrap();
+    scalar.description.layout = Layout::Scalar32Float;
+    scalar.description.space = Space::ScalarField;
+    assert_eq!(scalar.description.byte_len(), 24);
+    let mut graph = Graph::default();
+    let input = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::ScalarField,
+            },
+            &[],
+        )
+        .unwrap();
+    let imported = engine
+        .execute(
+            Input::Rendered(&scalar),
+            &graph,
+            &[input],
+            &mut Profile::default(),
+        )
+        .unwrap();
+    assert_eq!(imported[0].description, Some(scalar.description));
+    let texture = engine
+        .view_texture(&scalar, None, &mut Profile::default())
+        .unwrap();
+    assert_eq!(texture.description().space, Space::ScalarField);
+    let readback = engine.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Scalar view readback"),
+        size: 512,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let mut encoder = engine.device().create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: texture.texture(),
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256),
+                rows_per_image: Some(2),
+            },
+        },
+        wgpu::Extent3d {
+            width: 2,
+            height: 2,
+            depth_or_array_layers: 1,
+        },
+    );
+    engine.queue().submit(Some(encoder.finish()));
+    let bytes = engine.gpu.readback(&readback).unwrap();
+    for (i, value) in [0.75_f32, -0.25, 1.5, 0.5].iter().enumerate() {
+        let offset = (i / 2) * 256 + (i % 2) * 16;
+        assert_eq!(
+            bytemuck::cast_slice::<u8, f32>(&bytes[offset..offset + 16]),
+            &[*value, *value, *value, 1.]
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
+    let engine = Engine::new().unwrap();
+    let mut buffer = image(
+        &engine,
+        &[
+            0., 0., 0., -0.25, 0.5, 1.5, 0., 1., 0.25, 0., 0., 0., 0.75, 0.25, 0.5, 1., -0.5, 2.,
+        ],
+    );
+    let scopes = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    assert_eq!(scopes.samples, [2, 2]);
+    for c in 0..3 {
+        assert_eq!(scopes.histogram(c).iter().sum::<u32>(), 4);
+        assert_eq!(scopes.density(c).iter().sum::<u32>(), 4);
+    }
+    assert_eq!(scopes.outside(0), [1, 0, 0]);
+    assert_eq!(scopes.outside(1), [1, 0, 0]);
+    assert_eq!(scopes.outside(2), [0, 2, 0]);
+    assert_eq!(scopes.density(0)[64 * 256], 1); // rotated pixel 4 is left/top, red=.75
+    assert_eq!(scopes.density(0)[255 * 256 + 128], 2); // right column contains both negative and zero red
+    buffer.settings.exposure = 3.; // analysis follows the stored samples
+    let repeat = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    assert_eq!(scopes.counts, repeat.counts);
+    buffer.buffer = engine
+        .gpu
+        .upload(
+            "Sensor scope fixture",
+            &[
+                0_f32, 0., 0., 0., 2047.5, 4095., 4095., 0., 2047.5, 0., 0., 0., 1023.75, 4095.,
+                0., 2047.5, 1023.75, 4095.,
+            ],
+        )
+        .unwrap();
+    buffer.description.space = Space::SensorLayers;
+    let sensor = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    for bin in [0, 64, 128, 255] {
+        assert_eq!(sensor.histogram(0)[bin], 1);
+    }
+    assert_eq!(sensor.outside(0), [0, 0, 0]);
+    buffer.buffer = engine
+        .gpu
+        .upload("RGB luminance fixture", &[1_f32, 0., 0.].repeat(6))
+        .unwrap();
+    for (space, bin) in [(ColorSpace::Srgb, 54), (ColorSpace::AdobeRgb, 76)] {
+        buffer.description.space = Space::ToneMappedRgb(space);
+        let rgb = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+        assert_eq!(rgb.histogram(3)[bin], 4);
+    }
+    buffer.buffer = engine
+        .gpu
+        .upload(
+            "Scalar scope fixture",
+            &[-10_f32, -0.25, 0.5, -0.1, 0.75, 1.5],
+        )
+        .unwrap();
+    buffer.description.layout = Layout::Scalar32Float;
+    buffer.description.space = Space::ScalarField;
+    let scalar = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    assert_eq!(scalar.channels(), 1);
+    assert_eq!(scalar.outside(0), [1, 1, 0]);
+}
+
 fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
     RenderedImage {
         buffer: engine.gpu.upload("Retained fixture", pixels).unwrap(),
@@ -161,7 +434,7 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     let root = graph
         .add(
             Operation::RenderedInput {
-                space: ColorSpace::Srgb,
+                data: DataType::ToneMappedRgb(ColorSpace::Srgb),
             },
             &[],
         )
@@ -169,7 +442,7 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     let a = graph
         .add(
             Operation::Saturation {
-                params: gains([99, 99, 0, 0], [2.; 3]),
+                params: sensor_gain([99, 99, 0, 0], 2.),
                 space: ColorSpace::Srgb,
             },
             &[root],
@@ -178,7 +451,7 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     let b = graph
         .add(
             Operation::Saturation {
-                params: gains([99, 99, 0, 0], [3.; 3]),
+                params: sensor_gain([99, 99, 0, 0], 3.),
                 space: ColorSpace::Srgb,
             },
             &[a],
@@ -187,18 +460,19 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     let c = graph
         .add(
             Operation::Saturation {
-                params: gains([99, 99, 0, 0], [0.5; 3]),
+                params: sensor_gain([99, 99, 0, 0], 0.5),
                 space: ColorSpace::Srgb,
             },
             &[b],
         )
         .unwrap();
     let mut profile = Profile::new(true);
-    // Retain an intermediate while later nodes execute; it must not be recycled into c.
-    let retained = engine
-        .execute(Input::Rendered(&input), &graph, Some(a), &mut profile)
-        .unwrap()
+    // Retain two roots while later nodes execute, preserving a while c is written.
+    let mut outputs = engine
+        .execute(Input::Rendered(&input), &graph, &[a, c], &mut profile)
         .unwrap();
+    let _other = outputs.pop().unwrap();
+    let retained = outputs.pop().unwrap();
     let a_bytes = engine.gpu.readback(&retained.buffer).unwrap();
     for (actual, expected) in bytemuck::cast_slice::<u8, f32>(&a_bytes)
         .iter()
@@ -207,8 +481,9 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
         assert!((actual - expected * 2.).abs() < 1e-6);
     }
     let latest = engine
-        .execute(Input::Rendered(&input), &graph, Some(c), &mut profile)
+        .execute(Input::Rendered(&input), &graph, &[c], &mut profile)
         .unwrap()
+        .pop()
         .unwrap();
     assert_eq!(
         engine.gpu.readback(&input.buffer).unwrap(),
