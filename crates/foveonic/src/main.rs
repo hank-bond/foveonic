@@ -1,7 +1,7 @@
 //! Inspects Merrill X3Fs and exports single images or batches through shared TIFF settings.
 
 use foveonic::profile::Profile;
-use foveonic::render::{Engine, Settings};
+use foveonic::render::{Engine, RepairThreshold, Settings};
 use foveonic::source::{Result, Source};
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -24,7 +24,18 @@ Options (also available for batch):
   --saturation FACTOR       Nonnegative, default 1; 0 produces grayscale
   --sensor-gain FACTOR      Nonnegative uniform sensor-layer multiplier, default 1
   --color-dq-gain FACTOR     Camera ColorDQ amplitude multiplier, default 0 (off)
-  --repair-badness MIN       Select isolated camera-record repairs; 0..15
+  --repair                  Camera-derived ordered repair (default on)
+  --no-repair               Disable camera-record repair
+  --despeckle               Detect and correct remaining speckles (default on)
+  --no-despeckle            Disable dynamic speckle correction
+  --repair-badness MIN       Enable ordered repair with a manual cutoff; 0..15
+  --noise-override KEY=VALUE Override a reconstruction parameter; repeatable, enables reconstruction
+                            Keys: base-blend, edge-cutoff, mean-decay, edge-scale,
+                            luma-noise-scale, brightness-mix, layer-mix
+  --reconstruction          Enable reference-style full-resolution noise/detail processing
+  --chroma-noise CHOICE      Camera noise-table choice 0..4, default 2; enables reconstruction
+  --luma-noise CHOICE        Camera noise-table choice 0..4, default 2; enables reconstruction
+  --detail FACTOR           Residual detail multiplier, default 1; enables reconstruction
   --sharpen AMOUNT           Nonnegative unsharp-mask amount, default 0 (off)
   --sharpen-radius PIXELS    Gaussian sigma in source pixels, >0..16, default 1
   --size WIDTHxHEIGHT       Exact final oriented dimensions, bilinear sampling
@@ -37,6 +48,22 @@ fn parse_settings(args: impl Iterator<Item = OsString>) -> Result<(Settings, Vec
     let mut profiling = false;
     let mut args = args;
     while let Some(arg) = args.next() {
+        if arg == "--reconstruction" {
+            settings.reconstruction.get_or_insert_with(Default::default);
+            continue;
+        }
+        if arg == "--repair" {
+            settings.repair = Some(RepairThreshold::Camera);
+            continue;
+        }
+        if arg == "--no-repair" {
+            settings.repair = None;
+            continue;
+        }
+        if arg == "--despeckle" || arg == "--no-despeckle" {
+            settings.despeckle = arg == "--despeckle";
+            continue;
+        }
         if arg == "--profile" {
             profiling = true;
             continue;
@@ -61,7 +88,39 @@ fn parse_settings(args: impl Iterator<Item = OsString>) -> Result<(Settings, Vec
             "--saturation" => settings.saturation = value.parse()?,
             "--sensor-gain" => settings.sensor_gain = value.parse()?,
             "--color-dq-gain" => settings.color_dq_gain = value.parse()?,
-            "--repair-badness" => settings.repair_badness = Some(value.parse()?),
+            "--repair-badness" => settings.repair = Some(RepairThreshold::Manual(value.parse()?)),
+            "--noise-override" => {
+                let (key, value) = value
+                    .split_once('=')
+                    .ok_or("noise override requires KEY=VALUE")?;
+                let parameter = foveonic::noise::Parameter::ALL
+                    .into_iter()
+                    .find(|p| p.key() == key)
+                    .ok_or("unknown noise override parameter")?;
+                settings
+                    .reconstruction
+                    .get_or_insert_with(Default::default)
+                    .overrides
+                    .set(parameter, Some(value.parse()?));
+            }
+            "--chroma-noise" => {
+                settings
+                    .reconstruction
+                    .get_or_insert_with(Default::default)
+                    .chroma = value.parse()?
+            }
+            "--luma-noise" => {
+                settings
+                    .reconstruction
+                    .get_or_insert_with(Default::default)
+                    .luminance = value.parse()?
+            }
+            "--detail" => {
+                settings
+                    .reconstruction
+                    .get_or_insert_with(Default::default)
+                    .detail = value.parse()?
+            }
             "--sharpen" => settings.sharpen_amount = value.parse()?,
             "--sharpen-radius" => settings.sharpen_radius = value.parse()?,
             "--size" => {
@@ -225,7 +284,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn controls_are_shared_and_defaults_keep_the_minimal_recipe() {
+    fn controls_are_shared_and_defaults_enable_independent_corrections() {
         let parse = |args: &str| parse_settings(args.split_whitespace().map(OsString::from));
         let (neutral, paths, profiling) = parse("--wb Sunlight --mode Standard").unwrap();
         assert!(!profiling);
@@ -236,7 +295,65 @@ mod tests {
         assert_eq!(neutral.saturation, 1.);
         assert_eq!(neutral.color_dq_gain, 0.);
         assert_eq!(neutral.sharpen_amount, 0.);
-        assert!(neutral.repair_badness.is_none());
+        assert_eq!(neutral.repair, Some(RepairThreshold::Camera));
+        assert!(neutral.despeckle);
+        let disabled = parse("--wb Sunlight --mode Standard --no-repair --no-despeckle")
+            .unwrap()
+            .0;
+        assert!(disabled.repair.is_none() && !disabled.despeckle);
+        let restored =
+            parse("--wb Sunlight --mode Standard --no-repair --repair --no-despeckle --despeckle")
+                .unwrap()
+                .0;
+        assert_eq!(restored.repair, Some(RepairThreshold::Camera));
+        assert!(restored.despeckle);
+        assert!(neutral.reconstruction.is_none());
+        assert_eq!(
+            parse("--wb Sunlight --mode Standard --repair")
+                .unwrap()
+                .0
+                .repair,
+            Some(RepairThreshold::Camera)
+        );
+        assert_eq!(
+            parse("--wb Sunlight --mode Standard --repair-badness 2")
+                .unwrap()
+                .0
+                .repair,
+            Some(RepairThreshold::Manual(2))
+        );
+        let overridden = parse("--wb Sunlight --mode Standard --noise-override mean-decay=0.7 --noise-override brightness-mix=0.5").unwrap().0.reconstruction.unwrap();
+        assert_eq!(
+            overridden
+                .overrides
+                .get(foveonic::noise::Parameter::MeanDecay),
+            Some(0.7)
+        );
+        assert_eq!(
+            overridden
+                .overrides
+                .get(foveonic::noise::Parameter::BrightnessMix),
+            Some(0.5)
+        );
+        assert_eq!(
+            parse("--wb Sunlight --mode Standard --reconstruction")
+                .unwrap()
+                .0
+                .reconstruction,
+            Some(Default::default())
+        );
+        assert_eq!(
+            parse("--wb Sunlight --mode Standard --chroma-noise 1 --luma-noise 4 --detail 0.75")
+                .unwrap()
+                .0
+                .reconstruction,
+            Some(foveonic::noise::Controls {
+                chroma: 1,
+                luminance: 4,
+                detail: 0.75,
+                ..Default::default()
+            })
+        );
         assert!(neutral.output_size.is_none());
         let (settings, paths, _) = parse("a.x3f --wb Auto --mode Vivid --contrast 0.5 --shadows -1 --highlights 1 --sensor-gain 1.3 --saturation 1.2 --color-dq-gain 1.5 --repair-badness 8 --sharpen 0.5 --sharpen-radius 1.5 --size 600x400 b.x3f").unwrap();
         assert_eq!(paths, [PathBuf::from("a.x3f"), PathBuf::from("b.x3f")]);
@@ -265,8 +382,16 @@ mod tests {
             "--color-dq-gain NaN",
             "--color-dq-gain inf",
             "--repair-badness 16",
+            "--noise-override mean-decay=NaN",
+            "--noise-override edge-cutoff=1",
+            "--noise-override unknown=1",
+            "--noise-override mean-decay:1",
             "--sharpen-radius 0",
             "--size 0x400",
+            "--chroma-noise 5",
+            "--luma-noise 5",
+            "--detail -1",
+            "--detail NaN",
         ] {
             assert!(
                 parse(&format!("--wb Sunlight --mode Standard {invalid}")).is_err(),

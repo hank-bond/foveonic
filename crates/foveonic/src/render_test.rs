@@ -378,6 +378,20 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
     buffer.buffer = engine
         .gpu
         .upload(
+            "Camera-code RGB scope fixture",
+            &[4095_f32, 0., 0.].repeat(6),
+        )
+        .unwrap();
+    for (space, bin) in [(ColorSpace::Srgb, 54), (ColorSpace::AdobeRgb, 76)] {
+        buffer.description.space = Space::LinearRgb(space);
+        let rgb = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+        assert_eq!(rgb.histogram(0)[255], 4);
+        assert_eq!(rgb.histogram(3)[bin], 4);
+        assert_eq!(rgb.outside(0), [0, 0, 0]);
+    }
+    buffer.buffer = engine
+        .gpu
+        .upload(
             "Scalar scope fixture",
             &[-10_f32, -0.25, 0.5, -0.1, 0.75, 1.5],
         )
@@ -387,6 +401,34 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
     let scalar = engine.scopes(&buffer, &mut Profile::default()).unwrap();
     assert_eq!(scalar.channels(), 1);
     assert_eq!(scalar.outside(0), [1, 1, 0]);
+    buffer.buffer = engine
+        .gpu
+        .upload(
+            "Signed detail scope fixture",
+            &[-2000_f32, -1000., 0., 999., 1000., 2000.],
+        )
+        .unwrap();
+    buffer.description.space = Space::SignedDetail;
+    let detail = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    assert_eq!(detail.channels(), 1);
+    assert_eq!(detail.outside(0), [0, 1, 0]);
+    assert_eq!(detail.histogram(0)[0], 1);
+    assert_eq!(detail.histogram(0)[128], 1);
+    assert_eq!(detail.histogram(0)[255], 2);
+    buffer.buffer = engine
+        .gpu
+        .upload(
+            "Luminance ratio scope fixture",
+            &[0_f32, 0., 1., 0., 2., 3.],
+        )
+        .unwrap();
+    buffer.description.space = Space::LuminanceRatio;
+    let ratio = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    assert_eq!(ratio.channels(), 1);
+    assert_eq!(ratio.outside(0), [0, 1, 0]);
+    assert_eq!(ratio.histogram(0)[0], 1);
+    assert_eq!(ratio.histogram(0)[128], 1);
+    assert_eq!(ratio.histogram(0)[255], 2);
 }
 
 fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
@@ -591,4 +633,266 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     assert!(shared
         .view_texture(&input, None, &mut Profile::default())
         .is_err());
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
+    let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(dir.join("blue-parking-sign.x3f")).unwrap();
+    let engine = Engine::new().unwrap();
+    let mut settings = Settings::new("Sunlight", "");
+    settings.reconstruction = Some(Default::default());
+    let mut profile = Profile::new(true);
+    let mut artifacts = engine
+        .render_artifacts(&source, &settings, &["noise.edges"], &mut profile)
+        .unwrap();
+    assert!(!profile.host.iter().any(|t| t.stage == "prepare color mode"));
+    assert!(!profile
+        .gpu
+        .iter()
+        .any(|t| t.stage == "directional local mean"));
+    let crate::inspection::Content::Image(edge) = artifacts.remove(0).content else {
+        panic!("expected an image")
+    };
+    assert_eq!(edge.description.space, Space::ScalarField);
+    assert_eq!(edge.description.layout, Layout::Scalar32Float);
+    let before = engine.gpu.readback(&edge.buffer).unwrap();
+    profile = Profile::new(true);
+    let artifacts = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["noise.layers", "detail.ratio"],
+            &mut profile,
+        )
+        .unwrap();
+    assert!(!profile.host.iter().any(|t| t.stage == "prepare color mode"));
+    assert!(!profile
+        .gpu
+        .iter()
+        .any(|t| t.stage == "residual detail mixing"));
+    assert_eq!(artifacts.len(), 2);
+    for artifact in &artifacts {
+        assert_eq!(artifact.settings.reconstruction, settings.reconstruction);
+        let crate::inspection::Content::Image(image) = &artifact.content else {
+            panic!("expected an image")
+        };
+        assert_eq!(
+            image.description.space,
+            if artifact.name == "detail.ratio" {
+                Space::LuminanceRatio
+            } else {
+                Space::CalibratedLayers
+            }
+        );
+    }
+    drop(artifacts);
+    settings.color_mode = "Standard".into();
+    profile = Profile::new(true);
+    let mut artifacts = engine
+        .render_artifacts(&source, &settings, &["detail.signal"], &mut profile)
+        .unwrap();
+    assert!(!profile.gpu.iter().any(|t| matches!(
+        t.stage,
+        "residual detail mixing" | "detail reconstruction" | "tone"
+    )));
+    let crate::inspection::Content::Image(signal) = artifacts.remove(0).content else {
+        panic!("expected an image")
+    };
+    assert_eq!(signal.description.space, Space::SignedDetail);
+    assert_eq!(signal.description.layout, Layout::Scalar32Float);
+    let samples = engine.gpu.readback(&signal.buffer).unwrap();
+    let samples = bytemuck::cast_slice::<u8, f32>(&samples);
+    assert!(samples.iter().all(|v| v.is_finite()));
+    assert!(samples.iter().any(|v| *v < 0.) && samples.iter().any(|v| *v > 0.));
+    let scopes = engine.scopes(&signal, &mut Profile::default()).unwrap();
+    assert_eq!(scopes.channels(), 1);
+    assert_eq!(
+        scopes.histogram(0).iter().sum::<u32>(),
+        scopes.samples[0] * scopes.samples[1]
+    );
+    let texture = engine
+        .view_texture(&signal, Some([64, 96]), &mut Profile::default())
+        .unwrap();
+    assert_eq!(texture.description().space, Space::SignedDetail);
+    drop(source);
+    assert_eq!(engine.gpu.readback(&edge.buffer).unwrap(), before);
+    assert_eq!(signal.settings.reconstruction, settings.reconstruction);
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn camera_repair_matches_manual_cutoff_and_sensor_inspection_skips_selection() {
+    let engine = Engine::new().unwrap();
+    let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+        .join("blue-parking-sign.x3f");
+    let mut source = Source::open(path).unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.repair = Some(super::RepairThreshold::Camera);
+    let read = |source: &Source, settings: &Settings| {
+        let artifact = engine
+            .render_artifacts(
+                source,
+                settings,
+                &["repair.layers"],
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(artifact.settings.repair, settings.repair);
+        let crate::inspection::Content::Image(image) = artifact.content else {
+            panic!()
+        };
+        engine.gpu.readback(&image.buffer).unwrap()
+    };
+    let automatic = read(&source, &settings);
+    settings.repair = Some(super::RepairThreshold::Manual(2));
+    assert_eq!(read(&source, &settings), automatic);
+    settings.repair = Some(super::RepairThreshold::Manual(8));
+    assert_ne!(read(&source, &settings), automatic);
+    drop(automatic);
+    settings.repair = Some(super::RepairThreshold::Camera);
+    std::sync::Arc::make_mut(&mut source.metadata)
+        .matrices
+        .remove("BadnessTable");
+    assert!(engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["sensor.layers"],
+            &mut Profile::default()
+        )
+        .is_ok());
+    assert!(engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["repair.layers"],
+            &mut Profile::default()
+        )
+        .is_err());
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn advanced_overrides_preserve_captured_base_and_produce_finite_extremes() {
+    let engine = Engine::new().unwrap();
+    let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+        .join("blue-parking-sign.x3f");
+    let source = Source::open(path).unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    let read = |settings: &Settings, root| {
+        let artifact = engine
+            .render_artifacts(&source, settings, &[root], &mut Profile::default())
+            .unwrap()
+            .pop()
+            .unwrap();
+        let crate::inspection::Content::Image(image) = artifact.content else {
+            panic!()
+        };
+        engine.gpu.readback(&image.buffer).unwrap()
+    };
+    let baseline = read(&settings, "noise.layers");
+    let values = crate::noise::calculated_values(
+        &source.metadata,
+        "Sunlight",
+        1.,
+        settings.reconstruction.unwrap(),
+    )
+    .unwrap();
+    for parameter in crate::noise::Parameter::ALL {
+        settings
+            .reconstruction
+            .as_mut()
+            .unwrap()
+            .overrides
+            .set(parameter, Some(values[parameter as usize]));
+    }
+    assert_eq!(read(&settings, "noise.layers"), baseline);
+    settings
+        .reconstruction
+        .as_mut()
+        .unwrap()
+        .overrides
+        .set(crate::noise::Parameter::MeanDecay, Some(0.));
+    assert_ne!(read(&settings, "noise.layers"), baseline);
+    drop(baseline);
+    for maximum in [false, true] {
+        for parameter in crate::noise::Parameter::ALL {
+            let bounds = parameter.bounds();
+            settings.reconstruction.as_mut().unwrap().overrides.set(
+                parameter,
+                Some(if maximum {
+                    *bounds.end()
+                } else {
+                    *bounds.start()
+                }),
+            );
+        }
+        let bytes = read(&settings, "reconstruction.rgb");
+        assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
+            .iter()
+            .all(|v| v.is_finite()));
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn reconstruction_originals_stay_finite_across_noise_choices_and_zero_gain() {
+    let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let engine = Engine::new().unwrap();
+    for file in [
+        "blue-parking-sign",
+        "glossy-leaves-and-buds",
+        "rocks-and-tree-shadows",
+        "sunlit-red-flower",
+        "turquoise-still-life",
+        "yellow-flowers-and-stroller",
+    ] {
+        let source = Source::open(dir.join(format!("{file}.x3f"))).unwrap();
+        for choice in 0..=4 {
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.reconstruction = Some(crate::noise::Controls {
+                chroma: choice,
+                luminance: (choice + 2) % 5,
+                detail: if choice == 0 { 0. } else { 1. },
+                ..Default::default()
+            });
+            settings.sensor_gain = if choice == 2 { 0. } else { 1. };
+            settings.color_dq_gain = if choice == 4 { 1. } else { 0. };
+            let mut artifacts = engine
+                .render_artifacts(
+                    &source,
+                    &settings,
+                    &["reconstruction.rgb"],
+                    &mut Profile::default(),
+                )
+                .unwrap();
+            let crate::inspection::Content::Image(image) = artifacts.remove(0).content else {
+                panic!("expected an image")
+            };
+            let bytes = engine.gpu.readback(&image.buffer).unwrap();
+            let samples = bytemuck::cast_slice::<u8, f32>(&bytes);
+            assert!(
+                samples.iter().all(|v| v.is_finite()),
+                "{file}, choice {choice}"
+            );
+            if settings.sensor_gain == 0. {
+                let [x0, y0, x1, y1] = image.view.crop;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let pixel = ((y * image.description.extent[0] + x) * 3) as usize;
+                        assert_eq!(
+                            &samples[pixel..pixel + 3],
+                            &[0.; 3],
+                            "zero gain at {x},{y} in {file}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

@@ -15,6 +15,7 @@ implementation: incomplete
 - Each output **must** remain alive until its last required consumer has submitted its read. Displayed artifacts, explicitly retained references, and interaction checkpoints **must** remain immutable and excluded from reusable scratch.
 - Materialization **should** be limited to required outputs where the algorithm permits. Outputs needed internally or downstream **may** occupy temporary storage released after their last required consumer.
 - Switching to an unretained output **may** recompute its dependencies. Results **must** preserve the source, settings, and algorithm context needed to avoid mixing artifacts from different configurations.
+- Inspect **must** group processing buffers and their component views. RGB stages offer RGB/Red/Green/Blue, sensor-layer stages offer Layer 1/2/3, and scalar stages have a single entry. Component-only changes **must** reuse the retained buffer and texture without processing a new image. Scopes continue analyzing the full buffer independently of the display component.
 - Visualization **must** distinguish sensor layers from RGB and scalar fields. Diagnostic display mapping **must** preserve buffer samples and use the selected output's processing space.
 - Interactive scheduling **must** bound in-flight render work and prevent stale results from replacing the current selection.
 

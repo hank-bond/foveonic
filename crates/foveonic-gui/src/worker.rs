@@ -22,6 +22,8 @@ pub struct Request {
     pub export: Option<PathBuf>,
 }
 pub struct Frame {
+    pub path: PathBuf,
+    pub output: String,
     pub artifact: Artifact,
     pub texture: Arc<ImageTexture>,
     pub scopes: foveonic::scopes::Scopes,
@@ -115,6 +117,8 @@ impl Worker {
                     let scopes = engine.scopes(image, &mut profile)?;
                     engine.device().poll(eframe::wgpu::Maintain::Wait);
                     Ok(Some(Frame {
+                        path: request.path.clone(),
+                        output: request.output.clone(),
                         artifact,
                         texture,
                         scopes,

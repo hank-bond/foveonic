@@ -8,6 +8,12 @@ use std::path::PathBuf;
 pub enum DataType {
     SensorLayers,
     ScalarField,
+    LuminanceRatio,
+    SignedDetail,
+    FilteredTiles,
+    ResidualTiles,
+    RatioTiles,
+    ColorTiles(ColorSpace),
     BlackLevels,
     Histogram,
     CalibratedLayers,
@@ -23,6 +29,8 @@ impl From<crate::image::Space> for DataType {
         match space {
             Space::SensorLayers => Self::SensorLayers,
             Space::ScalarField => Self::ScalarField,
+            Space::LuminanceRatio => Self::LuminanceRatio,
+            Space::SignedDetail => Self::SignedDetail,
             Space::CalibratedLayers => Self::CalibratedLayers,
             Space::LinearRgb(space) => Self::LinearRgb(space),
             Space::ToneMappedRgb(space) => Self::ToneMappedRgb(space),
@@ -42,8 +50,23 @@ pub enum Operation {
         params: ColorParams,
         space: ColorSpace,
     },
-    Repair {
-        flags: Vec<u32>,
+    Repair(crate::repair::Prepared),
+    Despeckle(crate::despeckle::Prepared),
+    NoiseBase(crate::noise::Parameters),
+    Detail(crate::noise::Parameters),
+    TiledColor {
+        params: crate::noise::Parameters,
+        color: ColorParams,
+        space: ColorSpace,
+    },
+    TiledColorDq {
+        params: crate::noise::Parameters,
+        table: crate::color_dq::Table,
+        space: ColorSpace,
+    },
+    Reconstruct {
+        params: crate::noise::Parameters,
+        space: ColorSpace,
     },
     ColorDq {
         table: crate::color_dq::Table,
@@ -89,7 +112,13 @@ impl Operation {
             Self::Black(_) => "submit black",
             Self::Calibrate(_) => "submit calibration",
             Self::Color { .. } => "submit color",
-            Self::Repair { .. } => "submit repair",
+            Self::Repair(_) => "submit repair",
+            Self::Despeckle(_) => "submit despeckle",
+            Self::NoiseBase(_) => "submit reference noise base",
+            Self::Detail(_) => "submit reference detail",
+            Self::TiledColor { .. } => "submit tiled color",
+            Self::TiledColorDq { .. } => "submit tiled ColorDQ",
+            Self::Reconstruct { .. } => "submit reconstruction",
             Self::ColorDq { .. } => "submit ColorDQ",
             Self::SensorGain { .. } => "submit sensor gain",
             Self::Saturation { .. } => "submit saturation",
@@ -109,7 +138,15 @@ impl Operation {
             Self::Black(_) => (vec![SensorLayers], BlackLevels),
             Self::Calibrate(_) => (vec![SensorLayers, BlackLevels], CalibratedLayers),
             Self::Color { space, .. } => (vec![CalibratedLayers], LinearRgb(*space)),
-            Self::Repair { .. } => (vec![CalibratedLayers], CalibratedLayers),
+            Self::Repair(_) | Self::Despeckle(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::NoiseBase(_) => (vec![CalibratedLayers], FilteredTiles),
+            Self::Detail(_) => (vec![CalibratedLayers, FilteredTiles], ResidualTiles),
+            Self::TiledColor { space, .. } => (vec![FilteredTiles], ColorTiles(*space)),
+            Self::TiledColorDq { space, .. } => (vec![ColorTiles(*space)], ColorTiles(*space)),
+            Self::Reconstruct { space, .. } => (
+                vec![ColorTiles(*space), ResidualTiles, RatioTiles],
+                LinearRgb(*space),
+            ),
             Self::SensorGain { .. } => (vec![CalibratedLayers], CalibratedLayers),
             Self::ColorDq { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::Saturation { space, .. } | Self::Blur { space, .. } => {
@@ -171,13 +208,13 @@ impl Graph {
             dependencies: inputs.to_vec(),
         });
         let mut outputs = vec![id];
-        if matches!(operation, Operation::Black(_)) {
+        for (name, data, slots) in operation.side_outputs() {
             outputs.push(self.outputs.len());
             self.outputs.push(Output {
                 producer,
-                data: DataType::Histogram,
-                name: "black.histogram",
-                dependencies: inputs.to_vec(),
+                data,
+                name,
+                dependencies: slots.iter().map(|slot| inputs[*slot]).collect(),
             });
         }
         self.nodes.push(Node {
@@ -207,13 +244,38 @@ impl Graph {
 }
 
 impl Operation {
+    fn side_outputs(&self) -> Vec<(&'static str, DataType, Vec<usize>)> {
+        use DataType::*;
+        match self {
+            Self::Black(_) => vec![("black.histogram", Histogram, vec![0])],
+            Self::NoiseBase(_) => vec![
+                ("noise.layers", CalibratedLayers, vec![0]),
+                ("noise.edges", ScalarField, vec![0]),
+            ],
+            Self::Detail(_) => vec![
+                ("detail.ratio-tiles", RatioTiles, vec![0, 1]),
+                ("detail.ratio", LuminanceRatio, vec![0, 1]),
+            ],
+            Self::TiledColor { space, .. } => vec![("color.rgb", LinearRgb(*space), vec![0])],
+            Self::TiledColorDq { space, .. } => vec![("color-dq.rgb", LinearRgb(*space), vec![0])],
+            Self::Reconstruct { .. } => vec![("detail.signal", SignedDetail, vec![0, 2])],
+            _ => Vec::new(),
+        }
+    }
+
     pub fn output_name(&self) -> &'static str {
         match self {
             Self::Source => "sensor.layers",
             Self::RenderedInput { .. } => "import.image",
             Self::Black(_) => "black.levels",
             Self::Calibrate(_) => "calibration.layers",
-            Self::Repair { .. } => "repair.layers",
+            Self::Repair(_) => "repair.layers",
+            Self::Despeckle(_) => "despeckle.layers",
+            Self::NoiseBase(_) => "noise.tiles",
+            Self::Detail(_) => "detail.gain-tiles",
+            Self::TiledColor { .. } => "color.tiles",
+            Self::TiledColorDq { .. } => "color-dq.tiles",
+            Self::Reconstruct { .. } => "reconstruction.rgb",
             Self::Color { .. } => "color.rgb",
             Self::ColorDq { .. } => "color-dq.rgb",
             Self::SensorGain { .. } => "gain.layers",
@@ -261,6 +323,57 @@ mod tests {
     }
 
     #[test]
+    fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
+        let mut graph = Graph::default();
+        let params = <crate::noise::Parameters as bytemuck::Zeroable>::zeroed();
+        let raw = graph
+            .add(
+                Operation::RenderedInput {
+                    data: DataType::CalibratedLayers,
+                },
+                &[],
+            )
+            .unwrap();
+        let base = graph.add(Operation::NoiseBase(params), &[raw]).unwrap();
+        let detail = graph.add(Operation::Detail(params), &[raw, base]).unwrap();
+        let colour = graph
+            .add(
+                Operation::TiledColor {
+                    params,
+                    color: ColorParams {
+                        source: [0; 4],
+                        matrix: [[0.; 4]; 3],
+                    },
+                    space: ColorSpace::Srgb,
+                },
+                &[base],
+            )
+            .unwrap();
+        let restored = graph
+            .add(
+                Operation::Reconstruct {
+                    params,
+                    space: ColorSpace::Srgb,
+                },
+                &[colour, detail, detail + 1],
+            )
+            .unwrap();
+        let required = graph.required(&[restored + 1]).unwrap();
+        assert!(required[raw] && required[base] && required[colour] && required[detail + 1]);
+        assert!(!required[detail] && !required[restored]);
+        assert_eq!(graph.outputs[restored + 1].data, DataType::SignedDetail);
+        let required = graph.required(&[base + 2]).unwrap();
+        assert!(required[raw]);
+        assert!(!required[base] && !required[detail] && !required[colour]);
+        let tone = Operation::Tone {
+            curve: vec![0., 1.],
+            exposure: 1.,
+            space: ColorSpace::Srgb,
+        };
+        assert!(graph.add(tone, &[colour]).is_err()); // projection establishes full-sensor geometry
+    }
+
+    #[test]
     fn rejects_wrong_space_and_forward_dependencies() {
         let mut graph = Graph::default();
         let source = graph.add(Operation::Source, &[]).unwrap();
@@ -305,7 +418,13 @@ mod tests {
             )
             .unwrap();
         assert!(graph
-            .add(Operation::Repair { flags: vec![0] }, &[linear])
+            .add(
+                Operation::Repair(crate::repair::Prepared {
+                    params: [3, 3, 0, 0],
+                    records: vec![]
+                }),
+                &[linear]
+            )
             .is_err());
         let gain = || Operation::SensorGain { factor: 1.3 };
         assert!(graph.add(gain(), &[source]).is_err()); // gain requires black-corrected layers

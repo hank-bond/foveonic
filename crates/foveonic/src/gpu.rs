@@ -37,6 +37,24 @@ pub enum Kernel {
     ColorDq,
     View,
     Scopes,
+    NoiseTile,
+    NoiseBlock,
+    NoiseRadius,
+    NoiseBilateral,
+    NoiseEdge,
+    NoiseMean,
+    NoiseLuminance,
+    NoiseDiffuse,
+    NoiseOsf,
+    NoiseRatio,
+    NoiseMix,
+    NoiseRestore,
+    NoiseSignal,
+    NoiseStitch,
+    SpeckleDetect,
+    SpecklePrefix,
+    SpeckleScatter,
+    SpeckleRepair,
 }
 
 impl Kernel {
@@ -54,6 +72,24 @@ impl Kernel {
             Self::ColorDq => "ColorDQ",
             Self::View => "view texture",
             Self::Scopes => "current buffer scopes",
+            Self::NoiseTile => "noise tile context",
+            Self::NoiseBlock => "noise block means",
+            Self::NoiseRadius => "adaptive noise radius",
+            Self::NoiseBilateral => "noise bilateral base",
+            Self::NoiseEdge => "noise edge weights",
+            Self::NoiseMean => "directional local mean",
+            Self::NoiseLuminance => "reconstruction luminance",
+            Self::NoiseDiffuse => "luminance diffusion",
+            Self::NoiseOsf => "luminance extrema conditioning",
+            Self::NoiseRatio => "detail ratio",
+            Self::NoiseMix => "residual detail mixing",
+            Self::NoiseRestore => "detail reconstruction",
+            Self::NoiseSignal => "signed detail signal",
+            Self::NoiseStitch => "processing tile projection",
+            Self::SpeckleDetect => "speckle detection",
+            Self::SpecklePrefix => "speckle bank prefixes",
+            Self::SpeckleScatter => "speckle record compaction",
+            Self::SpeckleRepair => "ordered speckle correction",
         }
     }
 }
@@ -61,7 +97,7 @@ impl Kernel {
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    pipelines: [wgpu::ComputePipeline; 12],
+    pipelines: Vec<wgpu::ComputePipeline>,
     pub adapter_name: String,
 }
 
@@ -106,33 +142,58 @@ impl Gpu {
             (include_str!("shaders/color_dq.wgsl"), "main"),
             (include_str!("shaders/view.wgsl"), "main"),
             (include_str!("shaders/scopes.wgsl"), "main"),
+            (include_str!("shaders/noise_base.wgsl"), "tile_input"),
+            (include_str!("shaders/noise_base.wgsl"), "block_mean"),
+            (include_str!("shaders/noise_base.wgsl"), "radius_map"),
+            (include_str!("shaders/noise_base.wgsl"), "bilateral"),
+            (include_str!("shaders/noise_base.wgsl"), "edge_map"),
+            (include_str!("shaders/noise_base.wgsl"), "local_mean"),
+            (include_str!("shaders/noise_detail.wgsl"), "luminance"),
+            (include_str!("shaders/noise_detail.wgsl"), "diffuse"),
+            (include_str!("shaders/noise_detail.wgsl"), "osf"),
+            (include_str!("shaders/noise_detail.wgsl"), "ratio"),
+            (include_str!("shaders/noise_detail.wgsl"), "residual_mix"),
+            (include_str!("shaders/noise_detail.wgsl"), "restore"),
+            (include_str!("shaders/noise_detail.wgsl"), "signal"),
+            (include_str!("shaders/noise_stitch.wgsl"), "stitch"),
+            (include_str!("shaders/despeckle.wgsl"), "detect"),
+            (include_str!("shaders/despeckle.wgsl"), "prefix"),
+            (include_str!("shaders/despeckle.wgsl"), "scatter"),
+            (include_str!("shaders/despeckle.wgsl"), "repair"),
         ];
-        let pipelines = std::array::from_fn(|index| {
-            let (code, entry) = kernels[index];
-            let code: std::borrow::Cow<'_, str> = if [
-                Kernel::Encode as usize,
-                Kernel::View as usize,
-                Kernel::Scopes as usize,
-            ]
-            .contains(&index)
-            {
-                format!("{}\n{code}", include_str!("shaders/sample.wgsl")).into()
-            } else {
-                code.into()
-            };
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(entry),
-                source: wgpu::ShaderSource::Wgsl(code),
-            });
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: None,
-                module: &shader,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
+        let pipelines = kernels
+            .iter()
+            .enumerate()
+            .map(|(index, &(code, entry))| {
+                let code: std::borrow::Cow<'_, str> = if [
+                    Kernel::Encode as usize,
+                    Kernel::View as usize,
+                    Kernel::Scopes as usize,
+                ]
+                .contains(&index)
+                {
+                    format!("{}\n{code}", include_str!("shaders/sample.wgsl")).into()
+                } else if (Kernel::NoiseTile as usize..=Kernel::NoiseStitch as usize)
+                    .contains(&index)
+                {
+                    format!("{}\n{code}", include_str!("shaders/noise_common.wgsl")).into()
+                } else {
+                    code.into()
+                };
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(entry),
+                    source: wgpu::ShaderSource::Wgsl(code),
+                });
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
             })
-        });
+            .collect();
         if let Some(error) = pollster::block_on(device.pop_error_scope()) {
             return Err(error.into());
         }
@@ -151,7 +212,11 @@ impl Gpu {
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(values),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                // Uploaded image inputs can later enter the execution-local
+                // scratch pool, whose next owner may initialize by GPU copy.
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
             }))
     }
 
@@ -169,9 +234,19 @@ impl Gpu {
         Ok(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }))
+    }
+
+    pub fn copy(&self, source: &wgpu::Buffer, target: &wgpu::Buffer, size: u64) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_buffer_to_buffer(source, 0, target, 0, size);
+        self.queue.submit(Some(encoder.finish()));
     }
 
     fn check_size(&self, size: u64) -> Result<()> {

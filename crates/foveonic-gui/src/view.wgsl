@@ -21,7 +21,9 @@ fn encode(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(v, vec3(1./2.4)
     let channel = i32(params.options.x);
     if channel >= 0 { rgb = vec3(rgb[channel]); }
     else if params.options.z > 0. { rgb = vec3(1.39835574 * rgb.r - 0.39835574 * rgb.g, rgb.g, 1.04292899 * rgb.b - 0.04292899 * rgb.g); }
-    rgb = clamp(rgb * params.options.y, vec3(0.), vec3(1.));
+    rgb *= params.options.y;
+    if params.options.z < -1.5 { rgb += 0.5; }
+    rgb = clamp(rgb, vec3(0.), vec3(1.));
     if params.options.z < 0. {
         // Map scalar coverage directly to display gray.
         if params.options.w > 0. { rgb = select(pow((rgb + 0.055) / 1.055, vec3(2.4)), rgb / 12.92, rgb <= vec3(0.04045)); }

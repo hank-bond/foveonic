@@ -1,7 +1,10 @@
 //! Runs a three-pane Merrill workspace with current-buffer inspection, reorderable tools, and UI-only persistence.
 
+mod advanced;
 mod browser;
 mod controls;
+mod information;
+mod inspect;
 mod metadata;
 mod preferences;
 mod scopes;
@@ -26,6 +29,7 @@ struct App {
     settings: Settings,
     camera_overrides: [String; 2],
     output: String,
+    channel: i32,
     frame: Option<worker::Frame>,
     scope_images: Option<scopes::Images>,
     viewport: viewport::Viewport,
@@ -65,6 +69,7 @@ impl App {
             settings,
             camera_overrides: overrides,
             output: "final".into(),
+            channel: -1,
             frame: None,
             scope_images: None,
             viewport: Default::default(),
@@ -235,8 +240,9 @@ impl App {
                     .selected
                     .as_ref()
                     .and_then(|p| self.browser.thumbnail(p));
+                let channel = self.displayed_channel();
                 self.viewport
-                    .navigator(ui, texture, preview.as_ref(), self.srgb_target);
+                    .navigator(ui, texture, preview.as_ref(), channel, self.srgb_target);
                 false
             }
             Section::Scopes => {
@@ -270,25 +276,6 @@ impl App {
                     changed =
                         controls::processing(ui, &mut self.settings, self.metadata.as_deref());
                 });
-                ui.separator();
-                ui.weak("Display channel / layer");
-                egui::ComboBox::from_id_salt("channel")
-                    .selected_text(match self.viewport.channel {
-                        0 => "Channel / layer 1",
-                        1 => "Channel / layer 2",
-                        2 => "Channel / layer 3",
-                        _ => "RGB / first sensor layer",
-                    })
-                    .show_ui(ui, |ui| {
-                        for (i, name) in [
-                            (-1, "RGB / first sensor layer"),
-                            (0, "Channel / layer 1"),
-                            (1, "Channel / layer 2"),
-                            (2, "Channel / layer 3"),
-                        ] {
-                            ui.selectable_value(&mut self.viewport.channel, i, name);
-                        }
-                    });
                 ui.small("sRGB SDR presentation; monitor-profile correction pending.");
                 changed
             }
@@ -329,48 +316,61 @@ impl App {
         }
         changed
     }
+    fn displayed_channel(&self) -> i32 {
+        // A pending root's component must not reinterpret the artifact still being displayed.
+        if self.frame.as_ref().is_some_and(|f| f.output == self.output) {
+            self.channel
+        } else {
+            -1
+        }
+    }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
-            let outputs = foveonic::inspection::image_output_names(&self.settings);
-            if !outputs.contains(&self.output.as_str()) {
-                self.output = "final".into();
-                changed = true;
-            }
             ui.weak("Inspect");
             ui.add_enabled_ui(!self.exporting, |ui| {
-                egui::ComboBox::from_id_salt("artifact")
-                    .selected_text(&self.output)
-                    .width(145.)
-                    .show_ui(ui, |ui| {
-                        for output in outputs {
-                            changed |= ui
-                                .selectable_value(&mut self.output, output.into(), output)
-                                .changed();
-                        }
-                    });
+                changed |= inspect::show(ui, &self.settings, &mut self.output, &mut self.channel);
             });
-            if let Some(path) = &self.selected {
-                ui.add(
-                    egui::Label::new(path.file_name().unwrap_or_default().to_string_lossy())
-                        .truncate(),
-                );
-            }
         });
         ui.add_space(3.);
-        if let Some(frame) = &self.frame {
-            self.viewport
-                .show(ui, frame.texture.clone(), self.srgb_target);
-        } else if let Some(path) = &self.selected {
-            if let Some(preview) = self.browser.thumbnail(path) {
-                self.viewport
-                    .show_preview(ui, &preview.texture, preview.native_extent);
-            }
-        } else {
-            ui.centered_and_justified(|ui| {
-                ui.weak("Open a folder or Merrill X3F");
-            });
-        }
+        let height =
+            (ui.available_height() - information::HEIGHT - ui.spacing().item_spacing.y).max(0.);
+        let channel = self.displayed_channel();
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), height),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_min_height(height);
+                if let Some(frame) = &self.frame {
+                    self.viewport
+                        .show(ui, frame.texture.clone(), channel, self.srgb_target);
+                } else if let Some(path) = &self.selected {
+                    if let Some(preview) = self.browser.thumbnail(path) {
+                        self.viewport
+                            .show_preview(ui, &preview.texture, preview.native_extent);
+                    }
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.weak("Open a folder or Merrill X3F");
+                    });
+                }
+            },
+        );
+        let path = self
+            .frame
+            .as_ref()
+            .map(|f| &f.path)
+            .or(self.selected.as_ref());
+        let filename = path
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+        let metadata = self
+            .frame
+            .as_ref()
+            .map(|f| f.artifact.metadata.as_ref())
+            .or(self.metadata.as_deref());
+        information::show(ui, metadata, &filename, self.viewport.visible_pixels());
         changed
     }
 }

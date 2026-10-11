@@ -1,7 +1,10 @@
 //! Builds aligned sensor/tone editing rows with reset, focused value nudges, and sample-based rerender signals.
 
 use eframe::egui;
-use foveonic::{render::Settings, source::Metadata};
+use foveonic::{
+    render::{RepairThreshold, Settings},
+    source::Metadata,
+};
 use std::ops::RangeInclusive;
 
 pub fn adjustment<T: egui::emath::Numeric>(
@@ -137,7 +140,30 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         changed |= adjustment(ui, label, value, -2. ..=2., 0.);
     }
     ui.separator();
-    ui.weak("Corrections and detail");
+    ui.weak("Reference noise and detail");
+    let mut reconstruction = settings.reconstruction.is_some();
+    if ui
+        .checkbox(&mut reconstruction, "Reference reconstruction")
+        .changed()
+    {
+        settings.reconstruction = reconstruction.then(Default::default);
+        changed = true;
+    }
+    if let Some(controls) = &mut settings.reconstruction {
+        changed |= adjustment(ui, "Chroma noise", &mut controls.chroma, 0..=4, 2);
+        changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
+        changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
+        ui.small("Noise choices are reference presets; 0 still filters. Detail 1× is reference restoration, 0× is the filtered base.");
+        changed |= crate::advanced::show(
+            ui,
+            controls,
+            metadata,
+            &settings.white_balance,
+            settings.sensor_gain,
+        );
+    }
+    ui.separator();
+    ui.weak("Corrections and sharpening");
     for (label, value, range, default) in [
         ("ColorDQ gain", &mut settings.color_dq_gain, 0. ..=2., 0.),
         ("Sharpen", &mut settings.sharpen_amount, 0. ..=2., 0.),
@@ -145,23 +171,161 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     ] {
         changed |= adjustment(ui, label, value, range, default);
     }
-    let mut repair = settings.repair_badness.is_some();
+    let mut repair = settings.repair.is_some();
     if ui
-        .checkbox(&mut repair, "Isolated bad-pixel repair")
+        .checkbox(&mut repair, "Camera-record repair")
+        .on_hover_text("Correct camera-listed defects in record order using masked, chroma-anchored neighbors, including adjacent marked pixels.")
         .changed()
     {
-        settings.repair_badness = repair.then_some(8);
+        settings.repair = repair.then_some(RepairThreshold::Camera);
         changed = true;
     }
-    if let Some(value) = &mut settings.repair_badness {
-        changed |= adjustment(ui, "Min. badness", value, 0..=15, 8);
+    if let Some(threshold) = &mut settings.repair {
+        let camera = metadata.map(|m| RepairThreshold::Camera.resolve(m));
+        let automatic = camera.as_ref().and_then(|r| r.as_ref().ok()).copied();
+        let mut manual = matches!(threshold, RepairThreshold::Manual(_));
+        if ui.checkbox(&mut manual, "Manual cutoff").changed() {
+            *threshold = if manual {
+                RepairThreshold::Manual(automatic.unwrap_or(0))
+            } else {
+                RepairThreshold::Camera
+            };
+            changed = true;
+        }
+        if let RepairThreshold::Manual(value) = threshold {
+            let default = automatic.unwrap_or(*value);
+            changed |= adjustment(ui, "Min. badness", value, 0..=15, default);
+        } else if let Some(value) = automatic {
+            ui.weak(format!("Camera minimum badness: {value}"));
+        } else {
+            ui.weak(camera.map_or_else(
+                || "Waiting for camera cutoff".into(),
+                |r| r.unwrap_err().to_string(),
+            ));
+        }
     }
+    changed |= ui.checkbox(&mut settings.despeckle, "Despeckle").on_hover_text("Detect remaining channel speckles and correct them before reconstruction. Independent of camera-record repair; both are on by default.").changed();
     changed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn correction_checkboxes_start_enabled_and_toggle_independently() {
+        for label in ["Camera-record repair", "Despeckle"] {
+            let ctx = egui::Context::default();
+            let mut settings = Settings::new("Sunlight", "Standard");
+            let mut render = |events| {
+                let mut changed = false;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 2000.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            changed = processing(ui, &mut settings, None);
+                        });
+                    },
+                );
+                (
+                    changed,
+                    output,
+                    settings.repair.is_some(),
+                    settings.despeckle,
+                )
+            };
+            let (_, output, repair, despeckle) = render(vec![]);
+            assert!(repair && despeckle);
+            let point = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == label => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let event = |pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            render(vec![egui::Event::PointerMoved(point), event(true)]);
+            let (changed, _, repair, despeckle) = render(vec![event(false)]);
+            assert!(changed);
+            assert_eq!(
+                (repair, despeckle),
+                if label == "Despeckle" {
+                    (true, false)
+                } else {
+                    (false, true)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn reference_checkbox_enables_shared_defaults_and_requests_rerender() {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        let mut frame = |time, events| {
+            let mut changed = false;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 1000.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        changed = processing(ui, &mut settings, None);
+                    });
+                },
+            );
+            (changed, output, settings.reconstruction)
+        };
+        let (changed, output, reconstruction) = frame(0., vec![]);
+        assert!(reconstruction.is_none());
+        assert!(!changed);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Reference reconstruction" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap();
+        for (time, enabled) in [(1., true), (2., false)] {
+            let event = |pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            assert!(!frame(time, vec![egui::Event::PointerMoved(point), event(true)]).0);
+            let (changed, _, controls) = frame(time + 0.1, vec![event(false)]);
+            assert!(changed);
+            assert_eq!(controls, enabled.then(Default::default));
+        }
+        assert!(settings.reconstruction.is_none());
+        assert_eq!(settings.sensor_gain, 1.);
+        assert_eq!(settings.exposure, 0.);
+    }
+
     fn nudge_frame<T: egui::emath::Numeric>(
         ctx: &egui::Context,
         value: &mut T,

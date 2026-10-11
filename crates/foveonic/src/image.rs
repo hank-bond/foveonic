@@ -22,7 +22,12 @@ pub enum Layout {
 pub enum Space {
     SensorLayers,
     ScalarField,
+    /// Multiplicative luminance residual; 1 is neutral and the display range is 0..2.
+    LuminanceRatio,
+    /// Signed reconstruction detail in camera code units; display range is −1000..1000.
+    SignedDetail,
     CalibratedLayers,
+    /// Camera-color RGB in code units, with a nominal inspection range of 0..4095.
     LinearRgb(ColorSpace),
     /// Tone-mapped components in linear working primaries.
     ToneMappedRgb(ColorSpace),
@@ -92,7 +97,11 @@ impl RenderedImage {
             Space::LinearRgb(space) | Space::ToneMappedRgb(space) | Space::EncodedRgb16(space) => {
                 space
             }
-            Space::SensorLayers | Space::CalibratedLayers | Space::ScalarField => ColorSpace::Srgb,
+            Space::SensorLayers
+            | Space::CalibratedLayers
+            | Space::ScalarField
+            | Space::LuminanceRatio
+            | Space::SignedDetail => ColorSpace::Srgb,
         };
         EncodeParams {
             source: [

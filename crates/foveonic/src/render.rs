@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+pub use crate::repair::Threshold as RepairThreshold;
 pub use crate::tone::Controls as ToneControls;
 
 #[derive(Clone, Debug)]
@@ -26,8 +27,12 @@ pub struct Settings {
     pub saturation: f32,
     /// Multiplies camera ColorDQ amplitudes after camera color conversion; zero omits conditioning.
     pub color_dq_gain: f32,
-    /// Select isolated camera-record repairs with at least this badness (0..15).
-    pub repair_badness: Option<u32>,
+    /// Ordered camera-record repair, using the current cutoff or an explicit minimum badness.
+    pub repair: Option<RepairThreshold>,
+    /// Detect and correct remaining channel extrema with reference-style despeckling.
+    pub despeckle: bool,
+    /// Reference-style noise filtering and residual reconstruction; None keeps the neutral route.
+    pub reconstruction: Option<crate::noise::Controls>,
     /// Unsharp-mask strength; zero omits sharpening.
     pub sharpen_amount: f32,
     /// Gaussian sigma in full-sensor pixels, before output resizing.
@@ -46,7 +51,9 @@ impl Settings {
             sensor_gain: 1.,
             saturation: 1.,
             color_dq_gain: 0.,
-            repair_badness: None,
+            repair: Some(RepairThreshold::Camera),
+            despeckle: true,
+            reconstruction: None,
             sharpen_amount: 0.,
             sharpen_radius: 1.,
             output_size: None,
@@ -91,8 +98,11 @@ impl Settings {
         {
             return Err("sharpen radius must be in 0..16 pixels, excluding zero".into());
         }
-        if self.repair_badness.is_some_and(|v| v > 15) {
-            return Err("repair badness must be in 0..15".into());
+        if let Some(threshold) = self.repair {
+            threshold.validate()?;
+        }
+        if let Some(controls) = self.reconstruction {
+            controls.validate()?;
         }
         if self.output_size.is_some_and(|size| size.contains(&0)) {
             return Err("output dimensions must be nonzero".into());
@@ -170,11 +180,19 @@ fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
     let (layout, space) = match data {
         DataType::SensorLayers => (Layout::Rgb32Float, Space::SensorLayers),
         DataType::ScalarField => (Layout::Scalar32Float, Space::ScalarField),
+        DataType::LuminanceRatio => (Layout::Scalar32Float, Space::LuminanceRatio),
+        DataType::SignedDetail => (Layout::Scalar32Float, Space::SignedDetail),
         DataType::CalibratedLayers => (Layout::Rgb32Float, Space::CalibratedLayers),
         DataType::LinearRgb(space) => (Layout::Rgb32Float, Space::LinearRgb(space)),
         DataType::ToneMappedRgb(space) => (Layout::Rgb32Float, Space::ToneMappedRgb(space)),
         DataType::EncodedRgb16(space) => (Layout::PackedRgb16, Space::EncodedRgb16(space)),
-        DataType::BlackLevels | DataType::Histogram | DataType::File => return None,
+        DataType::BlackLevels
+        | DataType::Histogram
+        | DataType::File
+        | DataType::FilteredTiles
+        | DataType::ResidualTiles
+        | DataType::RatioTiles
+        | DataType::ColorTiles(_) => return None,
     };
     Some(Description {
         extent,
@@ -251,7 +269,7 @@ impl Engine {
         let crate::inspection::Content::Image(image) = artifact.content else {
             return Err("final output is not an image".into());
         };
-        Ok(image)
+        Ok(*image)
     }
 
     /// Request stable named outputs. Only their dependencies execute; other outputs are transient.
@@ -315,32 +333,89 @@ impl Engine {
             )?;
             finish!();
         }
-        if let Some(minimum) = settings.repair_badness {
-            let flags = profile.measure("prepare repair map", || {
-                crate::repair::flags(&source.metadata, minimum)
+        if let Some(threshold) = settings.repair {
+            let prepared = profile.measure("prepare repair records", || {
+                crate::repair::prepare(&source.metadata, threshold.resolve(&source.metadata)?)
             })?;
-            calibrated = graph.add(Operation::Repair { flags }, &[calibrated])?;
+            calibrated = graph.add(Operation::Repair(prepared), &[calibrated])?;
             finish!();
         }
+        if settings.despeckle {
+            let prepared = profile.measure("prepare despeckle", || {
+                crate::despeckle::prepare(
+                    &source.metadata,
+                    &settings.white_balance,
+                    settings.sensor_gain,
+                )
+            })?;
+            calibrated = graph.add(Operation::Despeckle(prepared), &[calibrated])?;
+            finish!();
+        }
+        let reconstruction = if let Some(controls) = settings.reconstruction {
+            let params = profile.measure("prepare reference noise", || {
+                crate::noise::prepare(
+                    &source.metadata,
+                    &settings.white_balance,
+                    settings.sensor_gain,
+                    controls,
+                )
+            })?;
+            let base = graph.add(Operation::NoiseBase(params), &[calibrated])?;
+            finish!();
+            let detail = graph.add(Operation::Detail(params), &[calibrated, base])?;
+            finish!();
+            Some((params, base, detail, detail + 1))
+        } else {
+            None
+        };
         let mode = profile.measure("prepare color mode", || {
             crate::color_mode::prepare(&source.metadata, &settings.color_mode)
         })?;
         let color = profile.measure("prepare color matrix", || {
             calibration::color(&source.metadata, &settings.white_balance, &mode)
         })?;
-        let mut linear = graph.add(
-            Operation::Color {
-                params: color,
-                space,
-            },
-            &[calibrated],
-        )?;
+        let mut linear = if let Some((params, base, _, _)) = reconstruction {
+            graph.add(
+                Operation::TiledColor {
+                    params,
+                    color,
+                    space,
+                },
+                &[base],
+            )?
+        } else {
+            graph.add(
+                Operation::Color {
+                    params: color,
+                    space,
+                },
+                &[calibrated],
+            )?
+        };
         finish!();
         if settings.color_dq_gain > 0. {
             let table = profile.measure("prepare ColorDQ", || {
                 crate::color_dq::prepare(&source.metadata, settings.color_dq_gain)
             })?;
-            linear = graph.add(Operation::ColorDq { table, space }, &[linear])?;
+            linear = if let Some((params, _, _, _)) = reconstruction {
+                graph.add(
+                    Operation::TiledColorDq {
+                        params,
+                        table,
+                        space,
+                    },
+                    &[linear],
+                )?
+            } else {
+                graph.add(Operation::ColorDq { table, space }, &[linear])?
+            };
+            finish!();
+        }
+        if let Some((params, _, detail, ratio)) = reconstruction {
+            linear = graph.add(
+                Operation::Reconstruct { params, space },
+                &[linear, detail, ratio],
+            )?;
             finish!();
         }
         let curve = profile.measure("prepare tone curve", || {
@@ -436,7 +511,7 @@ impl Engine {
             .map(|(value, id)| {
                 let output = &graph.outputs[id];
                 let content = if let Some(description) = value.description {
-                    Content::Image(RenderedImage {
+                    Content::Image(Box::new(RenderedImage {
                         buffer: value.buffer,
                         description,
                         view: View {
@@ -447,7 +522,7 @@ impl Engine {
                         metadata: source.metadata.clone(),
                         settings: settings.clone(),
                         owner: self.owner.clone(),
-                    })
+                    }))
                 } else {
                     let bytes = self.gpu.readback(&value.buffer)?;
                     let values = match output.data {
@@ -734,20 +809,172 @@ impl Engine {
                     );
                     Some(output)
                 }
-                Operation::Repair { flags } => {
+                Operation::NoiseBase(params) => {
+                    let projected = node.outputs[1];
+                    let edge_id = node.outputs[2];
+                    let base = crate::reconstruction::base(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        required[edge_id],
+                        required[index] || required[projected],
+                        profile,
+                    )?;
+                    if required[projected] {
+                        values[projected] = Some(Value {
+                            buffer: crate::reconstruction::project(
+                                gpu,
+                                base.tiles.as_ref().unwrap(),
+                                *params,
+                                3,
+                                false,
+                                profile,
+                            )?,
+                            description: description(DataType::CalibratedLayers, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    if let Some(edges) = base.edges {
+                        values[edge_id] = Some(Value {
+                            buffer: crate::reconstruction::project(
+                                gpu, &edges, *params, 1, false, profile,
+                            )?,
+                            description: description(DataType::ScalarField, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    if required[index] {
+                        base.tiles
+                    } else {
+                        None
+                    }
+                }
+                Operation::Detail(params) => {
+                    let ratio_id = node.outputs[1];
+                    let projected = node.outputs[2];
+                    let detail = crate::reconstruction::detail(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        *params,
+                        required[index],
+                        profile,
+                    )?;
+                    if required[projected] {
+                        values[projected] = Some(Value {
+                            buffer: crate::reconstruction::project(
+                                gpu,
+                                &detail.ratio,
+                                *params,
+                                1,
+                                false,
+                                profile,
+                            )?,
+                            description: description(DataType::LuminanceRatio, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    if required[ratio_id] {
+                        values[ratio_id] = Some(Value {
+                            buffer: detail.ratio,
+                            description: None,
+                            recyclable: false,
+                        });
+                    }
+                    detail.gains
+                }
+                Operation::TiledColor { params, color, .. } => {
+                    let tiles = crate::reconstruction::color(
+                        gpu,
+                        &input(0).buffer,
+                        *color,
+                        *params,
+                        profile,
+                    )?;
+                    let projected = node.outputs[1];
+                    if required[projected] {
+                        values[projected] = Some(Value {
+                            buffer: crate::reconstruction::project(
+                                gpu, &tiles, *params, 3, false, profile,
+                            )?,
+                            description: description(graph.outputs[projected].data, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    required[index].then_some(tiles)
+                }
+                Operation::TiledColorDq { params, table, .. } => {
+                    let tiles = crate::reconstruction::color_dq(
+                        gpu,
+                        &input(0).buffer,
+                        table,
+                        *params,
+                        profile,
+                    )?;
+                    let projected = node.outputs[1];
+                    if required[projected] {
+                        values[projected] = Some(Value {
+                            buffer: crate::reconstruction::project(
+                                gpu, &tiles, *params, 3, false, profile,
+                            )?,
+                            description: description(graph.outputs[projected].data, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    required[index].then_some(tiles)
+                }
+                Operation::Reconstruct { params, .. } => {
+                    let signal_id = node.outputs[1];
+                    let signal = if required[signal_id] {
+                        Some(crate::reconstruction::signal(
+                            gpu,
+                            &input(0).buffer,
+                            &input(2).buffer,
+                            *params,
+                            profile,
+                        )?)
+                    } else {
+                        None
+                    };
+                    let rgb = if required[index] {
+                        Some(crate::reconstruction::restore(
+                            gpu,
+                            &input(0).buffer,
+                            &input(1).buffer,
+                            *params,
+                            profile,
+                        )?)
+                    } else {
+                        None
+                    };
+                    if let Some(buffer) = signal {
+                        values[signal_id] = Some(Value {
+                            buffer,
+                            description: description(DataType::SignedDetail, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    rgb
+                }
+                Operation::Despeckle(prepared) => Some(crate::despeckle::apply(
+                    gpu,
+                    &input(0).buffer,
+                    prepared,
+                    profile,
+                )?),
+                Operation::Repair(prepared) => {
                     let output = scratch.take(gpu, bytes)?;
-                    let flags = gpu.upload("Camera repair map", flags)?;
-                    let uniform = gpu.uniform(&dimensions);
-                    dispatch(
-                        Kernel::Repair,
-                        &[
-                            (0, &input(0).buffer),
-                            (1, &flags),
-                            (2, &uniform),
-                            (3, &output),
-                        ],
-                        groups,
-                    );
+                    gpu.copy(&input(0).buffer, &output, bytes);
+                    if !prepared.records.is_empty() {
+                        let records =
+                            gpu.upload("Ordered camera repair records", &prepared.records)?;
+                        let uniform = gpu.uniform(&prepared.params);
+                        dispatch(
+                            Kernel::Repair,
+                            &[(1, &records), (2, &uniform), (3, &output)],
+                            [1, 1],
+                        );
+                    }
                     Some(output)
                 }
                 Operation::Color { .. }

@@ -84,8 +84,10 @@ pub fn meaning(space: Space) -> String {
         Space::SensorLayers => "Sensor layers · codes 0–4095".into(),
         Space::CalibratedLayers => "Calibrated layers · nominal codes 0–4095".into(),
         Space::ScalarField => "Scalar field · nominal 0–1".into(),
+        Space::LuminanceRatio => "Luminance ratio · 0–2 · 1 neutral".into(),
+        Space::SignedDetail => "Detail signal · −1000…1000 codes".into(),
         Space::LinearRgb(c) | Space::ToneMappedRgb(c) => format!(
-            "{} {} · linear signal 0–1",
+            "{} {} · {}",
             if matches!(space, Space::LinearRgb(_)) {
                 "Linear"
             } else {
@@ -95,6 +97,11 @@ pub fn meaning(space: Space) -> String {
                 "Adobe RGB"
             } else {
                 "sRGB"
+            },
+            if matches!(space, Space::LinearRgb(_)) {
+                "camera codes 0–4095"
+            } else {
+                "linear signal 0–1"
             }
         ),
         Space::EncodedRgb16(_) => "Encoded RGB".into(),
@@ -154,15 +161,26 @@ pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Optio
                 ui.painter()
                     .add(egui::Shape::line(points, egui::Stroke::new(1_f32, color)));
             }
-            let high = if matches!(data.space, Space::SensorLayers | Space::CalibratedLayers) {
+            let high = if matches!(
+                data.space,
+                Space::SensorLayers | Space::CalibratedLayers | Space::LinearRgb(_)
+            ) {
                 "4095"
+            } else if data.space == Space::LuminanceRatio {
+                "2"
+            } else if data.space == Space::SignedDetail {
+                "1000"
             } else {
                 "1"
             };
             ui.painter().text(
                 rect.left_bottom(),
                 egui::Align2::LEFT_BOTTOM,
-                "0",
+                if data.space == Space::SignedDetail {
+                    "−1000"
+                } else {
+                    "0"
+                },
                 egui::FontId::proportional(10.),
                 egui::Color32::GRAY,
             );

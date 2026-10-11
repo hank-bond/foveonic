@@ -21,7 +21,10 @@ pub struct Scopes {
 }
 impl Scopes {
     pub fn channels(&self) -> usize {
-        if self.space == Space::ScalarField {
+        if matches!(
+            self.space,
+            Space::ScalarField | Space::LuminanceRatio | Space::SignedDetail
+        ) {
             1
         } else {
             3
@@ -55,10 +58,12 @@ pub(crate) fn analyze(gpu: &Gpu, image: &RenderedImage, profile: &mut Profile) -
     params.output = [
         samples[0],
         samples[1],
-        u32::from(matches!(
-            space,
-            Space::SensorLayers | Space::CalibratedLayers
-        )),
+        match space {
+            Space::SensorLayers | Space::CalibratedLayers | Space::LinearRgb(_) => 1,
+            Space::SignedDetail => 2,
+            Space::LuminanceRatio => 3,
+            _ => 0,
+        },
         u32::from(matches!(
             space,
             Space::LinearRgb(crate::image::ColorSpace::AdobeRgb)

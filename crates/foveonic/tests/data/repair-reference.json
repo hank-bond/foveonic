@@ -1,0 +1,35 @@
+{
+  "source": "blue-parking-sign.x3f",
+  "reference": "Foveonic diagnostic library audited at e47af35, including permitted unstaged changes",
+  "white_balance": "Sunlight",
+  "aperture": 3.2,
+  "exposure_count": 1,
+  "exposure_gain": 1.0,
+  "rotation": 90,
+  "active_crop": [64, 36, 4767, 3171],
+  "despeckle_record_count": 2679,
+  "points": [
+    {
+      "name": "bolt",
+      "image": [2466, 156],
+      "sensor": [220, 705],
+      "original_layers": [278.0, 144.0, 236.0],
+      "calibrated": [754.5582885742188, 148.19189453125, 162.21035766601562],
+      "repaired": [754.5582885742188, 148.19189453125, 162.21035766601562],
+      "highlight_restored": [754.5582885742188, 148.19189453125, 162.21035766601562],
+      "despeckled": [124.37518310546875, 148.19189453125, 162.21035766601562],
+      "detected_record_flags": 17407
+    },
+    {
+      "name": "white-edge",
+      "image": [907, 3560],
+      "sensor": [3624, 2264],
+      "original_layers": [159.0, 106.0, 287.0],
+      "calibrated": [382.0425720214844, 106.653076171875, 189.76390075683594],
+      "repaired": [382.0425720214844, 106.653076171875, 189.76390075683594],
+      "highlight_restored": [382.0425720214844, 106.653076171875, 189.76390075683594],
+      "despeckled": [38.12125015258789, 106.653076171875, 189.76390075683594],
+      "detected_record_flags": 17407
+    }
+  ]
+}

@@ -7,6 +7,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= params.output_size.xy) { return; }
     var rgb = sample_rgb(id.xy);
     if params.output_size.z == 1u { rgb /= 4095.; }
+    // Shift before scaling so the signed range's endpoints remain exact.
+    if params.output_size.z == 2u { rgb = (rgb + 1000.) / 2000.; }
+    if params.output_size.z == 3u { rgb /= 2.; }
     let weights = select(vec3(0.2126, 0.7152, 0.0722), vec3(0.297344975, 0.627363566, 0.075291459), params.output_size.w == 1u);
     let values = vec4(rgb, dot(rgb, weights));
     let x = min(255u, id.x * 256u / params.output_size.x);

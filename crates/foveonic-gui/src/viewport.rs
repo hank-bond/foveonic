@@ -38,8 +38,18 @@ impl Params {
                 } else {
                     channel as f32
                 },
-                if sensor { 1. / 4095. } else { 1. },
-                if space == Space::ScalarField {
+                if sensor || matches!(space, Space::LinearRgb(_)) {
+                    1. / 4095.
+                } else if space == Space::LuminanceRatio {
+                    0.5
+                } else if space == Space::SignedDetail {
+                    1. / 2000.
+                } else {
+                    1.
+                },
+                if space == Space::SignedDetail {
+                    -2.
+                } else if matches!(space, Space::ScalarField | Space::LuminanceRatio) {
                     -1.
                 } else {
                     f32::from(matches!(
@@ -192,10 +202,16 @@ impl CallbackTrait for Draw {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PixelRegion {
+    pub top_left: [u32; 2],
+    pub bottom_right: [u32; 2],
+    pub extent: [u32; 2],
+}
+
 pub struct Viewport {
     pub zoom: f32,
     pub pan: egui::Vec2,
-    pub channel: i32,
     pub one_to_one: bool,
     last_canvas: Option<(egui::Vec2, [u32; 2])>,
     navigator_offset: egui::Vec2,
@@ -205,7 +221,6 @@ impl Default for Viewport {
         Self {
             zoom: 1.,
             pan: egui::Vec2::ZERO,
-            channel: -1,
             one_to_one: false,
             last_canvas: None,
             navigator_offset: egui::Vec2::ZERO,
@@ -276,13 +291,19 @@ impl Viewport {
         );
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, texture: Arc<ImageTexture>, srgb_target: bool) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        texture: Arc<ImageTexture>,
+        channel: i32,
+        srgb_target: bool,
+    ) {
         let (rect, image) = self.layout(ui, texture.description().extent);
         let params = Params::new(
             rect,
             image,
             texture.description().space,
-            self.channel,
+            channel,
             srgb_target,
         );
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
@@ -313,6 +334,26 @@ impl Viewport {
             ),
         )
     }
+    /// Inclusive pixel bounds in the cropped, oriented image grid; includes partly visible pixels.
+    pub fn visible_pixels(&self) -> Option<PixelRegion> {
+        let (_, extent) = self.last_canvas?;
+        let uv = self.visible_uv();
+        if !uv.is_positive() || !uv.min.is_finite() || !uv.max.is_finite() {
+            return None;
+        }
+        let top_left: [u32; 2] =
+            std::array::from_fn(|i| (uv.min[i].clamp(0., 1.) * extent[i] as f32).floor() as u32);
+        let end: [u32; 2] =
+            std::array::from_fn(|i| (uv.max[i].clamp(0., 1.) * extent[i] as f32).ceil() as u32);
+        if end[0] <= top_left[0] || end[1] <= top_left[1] {
+            return None;
+        }
+        Some(PixelRegion {
+            top_left,
+            bottom_right: end.map(|v| v - 1),
+            extent: [end[0] - top_left[0], end[1] - top_left[1]],
+        })
+    }
     pub fn pan_to(&mut self, uv: egui::Vec2) {
         if let Some((size, extent)) = self.last_canvas {
             let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
@@ -327,6 +368,7 @@ impl Viewport {
         ui: &mut egui::Ui,
         texture: Option<Arc<ImageTexture>>,
         preview: Option<&crate::browser::Thumbnail>,
+        channel: i32,
         srgb_target: bool,
     ) {
         let extent = texture
@@ -350,7 +392,7 @@ impl Viewport {
                 canvas,
                 image,
                 texture.description().space,
-                self.channel,
+                channel,
                 srgb_target,
             );
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
@@ -420,6 +462,38 @@ impl Viewport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visible_pixel_bounds_follow_fit_zoom_pan_and_oriented_extent() {
+        let mut viewport = Viewport {
+            last_canvas: Some((egui::vec2(800., 800.), [400, 200])),
+            ..Default::default()
+        };
+        assert_eq!(
+            viewport.visible_pixels().unwrap(),
+            PixelRegion {
+                top_left: [0, 0],
+                bottom_right: [399, 199],
+                extent: [400, 200]
+            }
+        );
+        viewport.zoom = 2.;
+        assert_eq!(
+            viewport.visible_pixels().unwrap(),
+            PixelRegion {
+                top_left: [100, 0],
+                bottom_right: [299, 199],
+                extent: [200, 200]
+            }
+        );
+        viewport.pan_to(egui::vec2(0.75, 0.5));
+        assert_eq!(viewport.visible_pixels().unwrap().top_left, [200, 0]);
+        viewport.pan = egui::vec2(10000., 10000.);
+        assert!(viewport.visible_pixels().is_none());
+        viewport.reset();
+        assert!(viewport.visible_pixels().is_none());
+        viewport.last_canvas = Some((egui::vec2(800., 800.), [200, 400]));
+        assert_eq!(viewport.visible_pixels().unwrap().bottom_right, [199, 399]);
+    }
 
     #[test]
     fn presentation_mapping_respects_buffer_meaning_and_canvas_geometry() {
@@ -429,7 +503,13 @@ mod tests {
             (Space::SensorLayers, -1, [0., 1. / 4095., 0., 1.]),
             (Space::CalibratedLayers, 2, [2., 1. / 4095., 0., 1.]),
             (Space::ScalarField, -1, [-1., 1., -1., 1.]),
-            (Space::LinearRgb(ColorSpace::Srgb), -1, [-1., 1., 0., 1.]),
+            (Space::LuminanceRatio, -1, [-1., 0.5, -1., 1.]),
+            (Space::SignedDetail, -1, [-1., 1. / 2000., -2., 1.]),
+            (
+                Space::LinearRgb(ColorSpace::Srgb),
+                -1,
+                [-1., 1. / 4095., 0., 1.],
+            ),
             (
                 Space::ToneMappedRgb(ColorSpace::AdobeRgb),
                 -1,
@@ -475,7 +555,7 @@ mod tests {
             input.events = events;
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    viewport.navigator(ui, None, Some(&preview), false)
+                    viewport.navigator(ui, None, Some(&preview), -1, false)
                 });
             });
         };

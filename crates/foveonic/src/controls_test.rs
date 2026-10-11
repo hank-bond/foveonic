@@ -9,42 +9,6 @@ fn floats(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<f32> {
 
 #[test]
 #[ignore = "requires a working GPU adapter"]
-fn shader_isolated_repair_keeps_unmarked_layers_and_skips_clusters() {
-    let gpu = Gpu::new().unwrap();
-    let mut pixels: Vec<f32> = (0..25)
-        .flat_map(|p| [(p % 5 + p / 5) as f32, 10., 20.])
-        .collect();
-    pixels[12 * 3] = 999.;
-    let mut flags = vec![0_u32; 25];
-    flags[12] = 0x40ff;
-    flags[0] = 0x40ff; // Border records remain untouched.
-    let input = gpu.upload("Repair input", &pixels).unwrap();
-    let uniform = gpu.uniform(&[5_u32, 5, 0, 0]);
-    let output = gpu.storage("Repair output", 25 * 3 * 4).unwrap();
-    let map = gpu.upload("Repair map", &flags).unwrap();
-    gpu.dispatch(
-        Kernel::Repair,
-        &[(0, &input), (1, &map), (2, &uniform), (3, &output)],
-        [1, 1],
-        &mut Default::default(),
-    );
-    let result = floats(&gpu, &output);
-    let mut expected = pixels.clone();
-    expected[12 * 3] = 4.;
-    assert_eq!(result, expected);
-    flags[6] = 0x40ff; // A neighboring defect makes both repairs non-isolated.
-    let map = gpu.upload("Clustered repair map", &flags).unwrap();
-    gpu.dispatch(
-        Kernel::Repair,
-        &[(0, &input), (1, &map), (2, &uniform), (3, &output)],
-        [1, 1],
-        &mut Default::default(),
-    );
-    assert_eq!(floats(&gpu, &output), pixels);
-}
-
-#[test]
-#[ignore = "requires a working GPU adapter"]
 fn shader_separable_blur_and_unsharp_blend_match_small_convolution() {
     let gpu = Gpu::new().unwrap();
     let mut pixels = [0.125_f32, 0.25, 0.5].repeat(25);

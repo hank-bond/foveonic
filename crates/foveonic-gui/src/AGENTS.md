@@ -16,8 +16,11 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 ### Source files
 
+- **[advanced.rs](./advanced.rs)** Displays preset-linked reconstruction parameters and captures explicit overrides without changing the baseline.
 - **[browser.rs](./browser.rs)** Browses X3F paths and lazily decodes embedded JPEGs through a bounded thumbnail worker.
 - **[controls.rs](./controls.rs)** Builds aligned sensor/tone editing rows with reset, focused value nudges, and sample-based rerender signals.
+- **[information.rs](./information.rs)** Paints capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
+- **[inspect.rs](./inspect.rs)** Groups pipeline buffers and component views in one inspection selector without scheduling component-only changes.
 - **[main.rs](./main.rs)** Runs a three-pane Merrill workspace with current-buffer inspection, reorderable tools, and UI-only persistence.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
 - **[preferences.rs](./preferences.rs)** Persists organizer, scope, and tool-section preferences.

@@ -3,13 +3,17 @@
 mod calibration;
 mod color_dq;
 mod color_mode;
+mod despeckle;
+mod estimated_iso;
 mod gpu;
 mod graph;
 pub mod image;
 pub mod inspection;
+pub mod noise;
 mod output;
 pub mod preview;
 pub mod profile;
+mod reconstruction;
 pub mod render;
 mod repair;
 pub mod scopes;
