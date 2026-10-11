@@ -322,6 +322,7 @@ impl Engine {
         let calibration = profile.measure("prepare calibration", || {
             calibration::prepare(&source.metadata, &settings.white_balance)
         })?;
+        let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
         let mut calibrated = graph.add(Operation::Calibrate(calibration), &[input, black])?;
         finish!();
         if settings.sensor_gain != 1. {
@@ -342,11 +343,7 @@ impl Engine {
         }
         if settings.despeckle {
             let prepared = profile.measure("prepare despeckle", || {
-                crate::despeckle::prepare(
-                    &source.metadata,
-                    &settings.white_balance,
-                    settings.sensor_gain,
-                )
+                crate::despeckle::prepare(&source.metadata, calibration_gains, settings.sensor_gain)
             })?;
             calibrated = graph.add(Operation::Despeckle(prepared), &[calibrated])?;
             finish!();

@@ -1,5 +1,5 @@
 ---
-summary: "Ordered camera repair fixes the leaf defect; the node audit identifies remaining camera coverage and WB-scale gaps."
+summary: "Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps."
 ---
 
 # Fix camera repair and audit implemented nodes
@@ -50,7 +50,7 @@ Each row includes metadata preparation, numerical stages, boundary behavior, dep
 | Calibrate | WB/aperture/temperature/sensor factors, spatial table routes/interpolation, black subtraction, shading and signed/headroom preservation checked against `gains.rs`, `spatial_tables.rs`, and preprocessing. Full-source differential evidence above. |
 | SensorGain | One finite nonnegative scalar after calibration; negative samples/headroom retained. Zero gain and stage ordering covered by GPU tests. |
 | Repair | Main ordered `BadPixelsF20` arithmetic now agrees with reference replay. Full native setup/list coverage remains incomplete, as detailed below. |
-| Despeckle | Table arithmetic, immutable extrema detection, peak clipping/negative valleys, margins, deterministic eight-bank capacity/order, and sequential correction agree for identical inputs/parameters. WB/recipe preparation still differs from production; the following section isolates the scale mismatch. See below. |
+| Despeckle | Table arithmetic, immutable extrema detection, peak clipping/negative valleys, margins, deterministic eight-bank capacity/order, and sequential correction agree for identical inputs/parameters. The subsequent WB-scale fix shares actual calibration factors; production noise-recipe adjustment remains deferred. See below. |
 | NoiseBase | Effective ISO, camera knots/presets, gain-scaled noise model, 4×4 tiles/64-pixel context, adaptive bilateral, edge tables, opposing recursive means and initialized borders checked against reference noise/filtering/local-mean code and fixtures. Full-resolution path only. |
 | Detail | Weighted brightness, noise/diffusion maps, iterative diffusion, extrema limiter, ratios and residual gains follow reference stages. Component/scalar fixtures and negative/zero/extreme-control finite checks pass. Preset 0 remains a filtering recipe, not Off. |
 | TiledColor | Uses the same prepared camera/WB/ISO/mode matrix as untiled conversion on filtered layers; tile geometry and selective dependencies checked. |
@@ -90,7 +90,7 @@ Holding repaired input, margins and `[15,15,5]` adjustment fixed, native detecto
 | Turquoise still life | 14859 | 4742 |
 | Yellow flowers | 29522 | 16597 |
 
-These counts isolate WB scale, not complete production preprocessing, and do not classify every detected point as a defect or useful detail. Proposed follow-up: share actual calibration WB factors with threshold preparation, preserving Sensor-gain invariance and zero-gain behavior. Noise-recipe adjustment remains a separate decision.
+These counts isolate WB scale, not complete production preprocessing, and do not classify every detected point as a defect or useful detail. The owner subsequently approved sharing actual calibration WB factors with threshold preparation, implemented in the [WB-scale fix](./despeckle-wb-scale.md). Sensor-gain invariance and zero-gain behavior are preserved. Noise-recipe adjustment remains a separate decision.
 
 ### Reconstruction completeness and output alternatives
 

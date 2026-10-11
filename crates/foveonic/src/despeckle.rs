@@ -85,30 +85,15 @@ fn tables(gains: [f64; 3], adjustment: [f64; 3]) -> Result<Vec<f32>> {
     Ok(result)
 }
 
-pub(crate) fn prepare(metadata: &Metadata, wb: &str, gain: f32) -> Result<Prepared> {
-    let key = metadata
-        .lists
-        .get("WhiteBalanceGains")
-        .and_then(|l| l.get(wb))
-        .ok_or("missing despeckle white balance")?;
-    let raw = metadata.fixed::<3>(key)?;
-    let optional = |key| {
-        if metadata.matrix(key).is_some() {
-            metadata.fixed::<3>(key)
-        } else {
-            Ok([1.; 3])
-        }
-    };
-    let aperture = optional("FnumberGainFact")?;
-    let mut temperature = optional("TempGainFact")?;
-    if temperature.iter().any(|v| !(0.5..=1.5).contains(v)) {
-        temperature = [1.; 3];
-    }
-    let sensor = optional("SensorAdjustmentGainFact")?;
-    // Unscaled WB inputs, as in the native diagnostic preparation. Calibration
-    // applies its separate factor of two. Threshold scale is the reference 1x;
-    // this independent correction is not driven by reconstruction presets.
-    let gains = std::array::from_fn(|c| ((raw[c] * aperture[c]) * temperature[c]) * sensor[c]);
+/// Threshold WB must match the factors actually applied by calibration, before
+/// global Sensor gain. Keep the independent adjustment at 1x; reconstruction
+/// presets do not change this stage's sensitivity.
+pub(crate) fn prepare(
+    metadata: &Metadata,
+    calibration_gains: [f32; 3],
+    gain: f32,
+) -> Result<Prepared> {
+    let gains = calibration_gains.map(f64::from);
     let mut adjustment = [15., 15., 5.];
     if let Some(m) = metadata
         .matrix("DespAdjust")
