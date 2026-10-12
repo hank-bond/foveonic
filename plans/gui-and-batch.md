@@ -31,7 +31,7 @@ Requirements: [`gui-workspace.md`](../docs/specs/gui-workspace.md), [`applicatio
 
 ## Current implementation
 
-The owner selected egui/eframe 0.31.1 with wgpu 24 after inspecting PhotoCraft and approved GUI dependency downloads. The GUI and subsequent processor changes remain uncommitted for review. TIFF batch processing is covered by [`tiff-controls-and-batch.md`](./tiff-controls-and-batch.md); resource ownership by [`render-resources-and-optimization.md`](./render-resources-and-optimization.md).
+The owner selected egui/eframe 0.31.1 with wgpu 24 after inspecting PhotoCraft and approved GUI dependency downloads. The initial GUI and processor work is committed; later sections record reviewed refinements and remaining owner acceptance. TIFF batch processing is covered by [`tiff-controls-and-batch.md`](./tiff-controls-and-batch.md); resource ownership by [`render-resources-and-optimization.md`](./render-resources-and-optimization.md).
 
 - The GUI shares eframe's device/queue with the engine. Viewport display uses GPU textures. Native menus and monitor-profile correction remain deferred.
 - Browser requests/results are bounded, rows are virtualized, and the thumbnail cache holds at most 256 entries. Seek-based reads decode only the smallest embedded JPEG and read the largest JPEG's dimensions for layout. All six originals contain two JPEG sizes: 221×147 and 4704×3136. Larger-preview decoding remains deferred.
@@ -71,6 +71,17 @@ All seventeen viewport tests pass, including cursor-point invariance during main
 Owner screenshots showed the navigator image compressing as it scrolled above the window. egui-wgpu clamps callback viewports to screen bounds, but the shader still mapped the full canvas into the shortened viewport. GPU presentation now intersects the callback canvas with the UI/screen clip and recalculates mapping against the unchanged image rectangle. The same path serves the main image; navigator layout, overlay, and interaction geometry remain unchanged.
 
 The regression test covers portrait/landscape images, clipping at each edge, overlay/sample alignment, fully hidden canvases, and 1×/2× display density. GUI tests pass (38 passed, two GPU fixtures ignored); native visual review remains pending.
+
+## Correction controls
+
+- [x] Combine the stage header/enable toggle into Noise and detail and rename its advanced subsection to Advanced noise and detail; keep reconstruction internal and migrate help keys, tests, and user instructions.
+- [x] Move ColorDQ gain into the enabled reconstruction controls, retaining its inline A toggle and removing the inactive warning.
+- [x] Rename camera-record repair to Bad-pixel repair, with a default-enabled checkbox inline to the left of its label.
+- [x] Remove the GUI repair cutoff slider/value/A toggle; use camera selection internally and retain CLI `--repair-badness` for diagnostics.
+- [x] Explain camera-based pixel/cluster repair and targeted red-pixel detection separately from Despeckle's search for additional isolated dots.
+- [x] Replace old cutoff-control tests with automatic-only repair toggling and reconstruction-local ColorDQ layout checks.
+
+Owner review supersedes the earlier repair cutoff A-toggle design: the cutoff selects recorded defects rather than a photographic correction amount. ColorDQ retains automatic/manual choice with a manual starting gain of 1. Moving its control does not change shared engine/CLI ColorDQ behavior. Noise preset/Detail explanations remain in hover help. GUI tests pass (61 passed, five opt-in tests ignored), along with strict all-target GUI Clippy, documentation generation/checks and tool tests, changed-file formatting, and diff checks. Native visual review remains pending.
 
 ## Organizer keyboard navigation
 

@@ -41,7 +41,7 @@ pub fn show(
     gain: f32,
 ) -> bool {
     let mut changed = false;
-    egui::CollapsingHeader::new("Advanced reconstruction")
+    egui::CollapsingHeader::new("Advanced noise and detail")
         .id_salt("advanced-reconstruction")
         .default_open(crate::smoke::editor_review_active())
         .show(ui, |ui| {

@@ -10,6 +10,7 @@ implementation: incomplete
 ## Requirements
 
 - Editing controls, advanced controls and their link buttons, inspection choices, and scope choices **must** have explanations written for people familiar with photo editing, without assuming programming or Foveon sensor knowledge.
+- Noise preset and Detail zero/default explanations **must** live in hover popovers, not as a persistent note below the controls. Use simple photographic language; professional photography knowledge **may** be assumed, but Merrill architecture expertise **must not** be assumed.
 - Help **should** explain what changes, when it is useful, and the important tradeoff. It **must** describe the implemented behavior, including neutral/off settings and relevant dependencies. Technical names alone are not explanations.
 - Sensor gain help **must** explain its ISO-like early signal adjustment, its difference from Exposure, and its noise/highlight tradeoffs. It **must not** imply that it changes capture ISO, gathers more light, or recovers detail lost at capture.
 - Advanced help **must** explain the visible effect and how to switch between following a basic control and a separate manual setting. Camera-dependent noise presets **must not** be presented as uniformly increasing strength or as off at zero.

@@ -34,6 +34,51 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
     default: T,
     nudge: f64,
 ) -> bool {
+    adjustment_row(ui, label, value, range, default, nudge, None)
+}
+
+struct Automatic<'a> {
+    active: &'a mut bool,
+    resolved: bool,
+}
+
+/// Keep automatic selection on the value row rather than in a separate checkbox.
+fn automatic_adjustment<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    label: &str,
+    manual: &mut Option<T>,
+    range: RangeInclusive<T>,
+    default: T,
+    calculated: Option<T>,
+) -> bool {
+    let before = manual.map(|v| v.to_f64());
+    let mut automatic = manual.is_none();
+    let mut value = manual.or(calculated).unwrap_or(default);
+    adjustment_row(
+        ui,
+        label,
+        &mut value,
+        range,
+        default,
+        if T::INTEGRAL { 1. } else { 0.1 },
+        Some(Automatic {
+            active: &mut automatic,
+            resolved: calculated.is_some(),
+        }),
+    );
+    *manual = (!automatic).then_some(value);
+    before != manual.map(|v| v.to_f64())
+}
+
+fn adjustment_row<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut T,
+    range: RangeInclusive<T>,
+    default: T,
+    nudge: f64,
+    mut automatic: Option<Automatic<'_>>,
+) -> bool {
     let before = value.to_f64();
     let decimals = if T::INTEGRAL {
         0
@@ -43,41 +88,63 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
             help::control(ui.add_sized([92., 20.], egui::Label::new(label)), label);
-            ui.spacing_mut().slider_width = (ui.available_width() - 62.).max(35.);
-            let response = ui
-                .add(egui::Slider::new(value, range.clone()).show_value(false))
-                .interact(egui::Sense::click_and_drag());
-            if response.double_clicked() {
-                *value = default;
+            let auto_width = if automatic.is_some() {
+                22. + ui.spacing().item_spacing.x
+            } else {
+                0.
+            };
+            ui.spacing_mut().slider_width = (ui.available_width() - 62. - auto_width).max(35.);
+            ui.add_enabled_ui(!automatic.as_ref().is_some_and(|a| *a.active), |ui| {
+                let response = ui
+                    .add(egui::Slider::new(value, range.clone()).show_value(false))
+                    .interact(egui::Sense::click_and_drag());
+                if response.double_clicked() {
+                    *value = default;
+                }
+                help::control(response, label);
+            });
+            if let Some(auto) = &mut automatic {
+                let response =
+                    ui.add_sized([22., 20.], egui::Button::new("A").selected(*auto.active));
+                if help::attach(response, help::automatic(label).unwrap()).clicked() {
+                    *auto.active = !*auto.active;
+                }
             }
-            help::control(response, label);
+            let active = automatic.as_ref().is_some_and(|a| *a.active);
+            let unresolved = automatic.as_ref().is_some_and(|a| *a.active && !a.resolved);
             // Match add_sized's layout, but inspect DragValue's stable child ID before it handles keys.
             let response = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(54., 20.),
-                    egui::Layout::centered_and_justified(ui.layout().main_dir()),
-                    |ui| {
-                        let focused = ui.memory(|memory| memory.has_focus(ui.next_auto_id()));
-                        ui.add(
-                            egui::DragValue::new(value)
-                                .range(range.clone())
-                                .speed(if focused {
-                                    nudge
-                                } else if T::INTEGRAL {
-                                    1.
-                                } else {
-                                    0.01
-                                })
-                                .fixed_decimals(decimals),
-                        )
-                    },
-                )
+                .add_enabled_ui(!active, |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(54., 20.),
+                        egui::Layout::centered_and_justified(ui.layout().main_dir()),
+                        |ui| {
+                            if unresolved {
+                                return ui.add(egui::Label::new("Auto"));
+                            }
+                            let focused = ui.memory(|memory| memory.has_focus(ui.next_auto_id()));
+                            ui.add(
+                                egui::DragValue::new(value)
+                                    .range(range.clone())
+                                    .speed(if focused {
+                                        nudge
+                                    } else if T::INTEGRAL {
+                                        1.
+                                    } else {
+                                        0.01
+                                    })
+                                    .fixed_decimals(decimals),
+                            )
+                        },
+                    )
+                    .inner
+                })
                 .inner;
             // Clamp keyboard overshoot and refresh the value field's cached text.
             let accepted = value
                 .to_f64()
                 .clamp(range.start().to_f64(), range.end().to_f64());
-            if value.to_f64() != accepted {
+            if !active && value.to_f64() != accepted {
                 *value = T::from_f64(accepted);
                 ui.data_mut(|data| data.remove::<String>(response.id));
                 ui.ctx().request_repaint();
@@ -145,11 +212,10 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         changed |= adjustment(ui, label, value, -2. ..=2., 0.);
     }
     ui.separator();
-    ui.weak("Reference noise and detail");
     let mut reconstruction = settings.reconstruction.is_some();
     if help::control(
-        ui.checkbox(&mut reconstruction, "Reference reconstruction"),
-        "Reference reconstruction",
+        ui.checkbox(&mut reconstruction, "Noise and detail"),
+        "Noise and detail",
     )
     .changed()
     {
@@ -160,7 +226,14 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         changed |= adjustment(ui, "Chroma noise", &mut controls.chroma, 0..=4, 2);
         changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
         changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
-        ui.small("Noise preset 0 still reduces noise. Detail 0 shows the smoothed image; 1× restores the normal amount of detail.");
+        changed |= automatic_adjustment(
+            ui,
+            "ColorDQ gain",
+            &mut settings.color_dq_gain,
+            0. ..=2.,
+            1.,
+            None,
+        );
         changed |= crate::advanced::show(
             ui,
             controls,
@@ -171,53 +244,16 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     }
     ui.separator();
     ui.weak("Corrections and sharpening");
-    let mut automatic = settings.color_dq_gain.is_none();
-    if help::control(ui.checkbox(&mut automatic, "Auto ColorDQ"), "Auto ColorDQ").changed() {
-        settings.color_dq_gain = if automatic { None } else { Some(1.) };
-        changed = true;
-    }
-    if let Some(gain) = &mut settings.color_dq_gain {
-        changed |= adjustment(ui, "ColorDQ gain", gain, 0. ..=2., 1.);
-    } else if settings.reconstruction.is_none() {
-        ui.weak("ColorDQ inactive without reconstruction");
-    }
     changed |= adjustment(ui, "Sharpen", &mut settings.sharpen_amount, 0. ..=2., 0.);
     let mut repair = settings.repair.is_some();
     if help::control(
-        ui.checkbox(&mut repair, "Camera-record repair"),
-        "Camera-record repair",
+        ui.checkbox(&mut repair, "Bad-pixel repair"),
+        "Bad-pixel repair",
     )
     .changed()
     {
         settings.repair = repair.then_some(RepairThreshold::Camera);
         changed = true;
-    }
-    if let Some(threshold) = &mut settings.repair {
-        let camera = metadata.map(|m| RepairThreshold::Camera.resolve(m));
-        let automatic = camera.as_ref().and_then(|r| r.as_ref().ok()).copied();
-        let mut manual = matches!(threshold, RepairThreshold::Manual(_));
-        if help::control(ui.checkbox(&mut manual, "Manual cutoff"), "Manual cutoff").changed() {
-            *threshold = if manual {
-                RepairThreshold::Manual(automatic.unwrap_or(0))
-            } else {
-                RepairThreshold::Camera
-            };
-            changed = true;
-        }
-        if let RepairThreshold::Manual(value) = threshold {
-            let default = automatic.unwrap_or(*value);
-            changed |= adjustment(ui, "Min. badness", value, 0..=15, default);
-        } else if let Some(value) = automatic {
-            help::control(
-                ui.weak(format!("Camera defect threshold: {value}")),
-                "Min. badness",
-            );
-        } else {
-            ui.weak(camera.map_or_else(
-                || "Waiting for camera cutoff".into(),
-                |r| r.unwrap_err().to_string(),
-            ));
-        }
     }
     changed |= help::control(
         ui.checkbox(&mut settings.highlight_restoration, "Highlight restoration"),
@@ -246,7 +282,7 @@ mod tests {
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.reconstruction = Some(Default::default());
         settings.color_dq_gain = Some(1.);
-        settings.repair = Some(RepairThreshold::Manual(0));
+        settings.repair = Some(RepairThreshold::Camera);
         let metadata = Metadata {
             width: 1,
             height: 1,
@@ -278,16 +314,13 @@ mod tests {
             "Contrast",
             "Shadows",
             "Highlights",
-            "Reference reconstruction",
+            "Noise and detail",
             "Chroma noise",
             "Luma noise",
             "Detail",
-            "Auto ColorDQ",
             "ColorDQ gain",
             "Sharpen",
-            "Camera-record repair",
-            "Manual cutoff",
-            "Min. badness",
+            "Bad-pixel repair",
             "Highlight restoration",
             "Despeckle",
         ] {
@@ -298,6 +331,265 @@ mod tests {
                 "control missing: {label}"
             );
             assert!(help::editing(label).is_some(), "help missing: {label}");
+        }
+    }
+
+    #[test]
+    fn colordq_is_grouped_with_reconstruction_and_repair_has_no_parameter_row() {
+        for reconstruction in [false, true] {
+            for manual_gain in [None, Some(1.2)] {
+                let ctx = egui::Context::default();
+                let mut settings = Settings::new("Sunlight", "Standard");
+                settings.reconstruction = reconstruction.then(Default::default);
+                settings.color_dq_gain = manual_gain;
+                let before = settings.clone();
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 2000.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            assert!(!processing(ui, &mut settings, None));
+                        });
+                    },
+                );
+                assert_eq!(settings, before);
+                let position = |label: &str| {
+                    output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == label => {
+                            Some(text.pos.y)
+                        }
+                        _ => None,
+                    })
+                };
+                assert!(position("Bad-pixel repair").is_some());
+                assert_eq!(
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|shape| matches!(
+                            &shape.shape,
+                            egui::Shape::Text(text) if text.galley.job.text == "Noise and detail"
+                        ))
+                        .count(),
+                    1,
+                    "the section heading and enable toggle must share one label"
+                );
+                assert!(position("Reconstruction").is_none());
+                assert!(position("Advanced reconstruction").is_none());
+                assert!(!output.shapes.iter().any(|shape| matches!(
+                    &shape.shape,
+                    egui::Shape::Text(text) if text.galley.job.text.contains("Reference")
+                )));
+                for removed in [
+                    "Camera-record repair",
+                    "Min. badness",
+                    "Waiting for camera cutoff",
+                    "ColorDQ inactive without reconstruction",
+                ] {
+                    assert!(position(removed).is_none(), "obsolete control: {removed}");
+                }
+                assert_eq!(position("ColorDQ gain").is_some(), reconstruction);
+                assert_eq!(position("A").is_some(), reconstruction);
+                assert_eq!(
+                    position("Advanced noise and detail").is_some(),
+                    reconstruction
+                );
+                if reconstruction {
+                    let y = position("ColorDQ gain").unwrap();
+                    assert!(y > position("Detail").unwrap());
+                    assert!(y < position("Advanced noise and detail").unwrap());
+                    assert!(y < position("Corrections and sharpening").unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_buttons_replace_checkboxes_and_noise_explanation_is_not_inline() {
+        for manual in [false, true] {
+            let ctx = egui::Context::default();
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.reconstruction = Some(Default::default());
+            if manual {
+                settings.color_dq_gain = Some(1.);
+            }
+            let before = settings.clone();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 2000.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(!processing(ui, &mut settings, None));
+                    });
+                },
+            );
+            assert_eq!(settings, before);
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(texts.iter().filter(|text| **text == "A").count(), 1);
+            assert!(texts.contains(&"ColorDQ gain"));
+            assert!(help::automatic("ColorDQ gain").is_some());
+            assert!(texts.contains(&"Bad-pixel repair"));
+            assert!(!texts.contains(&"Min. badness"));
+            assert!(!texts.iter().any(|text| text.contains("Noise preset 0")
+                || *text == "Auto ColorDQ"
+                || *text == "Manual cutoff"));
+        }
+    }
+
+    #[test]
+    fn automatic_row_disables_editing_and_toggles_to_resolved_or_fallback_value() {
+        for calculated in [Some(1.4_f32), None] {
+            let ctx = egui::Context::default();
+            let mut manual = None;
+            let mut render = |time, events| {
+                let mut changed = false;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(400., 100.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            changed = automatic_adjustment(
+                                ui,
+                                "ColorDQ gain",
+                                &mut manual,
+                                0. ..=2.,
+                                1.,
+                                calculated,
+                            );
+                        });
+                    },
+                );
+                (changed, output, manual)
+            };
+            render(0., vec![]);
+            let (_, output, _) = render(0.1, vec![]);
+            let a = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "A" => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            // Neither dragging/double-clicking the slider nor typing/nudging the value edits Auto.
+            for pos in [egui::pos2(220., 18.), egui::pos2(362., 18.)] {
+                for (time, pressed) in [(1., true), (1.05, false), (1.1, true), (1.15, false)] {
+                    let (changed, _, manual) = render(
+                        time,
+                        vec![egui::Event::PointerMoved(pos), button(pos, pressed)],
+                    );
+                    assert!(!changed);
+                    assert_eq!(manual, None);
+                }
+            }
+            assert!(
+                !render(
+                    1.2,
+                    vec![
+                        egui::Event::Text("2".into()),
+                        arrow(egui::Key::ArrowUp, false)
+                    ]
+                )
+                .0
+            );
+            render(2., vec![egui::Event::PointerMoved(a), button(a, true)]);
+            let (changed, _, manual) = render(2.1, vec![button(a, false)]);
+            assert!(changed);
+            assert_eq!(manual, Some(calculated.unwrap_or(1.)));
+            render(2.2, vec![]); // Register the now-enabled slider for hit testing.
+            let pos = egui::pos2(150., 18.);
+            let (changed, _, value) =
+                render(3., vec![egui::Event::PointerMoved(pos), button(pos, true)]);
+            assert!(changed);
+            assert_ne!(value, manual);
+            render(3.1, vec![button(pos, false)]);
+            render(4., vec![egui::Event::PointerMoved(a), button(a, true)]);
+            let (changed, _, manual) = render(4.1, vec![button(a, false)]);
+            assert!(changed);
+            assert_eq!(manual, None);
+        }
+    }
+
+    #[test]
+    fn bad_pixel_repair_checkbox_disables_and_restores_camera_selection() {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        let mut render = |events| {
+            let mut changed = false;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 2000.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        changed = processing(ui, &mut settings, None);
+                    });
+                },
+            );
+            (changed, output, settings.repair, settings.color_dq_gain)
+        };
+        render(vec![]);
+        let (_, output, repair, _) = render(vec![]);
+        assert_eq!(repair, Some(RepairThreshold::Camera));
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Bad-pixel repair" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap();
+        for expected in [None, Some(RepairThreshold::Camera)] {
+            let event = |pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            render(vec![egui::Event::PointerMoved(point), event(true)]);
+            let (changed, _, repair, color_dq) = render(vec![event(false)]);
+            assert!(changed);
+            assert_eq!(repair, expected);
+            assert_eq!(color_dq, None);
         }
     }
 
@@ -340,7 +632,7 @@ mod tests {
     #[test]
     fn correction_checkboxes_start_enabled_and_toggle_independently() {
         for label in [
-            "Camera-record repair",
+            "Bad-pixel repair",
             "Highlight restoration",
             "Despeckle",
             "Row banding correction",
@@ -407,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn reference_checkbox_enables_shared_defaults_and_requests_rerender() {
+    fn noise_and_detail_checkbox_enables_shared_defaults_and_requests_rerender() {
         let ctx = egui::Context::default();
         let mut settings = Settings::new("Sunlight", "Standard");
         let mut frame = |time, events| {
@@ -437,7 +729,7 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.job.text == "Reference reconstruction" => {
+                egui::Shape::Text(text) if text.galley.job.text == "Noise and detail" => {
                     Some(text.pos + text.galley.size() * 0.5)
                 }
                 _ => None,

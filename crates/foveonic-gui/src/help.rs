@@ -15,6 +15,16 @@ pub fn control(response: egui::Response, label: &str) -> egui::Response {
     }
 }
 
+/// Explain the automatic/manual toggle in photographic rather than pipeline terms.
+pub fn automatic(label: &str) -> Option<&'static str> {
+    Some(match label {
+        "ColorDQ gain" => {
+            "A chooses the amount automatically using the camera information, while noise reduction is on. Click A to choose your own amount; 0 turns this correction off. Click again to return to automatic. The slider and value cannot be edited while A is on."
+        }
+        _ => return None,
+    })
+}
+
 pub fn editing(label: &str) -> Option<&'static str> {
     Some(match label {
         "White balance" => {
@@ -41,33 +51,26 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Highlights" => {
             "Shapes the brighter part of the tone curve. Use it to adjust the appearance of bright surfaces and their tonal separation. It is not highlight recovery: detail lost at capture cannot be brought back by this slider. 0 leaves it unchanged."
         }
-        "Reference reconstruction" => {
-            "Enables noise reduction followed by detail restoration, using the camera's noise information. Use it to balance smoother areas against fine texture. Too much smoothing can look waxy; too much restored detail can bring noise back. The Chroma noise, Luma noise, and Detail controls work only while this is on."
+        "Noise and detail" => {
+            "Enables noise reduction followed by detail restoration, using the camera's noise information. Use it to balance smoother areas against fine texture. Too much smoothing can look waxy; too much restored detail can bring noise back. The Chroma noise, Luma noise, Detail, and ColorDQ gain controls are shown while this is on."
         }
         "Chroma noise" => {
-            "Reduces unwanted colored speckles and blotches, especially in shadows. The five choices are camera-based presets, not a simple strength scale; 2 is the standard starting point, and 0 still reduces noise. Compare smooth areas and fine color texture: cleanup can also remove real color detail."
+            "Reduces colored speckles and blotches, especially in shadows. Start at 2. These are five preset settings; 0 still smooths noise and is not an Off setting. Compare smooth areas and fine color texture: cleanup can also remove real color detail."
         }
         "Luma noise" => {
-            "Reduces brightness grain rather than colored blotches. The five choices are camera-based presets, not a simple strength scale; 2 is the standard starting point, and 0 still reduces noise. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
+            "Reduces grain rather than colored blotches. Start at 2. These are five preset settings; 0 still smooths noise and is not an Off setting. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
         }
         "Detail" => {
-            "Brings fine texture back after noise reduction. 0 shows the smoothed image, 1× uses the normal amount of restored detail, and higher values restore more. Too much can bring grain and colored speckles back. This is separate from final sharpening."
+            "Controls how much fine texture is kept after noise reduction. At 0 the image is smoother; 1 is the normal starting point. Higher values bring back more texture, but can also bring back grain and colored speckles. This is separate from sharpening."
         }
-        "Auto ColorDQ" => {"Uses native processing ISO gain capped by the noise recipe when reconstruction is enabled. Turn this off for a manual gain; manual 0 disables ColorDQ."}
         "ColorDQ gain" => {
-            "Reduces small color differences between red, green, and blue within each pixel, using camera-specific settings. It can tame subtle color speckles, but may also weaken genuine fine color differences. 0 turns it off. It is not Saturation and does not smooth neighboring pixels; compare a shadow crop before increasing it."
+            "Tames fine color speckles using camera information. Too much can also weaken real color detail. 0 turns it off. This is different from Saturation; compare a shadow crop before increasing it. A chooses the amount automatically while noise reduction is on."
         }
         "Sharpen" => {
             "Emphasizes edges to make the finished photo look crisper. 0 turns it off. Higher amounts can exaggerate grain and create light or dark outlines around edges. It cannot restore detail that was never recorded."
         }
-        "Camera-record repair" => {
-            "Fixes faulty sensor pixels that can appear as bright or colored dots, using correction information from the camera. Usually best left on. It repairs individual defects and small faulty patches, not general image grain. Despeckle checks for additional dots separately."
-        }
-        "Manual cutoff" => {
-            "Replaces the camera's automatic choice of which defects to repair. Usually leave this off and let the camera information choose. Manual values are defect ratings, not an overall noise-reduction strength."
-        }
-        "Min. badness" => {
-            "Sets the minimum camera defect rating for individual-pixel repairs. Lower values include more listed pixels; higher values keep only more severe ones. The same number also selects a separate group of larger faulty patches, so it is not a simple repair-strength slider. Usually the automatic camera choice is best."
+        "Bad-pixel repair" => {
+            "Fixes faulty sensor pixels and small faulty patches using the camera's defect information, with an additional check for abnormal red pixels. The camera information chooses which recorded defects to repair automatically. Usually best left on. This is not general noise reduction; Despeckle separately searches the image for additional isolated dots."
         }
         "Row banding correction" => {
             "Reduces faint horizontal brightness or color stripes by estimating small per-row sensor offsets. It acts before general noise reduction and does not smooth image texture. Usually best left on; switch it off to compare an affected shadow area."
@@ -219,6 +222,13 @@ mod tests {
         assert!(editing("Sharpen").unwrap().contains("0 turns it off"));
         assert!(editing("Chroma noise").unwrap().contains("0 still"));
         assert!(editing("Luma noise").unwrap().contains("0 still"));
+        let repair = editing("Bad-pixel repair").unwrap();
+        assert!(repair.contains("automatically"));
+        assert!(repair.contains("small faulty patches"));
+        assert!(repair.contains("Despeckle"));
+        assert!(editing("Camera-record repair").is_none());
+        assert!(editing("Min. badness").is_none());
+        assert!(automatic("Min. badness").is_none());
         for mode in [Scope::Histogram, Scope::Parade, Scope::Waveform] {
             assert!(!scope(mode).is_empty());
         }
