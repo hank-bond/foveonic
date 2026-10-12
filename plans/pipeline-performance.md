@@ -103,6 +103,12 @@ Camera corrections read their own pixel and radius-one masked neighbors, then wr
 
 The six originals select 41131 records in eight levels: 40625/470/15/8/5/6/1/1. Listed corrections fall from ~200 ms to ~0.26 ms, plus ~0.01–0.23 ms detected suffix. Eight extra passes/submissions and ~164.5 KB integer order storage trade for this gain; CPU preparation uses only metadata coordinates/classes. Warm completed all-enabled renders are 825/920/841/1042/838/1021 ms, with byte-identical float buffers and TIFFs. Structural schedule checks cover duplicates, neighbors, anti-dependencies, invalid borders/empty masks and all six originals at Camera/Manual 0/Manual 4. The full ignored suite (44 core plus GUI worker), ordinary workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{camera-phases,camera-phases-warm}` and `/tmp/foveonic-opt-camera-phase*.log`.
 
+## Round 8: stop copying local-mean pixels that are overwritten
+
+The line kernel copied an entire input line before writing all its interior pixels again. Preserve copies only for untouched rows/columns and border margins; the backward recurrence still fully writes the interior, including endpoints. Reuse its RGB sample within each step. This keeps all tile/margin values and recurrence expressions unchanged, with no new allocation/pass.
+
+Full-resolution two-direction mean work falls from ~194 to ~144 ms; local cases save ~25–35 ms; global rocks is already small. Warm renders are 852/888/848/995/804/969 ms (blue fluctuates despite improved kernel time). Six full floats/TIFFs remain byte-identical. Native full/reduced/global/overlap/border tests, workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{mean-copy,mean-copy-warm}` and `/tmp/foveonic-opt-mean-copy-*.log`.
+
 ## Output-changing alternatives for later review
 
 No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.

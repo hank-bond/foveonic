@@ -216,11 +216,16 @@ fn local_mean(@builtin(global_invocation_id) id: vec3<u32>) {
     let length = select(params.tile.x, params.tile.y, vertical);
     if id.x >= lines * params.source.z * params.source.w { return; }
     let row = id.x % lines;
-    for (var x = 0u; x < length; x++) { let pixel = line_pixel(id.x, x, vertical); put(pixel, rgb(pixel)); }
     let margin=params.geometry.x;
-    if row < margin || row+margin >= lines { return; }
+    if row < margin || row+margin >= lines {
+        for(var x=0u;x<length;x++){let pixel=line_pixel(id.x,x,vertical);put(pixel,rgb(pixel));}
+        return;
+    }
     let first=margin;
     let last=length-margin-1u;
+    // The backward recurrence writes every interior pixel; copy only margins.
+    for(var x=0u;x<first;x++){let pixel=line_pixel(id.x,x,vertical);put(pixel,rgb(pixel));}
+    for(var x=last+1u;x<length;x++){let pixel=line_pixel(id.x,x,vertical);put(pixel,rgb(pixel));}
     var sum = vec3(0.);
     var weight = 0.;
     for (var x = first; x <= last; x++) {
@@ -236,10 +241,11 @@ fn local_mean(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var x = i32(last); x >= i32(first); x--) {
         let pixel = line_pixel(id.x, u32(x), vertical);
         let e = select(edges[pixel], 0., u32(x) == last);
-        sum = e * sum + rgb(pixel);
+        let sample=rgb(pixel);
+        sum = e * sum + sample;
         weight = e * weight + 1.;
         let q = pixel * 3u;
-        var value = (vec3(prefix[q], prefix[q + 1u], prefix[q + 2u]) + sum - rgb(pixel)) / (scalar_work[pixel] + weight - 1.);
+        var value = (vec3(prefix[q], prefix[q + 1u], prefix[q + 2u]) + sum - sample) / (scalar_work[pixel] + weight - 1.);
         if u32(x) == first { value = sum / weight; }
         if u32(x) == last { value = vec3(prefix[q], prefix[q + 1u], prefix[q + 2u]) / scalar_work[pixel]; }
         put(pixel, value);
