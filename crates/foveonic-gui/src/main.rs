@@ -92,6 +92,7 @@ impl App {
             measure_timing: std::env::var_os("FOVEONIC_UI_TIMING").is_some(),
             last_frame: None,
         };
+        app.viewport.zoom_snap = app.preferences.zoom_snap;
         if let Some(path) = path {
             app.open(path);
         }
@@ -370,7 +371,6 @@ impl App {
                     changed =
                         controls::processing(ui, &mut self.settings, self.metadata.as_deref());
                 });
-                ui.small("sRGB SDR presentation; monitor-profile correction pending.");
                 changed
             }
             Section::Metadata => {
@@ -388,7 +388,10 @@ impl App {
                 for section in self.preferences.sections.clone() {
                     ui.push_id(section.title(), |ui| {
                         let collapsed = self.preferences.collapsed.contains(&section);
-                        let response = sections::header(ui, section, collapsed);
+                        let mut response = sections::header(ui, section, collapsed);
+                        if section == Section::Navigator {
+                            response = help::attach(response, &help::navigator(ui.ctx().os()));
+                        }
                         let header = response.rect;
                         if response.clicked() {
                             self.preferences.toggle(section);
@@ -396,7 +399,6 @@ impl App {
                         if !self.preferences.collapsed.contains(&section) {
                             ui.add_space(6.);
                             changed |= self.section_body(ui, section);
-                            ui.add_space(8.);
                         }
                         if let Some((source, after)) = sections::drop(ui, header) {
                             movement = Some((source, section, after));
@@ -470,6 +472,7 @@ impl App {
 }
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.preferences.zoom_snap = self.viewport.zoom_snap;
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {

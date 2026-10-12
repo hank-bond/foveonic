@@ -1,5 +1,6 @@
 //! Shares viewport geometry between JPEG previews and GPU images, with diagnostic mapping and manual filtering.
 
+use crate::preferences::ZoomPreset;
 use eframe::{
     egui,
     egui_wgpu::{self, CallbackResources, CallbackTrait},
@@ -303,6 +304,7 @@ pub struct Viewport {
     scale: Option<f32>,
     pub pan: egui::Vec2,
     pub one_to_one: bool,
+    pub zoom_snap: ZoomPreset,
     last_canvas: Option<(egui::Vec2, [u32; 2])>,
     navigator_offset: egui::Vec2,
 }
@@ -312,6 +314,7 @@ impl Default for Viewport {
             scale: None,
             pan: egui::Vec2::ZERO,
             one_to_one: false,
+            zoom_snap: ZoomPreset::default(),
             last_canvas: None,
             navigator_offset: egui::Vec2::ZERO,
         }
@@ -332,9 +335,75 @@ impl Viewport {
     pub fn zoom_by(&mut self, factor: f32) {
         if let Some((size, extent)) = self.last_canvas {
             let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
-            self.scale = Some(scale * factor);
-            self.pan *= factor;
+            self.set_scale_at(scale * factor, egui::Vec2::ZERO);
         }
+    }
+
+    /// Set UI points per image pixel, preserving the image point at an offset from canvas centre.
+    fn set_scale_at(&mut self, next: f32, anchor: egui::Vec2) {
+        if let Some((size, extent)) = self.last_canvas {
+            let old = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
+            if old > 0. {
+                self.pan = anchor - (anchor - self.pan) * (next / old);
+            }
+            self.scale = Some(next);
+            self.one_to_one = false;
+        }
+    }
+
+    fn toggle_fit_snap(&mut self, pixels_per_point: f32, anchor: egui::Vec2) {
+        if self.scale.is_none() && !self.one_to_one {
+            self.set_scale_at(self.zoom_snap.multiple() / pixels_per_point, anchor);
+        } else {
+            let canvas = self.last_canvas;
+            self.reset();
+            self.last_canvas = canvas;
+        }
+    }
+
+    fn zoom_percent(&self, pixels_per_point: f32) -> Option<f32> {
+        if self.one_to_one {
+            return Some(100.);
+        }
+        let (size, extent) = self.last_canvas?;
+        let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
+        Some(scale * pixels_per_point * 100.)
+    }
+
+    fn navigator_zoom_controls(&mut self, ui: &mut egui::Ui) {
+        let pixels_per_point = ui.ctx().pixels_per_point();
+        ui.horizontal(|ui| {
+            let zoom = self
+                .zoom_percent(pixels_per_point)
+                .map(|percent| format!("Zoom {percent:.0}%"))
+                .unwrap_or_else(|| "Zoom —".into());
+            ui.label(zoom);
+            for preset in ZoomPreset::ALL {
+                let response = crate::help::attach(
+                    ui.button(preset.label()),
+                    &crate::help::navigator(ui.ctx().os()),
+                );
+                if response.clicked() {
+                    if ui.input(|i| i.modifiers.command) {
+                        self.zoom_snap = preset;
+                    } else {
+                        self.set_scale_at(preset.multiple() / pixels_per_point, egui::Vec2::ZERO);
+                    }
+                    ui.ctx().request_repaint();
+                }
+                if preset == self.zoom_snap {
+                    let rect = response.rect;
+                    let y = rect.bottom() - 2.;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(rect.left() + 5., y),
+                            egui::pos2(rect.right() - 5., y),
+                        ],
+                        egui::Stroke::new(2_f32, ui.visuals().selection.stroke.color),
+                    );
+                }
+            }
+        });
     }
 
     fn reframe(&mut self, size: egui::Vec2, extent: [u32; 2]) {
@@ -361,24 +430,23 @@ impl Viewport {
 
     /// Allocate the same canvas and interaction geometry for JPEG and pipeline presentation.
     fn layout(&mut self, ui: &mut egui::Ui, extent: [u32; 2]) -> (egui::Rect, egui::Rect) {
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::drag());
+        let (rect, response) =
+            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         self.reframe(rect.size(), extent);
         let fit = Self::fit_scale(rect.size(), extent);
         if self.one_to_one {
-            let old = self.scale.unwrap_or(fit);
-            let next = 1. / ui.ctx().pixels_per_point();
-            if old > 0. {
-                self.pan *= next / old;
-            }
-            self.scale = Some(next);
-            self.one_to_one = false;
+            self.set_scale_at(1. / ui.ctx().pixels_per_point(), egui::Vec2::ZERO);
         }
         if response.dragged() {
             self.scale.get_or_insert(fit);
             self.pan += ui.input(|i| i.pointer.delta());
         }
         if response.double_clicked() {
-            self.reset();
+            let anchor = response
+                .interact_pointer_pos()
+                .map(|mouse| mouse - rect.center())
+                .unwrap_or(egui::Vec2::ZERO);
+            self.toggle_fit_snap(ui.ctx().pixels_per_point(), anchor);
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -387,13 +455,11 @@ impl Viewport {
                 let pixels_per_point = ui.ctx().pixels_per_point();
                 let next = (old * (scroll * 0.005).exp())
                     .clamp(0.05 / pixels_per_point, 64. / pixels_per_point);
-                self.scale = Some(next);
-                if old > 0. {
-                    if let Some(mouse) = response.hover_pos() {
-                        let delta = mouse - rect.center();
-                        self.pan = delta - (delta - self.pan) * (next / old);
-                    }
-                }
+                let anchor = response
+                    .hover_pos()
+                    .map(|mouse| mouse - rect.center())
+                    .unwrap_or(egui::Vec2::ZERO);
+                self.set_scale_at(next, anchor);
             }
         }
         if rect.width() > 0. && rect.height() > 0. {
@@ -522,6 +588,7 @@ impl Viewport {
         ui.painter()
             .rect_filled(canvas, 3., egui::Color32::from_gray(14));
         let Some(extent) = extent else {
+            self.navigator_zoom_controls(ui);
             return;
         };
         let size = egui::vec2(extent[0] as f32, extent[1] as f32);
@@ -561,16 +628,23 @@ impl Viewport {
                 };
             }
         }
-        if response.dragged() || response.clicked() {
+        if response.double_clicked() {
+            let fitted = self.scale.is_none() && !self.one_to_one;
+            self.toggle_fit_snap(ui.ctx().pixels_per_point(), egui::Vec2::ZERO);
+            if fitted {
+                if let Some(mouse) = response.interact_pointer_pos() {
+                    self.pan_to((mouse - image.min) / image.size());
+                }
+            }
+            ui.ctx().request_repaint();
+        } else if self.scale.is_some() && (response.dragged() || response.clicked()) {
+            // In Fit the whole image is visible; a click must not leave Fit before a double-click.
             if let Some(mouse) = response.interact_pointer_pos() {
                 self.pan_to((mouse - image.min) / image.size() - self.navigator_offset);
                 ui.ctx().request_repaint();
             }
         }
-        if response.double_clicked() {
-            self.reset();
-            ui.ctx().request_repaint();
-        }
+        self.navigator_zoom_controls(ui);
         let visible = self.visible_uv();
         if visible.is_positive() {
             let overlay = egui::Rect::from_min_max(
@@ -663,68 +737,6 @@ mod tests {
         }
     }
     #[test]
-    fn clipped_gpu_canvas_preserves_image_scale_and_overlay_coordinates() {
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
-        let clip = egui::Rect::from_min_max(egui::pos2(8., 10.), egui::pos2(392., 290.));
-        for extent in [[900, 600], [600, 900]] {
-            for origin in [
-                egui::pos2(8., 20.),  // fully visible
-                egui::pos2(8., -60.), // scrolled above the window
-                egui::pos2(8., 230.), // partly below the window
-                egui::pos2(-60., 20.),
-                egui::pos2(300., 20.),
-            ] {
-                let canvas = egui::Rect::from_min_size(origin, egui::vec2(384., 150.));
-                let image = Viewport::default().image_rect(canvas, extent);
-                let (visible, params) = Params::clipped(
-                    canvas,
-                    image,
-                    clip.intersect(screen),
-                    Space::CalibratedLayers,
-                    0,
-                    false,
-                )
-                .unwrap();
-                assert_eq!(visible, canvas.intersect(clip));
-                assert!(
-                    (egui::vec2(params.rect[2], params.rect[3]) * visible.size() - image.size())
-                        .length()
-                        < 0.001
-                );
-                // The shader's sampled UV must agree with the original image and navigator overlay.
-                for point in [visible.min, visible.center(), visible.max] {
-                    let canvas_uv = (point - visible.min) / visible.size();
-                    let shader_uv = (canvas_uv - egui::vec2(params.rect[0], params.rect[1]))
-                        / egui::vec2(params.rect[2], params.rect[3]);
-                    let image_uv = (point - image.min) / image.size();
-                    assert!((shader_uv - image_uv).length() < 1e-6);
-                }
-                for pixels_per_point in [1., 2.] {
-                    let info = egui::PaintCallbackInfo {
-                        viewport: visible,
-                        clip_rect: clip,
-                        pixels_per_point,
-                        screen_size_px: [
-                            (screen.width() * pixels_per_point) as u32,
-                            (screen.height() * pixels_per_point) as u32,
-                        ],
-                    };
-                    let viewport = info.viewport_in_pixels();
-                    assert_eq!(viewport.width_px as f32, visible.width() * pixels_per_point);
-                    assert_eq!(
-                        viewport.height_px as f32,
-                        visible.height() * pixels_per_point
-                    );
-                }
-            }
-        }
-        for top in [-200., 310.] {
-            let canvas = egui::Rect::from_min_size(egui::pos2(8., top), egui::vec2(384., 150.));
-            assert!(Params::clipped(canvas, canvas, clip, Space::ScalarField, -1, false).is_none());
-        }
-    }
-
-    #[test]
     fn visible_pixel_bounds_follow_fit_zoom_pan_and_oriented_extent() {
         let mut viewport = Viewport {
             last_canvas: Some((egui::vec2(800., 800.), [400, 200])),
@@ -785,6 +797,68 @@ mod tests {
                 Params::new(canvas, image, space, channel, false).options[3],
                 0.
             );
+        }
+    }
+
+    #[test]
+    fn clipped_gpu_canvas_preserves_image_scale_and_overlay_coordinates() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let clip = egui::Rect::from_min_max(egui::pos2(8., 10.), egui::pos2(392., 290.));
+        for extent in [[900, 600], [600, 900]] {
+            for origin in [
+                egui::pos2(8., 20.),  // fully visible
+                egui::pos2(8., -60.), // scrolled above the window
+                egui::pos2(8., 230.), // partly below the window
+                egui::pos2(-60., 20.),
+                egui::pos2(300., 20.),
+            ] {
+                let canvas = egui::Rect::from_min_size(origin, egui::vec2(384., 150.));
+                let image = Viewport::default().image_rect(canvas, extent);
+                let (visible, params) = Params::clipped(
+                    canvas,
+                    image,
+                    clip.intersect(screen),
+                    Space::CalibratedLayers,
+                    0,
+                    false,
+                )
+                .unwrap();
+                assert_eq!(visible, canvas.intersect(clip));
+                assert!(
+                    (egui::vec2(params.rect[2], params.rect[3]) * visible.size() - image.size())
+                        .length()
+                        < 0.001
+                );
+                // The shader's sampled UV must agree with the original image and navigator overlay.
+                for point in [visible.min, visible.center(), visible.max] {
+                    let canvas_uv = (point - visible.min) / visible.size();
+                    let shader_uv = (canvas_uv - egui::vec2(params.rect[0], params.rect[1]))
+                        / egui::vec2(params.rect[2], params.rect[3]);
+                    let image_uv = (point - image.min) / image.size();
+                    assert!((shader_uv - image_uv).length() < 1e-6);
+                }
+                for pixels_per_point in [1., 2.] {
+                    let info = egui::PaintCallbackInfo {
+                        viewport: visible,
+                        clip_rect: clip,
+                        pixels_per_point,
+                        screen_size_px: [
+                            (screen.width() * pixels_per_point) as u32,
+                            (screen.height() * pixels_per_point) as u32,
+                        ],
+                    };
+                    let viewport = info.viewport_in_pixels();
+                    assert_eq!(viewport.width_px as f32, visible.width() * pixels_per_point);
+                    assert_eq!(
+                        viewport.height_px as f32,
+                        visible.height() * pixels_per_point
+                    );
+                }
+            }
+        }
+        for top in [-200., 310.] {
+            let canvas = egui::Rect::from_min_size(egui::pos2(8., top), egui::vec2(384., 150.));
+            assert!(Params::clipped(canvas, canvas, clip, Space::ScalarField, -1, false).is_none());
         }
     }
 
@@ -860,6 +934,392 @@ mod tests {
             viewport.visible_uv(),
             egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.))
         );
+    }
+
+    #[test]
+    fn double_click_toggles_fit_and_snap_zoom_in_both_views() {
+        for navigator in [false, true] {
+            for pixels_per_point in [1., 2.] {
+                for zoom_snap in ZoomPreset::ALL {
+                    for initial_zoom in [None, Some(1.), Some(2.), Some(4.), Some(0.05)] {
+                        let ctx = egui::Context::default();
+                        ctx.set_pixels_per_point(pixels_per_point);
+                        let extent = [900, 600];
+                        let mut viewport = Viewport {
+                            scale: initial_zoom.map(|zoom| zoom / pixels_per_point),
+                            zoom_snap,
+                            last_canvas: Some((egui::vec2(600., 400.), extent)),
+                            ..Default::default()
+                        };
+                        let run = |viewport: &mut Viewport, time, events| {
+                            let mut bounds = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+                            let _ = ctx.run(
+                                egui::RawInput {
+                                    screen_rect: Some(egui::Rect::from_min_size(
+                                        egui::Pos2::ZERO,
+                                        egui::vec2(400., 240.),
+                                    )),
+                                    time: Some(time),
+                                    events,
+                                    ..Default::default()
+                                },
+                                |ctx| {
+                                    egui::CentralPanel::default().show(ctx, |ui| {
+                                        if navigator {
+                                            viewport.navigator(
+                                                ui,
+                                                Some(crate::navigator::Image {
+                                                    id: Some(egui::TextureId::User(7)),
+                                                    extent,
+                                                }),
+                                                None,
+                                            );
+                                        } else {
+                                            bounds = viewport.layout(ui, extent);
+                                        }
+                                    });
+                                },
+                            );
+                            bounds
+                        };
+                        run(&mut viewport, 0., vec![]); // Apply the display-density change first.
+                        let (canvas, before) = run(&mut viewport, 0.01, vec![]);
+                        let point = egui::pos2(190., 83.);
+                        for (time, pressed) in
+                            [(0.1, true), (0.15, false), (0.2, true), (0.25, false)]
+                        {
+                            run(
+                                &mut viewport,
+                                time,
+                                vec![
+                                    egui::Event::PointerMoved(point),
+                                    egui::Event::PointerButton {
+                                        pos: point,
+                                        button: egui::PointerButton::Primary,
+                                        pressed,
+                                        modifiers: Default::default(),
+                                    },
+                                ],
+                            );
+                            if initial_zoom.is_none() && time == 0.15 {
+                                assert_eq!(viewport.scale, None);
+                            }
+                        }
+                        assert_eq!(
+                        viewport.scale,
+                        initial_zoom.is_none().then_some(zoom_snap.multiple() / pixels_per_point),
+                        "navigator={navigator}, density={pixels_per_point}, initial={initial_zoom:?}"
+                    );
+                        if initial_zoom.is_some() {
+                            assert_eq!(viewport.pan, egui::Vec2::ZERO);
+                        } else if !navigator {
+                            let after = viewport.image_rect(canvas, extent);
+                            let before_uv = (point - before.min) / before.size();
+                            let after_uv = (point - after.min) / after.size();
+                            assert!(
+                            (after_uv - before_uv).length() < 1e-6,
+                            "density={pixels_per_point}, before_uv={before_uv:?}, after_uv={after_uv:?}"
+                        );
+                            assert_ne!(viewport.pan, egui::Vec2::ZERO);
+                        }
+                        assert!(!viewport.one_to_one);
+                        assert!(viewport.zoom_percent(pixels_per_point).is_some());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn navigator_double_click_zooms_into_clicked_image_location() {
+        for pixels_per_point in [1., 2.] {
+            for extent in [[4704, 3136], [3136, 4704]] {
+                for uv in [egui::vec2(0.65, 0.35), egui::vec2(0.01, 0.99)] {
+                    let ctx = egui::Context::default();
+                    ctx.set_pixels_per_point(pixels_per_point);
+                    let size = egui::vec2(600., 400.);
+                    let mut viewport = Viewport {
+                        last_canvas: Some((size, extent)),
+                        ..Default::default()
+                    };
+                    let run = |viewport: &mut Viewport, time, events| {
+                        ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(400., 240.),
+                                )),
+                                time: Some(time),
+                                events,
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().show(ctx, |ui| {
+                                    viewport.navigator(
+                                        ui,
+                                        Some(crate::navigator::Image {
+                                            id: Some(egui::TextureId::User(7)),
+                                            extent,
+                                        }),
+                                        None,
+                                    );
+                                });
+                            },
+                        )
+                    };
+                    run(&mut viewport, 0., vec![]); // Apply the display-density change first.
+                    let output = run(&mut viewport, 0.01, vec![]);
+                    let mesh = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Mesh(mesh)
+                                if mesh.texture_id == egui::TextureId::User(7) =>
+                            {
+                                Some(mesh)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    let mut image = egui::Rect::NOTHING;
+                    for vertex in &mesh.vertices {
+                        image.extend_with(vertex.pos);
+                    }
+                    let point = image.min + uv * image.size();
+                    for (time, pressed) in [(0.1, true), (0.15, false), (0.2, true), (0.25, false)]
+                    {
+                        run(
+                            &mut viewport,
+                            time,
+                            vec![
+                                egui::Event::PointerMoved(point),
+                                egui::Event::PointerButton {
+                                    pos: point,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: Default::default(),
+                                },
+                            ],
+                        );
+                    }
+                    assert_eq!(
+                        viewport.scale,
+                        Some(2. / pixels_per_point),
+                        "density={pixels_per_point}, extent={extent:?}, uv={uv:?}, image={image:?}, point={point:?}"
+                    );
+                    let display =
+                        egui::vec2(extent[0] as f32, extent[1] as f32) * 2. / pixels_per_point;
+                    let half = size / display * 0.5;
+                    let expected = uv.max(half).min(egui::vec2(1., 1.) - half);
+                    assert!((viewport.visible_uv().center().to_vec2() - expected).length() < 1e-6);
+                    assert_ne!(viewport.pan, egui::Vec2::ZERO);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn navigator_zoom_buttons_and_readout_use_physical_pixels() {
+        for pixels_per_point in [1., 2.] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(pixels_per_point);
+            let mut viewport = Viewport {
+                last_canvas: Some((egui::vec2(600., 400.), [900, 600])),
+                ..Default::default()
+            };
+            let run = |viewport: &mut Viewport, time, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(400., 240.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            viewport.navigator(
+                                ui,
+                                Some(crate::navigator::Image {
+                                    id: Some(egui::TextureId::User(7)),
+                                    extent: [900, 600],
+                                }),
+                                None,
+                            );
+                        });
+                    },
+                )
+            };
+            let mut output = run(&mut viewport, 0., vec![]);
+            let expected_fit = 600. / 900. * pixels_per_point * 100.;
+            assert!(
+                (viewport.zoom_percent(pixels_per_point).unwrap() - expected_fit).abs() < 0.001
+            );
+            for (index, percent) in [100., 200., 400.].into_iter().enumerate() {
+                let label = format!("{percent:.0}%");
+                let point = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.pos + text.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(point.y > 158.); // Controls are below the 150-point miniature.
+                viewport.pan = egui::vec2(-30., 12.);
+                let old = viewport.scale.unwrap_or(600. / 900.);
+                let time = index as f64 + 0.1;
+                for (time, pressed) in [(time, true), (time + 0.05, false)] {
+                    run(
+                        &mut viewport,
+                        time,
+                        vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+                let next = percent / 100. / pixels_per_point;
+                assert_eq!(viewport.scale, Some(next));
+                assert!((viewport.pan - egui::vec2(-30., 12.) * (next / old)).length() < 0.001);
+                assert_eq!(viewport.zoom_percent(pixels_per_point), Some(percent));
+                assert_eq!(viewport.zoom_snap, ZoomPreset::Percent200);
+                output = run(&mut viewport, time + 0.1, vec![]);
+                assert!(output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == format!("Zoom {percent:.0}%"))
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn modifier_click_selects_snap_without_changing_the_view() {
+        for modifiers in [
+            egui::Modifiers {
+                mac_cmd: true,
+                command: true,
+                ..Default::default()
+            },
+            egui::Modifiers {
+                ctrl: true,
+                command: true,
+                ..Default::default()
+            },
+        ] {
+            for pixels_per_point in [1., 2.] {
+                for (last_canvas, scale) in [
+                    (None, None),
+                    (Some((egui::vec2(600., 400.), [4704, 3136])), None),
+                    (Some((egui::vec2(600., 400.), [4704, 3136])), Some(0.25)),
+                ] {
+                    let ctx = egui::Context::default();
+                    ctx.set_pixels_per_point(pixels_per_point);
+                    let mut viewport = Viewport {
+                        last_canvas,
+                        scale,
+                        pan: egui::vec2(-23.5, 12.25),
+                        ..Default::default()
+                    };
+                    let run = |viewport: &mut Viewport, time, events| {
+                        ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(400., 240.),
+                                )),
+                                time: Some(time),
+                                modifiers,
+                                events,
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().show(ctx, |ui| {
+                                    viewport.navigator_zoom_controls(ui);
+                                });
+                            },
+                        )
+                    };
+                    run(&mut viewport, 0., vec![]);
+                    let mut output = run(&mut viewport, 0.01, vec![]);
+                    for (index, preset) in ZoomPreset::ALL.into_iter().enumerate() {
+                        let point = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.text() == preset.label() => {
+                                    Some(text.pos + text.galley.size() * 0.5)
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        let before = (
+                            viewport.scale,
+                            viewport.pan,
+                            viewport.one_to_one,
+                            viewport.last_canvas,
+                        );
+                        let time = index as f64 + 0.1;
+                        for (time, pressed) in [(time, true), (time + 0.05, false)] {
+                            run(
+                                &mut viewport,
+                                time,
+                                vec![
+                                    egui::Event::PointerMoved(point),
+                                    egui::Event::PointerButton {
+                                        pos: point,
+                                        button: egui::PointerButton::Primary,
+                                        pressed,
+                                        modifiers,
+                                    },
+                                ],
+                            );
+                        }
+                        assert_eq!(viewport.zoom_snap, preset);
+                        assert_eq!(
+                            (
+                                viewport.scale,
+                                viewport.pan,
+                                viewport.one_to_one,
+                                viewport.last_canvas,
+                            ),
+                            before
+                        );
+                        output = run(&mut viewport, time + 0.1, vec![]);
+                        let lines: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::LineSegment { points, stroke }
+                                    if stroke.width == 2.
+                                        && stroke.color
+                                            == ctx.style().visuals.selection.stroke.color =>
+                                {
+                                    Some(points)
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(lines.len(), 1);
+                        assert!(((lines[0][0].x + lines[0][1].x) * 0.5 - point.x).abs() < 0.001);
+                        assert!(lines[0][0].y > point.y);
+                        viewport.reset();
+                        assert_eq!(viewport.zoom_snap, preset);
+                        viewport.scale = before.0;
+                        viewport.pan = before.1;
+                        viewport.last_canvas = before.3;
+                    }
+                }
+            }
+        }
     }
 
     #[test]

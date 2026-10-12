@@ -91,7 +91,6 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
 
 pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
     let mut changed = false;
-    ui.small("Hover over a control for an explanation. Double-click a slider to reset it.");
     if let Some(metadata) = metadata {
         for (title, key, value) in [
             (

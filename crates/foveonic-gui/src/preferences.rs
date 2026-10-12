@@ -1,4 +1,4 @@
-//! Persists the last organizer folder, scope, and tool-section preferences separately from image edits.
+//! Persists organizer, scope, zoom snap, and tool-section preferences separately from image edits.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -18,6 +18,33 @@ pub enum Scope {
     Parade,
     Waveform,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ZoomPreset {
+    Percent100,
+    #[default]
+    Percent200,
+    Percent400,
+}
+impl ZoomPreset {
+    pub const ALL: [Self; 3] = [Self::Percent100, Self::Percent200, Self::Percent400];
+
+    pub fn multiple(self) -> f32 {
+        match self {
+            Self::Percent100 => 1.,
+            Self::Percent200 => 2.,
+            Self::Percent400 => 4.,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Percent100 => "100%",
+            Self::Percent200 => "200%",
+            Self::Percent400 => "400%",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Section {
     Navigator,
@@ -42,6 +69,7 @@ pub struct Preferences {
     pub last_folder: Option<std::path::PathBuf>,
     pub organizer: Organizer,
     pub scope: Scope,
+    pub zoom_snap: ZoomPreset,
     pub sections: Vec<Section>,
     pub collapsed: BTreeSet<Section>,
 }
@@ -51,6 +79,7 @@ impl Default for Preferences {
             last_folder: None,
             organizer: Organizer::Icons,
             scope: Scope::Histogram,
+            zoom_snap: ZoomPreset::default(),
             sections: Section::ALL.to_vec(),
             collapsed: BTreeSet::new(),
         }
@@ -127,6 +156,25 @@ mod tests {
         let explicit = std::path::PathBuf::from("explicit.x3f");
         assert_eq!(loaded.startup_path(Some(explicit.clone())), Some(explicit));
     }
+    #[test]
+    fn zoom_snap_defaults_to_200_and_survives_restart() {
+        assert_eq!(Preferences::load(None).zoom_snap, ZoomPreset::Percent200);
+        let mut store = Storage::default();
+        store.0.insert(STORAGE_KEY.into(), "(scope:Parade)".into());
+        let loaded = Preferences::load(Some(&store));
+        assert_eq!(loaded.scope, Scope::Parade);
+        assert_eq!(loaded.zoom_snap, ZoomPreset::Percent200);
+        for zoom_snap in ZoomPreset::ALL {
+            let prefs = Preferences {
+                scope: loaded.scope,
+                zoom_snap,
+                ..Default::default()
+            };
+            prefs.save(&mut store);
+            assert_eq!(Preferences::load(Some(&store)), prefs);
+        }
+    }
+
     #[test]
     fn layout_round_trip_and_reorder() {
         let mut prefs = Preferences {

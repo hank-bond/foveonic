@@ -1,7 +1,7 @@
-//! Explains editing controls, inspection stages, and scopes in photographic language.
+//! Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
 
 use crate::preferences::Scope;
-use eframe::egui;
+use eframe::egui::{self, os::OperatingSystem};
 
 /// Attach the same explanation to editable and read-only controls.
 pub fn attach(response: egui::Response, text: &str) -> egui::Response {
@@ -80,6 +80,17 @@ pub fn editing(label: &str) -> Option<&'static str> {
         }
         _ => return None,
     })
+}
+
+pub fn navigator(os: OperatingSystem) -> String {
+    let modifier = if matches!(os, OperatingSystem::Mac | OperatingSystem::IOS) {
+        "⌘"
+    } else {
+        "Ctrl"
+    };
+    format!(
+        "Drag the navigator's outlined region to pan. Double-click the main image or navigator to switch between Fit and your snap zoom (200% by default). Main-image zoom keeps the clicked point under the cursor; navigator zoom centres the clicked image location. Click 100%, 200%, or 400% to zoom immediately. {modifier}-click a button to select the snap zoom without changing the current view. The colored underline marks the snap target, not the current zoom; your choice is remembered across restarts. Percentages use display pixels per image pixel, including on Retina displays."
+    )
 }
 
 pub fn scope(mode: Scope) -> &'static str {
@@ -165,6 +176,27 @@ pub fn inspection(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigator_help_explains_snap_selection_and_platform_modifier() {
+        for (os, modifier) in [
+            (OperatingSystem::Mac, "⌘-click"),
+            (OperatingSystem::Windows, "Ctrl-click"),
+            (OperatingSystem::Nix, "Ctrl-click"),
+        ] {
+            let text = navigator(os);
+            for required in [
+                modifier,
+                "200% by default",
+                "without changing the current view",
+                "underline",
+                "remembered across restarts",
+                "under the cursor",
+            ] {
+                assert!(text.contains(required), "{required}");
+            }
+        }
+    }
 
     #[test]
     fn every_available_inspection_stage_has_help() {

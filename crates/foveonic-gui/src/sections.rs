@@ -45,7 +45,7 @@ pub fn header(ui: &mut egui::Ui, section: Section, collapsed: bool) -> egui::Res
         }
     }
     response.dnd_set_drag_payload(section);
-    response.on_hover_text("Click to collapse / expand; drag to reorder within this pane")
+    response
 }
 pub fn drop(ui: &mut egui::Ui, header: egui::Rect) -> Option<(Section, bool)> {
     let zone = egui::Rect::from_min_max(header.min, egui::pos2(header.right(), ui.cursor().top()));
