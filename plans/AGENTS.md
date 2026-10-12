@@ -21,6 +21,7 @@ The plans outline implementation work for review. Implementation begins with own
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
 - **[icon-background](./icon-background.md)** A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
+- **[inspection-differences](./inspection-differences.md)** Make Inspect groups expand inline and add amplified signed layer/channel comparisons against explicit operation inputs.
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[pipeline-performance](./pipeline-performance.md)** Pause algorithm expansion, stabilize a buildable baseline, measure completed cold/warm renders and GPU stages, then optimize the largest bottlenecks with output-equivalence checks. _Resume the owner-approved profiling and optimization pivot; remaining algorithm work is paused._

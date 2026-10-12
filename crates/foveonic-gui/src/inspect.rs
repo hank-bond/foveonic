@@ -19,6 +19,43 @@ fn choose(output: &mut String, channel: &mut i32, name: &str, component: i32) {
     *channel = component;
 }
 
+/// A full-width disclosure row. Opening it never selects a processing output.
+fn group_row(ui: &mut egui::Ui, name: &str, selected: bool) -> bool {
+    let id = ui.make_persistent_id(("inspect group", name));
+    let mut open = ui.data_mut(|d| d.get_persisted::<bool>(id).unwrap_or(false));
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+        egui::Sense::click(),
+    );
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|d| d.insert_persisted(id, open));
+    }
+    let visuals = ui.style().interact_selectable(&response, selected);
+    ui.painter()
+        .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+    let padding = ui.spacing().button_padding.x;
+    ui.painter().text(
+        rect.left_center() + egui::vec2(padding, 0.),
+        egui::Align2::LEFT_CENTER,
+        name,
+        egui::TextStyle::Button.resolve(ui.style()),
+        visuals.text_color(),
+    );
+    ui.painter().text(
+        rect.right_center() - egui::vec2(padding, 0.),
+        egui::Align2::RIGHT_CENTER,
+        if open { "▾" } else { "▸" },
+        egui::TextStyle::Button.resolve(ui.style()),
+        visuals.text_color(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, ui.is_enabled(), name)
+    });
+    response.on_hover_text(help::inspection(name).unwrap());
+    open
+}
+
 /// Returns true only when processing must produce a different buffer.
 pub fn show(
     ui: &mut egui::Ui,
@@ -58,7 +95,8 @@ pub fn show(
                         ui.close_menu();
                     }
                 } else {
-                    ui.menu_button(image.name, |ui| {
+                    if group_row(ui, image.name, image.name == output) {
+                        ui.indent(image.name, |ui| {
                         for &(component, label) in components(image.channels) {
                             if ui
                                 .selectable_label(
@@ -78,9 +116,8 @@ pub fn show(
                                 ui.close_menu();
                             }
                         }
-                    })
-                    .response
-                    .on_hover_text(help::inspection(image.name).unwrap());
+                        });
+                    }
                 }
             }
         })
@@ -95,6 +132,58 @@ pub fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disclosure_opens_and_closes_from_both_edges_of_the_row() {
+        let ctx = egui::Context::default();
+        let draw = |events: Vec<egui::Event>| {
+            let mut open = false;
+            let mut rect = egui::Rect::NOTHING;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(300., 300.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let origin = ui.cursor().min;
+                        let width = ui.available_width();
+                        let height = ui.spacing().interact_size.y;
+                        open = group_row(ui, "repair.layers", false);
+                        rect = egui::Rect::from_min_size(origin, egui::vec2(width, height));
+                    });
+                },
+            );
+            (open, rect)
+        };
+        let (open, rect) = draw(vec![]);
+        assert!(!open);
+        let click = |point| {
+            draw(vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ]);
+            draw(vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }])
+            .0
+        };
+        assert!(click(rect.left_center() + egui::vec2(5., 0.)));
+        assert!(draw(vec![]).0); // state survives subsequent frames
+        assert!(!click(rect.right_center() - egui::vec2(5., 0.)));
+    }
+
     #[test]
     fn component_selection_reuses_the_root_and_scalar_views_have_no_layers() {
         let mut output = "final".to_owned();

@@ -97,6 +97,50 @@ pub fn image_outputs(settings: &Settings) -> Vec<ImageOutput> {
         .collect()
 }
 
+/// Explicit operation input for same-unit layer/channel differences.
+/// Branch outputs are not a linear list: noise and column conditioning share an input,
+/// and reconstruction adds detail to the color-converted (optionally ColorDQ) base.
+/// Cross-unit tone/color conversion and diagnostic side outputs are deliberately absent.
+pub fn comparison_input(settings: &Settings, output: &str) -> Option<&'static str> {
+    let mut input = "sensor.layers";
+    for (name, enabled) in [
+        ("calibration.layers", true),
+        ("gain.layers", settings.sensor_gain != 1.),
+        ("repair.layers", settings.repair.is_some()),
+        ("highlight.layers", settings.highlight_restoration),
+        ("despeckle.layers", settings.despeckle),
+        ("banding.layers", settings.row_correction),
+    ] {
+        if enabled {
+            if output == name {
+                return Some(input);
+            }
+            input = name;
+        }
+    }
+    if settings.reconstruction.is_some() && matches!(output, "noise.layers" | "column.layers") {
+        return Some(input);
+    }
+    let base = if settings.color_dq_selected() {
+        "color-dq.rgb"
+    } else {
+        "color.rgb"
+    };
+    match output {
+        "color-dq.rgb" if settings.color_dq_selected() => Some("color.rgb"),
+        "reconstruction.rgb" if settings.reconstruction.is_some() => Some(base),
+        "sharpen.rgb" if settings.sharpen_amount > 0. => {
+            Some(if settings.reconstruction.is_some() {
+                "reconstruction.rgb"
+            } else {
+                base
+            })
+        }
+        "saturation.rgb" if settings.saturation != 1. => Some("tone.rgb"),
+        _ => None,
+    }
+}
+
 pub struct Artifact {
     pub name: &'static str,
     pub metadata: Arc<Metadata>,
@@ -106,6 +150,73 @@ pub struct Artifact {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn comparison_inputs_follow_enabled_stages_and_branches() {
+        let mut s = crate::render::Settings::new("Sunlight", "Standard");
+        assert_eq!(
+            super::comparison_input(&s, "repair.layers"),
+            Some("calibration.layers")
+        );
+        assert_eq!(
+            super::comparison_input(&s, "banding.layers"),
+            Some("despeckle.layers")
+        );
+        s.sensor_gain = 1.3;
+        assert_eq!(
+            super::comparison_input(&s, "repair.layers"),
+            Some("gain.layers")
+        );
+        s.repair = None;
+        s.highlight_restoration = false;
+        s.despeckle = false;
+        s.row_correction = false;
+        s.reconstruction = Some(Default::default());
+        for output in ["noise.layers", "column.layers"] {
+            assert_eq!(super::comparison_input(&s, output), Some("gain.layers"));
+        }
+        assert_eq!(
+            super::comparison_input(&s, "reconstruction.rgb"),
+            Some("color-dq.rgb")
+        );
+        s.color_dq_gain = Some(0.);
+        assert_eq!(
+            super::comparison_input(&s, "reconstruction.rgb"),
+            Some("color.rgb")
+        );
+        s.sharpen_amount = 0.75;
+        assert_eq!(
+            super::comparison_input(&s, "sharpen.rgb"),
+            Some("reconstruction.rgb")
+        );
+        s.reconstruction = None;
+        assert_eq!(
+            super::comparison_input(&s, "sharpen.rgb"),
+            Some("color.rgb")
+        );
+        for output in [
+            "sensor.layers",
+            "final",
+            "color.rgb",
+            "tone.rgb",
+            "noise.edges",
+            "detail.ratio",
+            "repair.layers",
+        ] {
+            assert_eq!(super::comparison_input(&s, output), None, "{output}");
+        }
+        s.saturation = 1.2;
+        assert_eq!(
+            super::comparison_input(&s, "saturation.rgb"),
+            Some("tone.rgb")
+        );
+        let images = super::image_outputs(&s);
+        for output in &images {
+            if let Some(input) = super::comparison_input(&s, output.name) {
+                assert!(images.iter().any(|i| i.name == input), "{input}");
+            }
+        }
+    }
+
     #[test]
     fn visual_catalog_excludes_tables_and_keeps_enabled_image_stages() {
         let mut settings = crate::render::Settings::new("Sunlight", "Standard");
