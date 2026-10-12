@@ -175,7 +175,10 @@ pub struct Source {
 }
 
 impl Source {
-    /// Host wall timings from loading; concurrent plane timings measure overlapping work.
+    /// Recorded once at source opening: file read and in-memory X3F decode wall are separate.
+    /// Nested decode/parallel-plane timings overlap; do not sum them with the decode total.
+    /// Read timing includes opening, size checks, allocation and the complete read into memory.
+    /// Filesystem cache state is not controlled; a first process read is not necessarily cold media I/O.
     pub fn load_timings(&self) -> &[crate::profile::Timing] {
         &self.timings
     }

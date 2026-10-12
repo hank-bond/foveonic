@@ -49,8 +49,11 @@ pub(crate) fn read(path: &Path) -> Result<Source> {
         return Err("X3F file changes during reading".into());
     }
     let read = Timing::elapsed("file read", start);
+    let start = Instant::now();
     let mut source = decode(&data)?;
-    source.timings.insert(0, read);
+    // Total in-memory decode wall time includes metadata parsing; nested plane timings overlap.
+    let decode = Timing::elapsed("X3F decode wall", start);
+    source.timings.splice(0..0, [read, decode]);
     Ok(source)
 }
 

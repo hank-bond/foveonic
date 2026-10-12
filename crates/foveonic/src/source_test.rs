@@ -123,7 +123,19 @@ fn decode_original_merrill_files() {
     files.sort();
     assert!(!files.is_empty(), "fixture directory contains no X3Fs");
     for path in files {
+        let started = std::time::Instant::now();
         let source = Source::open(&path).unwrap();
+        let opened_ms = started.elapsed().as_secs_f64() * 1000.;
+        let timings = source.load_timings();
+        assert_eq!(timings[0].stage, "file read");
+        assert_eq!(timings[1].stage, "X3F decode wall");
+        assert!(timings[0].milliseconds + timings[1].milliseconds <= opened_ms);
+        let planes = timings
+            .iter()
+            .find(|timing| timing.stage == "sensor planes wall")
+            .unwrap();
+        assert!(planes.milliseconds <= timings[1].milliseconds);
+        eprintln!("SOURCE-LOAD file_read_ms={:.3} decode_ms={:.3} source_open_ms={opened_ms:.3} cache_state=uncontrolled path={}",timings[0].milliseconds,timings[1].milliseconds,path.display());
         assert_eq!(source.pixels.len(), SENSOR_WIDTH * SENSOR_HEIGHT * 3);
         assert!(source
             .pixels

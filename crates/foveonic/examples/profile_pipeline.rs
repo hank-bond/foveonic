@@ -54,7 +54,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .to_string_lossy();
     let start = Instant::now();
     let source = Source::open(&input)?;
-    let decode = milliseconds(start);
+    let source_open = milliseconds(start);
+    let stage = |name| {
+        source
+            .load_timings()
+            .iter()
+            .find(|timing| timing.stage == name)
+            .map(|timing| timing.milliseconds)
+            .ok_or("missing source load timing")
+    };
+    let file_read = stage("file read")?;
+    let decode = stage("X3F decode wall")?;
     let start = Instant::now();
     let engine = Engine::new()?;
     engine.device().poll(wgpu::Maintain::Wait);
@@ -76,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
     println!(
         "{}",
-        serde_json::json!({"event":"setup","input":input,"adapter":engine.adapter_name(),"decode_ms":decode,"engine_ms":setup,"settings":format!("{settings:?}")})
+        serde_json::json!({"event":"setup","input":input,"adapter":engine.adapter_name(),"source_open_ms":source_open,"file_read_ms":file_read,"decode_ms":decode,"read_cache_state":"uncontrolled","engine_ms":setup,"settings":format!("{settings:?}")})
     );
     let warm: usize = args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(2);
     for iteration in 0..warm + 2 {
