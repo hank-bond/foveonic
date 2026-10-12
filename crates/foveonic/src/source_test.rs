@@ -126,6 +126,10 @@ fn decode_original_merrill_files() {
         let started = std::time::Instant::now();
         let source = Source::open(&path).unwrap();
         let opened_ms = started.elapsed().as_secs_f64() * 1000.;
+        assert_eq!(
+            read_capture_properties(&path).unwrap(),
+            source.metadata.properties
+        );
         let timings = source.load_timings();
         assert_eq!(timings[0].stage, "file read");
         assert_eq!(timings[1].stage, "X3F decode wall");

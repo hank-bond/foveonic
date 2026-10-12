@@ -2,6 +2,7 @@
 
 mod advanced;
 mod browser;
+mod capture;
 mod controls;
 mod help;
 mod icon;
@@ -27,6 +28,7 @@ use std::{path::PathBuf, sync::Arc};
 struct App {
     browser: browser::Browser,
     worker: worker::Worker,
+    capture: capture::Loader,
     metadata: Option<Arc<Metadata>>,
     selected: Option<PathBuf>,
     settings: Settings,
@@ -71,6 +73,7 @@ impl App {
         let mut app = Self {
             browser: browser::Browser::new(cc.egui_ctx.clone()),
             worker: worker::Worker::new(engine, cc.egui_ctx.clone()),
+            capture: capture::Loader::new(cc.egui_ctx.clone()),
             metadata: None,
             selected: None,
             settings,
@@ -119,6 +122,7 @@ impl App {
                 } else {
                     self.revision += 1;
                     self.selected = None;
+                    self.capture.select(None);
                     self.metadata = None;
                     self.frame = None;
                     self.scope_images = None;
@@ -133,6 +137,7 @@ impl App {
         }
     }
     fn select(&mut self, path: PathBuf) {
+        self.capture.select(Some(path.clone()));
         self.selected = Some(path);
         reset_camera_selection(&mut self.settings, &self.camera_overrides);
         self.metadata = None;
@@ -461,12 +466,13 @@ impl App {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-        let metadata = self
+        let properties = self
             .frame
             .as_ref()
-            .map(|f| f.artifact.metadata.as_ref())
-            .or(self.metadata.as_deref());
-        information::show(ui, metadata, &filename, self.viewport.visible_pixels());
+            .map(|f| &f.artifact.metadata.properties)
+            .or_else(|| self.metadata.as_ref().map(|metadata| &metadata.properties))
+            .or(self.capture.properties.as_ref());
+        information::show(ui, properties, &filename, self.viewport.visible_pixels());
         changed
     }
 }
@@ -489,6 +495,7 @@ impl eframe::App for App {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
             }
         }
+        self.capture.receive();
         if self
             .smoke
             .as_ref()

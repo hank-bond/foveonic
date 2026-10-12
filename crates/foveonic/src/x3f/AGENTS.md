@@ -16,6 +16,7 @@ Keep decoding independent of photographic adjustments and orientation. Preserve 
 
 - **[bytes.rs](./bytes.rs)** Read bounded little-endian values and terminated strings from owned file sections.
 - **[camf.rs](./camf.rs)** Decode camera metadata while preserving matrix encodings and property-list order.
+- **[capture.rs](./capture.rs)** Seeks directly to X3F capture properties without reading sensor or calibration payloads.
 - **[huffman.rs](./huffman.rs)** Decode category-coded differences with two-column and two-row sensor predictors.
 - **[mod.rs](./mod.rs)** Read owned X3F sections and decode Merrill sensor samples and camera metadata.
 

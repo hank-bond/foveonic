@@ -2,12 +2,12 @@
 
 use crate::viewport::PixelRegion;
 use eframe::egui;
-use foveonic::source::Metadata;
+use std::collections::BTreeMap;
 
 pub const HEIGHT: f32 = 26.;
 
-pub fn capture(metadata: &Metadata) -> String {
-    let rows = crate::metadata::rows(metadata);
+pub fn capture(properties: &BTreeMap<String, String>) -> String {
+    let rows = crate::metadata::property_rows(properties);
     [
         "Shutter",
         "Aperture",
@@ -42,11 +42,11 @@ pub fn region_text(region: PixelRegion) -> String {
 
 pub fn show(
     ui: &mut egui::Ui,
-    metadata: Option<&Metadata>,
+    properties: Option<&BTreeMap<String, String>>,
     filename: &str,
     region: Option<PixelRegion>,
 ) {
-    let left = metadata.map(capture).unwrap_or_default();
+    let left = properties.map(capture).unwrap_or_default();
     let right = region.map(region_text).unwrap_or_default();
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), HEIGHT),
@@ -108,7 +108,7 @@ pub fn show(
             .text(at, align, text, font, color);
     }
     response.on_hover_text(format!("{filename}\n{}\n{}\n0-based image pixels; inclusive top-left and bottom-right. Includes partly visible pixels.",
-        metadata.map(capture).unwrap_or_default(), region.map(region_text).unwrap_or_default()));
+        properties.map(capture).unwrap_or_default(), region.map(region_text).unwrap_or_default()));
 }
 
 #[cfg(test)]
@@ -124,23 +124,19 @@ mod tests {
             }),
             "300×300 · (100,200)–(399,499)"
         );
-        let metadata = Metadata {
-            width: 0,
-            height: 0,
-            rotation: 0,
-            matrices: Default::default(),
-            lists: Default::default(),
-            properties: [
-                ("SHUTTER", "0.01013"),
-                ("APERTURE", "2.8"),
-                ("FLENGTH", "30"),
-                ("ISO", "100"),
-                ("EXPCOMP", "0"),
-            ]
-            .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
-            .collect(),
-        };
-        assert_eq!(capture(&metadata), "1/100  f/2.8  30 mm  ISO 100  +0.0 EV");
+        let properties = [
+            ("SHUTTER", "0.01013"),
+            ("APERTURE", "2.8"),
+            ("FLENGTH", "30"),
+            ("ISO", "100"),
+            ("EXPCOMP", "0"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+        assert_eq!(
+            capture(&properties),
+            "1/100  f/2.8  30 mm  ISO 100  +0.0 EV"
+        );
     }
 }

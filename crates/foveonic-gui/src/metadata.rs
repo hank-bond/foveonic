@@ -70,8 +70,9 @@ fn captured(value: &str) -> Option<String> {
         seconds % 60
     ))
 }
-pub fn rows(metadata: &Metadata) -> Vec<(&'static str, String)> {
-    let p = &metadata.properties;
+pub fn property_rows(
+    p: &std::collections::BTreeMap<String, String>,
+) -> Vec<(&'static str, String)> {
     let get = |key: &str| p.get(key).map(|s| s.trim()).filter(|s| !s.is_empty());
     let mut rows = Vec::new();
     for (label, key) in [
@@ -133,6 +134,11 @@ pub fn rows(metadata: &Metadata) -> Vec<(&'static str, String)> {
         };
         rows.push((label, value));
     }
+    rows
+}
+
+pub fn rows(metadata: &Metadata) -> Vec<(&'static str, String)> {
+    let mut rows = property_rows(&metadata.properties);
     if let Ok(area) = metadata.fixed::<4>("ActiveImageArea") {
         rows.insert(
             rows.len().min(12),

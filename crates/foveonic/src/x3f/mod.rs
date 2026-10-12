@@ -4,6 +4,7 @@
 
 mod bytes;
 pub(crate) mod camf;
+pub(crate) mod capture;
 mod huffman;
 
 use crate::profile::Timing;

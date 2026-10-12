@@ -166,6 +166,17 @@ impl Metadata {
     }
 }
 
+/// Read photographic capture properties without loading sensor samples or CAMF calibration.
+/// This is not complete processing metadata; rendering must still open a `Source`.
+pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String, String>> {
+    let mut file = std::fs::File::open(path)?;
+    let properties = crate::x3f::capture::read(&mut file)?;
+    if !is_merrill(properties.get("CAMMODEL").map(String::as_str)) {
+        return Err("unsupported camera family".into());
+    }
+    Ok(properties)
+}
+
 pub struct Source {
     pub metadata: std::sync::Arc<Metadata>,
     /// Full-sensor, interleaved layer samples in original camera code units.

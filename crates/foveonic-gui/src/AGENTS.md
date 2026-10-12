@@ -18,6 +18,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 - **[advanced.rs](./advanced.rs)** Displays preset-linked reconstruction parameters and captures explicit overrides without changing the baseline.
 - **[browser.rs](./browser.rs)** Browses X3F paths and lazily decodes embedded JPEGs through a bounded thumbnail worker.
+- **[capture.rs](./capture.rs)** Loads capture properties independently of rendering, coalescing requests and rejecting stale selections.
 - **[controls.rs](./controls.rs)** Builds aligned sensor/tone editing rows with reset, focused value nudges, and sample-based rerender signals.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
 - **[icon.rs](./icon.rs)** Loads the default layered-X window icon; macOS Dock appearances come from the app bundle.
