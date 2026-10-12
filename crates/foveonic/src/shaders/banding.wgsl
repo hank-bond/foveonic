@@ -23,21 +23,22 @@ fn residual(p:u32)->vec3<f32>{return vec3(residuals[p*3u],residuals[p*3u+1u],res
 @compute @workgroup_size(32)
 fn fit(@builtin(global_invocation_id)id:vec3<u32>){
     let index=id.x;if index>=params.source.z{return;}let estimate=patches[index];let side=estimate.geometry.z;let n=estimate.geometry.w;
-    for(var k=0u;k<n;k++){
-        var sum=vec3(0.0);let start=estimate.storage.x+side*side*n+k*side*side;
-        for(var x=0u;x<side;x++){for(var y=0u;y<side;y++){
-            let weight=tables[start+x*side+y];let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;
-            sum=fma(vec3(weight),color(p),sum);
-        }}
-        let destination=(index*6u+k)*3u;coefficients[destination]=sum.x;coefficients[destination+1u]=sum.y;coefficients[destination+2u]=sum.z;
-    }
+    // Reuse each normalized RGB load across independent coefficient recurrences.
+    // Each coefficient still sees pixels in exactly the native x/y FMA order.
+    var sums:array<vec3<f32>,6>;
+    let start=estimate.storage.x+side*side*n;
+    for(var x=0u;x<side;x++){for(var y=0u;y<side;y++){
+        let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;let rgb=color(p);
+        for(var k=0u;k<n;k++){let weight=tables[start+k*side*side+x*side+y];sums[k]=fma(vec3(weight),rgb,sums[k]);}
+    }}
+    for(var k=0u;k<n;k++){let destination=(index*6u+k)*3u;coefficients[destination]=sums[k].x;coefficients[destination+1u]=sums[k].y;coefficients[destination+2u]=sums[k].z;}
 }
 @compute @workgroup_size(64)
 fn residual_field(@builtin(global_invocation_id)id:vec3<u32>){
     if id.y>=batch.value.y{return;}let index=batch.value.x+id.y;let estimate=patches[index];let side=estimate.geometry.z;let n=estimate.geometry.w;
     if id.x>=side*side{return;}let x=id.x%side;let y=id.x/side;var predicted=vec3(0.0);
     for(var k=0u;k<n;k++){let weight=tables[estimate.storage.x+(x*side+y)*n+k];predicted=fma(vec3(weight),coefficient(index,k),predicted);}
-    let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;let value=color(p)-predicted;let q=(estimate.storage.y-patches[batch.value.x].storage.y+id.x)*3u;
+    let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;let value=color(p)-predicted;let q=(estimate.storage.y-patches[batch.value.x].storage.y+x*side+y)*3u;
     residuals[q]=value.x;residuals[q+1u]=value.y;residuals[q+2u]=value.z;
 }
 // Compensated float32 sums approximate the reference's double statistics while
@@ -51,11 +52,11 @@ fn quality(@builtin(global_invocation_id)id:vec3<u32>){
     var original_sum=vec3(0.0);var original_error=vec3(0.0);var sum=vec3(0.0);var sum_error=vec3(0.0);
     for(var x=0u;x<side;x++){for(var y=0u;y<side;y++){
         let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;kahan(color(p),&original_sum,&original_error);
-        kahan(residual(start+y*side+x),&sum,&sum_error);
+        kahan(residual(start+x*side+y),&sum,&sum_error);
     }}
     let mean=sum/area;var variance=vec3(0.0);var variance_error=vec3(0.0);var covariance=vec3(0.0);var covariance_error=vec3(0.0);
     for(var x=0u;x<side;x++){for(var y=0u;y<side;y++){
-        let delta=residual(start+y*side+x)-mean;kahan(delta*delta,&variance,&variance_error);
+        let delta=residual(start+x*side+y)-mean;kahan(delta*delta,&variance,&variance_error);
         kahan(vec3(delta.y*delta.x,delta.x*delta.z,delta.z*delta.y),&covariance,&covariance_error);
     }}
     let deviation=sqrt(variance);let ratios=abs(covariance)/vec3(deviation.x*deviation.y,deviation.x*deviation.z,deviation.y*deviation.z);
@@ -67,7 +68,7 @@ fn quality(@builtin(global_invocation_id)id:vec3<u32>){
 fn row_means(@builtin(global_invocation_id)id:vec3<u32>){
     if id.y>=batch.value.y{return;}let index=batch.value.x+id.y;let estimate=patches[index];let side=estimate.geometry.z;let y=id.x;if y>=side{return;}
     var sum=vec3(0.0);let start=estimate.storage.y-patches[batch.value.x].storage.y;
-    if accepted[index]!=0u{for(var x=0u;x<side;x++){sum+=residual(start+y*side+x);}}
+    if accepted[index]!=0u{for(var x=0u;x<side;x++){sum+=residual(start+x*side+y);}}
     means[estimate.storage.z+y]=vec4(sum/f32(side),f32(accepted[index]));
 }
 @compute @workgroup_size(64)

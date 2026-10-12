@@ -85,6 +85,12 @@ The edge kernel recomputed five cross medians for each of five neighboring gradi
 
 Median plus edge work now takes ~13–24 ms on local/full photos, versus ~206–363 ms before (rocks global ~2.7 ms versus ~55 ms). All-enabled warm renders are 1280/1378/1218/1733/1246/1553 ms. Six float buffers and TIFFs remain byte-identical; full/reduced/global base, signed-detail, border, restored-pattern-seed and overlap component checks pass, as do workspace/strict Clippy. Evidence: `.local/pipeline-performance/{medians,medians-warm}` and `/tmp/foveonic-opt-medians-*.log`. Edge-only inspection uses the needed median workspace but still skips directional means/color/detail.
 
+## Round 5: simpler row-fitting reuse and quality-aligned residual layout
+
+Parallelizing coefficients into a second dispatch dimension was output-exact but gave no reliable speedup (~100–117 ms), so it was rejected. Inverting the independent coefficient/pixel loops instead reuses one RGB normalization per pixel while preserving each coefficient's x/y FMA sequence. Fit time falls from ~100 to ~55 ms without more buffers/passes. Store the private residual workspace column-major, matching native quality traversal; update quality and row-mean indices consistently. Correlation work falls from ~213 to ~62 ms, while residual writes rise from ~27 to ~34 ms. Net row savings are ~190 ms, with the same compensated sums/thresholds/counts.
+
+Warm all-enabled renders are 1118/1108/1036/1556/1041/1373 ms. Six full float buffers and TIFFs remain byte-identical. Native bank/row-count/gain/bounds regression, workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{row-fit,row-load,row-transpose,row-warm}` and `/tmp/foveonic-opt-row-*.log`. This is a private storage/index change, not a new photographic algorithm or compatibility path.
+
 ## Output-changing alternatives for later review
 
 No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.
