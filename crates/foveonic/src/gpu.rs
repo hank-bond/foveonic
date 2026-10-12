@@ -94,6 +94,7 @@ pub enum Kernel {
     CameraScatter,
     NoiseMedian,
     CameraDetected,
+    CameraBlocks,
 }
 
 impl Kernel {
@@ -168,6 +169,7 @@ impl Kernel {
             Self::CameraScatter => "ordered bad-red records and mask overrides",
             Self::NoiseMedian => "reusable noise cross medians",
             Self::CameraDetected => "ordered detected camera corrections",
+            Self::CameraBlocks => "stable capped bad-red block prefixes",
         }
     }
 }
@@ -293,6 +295,10 @@ impl Gpu {
                 include_str!("shaders/camera_repair.wgsl"),
                 "detected_correct",
             ),
+            (
+                include_str!("shaders/camera_repair.wgsl"),
+                "detection_block_prefix",
+            ),
         ];
         let pipelines = kernels
             .iter()
@@ -322,6 +328,7 @@ impl Gpu {
                     Kernel::CameraPrefix as usize,
                     Kernel::CameraScatter as usize,
                     Kernel::CameraDetected as usize,
+                    Kernel::CameraBlocks as usize,
                 ]
                 .contains(&index)
                 {

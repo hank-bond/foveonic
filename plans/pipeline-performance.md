@@ -121,6 +121,12 @@ Tested 8×8, 16×8 and 32×8 groups on the M1 Pro, with matching host/test grids
 
 Warm renders are 779/852/800/970/770/925 ms. Full ignored suite (44 core plus GUI worker), workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{bilateral-group,bilateral-32,bilateral-warm}` and `/tmp/foveonic-opt-bilateral-*.log`. This layout remains to be benchmarked on other GPU backends with the rest of cross-platform runtime validation.
 
+## Round 11: exact integer prefixes, no photographic arithmetic changes
+
+Camera detection prefixes now use a 256-record workgroup integer scan, then a capped block scan and exact local+block offsets in scatter. Counter capacity, accepted-bit order, duplicates and mask-exhaustion behavior are unchanged. ~562 uint offsets (~2.25 KB) and one extra pass replace the ~19.6 ms serial scan with ~0.2–0.35 ms. Despeckle's eight bank prefixes are independent; one workgroup per bank lowers ~8.2 to ~1.0 ms without extra buffers/passes.
+
+Fifteen explicit prefix fixtures cover 1/255/256/257/777 records and caps 0/7/999, including cross-block saturation/partial tails. All 45 core ignored tests plus GUI worker, workspace and strict Clippy pass. Six goldens/TIFFs stay byte-identical. Five warm repetitions measure 723/787/780/947/747/900 ms; peak process RSS is ~1.10–1.22 GiB, including golden comparisons/export. Evidence: `.local/pipeline-performance/{prefixes,final}` and `/tmp/foveonic-opt-prefix-*.log`. Original decoder, reference repository and concurrent GUI/help changes remain untouched.
+
 ## Output-changing alternatives for later review
 
 No output-changing alternative is installed in the equivalent-output pass. Tested/rejected experiments:

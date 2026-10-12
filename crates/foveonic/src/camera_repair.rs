@@ -277,7 +277,11 @@ fn select_bad_reds(
     }
     let bytes = u64::from(p.selection[2]) * 4;
     let detections = gpu.storage("Original-signal bad-red record masks", bytes)?;
-    let prefixes = gpu.storage("Stable capped bad-red record prefixes", bytes)?;
+    let prefixes = gpu.storage("Stable local bad-red record prefixes", bytes)?;
+    let blocks = gpu.storage(
+        "Stable capped bad-red block prefixes",
+        u64::from(p.selection[2].div_ceil(256)) * 4,
+    )?;
     let groups = [p.selection[2].div_ceil(64), 1];
     gpu.dispatch(
         Kernel::CameraDetect,
@@ -287,13 +291,25 @@ fn select_bad_reds(
     );
     gpu.dispatch(
         Kernel::CameraPrefix,
-        &[(1, records), (2, uniform), (4, &detections), (5, &prefixes)],
+        &[(2, uniform), (4, &detections), (5, &prefixes), (8, &blocks)],
+        [p.selection[2].div_ceil(256), 1],
+        trace,
+    );
+    gpu.dispatch(
+        Kernel::CameraBlocks,
+        &[(1, records), (2, uniform), (8, &blocks)],
         [1, 1],
         trace,
     );
     gpu.dispatch(
         Kernel::CameraScatter,
-        &[(1, records), (2, uniform), (4, &detections), (5, &prefixes)],
+        &[
+            (1, records),
+            (2, uniform),
+            (4, &detections),
+            (5, &prefixes),
+            (8, &blocks),
+        ],
         groups,
         trace,
     );
@@ -347,7 +363,7 @@ pub(crate) fn apply(
     gpu.copy(input, &output, input.size());
     let records = gpu.upload("Main JPEG and detected repair records", &p.records)?;
     let uniform = gpu.uniform(&p.params);
-    let mut trace = gpu.trace(profile.enabled, p.phases.len() as u32 + 5);
+    let mut trace = gpu.trace(profile.enabled, p.phases.len() as u32 + 6);
     select_bad_reds(gpu, original, &records, &uniform, p.params, &mut trace)?;
     correct_lists(gpu, &records, &output, &uniform, p, &mut trace)?;
     if !p.clusters.is_empty() {

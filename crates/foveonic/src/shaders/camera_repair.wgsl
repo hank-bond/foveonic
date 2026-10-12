@@ -9,6 +9,8 @@ struct Params { source:vec4<u32>, selection:vec4<u32>, model:array<vec4<f32>,3> 
 @group(0) @binding(5) var<storage,read_write> prefixes:array<u32>;
 @group(0) @binding(6) var<storage,read> repair_order:array<u32>;
 @group(0) @binding(7) var<uniform> phase:vec4<u32>;
+@group(0) @binding(8) var<storage,read_write> block_counts:array<u32>;
+var<workgroup> prefix_ranks:array<u32,256>;
 fn bad_red(p:u32)->bool{
     let r=original[p*3u];let b=original[p*3u+2u];
     let rn=(params.model[0].x+r*params.model[1].x)+(r*r)*params.model[2].x;
@@ -36,18 +38,29 @@ fn detect_records(@builtin(global_invocation_id)id:vec3<u32>){
     }
     detections[index]=found;
 }
+@compute @workgroup_size(256)
+fn detection_prefix(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)lane:u32,@builtin(workgroup_id)group:vec3<u32>){
+    var count=0u;if id.x<params.selection.z{count=countOneBits(detections[id.x]);}
+    prefix_ranks[lane]=count;workgroupBarrier();
+    for(var step=1u;step<256u;step*=2u){
+        var previous=0u;if lane>=step{previous=prefix_ranks[lane-step];}
+        workgroupBarrier();prefix_ranks[lane]+=previous;workgroupBarrier();
+    }
+    if id.x<params.selection.z{prefixes[id.x]=prefix_ranks[lane]-count;}
+    if lane==255u{block_counts[group.x]=prefix_ranks[lane];}
+}
 @compute @workgroup_size(1)
-fn detection_prefix(){
+fn detection_block_prefix(){
     var count=0u;
-    for(var index=0u;index<params.selection.z;index++){
-        prefixes[index]=count;count=min(count+countOneBits(detections[index]),params.selection.y);
+    for(var block=0u;block<(params.selection.z+255u)/256u;block++){
+        let value=block_counts[block];block_counts[block]=count;count=min(count+value,params.selection.y);
     }
     records[params.selection.z+params.selection.y]=vec2(count,0u);
 }
 @compute @workgroup_size(64)
 fn scatter_detections(@builtin(global_invocation_id)id:vec3<u32>){
     let index=id.x;if index>=params.selection.z{return;}
-    let w=params.source.x;let record=records[index];let xy=vec2<i32>(i32(record.x%w),i32(record.x/w));let mask=record.y&255u;var remaining=mask;var next=prefixes[index];
+    let w=params.source.x;let record=records[index];let xy=vec2<i32>(i32(record.x%w),i32(record.x/w));let mask=record.y&255u;var remaining=mask;var next=min(prefixes[index]+block_counts[index/256u],params.selection.y);
     for(var n=0u;n<8u;n++){
         if (detections[index]&(1u<<n))!=0u && next<params.selection.y{
             let q=xy+camera_offsets[n];let p=u32(q.y)*w+u32(q.x);

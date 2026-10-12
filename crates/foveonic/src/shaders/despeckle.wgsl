@@ -53,15 +53,14 @@ fn detect(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocatio
     if local==255u { counts[group.x]=ranks[local]; }
 }
 @compute @workgroup_size(1)
-fn prefix() {
+fn prefix(@builtin(workgroup_id)group:vec3<u32>) {
     let blocks = params.source.z / 8u;
-    for (var bank=0u; bank<8u; bank++) {
+    let bank=group.x;
         var sum=0u;
         for (var block=bank*blocks; block<(bank+1u)*blocks; block++) {
             let count=counts[block]; counts[block]=sum; sum+=count;
         }
         counts[params.source.z+bank]=min(sum,params.source.w);
-    }
 }
 @compute @workgroup_size(256)
 fn scatter(@builtin(global_invocation_id) id: vec3<u32>, @builtin(workgroup_id) group: vec3<u32>) {

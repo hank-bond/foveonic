@@ -157,7 +157,7 @@ pub(crate) fn apply(
     gpu.dispatch(
         Kernel::SpecklePrefix,
         &[(2, &uniform), (5, &counts)],
-        [1, 1],
+        [8, 1],
         &mut trace,
     );
     gpu.dispatch(

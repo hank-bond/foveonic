@@ -136,6 +136,63 @@ fn phases_preserve_neighbors_duplicates_anti_dependencies_and_skip_invalid_recor
     assert_phase_dependencies(&p);
 }
 #[test]
+#[ignore = "requires a working GPU adapter"]
+fn capped_integer_prefixes_match_ordered_counts_across_blocks_and_partial_tails() {
+    let gpu = Gpu::new().unwrap();
+    for n in [1_u32, 255, 256, 257, 777] {
+        for capacity in [0_u32, 7, 999] {
+            let p = Params {
+                source: [64, 64, n, 0],
+                selection: [0, capacity, n, 0],
+                ..Default::default()
+            };
+            let uniform = gpu.uniform(&p);
+            let masks: Vec<u32> = (0..n)
+                .map(|i| [0, 255, 0, 3, 1, 128, 15][i as usize % 7])
+                .collect();
+            let input = gpu.upload("Prefix integer mask fixture", &masks).unwrap();
+            let local = gpu
+                .storage("Local prefix fixture", u64::from(n) * 4)
+                .unwrap();
+            let blocks = gpu
+                .storage("Block prefix fixture", u64::from(n.div_ceil(256)) * 4)
+                .unwrap();
+            let records = gpu
+                .storage(
+                    "Final capped counter fixture",
+                    u64::from(n + capacity + 1) * 8,
+                )
+                .unwrap();
+            let mut trace = Default::default();
+            gpu.dispatch(
+                Kernel::CameraPrefix,
+                &[(2, &uniform), (4, &input), (5, &local), (8, &blocks)],
+                [n.div_ceil(256), 1],
+                &mut trace,
+            );
+            gpu.dispatch(
+                Kernel::CameraBlocks,
+                &[(1, &records), (2, &uniform), (8, &blocks)],
+                [1, 1],
+                &mut trace,
+            );
+            let local_bytes = gpu.readback(&local).unwrap();
+            let local = bytemuck::cast_slice::<u8, u32>(&local_bytes);
+            let block_bytes = gpu.readback(&blocks).unwrap();
+            let offsets = bytemuck::cast_slice::<u8, u32>(&block_bytes);
+            let bytes = gpu.readback(&records).unwrap();
+            let records = bytemuck::cast_slice::<u8, [u32; 2]>(&bytes);
+            let mut count = 0;
+            for (i, mask) in masks.iter().enumerate() {
+                assert_eq!((local[i] + offsets[i / 256]).min(capacity), count);
+                count = (count + mask.count_ones()).min(capacity);
+            }
+            assert_eq!(records[(n + capacity) as usize], [count, 0]);
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires FOVEONIC_FIXTURE_DIR"]
 fn original_metadata_repair_dependency_phase_counts() {
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
