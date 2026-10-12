@@ -36,7 +36,7 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 - **[output.rs](./output.rs)** Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
 - **[pattern.rs](./pattern.rs)** Metadata/geometry-only setup for native deterministic luminance-ratio pattern conditioning.
 - **[preview.rs](./preview.rs)** Reads embedded JPEG previews and presentation dimensions from X3F sections.
-- **[profile.rs](./profile.rs)** Collects lightweight host wall timings and optional GPU timestamp measurements.
+- **[profile.rs](./profile.rs)** Collects host/GPU timings and engine-owned transfer, submission, and allocation counts.
 - **[reconstruction.rs](./reconstruction.rs)** Executes reference-style processing tiles, noise filtering, residual detail, and image projections on GPU.
 - **[render.rs](./render.rs)** Builds typed processing and export recipes around owned GPU images and execution-local scratch.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.

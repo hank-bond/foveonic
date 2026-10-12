@@ -159,6 +159,7 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     pipelines: Vec<wgpu::ComputePipeline>,
     pub adapter_name: String,
+    activity: std::sync::Mutex<crate::profile::GpuActivity>,
 }
 
 impl Gpu {
@@ -302,11 +303,29 @@ impl Gpu {
             queue,
             pipelines,
             adapter_name,
+            activity: Default::default(),
         })
+    }
+
+    pub fn activity(&self) -> crate::profile::GpuActivity {
+        *self.activity.lock().expect("GPU activity counter")
+    }
+
+    fn submit(&self, encoder: wgpu::CommandEncoder) {
+        self.activity
+            .lock()
+            .expect("GPU activity counter")
+            .submissions += 1;
+        self.queue.submit(Some(encoder.finish()));
     }
 
     pub fn upload<T: bytemuck::Pod>(&self, label: &str, values: &[T]) -> Result<wgpu::Buffer> {
         self.check_size(std::mem::size_of_val(values) as u64)?;
+        {
+            let mut activity = self.activity.lock().expect("GPU activity counter");
+            activity.upload_bytes += std::mem::size_of_val(values) as u64;
+            activity.allocations += 1;
+        }
         Ok(self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -321,6 +340,11 @@ impl Gpu {
     }
 
     pub fn uniform<T: bytemuck::Pod>(&self, value: &T) -> wgpu::Buffer {
+        {
+            let mut activity = self.activity.lock().expect("GPU activity counter");
+            activity.uniform_bytes += std::mem::size_of::<T>() as u64;
+            activity.allocations += 1;
+        }
         self.device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Node parameters"),
@@ -331,6 +355,11 @@ impl Gpu {
 
     pub fn storage(&self, label: &str, size: u64) -> Result<wgpu::Buffer> {
         self.check_size(size)?;
+        {
+            let mut activity = self.activity.lock().expect("GPU activity counter");
+            activity.storage_bytes += size;
+            activity.allocations += 1;
+        }
         Ok(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size,
@@ -346,7 +375,11 @@ impl Gpu {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         encoder.copy_buffer_to_buffer(source, 0, target, 0, size);
-        self.queue.submit(Some(encoder.finish()));
+        self.activity
+            .lock()
+            .expect("GPU activity counter")
+            .device_copy_bytes += size;
+        self.submit(encoder);
     }
 
     fn check_size(&self, size: u64) -> Result<()> {
@@ -397,7 +430,11 @@ impl Gpu {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         encoder.resolve_query_set(query, 0..count, &resolved, 0);
-        self.queue.submit(Some(encoder.finish()));
+        self.activity
+            .lock()
+            .expect("GPU activity counter")
+            .timestamp_resolves += 1;
+        self.submit(encoder);
         let bytes = self.readback(&resolved)?;
         let timestamps = bytemuck::cast_slice::<u8, u64>(&bytes);
         let period = f64::from(self.queue.get_timestamp_period());
@@ -463,6 +500,10 @@ impl Gpu {
         groups: [u32; 2],
         trace: &mut GpuTrace,
     ) {
+        self.activity
+            .lock()
+            .expect("GPU activity counter")
+            .dispatches += 1;
         let pipeline = &self.pipelines[kernel as usize];
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Node inputs"),
@@ -483,10 +524,15 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(groups[0], groups[1], 1);
         }
-        self.queue.submit(Some(encoder.finish()));
+        self.submit(encoder);
     }
 
     pub fn readback(&self, source: &wgpu::Buffer) -> Result<Vec<u8>> {
+        {
+            let mut activity = self.activity.lock().expect("GPU activity counter");
+            activity.readbacks += 1;
+            activity.readback_bytes += source.size();
+        }
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Export readback"),
             size: source.size(),
@@ -499,7 +545,7 @@ impl Gpu {
                 label: Some("Export readback"),
             });
         encoder.copy_buffer_to_buffer(source, 0, &staging, 0, source.size());
-        self.queue.submit(Some(encoder.finish()));
+        self.submit(encoder);
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {

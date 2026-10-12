@@ -5,6 +5,35 @@ use crate::gpu::{Gpu, Kernel};
 
 #[test]
 #[ignore = "requires a working GPU adapter"]
+fn activity_counts_engine_owned_transfers_and_not_device_copies_as_readbacks() {
+    let gpu = Gpu::new().unwrap();
+    let before = gpu.activity();
+    let source = gpu.upload("Activity source", &[1_f32, 2., 3., 4.]).unwrap();
+    let target = gpu.storage("Activity target", 16).unwrap();
+    let _uniform = gpu.uniform(&[1_u32; 4]);
+    gpu.copy(&source, &target, 16);
+    let pending = gpu.activity().since(before);
+    assert_eq!(pending.upload_bytes, 16);
+    assert_eq!(pending.uniform_bytes, 16);
+    assert_eq!(pending.storage_bytes, 16);
+    assert_eq!(pending.allocations, 3);
+    assert_eq!(pending.submissions, 1);
+    assert_eq!(pending.device_copy_bytes, 16);
+    assert_eq!(pending.readback_bytes, 0);
+    assert_eq!(pending.readbacks, 0);
+    assert_eq!(
+        bytemuck::cast_slice::<u8, f32>(&gpu.readback(&target).unwrap()),
+        &[1., 2., 3., 4.]
+    );
+    let complete = gpu.activity().since(before);
+    assert_eq!(complete.readback_bytes, 16);
+    assert_eq!(complete.readbacks, 1);
+    assert_eq!(complete.submissions, 2);
+    assert_eq!(complete.timestamp_resolves, 0);
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
 fn shader_black_calibration_and_orientation() {
     let gpu = Gpu::new().unwrap();
     let mut params = CalibrationParams {

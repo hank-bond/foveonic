@@ -13,8 +13,8 @@ The owner reported unacceptable processing latency and approved a pivot: finish 
 
 - [x] Stabilize partial shared noise/ColorDQ wiring; check shared GUI/CLI callers and record baseline semantics.
 - [x] Commit the validated cleanup checkpoint, excluding unrelated GUI work.
-- [ ] Capture completed, unprofiled cold/warm renders, a separate timestamped stage breakdown, and process peak memory for representative/default and reconstructed routes.
-- [ ] Capture/review/commit profiling-only work before implementing optimization.
+- [x] Capture completed, unprofiled cold/warm renders, a separate timestamped stage breakdown, and process peak memory across six originals with all processing enabled.
+- [x] Capture/review/commit profiling-only work before implementing optimization.
 - [ ] Optimize the largest measured stage with equivalent output; preserve photographic selection/order, correction controls, and retained ownership.
 - [ ] Verify component/native and photographic output equivalence; rerun the identical benchmark and quantify improvement.
 - [ ] Review the next bottleneck, latency/synchronization/memory tradeoffs, and remaining performance limits.
@@ -31,5 +31,36 @@ Earlier measured expensive stages are ordered camera records (~0.79 s), masked c
 Minimal wiring retains native automatic ColorDQ only with opt-in reconstruction, manual `Some(gain)` with 0 Off, and shared metadata-derived despeckle dose using the actual prepared calibration WB factors. GUI/CLI/catalog callers are migrated. This is stabilization of existing partial work, not authorization to continue adding resampling or other algorithm stages. Current scale tables give dose 1 for the six originals. Ordinary workspace tests, strict all-target Clippy and release build pass. All 40 ignored core GPU/fixture tests and the GUI worker test pass. Thirty native recipe cases now check despeckle dose/ColorDQ limit as well as reduction/window. The new fixture assertion caught the in-flight ColorDQ column mixup: native column 7 is the cap, not column 12 (sharpening base). Corrected before the baseline checkpoint; preliminary reconstruction hashes before this fix are not equivalence goldens. Automatic ColorDQ is bit-identical to its explicit calculated-gain route, including retained-image checks. Non-unit despeckle dose, invalid dose and geometry-independent coupling preparation are checked. Preliminary diagnostic measurements exist under `/tmp/foveonic-performance-baseline-*`; no optimization code has been changed. A submitted render is not a completed render: preliminary default blue-sign submission is ~80 ms while completion is ~3.25 s, mainly cluster (~1.9 s) and ordered record (~0.8 s) GPU work; flower defaults complete in ~5.33 s with an additional ~2.10 s GPU donor-table loop. These are initial findings, not the finished profiling checkpoint. Image data stays device-resident through processing; timestamp resolution reads small timing buffers and introduces synchronization only with profiling enabled.
 
 Cleanup is reviewed independently from the concurrent GUI work: selectively staged controls/smoke API migrations compile and pass workspace tests and strict Clippy in `/tmp/foveonic-cleanup-review`. Forty core ignored GPU/fixture tests and the GUI worker test pass in the actual tree; staged core sources are identical. Documentation generation/check, formatting, diff checks and eight Python tests pass. Owner viewport/help/scopes/inspection work stays uncommitted. Evidence: `/tmp/foveonic-cleanup-{workspace,gpu-current,clippy-current,review-workspace,review-clippy,review-docs,python}.log`.
+
+## All-enabled baseline
+
+Cleanup checkpoint: `43fcd2e`. The reproducible example enables camera repair, highlights, despeckle, row correction, reconstruction (including column/pattern), automatic ColorDQ, native sharpening 0.75, gain 1.3, Exposure 0.5, nonneutral tone/saturation, and oriented 800×1200/1200×800 encoding/resizing/TIFF. Three completed unprofiled renders are followed by a separate timestamped render. Warm uses the same decoded source and engine, not result caching. New-process setup may reuse the driver's persistent shader cache; the first engine took 1022 ms, subsequent engines 44–54 ms.
+
+| Original | Decode ms | First render ms | Warm median ms | Timestamped ms | Warm export ms | Process peak MiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| blue-parking-sign | 268 | 4156 | 3912 | 3980 | 13 | 889 |
+| glossy-leaves-and-buds | 243 | 4034 | 4114 | 4143 | 15 | 1040 |
+| rocks-and-tree-shadows | 242 | 3695 | 3697 | 3825 | 21 | 922 |
+| sunlit-red-flower | 240 | 6222 | 6244 | 6288 | 13 | 1054 |
+| turquoise-still-life | 243 | 3923 | 4125 | 4089 | 13 | 1053 |
+| yellow-flowers-and-stroller | 243 | 5666 | 5729 | 5727 | 16 | 895 |
+
+Every unprofiled render has **zero CPU readbacks**, 62–64 compute passes, 64–66 engine submissions, ~264 MB upload (source and prepared tables), and ~275 MB device-local copies. Export adds one 7.68 MB readback; timestamp profiling adds 18–21 reads totaling just 992–1024 bytes, plus resolve submissions. Diagnostic golden readback is outside timing and activity. The latency is dominated by serial GPU work, not intermediate image round-trips. Total wrapper storage allocation is 4.89–5.67 GB per render; this is cumulative allocation, **not peak residency**. RSS also does not fully represent Metal device storage.
+
+Largest common stages: masked clusters ~1.89–1.90 s, ordered camera lists ~0.79 s. Flower/yellow donor tables add 2.10/1.47 s. Next costs include edge weights (55–365 ms), row correlation/fits (combined across banks), directional local means, bilateral, and scene-dependent despeckle. GPU sums account for 3.61–6.09 s of timestamped runs; remaining preparation/submission/waits are materially smaller. All host/GPU stages remain in JSON logs for the full-pipeline pass.
+
+```sh
+cargo build --offline --release -p foveonic --example profile_pipeline
+/usr/bin/time -l target/release/examples/profile_pipeline \
+  /Users/work/git/foveonic/references/x3f/blue-parking-sign.x3f \
+  .local/pipeline-performance/ROUND/exports \
+  .local/pipeline-performance/baseline/goldens
+```
+
+Initial goldens are created only when absent. Further rounds fail on any changed full-buffer byte. Keep baseline files: `.local/pipeline-performance/baseline/{logs,exports,goldens}`. Small exports also permit direct encoded-TIFF comparison. Counters describe engine-owned work, not hidden driver staging or other shared-device users. Wrapper counter tests, workspace tests, strict Clippy and documentation/format checks pass before this instrumentation-only checkpoint.
+
+## Output-changing alternatives for later review
+
+No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.
 
 Latest available disk is approximately 26 GiB. Keep logs/compact measurements and avoid duplicate full-frame TIFF exports. Retained originals and review evidence remain untouched.

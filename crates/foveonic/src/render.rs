@@ -228,6 +228,10 @@ impl Engine {
     pub fn queue(&self) -> &wgpu::Queue {
         &self.gpu.queue
     }
+    /// Cumulative engine-owned submissions/transfers/allocations, excluding other queue users.
+    pub fn gpu_activity(&self) -> crate::profile::GpuActivity {
+        self.gpu.activity()
+    }
     /// Analyze the retained buffer in its logical view.
     pub fn scopes(
         &self,
