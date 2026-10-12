@@ -109,8 +109,20 @@ The line kernel copied an entire input line before writing all its interior pixe
 
 Full-resolution two-direction mean work falls from ~194 to ~144 ms; local cases save ~25–35 ms; global rocks is already small. Warm renders are 852/888/848/995/804/969 ms (blue fluctuates despite improved kernel time). Six full floats/TIFFs remain byte-identical. Native full/reduced/global/overlap/border tests, workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{mean-copy,mean-copy-warm}` and `/tmp/foveonic-opt-mean-copy-*.log`.
 
+## Round 9: share projection geometry without vectorizing interpolation
+
+Repeating the 16-tile geometry/overlap traversal per RGB component cost ~40.5 ms across projections. Invert the tile/component loops with a three-element scalar result array: keep every channel's primitive scalar interpolation, reverse tile order and overwrite decisions. Geometry is evaluated once, scalar/RGB roots retain their layouts, and no storage/pass is added. Projection falls to ~14.8 ms. The attempted vector-float interpolation failed byte equality on blue despite passing native-tolerance components; it was rejected, not accepted as equivalent.
+
+Warm completed renders are 866/856/816/981/777/940 ms; blue still fluctuates. Every full float and TIFF matches baseline. Full/reduced/global/signed/overlap fixtures, ordinary workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{project-vector,project-scalar,project-scalar-warm}` and `/tmp/foveonic-opt-project-*.log`.
+
 ## Output-changing alternatives for later review
 
-No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.
+No output-changing alternative is installed in the equivalent-output pass. Tested/rejected experiments:
+
+- Floating donor-ratio caching alters contraction and fails flower equality; retained at `highlight-cached/source` and its logs. Accepted RGB-only prefetch avoids this.
+- Cooperative neighbor RGB prefetch for serial despeckle reduces rocks correction ~203 to ~163 ms, but changes 20460 bytes of its float output. Native-tolerance tests pass, yet exact comparison fails. Source, alternative float and logs are retained in `.local/pipeline-performance/speckle-coop/`; the implementation is reverted.
+- Vector-float tile projection passes component tolerances but fails blue float equality. The accepted scalar loop inversion gets the geometry saving without this change.
+
+Possible later choices include block-partial donor sums (different float32 association), simultaneous dependent defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.
 
 Latest available disk is approximately 26 GiB. Keep logs/compact measurements and avoid duplicate full-frame TIFF exports. Retained originals and review evidence remain untouched.
