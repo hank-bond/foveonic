@@ -89,6 +89,9 @@ pub enum Kernel {
     HighlightBinHistogram,
     HighlightBinPrefix,
     HighlightBinScatter,
+    CameraDetect,
+    CameraPrefix,
+    CameraScatter,
 }
 
 impl Kernel {
@@ -158,6 +161,9 @@ impl Kernel {
             Self::HighlightBinHistogram => "highlight donor bin counts",
             Self::HighlightBinPrefix => "highlight donor bin offsets",
             Self::HighlightBinScatter => "stable highlight donor bin grouping",
+            Self::CameraDetect => "parallel original-signal bad-red detection",
+            Self::CameraPrefix => "stable capped bad-red prefixes",
+            Self::CameraScatter => "ordered bad-red records and mask overrides",
         }
     }
 }
@@ -269,6 +275,15 @@ impl Gpu {
             (include_str!("shaders/highlight.wgsl"), "bin_histogram"),
             (include_str!("shaders/highlight.wgsl"), "bin_prefix"),
             (include_str!("shaders/highlight.wgsl"), "bin_scatter"),
+            (include_str!("shaders/camera_repair.wgsl"), "detect_records"),
+            (
+                include_str!("shaders/camera_repair.wgsl"),
+                "detection_prefix",
+            ),
+            (
+                include_str!("shaders/camera_repair.wgsl"),
+                "scatter_detections",
+            ),
         ];
         let pipelines = kernels
             .iter()
@@ -290,7 +305,14 @@ impl Gpu {
                         .contains(&index)
                 {
                     format!("{}\n{code}", include_str!("shaders/noise_common.wgsl")).into()
-                } else if [Kernel::Repair as usize, Kernel::CameraRepair as usize].contains(&index)
+                } else if [
+                    Kernel::Repair as usize,
+                    Kernel::CameraRepair as usize,
+                    Kernel::CameraDetect as usize,
+                    Kernel::CameraPrefix as usize,
+                    Kernel::CameraScatter as usize,
+                ]
+                .contains(&index)
                 {
                     format!("{}\n{code}", include_str!("shaders/camera_common.wgsl")).into()
                 } else {

@@ -73,6 +73,12 @@ The selected path uses integer block histograms/prefixes and stable scatter, ret
 
 All six full float buffers and TIFFs remain byte-identical to the original all-enabled baseline. Stable grouping across block boundaries/partial tails/empty bins, original saturation/connectivity/density/gain/selectivity, all **43 core ignored GPU/fixture tests**, GUI worker, ordinary workspace and strict Clippy checks pass. Evidence: `.local/pipeline-performance/highlight-sorted-warm` and `/tmp/foveonic-opt-highlight-*.log`.
 
+## Round 3: independent original-signal bad-red detection
+
+The old ~790 ms camera kernel combined immutable-input detection over 143827 records with ordered correction. Split independent per-record detection, capped integer prefixes and stable scatter/mask overrides from the dependent correction loop. Duplicate detections, capacity-minus-one, neighbor order, JPEG mask behavior, exhausted-mask sentinel and million-record override limit are unchanged. Shared selection scheduling is used by processing and record-inspection tests; no compatibility path or host readback is added.
+
+Detection is ~0.4–4.4 ms, capped prefixes ~19–21 ms, scatter ~0.1 ms, and ordered correction ~200–203 ms. Two record-sized uint workspaces (~1.15 MB total) and three passes trade for ~560 ms saved across every original. Full all-enabled warm renders are now 1555/1572/1278/2082/1501/1894 ms (blue/leaves/rocks/flower/turquoise/yellow), versus baseline 3912/4114/3697/6244/4125/5729 ms. Full float buffers and TIFFs remain byte-identical. All five targeted camera GPU regressions (native/order/capacity/tie/dark defects), workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{camera-detect,camera-detect-warm}` and `/tmp/foveonic-opt-camera-detect-*.log`.
+
 ## Output-changing alternatives for later review
 
 No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.

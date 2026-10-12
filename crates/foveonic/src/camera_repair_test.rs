@@ -207,9 +207,18 @@ fn gpu_complete_camera_matches_native_raw_detection_lists_and_clusters() {
         .unwrap();
     let records = gpu.upload("Detector records", &p.records).unwrap();
     let uniform = gpu.uniform(&p.params);
+    select_bad_reds(
+        &gpu,
+        &original,
+        &records,
+        &uniform,
+        p.params,
+        &mut Default::default(),
+    )
+    .unwrap();
     gpu.dispatch(
         Kernel::CameraRepair,
-        &[(0, &original), (1, &records), (2, &uniform), (3, &output)],
+        &[(1, &records), (2, &uniform), (3, &output)],
         [1, 1],
         &mut Default::default(),
     );
@@ -252,9 +261,18 @@ fn gpu_bad_red_detection_reserves_final_slot_and_preserves_exhausted_masks() {
         .unwrap();
     let records = gpu.upload("Capacity records", &p.records).unwrap();
     let uniform = gpu.uniform(&p.params);
+    select_bad_reds(
+        &gpu,
+        &original,
+        &records,
+        &uniform,
+        p.params,
+        &mut Default::default(),
+    )
+    .unwrap();
     gpu.dispatch(
         Kernel::CameraRepair,
-        &[(0, &original), (1, &records), (2, &uniform), (3, &output)],
+        &[(1, &records), (2, &uniform), (3, &output)],
         [1, 1],
         &mut Default::default(),
     );
