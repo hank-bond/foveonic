@@ -1,4 +1,4 @@
-//! Browses X3F paths and lazily decodes embedded JPEGs through a bounded thumbnail worker.
+//! Browses X3F paths with focused keyboard selection and bounded lazy embedded-JPEG thumbnails.
 
 use eframe::egui;
 use std::{
@@ -138,7 +138,7 @@ impl Browser {
         selected: bool,
         size: egui::Vec2,
     ) -> egui::Response {
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::CLICK);
         ui.painter().rect_filled(
             rect,
             4.,
@@ -181,6 +181,33 @@ impl Browser {
         selected: Option<&Path>,
         mode: crate::preferences::Organizer,
     ) -> Option<PathBuf> {
+        // One stable focus target owns the whole organizer, including virtualized rows.
+        let focus = ui.interact(
+            ui.available_rect_before_wrap(),
+            ui.make_persistent_id("organizer focus"),
+            egui::Sense::focusable_noninteractive(),
+        );
+        if focus.clicked_elsewhere() || !ui.is_enabled() {
+            focus.surrender_focus();
+        } else if ui.input(|input| input.pointer.primary_pressed())
+            && ui.rect_contains_pointer(focus.rect)
+            && !focus.has_focus()
+        {
+            // Focus on press so egui can install the arrow filter on release,
+            // before even the first arrow following the completed click.
+            focus.request_focus();
+        }
+        ui.memory_mut(|memory| {
+            memory.set_focus_lock_filter(
+                focus.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    escape: true,
+                    ..Default::default()
+                },
+            );
+        });
         let mut chosen = None;
         let width = ui.available_width();
         let columns = icon_columns(width);
@@ -190,83 +217,154 @@ impl Browser {
         } else {
             self.files.len()
         };
-        let height = if icons { 154. } else { 44. };
-        egui::ScrollArea::vertical()
-            .id_salt("organizer items")
-            .show_rows(ui, height, rows, |ui, range| {
-                for row in range {
-                    if icons {
-                        let tile_width = (width
-                            - (columns - 1) as f32 * ui.spacing().item_spacing.x)
-                            / columns as f32;
-                        ui.horizontal(|ui| {
-                            for index in row * columns..((row + 1) * columns).min(self.files.len())
-                            {
-                                let path = self.files[index].clone();
-                                if self
-                                    .tile(
-                                        ui,
-                                        &path,
-                                        selected == Some(path.as_path()),
-                                        egui::vec2(tile_width, 146.),
-                                    )
-                                    .clicked()
-                                {
-                                    chosen = Some(path);
-                                }
-                            }
-                        });
-                    } else {
-                        let path = self.files[row].clone();
-                        let (rect, response) =
-                            ui.allocate_exact_size(egui::vec2(width, 40.), egui::Sense::click());
-                        ui.painter().rect_filled(
-                            rect,
-                            3.,
-                            if selected == Some(path.as_path()) {
-                                egui::Color32::from_rgb(35, 57, 83)
-                            } else {
-                                egui::Color32::from_gray(20)
-                            },
-                        );
-                        if ui.is_rect_visible(rect) {
-                            if let Some(thumb) = self.thumbnail(&path) {
-                                let size = thumb.texture.size_vec2();
-                                let factor = (32. / size.x).min(32. / size.y);
-                                ui.painter().image(
-                                    thumb.texture.id(),
-                                    egui::Rect::from_center_size(
-                                        egui::pos2(rect.left() + 21., rect.center().y),
-                                        size * factor,
-                                    ),
-                                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                                    egui::Color32::WHITE,
-                                );
-                            }
-                            let text = egui::Rect::from_min_max(
-                                egui::pos2(rect.left() + 45., rect.top()),
-                                rect.max,
-                            );
-                            ui.painter().with_clip_rect(text).text(
-                                egui::pos2(text.left(), text.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                path.file_name().unwrap_or_default().to_string_lossy(),
-                                egui::FontId::proportional(12.),
-                                egui::Color32::LIGHT_GRAY,
-                            );
-                        }
-                        if response.on_hover_text(path.display().to_string()).clicked() {
-                            chosen = Some(path);
-                        }
+        let height = if icons { 146. } else { 40. };
+        let mut active = selected.and_then(|path| self.files.iter().position(|p| p == path));
+        if ui.is_enabled() && focus.has_focus() {
+            for key in [
+                egui::Key::ArrowLeft,
+                egui::Key::ArrowRight,
+                egui::Key::ArrowUp,
+                egui::Key::ArrowDown,
+            ] {
+                if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
+                    let next = arrow_selection(
+                        active,
+                        self.files.len(),
+                        if icons { columns } else { 1 },
+                        key,
+                    );
+                    if next != active {
+                        active = next;
+                        chosen = next.map(|index| self.files[index].clone());
                     }
                 }
-            });
+            }
+        }
+        let mut scroll = egui::ScrollArea::vertical().id_salt("organizer items");
+        if chosen.is_some() {
+            let row = active.unwrap() / if icons { columns } else { 1 };
+            let stride = height + ui.spacing().item_spacing.y;
+            let top = row as f32 * stride;
+            let bottom = top + height;
+            let id = ui.make_persistent_id(egui::Id::new("organizer items"));
+            let offset = egui::scroll_area::State::load(ui.ctx(), id)
+                .unwrap_or_default()
+                .offset
+                .y;
+            let viewport = ui.available_height();
+            let offset = if top < offset {
+                top
+            } else if bottom > offset + viewport {
+                (bottom - viewport).max(0.)
+            } else {
+                offset
+            };
+            scroll = scroll.vertical_scroll_offset(offset);
+        }
+        let highlighted = chosen.as_deref().or(selected).map(Path::to_owned);
+        scroll.show_rows(ui, height, rows, |ui, range| {
+            for row in range {
+                if icons {
+                    let tile_width = (width - (columns - 1) as f32 * ui.spacing().item_spacing.x)
+                        / columns as f32;
+                    ui.horizontal(|ui| {
+                        for index in row * columns..((row + 1) * columns).min(self.files.len()) {
+                            let path = self.files[index].clone();
+                            if self
+                                .tile(
+                                    ui,
+                                    &path,
+                                    highlighted.as_deref() == Some(path.as_path()),
+                                    egui::vec2(tile_width, 146.),
+                                )
+                                .clicked()
+                            {
+                                chosen = Some(path);
+                            }
+                        }
+                    });
+                } else {
+                    let path = self.files[row].clone();
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(width, 40.), egui::Sense::CLICK);
+                    ui.painter().rect_filled(
+                        rect,
+                        3.,
+                        if highlighted.as_deref() == Some(path.as_path()) {
+                            egui::Color32::from_rgb(35, 57, 83)
+                        } else {
+                            egui::Color32::from_gray(20)
+                        },
+                    );
+                    if ui.is_rect_visible(rect) {
+                        if let Some(thumb) = self.thumbnail(&path) {
+                            let size = thumb.texture.size_vec2();
+                            let factor = (32. / size.x).min(32. / size.y);
+                            ui.painter().image(
+                                thumb.texture.id(),
+                                egui::Rect::from_center_size(
+                                    egui::pos2(rect.left() + 21., rect.center().y),
+                                    size * factor,
+                                ),
+                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                        let text = egui::Rect::from_min_max(
+                            egui::pos2(rect.left() + 45., rect.top()),
+                            rect.max,
+                        );
+                        ui.painter().with_clip_rect(text).text(
+                            egui::pos2(text.left(), text.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            path.file_name().unwrap_or_default().to_string_lossy(),
+                            egui::FontId::proportional(12.),
+                            egui::Color32::LIGHT_GRAY,
+                        );
+                    }
+                    if response.on_hover_text(path.display().to_string()).clicked() {
+                        chosen = Some(path);
+                    }
+                }
+            }
+        });
+        if chosen.is_some() && !focus.has_focus() {
+            focus.request_focus();
+            // Install the arrow filter on the next pass, before subsequent keyboard input.
+            ui.ctx().request_repaint();
+        }
         chosen
     }
+}
+fn arrow_selection(
+    current: Option<usize>,
+    count: usize,
+    columns: usize,
+    key: egui::Key,
+) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    let Some(index) = current else {
+        return Some(0);
+    };
+    Some(match key {
+        egui::Key::ArrowLeft => index.saturating_sub(1),
+        egui::Key::ArrowRight => (index + 1).min(count - 1),
+        egui::Key::ArrowUp if index >= columns => index - columns,
+        egui::Key::ArrowDown if index / columns < (count - 1) / columns => {
+            (index + columns).min(count - 1)
+        }
+        _ => index,
+    })
 }
 fn icon_columns(width: f32) -> usize {
     ((width + 8.) / 158.).floor().max(1.) as usize
 }
+#[cfg(test)]
+#[path = "browser_test.rs"]
+mod interaction_tests;
+
 #[cfg(test)]
 mod tests {
     #[test]

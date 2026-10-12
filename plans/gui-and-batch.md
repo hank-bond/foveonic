@@ -72,6 +72,14 @@ Owner screenshots showed the navigator image compressing as it scrolled above th
 
 The regression test covers portrait/landscape images, clipping at each edge, overlay/sample alignment, fully hidden canvases, and 1×/2× display density. GUI tests pass (38 passed, two GPU fixtures ignored); native visual review remains pending.
 
+## Organizer keyboard navigation
+
+- [x] Add focused Left/Right and row-wise Up/Down selection to icons and lists through the existing selection/render path.
+- [x] Keep one stable organizer focus target across virtualized rows and repaints; release it on outside clicks or Tab without intercepting editing-field arrows.
+- [x] Scroll keyboard selections into view and cover repeats, edges, short final rows, column reflow, and focus transfer with egui input fixtures.
+
+Arrow navigation was previously absent. Individual tiles now receive pointer clicks without becoming separate keyboard focus targets. Focus is acquired on pointer press so egui installs the arrow-key filter by release, including the first arrow immediately after clicking. Virtualized row heights now match the actual tile/list heights; egui adds item spacing itself. This removes the previous spacing mismatch and makes offscreen selection scrolling accurate. The GUI suite passes (60 passed, five opt-in tests ignored), along with strict all-target GUI Clippy, changed-file formatting, documentation generation/checks and tool tests, and diff checks. Native owner interaction review remains pending.
+
 ## Evidence and remaining work
 
 - `.local/gui-cleanup-checks/{fixture}/` contains twelve-view native macOS checks on all six originals after cleanup. Viewport/navigator pixel comparisons match `.local/gui-sensor-gain-checks/` except for one organizer hover tooltip and its shadow overlapping the canvas; processing/display geometry is unchanged.
