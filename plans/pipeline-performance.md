@@ -15,10 +15,10 @@ The owner reported unacceptable processing latency and approved a pivot: finish 
 - [x] Commit the validated cleanup checkpoint, excluding unrelated GUI work.
 - [x] Capture completed, unprofiled cold/warm renders, a separate timestamped stage breakdown, and process peak memory across six originals with all processing enabled.
 - [x] Capture/review/commit profiling-only work before implementing optimization.
-- [ ] Optimize the largest measured stage with equivalent output; preserve photographic selection/order, correction controls, and retained ownership.
-- [ ] Verify component/native and photographic output equivalence; rerun the identical benchmark and quantify improvement.
-- [ ] Review the next bottleneck, latency/synchronization/memory tradeoffs, and remaining performance limits.
-- [ ] Run workspace/GPU/GUI/CLI/strict/documentation checks and commit successful rounds on the branch.
+- [x] Optimize the largest measured stage with equivalent output; preserve photographic selection/order, correction controls, and retained ownership.
+- [x] Verify component/native and photographic output equivalence; rerun the identical benchmark and quantify improvement.
+- [x] Review the next bottleneck, latency/synchronization/memory tradeoffs, and remaining performance limits.
+- [x] Run workspace/GPU/GUI/CLI/strict/documentation checks and commit successful rounds on the branch.
 
 ## Baseline constraints
 
@@ -126,6 +126,33 @@ Warm renders are 779/852/800/970/770/925 ms. Full ignored suite (44 core plus GU
 Camera detection prefixes now use a 256-record workgroup integer scan, then a capped block scan and exact local+block offsets in scatter. Counter capacity, accepted-bit order, duplicates and mask-exhaustion behavior are unchanged. ~562 uint offsets (~2.25 KB) and one extra pass replace the ~19.6 ms serial scan with ~0.2–0.35 ms. Despeckle's eight bank prefixes are independent; one workgroup per bank lowers ~8.2 to ~1.0 ms without extra buffers/passes.
 
 Fifteen explicit prefix fixtures cover 1/255/256/257/777 records and caps 0/7/999, including cross-block saturation/partial tails. All 45 core ignored tests plus GUI worker, workspace and strict Clippy pass. Six goldens/TIFFs stay byte-identical. Five warm repetitions measure 723/787/780/947/747/900 ms; peak process RSS is ~1.10–1.22 GiB, including golden comparisons/export. Evidence: `.local/pipeline-performance/{prefixes,final}` and `/tmp/foveonic-opt-prefix-*.log`. Original decoder, reference repository and concurrent GUI/help changes remain untouched.
+
+## Round 12: stop at diminishing donor-chunk returns
+
+Increasing cooperative donor chunks from 64 to 128 retains identical accumulation order and saves only ~7 ms on flower/~3 ms on yellow (~0.7%/~0.3% completed latency). Shared workgroup RGB storage increases from 1 to 2 KB; buffers/passes are unchanged. Full six-photo float/TIFF equality and all 45 core/GUI worker tests pass. This is the final small layout adjustment; further hardware micro-tuning is deferred.
+
+## Completed performance pass and limits
+
+Matched five-warm-render medians on Apple M1 Pro, all processing enabled, original baseline executable versus final engine. Queue completion is included; decoding/setup/export are separate. Neither route caches processing results.
+
+| Original | Baseline ms | Final ms | Speedup |
+| --- | ---: | ---: | ---: |
+| Blue parking sign | 3844 | 724 | 5.31× |
+| Glossy leaves and buds | 4025 | 785 | 5.13× |
+| Rocks and tree shadows | 3703 | 779 | 4.75× |
+| Sunlit red flower | 6225 | 938 | 6.64× |
+| Turquoise still life | 3937 | 741 | 5.31× |
+| Yellow flowers and stroller | 5616 | 896 | 6.26× |
+
+Final first-process renders complete in ~732–943 ms. Decode is ~247–262 ms, cached-driver engine setup ~52–55 ms, and completed resized TIFF export ~11–17 ms. The original baseline repeat's first engine recompilation took ~956 ms; subsequent setup was ~43–54 ms. This is not a controlled empty-driver-cache benchmark. Submission alone remains ~55–84 ms and is not processing latency. Timestamped renders take ~849–1048 ms, with ~624–851 ms summed measured kernels; per-operation timing synchronization is additional overhead.
+
+Every retained full float and resized TIFF matches the baseline byte-for-byte. Render activity reports zero CPU image readbacks; export reports one 7.68 MB readback. All-enabled counters: 109 allocations, 79 dispatches/81 submissions, ~264.5 MB uploads, ~275.2 MB device copies and ~5.57 GB **cumulative** storage allocations (not simultaneous residency). Compared process peak RSS ranges are similar: baseline ~1.08–1.23 GiB, final ~1.09–1.22 GiB. This pass primarily improves latency, not measured peak memory; process RSS is not a dedicated GPU residency measurement.
+
+Every stage was reviewed. Remaining average/max GPU costs: local means ~92/145 ms; row fits/quality/residuals ~55/62/34 ms; bilateral ~50/72 ms; ordered despeckle ~56/211 ms; pattern mask ~43 ms and swaps up to ~71 ms; column bilateral ~38/40 ms; donor table ~30/119 ms; ordered masked clusters ~30 ms. Context/resampling/projections, calibration/black/gain, color/ColorDQ, detail/restoration, sharpening, tone/saturation and encoding are smaller and remain in the full logs. No stage is disabled or weakened to obtain these times.
+
+Stop here: the last measured gain is below 1%; larger remaining reductions require more elaborate image/scratch layouts, cooperative recurrences or dynamic dependency scheduling, or changes to floating accumulation. Existing ordered recurrences remain intentional. Image readback elimination is not the remaining bottleneck. UI responsiveness, result caching, broader-camera/high-ISO/extreme-scene validation, other backends and owner photographic acceptance remain follow-ups.
+
+Final evidence: `.local/pipeline-performance/{baseline-repeat,final-128}`; final release build, ordinary workspace, 45 ignored core tests plus GUI worker, strict Clippy, documentation/format/diff and Python checks are recorded in `/tmp/foveonic-performance-final-*.log`. Source/GUI help work concurrent with this pass is excluded from its commits.
 
 ## Output-changing alternatives for later review
 
