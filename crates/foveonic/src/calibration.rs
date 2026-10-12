@@ -19,6 +19,11 @@ pub struct Calibration {
     pub params: CalibrationParams,
     pub grid_values: Vec<f32>,
 }
+impl Calibration {
+    pub(crate) fn key(&self) -> crate::recipe::Key {
+        crate::recipe::Key::pod(&self.params).slice(&self.grid_values)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorSpace {

@@ -28,6 +28,18 @@ pub(crate) struct Prepared {
     pub batches: Vec<[u32; 4]>,
 }
 
+impl Prepared {
+    pub(crate) fn key(&self) -> crate::recipe::Key {
+        crate::recipe::Key::pod(&self.params)
+            .slice(&self.patches)
+            .slice(&self.tables)
+            .slice(&self.links)
+            .slice(&self.rows)
+            .with(&[self.samples, self.contributions])
+            .slice(&self.batches)
+    }
+}
+
 fn matrices(side: u32) -> Result<(u32, Vec<f32>, Vec<f32>)> {
     if ![31, 73, 151].contains(&side) {
         return Err("unsupported row-banding patch side".into());

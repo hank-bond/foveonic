@@ -26,6 +26,12 @@ pub(crate) struct Prepared {
     pub tables: Vec<f32>,
 }
 
+impl Prepared {
+    pub(crate) fn key(&self) -> crate::recipe::Key {
+        crate::recipe::Key::pod(&self.params).slice(&self.tables)
+    }
+}
+
 fn parameters(width: u32, height: u32, active: [u32; 4], gain: f32) -> Result<Params> {
     let count = width
         .checked_mul(height)

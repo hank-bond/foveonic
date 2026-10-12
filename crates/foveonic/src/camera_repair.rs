@@ -35,6 +35,18 @@ pub(crate) struct Prepared {
     masks: Vec<u32>,
 }
 
+impl Prepared {
+    pub(crate) fn key(&self) -> crate::recipe::Key {
+        crate::recipe::Key::pod(&self.params)
+            .slice(&self.records)
+            .slice(&self.repair_order)
+            .slice(&self.phases)
+            .slice(&self.clusters)
+            .slice(&self.members)
+            .slice(&self.masks)
+    }
+}
+
 pub(crate) fn prepare(metadata: &Metadata, threshold: Threshold) -> Result<Prepared> {
     let cutoff = threshold.resolve(metadata)?;
     let main = crate::repair::prepare(metadata, 0)?;

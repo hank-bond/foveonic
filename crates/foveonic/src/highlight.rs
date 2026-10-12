@@ -20,6 +20,11 @@ pub(crate) struct Prepared {
     pub params: Params,
     pub flags: Vec<u32>,
 }
+impl Prepared {
+    pub(crate) fn key(&self) -> crate::recipe::Key {
+        crate::recipe::Key::pod(&self.params).slice(&self.flags)
+    }
+}
 pub(crate) struct Output {
     pub pixels: Option<wgpu::Buffer>,
     pub density: Option<wgpu::Buffer>,

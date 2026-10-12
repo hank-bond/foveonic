@@ -30,6 +30,7 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 - **[highlight.rs](./highlight.rs)** Prepares immutable camera saturation provenance and performs reference highlight restoration and neighborhood conditioning on GPU.
 - **[image.rs](./image.rs)** Describes owned GPU image snapshots, their source context, and logical output views.
 - **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
+- **[interactive.rs](./interactive.rs)** Retains one active edit's immutable input boundary, exact graph recipes, and safe render supersession.
 - **[lib.rs](./lib.rs)** Provides Merrill source decoding and a shared GPU TIFF rendering engine.
 - **[main.rs](./main.rs)** Inspects Merrill X3Fs and exports single images or batches through shared TIFF settings.
 - **[noise.rs](./noise.rs)** Prepares shared camera noise recipes, correction couplings, and metadata-selected full/reduced reconstruction controls.
@@ -37,6 +38,7 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 - **[pattern.rs](./pattern.rs)** Metadata/geometry-only setup for native deterministic luminance-ratio pattern conditioning.
 - **[preview.rs](./preview.rs)** Reads embedded JPEG previews and presentation dimensions from X3F sections.
 - **[profile.rs](./profile.rs)** Collects host/GPU timings and engine-owned transfer, submission, and allocation counts.
+- **[recipe.rs](./recipe.rs)** Encodes exact effective operation parameters for graph versioning without hashing photographic samples.
 - **[reconstruction.rs](./reconstruction.rs)** Executes reference-style processing tiles, noise filtering, residual detail, and image projections on GPU.
 - **[render.rs](./render.rs)** Builds typed processing and export recipes around owned GPU images and execution-local scratch.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.

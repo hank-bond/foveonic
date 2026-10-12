@@ -23,6 +23,9 @@ pub(crate) struct Prepared {
     pub offsets: Vec<u32>,
 }
 impl Prepared {
+    pub(crate) fn key(&self) -> crate::recipe::Key {
+        crate::recipe::Key::pod(&self.params).slice(&self.offsets)
+    }
     pub(crate) fn new(shape: [u32; 4], thresholds: [f32; 4]) -> Result<Self> {
         if shape[..3].contains(&0)
             || shape[3] > 4

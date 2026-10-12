@@ -197,6 +197,49 @@ impl Parameters {
     }
 }
 
+/// Each stage owns the subset of the shared uniform it actually consumes.
+/// Detail/override edits must not invalidate expensive filtering that ignores those fields.
+#[derive(Clone, Copy)]
+pub(crate) enum RecipeStage {
+    Base,
+    Column,
+    Ratio,
+    Geometry,
+    Detail,
+    Signal,
+}
+impl Parameters {
+    pub(crate) fn key(self, stage: RecipeStage) -> crate::recipe::Key {
+        let key = crate::recipe::Key::pod(&self.source).slice(&self.tile[..3]);
+        match stage {
+            RecipeStage::Base => key
+                .with(&self.tile[3])
+                .with(&self.area)
+                .with(&self.filter)
+                .with(&[self.edge[0], self.edge[1], self.edge[3]])
+                .with(&self.model)
+                .with(&self.reduction)
+                .with(&self.geometry),
+            RecipeStage::Column => key
+                .with(&self.area)
+                .with(&self.model)
+                .with(&self.column_area)
+                .with(&self.column),
+            RecipeStage::Ratio => key
+                .slice(&self.weights[..3])
+                .with(&self.mono)
+                .slice(&self.diffusion[..3])
+                .with(&self.edge[2]),
+            RecipeStage::Detail => key
+                .slice(&self.weights[..3])
+                .with(&self.edge[2])
+                .with(&self.residual),
+            RecipeStage::Signal => key.with(&self.edge[3]),
+            RecipeStage::Geometry => key,
+        }
+    }
+}
+
 pub(crate) fn column_parameters(metadata: &Metadata, mut p: Parameters) -> Result<Parameters> {
     let dark = metadata.fixed::<4>("DarkShieldTop")?;
     let active = crate::calibration::rectangle(metadata, "ActiveImageArea")?;

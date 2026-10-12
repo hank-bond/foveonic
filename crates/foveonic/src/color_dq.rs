@@ -9,6 +9,12 @@ pub struct Table {
     pub values: Vec<i32>,
 }
 
+impl Table {
+    pub(crate) fn key(&self) -> crate::recipe::Key {
+        crate::recipe::Key::pod(&self.period).slice(&self.values)
+    }
+}
+
 pub fn prepare(metadata: &Metadata, gain: f32) -> Result<Table> {
     table(
         metadata

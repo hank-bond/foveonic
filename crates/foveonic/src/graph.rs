@@ -116,6 +116,40 @@ pub enum Operation {
 }
 
 impl Operation {
+    /// Exact local output recipe; processing modules own parameter relevance.
+    /// Dependencies are declared separately on each graph output, including side outputs.
+    pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {
+        use crate::{noise::RecipeStage as N, recipe::Key};
+        match self {
+            Self::Source | Self::RenderedInput { .. } | Self::SharpSignal { .. } => Key::default(),
+            Self::Black(p) => Key::pod(p),
+            Self::Calibrate(p) => p.key(),
+            Self::Color { params, .. } | Self::Saturation { params, .. } => Key::pod(params),
+            Self::Repair(p) => p.key(),
+            Self::Despeckle(p) => p.key(),
+            Self::Highlights(p) | Self::HighlightDensity(p) => p.key(),
+            Self::Banding(p) => p.key(),
+            Self::NoiseBase(p) => p.key(N::Base),
+            Self::Column(p) => p.key(N::Column),
+            Self::Ratio(p) => p.key(N::Ratio),
+            Self::Pattern { params, prepared } => params.key(N::Geometry).join(prepared.key()),
+            Self::Detail(p) => p.key(N::Detail),
+            Self::TiledColor { params, color, .. } => params.key(N::Geometry).with(color),
+            Self::TiledColorDq { params, table, .. } => params.key(N::Geometry).join(table.key()),
+            Self::Reconstruct { params, .. } => params.key(if output == "detail.signal" {
+                N::Signal
+            } else {
+                N::Geometry
+            }),
+            Self::ColorDq { table, .. } => table.key(),
+            Self::SensorGain { factor } => Key::pod(factor),
+            Self::Sharpen { amount, .. } => Key::pod(amount),
+            Self::Tone {
+                curve, exposure, ..
+            } => Key::pod(exposure).slice(curve),
+            Self::Encode { params, .. } | Self::Tiff { params, .. } => Key::pod(params),
+        }
+    }
     pub fn label(&self) -> &'static str {
         match self {
             Self::Source => "upload sensor",
@@ -255,6 +289,10 @@ impl Graph {
 
     /// Output demand is independent of node execution: side outputs can be transient.
     pub fn required(&self, roots: &[usize]) -> Result<Vec<bool>> {
+        self.required_until(roots, &vec![false; self.outputs.len()])
+    }
+    /// Cached immutable outputs terminate dependency traversal without changing node types.
+    pub(crate) fn required_until(&self, roots: &[usize], cached: &[bool]) -> Result<Vec<bool>> {
         let mut required = vec![false; self.outputs.len()];
         let mut pending = roots.to_vec();
         while let Some(id) = pending.pop() {
@@ -264,7 +302,9 @@ impl Graph {
                 .ok_or("requested output does not exist")?;
             if !required[id] {
                 required[id] = true;
-                pending.extend_from_slice(&output.dependencies);
+                if !cached[id] {
+                    pending.extend_from_slice(&output.dependencies);
+                }
             }
         }
         Ok(required)

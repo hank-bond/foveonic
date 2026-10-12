@@ -4,6 +4,8 @@ use crate::calibration::{self, ColorSpace};
 use crate::gpu::{Gpu, Kernel};
 use crate::graph::{DataType, Graph, Operation};
 use crate::image::{Description, ImageTexture, Layout, RenderedImage, Space, View};
+pub use crate::interactive::RenderSession;
+use crate::interactive::{Execution, Superseded};
 use crate::profile::Profile;
 use crate::scratch::Scratch;
 use crate::source::{Metadata, Result, Source};
@@ -14,7 +16,7 @@ use std::time::Instant;
 pub use crate::repair::Threshold as RepairThreshold;
 pub use crate::tone::Controls as ToneControls;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub white_balance: String,
     pub color_mode: String,
@@ -161,10 +163,11 @@ impl Input<'_> {
     }
 }
 
-struct Value {
-    buffer: wgpu::Buffer,
-    description: Option<Description>,
-    recyclable: bool,
+#[derive(Clone)]
+pub(crate) struct Value {
+    pub(crate) buffer: wgpu::Buffer,
+    pub(crate) description: Option<Description>,
+    pub(crate) recyclable: bool,
 }
 
 fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
@@ -279,6 +282,56 @@ impl Engine {
         names: &[&str],
         profile: &mut Profile,
     ) -> Result<Vec<crate::inspection::Artifact>> {
+        self.render_artifacts_controlled(
+            source,
+            settings,
+            names,
+            profile,
+            &mut Execution::default(),
+        )
+    }
+
+    /// Full-quality interactive rendering; None means safe supersession, not a render error.
+    /// Checkpoints remain bound to this session's immutable source and this engine's device.
+    pub fn render_session(
+        &self,
+        session: &mut RenderSession,
+        settings: &Settings,
+        names: &[&str],
+        cancel: impl Fn() -> bool,
+        profile: &mut Profile,
+    ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
+        session.cache.bind(&self.owner);
+        session.last_settings = Some(settings.clone());
+        let mut execution = Execution {
+            cache: Some(&mut session.cache),
+            cancel: Some(&cancel),
+            checkpoints: Vec::new(),
+        };
+        let result = self.render_artifacts_controlled(
+            &session.source,
+            settings,
+            names,
+            profile,
+            &mut execution,
+        );
+        session.cache.finish();
+        match result {
+            Ok(artifacts) => Ok(Some(artifacts)),
+            Err(error) if error.downcast_ref::<Superseded>().is_some() => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn render_artifacts_controlled(
+        &self,
+        source: &Source,
+        settings: &Settings,
+        names: &[&str],
+        profile: &mut Profile,
+        execution: &mut Execution<'_>,
+    ) -> Result<Vec<crate::inspection::Artifact>> {
+        execution.check()?;
         settings.validate_values()?;
         if names.is_empty() {
             return Ok(Vec::new());
@@ -302,13 +355,14 @@ impl Engine {
         let input = graph.add(Operation::Source, &[])?;
         macro_rules! finish {
             () => {
+                execution.check()?;
                 if !names.contains(&"final")
                     && names
                         .iter()
                         .all(|name| graph.outputs.iter().any(|o| o.name == *name))
                 {
                     return self.collect_artifacts(
-                        source, settings, &graph, input, names, params, profile,
+                        source, settings, &graph, input, names, params, profile, execution,
                     );
                 }
             };
@@ -522,7 +576,9 @@ impl Engine {
             )?;
             finish!();
         }
-        self.collect_artifacts(source, settings, &graph, toned, names, params, profile)
+        self.collect_artifacts(
+            source, settings, &graph, toned, names, params, profile, execution,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -535,6 +591,7 @@ impl Engine {
         names: &[&str],
         params: calibration::EncodeParams,
         profile: &mut Profile,
+        execution: &mut Execution<'_>,
     ) -> Result<Vec<crate::inspection::Artifact>> {
         use crate::inspection::{Artifact, Content};
         let targets: Vec<_> = names
@@ -558,7 +615,16 @@ impl Engine {
         {
             return Err("duplicate requested output".into());
         }
-        let values = self.execute(Input::Source(source), graph, &targets, profile)?;
+        execution.check()?;
+        execution.plan(graph, &targets)?;
+        let mut roots = targets.clone();
+        for &id in &execution.checkpoints {
+            if !roots.contains(&id) {
+                roots.push(id);
+            }
+        }
+        let values =
+            self.execute_controlled(Input::Source(source), graph, &roots, profile, execution)?;
         values
             .into_iter()
             .zip(targets)
@@ -732,14 +798,41 @@ impl Engine {
         targets: &[usize],
         profile: &mut Profile,
     ) -> Result<Vec<Value>> {
+        self.execute_controlled(context, graph, targets, profile, &mut Execution::default())
+    }
+
+    fn execute_controlled(
+        &self,
+        context: Input<'_>,
+        graph: &Graph,
+        targets: &[usize],
+        profile: &mut Profile,
+        execution: &mut Execution<'_>,
+    ) -> Result<Vec<Value>> {
         let gpu = &self.gpu;
         let mut trace = gpu.trace(profile.enabled, graph.nodes.len() as u32 * 2);
         let mut scratch = Scratch::default();
-        let required = graph.required(targets)?;
-        let mut values: Vec<Option<Value>> = (0..graph.outputs.len()).map(|_| None).collect();
+        let mut values: Vec<Option<Value>> = graph
+            .outputs
+            .iter()
+            .map(|output| execution.seed(output.name))
+            .collect();
+        let cached: Vec<bool> = values.iter().map(Option::is_some).collect();
+        let required = if cached.iter().any(|cached| *cached) {
+            graph.required_until(targets, &cached)?
+        } else {
+            graph.required(targets)?
+        };
+        // Compound nodes may need one side output while their primary is cached.
+        // Demand only uncached outputs; keep seeded values intact when the node runs partially.
+        let required: Vec<bool> = required
+            .iter()
+            .zip(&cached)
+            .map(|(needed, cached)| *needed && !*cached)
+            .collect();
         let mut reads = vec![Vec::new(); graph.nodes.len()];
         for (id, output) in graph.outputs.iter().enumerate() {
-            if required[id] {
+            if required[id] && !cached[id] {
                 for &input in &output.dependencies {
                     if !reads[output.producer].contains(&input) {
                         reads[output.producer].push(input);
@@ -757,15 +850,20 @@ impl Engine {
             consumers[target] += 1;
         }
         for (node_index, node) in graph.nodes.iter().enumerate() {
-            if !node.outputs.iter().any(|id| required[*id]) {
+            execution.check()?;
+            if !node.outputs.iter().any(|id| required[*id] && !cached[*id]) {
                 continue;
             }
             let index = node.outputs[0];
             let start = Instant::now();
             let input = |slot: usize| {
-                values[node.inputs[slot]]
-                    .as_ref()
-                    .expect("validated graph input is live")
+                values[node.inputs[slot]].as_ref().unwrap_or_else(|| {
+                    panic!(
+                        "validated input {} for {} is not live",
+                        graph.outputs[node.inputs[slot]].name,
+                        node.operation.label()
+                    )
+                })
             };
             let inherited = reads[node_index]
                 .iter()
@@ -1250,11 +1348,24 @@ impl Engine {
             if !matches!(node.operation, Operation::Tiff { .. }) {
                 profile.record(node.operation.label(), start);
             }
-            values[index] = output.map(|buffer| Value {
-                buffer,
-                description: desc,
-                recyclable,
-            });
+            if !cached[index] {
+                values[index] = output.map(|buffer| Value {
+                    buffer,
+                    description: desc,
+                    recyclable,
+                });
+            }
+            for &id in &node.outputs {
+                if let Some(value) = values[id].as_mut() {
+                    execution.store(graph.outputs[id].name, value);
+                }
+            }
+            // Interactive work must not enqueue the entire obsolete graph ahead of drawing.
+            // Submitted work finishes off-thread; the next stage can then safely observe supersession.
+            // Stateless batch processing retains its asynchronous submission behavior.
+            if execution.cancel.is_some() {
+                gpu.device.poll(wgpu::Maintain::Wait);
+            }
             for &id in &reads[node_index] {
                 consumers[id] -= 1;
                 if consumers[id] == 0 {
@@ -1275,6 +1386,9 @@ impl Engine {
     }
 }
 
+#[cfg(test)]
+#[path = "interactive_test.rs"]
+mod interactive_tests;
 #[cfg(test)]
 #[path = "render_test.rs"]
 mod tests;

@@ -66,6 +66,7 @@ pub struct View {
 
 /// An immutable GPU snapshot with source metadata and rendering settings.
 /// Consumers have read-only access; the snapshot owns its storage for its lifetime.
+#[derive(Clone)]
 pub struct RenderedImage {
     pub(crate) buffer: wgpu::Buffer,
     pub(crate) description: Description,
