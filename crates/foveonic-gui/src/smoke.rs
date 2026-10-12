@@ -170,7 +170,9 @@ impl App {
                     self.output = "final".into();
                     self.channel = -1;
                     self.viewport.one_to_one = false;
-                    self.viewport.zoom = 48.;
+                    if !enabled {
+                        self.viewport.zoom_by(48.);
+                    }
                     self.viewport
                         .pan_to(egui::vec2(1582. / 3136., 2737. / 4704.));
                     self.submit(None);
@@ -190,7 +192,7 @@ impl App {
                     self.channel = -1;
                     self.settings.despeckle = smoke.targets[smoke.index] == "bolt-after";
                     if smoke.targets[smoke.index] == "bolt-before" {
-                        self.viewport.zoom *= 4.;
+                        self.viewport.zoom_by(4.);
                     }
                     self.viewport.pan_to(egui::vec2(0.79, 0.05));
                     self.submit(None);
@@ -257,7 +259,7 @@ impl App {
                 }
                 "repair-zoom" => self.viewport.one_to_one = true,
                 "bolt" => {
-                    self.viewport.zoom *= 4.;
+                    self.viewport.zoom_by(4.);
                     self.viewport.pan_to(egui::vec2(0.79, 0.05));
                 }
                 "white-edge" => self.viewport.pan_to(egui::vec2(0.335, 0.75)),

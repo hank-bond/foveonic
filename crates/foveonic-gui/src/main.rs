@@ -3,6 +3,7 @@
 mod advanced;
 mod browser;
 mod controls;
+mod help;
 mod icon;
 mod information;
 mod inspect;
@@ -269,9 +270,12 @@ impl App {
                             (Scope::Parade, "RGB / layer parade"),
                             (Scope::Waveform, "Combined waveform"),
                         ] {
-                            ui.selectable_value(&mut self.preferences.scope, value, name);
+                            ui.selectable_value(&mut self.preferences.scope, value, name)
+                                .on_hover_text(help::scope(value));
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(help::scope(self.preferences.scope));
                 scopes::show(
                     ui,
                     self.preferences.scope,

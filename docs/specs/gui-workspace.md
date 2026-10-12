@@ -14,6 +14,7 @@ implementation: conforming
 - The workspace **must** keep an organizer on the left, the selected image in the middle, and tools on the right. The organizer **must** offer icon and compact-list modes; resizing its pane **must** reflow the icon columns.
 - Navigator, Scopes, Editing, and Metadata sections **must** be collapsible and reorderable within the right pane. Floating sections and docking in other panes are deferred.
 - The navigator **must** show the visible image region and support dragging to pan the main viewport. Double-clicking it **must** restore centered fit, showing the whole image.
+- Fit **must** automatically scale and centre the whole image as the window or panes resize. After zooming, panning, or selecting 100%, resizing **must** preserve image magnification and the visible crop's continuous top-left image coordinate, revealing or hiding pixels at the right and bottom. An axis that fits wholly within the viewport **must** remain centred. Moving the window without resizing **must not** change magnification or crop. Explicit Fit or double-click **must** restore automatic fit.
 - One persistent Scopes section **must** switch between RGB histogram, RGB parade, and combined waveform. Scopes **must** analyze the currently inspected buffer. Signal labels and ranges **must** respect the output's meaning as described in [pipeline inspection](./pipeline-inspection.md).
 - Adjustment rows **must** use label, slider, then editable value order. Double-clicking a slider **must** reset its existing processing default. A focused value box **must** support Up/Down nudging, using 0.1 for floats and 1 for integers unless the parameter specifies another unit. Nudges **must** respect bounds, retain text editing/focus, and request a rerender when the value changes. Exposure **must** be offered solely as a processing adjustment.
 - Editing **must** offer one global Sensor gain in a Sensor subsection, neutral at 1×. Gain processing follows [processing graphs](./processing-graphs.md).
@@ -25,6 +26,8 @@ implementation: conforming
 - Editing changes are session-only in the current GUI. Per-file sidecars and photographic-settings persistence are deferred; UI-preference storage **must** be limited to workspace choices and geometry.
 
 ## Implementation direction
+
+Editing, inspection, and scope explanations follow [photographic control help](./photographic-help.md).
 
 Use eframe's built-in persistence with app ID `foveonic`. Store explicit UI preferences separately from processing `Settings`; eframe/egui handle window and widget layout memory. Missing or unreadable preferences use defaults. Native smoke tests use isolated storage.
 

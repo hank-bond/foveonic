@@ -22,6 +22,7 @@ The plans outline implementation work for review. Implementation begins with own
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
 - **[icon-background](./icon-background.md)** A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
+- **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[pipeline-performance](./pipeline-performance.md)** Pause algorithm expansion, stabilize a buildable baseline, measure completed cold/warm renders and GPU stages, then optimize the largest bottlenecks with output-equivalence checks. _Resume the owner-approved profiling and optimization pivot; remaining algorithm work is paused._
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.

@@ -97,13 +97,27 @@ impl Parameter {
     }
     pub fn help(self) -> &'static str {
         match self {
-            Self::BaseBlend => "Blend between the original layers (0) and bilateral-filtered layers (1), before directional averaging.",
-            Self::EdgeCutoff => "Higher cutoff limits directional averaging across weaker detected edges.",
-            Self::MeanDecay => "Higher decay extends directional averaging farther through smooth regions. Values near 1 can reveal tile boundaries.",
-            Self::EdgeScale => "Higher sensitivity reduces directional averaging across detected edges.",
-            Self::LumaNoiseScale => "Noise-model scale for brightness diffusion. Larger values allow more brightness cleanup before restoration.",
-            Self::BrightnessMix => "Mix raw brightness residual (0) with the conditioned brightness residual (1).",
-            Self::LayerMix => "Mix a shared brightness correction (0) with individual sensor-layer corrections (1).",
+            Self::BaseBlend => {
+                "Chooses how much initial smoothing is used before the later noise-reduction steps. 0 starts with the unsmoothed image; 1 uses the fully smoothed starting image. More smoothing can reduce grain but soften fine texture. 0 does not turn all noise reduction off."
+            }
+            Self::EdgeCutoff => {
+                "Sets how readily smoothing stops at an edge. Higher values stop it at smaller changes, helping preserve fine boundaries but potentially leaving more grain. Lower values let smoothing cross more edges and can soften detail."
+            }
+            Self::MeanDecay => {
+                "Sets how far smoothing reaches through areas without strong edges. Higher values smooth over longer distances, reducing unevenness but potentially spreading softness. Near 1, seams between processing regions may become visible."
+            }
+            Self::EdgeScale => {
+                "Sets how strongly detected edges hold back smoothing. Higher values protect edges more strongly but can also leave grain untouched. Lower values allow more smoothing across edges, which can soften real texture."
+            }
+            Self::LumaNoiseScale => {
+                "Sets how much brightness grain is treated before detail is restored. Higher values allow more smoothing of brightness variations, but can remove fine texture. It works together with Brightness mix and Detail, so its effect depends on those settings."
+            }
+            Self::BrightnessMix => {
+                "Chooses which brightness texture is restored after smoothing. 0 uses the original texture, including its grain; 1 uses the cleaned-up texture. Higher values can give a smoother result but restore less fine texture. The Detail slider sets the amount restored."
+            }
+            Self::LayerMix => {
+                "Chooses whether restored detail changes brightness alone (0) or also restores differences between the camera's three color-sensitive sensor layers (1). Higher values can restore more color texture, but also more color noise. The Detail slider sets the amount restored."
+            }
         }
     }
 }

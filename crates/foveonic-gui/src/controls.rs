@@ -1,5 +1,6 @@
 //! Builds aligned sensor/tone editing rows with reset, focused value nudges, and sample-based rerender signals.
 
+use crate::help;
 use eframe::egui;
 use foveonic::{
     render::{RepairThreshold, Settings},
@@ -41,7 +42,7 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
     };
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
-            ui.add_sized([92., 20.], egui::Label::new(label));
+            help::control(ui.add_sized([92., 20.], egui::Label::new(label)), label);
             ui.spacing_mut().slider_width = (ui.available_width() - 62.).max(35.);
             let response = ui
                 .add(egui::Slider::new(value, range.clone()).show_value(false))
@@ -49,6 +50,7 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
             if response.double_clicked() {
                 *value = default;
             }
+            help::control(response, label);
             // Match add_sized's layout, but inspect DragValue's stable child ID before it handles keys.
             let response = ui
                 .allocate_ui_with_layout(
@@ -80,6 +82,7 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
                 ui.data_mut(|data| data.remove::<String>(response.id));
                 ui.ctx().request_repaint();
             }
+            help::control(response, label);
         });
     });
     // Double-click sensing replaces the slider response, so compare actual values for rerendering.
@@ -88,6 +91,7 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
 
 pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
     let mut changed = false;
+    ui.small("Hover over a control for an explanation. Double-click a slider to reset it.");
     if let Some(metadata) = metadata {
         for (title, key, value) in [
             (
@@ -102,7 +106,7 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
             ),
         ] {
             ui.horizontal(|ui| {
-                ui.add_sized([92., 20.], egui::Label::new(title));
+                help::control(ui.add_sized([92., 20.], egui::Label::new(title)), title);
                 egui::ComboBox::from_id_salt(key)
                     .width(ui.available_width() - 8.)
                     .selected_text(if value.is_empty() {
@@ -117,7 +121,9 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
                                     ui.selectable_value(value, name.to_owned(), name).changed();
                             }
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(help::editing(title).unwrap());
             });
         }
     }
@@ -142,9 +148,11 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     ui.separator();
     ui.weak("Reference noise and detail");
     let mut reconstruction = settings.reconstruction.is_some();
-    if ui
-        .checkbox(&mut reconstruction, "Reference reconstruction")
-        .changed()
+    if help::control(
+        ui.checkbox(&mut reconstruction, "Reference reconstruction"),
+        "Reference reconstruction",
+    )
+    .changed()
     {
         settings.reconstruction = reconstruction.then(Default::default);
         changed = true;
@@ -153,7 +161,7 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         changed |= adjustment(ui, "Chroma noise", &mut controls.chroma, 0..=4, 2);
         changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
         changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
-        ui.small("Noise choices are reference presets; 0 still filters. Detail 1× is reference restoration, 0× is the filtered base.");
+        ui.small("Noise preset 0 still reduces noise. Detail 0 shows the smoothed image; 1× restores the normal amount of detail.");
         changed |= crate::advanced::show(
             ui,
             controls,
@@ -165,7 +173,7 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     ui.separator();
     ui.weak("Corrections and sharpening");
     let mut automatic = settings.color_dq_gain.is_none();
-    if ui.checkbox(&mut automatic, "Auto ColorDQ").on_hover_text("Uses the native noise-derived gain with reconstruction. Without reconstruction, automatic ColorDQ is inactive.").changed() {
+    if help::control(ui.checkbox(&mut automatic, "Auto ColorDQ"), "Auto ColorDQ").changed() {
         settings.color_dq_gain = if automatic { None } else { Some(1.) };
         changed = true;
     }
@@ -176,10 +184,11 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     }
     changed |= adjustment(ui, "Sharpen", &mut settings.sharpen_amount, 0. ..=2., 0.);
     let mut repair = settings.repair.is_some();
-    if ui
-        .checkbox(&mut repair, "Camera-record repair")
-        .on_hover_text("Correct camera-listed defects in record order using masked, chroma-anchored neighbors, including adjacent marked pixels.")
-        .changed()
+    if help::control(
+        ui.checkbox(&mut repair, "Camera-record repair"),
+        "Camera-record repair",
+    )
+    .changed()
     {
         settings.repair = repair.then_some(RepairThreshold::Camera);
         changed = true;
@@ -188,7 +197,7 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         let camera = metadata.map(|m| RepairThreshold::Camera.resolve(m));
         let automatic = camera.as_ref().and_then(|r| r.as_ref().ok()).copied();
         let mut manual = matches!(threshold, RepairThreshold::Manual(_));
-        if ui.checkbox(&mut manual, "Manual cutoff").changed() {
+        if help::control(ui.checkbox(&mut manual, "Manual cutoff"), "Manual cutoff").changed() {
             *threshold = if manual {
                 RepairThreshold::Manual(automatic.unwrap_or(0))
             } else {
@@ -200,7 +209,10 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
             let default = automatic.unwrap_or(*value);
             changed |= adjustment(ui, "Min. badness", value, 0..=15, default);
         } else if let Some(value) = automatic {
-            ui.weak(format!("Camera minimum badness: {value}"));
+            help::control(
+                ui.weak(format!("Camera defect threshold: {value}")),
+                "Min. badness",
+            );
         } else {
             ui.weak(camera.map_or_else(
                 || "Waiting for camera cutoff".into(),
@@ -208,20 +220,124 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
             ));
         }
     }
-    changed |= ui.checkbox(&mut settings.highlight_restoration, "Highlight restoration").on_hover_text("Restores original clipped highlights after camera repair and before despeckle; independent of the tone Highlights slider.").changed();
-    changed |= ui
-        .checkbox(&mut settings.row_correction, "Row banding correction")
-        .on_hover_text(
-            "Estimates and removes camera row bias after despeckle, before noise reconstruction.",
-        )
-        .changed();
-    changed |= ui.checkbox(&mut settings.despeckle, "Despeckle").on_hover_text("Detect remaining channel speckles and correct them before reconstruction. Independent of camera-record repair; both are on by default.").changed();
+    changed |= help::control(
+        ui.checkbox(&mut settings.highlight_restoration, "Highlight restoration"),
+        "Highlight restoration",
+    )
+    .changed();
+    changed |= help::control(
+        ui.checkbox(&mut settings.despeckle, "Despeckle"),
+        "Despeckle",
+    )
+    .changed();
+    changed |= help::control(
+        ui.checkbox(&mut settings.row_correction, "Row banding correction"),
+        "Row banding correction",
+    )
+    .changed();
     changed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn all_visible_editing_controls_have_explanations() {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.reconstruction = Some(Default::default());
+        settings.color_dq_gain = Some(1.);
+        settings.repair = Some(RepairThreshold::Manual(0));
+        let metadata = Metadata {
+            width: 1,
+            height: 1,
+            rotation: 0,
+            properties: Default::default(),
+            lists: Default::default(),
+            matrices: Default::default(),
+        };
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600., 2000.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    processing(ui, &mut settings, Some(&metadata));
+                });
+            },
+        );
+        for label in [
+            "White balance",
+            "Color mode",
+            "Sensor gain",
+            "Exposure",
+            "Saturation",
+            "Contrast",
+            "Shadows",
+            "Highlights",
+            "Reference reconstruction",
+            "Chroma noise",
+            "Luma noise",
+            "Detail",
+            "Auto ColorDQ",
+            "ColorDQ gain",
+            "Sharpen",
+            "Camera-record repair",
+            "Manual cutoff",
+            "Min. badness",
+            "Highlight restoration",
+            "Despeckle",
+        ] {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::Shape::Text(text) if text.galley.job.text == label
+                )),
+                "control missing: {label}"
+            );
+            assert!(help::editing(label).is_some(), "help missing: {label}");
+        }
+    }
+
+    #[test]
+    fn sensor_gain_help_opens_on_label_slider_and_value_without_changing_settings() {
+        for point in [
+            egui::pos2(45., 18.),
+            egui::pos2(220., 18.),
+            egui::pos2(362., 18.),
+        ] {
+            let ctx = egui::Context::default();
+            let mut value = 1_f32;
+            let mut output = None;
+            for time in [0., 1., 2.] {
+                output = Some(ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 400.),
+                        )),
+                        time: Some(time),
+                        events: vec![egui::Event::PointerMoved(point)],
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            ui.set_width(384.);
+                            assert!(!adjustment(ui, "Sensor gain", &mut value, 0. ..=2., 1.));
+                        });
+                    },
+                ));
+            }
+            assert_eq!(value, 1.);
+            assert!(output.unwrap().shapes.iter().any(|shape| matches!(
+                &shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("An ISO-like adjustment")
+            )), "help did not open at {point:?}");
+        }
+    }
+
     #[test]
     fn correction_checkboxes_start_enabled_and_toggle_independently() {
         for label in [

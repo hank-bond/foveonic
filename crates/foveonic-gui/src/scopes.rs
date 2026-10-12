@@ -116,9 +116,10 @@ pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Optio
         });
         return;
     };
-    ui.small(meaning(data.space));
-    let (rect, _) =
+    ui.small(meaning(data.space)).on_hover_text("These charts measure the selected inspection stage, before any screen-only display adjustments. Sensor readings and intermediate images use different scales from the finished photo. Values outside the chart's range are reported below; they do not necessarily mean detail was lost at capture.");
+    let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 170.), egui::Sense::hover());
+    response.on_hover_text(crate::help::scope(mode));
     let plot = rect.shrink2(egui::vec2(5., 12.));
     ui.painter()
         .rect_filled(rect, 3., egui::Color32::from_gray(10));

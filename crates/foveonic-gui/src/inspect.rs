@@ -1,5 +1,6 @@
 //! Groups pipeline buffers and component views in one inspection selector without scheduling component-only changes.
 
+use crate::help;
 use eframe::egui;
 use foveonic::{
     inspection::{self, Channels},
@@ -41,6 +42,7 @@ pub fn show(
     } else {
         format!("{output} · {label}")
     };
+    let current_help = help::inspection(current.name).unwrap();
     egui::ComboBox::from_id_salt("artifact")
         .selected_text(selected)
         .width(205.)
@@ -49,6 +51,7 @@ pub fn show(
                 if image.channels == Channels::Scalar {
                     if ui
                         .selectable_label(image.name == output, image.name)
+                        .on_hover_text(help::inspection(image.name).unwrap())
                         .clicked()
                     {
                         choose(output, channel, image.name, -1);
@@ -62,16 +65,30 @@ pub fn show(
                                     image.name == output && component == *channel,
                                     label,
                                 )
+                                .on_hover_text(if image.channels == Channels::Layers {
+                                    "Shows one of the camera's three color-sensitive sensor layers in gray. Each responds to overlapping colors; it is not a finished red, green, or blue channel."
+                                } else if component == -1 {
+                                    "Shows the normal color view of this processing stage."
+                                } else {
+                                    "Shows this color channel in gray: brighter means more of that channel. This changes the display only; it does not remove colors from the photo or change the scopes."
+                                })
                                 .clicked()
                             {
                                 choose(output, channel, image.name, component);
                                 ui.close_menu();
                             }
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(help::inspection(image.name).unwrap());
                 }
             }
-        });
+        })
+        .response
+        .on_hover_text(format!(
+            "{}\n\nInspect shows steps used to make the photo. Earlier steps do not include later edits. Changing this view does not change your export: export always uses the finished photo.",
+            current_help,
+        ));
     before != *output
 }
 

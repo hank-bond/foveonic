@@ -15,6 +15,7 @@ Requirements: [`gui-workspace.md`](../docs/specs/gui-workspace.md), [`applicatio
 - [x] Bound background render work and reject stale replies.
 - [x] Initialize recorded WB/mode per image, preserve launch overrides, and keep early inspection independent of downstream settings.
 - [x] Share preview/pipeline placement and native-pixel zoom.
+- [x] Preserve fixed magnification and the visible crop's top-left origin when resizing outside Fit mode; migrate smoke callers and check preview/pipeline geometry.
 - [x] Build the three-pane organizer/image/tools workspace with reflowing icon/list browsing.
 - [x] Add reorderable/collapsible tools, draggable navigator, current-buffer scopes, and photographic metadata.
 - [x] Persist UI preferences separately from session-only editing settings.
@@ -45,6 +46,14 @@ Removed view-only exposure, GUI table plotting, and the superseded RGB-gain/link
 A pointer fixture reproduced a slider rerender regression caused by replacing the slider response to add double-click sensing. Controls now compare actual before/after samples. Focused numeric fields nudge by 0.1 for floats or 1 for integers, with per-parameter overrides, bounds enforcement, preserved precision/focus, and unchanged mouse-drag sensitivity.
 
 The cleanup pass shares viewport/navigator mapping, isolates native smoke orchestration in `smoke.rs` with named state, exercises actual worker submit/clear methods in its pending-request test, and consolidates historical progress notes. Processing defaults and scheduling policy are unchanged.
+
+## Resize correction
+
+Owner review identified image movement during window/pane resizing. Magnification was relative to a freshly computed fit scale, and placement used the changing canvas centre plus an unchanged pan offset. The one-shot 100% command consequently did not survive resizing at native-pixel scale.
+
+The viewport now separates automatic Fit from a fixed UI-points-per-image-pixel scale. Resizing compensates the centre-based pan offset to preserve continuous top-left crop coordinates; fully visible axes stay centred. JPEG and GPU layout share the correction, and smoke callers use the fixed-scale zoom operation. Processing and render scheduling are unchanged.
+
+All eleven viewport tests and the GUI suite pass (31 passed, one GPU fixture ignored). Coverage includes fractional crop origins in both orientations, width/height changes, canvas translation, Fit/letterboxing transitions, pointer wheel/drag, 100% at 1×/2× display density, and matching resized JPEG/GPU bounds. Documentation generation/checks and tool tests, changed-file formatting, and diff checks pass. Workspace tests and GUI Clippy were blocked by concurrent processor work: missing `camera_repair_test.rs` and the unused `repair::Prepared::params` field, respectively. Native interaction review remains pending; processor files were not changed for this correction.
 
 ## Evidence and remaining work
 

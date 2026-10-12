@@ -27,9 +27,9 @@ pub fn link_button(ui: &mut egui::Ui, linked: bool, parent: &str) -> egui::Respo
         );
     }
     response.on_hover_text(if linked {
-        format!("Linked to {parent}. Click to capture this value as a manual override.")
+        format!("Follows {parent} automatically. Click to keep the current value and adjust it separately. Changing {parent} will then leave this value alone.")
     } else {
-        format!("Manual override. Click to follow the latest {parent} value.")
+        format!("Set separately from {parent}. Click to follow {parent} again. This replaces your manual value with the current automatic value.")
     })
 }
 
@@ -54,8 +54,10 @@ pub fn show(
             for parameter in Parameter::ALL {
                 changed |= row(ui, &mut controls.overrides, parameter, values.map(|v| v[parameter as usize]));
             }
-            ui.small("Links follow reference presets; overrides replace individual parameters. Detail remains a separate multiplier.");
-        });
+            ui.small("Linked values follow the basic noise controls. Click a link to adjust a value separately. Detail still controls how much texture is restored.");
+        })
+        .header_response
+        .on_hover_text("Fine-tunes how noise is smoothed and texture is restored. Start with the basic noise controls; these values normally follow them automatically. Adjusting them separately can preserve more texture, but can also leave grain or introduce artifacts.");
     changed
 }
 
@@ -93,11 +95,24 @@ fn row(
                     },
                 )
             });
-            editing.response.on_hover_text(format!(
-                "{}\nParent: {}",
-                parameter.help(),
-                parameter.parent()
-            ));
+            crate::help::attach(
+                editing.response,
+                &format!(
+                    "{}\n\n{} {}. {}",
+                    parameter.help(),
+                    if manual.is_some() {
+                        "Set separately from"
+                    } else {
+                        "Follows"
+                    },
+                    parameter.parent(),
+                    if manual.is_some() {
+                        "Click the link to follow that control again."
+                    } else {
+                        "Click the link to keep this value and adjust it separately."
+                    },
+                ),
+            );
             if manual.is_some() && editing.inner {
                 overrides.set(parameter, Some(value));
             }
@@ -109,6 +124,37 @@ fn row(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn linked_read_only_parameters_still_explain_their_effect() {
+        for parameter in Parameter::ALL {
+            let ctx = egui::Context::default();
+            let mut overrides = noise::Overrides::default();
+            let mut output = None;
+            for time in [0., 1., 2.] {
+                output = Some(ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 400.),
+                        )),
+                        time: Some(time),
+                        events: vec![egui::Event::PointerMoved(egui::pos2(90., 18.))],
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            assert!(!row(ui, &mut overrides, parameter, Some(0.5)));
+                        });
+                    },
+                ));
+            }
+            assert!(overrides.get(parameter).is_none());
+            assert!(output.unwrap().shapes.iter().any(|shape| matches!(
+                &shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains(parameter.help())
+            )), "missing read-only help for {parameter:?}");
+        }
+    }
+
     #[test]
     fn pointer_link_captures_value_keeps_override_and_relinks_to_latest_parent() {
         let ctx = egui::Context::default();
