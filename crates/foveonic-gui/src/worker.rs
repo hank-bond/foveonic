@@ -400,7 +400,51 @@ mod tests {
     #[test]
     #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
     fn continuous_drag_makes_progress_then_settles_with_matching_scopes() {
-        for control in ["detail", "exposure"] {
+        fn edit(settings: &mut foveonic::render::Settings, control: &str, revision: u64) {
+            use foveonic::noise::Parameter;
+            match control {
+                "detail" => {
+                    settings.reconstruction.as_mut().unwrap().detail = revision as f32 / 20.
+                }
+                "exposure" => settings.exposure = revision as f32 / 40.,
+                "chroma" => {
+                    settings.reconstruction.as_mut().unwrap().chroma = (revision % 5) as u32
+                }
+                "luma" => {
+                    settings.reconstruction.as_mut().unwrap().luminance = (revision % 5) as u32
+                }
+                key => {
+                    let p = Parameter::ALL.into_iter().find(|p| p.key() == key).unwrap();
+                    let bounds = p.bounds();
+                    let value = *bounds.start()
+                        + (*bounds.end() - *bounds.start()) * ((revision % 40) as f32 / 40.);
+                    settings
+                        .reconstruction
+                        .as_mut()
+                        .unwrap()
+                        .overrides
+                        .set(p, Some(value));
+                }
+            }
+        }
+        for control in [
+            "detail",
+            "exposure",
+            "chroma",
+            "luma",
+            "base-blend",
+            "edge-cutoff",
+            "mean-decay",
+            "edge-scale",
+            "luma-noise-scale",
+            "brightness-mix",
+            "layer-mix",
+        ] {
+            let last = if matches!(control, "detail" | "exposure") {
+                41
+            } else {
+                161
+            };
             let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
                 .join("blue-parking-sign.x3f");
             let worker = super::Worker::new(
@@ -425,39 +469,28 @@ mod tests {
             let mut progress = Vec::new();
             let mut settled = false;
             let mut scopes = false;
-            for revision in 2..=41 {
-                if control == "detail" {
-                    settings.reconstruction.as_mut().unwrap().detail = revision as f32 / 20.;
-                } else {
-                    settings.exposure = revision as f32 / 40.;
-                }
+            for revision in 2..=last {
+                edit(&mut settings, control, revision);
                 submit(revision, settings.clone());
                 std::thread::sleep(std::time::Duration::from_millis(8));
                 while let Ok(update) = worker.replies.try_recv() {
                     if let super::Update::Image(reply) = update {
                         if let Some(frame) = reply.result.unwrap() {
-                            if control == "detail" {
-                                assert_eq!(
-                                    frame.artifact.settings.reconstruction.unwrap().detail,
-                                    reply.revision as f32 / 20.
-                                );
-                            } else {
-                                assert_eq!(
-                                    frame.artifact.settings.exposure,
-                                    reply.revision as f32 / 40.
-                                );
-                            }
+                            let mut expected =
+                                foveonic::render::Settings::new("Sunlight", "Standard");
+                            expected.reconstruction = Some(Default::default());
+                            expected.sharpen_amount = 0.75;
+                            edit(&mut expected, control, reply.revision);
+                            assert_eq!(frame.artifact.settings, expected);
                             assert!(frame.scopes.is_none());
                             progress.push(reply.revision);
-                            settled |= reply.revision == 41;
+                            settled |= reply.revision == last;
                         }
-                    } else if let super::Update::Scopes {
-                        revision: 41,
-                        result,
-                    } = update
-                    {
-                        assert!(result.is_ok());
-                        scopes = true;
+                    } else if let super::Update::Scopes { revision, result } = update {
+                        if revision == last {
+                            assert!(result.is_ok());
+                            scopes = true;
+                        }
                     }
                 }
             }
@@ -475,7 +508,7 @@ mod tests {
                     .recv_timeout(std::time::Duration::from_secs(20))
                     .unwrap()
                 {
-                    super::Update::Image(reply) if reply.revision == 41 => {
+                    super::Update::Image(reply) if reply.revision == last => {
                         assert!(!settled, "unexpected extra final image");
                         let frame = reply.result.unwrap().unwrap();
                         assert_eq!(frame.artifact.settings.exposure, settings.exposure);
@@ -491,10 +524,7 @@ mod tests {
                         stopped.elapsed().as_secs_f64() * 1000.
                     );
                     }
-                    super::Update::Scopes {
-                        revision: 41,
-                        result,
-                    } => {
+                    super::Update::Scopes { revision, result } if revision == last => {
                         assert!(result.is_ok());
                         scopes = true;
                     }

@@ -1,7 +1,7 @@
 //! Checks GPU navigator transfer mapping and completed preparation cost using synthetic floating textures.
 
 use super::*;
-fn state() -> egui_wgpu::RenderState {
+pub(super) fn state() -> egui_wgpu::RenderState {
     let instance = wgpu::Instance::default();
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -29,7 +29,7 @@ fn state() -> egui_wgpu::RenderState {
     viewport::install(&rs);
     rs
 }
-fn texture(
+pub(super) fn texture(
     rs: &egui_wgpu::RenderState,
     size: [u32; 2],
     format: wgpu::TextureFormat,

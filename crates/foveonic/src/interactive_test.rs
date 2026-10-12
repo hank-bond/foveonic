@@ -124,7 +124,7 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
                 }
                 _ => unreachable!(),
             }
-            // Detail slides reuse the three primed inputs; changing edit groups may warm a new boundary.
+            // Detail slides reuse the complete continuation cut; edit-group changes may warm a new boundary.
             let activity = engine.gpu_activity();
             let cached = session_image(&engine, &mut session, &settings);
             let delta = engine.gpu_activity().since(activity);
@@ -178,6 +178,63 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
             session.cached_bytes()
         );
     }
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; checks coupled noise recipes and every advanced override"]
+fn noise_and_override_inputs_match_fresh_outputs() {
+    use crate::noise::Parameter;
+    let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+        .join("blue-parking-sign.x3f");
+    let engine = Engine::new().unwrap();
+    let mut session = RenderSession::new(Source::open(path).unwrap());
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    settings.sensor_gain = 1.3;
+    settings.sharpen_amount = 0.75;
+    let retained = session_image(&engine, &mut session, &settings);
+    let original = engine.gpu.readback(&retained.buffer).unwrap();
+    let mut cases = Vec::new();
+    for choice in [0, 1, 3, 4] {
+        let mut chroma = settings.clone();
+        chroma.reconstruction.as_mut().unwrap().chroma = choice;
+        cases.push((format!("chroma-{choice}"), chroma));
+        let mut luma = settings.clone();
+        luma.reconstruction.as_mut().unwrap().luminance = choice;
+        cases.push((format!("luma-{choice}"), luma));
+    }
+    for parameter in Parameter::ALL {
+        for fraction in [0.25, 0.75] {
+            let mut changed = settings.clone();
+            let bounds = parameter.bounds();
+            changed.reconstruction.as_mut().unwrap().overrides.set(
+                parameter,
+                Some(*bounds.start() + (*bounds.end() - *bounds.start()) * fraction),
+            );
+            cases.push((format!("{}-{fraction}", parameter.key()), changed));
+        }
+    }
+    for (label, settings) in cases {
+        for movement in 0..2 {
+            let mut edited = settings.clone();
+            if movement == 1 {
+                edited.reconstruction.as_mut().unwrap().detail = 1.4;
+            }
+            let cached = session_image(&engine, &mut session, &edited);
+            let bytes = engine.gpu.readback(&cached.buffer).unwrap();
+            let fresh = engine
+                .render(&session.source, &edited, &mut Profile::default())
+                .unwrap();
+            assert_eq!(
+                bytes,
+                engine.gpu.readback(&fresh.buffer).unwrap(),
+                "{label} movement={movement}"
+            );
+            assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
+        }
+        eprintln!("NOISE-CACHE {label} exact");
+    }
+    assert_eq!(original, engine.gpu.readback(&retained.buffer).unwrap());
 }
 
 #[test]

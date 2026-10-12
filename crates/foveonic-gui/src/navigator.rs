@@ -251,6 +251,9 @@ fn tile_extent(extent: [u32; 2]) -> [u32; 2] {
     extent.map(|v| (v as f32 * scale).round().max(1.) as u32)
 }
 #[cfg(test)]
+#[path = "navigator_draw_test.rs"]
+mod draw_tests;
+#[cfg(test)]
 #[path = "navigator_test.rs"]
 mod gpu_tests;
 #[cfg(test)]

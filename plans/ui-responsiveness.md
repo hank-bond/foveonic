@@ -21,10 +21,13 @@ The owner approved measurement, one active edit's GPU input cache, image-before-
 - [x] Check continuous worker drag progress, newest settlement, matching scopes, navigator mapping, pointer interaction and scrolling/overlay geometry.
 - [x] Measure completed Detail feedback and native timing/normal memory versus transient peaks.
 - [x] Run release workspace/examples, ignored GPU/worker, strict Clippy, documentation, formatting and Python checks.
-- [ ] Quantify navigator drawing benefit independently of preparation cost.
-- [ ] Extend continuous-drag coverage to noise/advanced controls and record native pointer-driven interaction/owner review.
+- [x] Quantify synthetic navigator drawing independently of preparation cost.
+- [x] Extend continuous worker dragging and exact cache/fresh coverage to noise presets and all advanced controls.
+- [ ] Record native pointer-driven interaction and owner review.
 - [ ] Review the remaining Detail subtree and UI stalls with the owner before expanding the implementation.
-- [ ] Review the scoped diff before committing; preserve concurrent inspection changes.
+- [x] Review and split the initial slice into tested commits; preserve concurrent inspection changes.
+- [x] Review profiling, capture loading, organizer/control refinements and broader-control checks as separate commits.
+- [ ] Diagnose the intermittent GPU equality failures before accepting the unfinished tone-reuse optimization.
 
 ## Architecture and discoveries
 
@@ -50,11 +53,21 @@ Native isolated captures: `.local/ui-responsiveness/native-noise-1`, `native-det
 
 Final complete-boundary native evidence: `.local/ui-responsiveness/native-complete-boundary-1` and `/tmp/foveonic-ui-native-complete-boundary.log`. Warm Detail input-to-UI **125–143 ms**; first edit-group transition 548 ms. Warm busy frame gaps median 16.6 ms, p95 45.8 ms, maximum 46.7 ms. Normal settled physical footprint: **2.1 GiB**, `/tmp/foveonic-ui-native-complete-boundary-memory.log`, versus **1.8 GiB** in the superseded direct-input state. This trades approximately 235 MiB more retained input for faster feedback; retaining signed signal when sharpening is enabled adds a further 61 MiB. Native complete-boundary peak footprint approximately **3.5 GiB**; reconstruction/inspection smoke peak approximately **3.7 GiB**. Process RSS was approximately 0.94 GiB and excludes substantial GPU accounting: do not substitute it for total usage. These are local blue-sign measurements, not a universal bound across all scenes/backends. The observed settled state is close to the soft normal target; cold/replacement/in-flight peaks are larger.
 
-Navigator synthetic mapping and completed preparation: `/tmp/foveonic-ui-navigator-gpu-2.log`, warm average 1.62 ms for 512×341. Native warm preparation commonly 1.7–3.3 ms, with occasional queue-contention/cold values up to 19 ms, logged separately after main publication. GPU fixture checks layers, linear/tone RGB, channels, scalar, ratio and signed mapping. Ordinary-painter tests check scroll clipping without compression, full UVs, overlay alignment and absence of navigator callbacks. Per-frame drawing benefit remains unquantified.
+Navigator synthetic mapping and completed preparation: `/tmp/foveonic-ui-navigator-gpu-2.log`, warm average 1.62 ms for 512×341. Native warm preparation commonly 1.7–3.3 ms, with occasional queue-contention/cold values up to 19 ms, logged separately after main publication. GPU fixture checks layers, linear/tone RGB, channels, scalar, ratio and signed mapping. Ordinary-painter tests check scroll clipping without compression, full UVs, overlay alignment and absence of navigator callbacks. Follow-up `/tmp/foveonic-ui-navigator-drawing-batched.log`: five alternating completed 25-draw batches measured median 0.169 ms for repeated float presentation versus 0.122 ms for ordinary egui painting of the prepared tile. Native-sized synthetic source, 512×341 target; mapped pixels agree within one encoded code. This includes preparation/submission and amortized completion, excludes common overlays, and uses standalone passes rather than the complete native callback path. The saving is modest, not evidence that navigator replacement removes native frame stalls. Per-draw fences obscured the difference (~1.5 ms for either path); that earlier run remains in `/tmp/foveonic-ui-navigator-drawing.log`.
 
-Final checks: `/tmp/foveonic-ui-complete-boundary-gpu.log` and `/tmp/foveonic-ui-final-{workspace,clippy,build,docs,python}.log`. Release tests passed: 48 ordinary core tests, 48 ignored core GPU/fixture tests, 42 ordinary GUI tests (including a concurrent scope-layout regression) and four ignored GUI GPU/worker tests, plus docs-index/CLI tests. Only the existing `block v0.1.6` future-incompatibility warning remains. No commits, pushes, installation or evidence deletion in this slice.
+Final checks: `/tmp/foveonic-ui-complete-boundary-gpu.log` and `/tmp/foveonic-ui-final-{workspace,clippy,build,docs,python}.log`. Release tests passed: 48 ordinary core tests, 48 ignored core GPU/fixture tests, 42 ordinary GUI tests (including a concurrent scope-layout regression) and four ignored GUI GPU/worker tests, plus docs-index/CLI tests. Only the existing `block v0.1.6` future-incompatibility warning remains. The initial slice was reviewed in four commits (`1dee6e3`, `509a320`, `3e750e8`, `7458c38`) and fast-forwarded into local `main`. No remote is configured; nothing was pushed, installed or deleted.
 
+## Follow-up measurements
 
-## Source-load profiling
+`/tmp/foveonic-ui-noise-invalidation.log`: blue-sign full-float cached/fresh equality for all alternative chroma/luma presets and two values of every advanced override, each followed by a Detail edit; retained original image stays immutable. `/tmp/foveonic-ui-all-controls-drag.log`: all eleven controls publish ordered progressive frames and settle with exact artifact settings and matching scopes. Detail settles in 163 ms, Exposure 96 ms; noise/early overrides take 286–955 ms, while brightness/layer mixing takes 150–171 ms. Earlier-stage edits still need significant work; these checks establish progress/correctness, not fluid native interaction.
+
+Tone-table reuse and mismatch diagnostics remain uncommitted pending investigation. GPU equality failed intermittently on the red-flower fixture; later passing runs do not resolve the cause. No follow-up performance optimization is accepted or promoted.
 
 Source profiling separates complete file reading into memory from total in-memory X3F decoding and total `Source::open` time. The old benchmark `decode_ms` included file reading; setup now names each duration explicitly. Nested decoder/parallel-plane timings overlap and are not additive to the decode total. File-read timing includes opening, size checks, allocation and the full read. OS cache state is uncontrolled; a first read in a process is not necessarily cold SD-card I/O. Existing local-drive evidence cannot establish card latency. The owner deferred new GUI diagnostics to a later pipeline-visualization view: prioritize performance and baseline editing UI.
+
+
+## Reviewed follow-up checkpoint
+
+Five independently rebuilt checkpoints cover read/decode profiling, early capture properties, organizer keyboard navigation, correction controls/help and broader drag/drawing checks. Each passes release workspace tests, strict all-target Clippy, example builds, formatting and documentation checks. Final stable snapshot: 52 ordinary core tests, 49 ignored core GPU/fixture tests, 61 ordinary GUI tests and five ignored GUI GPU/worker tests, plus CLI/docs-index and Python tests. GPU evidence: `/tmp/foveonic-followup-stable-isolated-gpu.log` and `.local/ui-responsiveness/stable-checkpoint-equality-2`; float goldens and resized TIFF comparisons pass. Passing this checkpoint does not resolve the earlier intermittent failure. Tone reuse and additional mismatch diagnostics remain uncommitted.
+
+Review snapshots require explicit source rebuilds when sharing Cargo artifacts: unchanged relative paths and older copied mtimes allowed the first validation harness to reuse an earlier checkpoint binary. `/tmp/foveonic-followup-*-isolated.log` supersedes those first checks; isolated artifacts and freshly touched snapshot sources confirm the intended test inventories.
