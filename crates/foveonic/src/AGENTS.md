@@ -20,7 +20,7 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 
 - **[banding.rs](./banding.rs)** Prepares geometric least-squares row-banding fits and deterministic patch/row traversal for GPU-only photographic estimation and correction.
 - **[calibration.rs](./calibration.rs)** Resolves metadata-derived calibration, white balance, camera color, and image geometry.
-- **[camera_repair.rs](./camera_repair.rs)** Prepares complete native camera repair metadata and executes raw-signal bad-red selection, ordered lists, and masked cluster matching on GPU.
+- **[camera_repair.rs](./camera_repair.rs)** Prepares complete native camera repair metadata and executes raw-signal bad-red selection, dependency-safe pixel phases, and ordered masked cluster matching on GPU.
 - **[color_dq.rs](./color_dq.rs)** Builds reference-derived ColorDQ lookup tables with an explicitly selected gain.
 - **[color_mode.rs](./color_mode.rs)** Resolves camera color modes and their camera-ordered tone records.
 - **[despeckle.rs](./despeckle.rs)** Prepares reference speckle thresholds and runs deterministic detection and ordered chroma-anchored correction on GPU.

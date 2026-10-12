@@ -69,6 +69,101 @@ fn fixture() -> (Metadata, serde_json::Value) {
         f,
     )
 }
+fn assert_phase_dependencies(p: &Prepared) {
+    let w = p.params.source[0];
+    let h = p.params.source[1];
+    let base = p.params.selection[2] as usize;
+    let mut assigned = vec![None; base];
+    let mut end = 0;
+    for (level, phase) in p.phases.iter().enumerate() {
+        assert_eq!(phase[0] as usize, end);
+        end += phase[1] as usize;
+        for &index in &p.repair_order[phase[0] as usize..end] {
+            assert!(assigned[index as usize].replace(level).is_none());
+        }
+    }
+    assert_eq!(end, p.repair_order.len());
+    let mut previous = std::collections::HashMap::<u32, usize>::new();
+    for (index, r) in p.records[..base].iter().enumerate() {
+        let x = r[0] % w;
+        let y = r[0] / w;
+        let selected = ((r[1] >> 8) & 15) >= p.params.selection[0]
+            && r[1] & 255 != 0
+            && x >= 2
+            && y >= 2
+            && x < w - 1
+            && y < h - 1;
+        if !selected {
+            assert!(assigned[index].is_none());
+            continue;
+        }
+        let level = assigned[index].expect("eligible record missing from schedule");
+        for dy in -1_i32..=1 {
+            for dx in -1_i32..=1 {
+                let q = (y as i32 + dy) as u32 * w + (x as i32 + dx) as u32;
+                if let Some(old) = previous.get(&q) {
+                    assert!(*old < level, "neighbor/duplicate/anti-dependency reordered");
+                }
+            }
+        }
+        previous.insert(r[0], level);
+    }
+}
+#[test]
+fn phases_preserve_neighbors_duplicates_anti_dependencies_and_skip_invalid_records() {
+    let mut p = Prepared {
+        params: Params {
+            source: [10, 10, 9, 0],
+            selection: [2, 999, 9, 0],
+            ..Default::default()
+        },
+        records: vec![
+            [33, 0x43ff],
+            [77, 0x43ff],
+            [34, 0x43ff],
+            [33, 0x43ff],
+            [43, 0x43ff],
+            [31, 0x43ff],
+            [76, 0x43ff],
+            [99, 0x43ff],
+            [55, 0x4300],
+        ],
+        ..Default::default()
+    };
+    prepare_phases(&mut p);
+    assert_eq!(p.repair_order, [0, 1, 2, 6, 3, 4]);
+    assert_eq!(p.phases, [[0, 2], [2, 2], [4, 1], [5, 1]]);
+    assert_phase_dependencies(&p);
+}
+#[test]
+#[ignore = "requires FOVEONIC_FIXTURE_DIR"]
+fn original_metadata_repair_dependency_phase_counts() {
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    for name in [
+        "blue-parking-sign",
+        "glossy-leaves-and-buds",
+        "rocks-and-tree-shadows",
+        "sunlit-red-flower",
+        "turquoise-still-life",
+        "yellow-flowers-and-stroller",
+    ] {
+        let source = crate::source::Source::open(root.join(format!("{name}.x3f"))).unwrap();
+        for threshold in [
+            Threshold::Camera,
+            Threshold::Manual(0),
+            Threshold::Manual(4),
+        ] {
+            let p = prepare(&source.metadata, threshold).unwrap();
+            assert_phase_dependencies(&p);
+            println!(
+                "{name}: selected {} phase_count {}",
+                p.repair_order.len(),
+                p.phases.len()
+            );
+        }
+    }
+}
+
 #[test]
 fn preparation_preserves_full_low_badness_lists_and_cluster_quality_order() {
     let (m, _) = fixture();
@@ -216,12 +311,15 @@ fn gpu_complete_camera_matches_native_raw_detection_lists_and_clusters() {
         &mut Default::default(),
     )
     .unwrap();
-    gpu.dispatch(
-        Kernel::CameraRepair,
-        &[(1, &records), (2, &uniform), (3, &output)],
-        [1, 1],
+    correct_lists(
+        &gpu,
+        &records,
+        &output,
+        &uniform,
+        &p,
         &mut Default::default(),
-    );
+    )
+    .unwrap();
     let bytes = gpu.readback(&records).unwrap();
     let r = bytemuck::cast_slice::<u8, [u32; 2]>(&bytes);
     for (i, v) in numbers(&f["overrides"]).iter().enumerate() {
@@ -270,12 +368,15 @@ fn gpu_bad_red_detection_reserves_final_slot_and_preserves_exhausted_masks() {
         &mut Default::default(),
     )
     .unwrap();
-    gpu.dispatch(
-        Kernel::CameraRepair,
-        &[(1, &records), (2, &uniform), (3, &output)],
-        [1, 1],
+    correct_lists(
+        &gpu,
+        &records,
+        &output,
+        &uniform,
+        &p,
         &mut Default::default(),
-    );
+    )
+    .unwrap();
     let bytes = gpu.readback(&records).unwrap();
     let records = bytemuck::cast_slice::<u8, [u32; 2]>(&bytes);
     assert_eq!(records[150 + 999], [999, 0]);

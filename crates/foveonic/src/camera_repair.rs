@@ -1,4 +1,4 @@
-//! Prepares complete native camera repair metadata and executes raw-signal bad-red selection, ordered lists, and masked cluster matching on GPU.
+//! Prepares complete native camera repair metadata and executes raw-signal bad-red selection, dependency-safe pixel phases, and ordered masked cluster matching on GPU.
 //!
 //! Adapted with owner permission from Foveonic repair_setup.rs, bad_reds.rs,
 //! and clusters.rs at e47af35. Original sensor data and metadata remain immutable.
@@ -28,6 +28,8 @@ struct Cluster {
 pub(crate) struct Prepared {
     params: Params,
     records: Vec<[u32; 2]>,
+    repair_order: Vec<u32>,
+    phases: Vec<[u32; 2]>,
     clusters: Vec<Cluster>,
     members: Vec<[u32; 4]>,
     masks: Vec<u32>,
@@ -79,6 +81,8 @@ pub(crate) fn prepare(metadata: &Metadata, threshold: Threshold) -> Result<Prepa
             }),
         },
         records: main.records.into_iter().chain(jpeg).collect(),
+        repair_order: Vec::new(),
+        phases: Vec::new(),
         clusters: Vec::new(),
         members: Vec::new(),
         masks: Vec::new(),
@@ -115,7 +119,52 @@ pub(crate) fn prepare(metadata: &Metadata, threshold: Threshold) -> Result<Prepa
         let words: Vec<_> = matrix.values.iter().map(|v| *v as u16).collect();
         prepare_clusters(&mut prepared, &words, cluster_class, margin)?;
     }
+    prepare_phases(&mut prepared);
     Ok(prepared)
+}
+
+// Every repair reads its own pixel and masked radius-one neighbors. Preserve
+// original order for nearby centers (including duplicates and anti-dependencies);
+// more distant centers can safely run together. This is metadata scheduling only.
+fn prepare_phases(p: &mut Prepared) {
+    let w = p.params.source[0];
+    let h = p.params.source[1];
+    let mut levels = std::collections::HashMap::<u32, usize>::new();
+    let mut phases = Vec::<Vec<u32>>::new();
+    for (index, r) in p.records[..p.params.selection[2] as usize]
+        .iter()
+        .enumerate()
+    {
+        let x = r[0] % w;
+        let y = r[0] / w;
+        if ((r[1] >> 8) & 15) < p.params.selection[0]
+            || r[1] & 255 == 0
+            || x < 2
+            || y < 2
+            || x >= w - 1
+            || y >= h - 1
+        {
+            continue;
+        }
+        let mut level = 0;
+        for dy in -1_i32..=1 {
+            for dx in -1_i32..=1 {
+                let q = (y as i32 + dy) as u32 * w + (x as i32 + dx) as u32;
+                if let Some(previous) = levels.get(&q) {
+                    level = level.max(previous + 1);
+                }
+            }
+        }
+        levels.insert(r[0], level);
+        phases.resize_with(phases.len().max(level + 1), Vec::new);
+        phases[level].push(index as u32);
+    }
+    for phase in phases {
+        let start = p.repair_order.len() as u32;
+        let count = phase.len() as u32;
+        p.repair_order.extend(phase);
+        p.phases.push([start, count]);
+    }
 }
 
 fn prepare_clusters(
@@ -251,6 +300,42 @@ fn select_bad_reds(
     Ok(())
 }
 
+fn correct_lists(
+    gpu: &Gpu,
+    records: &wgpu::Buffer,
+    output: &wgpu::Buffer,
+    uniform: &wgpu::Buffer,
+    p: &Prepared,
+    trace: &mut crate::gpu::GpuTrace,
+) -> Result<()> {
+    if !p.repair_order.is_empty() {
+        let order = gpu.upload("Dependency-safe camera repair phases", &p.repair_order)?;
+        for phase in &p.phases {
+            let batch = gpu.uniform(&[phase[0], phase[1], 0, 0]);
+            gpu.dispatch(
+                Kernel::CameraRepair,
+                &[
+                    (1, records),
+                    (2, uniform),
+                    (3, output),
+                    (6, &order),
+                    (7, &batch),
+                ],
+                [phase[1].div_ceil(64), 1],
+                trace,
+            );
+        }
+    }
+    // Runtime-detected records follow every main/JPEG repair in native order.
+    gpu.dispatch(
+        Kernel::CameraDetected,
+        &[(1, records), (2, uniform), (3, output)],
+        [1, 1],
+        trace,
+    );
+    Ok(())
+}
+
 pub(crate) fn apply(
     gpu: &Gpu,
     original: &wgpu::Buffer,
@@ -262,14 +347,9 @@ pub(crate) fn apply(
     gpu.copy(input, &output, input.size());
     let records = gpu.upload("Main JPEG and detected repair records", &p.records)?;
     let uniform = gpu.uniform(&p.params);
-    let mut trace = gpu.trace(profile.enabled, 5);
+    let mut trace = gpu.trace(profile.enabled, p.phases.len() as u32 + 5);
     select_bad_reds(gpu, original, &records, &uniform, p.params, &mut trace)?;
-    gpu.dispatch(
-        Kernel::CameraRepair,
-        &[(1, &records), (2, &uniform), (3, &output)],
-        [1, 1],
-        &mut trace,
-    );
+    correct_lists(gpu, &records, &output, &uniform, p, &mut trace)?;
     if !p.clusters.is_empty() {
         let clusters = gpu.upload("Camera cluster descriptors", &p.clusters)?;
         let members = gpu.upload("Stable quality ordered cluster members", &p.members)?;

@@ -7,6 +7,8 @@ struct Params { source:vec4<u32>, selection:vec4<u32>, model:array<vec4<f32>,3> 
 @group(0) @binding(3) var<storage,read_write> pixels:array<f32>;
 @group(0) @binding(4) var<storage,read_write> detections:array<u32>;
 @group(0) @binding(5) var<storage,read_write> prefixes:array<u32>;
+@group(0) @binding(6) var<storage,read> repair_order:array<u32>;
+@group(0) @binding(7) var<uniform> phase:vec4<u32>;
 fn bad_red(p:u32)->bool{
     let r=original[p*3u];let b=original[p*3u+2u];
     let rn=(params.model[0].x+r*params.model[1].x)+(r*r)*params.model[2].x;
@@ -55,11 +57,17 @@ fn scatter_detections(@builtin(global_invocation_id)id:vec3<u32>){
     // Only accepted detections alter main masks; exhaustion retains the original.
     if index<params.source.z && index<1000000u && remaining!=0u{records[index].y=(record.y&0xff00u)|remaining;}
 }
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id)id:vec3<u32>){
+    if id.x>=phase.y{return;}
+    // Metadata phases preserve all neighboring/duplicate record dependencies.
+    let record=records[repair_order[phase.x+id.x]];
+    camera_correct(record,params.source.x,params.source.y);
+}
 @compute @workgroup_size(1)
-fn main(){
+fn detected_correct(){
     let w=params.source.x;let h=params.source.y;let base=params.selection.z;let count=records[base+params.selection.y].x;
-    // Dependent pixel corrections remain in original main/JPEG/detected order.
-    for(var index=0u;index<base+count;index++){
-        let record=records[index];if ((record.y>>8u)&15u)>=params.selection.x{camera_correct(record,w,h);}
+    for(var index=0u;index<count;index++){
+        let record=records[base+index];if ((record.y>>8u)&15u)>=params.selection.x{camera_correct(record,w,h);}
     }
 }

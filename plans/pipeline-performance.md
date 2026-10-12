@@ -97,6 +97,12 @@ One 64-lane workgroup per bin loads the next RGB chunk into shared memory. Lane 
 
 Flower/yellow table work falls from ~421/211 to ~126/58 ms. Warm all-enabled renders are 1120/1108/1038/1252/1035/1215 ms; every full float buffer and TIFF still matches baseline byte-for-byte. All highlight connectivity/gain/ownership/selectivity/stable-bin tests, workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{highlight-prefetch,highlight-prefetch-warm}` and `/tmp/foveonic-opt-highlight-prefetch-*.log`.
 
+## Round 7: metadata-only dependency phases for camera pixel lists
+
+Camera corrections read their own pixel and radius-one masked neighbors, then write only their own pixel. A metadata-only schedule assigns each eligible original main/JPEG record a level strictly after every earlier record at a neighboring center, including duplicates and read-before-write anti-dependencies. Centers within one level are independent; all runtime-detected records still execute serially afterward, then packed clusters. Detector mask overrides cannot expand the read footprint. The original record array/masks, correction arithmetic and immutable provenance remain unchanged.
+
+The six originals select 41131 records in eight levels: 40625/470/15/8/5/6/1/1. Listed corrections fall from ~200 ms to ~0.26 ms, plus ~0.01–0.23 ms detected suffix. Eight extra passes/submissions and ~164.5 KB integer order storage trade for this gain; CPU preparation uses only metadata coordinates/classes. Warm completed all-enabled renders are 825/920/841/1042/838/1021 ms, with byte-identical float buffers and TIFFs. Structural schedule checks cover duplicates, neighbors, anti-dependencies, invalid borders/empty masks and all six originals at Camera/Manual 0/Manual 4. The full ignored suite (44 core plus GUI worker), ordinary workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{camera-phases,camera-phases-warm}` and `/tmp/foveonic-opt-camera-phase*.log`.
+
 ## Output-changing alternatives for later review
 
 No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.
