@@ -5,7 +5,7 @@ use foveonic::{
     image::ImageTexture,
     inspection::{Artifact, Content},
     profile::Profile,
-    render::{Engine, Settings},
+    render::{Engine, RenderSession, Settings},
     source::{Metadata, Source},
 };
 use std::{
@@ -26,8 +26,10 @@ pub struct Frame {
     pub output: String,
     pub artifact: Artifact,
     pub texture: Arc<ImageTexture>,
-    pub scopes: foveonic::scopes::Scopes,
+    pub scopes: Option<foveonic::scopes::Scopes>,
     pub milliseconds: f64,
+    pub revision: u64,
+    pub queued_at: std::time::Instant,
 }
 pub struct Reply {
     pub revision: u64,
@@ -37,31 +39,41 @@ pub struct Reply {
     pub exported: bool,
 }
 
+pub enum Update {
+    Image(Box<Reply>),
+    Scopes {
+        revision: u64,
+        result: Result<foveonic::scopes::Scopes, String>,
+    },
+}
+
 struct Pending {
     request: Option<Request>,
+    queued_at: Option<std::time::Instant>,
     stop: bool,
     clear: bool,
 }
 pub struct Worker {
     pending: Arc<(Mutex<Pending>, Condvar)>,
-    pub replies: mpsc::Receiver<Reply>,
+    pub replies: mpsc::Receiver<Update>,
 }
 impl Worker {
     pub fn new(engine: Engine, context: egui::Context) -> Self {
         let pending = Arc::new((
             Mutex::new(Pending {
                 request: None,
+                queued_at: None,
                 stop: false,
                 clear: false,
             }),
             Condvar::new(),
         ));
-        let (tx, replies) = mpsc::sync_channel(1);
+        let (tx, replies) = mpsc::sync_channel(2);
         let slot = pending.clone();
         thread::spawn(move || {
-            let mut source: Option<(PathBuf, Source)> = None;
+            let mut source: Option<(PathBuf, RenderSession)> = None;
             loop {
-                let request = {
+                let (request, queued_at) = {
                     let (lock, wake) = &*slot;
                     let mut state = lock.lock().unwrap();
                     while !state.stop && !state.clear && state.request.is_none() {
@@ -75,54 +87,59 @@ impl Worker {
                         source = None;
                         continue;
                     }
-                    state.request.take().unwrap()
+                    (
+                        state.request.take().unwrap(),
+                        state.queued_at.take().unwrap(),
+                    )
                 };
                 let started = std::time::Instant::now();
                 let mut metadata = None;
                 let mut settings = request.settings.clone();
                 let mut defaults_errors = Vec::new();
+                let mut scope_image = None;
                 let result = (|| -> foveonic::source::Result<Option<Frame>> {
                     if source.as_ref().is_none_or(|(p, _)| p != &request.path) {
                         source = None; // release the previous decoded image before loading another
-                        source = Some((request.path.clone(), Source::open(&request.path)?));
+                        source = Some((request.path.clone(), RenderSession::new(Source::open(&request.path)?)));
                     }
-                    let src = &source.as_ref().unwrap().1;
-                    metadata = Some(src.metadata.clone());
-                    defaults_errors = resolve_camera_settings(&mut settings, &src.metadata);
-                    // A newer request can replace work that hasn't reached GPU submission yet.
-                    let superseded = {
-                        let state = slot.0.lock().unwrap();
-                        state.request.is_some() || state.clear || state.stop
+                    let session = &mut source.as_mut().unwrap().1;
+                    metadata = Some(session.metadata().clone());
+                    defaults_errors = resolve_camera_settings(&mut settings, session.metadata());
+                    let edit=session.changed_parameters(&settings);
+                    let cancel=||{
+                        if request.export.is_some(){return false;}
+                        let state=slot.0.lock().unwrap();
+                        state.clear||state.stop||state.request.as_ref().is_some_and(|pending|{
+                            let mut next=pending.settings.clone();
+                            resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
+                            pending.path!=request.path||pending.output!=request.output||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
+                        })
                     };
-                    if superseded && request.export.is_none() {
-                        return Ok(None);
-                    }
                     let mut profile = Profile::default();
-                    if let Some(path) = &request.export {
-                        let image = engine.render(src, &settings, &mut profile)?;
-                        engine.write_tiff(&image, path, &mut profile)?;
-                        return Ok(None);
-                    }
-                    let artifact = engine
-                        .render_artifacts(src, &settings, &[&request.output], &mut profile)?
-                        .pop()
-                        .ok_or("missing requested artifact")?;
+                    let root=if request.export.is_some(){"final"}else{&request.output};
+                    let Some(mut artifacts)=engine.render_session(session,&settings,&[root],cancel,&mut profile)? else{return Ok(None);};
+                    let artifact = artifacts.pop().ok_or("missing requested artifact")?;
                     let Content::Image(image) = &artifact.content else {
                         return Err(
                             "GUI inspection requires a visual image buffer; node-data diagnostics are deferred"
                                 .into(),
                         );
                     };
+                    if let Some(path)=&request.export{engine.write_tiff(image,path,&mut profile)?;return Ok(None);}
+                    if cancel(){return Ok(None);}
                     let texture = Arc::new(engine.view_texture(image, None, &mut profile)?);
-                    let scopes = engine.scopes(image, &mut profile)?;
                     engine.device().poll(eframe::wgpu::Maintain::Wait);
+                    scope_image=Some((**image).clone());
+                    if std::env::var_os("FOVEONIC_UI_TIMING").is_some(){eprintln!("GPU-CACHE revision={} bytes={}",request.revision,session.cached_bytes());}
                     Ok(Some(Frame {
                         path: request.path.clone(),
                         output: request.output.clone(),
                         artifact,
                         texture,
-                        scopes,
+                        scopes:None,
                         milliseconds: started.elapsed().as_secs_f64() * 1000.,
+                        revision:request.revision,
+                        queued_at,
                     }))
                 })()
                 .map_err(|e| {
@@ -136,18 +153,40 @@ impl Worker {
                     }
                 });
                 if tx
-                    .send(Reply {
+                    .send(Update::Image(Box::new(Reply {
                         revision: request.revision,
                         metadata,
                         settings,
                         result,
                         exported: request.export.is_some(),
-                    })
+                    })))
                     .is_err()
                 {
                     break;
                 }
                 context.request_repaint();
+                if let Some(image) = scope_image {
+                    // Image publication is independent; latest image work outranks scope completion.
+                    if scope_superseded(&slot) {
+                        continue;
+                    }
+                    let result = engine
+                        .scopes(&image, &mut Profile::default())
+                        .map_err(|error| error.to_string());
+                    if scope_superseded(&slot) {
+                        continue;
+                    }
+                    if tx
+                        .send(Update::Scopes {
+                            revision: request.revision,
+                            result,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    context.request_repaint();
+                }
             }
         });
         Self { pending, replies }
@@ -157,11 +196,14 @@ impl Worker {
         let mut state = lock.lock().unwrap();
         state.clear = true;
         state.request = None;
+        state.queued_at = None;
         wake.notify_one();
     }
     pub fn submit(&self, request: Request) {
         let (lock, wake) = &*self.pending;
-        lock.lock().unwrap().request = Some(request);
+        let mut state = lock.lock().unwrap();
+        state.request = Some(request);
+        state.queued_at = Some(std::time::Instant::now());
         wake.notify_one();
     }
 }
@@ -171,6 +213,11 @@ impl Drop for Worker {
         lock.lock().unwrap().stop = true;
         wake.notify_one();
     }
+}
+
+fn scope_superseded(slot: &Arc<(Mutex<Pending>, Condvar)>) -> bool {
+    let state = slot.0.lock().unwrap();
+    state.stop || state.clear || state.request.is_some()
 }
 
 /// Resolve only unspecified fields: explicit launch and current-image edits win.
@@ -195,6 +242,17 @@ fn resolve_camera_settings(settings: &mut Settings, metadata: &Metadata) -> Vec<
 
 #[cfg(test)]
 mod tests {
+    fn receive(worker: &super::Worker) -> super::Reply {
+        loop {
+            if let super::Update::Image(reply) = worker
+                .replies
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap()
+            {
+                return *reply;
+            }
+        }
+    }
     #[test]
     #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
     fn worker_keeps_latest_image_request_and_rejects_table_inspection() {
@@ -214,10 +272,7 @@ mod tests {
             });
         }
         loop {
-            let reply = worker
-                .replies
-                .recv_timeout(std::time::Duration::from_secs(20))
-                .unwrap();
+            let reply = receive(&worker);
             if reply.revision != 20 {
                 continue;
             }
@@ -240,10 +295,7 @@ mod tests {
             output: "final".into(),
             export: None,
         });
-        let reply = worker
-            .replies
-            .recv_timeout(std::time::Duration::from_secs(20))
-            .unwrap();
+        let reply = receive(&worker);
         assert_eq!(reply.revision, 21);
         let frame = reply.result.unwrap().unwrap();
         assert_eq!(frame.artifact.name, "tone.rgb"); // final aliases the last enabled recipe output
@@ -260,10 +312,7 @@ mod tests {
             output: "black.histogram".into(),
             export: None,
         });
-        let reply = worker
-            .replies
-            .recv_timeout(std::time::Duration::from_secs(20))
-            .unwrap();
+        let reply = receive(&worker);
         assert_eq!(reply.revision, 22);
         assert!(reply
             .result
@@ -306,12 +355,163 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; prints completed slider feedback timings"]
+    fn slider_feedback_benchmark() {
+        let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+            .join("blue-parking-sign.x3f");
+        let worker = super::Worker::new(
+            foveonic::render::Engine::new().unwrap(),
+            eframe::egui::Context::default(),
+        );
+        let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        settings.sensor_gain = 1.3;
+        settings.reconstruction = Some(Default::default());
+        settings.sharpen_amount = 0.75;
+        for revision in 0..10 {
+            let control = if revision < 5 {
+                settings.exposure = revision as f32 * 0.1;
+                "exposure"
+            } else if revision < 8 {
+                settings.saturation = 1. + (revision - 5) as f32 * 0.1;
+                "saturation"
+            } else {
+                settings.sharpen_amount = 0.8 + (revision - 8) as f32 * 0.1;
+                "sharpen"
+            };
+            let start = std::time::Instant::now();
+            worker.submit(super::Request {
+                revision,
+                path: path.clone(),
+                settings: settings.clone(),
+                output: "final".into(),
+                export: None,
+            });
+            let reply = receive(&worker);
+            assert_eq!(reply.revision, revision);
+            let frame = reply.result.unwrap().unwrap();
+            eprintln!(
+                "SLIDER revision={revision} control={control} completed_ms={:.3} worker_ms={:.3}",
+                start.elapsed().as_secs_f64() * 1000.,
+                frame.milliseconds
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+    fn continuous_drag_makes_progress_then_settles_with_matching_scopes() {
+        for control in ["detail", "exposure"] {
+            let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+                .join("blue-parking-sign.x3f");
+            let worker = super::Worker::new(
+                foveonic::render::Engine::new().unwrap(),
+                eframe::egui::Context::default(),
+            );
+            let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+            settings.reconstruction = Some(Default::default());
+            settings.sharpen_amount = 0.75;
+            let submit = |revision, settings: foveonic::render::Settings| {
+                worker.submit(super::Request {
+                    revision,
+                    path: path.clone(),
+                    settings,
+                    output: "final".into(),
+                    export: None,
+                })
+            };
+            submit(1, settings.clone());
+            assert!(receive(&worker).result.unwrap().is_some());
+            let start = std::time::Instant::now();
+            let mut progress = Vec::new();
+            let mut settled = false;
+            let mut scopes = false;
+            for revision in 2..=41 {
+                if control == "detail" {
+                    settings.reconstruction.as_mut().unwrap().detail = revision as f32 / 20.;
+                } else {
+                    settings.exposure = revision as f32 / 40.;
+                }
+                submit(revision, settings.clone());
+                std::thread::sleep(std::time::Duration::from_millis(8));
+                while let Ok(update) = worker.replies.try_recv() {
+                    if let super::Update::Image(reply) = update {
+                        if let Some(frame) = reply.result.unwrap() {
+                            if control == "detail" {
+                                assert_eq!(
+                                    frame.artifact.settings.reconstruction.unwrap().detail,
+                                    reply.revision as f32 / 20.
+                                );
+                            } else {
+                                assert_eq!(
+                                    frame.artifact.settings.exposure,
+                                    reply.revision as f32 / 40.
+                                );
+                            }
+                            assert!(frame.scopes.is_none());
+                            progress.push(reply.revision);
+                            settled |= reply.revision == 41;
+                        }
+                    } else if let super::Update::Scopes {
+                        revision: 41,
+                        result,
+                    } = update
+                    {
+                        assert!(result.is_ok());
+                        scopes = true;
+                    }
+                }
+            }
+            assert!(
+                !progress.is_empty(),
+                "continuous dragging starved image publication"
+            );
+            assert!(progress
+                .windows(2)
+                .all(|revisions| revisions[0] < revisions[1]));
+            let stopped = std::time::Instant::now();
+            while !settled || !scopes {
+                match worker
+                    .replies
+                    .recv_timeout(std::time::Duration::from_secs(20))
+                    .unwrap()
+                {
+                    super::Update::Image(reply) if reply.revision == 41 => {
+                        assert!(!settled, "unexpected extra final image");
+                        let frame = reply.result.unwrap().unwrap();
+                        assert_eq!(frame.artifact.settings.exposure, settings.exposure);
+                        assert_eq!(
+                            frame.artifact.settings.reconstruction,
+                            settings.reconstruction
+                        );
+                        settled = true;
+                        eprintln!(
+                        "DRAG control={control} published_during_drag={} duration_ms={:.3} settled_ms={:.3}",
+                        progress.len(),
+                        start.elapsed().as_secs_f64() * 1000.,
+                        stopped.elapsed().as_secs_f64() * 1000.
+                    );
+                    }
+                    super::Update::Scopes {
+                        revision: 41,
+                        result,
+                    } => {
+                        assert!(result.is_ok());
+                        scopes = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
     fn pending_requests_replace_not_accumulate() {
         let (_, replies) = std::sync::mpsc::channel();
         let worker = super::Worker {
             pending: std::sync::Arc::new((
                 std::sync::Mutex::new(super::Pending {
                     request: None,
+                    queued_at: None,
                     stop: false,
                     clear: false,
                 }),

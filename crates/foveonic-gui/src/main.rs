@@ -8,6 +8,7 @@ mod icon;
 mod information;
 mod inspect;
 mod metadata;
+mod navigator;
 mod preferences;
 mod scopes;
 mod sections;
@@ -35,6 +36,7 @@ struct App {
     frame: Option<worker::Frame>,
     scope_images: Option<scopes::Images>,
     viewport: viewport::Viewport,
+    navigator: navigator::Navigator,
     revision: u64,
     busy: bool,
     exporting: bool,
@@ -43,6 +45,8 @@ struct App {
     srgb_target: bool,
     render_state: egui_wgpu::RenderState,
     smoke: Option<smoke::Smoke>,
+    measure_timing: bool,
+    last_frame: Option<std::time::Instant>,
 }
 impl App {
     fn new(
@@ -76,6 +80,7 @@ impl App {
             frame: None,
             scope_images: None,
             viewport: Default::default(),
+            navigator: navigator::Navigator::new(rs.clone(), cc.egui_ctx.clone()),
             revision: 0,
             busy: false,
             exporting: false,
@@ -84,6 +89,8 @@ impl App {
             srgb_target: rs.target_format.is_srgb(),
             render_state: rs.clone(),
             smoke: smoke::Smoke::from_env(),
+            measure_timing: std::env::var_os("FOVEONIC_UI_TIMING").is_some(),
+            last_frame: None,
         };
         if let Some(path) = path {
             app.open(path);
@@ -160,15 +167,71 @@ impl App {
     }
     fn receive(&mut self, ctx: &egui::Context) {
         self.browser.receive(ctx);
-        while let Ok(reply) = self.worker.replies.try_recv() {
-            if reply.revision != self.revision {
+        while let Ok(update) = self.worker.replies.try_recv() {
+            let reply = match update {
+                worker::Update::Image(reply) => *reply,
+                worker::Update::Scopes { revision, result } => {
+                    if let Some(frame) = self
+                        .frame
+                        .as_mut()
+                        .filter(|frame| frame.revision == revision)
+                    {
+                        match result {
+                            Ok(data) => {
+                                self.scope_images = Some(scopes::Images::new(ctx, &data));
+                                frame.scopes = Some(data);
+                                if self.measure_timing {
+                                    eprintln!(
+                                        "UI-SCOPES revision={revision} elapsed_ms={:.3}",
+                                        frame.queued_at.elapsed().as_secs_f64() * 1000.
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                if !self.busy {
+                                    self.status = format!("Scope analysis: {error}");
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+            };
+            let current = reply.revision == self.revision;
+            if !current
+                && !reply
+                    .result
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .is_some_and(|frame| {
+                        !self.exporting
+                            && self.selected.as_ref() == Some(&frame.path)
+                            && self.output == frame.output
+                            && self
+                                .frame
+                                .as_ref()
+                                .is_none_or(|displayed| frame.revision > displayed.revision)
+                    })
+            {
                 continue;
             }
-            self.busy = false;
-            self.exporting = false;
+            if current {
+                self.busy = false;
+                self.exporting = false;
+            }
             if let Some(metadata) = reply.metadata {
                 self.metadata = Some(metadata);
-                self.settings = reply.settings;
+                if current {
+                    self.settings = reply.settings;
+                } else {
+                    if self.settings.white_balance.is_empty() {
+                        self.settings.white_balance = reply.settings.white_balance;
+                    }
+                    if self.settings.color_mode.is_empty() {
+                        self.settings.color_mode = reply.settings.color_mode;
+                    }
+                }
             }
             match reply.result {
                 Ok(Some(frame)) => {
@@ -179,7 +242,22 @@ impl App {
                     if self.smoke.is_some() {
                         eprintln!("{}: {:.0} ms", frame.artifact.name, frame.milliseconds);
                     }
-                    self.scope_images = Some(scopes::Images::new(ctx, &frame.scopes));
+                    if !current {
+                        self.status = format!(
+                            "Updating {}; displaying {}",
+                            self.output, frame.artifact.name
+                        );
+                    }
+                    if self.measure_timing {
+                        eprintln!(
+                            "UI-IMAGE revision={} current={} input_to_ui_ms={:.3} worker_ms={:.3}",
+                            frame.revision,
+                            current,
+                            frame.queued_at.elapsed().as_secs_f64() * 1000.,
+                            frame.milliseconds
+                        );
+                    }
+                    self.scope_images = None;
                     viewport::clear(&self.render_state);
                     self.frame = Some(frame);
                 }
@@ -246,14 +324,16 @@ impl App {
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
         match section {
             Section::Navigator => {
-                let texture = self.frame.as_ref().map(|f| f.texture.clone());
+                let channel = self.displayed_channel();
+                let texture = self
+                    .frame
+                    .as_ref()
+                    .map(|frame| self.navigator.image(frame, channel));
                 let preview = self
                     .selected
                     .as_ref()
                     .and_then(|p| self.browser.thumbnail(p));
-                let channel = self.displayed_channel();
-                self.viewport
-                    .navigator(ui, texture, preview.as_ref(), channel, self.srgb_target);
+                self.viewport.navigator(ui, texture, preview.as_ref());
                 false
             }
             Section::Scopes => {
@@ -279,7 +359,7 @@ impl App {
                 scopes::show(
                     ui,
                     self.preferences.scope,
-                    self.frame.as_ref().map(|f| &f.scopes),
+                    self.frame.as_ref().and_then(|f| f.scopes.as_ref()),
                     self.scope_images.as_ref(),
                 );
                 false
@@ -393,6 +473,19 @@ impl eframe::App for App {
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let began = std::time::Instant::now();
+        if self.measure_timing {
+            if let Some(last) = self.last_frame.replace(began) {
+                eprintln!(
+                    "UI-FRAME gap_ms={:.3} busy={}",
+                    began.duration_since(last).as_secs_f64() * 1000.,
+                    self.busy
+                );
+            }
+            if self.busy {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        }
         if self
             .smoke
             .as_ref()
@@ -446,6 +539,18 @@ impl eframe::App for App {
             self.select(path);
         } else if changed && !self.exporting {
             self.submit(None);
+        }
+        self.navigator.update(
+            self.frame.as_ref(),
+            self.displayed_channel(),
+            self.busy,
+            ctx,
+        );
+        if self.measure_timing {
+            eprintln!(
+                "UI-UPDATE cpu_ms={:.3}",
+                began.elapsed().as_secs_f64() * 1000.
+            );
         }
     }
 }

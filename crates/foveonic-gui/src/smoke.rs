@@ -22,6 +22,22 @@ const TARGETS: [&str; 12] = [
     "calibration.layers",
 ];
 
+const DETAIL_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "reference",
+    "slide-detail-0.0",
+    "slide-detail-0.2",
+    "slide-detail-0.4",
+    "slide-detail-0.6",
+    "slide-detail-0.8",
+    "slide-detail-1.0",
+    "slide-detail-1.2",
+    "slide-detail-1.4",
+    "slide-detail-1.6",
+    "slide-detail-1.8",
+];
+
 const NOISE_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -93,12 +109,15 @@ pub struct Smoke {
     targets: &'static [&'static str],
     index: usize,
     awaiting: bool,
+    close_at: Option<std::time::Instant>,
 }
 impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_REPAIR").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_DETAIL").is_some() {
+                DETAIL_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_REPAIR").is_some() {
                 REPAIR_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DESPECKLE").is_some() {
                 SPECKLE_TARGETS
@@ -111,6 +130,7 @@ impl Smoke {
             },
             index: 0,
             awaiting: false,
+            close_at: None,
         })
     }
     /// Hold processing replies until the embedded preview has been captured.
@@ -121,9 +141,18 @@ impl Smoke {
 
 impl App {
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
+        let channel = self.displayed_channel();
         let Some(smoke) = &mut self.smoke else {
             return;
         };
+        if let Some(close_at) = smoke.close_at {
+            if std::time::Instant::now() >= close_at {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            }
+            return;
+        }
         let screenshot = ctx.input(|i| {
             i.events.iter().find_map(|e| {
                 if let egui::Event::Screenshot { image, .. } = e {
@@ -156,11 +185,24 @@ impl App {
                     .move_section(Section::Metadata, Section::Navigator, false);
                 self.preferences.collapsed = [Section::Editing].into();
                 self.settings.exposure = 1.25; // deliberately session-only
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                if let Some(seconds) = std::env::var_os("FOVEONIC_GUI_SMOKE_HOLD_SECONDS")
+                    .and_then(|s| s.to_str().and_then(|s| s.parse::<u64>().ok()))
+                {
+                    smoke.close_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(seconds));
+                    ctx.request_repaint();
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
                 return;
             }
             match smoke.targets[smoke.index] {
                 "final" => {}
+                name if name.starts_with("slide-detail-") => {
+                    self.settings.reconstruction.as_mut().unwrap().detail =
+                        name.strip_prefix("slide-detail-").unwrap().parse().unwrap();
+                    self.submit(None);
+                }
                 "leaf-before" | "leaf-after" => {
                     let enabled = smoke.targets[smoke.index] == "leaf-after";
                     self.settings.repair =
@@ -333,7 +375,10 @@ impl App {
                     .as_ref()
                     .is_some_and(|p| self.browser.thumbnail(p).is_some())
             } else {
-                !self.busy && self.frame.is_some()
+                !self.busy
+                    && self.frame.as_ref().is_some_and(|frame| {
+                        frame.scopes.is_some() && self.navigator.ready(frame, channel)
+                    })
             };
             if ready {
                 smoke.awaiting = true;

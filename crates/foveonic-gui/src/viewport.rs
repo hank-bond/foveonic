@@ -16,6 +16,25 @@ struct Params {
 }
 
 impl Params {
+    /// Fit against the original image, but draw only inside the visible canvas.
+    /// egui-wgpu clamps offscreen callback viewports, which would otherwise squeeze the image.
+    fn clipped(
+        canvas: egui::Rect,
+        image: egui::Rect,
+        clip_rect: egui::Rect,
+        space: Space,
+        channel: i32,
+        srgb_target: bool,
+    ) -> Option<(egui::Rect, Self)> {
+        let visible = canvas.intersect(clip_rect);
+        visible.is_positive().then(|| {
+            (
+                visible,
+                Self::new(visible, image, space, channel, srgb_target),
+            )
+        })
+    }
+
     fn new(
         canvas: egui::Rect,
         image: egui::Rect,
@@ -66,6 +85,7 @@ impl Params {
 
 struct Resources {
     pipeline: wgpu::RenderPipeline,
+    navigator_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     binds: HashMap<&'static str, wgpu::BindGroup>,
 }
@@ -106,33 +126,38 @@ pub fn install(rs: &egui_wgpu::RenderState) {
         bind_group_layouts: &[&layout],
         push_constant_ranges: &[],
     });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Image presentation"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: rs.target_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: Default::default(),
-        depth_stencil: None,
-        multisample: Default::default(),
-        multiview: None,
-        cache: None,
-    });
+    let pipeline_for = |format| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Image presentation"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        })
+    };
+    let pipeline = pipeline_for(rs.target_format);
+    let navigator_pipeline = pipeline_for(wgpu::TextureFormat::Rgba8UnormSrgb);
     rs.renderer.write().callback_resources.insert(Resources {
         pipeline,
+        navigator_pipeline,
         layout,
         binds: HashMap::new(),
     });
@@ -146,6 +171,70 @@ pub fn clear(rs: &egui_wgpu::RenderState) {
         .unwrap()
         .binds
         .clear();
+}
+
+/// Map the same oriented float texture as the main viewport into a tiny sRGB tile.
+/// This is queued once per content/mapping change, not a per-frame drawing callback.
+pub(crate) fn prepare_navigator(
+    rs: &egui_wgpu::RenderState,
+    source: &wgpu::Texture,
+    space: Space,
+    target: &wgpu::Texture,
+    channel: i32,
+) {
+    use wgpu::util::DeviceExt;
+    let full = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.));
+    let params = Params::new(full, full, space, channel, true);
+    let uniform = rs
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Navigator mapping"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+    let view = source.create_view(&Default::default());
+    let target_view = target.create_view(&Default::default());
+    let renderer = rs.renderer.write();
+    let resources = renderer.callback_resources.get::<Resources>().unwrap();
+    let bind = rs.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Navigator source"),
+        layout: &resources.layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: uniform.as_entire_binding(),
+            },
+        ],
+    });
+    let mut encoder = rs
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Small navigator presentation"),
+        });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Small navigator presentation"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&resources.navigator_pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.draw(0..6, 0..1);
+    }
+    rs.queue.submit(Some(encoder.finish()));
 }
 
 struct Draw {
@@ -348,15 +437,18 @@ impl Viewport {
         srgb_target: bool,
     ) {
         let (rect, image) = self.layout(ui, texture.description().extent);
-        let params = Params::new(
+        let Some((visible, params)) = Params::clipped(
             rect,
             image,
+            ui.clip_rect().intersect(ui.ctx().screen_rect()),
             texture.description().space,
             channel,
             srgb_target,
-        );
+        ) else {
+            return;
+        };
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
-            rect,
+            visible,
             Draw {
                 key: "main",
                 texture,
@@ -416,14 +508,12 @@ impl Viewport {
     pub fn navigator(
         &mut self,
         ui: &mut egui::Ui,
-        texture: Option<Arc<ImageTexture>>,
+        texture: Option<crate::navigator::Image>,
         preview: Option<&crate::browser::Thumbnail>,
-        channel: i32,
-        srgb_target: bool,
     ) {
         let extent = texture
             .as_ref()
-            .map(|t| t.description().extent)
+            .map(|t| t.extent)
             .or_else(|| preview.map(|p| p.native_extent));
         let (canvas, response) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), 150.),
@@ -438,21 +528,14 @@ impl Viewport {
         let fit = (canvas.width() / size.x).min(canvas.height() / size.y);
         let image = egui::Rect::from_center_size(canvas.center(), size * fit);
         if let Some(texture) = texture {
-            let params = Params::new(
-                canvas,
-                image,
-                texture.description().space,
-                channel,
-                srgb_target,
-            );
-            ui.painter().add(egui_wgpu::Callback::new_paint_callback(
-                canvas,
-                Draw {
-                    key: "navigator",
-                    texture,
-                    params,
-                },
-            ));
+            if let Some(id) = texture.id {
+                ui.painter().image(
+                    id,
+                    image,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                    egui::Color32::WHITE,
+                );
+            }
         } else if let Some(preview) = preview {
             ui.painter().image(
                 preview.texture.id(),
@@ -512,6 +595,135 @@ impl Viewport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ordinary_navigator_clips_without_compression_and_overlay_tracks_original_geometry() {
+        for offset in [0., -60., -140.] {
+            let ctx = egui::Context::default();
+            let mut viewport = Viewport {
+                scale: Some(4. / 3.),
+                last_canvas: Some((egui::vec2(600., 400.), [900, 600])),
+                ..Default::default()
+            };
+            let clip = egui::Rect::from_min_max(egui::pos2(8., 8.), egui::pos2(392., 250.));
+            let result = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400., 300.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.set_clip_rect(clip);
+                        ui.add_space(offset);
+                        viewport.navigator(
+                            ui,
+                            Some(crate::navigator::Image {
+                                id: Some(egui::TextureId::User(7)),
+                                extent: [900, 600],
+                            }),
+                            None,
+                        );
+                    });
+                },
+            );
+            assert!(!result
+                .shapes
+                .iter()
+                .any(|shape| matches!(shape.shape, egui::Shape::Callback(_))));
+            let mesh = result
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == egui::TextureId::User(7) => {
+                        Some(mesh)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let mut rect = egui::Rect::NOTHING;
+            for vertex in &mesh.vertices {
+                rect.extend_with(vertex.pos);
+                assert!(vertex.uv.x == 0. || vertex.uv.x == 1.);
+                assert!(vertex.uv.y == 0. || vertex.uv.y == 1.);
+            }
+            assert!((rect.width() - 225.).abs() < 0.001);
+            assert!((rect.height() - 150.).abs() < 0.001);
+            let uv = viewport.visible_uv();
+            let overlay = egui::Rect::from_min_max(
+                rect.min + uv.min.to_vec2() * rect.size(),
+                rect.min + uv.max.to_vec2() * rect.size(),
+            );
+            assert!(result
+                .shapes
+                .iter()
+                .any(|shape| matches!(&shape.shape,egui::Shape::Rect(r)if r.rect==overlay)));
+            assert_eq!(viewport.pan, egui::Vec2::ZERO);
+        }
+    }
+    #[test]
+    fn clipped_gpu_canvas_preserves_image_scale_and_overlay_coordinates() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400., 300.));
+        let clip = egui::Rect::from_min_max(egui::pos2(8., 10.), egui::pos2(392., 290.));
+        for extent in [[900, 600], [600, 900]] {
+            for origin in [
+                egui::pos2(8., 20.),  // fully visible
+                egui::pos2(8., -60.), // scrolled above the window
+                egui::pos2(8., 230.), // partly below the window
+                egui::pos2(-60., 20.),
+                egui::pos2(300., 20.),
+            ] {
+                let canvas = egui::Rect::from_min_size(origin, egui::vec2(384., 150.));
+                let image = Viewport::default().image_rect(canvas, extent);
+                let (visible, params) = Params::clipped(
+                    canvas,
+                    image,
+                    clip.intersect(screen),
+                    Space::CalibratedLayers,
+                    0,
+                    false,
+                )
+                .unwrap();
+                assert_eq!(visible, canvas.intersect(clip));
+                assert!(
+                    (egui::vec2(params.rect[2], params.rect[3]) * visible.size() - image.size())
+                        .length()
+                        < 0.001
+                );
+                // The shader's sampled UV must agree with the original image and navigator overlay.
+                for point in [visible.min, visible.center(), visible.max] {
+                    let canvas_uv = (point - visible.min) / visible.size();
+                    let shader_uv = (canvas_uv - egui::vec2(params.rect[0], params.rect[1]))
+                        / egui::vec2(params.rect[2], params.rect[3]);
+                    let image_uv = (point - image.min) / image.size();
+                    assert!((shader_uv - image_uv).length() < 1e-6);
+                }
+                for pixels_per_point in [1., 2.] {
+                    let info = egui::PaintCallbackInfo {
+                        viewport: visible,
+                        clip_rect: clip,
+                        pixels_per_point,
+                        screen_size_px: [
+                            (screen.width() * pixels_per_point) as u32,
+                            (screen.height() * pixels_per_point) as u32,
+                        ],
+                    };
+                    let viewport = info.viewport_in_pixels();
+                    assert_eq!(viewport.width_px as f32, visible.width() * pixels_per_point);
+                    assert_eq!(
+                        viewport.height_px as f32,
+                        visible.height() * pixels_per_point
+                    );
+                }
+            }
+        }
+        for top in [-200., 310.] {
+            let canvas = egui::Rect::from_min_size(egui::pos2(8., top), egui::vec2(384., 150.));
+            assert!(Params::clipped(canvas, canvas, clip, Space::ScalarField, -1, false).is_none());
+        }
+    }
+
     #[test]
     fn visible_pixel_bounds_follow_fit_zoom_pan_and_oriented_extent() {
         let mut viewport = Viewport {
@@ -604,9 +816,8 @@ mod tests {
             input.time = Some(time);
             input.events = events;
             let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    viewport.navigator(ui, None, Some(&preview), -1, false)
-                });
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| viewport.navigator(ui, None, Some(&preview)));
             });
         };
         run(&mut viewport, 0., vec![]);

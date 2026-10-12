@@ -1026,6 +1026,7 @@ dependencies = [
  "eframe",
  "foveonic",
  "image",
+ "pollster",
  "rfd",
  "serde",
 ]

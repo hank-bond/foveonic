@@ -12,3 +12,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 rfd = "0.16"
 bytemuck = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+pollster = "0.4"

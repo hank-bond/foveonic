@@ -35,7 +35,7 @@ Controls include exposure, contrast, shadows, highlights, saturation, and a glob
 
 Enable **Reference reconstruction** in Editing or use `--reconstruction` for the [noise/detail path](./docs/specs/detail-and-noise.md), including [native reduced local/global filtering](./docs/specs/reduced-reconstruction.md). `--chroma-noise` and `--luma-noise` select camera-table choices 0–4 (default 2); `--detail` sets residual strength (default 1×). These options also enable reconstruction. Inspection exposes filtered layers, edge weights, a luminance ratio, reconstructed RGB, and a signed detail signal. Advanced reconstruction controls link to their basic presets; unlink a value to override it. CLI accepts repeated `--noise-override KEY=VALUE`. Noise preset 0 still filters; Detail 0 shows the filtered base.
 
-The [render-resource API](./docs/render-resources.md) separates GPU processing, texture preparation, and export. Inspection executes only requested output dependencies and retains selected artifacts. Intermediate checkpoint caching, comparisons, and native menus remain deferred.
+The [render-resource API](./docs/render-resources.md) separates GPU processing, texture preparation, and export. Inspection executes only requested output dependencies and retains selected artifacts. Interactive sessions reuse the active edit's unchanged inputs and deliver images before scopes; the navigator is a deferred GPU-prepared small texture. Comparisons and native menus remain deferred. See the [responsiveness plan](./plans/ui-responsiveness.md) for measurements and remaining limits.
 
 ## Project documents
 
