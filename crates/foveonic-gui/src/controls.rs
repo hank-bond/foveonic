@@ -164,13 +164,17 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     }
     ui.separator();
     ui.weak("Corrections and sharpening");
-    for (label, value, range, default) in [
-        ("ColorDQ gain", &mut settings.color_dq_gain, 0. ..=2., 0.),
-        ("Sharpen", &mut settings.sharpen_amount, 0. ..=2., 0.),
-        ("Radius", &mut settings.sharpen_radius, 0.1..=16., 1.),
-    ] {
-        changed |= adjustment(ui, label, value, range, default);
+    let mut automatic = settings.color_dq_gain.is_none();
+    if ui.checkbox(&mut automatic, "Auto ColorDQ").on_hover_text("Uses the native noise-derived gain with reconstruction. Without reconstruction, automatic ColorDQ is inactive.").changed() {
+        settings.color_dq_gain = if automatic { None } else { Some(1.) };
+        changed = true;
     }
+    if let Some(gain) = &mut settings.color_dq_gain {
+        changed |= adjustment(ui, "ColorDQ gain", gain, 0. ..=2., 1.);
+    } else if settings.reconstruction.is_none() {
+        ui.weak("ColorDQ inactive without reconstruction");
+    }
+    changed |= adjustment(ui, "Sharpen", &mut settings.sharpen_amount, 0. ..=2., 0.);
     let mut repair = settings.repair.is_some();
     if ui
         .checkbox(&mut repair, "Camera-record repair")
@@ -204,6 +208,13 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
             ));
         }
     }
+    changed |= ui.checkbox(&mut settings.highlight_restoration, "Highlight restoration").on_hover_text("Restores original clipped highlights after camera repair and before despeckle; independent of the tone Highlights slider.").changed();
+    changed |= ui
+        .checkbox(&mut settings.row_correction, "Row banding correction")
+        .on_hover_text(
+            "Estimates and removes camera row bias after despeckle, before noise reconstruction.",
+        )
+        .changed();
     changed |= ui.checkbox(&mut settings.despeckle, "Despeckle").on_hover_text("Detect remaining channel speckles and correct them before reconstruction. Independent of camera-record repair; both are on by default.").changed();
     changed
 }
@@ -213,7 +224,12 @@ mod tests {
     use super::*;
     #[test]
     fn correction_checkboxes_start_enabled_and_toggle_independently() {
-        for label in ["Camera-record repair", "Despeckle"] {
+        for label in [
+            "Camera-record repair",
+            "Highlight restoration",
+            "Despeckle",
+            "Row banding correction",
+        ] {
             let ctx = egui::Context::default();
             let mut settings = Settings::new("Sunlight", "Standard");
             let mut render = |events| {
@@ -237,11 +253,13 @@ mod tests {
                     changed,
                     output,
                     settings.repair.is_some(),
+                    settings.highlight_restoration,
                     settings.despeckle,
+                    settings.row_correction,
                 )
             };
-            let (_, output, repair, despeckle) = render(vec![]);
-            assert!(repair && despeckle);
+            let (_, output, repair, highlights, despeckle, rows) = render(vec![]);
+            assert!(repair && highlights && despeckle && rows);
             let point = output
                 .shapes
                 .iter()
@@ -259,14 +277,15 @@ mod tests {
                 modifiers: Default::default(),
             };
             render(vec![egui::Event::PointerMoved(point), event(true)]);
-            let (changed, _, repair, despeckle) = render(vec![event(false)]);
+            let (changed, _, repair, highlights, despeckle, rows) = render(vec![event(false)]);
             assert!(changed);
             assert_eq!(
-                (repair, despeckle),
-                if label == "Despeckle" {
-                    (true, false)
-                } else {
-                    (false, true)
+                (repair, highlights, despeckle, rows),
+                match label {
+                    "Despeckle" => (true, true, false, true),
+                    "Highlight restoration" => (true, false, true, true),
+                    "Row banding correction" => (true, true, true, false),
+                    _ => (false, true, true, true),
                 }
             );
         }

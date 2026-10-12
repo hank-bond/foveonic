@@ -9,58 +9,66 @@ fn floats(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<f32> {
 
 #[test]
 #[ignore = "requires a working GPU adapter"]
-fn shader_separable_blur_and_unsharp_blend_match_small_convolution() {
+fn shader_native_high_pass_and_final_sharpen_match_reference_limits_and_packing() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/data/sharpen-reference.json")).unwrap();
+    let array = |v: &serde_json::Value| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap() as f32)
+            .collect::<Vec<_>>()
+    };
     let gpu = Gpu::new().unwrap();
-    let mut pixels = [0.125_f32, 0.25, 0.5].repeat(25);
-    pixels[12 * 3..12 * 3 + 3].copy_from_slice(&[1., 2., 3.]);
-    let input = gpu.upload("Sharpen input", &pixels).unwrap();
-    let weights = gpu.upload("Blur weights", &[0.25_f32, 0.5, 0.25]).unwrap();
-    let horizontal = gpu.storage("Horizontal blur", 300).unwrap();
-    let blurred = gpu.storage("Vertical blur", 300).unwrap();
-    let output = gpu.storage("Sharpened", 300).unwrap();
-    for (axis, source, destination) in [(0, &input, &horizontal), (1, &horizontal, &blurred)] {
-        let uniform = gpu.uniform(&[5_u32, 5, axis, 1]);
-        gpu.dispatch(
-            Kernel::Blur,
-            &[(0, source), (1, &weights), (2, &uniform), (3, destination)],
-            [1, 1],
-            &mut Default::default(),
-        );
-    }
-    let mut expected = vec![0_f32; pixels.len()];
-    let kernel = [0.25, 0.5, 0.25];
-    for y in 0..5_i32 {
-        for x in 0..5_i32 {
-            for c in 0..3 {
-                let mut sum = 0.;
-                for dy in -1..=1_i32 {
-                    for dx in -1..=1_i32 {
-                        let p = ((y + dy).clamp(0, 4) * 5 + (x + dx).clamp(0, 4)) as usize;
-                        sum += kernel[(dx + 1) as usize]
-                            * kernel[(dy + 1) as usize]
-                            * pixels[p * 3 + c];
-                    }
-                }
-                expected[(y * 5 + x) as usize * 3 + c] = sum;
-            }
-        }
-    }
-    for (actual, expected) in floats(&gpu, &blurred).iter().zip(&expected) {
-        assert!((actual - expected).abs() < 1e-6);
-    }
-    let mut bytes = Vec::new();
-    bytes.extend(bytemuck::bytes_of(&[5_u32, 5, 0, 0]));
-    bytes.extend(bytemuck::bytes_of(&[0.75_f32, 0., 0., 0.]));
-    let uniform = gpu.uniform(&<[u8; 32]>::try_from(bytes).unwrap());
+    let pixels = array(&fixture["input"]);
+    let input = gpu.upload("Native sharpen source", &pixels).unwrap();
+    let uniform = |amount: f32| {
+        let mut bytes = Vec::new();
+        bytes.extend(bytemuck::bytes_of(&[24_u32, 20, 0, 0]));
+        bytes.extend(bytemuck::bytes_of(&[amount, 0., 0., 0.]));
+        gpu.uniform(&<[u8; 32]>::try_from(bytes).unwrap())
+    };
+    let signal = gpu
+        .storage("Native high-pass fixture", 24 * 20 * 4)
+        .unwrap();
+    let p = uniform(0.);
     gpu.dispatch(
-        Kernel::Sharpen,
-        &[(0, &input), (1, &blurred), (2, &uniform), (3, &output)],
-        [1, 1],
+        Kernel::SharpSignal,
+        &[(0, &input), (2, &p), (3, &signal)],
+        [3, 3],
         &mut Default::default(),
     );
-    for ((actual, original), blurred) in floats(&gpu, &output).iter().zip(pixels).zip(expected) {
-        assert!((actual - (original + 0.75 * (original - blurred))).abs() < 1e-6);
+    let expected = array(&fixture["signal"]);
+    for (i, (a, b)) in floats(&gpu, &signal).iter().zip(expected).enumerate() {
+        assert!((a - b).abs() < 0.004, "signal component {i}: {a} vs {b}");
     }
+    let raw = gpu
+        .upload(
+            "Native quarter-code packing cases",
+            &array(&fixture["application_signal"]),
+        )
+        .unwrap();
+    for output in fixture["outputs"].as_array().unwrap() {
+        let p = uniform(output["amount"].as_f64().unwrap() as f32);
+        let target = gpu.storage("Native sharpen output", 24 * 20 * 12).unwrap();
+        gpu.dispatch(
+            Kernel::Sharpen,
+            &[(0, &input), (1, &raw), (2, &p), (3, &target)],
+            [3, 3],
+            &mut Default::default(),
+        );
+        for (i, (a, b)) in floats(&gpu, &target)
+            .iter()
+            .zip(array(&output["rgb"]))
+            .enumerate()
+        {
+            assert!((a - b).abs() < 0.005, "sharpen component {i}: {a} vs {b}");
+        }
+    }
+    assert!(floats(&gpu, &input)
+        .iter()
+        .zip(&pixels)
+        .all(|(a, b)| a.to_bits() == b.to_bits()));
 }
 
 fn code(value: f32, route: u32) -> u16 {

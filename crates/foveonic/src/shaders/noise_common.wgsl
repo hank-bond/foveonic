@@ -10,6 +10,10 @@ struct NoiseParams {
     mono: vec4<f32>,
     residual: vec4<f32>,
     diffusion: vec4<f32>,
+    column_area:vec4<u32>,
+    column:vec4<f32>,
+    reduction:vec4<f32>,
+    geometry:vec4<u32>,
 }
 fn tile_pixel(p: vec3<u32>, params: NoiseParams) -> u32 {
     return (p.z * params.tile.y + p.y) * params.tile.x + p.x;

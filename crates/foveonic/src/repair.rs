@@ -44,7 +44,7 @@ fn camera_float(metadata: &Metadata, name: &str) -> Result<f32> {
     }
     Ok(m.values[0] as f32)
 }
-fn camera_cutoff(metadata: &Metadata) -> Result<u32> {
+pub(crate) fn camera_class(metadata: &Metadata) -> Result<u32> {
     let m = metadata
         .matrix("BadnessTable")
         .ok_or("missing repair badness table")?;
@@ -82,22 +82,30 @@ fn camera_cutoff(metadata: &Metadata) -> Result<u32> {
     } else {
         (0..4).rev().find(|&i| score <= thresholds[i]).unwrap()
     };
-    let class = table[index][2] as u32;
-    let offset = match metadata
-        .matrix("BPBadnessOffset")
+    Ok(table[index][2] as u32)
+}
+
+pub(crate) fn camera_integer(metadata: &Metadata, name: &str, default: u32) -> Result<u32> {
+    match metadata
+        .matrix(name)
         .filter(|m| m.encoding != MatrixEncoding::Int16 && m.dimensions == [1])
     {
-        None => 1,
+        None => Ok(default),
         Some(m)
             if m.values.len() == 1
                 && m.values[0].is_finite()
                 && (0. ..=u32::MAX as f64).contains(&m.values[0])
                 && m.values[0].fract() == 0. =>
         {
-            m.values[0] as u32
+            Ok(m.values[0] as u32)
         }
-        Some(_) => return Err("invalid repair badness offset".into()),
-    };
+        Some(_) => Err(format!("invalid repair integer key {name}").into()),
+    }
+}
+
+fn camera_cutoff(metadata: &Metadata) -> Result<u32> {
+    let class = camera_class(metadata)?;
+    let offset = camera_integer(metadata, "BPBadnessOffset", 1)?;
     if class == 0 {
         Ok(0)
     } else {
@@ -114,12 +122,20 @@ pub struct Prepared {
 }
 
 pub fn prepare(metadata: &Metadata, minimum_badness: u32) -> Result<Prepared> {
+    prepare_list(metadata, "BadPixelsF20", minimum_badness)
+}
+
+pub(crate) fn prepare_list(
+    metadata: &Metadata,
+    name: &str,
+    minimum_badness: u32,
+) -> Result<Prepared> {
     if minimum_badness > 15 {
         return Err("repair badness must be in 0..15".into());
     }
     let matrix = metadata
-        .matrix("BadPixelsF20")
-        .ok_or("missing BadPixelsF20 metadata")?;
+        .matrix(name)
+        .ok_or_else(|| format!("missing {name} metadata"))?;
     if matrix.dimensions.len() != 2
         || matrix.dimensions[0] != 3
         || matrix.values.len() != matrix.dimensions[1] * 3

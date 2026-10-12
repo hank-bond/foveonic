@@ -173,42 +173,11 @@ pub fn color(
         .get("WhiteBalanceColorCorrections")
         .and_then(|list| list.get(wb))
         .ok_or("missing white-balance color matrix")?;
-    let capture = match metadata
-        .matrix("CaptureISO")
-        .map(|m| m.values[0])
-        .filter(|v| *v > 0.)
-    {
-        Some(value) => value,
-        None => metadata
-            .properties
-            .get("ISO")
-            .ok_or("missing ISO")?
-            .parse::<f64>()?,
-    };
-    let mut processing_iso = capture;
-    if metadata
-        .matrix("ISOrange")
-        .is_some_and(|m| m.values[0] != 0.)
-    {
-        processing_iso = match capture {
-            800. => 666.,
-            1600. => 1200.,
-            3200. => 2133.,
-            6400. => 4266.,
-            _ => capture,
-        };
-    }
-    let sensor_iso = metadata.matrix("SensorISO").map_or(100., |m| {
-        if m.values[0] == 0. {
-            100.
-        } else {
-            m.values[0]
-        }
-    });
+    let (_, processing_gain) = crate::noise::processing_gain(metadata)?;
     let matrix = mode.camera_matrix(
         metadata
             .fixed::<9>(key)?
-            .map(|v| v * processing_iso / sensor_iso),
+            .map(|v| v * f64::from(processing_gain)),
     );
     if matrix.iter().any(|v| !v.is_finite()) {
         return Err("invalid camera color matrix".into());

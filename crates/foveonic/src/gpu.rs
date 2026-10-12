@@ -32,7 +32,6 @@ pub enum Kernel {
     Tone,
     Encode,
     Repair,
-    Blur,
     Sharpen,
     ColorDq,
     View,
@@ -55,6 +54,37 @@ pub enum Kernel {
     SpecklePrefix,
     SpeckleScatter,
     SpeckleRepair,
+    CameraRepair,
+    ClusterRepair,
+    HighlightFlags,
+    HighlightMap,
+    HighlightDensity,
+    HighlightDonors,
+    HighlightPrefix,
+    HighlightScatter,
+    HighlightTable,
+    HighlightApply,
+    BandingFit,
+    BandingResidual,
+    BandingQuality,
+    BandingMeans,
+    BandingReduce,
+    BandingApply,
+    ColumnHorizontal,
+    ColumnDeltas,
+    ColumnApply,
+    PatternMask,
+    PatternCounts,
+    PatternPrefix,
+    PatternHorizontal,
+    PatternVertical,
+    PatternBlend,
+    PatternMaskImage,
+    SharpSignal,
+    Resample,
+    NoiseGlobalTile,
+    NoisePatternSeed,
+    NoiseGlobalScalarTile,
 }
 
 impl Kernel {
@@ -67,7 +97,6 @@ impl Kernel {
             Self::Tone => "tone",
             Self::Encode => "encode",
             Self::Repair => "repair",
-            Self::Blur => "blur",
             Self::Sharpen => "sharpen",
             Self::ColorDq => "ColorDQ",
             Self::View => "view texture",
@@ -90,6 +119,37 @@ impl Kernel {
             Self::SpecklePrefix => "speckle bank prefixes",
             Self::SpeckleScatter => "speckle record compaction",
             Self::SpeckleRepair => "ordered speckle correction",
+            Self::CameraRepair => "complete camera record repair",
+            Self::ClusterRepair => "masked camera cluster matching",
+            Self::HighlightFlags => "connected original saturation flags",
+            Self::HighlightMap => "clipped highlight neighborhood map",
+            Self::HighlightDensity => "highlight neighborhood density",
+            Self::HighlightDonors => "highlight donor selection",
+            Self::HighlightPrefix => "highlight donor prefixes",
+            Self::HighlightScatter => "ordered highlight donor compaction",
+            Self::HighlightTable => "highlight blue correction table",
+            Self::HighlightApply => "highlight restoration",
+            Self::BandingFit => "row smooth-surface fits",
+            Self::BandingResidual => "row patch residuals",
+            Self::BandingQuality => "row patch correlation rejection",
+            Self::BandingMeans => "row patch mean contributions",
+            Self::BandingReduce => "ordered row bias reduction",
+            Self::BandingApply => "row bias correction",
+            Self::ColumnHorizontal => "column horizontal bilateral",
+            Self::ColumnDeltas => "column block means",
+            Self::ColumnApply => "column conditioning",
+            Self::PatternMask => "pattern minmax mask",
+            Self::PatternCounts => "pattern line counts",
+            Self::PatternPrefix => "ordered pattern prefixes",
+            Self::PatternHorizontal => "pattern horizontal swaps",
+            Self::PatternVertical => "pattern vertical swaps",
+            Self::PatternBlend => "pattern ratio blend",
+            Self::PatternMaskImage => "pattern mask image",
+            Self::SharpSignal => "native mono high-pass",
+            Self::Resample => "native polyphase resampling",
+            Self::NoiseGlobalTile => "global reduced tile context",
+            Self::NoisePatternSeed => "native transposed pattern seed",
+            Self::NoiseGlobalScalarTile => "global reduced edge context",
         }
     }
 }
@@ -137,7 +197,6 @@ impl Gpu {
             (include_str!("shaders/tone.wgsl"), "main"),
             (include_str!("shaders/encode.wgsl"), "main"),
             (include_str!("shaders/repair.wgsl"), "main"),
-            (include_str!("shaders/blur.wgsl"), "main"),
             (include_str!("shaders/sharpen.wgsl"), "main"),
             (include_str!("shaders/color_dq.wgsl"), "main"),
             (include_str!("shaders/view.wgsl"), "main"),
@@ -160,6 +219,40 @@ impl Gpu {
             (include_str!("shaders/despeckle.wgsl"), "prefix"),
             (include_str!("shaders/despeckle.wgsl"), "scatter"),
             (include_str!("shaders/despeckle.wgsl"), "repair"),
+            (include_str!("shaders/camera_repair.wgsl"), "main"),
+            (include_str!("shaders/cluster_repair.wgsl"), "main"),
+            (include_str!("shaders/highlight.wgsl"), "connected_flags"),
+            (include_str!("shaders/highlight.wgsl"), "neighborhood_map"),
+            (include_str!("shaders/highlight.wgsl"), "density_field"),
+            (include_str!("shaders/highlight.wgsl"), "donor_marks"),
+            (include_str!("shaders/highlight.wgsl"), "donor_prefix"),
+            (include_str!("shaders/highlight.wgsl"), "donor_scatter"),
+            (include_str!("shaders/highlight.wgsl"), "correction_table"),
+            (include_str!("shaders/highlight.wgsl"), "restore"),
+            (include_str!("shaders/banding.wgsl"), "fit"),
+            (include_str!("shaders/banding.wgsl"), "residual_field"),
+            (include_str!("shaders/banding.wgsl"), "quality"),
+            (include_str!("shaders/banding.wgsl"), "row_means"),
+            (include_str!("shaders/banding.wgsl"), "reduce_rows"),
+            (include_str!("shaders/banding.wgsl"), "apply"),
+            (include_str!("shaders/noise_column.wgsl"), "horizontal"),
+            (include_str!("shaders/noise_column.wgsl"), "block_deltas"),
+            (include_str!("shaders/noise_column.wgsl"), "correct"),
+            (include_str!("shaders/pattern.wgsl"), "mask"),
+            (include_str!("shaders/pattern.wgsl"), "line_counts"),
+            (include_str!("shaders/pattern.wgsl"), "line_prefix"),
+            (include_str!("shaders/pattern.wgsl"), "horizontal"),
+            (include_str!("shaders/pattern.wgsl"), "vertical"),
+            (include_str!("shaders/pattern.wgsl"), "blend"),
+            (include_str!("shaders/pattern.wgsl"), "mask_image"),
+            (include_str!("shaders/sharpen.wgsl"), "signal"),
+            (include_str!("shaders/resample.wgsl"), "main"),
+            (include_str!("shaders/noise_base.wgsl"), "global_tile"),
+            (include_str!("shaders/noise_base.wgsl"), "pattern_seed"),
+            (
+                include_str!("shaders/noise_base.wgsl"),
+                "global_tile_scalar",
+            ),
         ];
         let pipelines = kernels
             .iter()
@@ -175,8 +268,15 @@ impl Gpu {
                     format!("{}\n{code}", include_str!("shaders/sample.wgsl")).into()
                 } else if (Kernel::NoiseTile as usize..=Kernel::NoiseStitch as usize)
                     .contains(&index)
+                    || (Kernel::ColumnHorizontal as usize..=Kernel::ColumnApply as usize)
+                        .contains(&index)
+                    || (Kernel::NoiseGlobalTile as usize..=Kernel::NoiseGlobalScalarTile as usize)
+                        .contains(&index)
                 {
                     format!("{}\n{code}", include_str!("shaders/noise_common.wgsl")).into()
+                } else if [Kernel::Repair as usize, Kernel::CameraRepair as usize].contains(&index)
+                {
+                    format!("{}\n{code}", include_str!("shaders/camera_common.wgsl")).into()
                 } else {
                     code.into()
                 };

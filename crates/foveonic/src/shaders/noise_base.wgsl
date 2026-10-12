@@ -28,6 +28,31 @@ fn tile_input(@builtin(global_invocation_id) id: vec3<u32>) {
     put(tile_pixel(p, params), value);
 }
 
+// Global reduced data uses native CopyImageToTile's first-edge extension, not
+// the local raw-input second-edge repeats or working-rectangle fill.
+@compute @workgroup_size(8,8)
+fn global_tile(@builtin(global_invocation_id)id:vec3<u32>){
+    if id.x>=params.tile.x||id.y>=params.tile.y*params.source.z*params.source.w{return;}
+    let p=atlas_position(id.xy,params);let core=params.source.xy/params.source.zw;let origin=vec2(p.z%params.source.z,p.z/params.source.z)*core;
+    let xy=vec2<u32>(clamp(vec2<i32>(origin+p.xy)-i32(params.tile.z),vec2(0),vec2<i32>(params.source.xy)-1));let source=xy.y*params.source.x+xy.x;let dest_index=tile_pixel(p,params);
+    put(dest_index,rgb(source));
+}
+@compute @workgroup_size(8,8)
+fn global_tile_scalar(@builtin(global_invocation_id)id:vec3<u32>){
+    if id.x>=params.tile.x||id.y>=params.tile.y*params.source.z*params.source.w{return;}
+    let p=atlas_position(id.xy,params);let core=params.source.xy/params.source.zw;let origin=vec2(p.z%params.source.z,p.z/params.source.z)*core;
+    let xy=vec2<u32>(clamp(vec2<i32>(origin+p.xy)-i32(params.tile.z),vec2(0),vec2<i32>(params.source.xy)-1));scalar_work[tile_pixel(p,params)]=input_pixels[xy.y*params.source.x+xy.x];
+}
+// Preserve the native transposed F backing seed explicitly, including compact
+// reduced LocalMean writes at its original allocation start. Global F is zero.
+@compute @workgroup_size(8,8)
+fn pattern_seed(@builtin(global_invocation_id)id:vec3<u32>){
+    if id.x>=params.tile.x||id.y>=params.tile.y*params.source.z*params.source.w{return;}let p=atlas_position(id.xy,params);var value=0.0;
+    if params.geometry.w==0u{let reduced=vec2<u32>(vec2<f32>(params.tile.xy)*params.reduction.x);let index=p.x*params.tile.y+p.y;let x=index/reduced.y;let y=index%reduced.y;let margin=params.geometry.x;
+        if x>=margin&&x+margin<reduced.x&&y>=margin&&y+margin<reduced.y{value=input_pixels[(p.z*reduced.y+y)*reduced.x+x];}
+    }
+    scalar_work[tile_pixel(p,params)]=value;
+}
 @compute @workgroup_size(8, 8)
 fn block_mean(@builtin(global_invocation_id) id: vec3<u32>) {
     let grid = (params.tile.xy + 31u) / 32u;
@@ -75,17 +100,21 @@ fn bilateral(@builtin(global_invocation_id) id: vec3<u32>) {
     let center = rgb(pixel);
     let half = params.tile.w / 2u;
     var filtered = vec3(0.);
-    if p.x >= half && p.x < params.tile.x - half - 1u && p.y >= half && p.y < params.tile.y - half {
-        let grid = (params.tile.xy + 31u) / 32u;
-        let row = (p.y + 1u) / 32u;
-        let column = (p.x + 1u) / 32u;
-        var radius_index = (p.z * grid.y + row) * grid.x + column;
-        // Preserve the reference's carried radius at the beginning of each row.
-        if column == 0u && p.y != half && (p.y + 1u) % 32u != 0u {
-            radius_index = (p.z * grid.y + (p.y / 32u)) * grid.x + (params.tile.x - half - 1u) / 32u;
+    let global=params.geometry.w!=0u;
+    let last_row=select(params.tile.y-half,params.tile.y-4u,global);
+    if p.x >= half && p.x < params.tile.x - half - 1u && p.y >= half && p.y < last_row {
+        var radius=i32(half);var step=2;
+        if !global{
+            let grid = (params.tile.xy + 31u) / 32u;
+            let row = (p.y + 1u) / 32u;
+            let column = (p.x + 1u) / 32u;
+            var radius_index = (p.z * grid.y + row) * grid.x + column;
+            // Preserve the reference's carried radius at the beginning of each row.
+            if column == 0u && p.y != half && (p.y + 1u) % 32u != 0u {
+                radius_index = (p.z * grid.y + (p.y / 32u)) * grid.x + (params.tile.x - half - 1u) / 32u;
+            }
+            radius=i32(radii[radius_index]);step=select(1,2,radius>3);
         }
-        let radius = i32(radii[radius_index]);
-        let step = select(1, 2, radius > 3);
         let inverse = (2047. / (8. / params.filtering.x)) / variance(center, params);
         var sum = vec3(0.);
         var total = 0.;
@@ -94,7 +123,9 @@ fn bilateral(@builtin(global_invocation_id) id: vec3<u32>) {
             for (var y = i32(p.y) - radius; y <= min(i32(params.tile.y) - 1, i32(p.y) + radius); y++) {
                 if i32(p.x) >= horizontal_radius {
                     for (var x = i32(p.x) - horizontal_radius; x <= i32(p.x) + horizontal_radius; x += step) {
-                        let sample = rgb((p.z * params.tile.y + u32(y)) * params.tile.x + u32(x));
+                        let local=u32(y)*params.tile.x+u32(x);var sample=vec3(0.0);
+                        // Reduced B is a compact prefix of zeroed per-tile scratch, not the next tile's source.
+                        if params.reduction.x==1.0||local<params.tile.x*params.tile.y{sample=rgb(p.z*params.tile.x*params.tile.y+local);}
                         let d = sample - center;
                         let distance = dot(d * d, inverse);
                         let index = u32(round(distance));
@@ -112,15 +143,19 @@ fn bilateral(@builtin(global_invocation_id) id: vec3<u32>) {
         if total > 0. { filtered = sum / total; }
     }
     let border = clamp(p.xy, vec2(half), params.tile.xy - half - 1u);
-    let original = rgb(tile_pixel(vec3(border, p.z), params));
+    var original = rgb(tile_pixel(vec3(border, p.z), params));if global{original=center;}
     put(pixel, params.filtering.y * filtered + (1. - params.filtering.y) * original);
 }
 
 fn sample_at(p: vec3<u32>, delta: vec2<i32>) -> vec3<f32> {
-    let xy = vec2<u32>(clamp(vec2<i32>(p.xy) + delta, vec2(0), vec2<i32>(params.tile.xy) - 1));
-    return rgb(tile_pixel(vec3(xy, p.z), params)) + params.edge.y;
+    let position=vec2<i32>(p.xy)+delta;
+    // Native rotating RGB rows leave both outside columns zero, without shift.
+    if position.x<=0 || position.x>=i32(params.tile.x)-1{return vec3(0.0);}
+    let xy=vec2<u32>(clamp(position,vec2(0),vec2<i32>(params.tile.xy)-1));
+    return rgb(tile_pixel(vec3(xy,p.z),params))+params.edge.y;
 }
 fn median_cross(p: vec3<u32>, delta: vec2<i32>) -> vec3<f32> {
+    let x=i32(p.x)+delta.x;if x<=0||x>=i32(params.tile.x)-1{return vec3(0.0);}
     var values = array<vec3<f32>, 5>(sample_at(p, delta), sample_at(p, delta + vec2(-1, 0)), sample_at(p, delta + vec2(1, 0)), sample_at(p, delta + vec2(0, -1)), sample_at(p, delta + vec2(0, 1)));
     for (var i = 1u; i < 5u; i++) {
         for (var j = i; j > 0u; j--) {
@@ -132,6 +167,7 @@ fn median_cross(p: vec3<u32>, delta: vec2<i32>) -> vec3<f32> {
     return values[2];
 }
 fn gradient(p: vec3<u32>, offset: vec2<i32>) -> f32 {
+    let x=i32(p.x)+offset.x;if x<=0||x>=i32(params.tile.x)-1{return 0.0;}
     let center = median_cross(p, offset);
     let inverse = 1. / max(params.model[0].xyz + params.model[1].xyz * center, vec3(1e-12));
     let dx = (median_cross(p, offset + vec2(-1, 0)) - median_cross(p, offset + vec2(1, 0))) * inverse;
@@ -146,7 +182,8 @@ fn edge_map(@builtin(global_invocation_id) id: vec3<u32>) {
     if p.x > 0u && p.x + 1u < params.tile.x && p.y >= 3u && p.y + 3u < params.tile.y {
         value = (gradient(p, vec2(0)) + gradient(p, vec2(-1, 0)) + gradient(p, vec2(1, 0)) + gradient(p, vec2(0, -1)) + gradient(p, vec2(0, 1))) * 0.2;
     }
-    if p.x >= 9u && p.x + 9u < params.tile.x && p.y >= 8u && p.y + 8u < params.tile.y {
+    let margin=params.geometry.y;
+    if p.x >= margin+1u && p.x+margin+1u < params.tile.x && p.y >= margin && p.y+margin < params.tile.y {
         let cap = 4. / params.edge.x;
         let index = u32(min(value, cap) * (2047. / cap));
         value = table[2048u + min(index, 2047u)];
@@ -169,9 +206,10 @@ fn local_mean(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= lines * params.source.z * params.source.w { return; }
     let row = id.x % lines;
     for (var x = 0u; x < length; x++) { let pixel = line_pixel(id.x, x, vertical); put(pixel, rgb(pixel)); }
-    if row < 8u || row + 8u >= lines { return; }
-    let first = 8u;
-    let last = length - 9u;
+    let margin=params.geometry.x;
+    if row < margin || row+margin >= lines { return; }
+    let first=margin;
+    let last=length-margin-1u;
     var sum = vec3(0.);
     var weight = 0.;
     for (var x = first; x <= last; x++) {

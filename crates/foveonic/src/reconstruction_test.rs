@@ -19,8 +19,213 @@ fn parameters() -> Parameters {
         mono: [70. / 9., 0.12 / 9., 0.00035 / 9., 0.],
         residual: [0.6, 0.3, 1.2, 1.],
         diffusion: [0.25, 1., 2., 0.],
+        column_area: [0, 8, 80, 64],
+        column: [0.375, 0., 0., 0.],
+        reduction: [1., 0., 0., 0.],
+        geometry: [8, 8, 21, 0],
     }
 }
+#[test]
+#[ignore = "requires a GPU"]
+fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_seed() {
+    let f: Value =
+        serde_json::from_str(include_str!("../tests/data/reduced-reference.json")).unwrap();
+    let array = |v: &Value| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap() as f32)
+            .collect::<Vec<_>>()
+    };
+    let gpu = Gpu::new().unwrap();
+    let source = array(&f["input"]);
+    let input = gpu.upload("Immutable reduced fixture", &source).unwrap();
+    let check = |buffer: &wgpu::Buffer, expected: Vec<f32>, tolerance: f32, label: &str| {
+        let actual = floats(&gpu, buffer);
+        let mut max = 0_f32;
+        let mut pos = 0;
+        for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
+            let d = (a - b).abs();
+            if d > max {
+                max = d;
+                pos = i;
+            }
+        }
+        assert_eq!(actual.len(), expected.len());
+        eprintln!("{label}: maximum {max} at {pos}");
+        assert!(
+            max < tolerance,
+            "{label} maximum {max} at {pos}, {} vs {}",
+            actual[pos],
+            expected[pos]
+        );
+    };
+    let mut p = parameters();
+    p.filter = [0.08, 0.8, 0.6, 0.95];
+    p.geometry = [4, 0, 21, 1];
+    p.tile[3] = 21;
+    let bilateral = gpu
+        .storage("Global bilateral verification", 80 * 72 * 12)
+        .unwrap();
+    let radii = gpu.upload("Unused global radii", &[0_u32]).unwrap();
+    let lookup = gpu.upload("Global lookup", &tables(p)).unwrap();
+    let uniform = gpu.uniform(&p);
+    let mut trace = gpu.trace(false, 1);
+    gpu.dispatch(
+        Kernel::NoiseBilateral,
+        &[
+            (0, &input),
+            (1, &uniform),
+            (2, &bilateral),
+            (6, &lookup),
+            (7, &radii),
+        ],
+        groups(p),
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, &mut Profile::default()).unwrap();
+    check(
+        &bilateral,
+        array(&f["global"]["bilateral"]),
+        0.08,
+        "global bilateral",
+    );
+    let global = filter(&gpu, &input, p, true, &mut Profile::default()).unwrap();
+    check(
+        global.tiles.as_ref().unwrap(),
+        array(&f["global"]["filtered"]),
+        0.1,
+        "global fixed/mean",
+    );
+    check(
+        &global.edges,
+        array(&f["global"]["edges"]),
+        0.005,
+        "global LUT",
+    );
+    for (key, scale) in [("local", 0.75), ("global_half", 0.5)] {
+        let mut p = parameters();
+        p.filter = [0.08, 0.8, 0.6, 0.95];
+        p.reduction[0] = scale;
+        let base = base(&gpu, &input, p, true, true, true, &mut Profile::default()).unwrap();
+        check(
+            base.tiles.as_ref().unwrap(),
+            array(&f[key]["restored"]),
+            0.12,
+            key,
+        );
+        check(
+            base.seed.as_ref().unwrap(),
+            array(&f[key]["seed"]),
+            0.002,
+            "native F backing seed",
+        );
+    }
+    // Four context tiles must extend the first source edge (not the local second edge).
+    let mut p = parameters();
+    p.source = [80, 72, 2, 2];
+    p.tile = [56, 52, 8, 11];
+    let copied = global_tiles(&gpu, &input, p, 3, &mut Profile::default()).unwrap();
+    let actual = floats(&gpu, &copied);
+    for tile in 0..4 {
+        for y in 0..52 {
+            for x in 0..56 {
+                let sx = ((tile % 2) * 40 + x - 8_i32).clamp(0, 79) as usize;
+                let sy = ((tile / 2) * 36 + y - 8_i32).clamp(0, 71) as usize;
+                let dst = ((tile * 52 + y) * 56 + x) as usize * 3;
+                let src = (sy * 80 + sx) * 3;
+                assert!(
+                    actual[dst..dst + 3] == source[src..src + 3],
+                    "global tile edge at {tile},{x},{y}"
+                );
+            }
+        }
+    }
+    // Compact reduced B ends in zeroed native scratch, never the following tile.
+    let mut p = parameters();
+    p.filter = [0.08, 0.8, 0.6, 0.95];
+    p.reduction[0] = 0.75;
+    let first = base(&gpu, &input, p, false, true, false, &mut Profile::default()).unwrap();
+    let first = gpu.readback(first.tiles.as_ref().unwrap()).unwrap();
+    let mut wide = Vec::new();
+    for row in source.as_chunks::<240>().0 {
+        wide.extend_from_slice(row);
+        wide.extend(row.iter().map(|v| v + 10000.));
+    }
+    let wide = gpu
+        .upload("Different following reduced tile", &wide)
+        .unwrap();
+    p.source = [160, 72, 2, 1];
+    p.area[2] = 160;
+    let two = base(&gpu, &wide, p, false, true, false, &mut Profile::default()).unwrap();
+    let two = gpu.readback(two.tiles.as_ref().unwrap()).unwrap();
+    assert!(
+        two[..first.len()] == first,
+        "following reduced tile leaked into first base"
+    );
+    assert!(
+        gpu.readback(&input).unwrap() == bytemuck::cast_slice::<f32, u8>(&source),
+        "base mutated original source"
+    );
+}
+#[test]
+#[ignore = "requires a GPU"]
+fn column_conditioning_matches_native_blocks_borders_gain_and_clamps() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../tests/data/column-reference.json")).unwrap();
+    let source: Vec<f32> = fixture["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap() as f32)
+        .collect();
+    let expected: Vec<f32> = fixture["corrected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap() as f32)
+        .collect();
+    let gpu = Gpu::new().unwrap();
+    for gain in [0., 1., 1.3] {
+        let mut p = parameters();
+        p.source = [80, 112, 1, 1];
+        p.tile = [80, 112, 0, 11];
+        p.area = [0, 0, 80, 112];
+        p.column_area = [0, 8, 80, 104];
+        for c in 0..3 {
+            p.model[0][c] *= gain * gain;
+            p.model[1][c] *= gain;
+        }
+        let scaled: Vec<f32> = source.iter().map(|v| v * gain).collect();
+        let input = gpu.upload("Column component source", &scaled).unwrap();
+        let result = column(&gpu, &input, p, &mut Profile::default()).unwrap();
+        let actual = floats(&gpu, &result);
+        let mut maximum = 0_f32;
+        let mut position = 0;
+        for (i, (&value, &reference)) in actual.iter().zip(&expected).enumerate() {
+            assert!(value.is_finite());
+            let reference = (reference * gain).clamp(0., 32766.);
+            let error = (value - reference).abs();
+            if error > maximum {
+                maximum = error;
+                position = i;
+            }
+        }
+        assert!(
+            maximum < 0.12,
+            "column gain {gain}: maximum error {maximum}, component {position}"
+        );
+        assert!(floats(&gpu, &input)
+            .iter()
+            .zip(&scaled)
+            .all(|(a, b)| a.to_bits() == b.to_bits()));
+        if gain > 0. {
+            assert_eq!(actual[(55 * 80 + 40) * 3], 32766.);
+            assert_eq!(actual[(56 * 80 + 41) * 3 + 1], 0.);
+        }
+    }
+}
+
 fn source() -> Vec<f32> {
     (0..72)
         .flat_map(|y| {
@@ -110,7 +315,7 @@ fn reference_noise_and_detail_components_match_synthetic_fixtures() {
         .collect();
     assert_eq!(actual, expected);
     check(&floats(&gpu, &filtered), &fixture, "bilateral", 3, 0.08);
-    let base = base(&gpu, &input, p, true, true, &mut profile).unwrap();
+    let base = base(&gpu, &input, p, true, true, false, &mut profile).unwrap();
     check(
         &floats(&gpu, base.edges.as_ref().unwrap()),
         &fixture,
@@ -153,16 +358,11 @@ fn reference_noise_and_detail_components_match_synthetic_fixtures() {
         &mut trace,
     );
     check(&floats(&gpu, &b), &fixture, "osf", 1, 0.001);
-    let residual = detail(&gpu, &input, &base, p, true, &mut profile).unwrap();
-    check(&floats(&gpu, &residual.ratio), &fixture, "ratio", 1, 0.001);
-    check(
-        &floats(&gpu, residual.gains.as_ref().unwrap()),
-        &fixture,
-        "gains",
-        3,
-        0.001,
-    );
-    let sharp = signal(&gpu, &base, &residual.ratio, p, &mut profile).unwrap();
+    let ratio = ratio(&gpu, &input, &base, p, &mut profile).unwrap();
+    let gains = mix(&gpu, &input, &base, &ratio, p, &mut profile).unwrap();
+    check(&floats(&gpu, &ratio), &fixture, "ratio", 1, 0.001);
+    check(&floats(&gpu, &gains), &fixture, "gains", 3, 0.001);
+    let sharp = signal(&gpu, &base, &ratio, p, &mut profile).unwrap();
     let signal_samples = floats(&gpu, &sharp);
     check(&signal_samples, &fixture, "signal", 1, 0.3);
     for y in 0..72 {
@@ -172,23 +372,14 @@ fn reference_noise_and_detail_components_match_synthetic_fixtures() {
             }
         }
     }
-    let output = restore(
-        &gpu,
-        &base,
-        residual.gains.as_ref().unwrap(),
-        p,
-        &mut profile,
-    )
-    .unwrap();
+    let output = restore(&gpu, &base, &gains, p, &mut profile).unwrap();
     check(&floats(&gpu, &output), &fixture, "restored", 3, 0.2);
     assert_eq!(floats(&gpu, &input), source());
     // Detail zero retains the filtered base through the reference reconstruction clamps.
     let mut neutral = p;
     neutral.residual[3] = 0.;
-    let neutral = detail(&gpu, &input, &base, neutral, true, &mut profile).unwrap();
-    assert!(floats(&gpu, neutral.gains.as_ref().unwrap())
-        .iter()
-        .all(|v| *v == 1.));
+    let neutral = mix(&gpu, &input, &base, &ratio, neutral, &mut profile).unwrap();
+    assert!(floats(&gpu, &neutral).iter().all(|v| *v == 1.));
 }
 
 #[test]

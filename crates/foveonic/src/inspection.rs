@@ -27,14 +27,27 @@ pub fn output_names(settings: &Settings) -> Vec<&'static str> {
     if settings.repair.is_some() {
         names.push("repair.layers");
     }
+    if settings.highlight_restoration {
+        names.extend(["highlight.layers", "highlight.density"]);
+    }
     if settings.despeckle {
         names.push("despeckle.layers");
     }
+    if settings.row_correction {
+        names.extend(["banding.layers", "banding.rows"]);
+    }
     if settings.reconstruction.is_some() {
-        names.extend(["noise.layers", "noise.edges", "detail.ratio"]);
+        names.extend([
+            "noise.layers",
+            "noise.edges",
+            "column.layers",
+            "detail.raw-ratio",
+            "pattern.mask",
+            "detail.ratio",
+        ]);
     }
     names.push("color.rgb");
-    if settings.color_dq_gain > 0. {
+    if settings.color_dq_selected() {
         names.push("color-dq.rgb");
     }
     if settings.reconstruction.is_some() {
@@ -45,7 +58,10 @@ pub fn output_names(settings: &Settings) -> Vec<&'static str> {
         names.push("saturation.rgb");
     }
     if settings.sharpen_amount > 0. {
-        names.extend(["sharpen.horizontal", "sharpen.blurred", "sharpen.rgb"]);
+        if settings.reconstruction.is_none() {
+            names.push("detail.signal");
+        }
+        names.push("sharpen.rgb");
     }
     names
 }
@@ -68,10 +84,12 @@ pub fn image_outputs(settings: &Settings) -> Vec<ImageOutput> {
         .into_iter()
         .filter_map(|name| {
             let channels = match name {
-                "black.levels" | "black.histogram" => return None,
+                "black.levels" | "black.histogram" | "banding.rows" => return None,
                 "sensor.layers" | "calibration.layers" | "gain.layers" | "repair.layers"
-                | "despeckle.layers" | "noise.layers" => Channels::Layers,
-                "noise.edges" | "detail.ratio" | "detail.signal" => Channels::Scalar,
+                | "despeckle.layers" | "highlight.layers" | "banding.layers" | "noise.layers"
+                | "column.layers" => Channels::Layers,
+                "noise.edges" | "detail.ratio" | "detail.raw-ratio" | "pattern.mask"
+                | "detail.signal" | "highlight.density" => Channels::Scalar,
                 _ => Channels::Rgb,
             };
             Some(ImageOutput { name, channels })
@@ -101,13 +119,16 @@ mod tests {
                 "sensor.layers",
                 "calibration.layers",
                 "repair.layers",
+                "highlight.layers",
+                "highlight.density",
                 "despeckle.layers",
+                "banding.layers",
                 "color.rgb",
                 "tone.rgb"
             ]
         );
         settings.repair = Some(crate::render::RepairThreshold::Camera);
-        settings.color_dq_gain = 1.;
+        settings.color_dq_gain = Some(1.);
         settings.sensor_gain = 1.3;
         settings.saturation = 1.1;
         settings.sharpen_amount = 0.5;
@@ -120,8 +141,7 @@ mod tests {
             "color-dq.rgb",
             "gain.layers",
             "saturation.rgb",
-            "sharpen.horizontal",
-            "sharpen.blurred",
+            "detail.signal",
             "sharpen.rgb",
         ] {
             assert!(images.contains(&name));
@@ -132,8 +152,11 @@ mod tests {
         let images = super::image_outputs(&settings);
         for (name, kind) in [
             ("noise.layers", super::Channels::Layers),
+            ("column.layers", super::Channels::Layers),
             ("noise.edges", super::Channels::Scalar),
             ("detail.ratio", super::Channels::Scalar),
+            ("detail.raw-ratio", super::Channels::Scalar),
+            ("pattern.mask", super::Channels::Scalar),
             ("detail.signal", super::Channels::Scalar),
             ("reconstruction.rgb", super::Channels::Rgb),
         ] {

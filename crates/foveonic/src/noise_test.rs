@@ -126,6 +126,10 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let fixtures: serde_json::Value =
         serde_json::from_str(include_str!("../tests/data/noise-parameters.json")).unwrap();
+    let patterns: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/data/pattern-parameters.json")).unwrap();
+    let recipes: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/data/recipe-parameters.json")).unwrap();
     for fixture in fixtures.as_array().unwrap() {
         let source =
             crate::source::Source::open(dir.join(fixture["file"].as_str().unwrap())).unwrap();
@@ -159,6 +163,101 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
                 "model {actual} vs {expected}"
             );
         }
+        for expected in patterns
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["file"] == fixture["file"])
+        {
+            let controls = Controls {
+                chroma: expected["chroma"].as_u64().unwrap() as u32,
+                ..Controls::default()
+            };
+            let params = prepare(&source.metadata, "Sunlight", 1., controls).unwrap();
+            let pattern = pattern_parameters(&source.metadata, params, controls).unwrap();
+            assert_eq!(
+                u64::from(pattern.params.shape[3]),
+                expected["half"].as_u64().unwrap()
+            );
+            for (c, v) in expected["thresholds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+            {
+                assert!(
+                    (pattern.params.thresholds[c] - v.as_f64().unwrap() as f32).abs() < 0.000001,
+                    "pattern {} preset {} field {c}",
+                    expected["file"],
+                    expected["chroma"]
+                );
+            }
+        }
+        for expected in recipes
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["file"] == fixture["file"])
+        {
+            let choice = expected["choice"].as_u64().unwrap() as u32;
+            let p = prepare(
+                &source.metadata,
+                "Sunlight",
+                1.,
+                Controls {
+                    chroma: choice,
+                    luminance: choice,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let recipe = couplings(
+                &source.metadata,
+                "Sunlight",
+                Controls {
+                    chroma: choice,
+                    luminance: choice,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                recipe.despeckle_scale,
+                expected["despeckle_scale"].as_f64().unwrap() as f32
+            );
+            assert_eq!(
+                recipe.color_dq_limit,
+                expected["color_dq_limit"].as_f64().unwrap() as f32
+            );
+            assert_eq!(p.reduction[0], expected["scale"].as_f64().unwrap() as f32);
+            assert_eq!(
+                u64::from(p.geometry[2]),
+                expected["fixed_size"].as_u64().unwrap()
+            );
+        }
+        let mut small = (*source.metadata).clone();
+        small.width = 1;
+        small.height = 1;
+        assert!(couplings(&small, "Sunlight", Controls::default()).is_ok());
+        assert!(prepare(&small, "Sunlight", 1., Controls::default()).is_err());
+        assert_eq!(p.column_area, [0; 4]);
+        let column = column_parameters(&source.metadata, p).unwrap();
+        let active = crate::calibration::rectangle(&source.metadata, "ActiveImageArea").unwrap();
+        assert_eq!(column.column_area[1], active[1]);
+        assert_eq!(column.column_area[3], active[3]);
+        assert_eq!(
+            column.column[0],
+            0.375
+                * if p.edge[3] < 800. {
+                    1.
+                } else {
+                    f32::from_bits(0x3faaa993)
+                }
+        );
+        let mut incomplete = (*source.metadata).clone();
+        incomplete.matrices.remove("DarkShieldTop");
+        assert!(prepare(&incomplete, "Sunlight", 1., Controls::default()).is_ok());
+        assert!(column_parameters(&incomplete, p).is_err());
         let gained = prepare(&source.metadata, "Sunlight", 0.5, Controls::default()).unwrap();
         for c in 0..3 {
             assert_eq!(gained.model[0][c], p.model[0][c] * 0.25);

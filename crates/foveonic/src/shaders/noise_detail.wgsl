@@ -7,9 +7,7 @@
 
 fn base_rgb(pixel: u32) -> vec3<f32> { let q = pixel * 3u; return vec3(base[q], base[q + 1u], base[q + 2u]); }
 fn raw_rgb(p: vec3<u32>) -> vec3<f32> {
-    let xy = full_position(p, params);
-    if any(xy < params.area.xy) || any(xy >= params.area.zw) { return vec3(1000.); }
-    let q = (xy.y * params.source.x + xy.x) * 3u;
+    let q = tile_pixel(p,params)*3u;
     return vec3(input_values[q], input_values[q + 1u], input_values[q + 2u]);
 }
 @compute @workgroup_size(8, 8)

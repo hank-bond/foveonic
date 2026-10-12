@@ -26,17 +26,20 @@ pub struct Settings {
     /// A factor after tone: zero is grayscale, one leaves saturation unchanged.
     pub saturation: f32,
     /// Multiplies camera ColorDQ amplitudes after camera color conversion; zero omits conditioning.
-    pub color_dq_gain: f32,
+    /// None selects native automatic gain with reconstruction; Some overrides it (0 Off).
+    pub color_dq_gain: Option<f32>,
     /// Ordered camera-record repair, using the current cutoff or an explicit minimum badness.
     pub repair: Option<RepairThreshold>,
     /// Detect and correct remaining channel extrema with reference-style despeckling.
     pub despeckle: bool,
+    /// Restore clipped-layer color from original camera saturation maps, independently of tone highlights.
+    pub highlight_restoration: bool,
+    /// Estimate and subtract native additive per-row layer bias before reconstruction.
+    pub row_correction: bool,
     /// Reference-style noise filtering and residual reconstruction; None keeps the neutral route.
     pub reconstruction: Option<crate::noise::Controls>,
-    /// Unsharp-mask strength; zero omits sharpening.
+    /// Effective native brightness-proportional sharp strength; zero omits sharpening.
     pub sharpen_amount: f32,
-    /// Gaussian sigma in full-sensor pixels, before output resizing.
-    pub sharpen_radius: f32,
     /// Exact final oriented dimensions; None keeps the active crop's native size.
     pub output_size: Option<[u32; 2]>,
 }
@@ -50,14 +53,20 @@ impl Settings {
             tone: ToneControls::default(),
             sensor_gain: 1.,
             saturation: 1.,
-            color_dq_gain: 0.,
+            color_dq_gain: None,
             repair: Some(RepairThreshold::Camera),
             despeckle: true,
+            highlight_restoration: true,
+            row_correction: true,
             reconstruction: None,
             sharpen_amount: 0.,
-            sharpen_radius: 1.,
             output_size: None,
         }
+    }
+
+    pub fn color_dq_selected(&self) -> bool {
+        self.color_dq_gain
+            .map_or(self.reconstruction.is_some(), |v| v > 0.)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -89,14 +98,8 @@ impl Settings {
                 "sensor gain, saturation, and sharpening must be finite and nonnegative".into(),
             );
         }
-        if !self.color_dq_gain.is_finite() || self.color_dq_gain < 0. {
+        if self.color_dq_gain.is_some_and(|v| !v.is_finite() || v < 0.) {
             return Err("ColorDQ gain must be finite and nonnegative".into());
-        }
-        if !self.sharpen_radius.is_finite()
-            || self.sharpen_radius <= 0.
-            || self.sharpen_radius > 16.
-        {
-            return Err("sharpen radius must be in 0..16 pixels, excluding zero".into());
         }
         if let Some(threshold) = self.repair {
             threshold.validate()?;
@@ -109,18 +112,6 @@ impl Settings {
         }
         Ok(())
     }
-}
-
-fn gaussian_weights(sigma: f32) -> Vec<f32> {
-    let radius = (sigma * 3.).ceil() as i32;
-    let mut weights: Vec<_> = (-radius..=radius)
-        .map(|x| (-0.5 * (x as f32 / sigma).powi(2)).exp())
-        .collect();
-    let sum: f32 = weights.iter().sum();
-    for weight in &mut weights {
-        *weight /= sum;
-    }
-    weights
 }
 
 fn sensor_gain(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
@@ -188,8 +179,12 @@ fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
         DataType::EncodedRgb16(space) => (Layout::PackedRgb16, Space::EncodedRgb16(space)),
         DataType::BlackLevels
         | DataType::Histogram
+        | DataType::RowTable
         | DataType::File
         | DataType::FilteredTiles
+        | DataType::ConditionedTiles
+        | DataType::PatternSeedTiles
+        | DataType::UnconditionedRatioTiles
         | DataType::ResidualTiles
         | DataType::RatioTiles
         | DataType::ColorTiles(_) => return None,
@@ -315,6 +310,15 @@ impl Engine {
             };
         }
         finish!();
+        let mut highlight_params = None;
+        if settings.highlight_restoration && names.contains(&"highlight.density") {
+            let prepared = Arc::new(profile.measure("prepare original saturation", || {
+                crate::highlight::prepare(&source.metadata, settings.sensor_gain)
+            })?);
+            graph.add(Operation::HighlightDensity(prepared.clone()), &[])?;
+            highlight_params = Some(prepared);
+            finish!();
+        }
         let black_params =
             profile.measure("prepare black", || calibration::black(&source.metadata))?;
         let black = graph.add(Operation::Black(black_params), &[input])?;
@@ -336,16 +340,47 @@ impl Engine {
         }
         if let Some(threshold) = settings.repair {
             let prepared = profile.measure("prepare repair records", || {
-                crate::repair::prepare(&source.metadata, threshold.resolve(&source.metadata)?)
+                crate::camera_repair::prepare(&source.metadata, threshold)
             })?;
-            calibrated = graph.add(Operation::Repair(prepared), &[calibrated])?;
+            calibrated = graph.add(Operation::Repair(prepared), &[calibrated, input])?;
             finish!();
         }
+        if settings.highlight_restoration {
+            let prepared = match highlight_params {
+                Some(prepared) => prepared,
+                None => Arc::new(profile.measure("prepare highlight restoration", || {
+                    crate::highlight::prepare(&source.metadata, settings.sensor_gain)
+                })?),
+            };
+            calibrated = graph.add(Operation::Highlights(prepared), &[calibrated])?;
+            finish!();
+        }
+        let mut couplings = None;
         if settings.despeckle {
+            let recipe = profile.measure("prepare noise couplings", || {
+                crate::noise::couplings(
+                    &source.metadata,
+                    &settings.white_balance,
+                    settings.reconstruction.unwrap_or_default(),
+                )
+            })?;
+            couplings = Some(recipe);
             let prepared = profile.measure("prepare despeckle", || {
-                crate::despeckle::prepare(&source.metadata, calibration_gains, settings.sensor_gain)
+                crate::despeckle::prepare(
+                    &source.metadata,
+                    calibration_gains,
+                    settings.sensor_gain,
+                    recipe.despeckle_scale,
+                )
             })?;
             calibrated = graph.add(Operation::Despeckle(prepared), &[calibrated])?;
+            finish!();
+        }
+        if settings.row_correction {
+            let prepared = profile.measure("prepare row correction", || {
+                crate::banding::prepare(&source.metadata, calibration_gains, settings.sensor_gain)
+            })?;
+            calibrated = graph.add(Operation::Banding(prepared), &[calibrated])?;
             finish!();
         }
         let reconstruction = if let Some(controls) = settings.reconstruction {
@@ -359,9 +394,21 @@ impl Engine {
             })?;
             let base = graph.add(Operation::NoiseBase(params), &[calibrated])?;
             finish!();
-            let detail = graph.add(Operation::Detail(params), &[calibrated, base])?;
+            let column_params = profile.measure("prepare column cuts", || {
+                crate::noise::column_parameters(&source.metadata, params)
+            })?;
+            let conditioned = graph.add(Operation::Column(column_params), &[calibrated])?;
             finish!();
-            Some((params, base, detail, detail + 1))
+            let ratio = graph.add(Operation::Ratio(params), &[conditioned, base])?;
+            finish!();
+            let prepared = profile.measure("prepare pattern recipe", || {
+                crate::noise::pattern_parameters(&source.metadata, params, controls)
+            })?;
+            let pattern = graph.add(Operation::Pattern { params, prepared }, &[ratio, base + 3])?;
+            finish!();
+            let detail = graph.add(Operation::Detail(params), &[conditioned, base, pattern])?;
+            finish!();
+            Some((params, base, detail, pattern))
         } else {
             None
         };
@@ -390,9 +437,26 @@ impl Engine {
             )?
         };
         finish!();
-        if settings.color_dq_gain > 0. {
+        if settings.color_dq_selected() {
+            let gain = if let Some(gain) = settings.color_dq_gain {
+                gain
+            } else {
+                let recipe = match couplings {
+                    Some(recipe) => recipe,
+                    None => profile.measure("prepare noise couplings", || {
+                        crate::noise::couplings(
+                            &source.metadata,
+                            &settings.white_balance,
+                            settings.reconstruction.unwrap_or_default(),
+                        )
+                    })?,
+                };
+                crate::noise::processing_gain(&source.metadata)?
+                    .1
+                    .min(recipe.color_dq_limit)
+            };
             let table = profile.measure("prepare ColorDQ", || {
-                crate::color_dq::prepare(&source.metadata, settings.color_dq_gain)
+                crate::color_dq::prepare(&source.metadata, gain)
             })?;
             linear = if let Some((params, _, _, _)) = reconstruction {
                 graph.add(
@@ -412,6 +476,23 @@ impl Engine {
             linear = graph.add(
                 Operation::Reconstruct { params, space },
                 &[linear, detail, ratio],
+            )?;
+            finish!();
+        }
+        if settings.sharpen_amount > 0. {
+            let signal = if reconstruction.is_some() {
+                linear + 1
+            } else {
+                let signal = graph.add(Operation::SharpSignal { space }, &[linear])?;
+                finish!();
+                signal
+            };
+            linear = graph.add(
+                Operation::Sharpen {
+                    amount: settings.sharpen_amount,
+                    space,
+                },
+                &[linear, signal],
             )?;
             finish!();
         }
@@ -436,34 +517,6 @@ impl Engine {
                 &[toned],
             )?;
             finish!();
-        }
-        if settings.sharpen_amount > 0. {
-            let weights = gaussian_weights(settings.sharpen_radius);
-            let horizontal = graph.add(
-                Operation::Blur {
-                    axis: 0,
-                    weights: weights.clone(),
-                    space,
-                },
-                &[toned],
-            )?;
-            finish!();
-            let blurred = graph.add(
-                Operation::Blur {
-                    axis: 1,
-                    weights,
-                    space,
-                },
-                &[horizontal],
-            )?;
-            finish!();
-            toned = graph.add(
-                Operation::Sharpen {
-                    amount: settings.sharpen_amount,
-                    space,
-                },
-                &[toned, blurred],
-            )?;
         }
         self.collect_artifacts(source, settings, &graph, toned, names, params, profile)
     }
@@ -527,14 +580,16 @@ impl Engine {
                             .iter()
                             .map(|v| *v as f32)
                             .collect(),
-                        DataType::BlackLevels => bytemuck::cast_slice::<u8, f32>(&bytes).to_vec(),
+                        DataType::BlackLevels | DataType::RowTable => {
+                            bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()
+                        }
                         _ => return Err("unsupported diagnostic output".into()),
                     };
                     Content::Table {
-                        columns: if output.data == DataType::Histogram {
-                            4096
-                        } else {
-                            1
+                        columns: match output.data {
+                            DataType::Histogram => 4096,
+                            DataType::RowTable => 4,
+                            _ => 1,
                         },
                         values,
                     }
@@ -815,6 +870,7 @@ impl Engine {
                         *params,
                         required[edge_id],
                         required[index] || required[projected],
+                        required[node.outputs[3]],
                         profile,
                     )?;
                     if required[projected] {
@@ -831,12 +887,24 @@ impl Engine {
                             recyclable: false,
                         });
                     }
-                    if let Some(edges) = base.edges {
+                    if required[edge_id] {
                         values[edge_id] = Some(Value {
                             buffer: crate::reconstruction::project(
-                                gpu, &edges, *params, 1, false, profile,
+                                gpu,
+                                base.edges.as_ref().unwrap(),
+                                *params,
+                                1,
+                                false,
+                                profile,
                             )?,
                             description: description(DataType::ScalarField, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    if required[node.outputs[3]] {
+                        values[node.outputs[3]] = Some(Value {
+                            buffer: base.seed.unwrap(),
+                            description: None,
                             recyclable: false,
                         });
                     }
@@ -846,22 +914,58 @@ impl Engine {
                         None
                     }
                 }
-                Operation::Detail(params) => {
-                    let ratio_id = node.outputs[1];
-                    let projected = node.outputs[2];
-                    let detail = crate::reconstruction::detail(
+                Operation::Column(params) => {
+                    let tiles =
+                        crate::reconstruction::column(gpu, &input(0).buffer, *params, profile)?;
+                    let projected = node.outputs[1];
+                    if required[projected] {
+                        values[projected] = Some(Value {
+                            buffer: crate::reconstruction::project(
+                                gpu, &tiles, *params, 3, false, profile,
+                            )?,
+                            description: description(DataType::CalibratedLayers, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    required[index].then_some(tiles)
+                }
+                Operation::Ratio(params) => {
+                    let ratio = crate::reconstruction::ratio(
                         gpu,
                         &input(0).buffer,
                         &input(1).buffer,
                         *params,
-                        required[index],
+                        profile,
+                    )?;
+                    let projected = node.outputs[1];
+                    if required[projected] {
+                        values[projected] = Some(Value {
+                            buffer: crate::reconstruction::project(
+                                gpu, &ratio, *params, 1, false, profile,
+                            )?,
+                            description: description(DataType::LuminanceRatio, inherited),
+                            recyclable: false,
+                        });
+                    }
+                    required[index].then_some(ratio)
+                }
+                Operation::Pattern { params, prepared } => {
+                    let projected = node.outputs[1];
+                    let mask = node.outputs[2];
+                    let result = crate::pattern::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        required[index] || required[projected],
+                        required[mask],
                         profile,
                     )?;
                     if required[projected] {
                         values[projected] = Some(Value {
                             buffer: crate::reconstruction::project(
                                 gpu,
-                                &detail.ratio,
+                                result.ratio.as_ref().unwrap(),
                                 *params,
                                 1,
                                 false,
@@ -871,15 +975,34 @@ impl Engine {
                             recyclable: false,
                         });
                     }
-                    if required[ratio_id] {
-                        values[ratio_id] = Some(Value {
-                            buffer: detail.ratio,
-                            description: None,
+                    if required[mask] {
+                        values[mask] = Some(Value {
+                            buffer: crate::reconstruction::project(
+                                gpu,
+                                result.mask.as_ref().unwrap(),
+                                *params,
+                                1,
+                                false,
+                                profile,
+                            )?,
+                            description: description(DataType::ScalarField, inherited),
                             recyclable: false,
                         });
                     }
-                    detail.gains
+                    if required[index] {
+                        result.ratio
+                    } else {
+                        None
+                    }
                 }
+                Operation::Detail(params) => Some(crate::reconstruction::mix(
+                    gpu,
+                    &input(0).buffer,
+                    &input(1).buffer,
+                    &input(2).buffer,
+                    *params,
+                    profile,
+                )?),
                 Operation::TiledColor { params, color, .. } => {
                     let tiles = crate::reconstruction::color(
                         gpu,
@@ -953,27 +1076,44 @@ impl Engine {
                     }
                     rgb
                 }
+                Operation::Banding(prepared) => {
+                    let result = crate::banding::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        required[index],
+                        profile,
+                    )?;
+                    let rows = node.outputs[1];
+                    if required[rows] {
+                        values[rows] = Some(Value {
+                            buffer: result.rows,
+                            description: None,
+                            recyclable: false,
+                        });
+                    }
+                    result.image
+                }
+                Operation::Highlights(prepared) => {
+                    crate::highlight::apply(gpu, Some(&input(0).buffer), prepared, false, profile)?
+                        .pixels
+                }
+                Operation::HighlightDensity(prepared) => {
+                    crate::highlight::apply(gpu, None, prepared, true, profile)?.density
+                }
                 Operation::Despeckle(prepared) => Some(crate::despeckle::apply(
                     gpu,
                     &input(0).buffer,
                     prepared,
                     profile,
                 )?),
-                Operation::Repair(prepared) => {
-                    let output = scratch.take(gpu, bytes)?;
-                    gpu.copy(&input(0).buffer, &output, bytes);
-                    if !prepared.records.is_empty() {
-                        let records =
-                            gpu.upload("Ordered camera repair records", &prepared.records)?;
-                        let uniform = gpu.uniform(&prepared.params);
-                        dispatch(
-                            Kernel::Repair,
-                            &[(1, &records), (2, &uniform), (3, &output)],
-                            [1, 1],
-                        );
-                    }
-                    Some(output)
-                }
+                Operation::Repair(prepared) => Some(crate::camera_repair::apply(
+                    gpu,
+                    &input(1).buffer,
+                    &input(0).buffer,
+                    prepared,
+                    profile,
+                )?),
                 Operation::Color { .. }
                 | Operation::SensorGain { .. }
                 | Operation::Saturation { .. } => {
@@ -1031,30 +1171,26 @@ impl Engine {
                     );
                     Some(output)
                 }
-                Operation::Blur { axis, weights, .. } => {
-                    let output = scratch.take(gpu, bytes)?;
-                    let uniform = gpu.uniform(&[
-                        inherited[0],
-                        inherited[1],
-                        *axis,
-                        (weights.len() / 2) as u32,
-                    ]);
-                    let weights = gpu.upload("Gaussian weights", weights)?;
+                Operation::SharpSignal { .. } => {
+                    let output = gpu.storage(
+                        "Native signed mono high-pass",
+                        u64::from(inherited[0]) * u64::from(inherited[1]) * 4,
+                    )?;
+                    let uniform = gpu.uniform(&ScalarParams {
+                        source: dimensions,
+                        value: [0.; 4],
+                    });
                     dispatch(
-                        Kernel::Blur,
-                        &[
-                            (0, &input(0).buffer),
-                            (1, &weights),
-                            (2, &uniform),
-                            (3, &output),
-                        ],
+                        Kernel::SharpSignal,
+                        &[(0, &input(0).buffer), (2, &uniform), (3, &output)],
                         groups,
                     );
                     Some(output)
                 }
                 Operation::Sharpen { amount, .. } => {
-                    if input(0).description != input(1).description {
-                        return Err("sharpen inputs have different image descriptions".into());
+                    if input(0).description.unwrap().extent != input(1).description.unwrap().extent
+                    {
+                        return Err("sharpen inputs have different image extents".into());
                     }
                     let output = scratch.take(gpu, bytes)?;
                     let uniform = gpu.uniform(&ScalarParams {

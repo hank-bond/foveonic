@@ -86,13 +86,17 @@ fn tables(gains: [f64; 3], adjustment: [f64; 3]) -> Result<Vec<f32>> {
 }
 
 /// Threshold WB must match the factors actually applied by calibration, before
-/// global Sensor gain. Keep the independent adjustment at 1x; reconstruction
-/// presets do not change this stage's sensitivity.
+/// global Sensor gain. Multiply the camera's adjustment by the shared native
+/// noise-derived dose; never recompute a duplicate raw-WB calibration recipe.
 pub(crate) fn prepare(
     metadata: &Metadata,
     calibration_gains: [f32; 3],
     gain: f32,
+    noise_scale: f32,
 ) -> Result<Prepared> {
+    if !noise_scale.is_finite() || noise_scale <= 0. {
+        return Err("invalid despeckle noise scale".into());
+    }
     let gains = calibration_gains.map(f64::from);
     let mut adjustment = [15., 15., 5.];
     if let Some(m) = metadata
@@ -104,6 +108,7 @@ pub(crate) fn prepare(
         }
         adjustment = std::array::from_fn(|c| m.values[c] as f32 as f64);
     }
+    adjustment = adjustment.map(|v| v * f64::from(noise_scale));
     let active = crate::calibration::rectangle(metadata, "ActiveImageArea")?;
     let keep = crate::calibration::rectangle(metadata, "KeepImageArea")?;
     if keep != [0, 0, metadata.width as u32, metadata.height as u32] {

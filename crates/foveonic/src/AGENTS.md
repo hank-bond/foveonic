@@ -18,24 +18,29 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 
 ### Source files
 
+- **[banding.rs](./banding.rs)** Prepares geometric least-squares row-banding fits and deterministic patch/row traversal for GPU-only photographic estimation and correction.
 - **[calibration.rs](./calibration.rs)** Resolves metadata-derived calibration, white balance, camera color, and image geometry.
+- **[camera_repair.rs](./camera_repair.rs)** Prepares complete native camera repair metadata and executes raw-signal bad-red selection, ordered lists, and masked cluster matching on GPU.
 - **[color_dq.rs](./color_dq.rs)** Builds reference-derived ColorDQ lookup tables with an explicitly selected gain.
 - **[color_mode.rs](./color_mode.rs)** Resolves camera color modes and their camera-ordered tone records.
 - **[despeckle.rs](./despeckle.rs)** Prepares reference speckle thresholds and runs deterministic detection and ordered chroma-anchored correction on GPU.
 - **[estimated_iso.rs](./estimated_iso.rs)** Estimates processing ISO from camera histograms and reference metadata.
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
 - **[graph.rs](./graph.rs)** Builds typed, dependency-ordered image graphs and validates their connections.
+- **[highlight.rs](./highlight.rs)** Prepares immutable camera saturation provenance and performs reference highlight restoration and neighborhood conditioning on GPU.
 - **[image.rs](./image.rs)** Describes owned GPU image snapshots, their source context, and logical output views.
 - **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
 - **[lib.rs](./lib.rs)** Provides Merrill source decoding and a shared GPU TIFF rendering engine.
 - **[main.rs](./main.rs)** Inspects Merrill X3Fs and exports single images or batches through shared TIFF settings.
-- **[noise.rs](./noise.rs)** Prepares camera-derived noise models and full-resolution reconstruction controls.
+- **[noise.rs](./noise.rs)** Prepares shared camera noise recipes, correction couplings, and metadata-selected full/reduced reconstruction controls.
 - **[output.rs](./output.rs)** Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
+- **[pattern.rs](./pattern.rs)** Metadata/geometry-only setup for native deterministic luminance-ratio pattern conditioning.
 - **[preview.rs](./preview.rs)** Reads embedded JPEG previews and presentation dimensions from X3F sections.
 - **[profile.rs](./profile.rs)** Collects lightweight host wall timings and optional GPU timestamp measurements.
 - **[reconstruction.rs](./reconstruction.rs)** Executes reference-style processing tiles, noise filtering, residual detail, and image projections on GPU.
 - **[render.rs](./render.rs)** Builds typed processing and export recipes around owned GPU images and execution-local scratch.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.
+- **[resample.rs](./resample.rs)** Native triangular polyphase metadata preparation and immutable GPU RGB resampling.
 - **[scopes.rs](./scopes.rs)** Samples the current floating GPU buffer into compact histogram and waveform counts.
 - **[scratch.rs](./scratch.rs)** Reuses exclusively owned, fully overwritten buffers within one ordered graph execution.
 - **[source.rs](./source.rs)** Owns original Merrill sensor samples and typed camera metadata.

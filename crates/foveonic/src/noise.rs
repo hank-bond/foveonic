@@ -1,4 +1,4 @@
-//! Prepares camera-derived noise models and full-resolution reconstruction controls.
+//! Prepares shared camera noise recipes, correction couplings, and metadata-selected full/reduced reconstruction controls.
 //!
 //! Adapted from Foveonic noise.rs and params.rs at e47af35 with owner permission.
 
@@ -168,6 +168,10 @@ pub(crate) struct Parameters {
     pub mono: [f32; 4],
     pub residual: [f32; 4], // Mono mix, color mix, residual strength, detail multiplier.
     pub diffusion: [f32; 4], // Step, noise-model step, fixed contrast, directional axis.
+    pub column_area: [u32; 4], // Native column cuts; distinct from shading/work bounds.
+    pub column: [f32; 4],   // Native default column-preset blend; reserved values.
+    pub reduction: [f32; 4], // Native eighth-quantized reconstruction scale.
+    pub geometry: [u32; 4], // LocalMean margin, edge LUT margin, fixed bilateral size, global branch.
 }
 impl Parameters {
     pub fn atlas_extent(self) -> [u32; 2] {
@@ -177,6 +181,100 @@ impl Parameters {
         let [w, h] = self.atlas_extent();
         u64::from(w) * u64::from(h)
     }
+}
+
+pub(crate) fn column_parameters(metadata: &Metadata, mut p: Parameters) -> Result<Parameters> {
+    let dark = metadata.fixed::<4>("DarkShieldTop")?;
+    let active = crate::calibration::rectangle(metadata, "ActiveImageArea")?;
+    if [dark[0], dark[2]]
+        .iter()
+        .any(|v| !v.is_finite() || v.fract() != 0. || !(0. ..u32::MAX as f64).contains(v))
+        || active[1] >= active[3]
+        || active[3] > p.source[1]
+        || active[1] >= p.tile[1]
+        || p.source[1] - active[3] >= p.tile[1]
+    {
+        return Err("invalid noise column rectangle".into());
+    }
+    p.column_area = [dark[0] as u32, active[1], dark[2] as u32 + 1, active[3]];
+    Ok(p)
+}
+
+pub(crate) fn pattern_parameters(
+    metadata: &Metadata,
+    p: Parameters,
+    controls: Controls,
+) -> Result<crate::pattern::Prepared> {
+    controls.validate()?;
+    const EXTRA: [[f32; 13]; 7] = [
+        [
+            100., 0.025, 0.025, 0., 0.12, 0.0025, 3., 0., 0., 0., 0., 0., 0.,
+        ],
+        [
+            400., 0.05, 0.05, 0., 0.12, 0.0025, 3., 0., 0., 0., 0., 0., 0.,
+        ],
+        [
+            800., 0.075, 0.075, 0.25, 0.12, 0.0025, 3., 0., 0., 0., 0., 0., 0.,
+        ],
+        [
+            1600., 0.1, 0.1, 0.5, 0.12, 0.0025, 3., 0., 0., 0., 0., 0., 0.,
+        ],
+        [
+            3200., 0., 0., 0.75, 0.12, 0.0025, 3., 0., 0., 0., 0., 0., 0.,
+        ],
+        [6400., 0., 0., 1., 0.12, 0.0025, 3., 0., 0., 0., 0., 0., 0.],
+        [12800., 0., 0., 1., 0.12, 0.0025, 3., 0., 0., 0., 0., 0., 0.],
+    ];
+    let rows =
+        table::<13>(metadata, "AdditionalISONoiseSettings")?.unwrap_or_else(|| EXTRA.to_vec());
+    if !(2..20).contains(&rows.len())
+        || rows.windows(2).any(|r| r[0][0] >= r[1][0])
+        || rows[0][0] <= 0.
+    {
+        return Err("invalid additional ISO noise knots".into());
+    }
+    let last = rows.last().unwrap()[0];
+    let estimated = p.edge[3].clamp(rows[0][0], last);
+    let capture = scalar(metadata, "CaptureISO", 0., MatrixEncoding::Float32)?;
+    let capture = if capture > 0. {
+        capture
+    } else {
+        metadata
+            .properties
+            .get("ISO")
+            .ok_or("missing pattern capture ISO")?
+            .parse::<f32>()?
+    };
+    if !capture.is_finite() || capture <= 0. {
+        return Err("invalid pattern capture ISO".into());
+    }
+    let capture = capture.clamp(rows[0][0], last);
+    let high = rows
+        .iter()
+        .position(|row| estimated <= row[0])
+        .unwrap()
+        .max(1);
+    let weight = (capture - rows[high - 1][0]) / (rows[high][0] - rows[high - 1][0]);
+    let extra: [f32; 13] =
+        std::array::from_fn(|c| (1. - weight).mul_add(rows[high - 1][c], weight * rows[high][c]));
+    let half = metadata
+        .matrix("PermSizeHalf")
+        .filter(|m| m.dimensions == [1])
+        .map(|m| m.values.first().copied().unwrap_or(f64::NAN))
+        .unwrap_or(4.);
+    if !half.is_finite() || half.fract() != 0. || !(0. ..=4.).contains(&half) {
+        return Err("unsupported pattern half size".into());
+    }
+    let adjustment = [0., 0., 0., 0.25, 0.5][controls.chroma as usize];
+    crate::pattern::Prepared::new(
+        [p.tile[0], p.tile[1], p.source[2] * p.source[3], half as u32],
+        [
+            extra[1],
+            extra[2],
+            (extra[3] + adjustment).clamp(0., 1.),
+            0.,
+        ],
+    )
 }
 
 const HI_COLOR: [[f32; 13]; 7] = [
@@ -233,7 +331,7 @@ fn table<const N: usize>(metadata: &Metadata, name: &str) -> Result<Option<Vec<[
     ))
 }
 
-fn effective_iso(metadata: &Metadata, wb: [f64; 3]) -> Result<f32> {
+pub(crate) fn processing_gain(metadata: &Metadata) -> Result<(f32, f32)> {
     let f = |key, default| scalar(metadata, key, default, MatrixEncoding::Float32);
     let capture = f("CaptureISO", 0.)?;
     let capture = if capture > 0. {
@@ -259,6 +357,14 @@ fn effective_iso(metadata: &Metadata, wb: [f64; 3]) -> Result<f32> {
     };
     let sensor = f("SensorISO", 100.)?;
     let gain = processing / if sensor == 0. { 100. } else { sensor };
+    if !capture.is_finite() || capture <= 0. || !gain.is_finite() || gain <= 0. {
+        return Err("invalid processing ISO gain".into());
+    }
+    Ok((capture, gain))
+}
+fn effective_iso(metadata: &Metadata, wb: [f64; 3]) -> Result<f32> {
+    let f = |key, default| scalar(metadata, key, default, MatrixEncoding::Float32);
+    let (capture, gain) = processing_gain(metadata)?;
     let aperture = metadata
         .properties
         .get("APERTURE")
@@ -308,20 +414,33 @@ fn effective_iso(metadata: &Metadata, wb: [f64; 3]) -> Result<f32> {
     Ok(iso)
 }
 
-pub(crate) fn prepare(
-    metadata: &Metadata,
-    wb: &str,
-    sensor_gain: f32,
-    controls: Controls,
-) -> Result<Parameters> {
-    controls.validate()?;
-    let w = metadata.width as u32;
-    let h = metadata.height as u32;
-    if !w.is_multiple_of(4) || !h.is_multiple_of(4) || w < 512 || h < 512 {
-        return Err(
-            "reference reconstruction requires four-by-four tiles with 64-pixel context".into(),
-        );
+struct Recipe {
+    wb: [f64; 3],
+    mixed: [f64; 13],
+    chroma: [f32; 13],
+    luminance: [f32; 13],
+    iso: f32,
+}
+#[derive(Clone, Copy)]
+pub(crate) struct Couplings {
+    pub despeckle_scale: f32,
+    pub color_dq_limit: f32,
+}
+pub(crate) fn couplings(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Couplings> {
+    let r = recipe(metadata, wb, controls)?;
+    let scale = r.mixed[1] as f32;
+    // Main/slider column 7 is the ColorDQ cap; column 12 is sharpening base.
+    let limit = (r.mixed[7] as f32) * r.luminance[7];
+    if !scale.is_finite() || scale < 0. || !limit.is_finite() || limit < 0. {
+        return Err("invalid production noise coupling".into());
     }
+    Ok(Couplings {
+        despeckle_scale: scale,
+        color_dq_limit: limit,
+    })
+}
+fn recipe(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Recipe> {
+    controls.validate()?;
     let key = metadata
         .lists
         .get("WhiteBalanceGains")
@@ -374,6 +493,34 @@ pub(crate) fn prepare(
     }
     let chroma = sliders[controls.chroma as usize];
     let luminance = sliders[controls.luminance as usize];
+    Ok(Recipe {
+        wb,
+        mixed,
+        chroma,
+        luminance,
+        iso,
+    })
+}
+pub(crate) fn prepare(
+    metadata: &Metadata,
+    wb: &str,
+    sensor_gain: f32,
+    controls: Controls,
+) -> Result<Parameters> {
+    controls.validate()?;
+    let (w, h) = (metadata.width as u32, metadata.height as u32);
+    if !w.is_multiple_of(4) || !h.is_multiple_of(4) || w < 512 || h < 512 {
+        return Err(
+            "reference reconstruction requires four-by-four tiles with 64-pixel context".into(),
+        );
+    }
+    let Recipe {
+        wb,
+        mixed,
+        chroma,
+        luminance,
+        iso,
+    } = recipe(metadata, wb, controls)?;
     let t = ((iso.ln() as f64) + f64::from_bits(0xc0126bb1bbb55516))
         / f64::from_bits(0xc010a2b23f3bab72);
     let upper_strength = t.mul_add(-0.25, 0.7);
@@ -451,6 +598,14 @@ pub(crate) fn prepare(
                 1.
             })) as f32
     });
+    let original_scale = (mixed[2] as f32) * luminance[2];
+    let mut reconstruction_scale =
+        ((f64::from(original_scale).mul_add(8., 0.5) as i32) as f32 * 0.125).max(0.375);
+    if reconstruction_scale == 1. && original_scale < 0.984375 {
+        reconstruction_scale = 0.875;
+    }
+    let fixed_size =
+        ((((mixed[3].mul_add(2., 1.) as u32) & !1) * (luminance[3] as u32)) | 1).max(1);
     let params = Parameters {
         source: [w, h, 4, 4],
         tile: [
@@ -497,6 +652,20 @@ pub(crate) fn prepare(
             scalar(metadata, "AnisoLambda", 0.25, MatrixEncoding::Float32)?,
             noise_step,
             scalar(metadata, "ResidualAnisoDiffK2", 2., MatrixEncoding::Int16)?,
+            0.,
+        ],
+        reduction: [reconstruction_scale, 0., 0., 0.],
+        geometry: [8, 8, fixed_size, 0],
+        column_area: [0; 4], // Prepared only when the column stage is required.
+        column: [
+            0.375
+                * if iso < 800. {
+                    1.
+                } else {
+                    f32::from_bits(0x3faaa993)
+                },
+            0.,
+            0.,
             0.,
         ],
     };

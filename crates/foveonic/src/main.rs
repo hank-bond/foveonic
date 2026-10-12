@@ -23,11 +23,15 @@ Options (also available for batch):
   --highlights VALUE        -2..2, default 0
   --saturation FACTOR       Nonnegative, default 1; 0 produces grayscale
   --sensor-gain FACTOR      Nonnegative uniform sensor-layer multiplier, default 1
-  --color-dq-gain FACTOR     Camera ColorDQ amplitude multiplier, default 0 (off)
+  --color-dq-gain FACTOR     Override native ColorDQ gain (0 off); reconstruction defaults to auto
   --repair                  Camera-derived ordered repair (default on)
   --no-repair               Disable camera-record repair
   --despeckle               Detect and correct remaining speckles (default on)
   --no-despeckle            Disable dynamic speckle correction
+  --highlight-restoration   Restore original clipped-layer color (default on)
+  --no-highlight-restoration Disable clipped-layer restoration and neutralization
+  --row-correction          Reduce additive per-row sensor banding (default on)
+  --no-row-correction       Disable per-row banding correction
   --repair-badness MIN       Enable ordered repair with a manual cutoff; 0..15
   --noise-override KEY=VALUE Override a reconstruction parameter; repeatable, enables reconstruction
                             Keys: base-blend, edge-cutoff, mean-decay, edge-scale,
@@ -36,8 +40,7 @@ Options (also available for batch):
   --chroma-noise CHOICE      Camera noise-table choice 0..4, default 2; enables reconstruction
   --luma-noise CHOICE        Camera noise-table choice 0..4, default 2; enables reconstruction
   --detail FACTOR           Residual detail multiplier, default 1; enables reconstruction
-  --sharpen AMOUNT           Nonnegative unsharp-mask amount, default 0 (off)
-  --sharpen-radius PIXELS    Gaussian sigma in source pixels, >0..16, default 1
+  --sharpen AMOUNT           Nonnegative native high-pass amount before tone, default 0 (off)
   --size WIDTHxHEIGHT       Exact final oriented dimensions, bilinear sampling
   --profile                 Report host wall times and GPU timestamps where supported
   --help                    Show this help";
@@ -64,6 +67,14 @@ fn parse_settings(args: impl Iterator<Item = OsString>) -> Result<(Settings, Vec
             settings.despeckle = arg == "--despeckle";
             continue;
         }
+        if arg == "--highlight-restoration" || arg == "--no-highlight-restoration" {
+            settings.highlight_restoration = arg == "--highlight-restoration";
+            continue;
+        }
+        if arg == "--row-correction" || arg == "--no-row-correction" {
+            settings.row_correction = arg == "--row-correction";
+            continue;
+        }
         if arg == "--profile" {
             profiling = true;
             continue;
@@ -87,7 +98,7 @@ fn parse_settings(args: impl Iterator<Item = OsString>) -> Result<(Settings, Vec
             "--highlights" => settings.tone.highlights = value.parse()?,
             "--saturation" => settings.saturation = value.parse()?,
             "--sensor-gain" => settings.sensor_gain = value.parse()?,
-            "--color-dq-gain" => settings.color_dq_gain = value.parse()?,
+            "--color-dq-gain" => settings.color_dq_gain = Some(value.parse()?),
             "--repair-badness" => settings.repair = Some(RepairThreshold::Manual(value.parse()?)),
             "--noise-override" => {
                 let (key, value) = value
@@ -122,7 +133,6 @@ fn parse_settings(args: impl Iterator<Item = OsString>) -> Result<(Settings, Vec
                     .detail = value.parse()?
             }
             "--sharpen" => settings.sharpen_amount = value.parse()?,
-            "--sharpen-radius" => settings.sharpen_radius = value.parse()?,
             "--size" => {
                 let (width, height) = value.split_once('x').ok_or("size requires WIDTHxHEIGHT")?;
                 settings.output_size = Some([width.parse()?, height.parse()?]);
@@ -293,10 +303,37 @@ mod tests {
         assert_eq!(neutral.exposure, 0.);
         assert_eq!(neutral.sensor_gain, 1.);
         assert_eq!(neutral.saturation, 1.);
-        assert_eq!(neutral.color_dq_gain, 0.);
+        assert_eq!(neutral.color_dq_gain, None);
         assert_eq!(neutral.sharpen_amount, 0.);
         assert_eq!(neutral.repair, Some(RepairThreshold::Camera));
-        assert!(neutral.despeckle);
+        assert!(neutral.despeckle && neutral.highlight_restoration && neutral.row_correction);
+        let rows_off = parse("--wb Sunlight --mode Standard --no-row-correction")
+            .unwrap()
+            .0;
+        assert!(
+            !rows_off.row_correction
+                && rows_off.despeckle
+                && rows_off.highlight_restoration
+                && rows_off.repair.is_some()
+        );
+        assert!(
+            parse("--wb Sunlight --mode Standard --no-row-correction --row-correction")
+                .unwrap()
+                .0
+                .row_correction
+        );
+        let off = parse("--wb Sunlight --mode Standard --no-highlight-restoration")
+            .unwrap()
+            .0;
+        assert!(!off.highlight_restoration && off.repair.is_some() && off.despeckle);
+        assert!(
+            parse(
+                "--wb Sunlight --mode Standard --no-highlight-restoration --highlight-restoration"
+            )
+            .unwrap()
+            .0
+            .highlight_restoration
+        );
         let disabled = parse("--wb Sunlight --mode Standard --no-repair --no-despeckle")
             .unwrap()
             .0;
@@ -355,20 +392,20 @@ mod tests {
             })
         );
         assert!(neutral.output_size.is_none());
-        let (settings, paths, _) = parse("a.x3f --wb Auto --mode Vivid --contrast 0.5 --shadows -1 --highlights 1 --sensor-gain 1.3 --saturation 1.2 --color-dq-gain 1.5 --repair-badness 8 --sharpen 0.5 --sharpen-radius 1.5 --size 600x400 b.x3f").unwrap();
+        let (settings, paths, _) = parse("a.x3f --wb Auto --mode Vivid --contrast 0.5 --shadows -1 --highlights 1 --sensor-gain 1.3 --saturation 1.2 --color-dq-gain 1.5 --repair-badness 8 --sharpen 0.5 --size 600x400 b.x3f").unwrap();
         assert_eq!(paths, [PathBuf::from("a.x3f"), PathBuf::from("b.x3f")]);
         assert_eq!(settings.tone.contrast, 0.5);
         assert_eq!(settings.tone.shadows, -1.);
         assert_eq!(settings.tone.highlights, 1.);
         assert_eq!(settings.sensor_gain, 1.3);
         assert_eq!(settings.output_size, Some([600, 400]));
-        assert_eq!(settings.color_dq_gain, 1.5);
+        assert_eq!(settings.color_dq_gain, Some(1.5));
         assert_eq!(
             parse("--wb Sunlight --mode Standard --color-dq-gain 0")
                 .unwrap()
                 .0
                 .color_dq_gain,
-            0.
+            Some(0.)
         );
         for invalid in [
             "--contrast NaN",
@@ -386,7 +423,9 @@ mod tests {
             "--noise-override edge-cutoff=1",
             "--noise-override unknown=1",
             "--noise-override mean-decay:1",
-            "--sharpen-radius 0",
+            "--sharpen-radius 1.5", // retired Gaussian control
+            "--sharpen -1",
+            "--sharpen NaN",
             "--size 0x400",
             "--chroma-noise 5",
             "--luma-noise 5",

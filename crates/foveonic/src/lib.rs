@@ -1,21 +1,26 @@
 //! Provides Merrill source decoding and a shared GPU TIFF rendering engine.
 
+mod banding;
 mod calibration;
+mod camera_repair;
 mod color_dq;
 mod color_mode;
 mod despeckle;
 mod estimated_iso;
 mod gpu;
 mod graph;
+mod highlight;
 pub mod image;
 pub mod inspection;
 pub mod noise;
 mod output;
+mod pattern;
 pub mod preview;
 pub mod profile;
 mod reconstruction;
 pub mod render;
 mod repair;
+mod resample;
 pub mod scopes;
 mod scratch;
 pub mod source;

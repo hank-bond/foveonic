@@ -21,7 +21,7 @@ The objective is useful further editing and attractive results. The common-curve
 
 - The application **must** produce TIFF output with the selected white balance, color, and tone processing baked into the image.
 - TIFF **must** use its own rendering and packaging path within the shared graph engine.
-- TIFF ColorDQ conditioning **must** be opt-in and support an explicit gain setting. Automatic noise-dependent gain selection is deferred.
+- TIFF ColorDQ conditioning **must** support an explicit gain override (0 Off). The opt-in reconstruction recipe **must** select native automatic processing-ISO gain capped by its noise-derived limit when no override is set. Without reconstruction, automatic selection **must** remain inactive.
 
 ## Conformance
 

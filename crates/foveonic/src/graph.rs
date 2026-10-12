@@ -11,11 +11,15 @@ pub enum DataType {
     LuminanceRatio,
     SignedDetail,
     FilteredTiles,
+    ConditionedTiles,
+    PatternSeedTiles,
+    UnconditionedRatioTiles,
     ResidualTiles,
     RatioTiles,
     ColorTiles(ColorSpace),
     BlackLevels,
     Histogram,
+    RowTable,
     CalibratedLayers,
     LinearRgb(ColorSpace),
     ToneMappedRgb(ColorSpace),
@@ -50,9 +54,18 @@ pub enum Operation {
         params: ColorParams,
         space: ColorSpace,
     },
-    Repair(crate::repair::Prepared),
+    Repair(crate::camera_repair::Prepared),
     Despeckle(crate::despeckle::Prepared),
+    Highlights(std::sync::Arc<crate::highlight::Prepared>),
+    HighlightDensity(std::sync::Arc<crate::highlight::Prepared>),
+    Banding(crate::banding::Prepared),
     NoiseBase(crate::noise::Parameters),
+    Column(crate::noise::Parameters),
+    Ratio(crate::noise::Parameters),
+    Pattern {
+        params: crate::noise::Parameters,
+        prepared: crate::pattern::Prepared,
+    },
     Detail(crate::noise::Parameters),
     TiledColor {
         params: crate::noise::Parameters,
@@ -79,9 +92,7 @@ pub enum Operation {
         params: ColorParams,
         space: ColorSpace,
     },
-    Blur {
-        axis: u32,
-        weights: Vec<f32>,
+    SharpSignal {
         space: ColorSpace,
     },
     Sharpen {
@@ -114,7 +125,13 @@ impl Operation {
             Self::Color { .. } => "submit color",
             Self::Repair(_) => "submit repair",
             Self::Despeckle(_) => "submit despeckle",
+            Self::Highlights(_) => "submit highlight restoration",
+            Self::HighlightDensity(_) => "submit original saturation density",
+            Self::Banding(_) => "submit row banding correction",
             Self::NoiseBase(_) => "submit reference noise base",
+            Self::Column(_) => "submit reference column conditioning",
+            Self::Ratio(_) => "submit reference luminance ratio",
+            Self::Pattern { .. } => "submit reference pattern conditioning",
             Self::Detail(_) => "submit reference detail",
             Self::TiledColor { .. } => "submit tiled color",
             Self::TiledColorDq { .. } => "submit tiled ColorDQ",
@@ -122,7 +139,7 @@ impl Operation {
             Self::ColorDq { .. } => "submit ColorDQ",
             Self::SensorGain { .. } => "submit sensor gain",
             Self::Saturation { .. } => "submit saturation",
-            Self::Blur { .. } => "submit blur",
+            Self::SharpSignal { .. } => "submit native high-pass",
             Self::Sharpen { .. } => "submit sharpen",
             Self::Tone { .. } => "submit tone",
             Self::Encode { .. } => "submit encode",
@@ -138,9 +155,22 @@ impl Operation {
             Self::Black(_) => (vec![SensorLayers], BlackLevels),
             Self::Calibrate(_) => (vec![SensorLayers, BlackLevels], CalibratedLayers),
             Self::Color { space, .. } => (vec![CalibratedLayers], LinearRgb(*space)),
-            Self::Repair(_) | Self::Despeckle(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::Repair(_) => (vec![CalibratedLayers, SensorLayers], CalibratedLayers),
+            Self::Despeckle(_) | Self::Highlights(_) | Self::Banding(_) => {
+                (vec![CalibratedLayers], CalibratedLayers)
+            }
+            Self::HighlightDensity(_) => (vec![], ScalarField),
             Self::NoiseBase(_) => (vec![CalibratedLayers], FilteredTiles),
-            Self::Detail(_) => (vec![CalibratedLayers, FilteredTiles], ResidualTiles),
+            Self::Column(_) => (vec![CalibratedLayers], ConditionedTiles),
+            Self::Ratio(_) => (
+                vec![ConditionedTiles, FilteredTiles],
+                UnconditionedRatioTiles,
+            ),
+            Self::Pattern { .. } => (vec![UnconditionedRatioTiles, PatternSeedTiles], RatioTiles),
+            Self::Detail(_) => (
+                vec![ConditionedTiles, FilteredTiles, RatioTiles],
+                ResidualTiles,
+            ),
             Self::TiledColor { space, .. } => (vec![FilteredTiles], ColorTiles(*space)),
             Self::TiledColorDq { space, .. } => (vec![ColorTiles(*space)], ColorTiles(*space)),
             Self::Reconstruct { space, .. } => (
@@ -149,13 +179,11 @@ impl Operation {
             ),
             Self::SensorGain { .. } => (vec![CalibratedLayers], CalibratedLayers),
             Self::ColorDq { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
-            Self::Saturation { space, .. } | Self::Blur { space, .. } => {
-                (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space))
+            Self::Saturation { space, .. } => (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space)),
+            Self::SharpSignal { space } => (vec![LinearRgb(*space)], SignedDetail),
+            Self::Sharpen { space, .. } => {
+                (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
             }
-            Self::Sharpen { space, .. } => (
-                vec![ToneMappedRgb(*space), ToneMappedRgb(*space)],
-                ToneMappedRgb(*space),
-            ),
             Self::Tone { space, .. } => (vec![LinearRgb(*space)], ToneMappedRgb(*space)),
             Self::Encode { space, .. } => (vec![ToneMappedRgb(*space)], EncodedRgb16(*space)),
             Self::Tiff { space, .. } => (vec![EncodedRgb16(*space)], File),
@@ -248,13 +276,17 @@ impl Operation {
         use DataType::*;
         match self {
             Self::Black(_) => vec![("black.histogram", Histogram, vec![0])],
+            Self::Banding(_) => vec![("banding.rows", RowTable, vec![0])],
             Self::NoiseBase(_) => vec![
                 ("noise.layers", CalibratedLayers, vec![0]),
                 ("noise.edges", ScalarField, vec![0]),
+                ("noise.pattern-seed-tiles", PatternSeedTiles, vec![0]),
             ],
-            Self::Detail(_) => vec![
-                ("detail.ratio-tiles", RatioTiles, vec![0, 1]),
+            Self::Column(_) => vec![("column.layers", CalibratedLayers, vec![0])],
+            Self::Ratio(_) => vec![("detail.raw-ratio", LuminanceRatio, vec![0, 1])],
+            Self::Pattern { .. } => vec![
                 ("detail.ratio", LuminanceRatio, vec![0, 1]),
+                ("pattern.mask", ScalarField, vec![0, 1]),
             ],
             Self::TiledColor { space, .. } => vec![("color.rgb", LinearRgb(*space), vec![0])],
             Self::TiledColorDq { space, .. } => vec![("color-dq.rgb", LinearRgb(*space), vec![0])],
@@ -271,7 +303,13 @@ impl Operation {
             Self::Calibrate(_) => "calibration.layers",
             Self::Repair(_) => "repair.layers",
             Self::Despeckle(_) => "despeckle.layers",
+            Self::Highlights(_) => "highlight.layers",
+            Self::HighlightDensity(_) => "highlight.density",
+            Self::Banding(_) => "banding.layers",
             Self::NoiseBase(_) => "noise.tiles",
+            Self::Column(_) => "column.tiles",
+            Self::Ratio(_) => "detail.raw-ratio-tiles",
+            Self::Pattern { .. } => "detail.ratio-tiles",
             Self::Detail(_) => "detail.gain-tiles",
             Self::TiledColor { .. } => "color.tiles",
             Self::TiledColorDq { .. } => "color-dq.tiles",
@@ -281,8 +319,7 @@ impl Operation {
             Self::SensorGain { .. } => "gain.layers",
             Self::Tone { .. } => "tone.rgb",
             Self::Saturation { .. } => "saturation.rgb",
-            Self::Blur { axis: 0, .. } => "sharpen.horizontal",
-            Self::Blur { .. } => "sharpen.blurred",
+            Self::SharpSignal { .. } => "detail.signal",
             Self::Sharpen { .. } => "sharpen.rgb",
             Self::Encode { .. } => "export.rgb16",
             Self::Tiff { .. } => "export.file",
@@ -335,7 +372,23 @@ mod tests {
             )
             .unwrap();
         let base = graph.add(Operation::NoiseBase(params), &[raw]).unwrap();
-        let detail = graph.add(Operation::Detail(params), &[raw, base]).unwrap();
+        let conditioned = graph.add(Operation::Column(params), &[raw]).unwrap();
+        let ratio = graph
+            .add(Operation::Ratio(params), &[conditioned, base])
+            .unwrap();
+        let pattern = graph
+            .add(
+                Operation::Pattern {
+                    params,
+                    prepared: crate::pattern::Prepared::new([40, 40, 1, 4], [0.025, 0.025, 0., 0.])
+                        .unwrap(),
+                },
+                &[ratio, base + 3],
+            )
+            .unwrap();
+        let detail = graph
+            .add(Operation::Detail(params), &[conditioned, base, pattern])
+            .unwrap();
         let colour = graph
             .add(
                 Operation::TiledColor {
@@ -355,13 +408,19 @@ mod tests {
                     params,
                     space: ColorSpace::Srgb,
                 },
-                &[colour, detail, detail + 1],
+                &[colour, detail, pattern],
             )
             .unwrap();
         let required = graph.required(&[restored + 1]).unwrap();
-        assert!(required[raw] && required[base] && required[colour] && required[detail + 1]);
+        assert!(required[raw] && required[base] && required[colour] && required[pattern]);
         assert!(!required[detail] && !required[restored]);
         assert_eq!(graph.outputs[restored + 1].data, DataType::SignedDetail);
+        let masks = graph.required(&[pattern + 2]).unwrap();
+        assert!(masks[ratio] && masks[base + 3]);
+        assert!(!masks[pattern] && !masks[detail]);
+        let raw_ratio = graph.required(&[ratio + 1]).unwrap();
+        assert!(raw_ratio[base] && raw_ratio[conditioned]);
+        assert!(!raw_ratio[pattern] && !raw_ratio[base + 3] && !raw_ratio[detail]);
         let required = graph.required(&[base + 2]).unwrap();
         assert!(required[raw]);
         assert!(!required[base] && !required[detail] && !required[colour]);
@@ -419,11 +478,8 @@ mod tests {
             .unwrap();
         assert!(graph
             .add(
-                Operation::Repair(crate::repair::Prepared {
-                    params: [3, 3, 0, 0],
-                    records: vec![]
-                }),
-                &[linear]
+                Operation::Repair(crate::camera_repair::Prepared::default()),
+                &[linear, source]
             )
             .is_err());
         let gain = || Operation::SensorGain { factor: 1.3 };
@@ -452,6 +508,14 @@ mod tests {
             )
             .unwrap();
         assert!(graph.add(color_dq(ColorSpace::Srgb), &[toned]).is_err());
+        let sharp = graph
+            .add(
+                Operation::SharpSignal {
+                    space: ColorSpace::Srgb,
+                },
+                &[linear],
+            )
+            .unwrap();
         assert!(graph
             .add(
                 Operation::Sharpen {
@@ -476,7 +540,7 @@ mod tests {
                     amount: 1.,
                     space: ColorSpace::Srgb
                 },
-                &[toned, toned]
+                &[linear, sharp]
             )
             .is_ok());
     }

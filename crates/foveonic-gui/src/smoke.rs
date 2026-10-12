@@ -274,9 +274,9 @@ impl App {
                             controls.chroma = 4;
                             controls.luminance = 4;
                         }
-                        "color-dq" => self.settings.color_dq_gain = 1.,
+                        "color-dq" => self.settings.color_dq_gain = Some(1.),
                         "reference-gain" => {
-                            self.settings.color_dq_gain = 0.;
+                            self.settings.color_dq_gain = Some(0.);
                             self.settings.sensor_gain = 1.3;
                         }
                         "final-neutral" => {

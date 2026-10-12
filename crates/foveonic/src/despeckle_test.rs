@@ -52,7 +52,7 @@ fn metadata() -> Metadata {
 }
 
 #[test]
-fn preparation_uses_actual_calibration_factors_and_keeps_adjustment_independent() {
+fn preparation_uses_actual_calibration_factors_with_explicit_noise_dose() {
     // No WB lists are needed: threshold preparation consumes the exact factors
     // already selected/rounded for calibration, not a second metadata recipe.
     let mut metadata = metadata();
@@ -63,7 +63,7 @@ fn preparation_uses_actual_calibration_factors_and_keeps_adjustment_independent(
         tables(gains.map(|v| f64::from(v) * 0.5), [15., 15., 5.]).unwrap()
     );
     for gain in [0., 1., 1.3, 2.] {
-        let prepared = prepare(&metadata, gains, gain).unwrap();
+        let prepared = prepare(&metadata, gains, gain, 1.).unwrap();
         assert_eq!(prepared.tables, expected);
         assert_eq!(prepared.params.gain[0], gain);
     }
@@ -76,19 +76,27 @@ fn preparation_uses_actual_calibration_factors_and_keeps_adjustment_independent(
             values: vec![10., 10., 5.],
         },
     );
-    assert_eq!(prepare(&metadata, gains, 1.).unwrap().tables, expected);
+    assert_eq!(prepare(&metadata, gains, 1., 1.).unwrap().tables, expected);
     let adjustment = metadata.matrices.get_mut("DespAdjust").unwrap();
     adjustment.encoding = MatrixEncoding::Float32;
     adjustment.values = vec![10.1, 7.3, 2.8];
     assert_eq!(
-        prepare(&metadata, gains, 1.).unwrap().tables,
+        prepare(&metadata, gains, 1., 1.).unwrap().tables,
         tables(gains.map(f64::from), [10.1_f32, 7.3, 2.8].map(f64::from)).unwrap()
     );
+    for scale in [0.75_f32, 1.3] {
+        let adjustment = [10.1_f32, 7.3, 2.8].map(|v| f64::from(v) * f64::from(scale));
+        assert_eq!(
+            prepare(&metadata, gains, 1., scale).unwrap().tables,
+            tables(gains.map(f64::from), adjustment).unwrap()
+        );
+    }
     for invalid in [0., -1., f32::NAN, f32::INFINITY] {
-        assert!(prepare(&metadata, [invalid, gains[1], gains[2]], 1.).is_err());
+        assert!(prepare(&metadata, [invalid, gains[1], gains[2]], 1., 1.).is_err());
+        assert!(prepare(&metadata, gains, 1., invalid).is_err());
     }
     metadata.matrices.get_mut("DespAdjust").unwrap().values[0] = f64::NAN;
-    assert!(prepare(&metadata, gains, 1.).is_err());
+    assert!(prepare(&metadata, gains, 1., 1.).is_err());
 }
 
 #[test]
@@ -112,7 +120,7 @@ fn original_presets_share_calibration_factors_with_despeckle_thresholds() {
         for wb in metadata.lists["WhiteBalanceGains"].names() {
             let calibration = crate::calibration::prepare(metadata, wb).unwrap();
             let gains = std::array::from_fn(|c| calibration.params.gains[c]);
-            let prepared = prepare(metadata, gains, 1.).unwrap();
+            let prepared = prepare(metadata, gains, 1., 1.).unwrap();
             assert_eq!(
                 prepared.tables,
                 tables(gains.map(f64::from), [15., 15., 5.]).unwrap(),
@@ -190,7 +198,7 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_gain_and_input() {
 fn gpu_scale_matched_thresholds_keep_marginal_detail_and_sensor_gain_invariance() {
     let metadata = metadata();
     let factors = [4.6_f32, 2.2, 1.6];
-    let prepared = prepare(&metadata, factors, 1.).unwrap();
+    let prepared = prepare(&metadata, factors, 1., 1.).unwrap();
     let old_tables = tables(factors.map(|v| f64::from(v) * 0.5), [15., 15., 5.]).unwrap();
     let gap = (prepared.tables[200] + old_tables[200]) * 0.5;
     assert!(prepared.tables[200] > old_tables[200]);
@@ -208,7 +216,7 @@ fn gpu_scale_matched_thresholds_keep_marginal_detail_and_sensor_gain_invariance(
     for gain in [0., 1., 1.3] {
         let original: Vec<_> = source.iter().map(|v| v * gain).collect();
         let input = gpu.upload("WB scale fixture", &original).unwrap();
-        let prepared = prepare(&metadata, factors, gain).unwrap();
+        let prepared = prepare(&metadata, factors, gain, 1.).unwrap();
         let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
         let bytes = gpu.readback(&output).unwrap();
         let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
@@ -261,7 +269,7 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
         .render_artifacts(
             &source,
             &settings,
-            &["repair.layers", "despeckle.layers"],
+            &["highlight.layers", "despeckle.layers"],
             &mut Profile::new(false),
         )
         .unwrap();
@@ -283,11 +291,11 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
     let calibration =
         crate::calibration::prepare(&source.metadata, &settings.white_balance).unwrap();
     let factors = std::array::from_fn(|c| calibration.params.gains[c]);
-    let prepared = prepare(&source.metadata, factors, settings.sensor_gain).unwrap();
+    let prepared = prepare(&source.metadata, factors, settings.sensor_gain, 1.).unwrap();
     let expected = apply(&gpu, &images[0].buffer, &prepared, &mut Profile::default()).unwrap();
-    assert_eq!(
-        gpu.readback(&expected).unwrap(),
-        bytemuck::cast_slice::<f32, u8>(after)
+    assert!(
+        gpu.readback(&expected).unwrap() == bytemuck::cast_slice::<f32, u8>(after),
+        "despeckle graph input/parameter handoff differs from direct application"
     );
     for (x, y) in [(220, 705), (3624, 2264)] {
         let i = (y * source.metadata.width + x) * 3;
@@ -305,15 +313,15 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
         .render_artifacts(
             &source,
             &settings,
-            &["repair.layers"],
+            &["highlight.layers"],
             &mut Profile::new(false),
         )
         .unwrap();
     let Content::Image(i) = &again[0].content else {
         panic!()
     };
-    assert_eq!(
-        gpu.readback(&i.buffer).unwrap(),
-        bytemuck::cast_slice::<f32, u8>(before)
+    assert!(
+        gpu.readback(&i.buffer).unwrap() == bytemuck::cast_slice::<f32, u8>(before),
+        "retained pre-despeckle image changed"
     );
 }

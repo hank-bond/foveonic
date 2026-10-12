@@ -106,20 +106,6 @@ fn uniform_sensor_gain_preserves_signed_calibrated_layers_before_color() {
 }
 
 #[test]
-fn gaussian_weights_are_symmetric_finite_and_normalized() {
-    for sigma in [1e-8, 0.5, 1., 1.2, 16.] {
-        let weights = gaussian_weights(sigma);
-        assert!(weights.len() % 2 == 1);
-        assert!(weights.iter().all(|v| v.is_finite() && *v >= 0.));
-        assert!((weights.iter().sum::<f32>() - 1.).abs() < 2e-6);
-        assert!(weights
-            .iter()
-            .zip(weights.iter().rev())
-            .all(|(a, b)| a == b));
-    }
-}
-
-#[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn original_result_outlives_source_and_another_render() {
     let directory = std::env::var_os("FOVEONIC_FIXTURE_DIR").expect("set FOVEONIC_FIXTURE_DIR");
@@ -651,13 +637,64 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     assert!(!profile
         .gpu
         .iter()
-        .any(|t| t.stage == "directional local mean"));
+        .any(|t| t.stage == "directional local mean" || t.stage.starts_with("column")));
+    assert!(!profile
+        .host
+        .iter()
+        .any(|t| matches!(t.stage, "prepare column cuts" | "prepare pattern recipe")));
+    assert!(!profile.gpu.iter().any(|t| t.stage.starts_with("pattern")));
     let crate::inspection::Content::Image(edge) = artifacts.remove(0).content else {
         panic!("expected an image")
     };
     assert_eq!(edge.description.space, Space::ScalarField);
     assert_eq!(edge.description.layout, Layout::Scalar32Float);
     let before = engine.gpu.readback(&edge.buffer).unwrap();
+    profile = Profile::new(true);
+    let mut columns = engine
+        .render_artifacts(&source, &settings, &["column.layers"], &mut profile)
+        .unwrap();
+    assert!(profile.gpu.iter().any(|t| t.stage == "column conditioning"));
+    assert!(!profile.gpu.iter().any(|t| matches!(
+        t.stage,
+        "noise bilateral base"
+            | "directional local mean"
+            | "reconstruction luminance"
+            | "residual detail mixing"
+            | "tone"
+    )));
+    assert!(!profile.host.iter().any(|t| t.stage == "prepare color mode"));
+    let crate::inspection::Content::Image(column) = columns.remove(0).content else {
+        panic!("expected conditioned layers")
+    };
+    assert_eq!(column.description.space, Space::CalibratedLayers);
+    let column_before = engine.gpu.readback(&column.buffer).unwrap();
+    profile = Profile::new(true);
+    let raw = engine
+        .render_artifacts(&source, &settings, &["detail.raw-ratio"], &mut profile)
+        .unwrap();
+    assert!(!profile
+        .host
+        .iter()
+        .any(|t| t.stage == "prepare pattern recipe"));
+    assert!(!profile
+        .gpu
+        .iter()
+        .any(|t| t.stage.starts_with("pattern") || t.stage == "residual detail mixing"));
+    drop(raw);
+    profile = Profile::new(true);
+    let mask = engine
+        .render_artifacts(&source, &settings, &["pattern.mask"], &mut profile)
+        .unwrap();
+    assert!(profile.gpu.iter().any(|t| t.stage == "pattern minmax mask"));
+    assert!(!profile.gpu.iter().any(|t| matches!(
+        t.stage,
+        "pattern horizontal swaps"
+            | "pattern vertical swaps"
+            | "pattern ratio blend"
+            | "residual detail mixing"
+            | "tone"
+    )));
+    drop(mask);
     profile = Profile::new(true);
     let artifacts = engine
         .render_artifacts(
@@ -719,6 +756,155 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     drop(source);
     assert_eq!(engine.gpu.readback(&edge.buffer).unwrap(), before);
     assert_eq!(signal.settings.reconstruction, settings.reconstruction);
+    assert!(
+        engine.gpu.readback(&column.buffer).unwrap() == column_before,
+        "retained conditioned layers changed"
+    );
+}
+
+#[test]
+fn color_dq_selection_is_auto_only_with_reconstruction_and_explicit_off_wins() {
+    let mut s = Settings::new("Sunlight", "Standard");
+    assert!(!s.color_dq_selected());
+    s.reconstruction = Some(Default::default());
+    assert!(s.color_dq_selected());
+    s.color_dq_gain = Some(0.);
+    assert!(!s.color_dq_selected());
+    s.reconstruction = None;
+    s.color_dq_gain = Some(1.);
+    assert!(s.color_dq_selected());
+    s.color_dq_gain = Some(f32::NAN);
+    assert!(s.validate().is_err());
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn automatic_color_dq_matches_native_gain_manual_override_and_preserves_source() {
+    let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(dir.join("blue-parking-sign.x3f")).unwrap();
+    let engine = Engine::new().unwrap();
+    let mut s = Settings::new("Sunlight", "Standard");
+    s.reconstruction = Some(Default::default());
+    s.repair = None;
+    s.highlight_restoration = false;
+    s.despeckle = false;
+    s.row_correction = false;
+    let recipe = crate::noise::couplings(
+        &source.metadata,
+        &s.white_balance,
+        s.reconstruction.unwrap(),
+    )
+    .unwrap();
+    let gain = crate::noise::processing_gain(&source.metadata)
+        .unwrap()
+        .1
+        .min(recipe.color_dq_limit);
+    let auto = engine
+        .render_artifacts(&source, &s, &["color-dq.rgb"], &mut Profile::default())
+        .unwrap();
+    let crate::inspection::Content::Image(auto) = &auto[0].content else {
+        panic!()
+    };
+    let before = engine.gpu.readback(&auto.buffer).unwrap();
+    s.color_dq_gain = Some(gain);
+    let manual = engine
+        .render_artifacts(&source, &s, &["color-dq.rgb"], &mut Profile::default())
+        .unwrap();
+    let crate::inspection::Content::Image(manual) = &manual[0].content else {
+        panic!()
+    };
+    assert!(
+        engine.gpu.readback(&manual.buffer).unwrap() == before,
+        "automatic and explicit native gain differ"
+    );
+    s.color_dq_gain = Some(0.);
+    let mut profile = Profile::new(true);
+    engine
+        .render_artifacts(&source, &s, &["reconstruction.rgb"], &mut profile)
+        .unwrap();
+    assert!(!profile.gpu.iter().any(|t| t.stage == "ColorDQ"));
+    assert!(
+        engine.gpu.readback(&auto.buffer).unwrap() == before,
+        "manual/off route changed retained auto image"
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable() {
+    let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(dir.join("blue-parking-sign.x3f")).unwrap();
+    let engine = Engine::new().unwrap();
+    for reconstruction in [false, true] {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.sharpen_amount = 0.75;
+        if reconstruction {
+            settings.reconstruction = Some(Default::default());
+        }
+        let root = if reconstruction {
+            "reconstruction.rgb"
+        } else {
+            "color.rgb"
+        };
+        let mut profile = Profile::new(true);
+        let mut artifacts = engine
+            .render_artifacts(
+                &source,
+                &settings,
+                &[root, "detail.signal", "sharpen.rgb"],
+                &mut profile,
+            )
+            .unwrap();
+        assert!(!profile.host.iter().any(|t| t.stage == "prepare tone curve"));
+        assert!(!profile.gpu.iter().any(|t| t.stage == "tone"));
+        let crate::inspection::Content::Image(sharp) = artifacts.pop().unwrap().content else {
+            panic!()
+        };
+        let crate::inspection::Content::Image(signal) = artifacts.pop().unwrap().content else {
+            panic!()
+        };
+        let crate::inspection::Content::Image(input) = artifacts.pop().unwrap().content else {
+            panic!()
+        };
+        assert_eq!(sharp.description.space, input.description.space);
+        assert!(matches!(sharp.description.space, Space::LinearRgb(_)));
+        assert_eq!(signal.description.space, Space::SignedDetail);
+        let before = engine.gpu.readback(&input.buffer).unwrap();
+        let signal_before = engine.gpu.readback(&signal.buffer).unwrap();
+        settings.sensor_gain = 0.;
+        let zero = engine
+            .render_artifacts(
+                &source,
+                &settings,
+                &["sharpen.rgb"],
+                &mut Profile::default(),
+            )
+            .unwrap();
+        let crate::inspection::Content::Image(zero) = &zero[0].content else {
+            panic!()
+        };
+        let bytes = engine.gpu.readback(&zero.buffer).unwrap();
+        let samples = bytemuck::cast_slice::<u8, f32>(&bytes);
+        assert!(samples.iter().all(|v| v.is_finite()));
+        let [x0, y0, x1, y1] = zero.view.crop;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let p = ((y * zero.description.extent[0] + x) * 3) as usize;
+                assert!(
+                    samples[p..p + 3].iter().all(|v| *v == 0.),
+                    "zero-gain sharp image at {x},{y}"
+                );
+            }
+        }
+        assert!(
+            engine.gpu.readback(&input.buffer).unwrap() == before,
+            "sharp processing changed earlier RGB"
+        );
+        assert!(
+            engine.gpu.readback(&signal.buffer).unwrap() == signal_before,
+            "sharp processing changed retained signed signal"
+        );
+    }
 }
 
 #[test]
@@ -862,7 +1048,7 @@ fn reconstruction_originals_stay_finite_across_noise_choices_and_zero_gain() {
                 ..Default::default()
             });
             settings.sensor_gain = if choice == 2 { 0. } else { 1. };
-            settings.color_dq_gain = if choice == 4 { 1. } else { 0. };
+            settings.color_dq_gain = Some(if choice == 4 { 1. } else { 0. });
             let mut artifacts = engine
                 .render_artifacts(
                     &source,

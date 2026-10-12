@@ -11,7 +11,7 @@ implementation: conforming
 
 - Noise filtering and detail reconstruction **must** run in GPU shaders through the shared GUI/CLI engine.
 - The first implementation **must** follow the reference algorithms, stage order, and camera-derived parameters. Necessary departures **must** be documented and checked with arithmetic fixtures and photographs.
-- The first slice **must** provide full-resolution noise-aware base filtering, edge-guided smoothing, luminance conditioning, and residual detail reconstruction. Column/pattern correction and the reduced-resolution branch remain follow-on work.
+- Reconstruction **must** provide noise-aware base filtering, edge-guided smoothing, luminance conditioning, and residual detail reconstruction at the native metadata-selected full/local reduced/global geometry. Column/pattern conditioning and full-resolution detail/color/restoration **must** stay at their reference positions.
 - The graph **must** expose useful image stages for inspection and preserve the settings behind retained artifacts.
 - Controls **must** be shared by the GUI and CLI. Reconstruction **must** remain opt-in during photographic review. Camera-record repair and despeckling use the independently agreed enabled defaults in [processing graphs](./processing-graphs.md).
 - Modern alternatives **must** use distinct node implementations so their photographic results and resource use can be compared with the reference-style baseline.
@@ -20,7 +20,7 @@ implementation: conforming
 
 Use the reference's 4×4 processing tiles with 64-pixel context. Prepare camera noise models and control-table selections in Rust. Shader stages build a bilateral/edge-guided base, condition luminance with diffusion, derive residual gains, and restore detail after camera color conversion and optional ColorDQ. Keep the signed detail signal available for inspection.
 
-The first slice uses full-resolution filtering across ISO choices. Chroma and luminance controls select the reference's five table rows, numbered 0–4 with default 2. A finite nonnegative detail multiplier scales the reference residual strength, with 1× retaining that selection and 0× displaying the filtered base.
+Reconstruction selects native full-resolution or reduced local/global base filtering, restoring the base to full-resolution tile geometry before detail/color/restoration. Chroma and luminance controls select the reference's five table rows, numbered 0–4 with default 2. A finite nonnegative detail multiplier scales the reference residual strength, with 1× retaining that selection and 0× displaying the filtered base.
 
 ## Inspection and controls
 
@@ -54,7 +54,7 @@ These coefficients retain the reference's coupling and nonlinear effects; higher
 
 ## Baseline boundaries
 
-The full-resolution slice retains existing calibration/repair and explicit ColorDQ selection. Column correction, pattern suppression, row preprocessing, the high-ISO reduced-resolution branch, automatic ColorDQ selection, and highlight reconstruction remain follow-on work. Signed reference detail is available for inspection; final sharpening continues through the existing optional Gaussian node.
+The recipe retains existing calibration/repair. Shared noise metadata supplies despeckle dose while retaining actual calibration WB factors. ColorDQ selects native processing-ISO gain capped by the noise-derived limit with reconstruction; `Some(gain)`/`--color-dq-gain` overrides it and 0 explicitly disables it. GUI Auto ColorDQ restores the calculated choice; automatic selection is inactive without reconstruction. [Row preprocessing](./row-banding.md) and [highlight restoration](./highlight-restoration.md) are now integrated. [Full-resolution column correction](./column-conditioning.md) is integrated at the reference position before luminance/detail estimation. [Pattern conditioning](./pattern-conditioning.md) is integrated between ratio creation and residual mixing with distinct original-ratio/mask/conditioned-ratio inspection. The [metadata-selected reduced local/global branch](./reduced-reconstruction.md) is integrated. Signed reference detail is inspectable and now feeds [optional native final sharpening](./native-sharpening.md) before Exposure/tone. Gaussian radius/blur stages are retired; amount 0 remains Off.
 
 Shaders use float32 arithmetic and owned, initialized workspaces. Source images stay immutable. Tile extraction defines outer context corners, and directional passes preserve their initialized tile borders. The signed signal has a zero-filled two-pixel tile border. The 64-pixel context separates these workspace borders from projected cores. Numerical checks cover reference interior arithmetic, diffusion's delayed border writes, and overlap ramps.
 
