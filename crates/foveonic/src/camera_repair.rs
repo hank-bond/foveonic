@@ -241,7 +241,7 @@ pub(crate) fn apply(
             p.params.source[0],
             p.params.source[1],
             p.clusters.len() as u32,
-            0,
+            p.clusters.iter().map(|c| c.indices[1]).max().unwrap(),
         ]);
         gpu.dispatch(
             Kernel::ClusterRepair,

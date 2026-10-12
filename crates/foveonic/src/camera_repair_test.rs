@@ -114,6 +114,48 @@ fn preparation_preserves_full_low_badness_lists_and_cluster_quality_order() {
 }
 #[test]
 #[ignore = "requires a working GPU adapter"]
+fn cooperative_cluster_search_preserves_first_tie_empty_search_and_uniform_padding() {
+    let gpu = Gpu::new().unwrap();
+    let mut pixels = [10_f32, 20., 30.].repeat(96);
+    pixels[13 * 3..13 * 3 + 3].copy_from_slice(&[111., 222., 333.]);
+    pixels[14 * 3..14 * 3 + 3].copy_from_slice(&[999., 888., 777.]);
+    let clusters = gpu
+        .upload(
+            "Tie cluster",
+            &[Cluster {
+                rect: [0, 0, 12, 8],
+                indices: [0, 1, 0, 0],
+            }],
+        )
+        .unwrap();
+    let members = gpu.upload("Tie member", &[[69_u32, 69, 0, 0]]).unwrap();
+    let params = gpu.uniform(&[12_u32, 8, 1, 2]);
+    for (known, expected) in [(256_u32, [111_f32, 222., 333.]), (0, [0., 0., 0.])] {
+        let output = gpu.upload("Tie pixels", &pixels).unwrap();
+        let masks = gpu.upload("Tie masks", &[known; 96]).unwrap();
+        gpu.dispatch(
+            Kernel::ClusterRepair,
+            &[
+                (0, &output),
+                (1, &clusters),
+                (2, &members),
+                (3, &masks),
+                (4, &params),
+            ],
+            [1, 1],
+            &mut Default::default(),
+        );
+        let bytes = gpu.readback(&output).unwrap();
+        let values = bytemuck::cast_slice::<u8, f32>(&bytes);
+        assert_eq!(&values[69 * 3..69 * 3 + 3], &expected);
+        assert_eq!(&values[13 * 3..13 * 3 + 3], &pixels[13 * 3..13 * 3 + 3]);
+        let bytes = gpu.readback(&masks).unwrap();
+        assert_eq!(bytemuck::cast_slice::<u8, u32>(&bytes)[69], known | 7);
+    }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
 fn gpu_complete_camera_matches_native_raw_detection_lists_and_clusters() {
     let (m, f) = fixture();
     let p = prepare(&m, Threshold::Manual(2)).unwrap();

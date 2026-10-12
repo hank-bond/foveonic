@@ -59,6 +59,12 @@ cargo build --offline --release -p foveonic --example profile_pipeline
 
 Initial goldens are created only when absent. Further rounds fail on any changed full-buffer byte. Keep baseline files: `.local/pipeline-performance/baseline/{logs,exports,goldens}`. Small exports also permit direct encoded-TIFF comparison. Counters describe engine-owned work, not hidden driver staging or other shared-device users. Wrapper counter tests, workspace tests, strict Clippy and documentation/format checks pass before this instrumentation-only checkpoint.
 
+## Round 1: cooperative cluster candidate search
+
+Independent candidate searches run in one 64-lane workgroup; clusters/member updates remain sequential with storage barriers. Each lane retains native float accumulation order. Reduction chooses lowest cost then original row-major/mapping rank, preserving strict first-best ties. Host metadata supplies a uniform maximum member loop bound; unused slots do no repairs. No new submissions or readbacks.
+
+GPU matching fell from ~1890–1900 ms to 29.5–29.8 ms. Completed warm all-enabled renders now measure 1994/2196/1850/4377/2174/3752 ms (blue/leaves/rocks/flower/turquoise/yellow), versus 3912/4114/3697/6244/4125/5729 ms. Six full-sensor float buffers and all six resized TIFFs are **byte-identical** to baseline. Native/order/capacity/dark-defect component regressions, explicit cross-lane first-tie/no-candidate/uniform-padding tests, workspace and strict Clippy checks pass. Evidence: `.local/pipeline-performance/{clusters,clusters-warm}` and `/tmp/foveonic-opt-clusters-*.log`. Work remains GPU-only with immutable earlier artifacts.
+
 ## Output-changing alternatives for later review
 
 No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.
