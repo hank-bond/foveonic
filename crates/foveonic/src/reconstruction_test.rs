@@ -80,7 +80,7 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
             (6, &lookup),
             (7, &radii),
         ],
-        groups(p),
+        bilateral_groups(p),
         &mut trace,
     );
     gpu.finish_trace(&trace, &mut Profile::default()).unwrap();
@@ -299,7 +299,7 @@ fn reference_noise_and_detail_components_match_synthetic_fixtures() {
             (6, &lookup),
             (7, &radii),
         ],
-        groups(p),
+        bilateral_groups(p),
         &mut trace,
     );
     gpu.finish_trace(&trace, &mut profile).unwrap();

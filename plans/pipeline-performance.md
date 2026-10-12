@@ -115,6 +115,12 @@ Repeating the 16-tile geometry/overlap traversal per RGB component cost ~40.5 ms
 
 Warm completed renders are 866/856/816/981/777/940 ms; blue still fluctuates. Every full float and TIFF matches baseline. Full/reduced/global/signed/overlap fixtures, ordinary workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{project-vector,project-scalar,project-scalar-warm}` and `/tmp/foveonic-opt-project-*.log`.
 
+## Round 10: bilateral workgroup layout, unchanged per-pixel FMA
+
+Tested 8×8, 16×8 and 32×8 groups on the M1 Pro, with matching host/test grids. 32×8 puts neighboring row pixels in the same SIMD group, with 256 threads within standard limits. Bilateral work falls from 83/92/32/41/49/82 to 64/72/25/34/39/66 ms. No arithmetic, buffer or pass changes; all six full floats/TIFFs remain exact.
+
+Warm renders are 779/852/800/970/770/925 ms. Full ignored suite (44 core plus GUI worker), workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{bilateral-group,bilateral-32,bilateral-warm}` and `/tmp/foveonic-opt-bilateral-*.log`. This layout remains to be benchmarked on other GPU backends with the rest of cross-platform runtime validation.
+
 ## Output-changing alternatives for later review
 
 No output-changing alternative is installed in the equivalent-output pass. Tested/rejected experiments:

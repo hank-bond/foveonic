@@ -30,6 +30,10 @@ fn tables(params: Parameters) -> Vec<f32> {
 fn groups(params: Parameters) -> [u32; 2] {
     params.atlas_extent().map(|v| v.div_ceil(8))
 }
+fn bilateral_groups(params: Parameters) -> [u32; 2] {
+    let [width, height] = params.atlas_extent();
+    [width.div_ceil(32), height.div_ceil(8)]
+}
 
 pub(crate) fn project(
     gpu: &Gpu,
@@ -298,7 +302,7 @@ fn filter(
             (6, &tables),
             (7, &radii),
         ],
-        groups(params),
+        bilateral_groups(params),
         &mut trace,
     );
     // Median values are reused across neighboring gradients, then this buffer

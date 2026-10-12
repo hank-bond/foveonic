@@ -92,7 +92,7 @@ fn radius_map(@builtin(global_invocation_id) id: vec3<u32>) {
     radii[id.y * grid.x + id.x] = radius;
 }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(32, 8)
 fn bilateral(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
     let p = atlas_position(id.xy, params);
