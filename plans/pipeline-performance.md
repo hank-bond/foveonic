@@ -91,6 +91,12 @@ Parallelizing coefficients into a second dispatch dimension was output-exact but
 
 Warm all-enabled renders are 1118/1108/1036/1556/1041/1373 ms. Six full float buffers and TIFFs remain byte-identical. Native bank/row-count/gain/bounds regression, workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{row-fit,row-load,row-transpose,row-warm}` and `/tmp/foveonic-opt-row-*.log`. This is a private storage/index change, not a new photographic algorithm or compatibility path.
 
+## Round 6: cooperative donor RGB prefetch, still serial float sums
+
+One 64-lane workgroup per bin loads the next RGB chunk into shared memory. Lane zero consumes that chunk in original donor order, retaining inline ratio arithmetic and the original recurrence. Uniform range loading makes barriers valid, including empty bins and partial chunks. This adds neither passes nor full-image buffers. Unlike rejected floating-ratio precomputation, RGB prefetch is byte-exact on all six originals.
+
+Flower/yellow table work falls from ~421/211 to ~126/58 ms. Warm all-enabled renders are 1120/1108/1038/1252/1035/1215 ms; every full float buffer and TIFF still matches baseline byte-for-byte. All highlight connectivity/gain/ownership/selectivity/stable-bin tests, workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{highlight-prefetch,highlight-prefetch-warm}` and `/tmp/foveonic-opt-highlight-prefetch-*.log`.
+
 ## Output-changing alternatives for later review
 
 No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.

@@ -17,6 +17,8 @@ struct Params {source:vec4<u32>,area:vec4<u32>,value:vec4<f32>};
 @group(0) @binding(12) var<storage,read_write> bin_starts:array<u32>;
 var<workgroup> ranks:array<u32,256>;
 var<workgroup> histogram:array<atomic<u32>,256>;
+var<workgroup> donor_range:vec2<u32>;
+var<workgroup> donor_rgb:array<vec3<f32>,64>;
 fn in_image(xy:vec2<u32>)->bool{return xy.x<params.source.x && xy.y<params.source.y;}
 fn work(xy:vec2<u32>)->bool{return all(xy>=params.area.xy) && all(xy<=params.area.zw);}
 fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u])/params.value.y;}
@@ -107,16 +109,25 @@ fn bin_scatter(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocat
         sorted_donors[index]=donors[id.x];
     }
 }
-@compute @workgroup_size(32)
-fn correction_table(@builtin(global_invocation_id)id:vec3<u32>){
-    let bucket=id.x;var sum=0.0;var count=0.0;
-    // Counting-sort keeps exactly the original row-major subsequence per bin.
-    // Keep ratio arithmetic here: materializing it can change FMA contraction.
-    for(var i=bin_starts[bucket];i<bin_starts[bucket+1u];i++){
-        let rgb=max(color(sorted_donors[i]),vec3(1.0));let bin=u32(rgb.x*255.0/(rgb.x+rgb.y));
-        if bin==bucket{sum+=rgb.z/rgb.y;count+=1.0;}
+@compute @workgroup_size(64)
+fn correction_table(@builtin(local_invocation_index)lane:u32,@builtin(workgroup_id)group:vec3<u32>){
+    let bucket=group.x;
+    if lane==0u{donor_range=vec2(bin_starts[bucket],bin_starts[bucket+1u]);}
+    let range=workgroupUniformLoad(&donor_range);var sum=0.0;var count=0.0;
+    // Parallel RGB loading; the original bin recurrence remains sequential.
+    // Ratio arithmetic stays inline rather than materializing rounded ratios.
+    for(var base=range.x;base<range.y;base+=64u){
+        if base+lane<range.y{donor_rgb[lane]=max(color(sorted_donors[base+lane]),vec3(1.0));}
+        workgroupBarrier();
+        if lane==0u{
+            for(var i=0u;i<min(64u,range.y-base);i++){
+                let rgb=donor_rgb[i];let bin=u32(rgb.x*255.0/(rgb.x+rgb.y));
+                if bin==bucket{sum+=rgb.z/rgb.y;count+=1.0;}
+            }
+        }
+        workgroupBarrier();
     }
-    lookup[bucket]=sum;lookup[256u+bucket]=count;
+    if lane==0u{lookup[bucket]=sum;lookup[256u+bucket]=count;}
 }
 @compute @workgroup_size(1)
 fn table_interpolation(){

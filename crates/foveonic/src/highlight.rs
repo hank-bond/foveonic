@@ -268,7 +268,7 @@ pub(crate) fn apply(
                 (10, &sorted),
                 (12, &starts),
             ],
-            [8, 1],
+            [256, 1],
             &mut trace,
         );
         gpu.dispatch(
