@@ -274,7 +274,7 @@ fn filter(
     let radii = gpu.storage("Adaptive noise radii", block_mean.size())?;
     let tables = gpu.upload("Reference noise lookup tables", &tables(params))?;
     let uniform = gpu.uniform(&params);
-    let mut trace = gpu.trace(profile.enabled, 6);
+    let mut trace = gpu.trace(profile.enabled, 7);
     if params.geometry[3] == 0 {
         gpu.dispatch(
             Kernel::NoiseBlock,
@@ -301,9 +301,18 @@ fn filter(
         groups(params),
         &mut trace,
     );
+    // Median values are reused across neighboring gradients, then this buffer
+    // is fully overwritten by the horizontal directional-mean pass.
+    let horizontal = gpu.storage("Cross-median / directional-mean workspace", n * 12)?;
+    gpu.dispatch(
+        Kernel::NoiseMedian,
+        &[(0, &filtered), (1, &uniform), (2, &horizontal)],
+        groups(params),
+        &mut trace,
+    );
     gpu.dispatch(
         Kernel::NoiseEdge,
-        &[(0, &filtered), (1, &uniform), (4, &edges), (6, &tables)],
+        &[(0, &horizontal), (1, &uniform), (4, &edges), (6, &tables)],
         groups(params),
         &mut trace,
     );
@@ -311,7 +320,6 @@ fn filter(
         gpu.finish_trace(&trace, profile)?;
         return Ok(Filtered { tiles: None, edges });
     }
-    let horizontal = gpu.storage("Immutable directional mean workspace", n * 12)?;
     let prefix = gpu.storage("Directional prefix sums", n * 12)?;
     let weights = gpu.storage("Directional accumulated weights", n * 4)?;
     gpu.dispatch(

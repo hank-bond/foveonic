@@ -79,6 +79,12 @@ The old ~790 ms camera kernel combined immutable-input detection over 143827 rec
 
 Detection is ~0.4–4.4 ms, capped prefixes ~19–21 ms, scatter ~0.1 ms, and ordered correction ~200–203 ms. Two record-sized uint workspaces (~1.15 MB total) and three passes trade for ~560 ms saved across every original. Full all-enabled warm renders are now 1555/1572/1278/2082/1501/1894 ms (blue/leaves/rocks/flower/turquoise/yellow), versus baseline 3912/4114/3697/6244/4125/5729 ms. Full float buffers and TIFFs remain byte-identical. All five targeted camera GPU regressions (native/order/capacity/tie/dark defects), workspace and strict Clippy pass. Evidence: `.local/pipeline-performance/{camera-detect,camera-detect-warm}` and `/tmp/foveonic-opt-camera-detect-*.log`.
 
+## Round 4: reuse cross medians instead of repeating neighborhood sorts
+
+The edge kernel recomputed five cross medians for each of five neighboring gradients at every pixel. A single GPU pass computes identical median RGB once, with the same zero outer columns and initialized tile boundaries. The edge kernel reads those medians but keeps its original gradient/averaging/LUT expressions. The median buffer is subsequently fully overwritten as the existing horizontal-mean workspace; all-enabled storage allocation is unchanged. One pass/submission is added, with no readback or result cache.
+
+Median plus edge work now takes ~13–24 ms on local/full photos, versus ~206–363 ms before (rocks global ~2.7 ms versus ~55 ms). All-enabled warm renders are 1280/1378/1218/1733/1246/1553 ms. Six float buffers and TIFFs remain byte-identical; full/reduced/global base, signed-detail, border, restored-pattern-seed and overlap component checks pass, as do workspace/strict Clippy. Evidence: `.local/pipeline-performance/{medians,medians-warm}` and `/tmp/foveonic-opt-medians-*.log`. Edge-only inspection uses the needed median workspace but still skips directional means/color/detail.
+
 ## Output-changing alternatives for later review
 
 No alternatives are implemented in the equivalent-output pass. Possible later choices include block-partial donor sums (different float32 association), simultaneous rather than sequential defect updates (different adjacent repairs), or a simpler modern edge/noise model instead of the native processing recipe. These require photographic review and explicit acceptance; disabling corrections or lowering noise quality is not an optimization in this pass.

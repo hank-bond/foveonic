@@ -166,12 +166,23 @@ fn median_cross(p: vec3<u32>, delta: vec2<i32>) -> vec3<f32> {
     }
     return values[2];
 }
+@compute @workgroup_size(8,8)
+fn cross_medians(@builtin(global_invocation_id)id:vec3<u32>){
+    if id.x>=params.tile.x||id.y>=params.tile.y*params.source.z*params.source.w{return;}
+    let p=atlas_position(id.xy,params);put(tile_pixel(p,params),median_cross(p,vec2(0)));
+}
+fn cached_median(p:vec3<u32>,delta:vec2<i32>)->vec3<f32>{
+    let position=vec2<i32>(p.xy)+delta;
+    if position.x<=0||position.x>=i32(params.tile.x)-1{return vec3(0.0);}
+    let xy=vec2<u32>(clamp(position,vec2(0),vec2<i32>(params.tile.xy)-1));
+    return rgb(tile_pixel(vec3(xy,p.z),params));
+}
 fn gradient(p: vec3<u32>, offset: vec2<i32>) -> f32 {
     let x=i32(p.x)+offset.x;if x<=0||x>=i32(params.tile.x)-1{return 0.0;}
-    let center = median_cross(p, offset);
+    let center = cached_median(p, offset);
     let inverse = 1. / max(params.model[0].xyz + params.model[1].xyz * center, vec3(1e-12));
-    let dx = (median_cross(p, offset + vec2(-1, 0)) - median_cross(p, offset + vec2(1, 0))) * inverse;
-    let dy = (median_cross(p, offset + vec2(0, -1)) - median_cross(p, offset + vec2(0, 1))) * inverse;
+    let dx = (cached_median(p, offset + vec2(-1, 0)) - cached_median(p, offset + vec2(1, 0))) * inverse;
+    let dy = (cached_median(p, offset + vec2(0, -1)) - cached_median(p, offset + vec2(0, 1))) * inverse;
     return sqrt((max(dx.x * dx.x, max(dx.y * dx.y, dx.z * dx.z)) + max(dy.x * dy.x, max(dy.y * dy.y, dy.z * dy.z))) * 0.5);
 }
 @compute @workgroup_size(8, 8)
