@@ -9,6 +9,81 @@ fn values(v: &serde_json::Value) -> Vec<f64> {
         .collect()
 }
 #[test]
+#[ignore = "requires a working GPU adapter"]
+fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
+    let gpu = Gpu::new().unwrap();
+    let rgb: Vec<f32> = (0..600)
+        .flat_map(|i| [((i % 13 + 1) * 10) as f32, 100., (7 + i % 5) as f32])
+        .collect();
+    let ids: Vec<u32> = (0..270).map(|i| i * 2).collect();
+    let bucket = |p: u32| {
+        let c = &rgb[p as usize * 3..][..3];
+        (c[0] * 255. / (c[0] + c[1])) as u32
+    };
+    let mut expected = ids.clone();
+    expected.sort_by_key(|p| bucket(*p));
+    let input = gpu.upload("Bin RGB", &rgb).unwrap();
+    let donors = gpu.upload("Bin donors", &ids).unwrap();
+    let counts = gpu.upload("Bin donor total", &[0_u32, 0, 0, 270]).unwrap();
+    let marks = gpu.storage("Reused bin scratch", 600 * 4).unwrap();
+    let histogram = gpu.storage("Bin histograms", 3 * 256 * 4).unwrap();
+    let starts = gpu.storage("Bin offsets", 257 * 4).unwrap();
+    let sorted = gpu.storage("Stable bin output", 600 * 4).unwrap();
+    let params = gpu.uniform(&Params {
+        source: [30, 20, 600, 3],
+        area: [0; 4],
+        value: [0., 1., 0., 0.],
+    });
+    gpu.dispatch(
+        Kernel::HighlightBinHistogram,
+        &[
+            (2, &params),
+            (5, &input),
+            (6, &marks),
+            (7, &counts),
+            (8, &donors),
+            (11, &histogram),
+        ],
+        [3, 1],
+        &mut Default::default(),
+    );
+    gpu.dispatch(
+        Kernel::HighlightBinPrefix,
+        &[(2, &params), (7, &counts), (11, &histogram), (12, &starts)],
+        [1, 1],
+        &mut Default::default(),
+    );
+    gpu.dispatch(
+        Kernel::HighlightBinScatter,
+        &[
+            (2, &params),
+            (6, &marks),
+            (7, &counts),
+            (8, &donors),
+            (10, &sorted),
+            (11, &histogram),
+            (12, &starts),
+        ],
+        [3, 1],
+        &mut Default::default(),
+    );
+    let bytes = gpu.readback(&sorted).unwrap();
+    assert_eq!(&bytemuck::cast_slice::<u8, u32>(&bytes)[..270], expected);
+    let bytes = gpu.readback(&starts).unwrap();
+    for (b, &start) in bytemuck::cast_slice::<u8, u32>(&bytes).iter().enumerate() {
+        assert_eq!(
+            start as usize,
+            ids.iter().filter(|p| bucket(**p) < b as u32).count()
+        );
+    }
+    let bytes = gpu.readback(&marks).unwrap();
+    assert_eq!(
+        &bytemuck::cast_slice::<u8, u32>(&bytes)[..270],
+        ids.iter().map(|p| bucket(*p)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn camera_saturation_maps_preserve_original_positions_and_validate_coverage() {
     let mut m = Metadata {
         width: 8,

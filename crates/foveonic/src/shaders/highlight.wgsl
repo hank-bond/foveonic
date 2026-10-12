@@ -12,7 +12,11 @@ struct Params {source:vec4<u32>,area:vec4<u32>,value:vec4<f32>};
 @group(0) @binding(7) var<storage,read_write> counts:array<u32>;
 @group(0) @binding(8) var<storage,read_write> donors:array<u32>;
 @group(0) @binding(9) var<storage,read_write> lookup:array<f32>;
+@group(0) @binding(10) var<storage,read_write> sorted_donors:array<u32>;
+@group(0) @binding(11) var<storage,read_write> bin_counts:array<u32>;
+@group(0) @binding(12) var<storage,read_write> bin_starts:array<u32>;
 var<workgroup> ranks:array<u32,256>;
+var<workgroup> histogram:array<atomic<u32>,256>;
 fn in_image(xy:vec2<u32>)->bool{return xy.x<params.source.x && xy.y<params.source.y;}
 fn work(xy:vec2<u32>)->bool{return all(xy>=params.area.xy) && all(xy<=params.area.zw);}
 fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u])/params.value.y;}
@@ -73,13 +77,49 @@ fn donor_prefix(){var sum=0u;for(var i=0u;i<params.source.w;i++){let count=count
 fn donor_scatter(@builtin(global_invocation_id)id:vec3<u32>,@builtin(workgroup_id)group:vec3<u32>){
     let p=id.x;if p>=params.source.z{return;}let rank=marks[p];if rank!=0u{donors[counts[group.x]+rank-1u]=p;}
 }
-@compute @workgroup_size(1)
-fn correction_table(){
-    for(var i=0u;i<256u;i++){lookup[i]=0.0;lookup[256u+i]=0.0;}
-    for(var i=0u;i<counts[params.source.w];i++){
-        let rgb=max(color(donors[i]),vec3(1.0));let bin=u32(rgb.x*255.0/(rgb.x+rgb.y));
-        lookup[bin]+=rgb.z/rgb.y;lookup[256u+bin]+=1.0;
+@compute @workgroup_size(256)
+fn bin_histogram(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3<u32>){
+    atomicStore(&histogram[local],0u);workgroupBarrier();
+    if id.x<counts[params.source.w]{
+        let rgb=max(color(donors[id.x]),vec3(1.0));let bucket=u32(rgb.x*255.0/(rgb.x+rgb.y));
+        // Original rank scratch is no longer needed after donor_scatter.
+        marks[id.x]=bucket;atomicAdd(&histogram[bucket],1u);
     }
+    workgroupBarrier();bin_counts[group.x*256u+local]=atomicLoad(&histogram[local]);
+}
+@compute @workgroup_size(256)
+fn bin_prefix(@builtin(local_invocation_index)bucket:u32){
+    let blocks=(counts[params.source.w]+255u)/256u;var sum=0u;
+    for(var block=0u;block<blocks;block++){
+        let index=block*256u+bucket;let count=bin_counts[index];bin_counts[index]=sum;sum+=count;
+    }
+    ranks[bucket]=sum;workgroupBarrier();
+    for(var step=1u;step<256u;step*=2u){var previous=0u;if bucket>=step{previous=ranks[bucket-step];}workgroupBarrier();ranks[bucket]+=previous;workgroupBarrier();}
+    bin_starts[bucket]=ranks[bucket]-sum;if bucket==255u{bin_starts[256]=ranks[bucket];}
+}
+@compute @workgroup_size(256)
+fn bin_scatter(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3<u32>){
+    let valid=id.x<counts[params.source.w];var bucket=256u;if valid{bucket=marks[id.x];}
+    ranks[local]=bucket;workgroupBarrier();
+    if valid{
+        var prior=0u;for(var i=0u;i<local;i++){if ranks[i]==bucket{prior+=1u;}}
+        let index=bin_starts[bucket]+bin_counts[group.x*256u+bucket]+prior;
+        sorted_donors[index]=donors[id.x];
+    }
+}
+@compute @workgroup_size(32)
+fn correction_table(@builtin(global_invocation_id)id:vec3<u32>){
+    let bucket=id.x;var sum=0.0;var count=0.0;
+    // Counting-sort keeps exactly the original row-major subsequence per bin.
+    // Keep ratio arithmetic here: materializing it can change FMA contraction.
+    for(var i=bin_starts[bucket];i<bin_starts[bucket+1u];i++){
+        let rgb=max(color(sorted_donors[i]),vec3(1.0));let bin=u32(rgb.x*255.0/(rgb.x+rgb.y));
+        if bin==bucket{sum+=rgb.z/rgb.y;count+=1.0;}
+    }
+    lookup[bucket]=sum;lookup[256u+bucket]=count;
+}
+@compute @workgroup_size(1)
+fn table_interpolation(){
     var first=256u;
     for(var i=0u;i<256u;i++){if lookup[i]>0.0{lookup[i]/=lookup[256u+i];if first==256u{first=i;}}}
     if first<256u{var previous=lookup[first];for(var i=0u;i<256u;i++){if lookup[i]==0.0{lookup[i]=previous;}previous=lookup[i];}}

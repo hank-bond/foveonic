@@ -85,6 +85,10 @@ pub enum Kernel {
     NoiseGlobalTile,
     NoisePatternSeed,
     NoiseGlobalScalarTile,
+    HighlightInterpolation,
+    HighlightBinHistogram,
+    HighlightBinPrefix,
+    HighlightBinScatter,
 }
 
 impl Kernel {
@@ -150,6 +154,10 @@ impl Kernel {
             Self::NoiseGlobalTile => "global reduced tile context",
             Self::NoisePatternSeed => "native transposed pattern seed",
             Self::NoiseGlobalScalarTile => "global reduced edge context",
+            Self::HighlightInterpolation => "highlight table interpolation",
+            Self::HighlightBinHistogram => "highlight donor bin counts",
+            Self::HighlightBinPrefix => "highlight donor bin offsets",
+            Self::HighlightBinScatter => "stable highlight donor bin grouping",
         }
     }
 }
@@ -254,6 +262,13 @@ impl Gpu {
                 include_str!("shaders/noise_base.wgsl"),
                 "global_tile_scalar",
             ),
+            (
+                include_str!("shaders/highlight.wgsl"),
+                "table_interpolation",
+            ),
+            (include_str!("shaders/highlight.wgsl"), "bin_histogram"),
+            (include_str!("shaders/highlight.wgsl"), "bin_prefix"),
+            (include_str!("shaders/highlight.wgsl"), "bin_scatter"),
         ];
         let pipelines = kernels
             .iter()

@@ -163,7 +163,7 @@ pub(crate) fn apply(
         p.params.source[0].div_ceil(8),
         p.params.source[1].div_ceil(8),
     ];
-    let mut trace = gpu.trace(profile.enabled, 8);
+    let mut trace = gpu.trace(profile.enabled, 12);
     gpu.dispatch(
         Kernel::HighlightFlags,
         &[(0, &original), (1, &flags), (2, &uniform)],
@@ -195,6 +195,12 @@ pub(crate) fn apply(
             u64::from(p.params.source[3] + 1) * 4,
         )?;
         let donors = gpu.storage("Ordered highlight donor indices", size)?;
+        let sorted = gpu.storage("Stable per-bin highlight donor indices", size)?;
+        let histogram = gpu.storage(
+            "Highlight block-bin counts/prefixes",
+            u64::from(p.params.source[3]) * 256 * 4,
+        )?;
+        let starts = gpu.storage("Highlight bin start offsets", 257 * 4)?;
         let lookup = gpu.storage("Highlight blue correction table and counts", 512 * 4)?;
         gpu.dispatch(
             Kernel::HighlightDonors,
@@ -221,14 +227,53 @@ pub(crate) fn apply(
             &mut trace,
         );
         gpu.dispatch(
+            Kernel::HighlightBinHistogram,
+            &[
+                (2, &uniform),
+                (5, input),
+                (6, &marks),
+                (7, &counts),
+                (8, &donors),
+                (11, &histogram),
+            ],
+            [p.params.source[3], 1],
+            &mut trace,
+        );
+        gpu.dispatch(
+            Kernel::HighlightBinPrefix,
+            &[(2, &uniform), (7, &counts), (11, &histogram), (12, &starts)],
+            [1, 1],
+            &mut trace,
+        );
+        gpu.dispatch(
+            Kernel::HighlightBinScatter,
+            &[
+                (2, &uniform),
+                (6, &marks),
+                (7, &counts),
+                (8, &donors),
+                (10, &sorted),
+                (11, &histogram),
+                (12, &starts),
+            ],
+            [p.params.source[3], 1],
+            &mut trace,
+        );
+        gpu.dispatch(
             Kernel::HighlightTable,
             &[
                 (2, &uniform),
                 (5, input),
-                (7, &counts),
-                (8, &donors),
                 (9, &lookup),
+                (10, &sorted),
+                (12, &starts),
             ],
+            [8, 1],
+            &mut trace,
+        );
+        gpu.dispatch(
+            Kernel::HighlightInterpolation,
+            &[(9, &lookup)],
             [1, 1],
             &mut trace,
         );
