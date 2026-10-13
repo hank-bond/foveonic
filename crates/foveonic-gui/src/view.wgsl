@@ -2,12 +2,19 @@
 struct Params { rect: vec4<f32>, options: vec4<f32> }
 @group(0) @binding(0) var image: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
+@group(0) @binding(2) var input_image: texture_2d<f32>;
 struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
 @vertex fn vs(@builtin(vertex_index) i: u32) -> Vertex {
     let xy = array<vec2<f32>, 6>(vec2(0.,0.), vec2(1.,0.), vec2(0.,1.), vec2(0.,1.), vec2(1.,0.), vec2(1.,1.));
     var out: Vertex; out.uv = xy[i]; out.position = vec4(xy[i].x * 2. - 1., 1. - xy[i].y * 2., 0., 1.); return out;
 }
-fn fetch(p: vec2<i32>) -> vec3<f32> { return textureLoad(image, clamp(p, vec2(0), vec2<i32>(textureDimensions(image)) - 1), 0).rgb; }
+fn fetch(p: vec2<i32>) -> vec3<f32> {
+    let q = clamp(p, vec2(0), vec2<i32>(textureDimensions(image)) - 1);
+    let output = textureLoad(image, q, 0).rgb;
+    // Subtract immutable, same-geometry signal samples before filtering and display mapping.
+    if params.options.z < -2.5 { return output - textureLoad(input_image, q, 0).rgb; }
+    return output;
+}
 fn sample_at(uv: vec2<f32>) -> vec3<f32> {
     let p = uv * vec2<f32>(textureDimensions(image)) - 0.5;
     let base = vec2<i32>(floor(p)); let f = fract(p);

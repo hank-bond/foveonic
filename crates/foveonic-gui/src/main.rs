@@ -1,4 +1,4 @@
-//! Runs a three-pane Merrill workspace with current-buffer inspection, reorderable tools, and UI-only persistence.
+//! Runs a three-pane Merrill workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
 mod advanced;
 mod browser;
@@ -13,6 +13,7 @@ mod navigator;
 mod preferences;
 mod scopes;
 mod sections;
+mod sidecars;
 mod smoke;
 mod timing;
 mod viewport;
@@ -30,12 +31,14 @@ struct App {
     browser: browser::Browser,
     worker: worker::Worker,
     capture: capture::Loader,
+    sidecars: sidecars::Session,
     metadata: Option<Arc<Metadata>>,
     selected: Option<PathBuf>,
     settings: Settings,
     camera_overrides: [String; 2],
     output: String,
     channel: i32,
+    difference: inspect::Difference,
     frame: Option<worker::Frame>,
     scope_images: Option<scopes::Images>,
     viewport: viewport::Viewport,
@@ -79,12 +82,17 @@ impl App {
             browser: browser::Browser::new(cc.egui_ctx.clone()),
             worker: worker::Worker::new(engine, cc.egui_ctx.clone()),
             capture: capture::Loader::new(cc.egui_ctx.clone()),
+            sidecars: sidecars::Session::new(
+                cc.egui_ctx.clone(),
+                std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_none(),
+            ),
             metadata: None,
             selected: None,
             settings,
             camera_overrides: overrides,
             output: "final".into(),
             channel: -1,
+            difference: Default::default(),
             frame: None,
             scope_images: None,
             viewport: Default::default(),
@@ -126,6 +134,7 @@ impl App {
                 } else {
                     self.revision += 1;
                     self.selected = None;
+                    self.sidecars.clear();
                     self.capture.select(None);
                     self.metadata = None;
                     self.frame = None;
@@ -142,16 +151,23 @@ impl App {
     }
     fn select(&mut self, path: PathBuf) {
         self.capture.select(Some(path.clone()));
+        self.sidecars.select(path.clone());
         self.selected = Some(path);
-        reset_camera_selection(&mut self.settings, &self.camera_overrides);
+        self.settings = Settings::new("", "");
+        self.revision += 1;
+        self.worker.clear();
+        self.busy = false;
+        self.status = "Loading editing recipe…".into();
         self.metadata = None;
         self.frame = None;
         self.scope_images = None;
         self.viewport.reset();
         viewport::clear(&self.render_state);
-        self.submit(None);
     }
     fn submit(&mut self, export: Option<PathBuf>) {
+        if !self.sidecars.ready() {
+            return;
+        }
         if let Some(path) = &self.selected {
             self.revision += 1;
             self.busy = true;
@@ -172,6 +188,10 @@ impl App {
                 path: path.clone(),
                 settings: self.settings.clone(),
                 output: self.output.clone(),
+                difference: self.difference.enabled
+                    && self.channel >= 0
+                    && foveonic::inspection::comparison_input(&self.settings, &self.output)
+                        .is_some(),
                 export,
             });
         }
@@ -214,6 +234,7 @@ impl App {
                         !self.exporting
                             && self.selected.as_ref() == Some(&frame.path)
                             && self.output == frame.output
+                            && (!self.difference.enabled || frame.comparison.is_some())
                             && self
                                 .frame
                                 .as_ref()
@@ -324,15 +345,23 @@ impl App {
             ui.add(egui::Label::new(&self.status).truncate())
                 .on_hover_text(&self.status);
         });
+        if let Some(warning) = self.sidecars.warning() {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(egui::Color32::YELLOW, warning);
+                if self.sidecars.can_retry() && ui.button("Retry saving edits").clicked() {
+                    self.sidecars.retry();
+                }
+            });
+        }
     }
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
         match section {
             Section::Navigator => {
-                let channel = self.displayed_channel();
+                let mapping = self.displayed_mapping();
                 let texture = self
                     .frame
                     .as_ref()
-                    .map(|frame| self.navigator.image(frame, channel));
+                    .map(|frame| self.navigator.image(frame, mapping));
                 let preview = self
                     .selected
                     .as_ref()
@@ -370,7 +399,7 @@ impl App {
             }
             Section::Editing => {
                 let mut changed = false;
-                ui.add_enabled_ui(!self.exporting, |ui| {
+                ui.add_enabled_ui(!self.exporting && self.sidecars.ready(), |ui| {
                     changed =
                         controls::processing(ui, &mut self.settings, self.metadata.as_deref());
                 });
@@ -423,18 +452,67 @@ impl App {
             -1
         }
     }
+    fn displayed_mapping(&self) -> viewport::Mapping {
+        let channel = self.displayed_channel();
+        let has_pair = self
+            .frame
+            .as_ref()
+            .is_some_and(|frame| frame.output == self.output && frame.comparison.is_some());
+        if self.difference.enabled && channel >= 0 && has_pair {
+            viewport::Mapping {
+                channel,
+                difference_gain: self.difference.gain,
+            }
+        } else {
+            viewport::Mapping::normal(channel)
+        }
+    }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.weak("Inspect");
             ui.add_enabled_ui(!self.exporting, |ui| {
                 changed |= inspect::show(ui, &self.settings, &mut self.output, &mut self.channel);
+                let requested =
+                    self.difference
+                        .show(ui, &self.settings, &self.output, self.channel);
+                let has_pair = self
+                    .frame
+                    .as_ref()
+                    .is_some_and(|frame| frame.output == self.output && frame.comparison.is_some());
+                changed |= requested && (self.busy || !has_pair);
             });
         });
+        let mapping = self.displayed_mapping();
+        if mapping.difference_gain > 0. {
+            let frame = self.frame.as_ref().unwrap();
+            let input = frame.comparison.as_ref().unwrap().input;
+            let (range, units) = if matches!(
+                frame.texture.description().space,
+                foveonic::image::Space::ToneMappedRgb(_)
+            ) {
+                (1., "linear")
+            } else {
+                (4095., "codes")
+            };
+            ui.add(
+                egui::Label::new(format!(
+                    "Δ {} − {input} · dark − / gray 0 / light + · ±{:.3} {units} · scopes: output",
+                    frame.output,
+                    range / mapping.difference_gain,
+                ))
+                .wrap(),
+            );
+        } else if self.difference.enabled {
+            let name = self
+                .frame
+                .as_ref()
+                .map_or("preview", |frame| frame.output.as_str());
+            ui.small(format!("Difference pending; displaying {name} output."));
+        }
         ui.add_space(3.);
         let height =
             (ui.available_height() - information::HEIGHT - ui.spacing().item_spacing.y).max(0.);
-        let channel = self.displayed_channel();
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), height),
             egui::Layout::top_down(egui::Align::Min),
@@ -444,7 +522,8 @@ impl App {
                     self.viewport.show(
                         ui,
                         frame.texture.clone(),
-                        channel,
+                        frame.comparison.as_ref().map(|c| c.texture.clone()),
+                        mapping,
                         self.srgb_target,
                         frame.revision,
                     );
@@ -499,6 +578,13 @@ impl eframe::App for App {
             );
         }
         self.capture.receive();
+        if let Some(saved) = self.sidecars.receive() {
+            if self.selected.is_some() {
+                self.settings = sidecars::selection_settings(saved, &self.camera_overrides);
+                inspect::normalize(&self.settings, &mut self.output, &mut self.channel);
+                self.submit(None);
+            }
+        }
         if self
             .smoke
             .as_ref()
@@ -509,6 +595,9 @@ impl eframe::App for App {
             self.receive(ctx);
         }
         self.smoke_tick(ctx);
+        self.sidecars.refresh(&self.settings);
+        let previous_settings = self.settings.clone();
+        let previous_selection = self.selected.clone();
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui));
         let mut select = None;
         let organizer_limit = (ctx.available_rect().width() - 540.).clamp(160., 650.);
@@ -548,6 +637,9 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             changed |= self.central(ui);
         });
+        if previous_selection == self.selected && previous_settings != self.settings {
+            self.sidecars.edited(&self.settings);
+        }
         if let Some(path) = select {
             self.select(path);
         } else if changed && !self.exporting {
@@ -555,7 +647,7 @@ impl eframe::App for App {
         }
         self.navigator.update(
             self.frame.as_ref(),
-            self.displayed_channel(),
+            self.displayed_mapping(),
             self.busy,
             ctx,
         );
@@ -583,10 +675,6 @@ fn install_style(ctx: &egui::Context) {
         .text_styles
         .insert(egui::TextStyle::Body, egui::FontId::proportional(13.));
     ctx.set_style(style);
-}
-fn reset_camera_selection(settings: &mut Settings, overrides: &[String; 2]) {
-    settings.white_balance.clone_from(&overrides[0]);
-    settings.color_mode.clone_from(&overrides[1]);
 }
 fn main() -> eframe::Result {
     timing::configure().map_err(eframe::Error::AppCreation)?;
@@ -644,14 +732,37 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn image_changes_reset_camera_choices_but_keep_other_controls() {
-        let mut settings = foveonic::render::Settings::new("Shade", "Vivid");
-        settings.exposure = 1.;
-        super::reset_camera_selection(&mut settings, &[String::new(), String::new()]);
-        assert!(settings.white_balance.is_empty() && settings.color_mode.is_empty());
-        assert_eq!(settings.exposure, 1.);
-        super::reset_camera_selection(&mut settings, &["Auto".into(), "Neutral".into()]);
-        assert_eq!(settings.white_balance, "Auto");
-        assert_eq!(settings.color_mode, "Neutral");
+    fn restored_recipes_normalize_unavailable_inspection_before_rendering() {
+        let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        let mut output = "noise.layers".to_owned();
+        let mut channel = 2;
+        super::inspect::normalize(&settings, &mut output, &mut channel);
+        assert_eq!((&*output, channel), ("final", -1));
+        settings.sensor_gain = 1.5;
+        output = "gain.layers".into();
+        channel = 1;
+        super::inspect::normalize(&settings, &mut output, &mut channel);
+        assert_eq!((&*output, channel), ("gain.layers", 1));
+    }
+    #[test]
+    fn image_defaults_and_saved_recipes_do_not_carry_other_photo_edits() {
+        let mut saved = foveonic::render::Settings::new("Shade", "Vivid");
+        saved.exposure = 1.;
+        let overrides = [String::new(), String::new()];
+        assert_eq!(
+            super::sidecars::selection_settings(saved.clone(), &overrides),
+            saved
+        );
+        let fresh = super::sidecars::selection_settings(
+            foveonic::render::Settings::new("", ""),
+            &overrides,
+        );
+        assert_eq!(fresh.exposure, 0.);
+        assert!(fresh.white_balance.is_empty() && fresh.color_mode.is_empty());
+        let explicit =
+            super::sidecars::selection_settings(saved, &["Auto".into(), "Neutral".into()]);
+        assert_eq!(explicit.white_balance, "Auto");
+        assert_eq!(explicit.color_mode, "Neutral");
+        assert_eq!(explicit.exposure, 1.);
     }
 }

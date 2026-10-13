@@ -7,7 +7,8 @@ use crate::source::{MatrixEncoding, Metadata, Result};
 const RECORD_VALUES: usize = 7;
 const LUT_ENTRIES: usize = 65536;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Controls {
     pub contrast: f64,
     pub shadows: f64,

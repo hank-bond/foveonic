@@ -22,6 +22,17 @@ const TARGETS: [&str; 12] = [
     "calibration.layers",
 ];
 
+const DIFFERENCE_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "diff-layer",
+    "diff-amplified",
+    "diff-layer-two",
+    "diff-output",
+    "diff-rgb",
+    "diff-final",
+];
+
 const DETAIL_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -115,7 +126,9 @@ impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_DETAIL").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_INSPECTION").is_some() {
+                DIFFERENCE_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DETAIL").is_some() {
                 DETAIL_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_REPAIR").is_some() {
                 REPAIR_TARGETS
@@ -141,7 +154,7 @@ impl Smoke {
 
 impl App {
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
-        let channel = self.displayed_channel();
+        let mapping = self.displayed_mapping();
         let Some(smoke) = &mut self.smoke else {
             return;
         };
@@ -198,6 +211,33 @@ impl App {
             }
             match smoke.targets[smoke.index] {
                 "final" => {}
+                "diff-layer" => {
+                    self.settings.sensor_gain = 1.05;
+                    self.output = "gain.layers".into();
+                    self.channel = 0;
+                    self.difference.enabled = true;
+                    self.difference.gain = 8.;
+                    self.submit(None);
+                }
+                "diff-amplified" => self.difference.gain = 32.,
+                "diff-layer-two" => self.channel = 1,
+                "diff-output" => self.difference.enabled = false,
+                "diff-rgb" => {
+                    self.settings.saturation = 1.5;
+                    self.output = "saturation.rgb".into();
+                    self.channel = 2;
+                    self.difference.enabled = true;
+                    self.difference.gain = 8.;
+                    self.submit(None);
+                }
+                "diff-final" => {
+                    self.output = "final".into();
+                    self.channel = -1;
+                    self.difference.enabled = false;
+                    self.settings.sensor_gain = 1.;
+                    self.settings.saturation = 1.;
+                    self.submit(None);
+                }
                 name if name.starts_with("slide-detail-") => {
                     self.settings.reconstruction.as_mut().unwrap().detail =
                         name.strip_prefix("slide-detail-").unwrap().parse().unwrap();
@@ -377,7 +417,7 @@ impl App {
             } else {
                 !self.busy
                     && self.frame.as_ref().is_some_and(|frame| {
-                        frame.scopes.is_some() && self.navigator.ready(frame, channel)
+                        frame.scopes.is_some() && self.navigator.ready(frame, mapping)
                     })
             };
             if ready {

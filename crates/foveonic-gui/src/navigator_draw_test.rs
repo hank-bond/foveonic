@@ -44,6 +44,95 @@ fn pixels(rs: &egui_wgpu::RenderState, texture: &wgpu::Texture) -> Vec<u8> {
 }
 
 #[test]
+#[ignore = "requires a GPU"]
+fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() {
+    let rs = state();
+    let make_source = || {
+        texture(
+            &rs,
+            [1, 1],
+            wgpu::TextureFormat::Rgba32Float,
+            wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+        )
+    };
+    let output = make_source();
+    let input = make_source();
+    let target = texture(
+        &rs,
+        [1, 1],
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let upload = |texture: &wgpu::Texture, value: [f32; 4]| {
+        rs.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&value),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(16),
+                rows_per_image: Some(1),
+            },
+            texture.size(),
+        );
+    };
+    for (space, range) in [
+        (Space::CalibratedLayers, 4095.),
+        (
+            Space::LinearRgb(foveonic::image::ColorSpace::AdobeRgb),
+            4095.,
+        ),
+        (Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb), 1.),
+    ] {
+        for baseline in [-range * 0.125, range * 2.] {
+            for gain in [1., 32., 1024.] {
+                for (fraction, expected) in
+                    [(-1., 0_u8), (-0.5, 64), (0., 128), (0.5, 191), (1., 255)]
+                {
+                    let delta = fraction * range / gain;
+                    upload(&input, [baseline, baseline, baseline, 1.]);
+                    // Channel 1 has the change; the others intentionally do not.
+                    upload(&output, [baseline, baseline + delta, baseline, 1.]);
+                    viewport::prepare_navigator(
+                        &rs,
+                        &output,
+                        space,
+                        &target,
+                        viewport::Mapping {
+                            channel: 1,
+                            difference_gain: gain,
+                        },
+                        Some(&input),
+                    );
+                    let bytes = pixels(&rs, &target);
+                    for value in &bytes[..3] {
+                        assert!(value.abs_diff(expected) <= 1,
+                            "{space:?} baseline={baseline} gain={gain} delta={delta}: {value} != {expected}");
+                    }
+                    assert_eq!(bytes[3], 255);
+                }
+            }
+        }
+    }
+    // The normal output mapping must ignore a retained reference when Difference is off.
+    upload(&output, [0.25; 4]);
+    upload(&input, [0.9; 4]);
+    viewport::prepare_navigator(
+        &rs,
+        &output,
+        Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb),
+        &target,
+        viewport::Mapping::normal(1),
+        Some(&input),
+    );
+    assert!(pixels(&rs, &target)[0].abs_diff(137) <= 1);
+}
+
+#[test]
 #[ignore = "requires a GPU; reports completed old/new navigator drawing without profiling synchronization"]
 fn ordinary_navigator_drawing_cost() {
     let rs = state();
@@ -96,7 +185,14 @@ fn ordinary_navigator_drawing_cost() {
     }
     rs.queue.submit(Some(encoder.finish()));
     let space = Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb);
-    viewport::prepare_navigator(&rs, &source, space, &tile, -1);
+    viewport::prepare_navigator(
+        &rs,
+        &source,
+        space,
+        &tile,
+        viewport::Mapping::normal(-1),
+        None,
+    );
     rs.device.poll(wgpu::Maintain::Wait);
     let id = rs.renderer.write().register_native_texture(
         &rs.device,
@@ -147,7 +243,14 @@ fn ordinary_navigator_drawing_cost() {
         rs.queue.submit(Some(encoder.finish()));
     };
     let draw_old = || {
-        viewport::prepare_navigator(&rs, &source, space, &old_target, -1);
+        viewport::prepare_navigator(
+            &rs,
+            &source,
+            space,
+            &old_target,
+            viewport::Mapping::normal(-1),
+            None,
+        );
     };
     draw_old();
     draw_new();

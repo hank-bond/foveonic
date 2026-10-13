@@ -8,6 +8,8 @@ Read the selected plan and its linked specifications before work. Update checkli
 
 The plans outline implementation work for review. Implementation begins with owner approval.
 
+Keep plans self-contained. Referenced filesystem paths must be checked in; do not cite temporary or ignored artifact locations. Summarize findings, methods, and limitations in the plan instead.
+
 <!-- INDEX:START -->
 
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
@@ -17,7 +19,9 @@ The plans outline implementation work for review. Implementation begins with own
 - **[despeckle](./despeckle.md)** GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
 - **[detail-and-noise](./detail-and-noise.md)** The reference-style full-resolution noise/detail shader slice is implemented and validated, with owner photographic review pending.
+- **[dng-export](./dng-export.md)** Implement uint16 lossless-JPEG DNG export with baked technical corrections and DNG-local appearance composition, using the working x3fuse representation as a reference.
 - **[editing-optimization-handoff](./editing-optimization-handoff.md)** Continue native editing measurements with guarded GPU ownership while preserving the deferred mismatch evidence.
+- **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.
 - **[editor-review-focus](./editor-review-focus.md)** Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Deferred intermittent fresh-render differences retain investigation evidence without claiming a known cause or fix.

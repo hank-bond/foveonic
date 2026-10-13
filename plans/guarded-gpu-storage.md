@@ -6,42 +6,35 @@ summary: "Replace raw processing-buffer handles and recycling flags with guarded
 
 Implements the owner-approved guard approach in [render resources](../docs/specs/render-resources.md). This is an ownership improvement, not an established fix for the intermittent output mismatch.
 
-- [x] Encapsulate raw buffer handles in the GPU/storage layer; shared read ownership and exclusive write guards cover graph values, caches, retained images and processing workspaces.
-- [x] Make dispatch reads/writes explicit and retain borrowed guards through synchronous submission. No delayed encoder may escape this boundary.
-- [x] Replace the graph's recyclable flag with checked exclusive ownership when returning storage to scratch.
-- [x] Identify allocations and write generations in diagnostics; test shared readers blocking writes/recycling, last-reader release, binding alias rejection and retained output stability.
-- [x] Migrate diagnostic image readback to the engine instead of exposing a public raw writable handle.
-- [x] Validate an isolated snapshot, exact fixture comparisons, ordinary/GPU tests and strict checks. Preserve all failed evidence.
-- [ ] Owner review; keep changes uncommitted until approved.
-- [x] Defer the unresolved mismatch by owner decision; preserve experiment evidence and remove temporary investigation paths.
-- [x] Validate cleaned code and coherent documentation with the concurrent inspection slice; leave tone reuse uncommitted for later review.
+- [x] Encapsulate raw buffers; shared read ownership and exclusive writes cover graph values, caches, retained images, and processing workspaces.
+- [x] Make dispatch bindings explicit and retain borrowed guards through synchronous submission.
+- [x] Replace recyclable flags with checked exclusive ownership when returning storage to scratch.
+- [x] Identify allocations/generations and test reader rejection, last-reader release, binding access, and retained stability.
+- [x] Move diagnostic image readback to the engine instead of exposing public raw writable handles.
+- [x] Validate isolated ordinary/GPU suites and exact originals without weakening assertions.
+- [x] Owner approved checkpointing; exclude the unaccepted tone-cache prototype.
+- [x] Defer the unresolved mismatch and remove temporary investigation paths.
+- [x] Validate the cleaned processor together with inspection differences.
 
-## Scope
+## Implementation and limits
 
-Single ordered device queue remains the submission contract. Ownership checks do not detect missing graph edges or shader-internal races. Processing workspaces may be modified in place only through an exclusive write guard; read bindings hold read ownership through command submission. No extra production fences, photographic arithmetic changes or performance acceptance claims.
+The single ordered device queue remains the submission contract. Guards do not detect missing graph edges or shader-internal races. No production completion fences, shaders, or photographic arithmetic changed.
 
-The concurrent inspection agent owns GUI changes. Core buffer types, processing callers, tests and the benchmark readback caller are migrated here; no GUI behavior is changed.
+The private [storage module](../crates/foveonic/src/gpu_storage.rs) holds shared `Arc` allocations. Mutable borrowing and `Arc::get_mut` acquire a non-clonable `WriteGuard`; retained owners block writes in release builds. Processing modules cannot access raw buffers. `Binding::Read` borrows shared ownership; `Binding::Write` holds a mutable lease through synchronous encode/submit, including internal reads of in-place stages.
 
-## Implementation
+Cache/image/graph clones share ownership. Scratch accepts exclusively owned ordinary floating-image layouts, not large tiled/atomic workspaces. Shape eligibility and content ownership are distinct checks. Allocation/generation IDs, size, labels, and last writers remain in assertion diagnostics. Temporary event tracing and capture/rerender probes are removed. Test-only Naga analysis audits transitive shader writes against host bindings without production reflection.
 
-`gpu_storage.rs` is a private child of the GPU module. `ReadGuard` shares an `Arc` allocation; mutable borrowing plus `Arc::get_mut` is required to acquire a non-clonable `WriteGuard`. Other owners block writes in release builds too. No raw-buffer accessor is visible to processing modules. `Binding::Read` borrows a read guard; `Binding::Write` owns a mutable lease for that call. Dispatch and GPU copy encode and submit synchronously before releasing their guards. In-place shader stages use exclusive write bindings, including their internal reads.
+`RenderedImage::buffer()` is no longer public. Diagnostic callers use owner-checked `Engine::readback_image`; its counters are excluded from measured processing/export intervals. Production presentation stays GPU-only.
 
-Cache/image/graph clones now share tracked ownership. The `Value::recyclable` flag is removed; scratch accepts only exclusively owned allocations. The graph still restricts pooling to ordinary floating-image layouts, avoiding retention of large tiled/atomic workspaces that image scratch cannot use. Pool eligibility by shape is separate from enforced content ownership.
+## Validation history
 
-Allocation IDs, write-generation IDs, sizes, labels and last submitted writers remain in ownership assertion diagnostics. Temporary event tracing and rerender/capture probes have been removed. Test builds audit host read/write binding modes against Naga's transitive entry-point write analysis, avoiding a separate handwritten access table. This audit adds no production shader-compilation work.
+Methods, counts, and limitations are summarized here; local artifact paths are not prerequisites for this plan.
 
-`RenderedImage::buffer()` is no longer public. The benchmark uses owner-checked `Engine::readback_image` instead; diagnostic readback contributes to engine counters but remains outside measured render/export intervals and activity deltas. Production display remains GPU-only.
+- Three GPU guard regressions passed: retained readers reject writes/recycling, last-owner recycling advances generations, ordered copy/read/overwrite needs no completion fence, and mislabeled shader writes are rejected. Expected rejection panics were caught.
+- A frozen guarded processor with the then-unaccepted tone/diagnostic changes passed ordinary/strict checks and 54 ignored core plus five GUI tests, including six-original float/golden/TIFF equality. Earlier intermediate results were retained separately.
+- A tone-free guard-only snapshot passed 52 ordinary core tests, strict checks, and all 53 ignored core tests. Three additional serial full suites passed 53 tests each. A fixed executable and source hashes established the repeat inventory; tone-reuse tests were absent. An existing GUI stayed running, so these were correctness trials, not controlled timing evidence.
+- Matched guarded/original-storage comparisons passed twice per variant with tone reuse disabled. The common test list excluded guard-only regressions. The owner deferred diagnosis; see [GPU output mismatch](./gpu-output-mismatch.md).
+- Cleaned combined processor/inspection validation passed 53 ordinary core and 64 GUI tests, all 52 ignored core and seven GUI tests, strict checks, examples, indexes/formatting, and eight Python tests. A second strict pass followed removal of an obsolete explicit guard drop. That snapshot contained tone reuse and did not accept it. Repeated-render/paired-tone benchmarks, raw-root capture, fixture filtering, failure rerenders, and event tracing were absent; bounded numeric reports retained exact equality.
+- The separately rebuilt tone-free guard checkpoint passed 52 ordinary core and 61 GUI tests, all 52 core and five GUI GPU tests, strict checks/examples/indexes/formatting, and eight Python tests. Application crates were explicitly rebuilt; only dependency artifacts were reused. Inspection changes were excluded. It was committed as `d916440`.
 
-## Validation
-
-- `/tmp/foveonic-guards-ownership.log`: three GPU guard regressions pass (shared readers reject writes/recycling, last-owner recycling advances generations, ordered copy/read/overwrite without completion fences, and a shader write mislabeled as a read is rejected). Expected panics are caught by the two rejection tests.
-- `/tmp/foveonic-guard-review-2`: frozen `d686266` GUI plus guarded processor and existing uncommitted tone/diagnostic changes. `/tmp/foveonic-guards-checkpoint-checks.log` passes release workspace tests, strict all-target Clippy, example builds, formatting and documentation-index checks. `/tmp/foveonic-guards-full-2.log` passes 54 ignored core and five GUI tests, including full-quality dragging, retained ownership, shader binding access audit and six-original exact float/golden/TIFF equality. Evidence: `.local/ui-responsiveness/guarded-equality-2`. Earlier intermediate suite evidence remains in `/tmp/foveonic-guards-full-1.log`.
-- `/tmp/foveonic-guard-only-review` removes the experimental tone cache entirely while retaining the guarded implementation and bounded mismatch probes. `/tmp/foveonic-guard-only-checks.log` passes 52 ordinary core tests and strict workspace Clippy; it also captures the guard event trace with expected rejection assertions. `/tmp/foveonic-guard-only-gpu.log` passes all 53 ignored core tests. Exact output evidence: `.local/ui-responsiveness/guard-only-equality-1`.
-
-Owner-requested repeat campaign: three additional full guard-only core GPU/fixture suites passed, 53 tests each. Logs: `/tmp/foveonic-guard-only-repeat-{2,3,4}.log`; exact-output directories: `.local/ui-responsiveness/guard-only-equality-{2,3,4}`. This is four passing full suites for the guard-only configuration, including its initial validation. A freshly rebuilt executable was copied to `/tmp/foveonic-guard-repeat/core-tests` and launched directly for all three repeats; `/tmp/foveonic-guard-repeat/manifest.json` records its SHA-256 and frozen source hashes. Test inventory confirms tone-reuse tests are absent. Execution was serial, with unchanged diagnostics and storage tracing off. An existing native GUI was left running; these are correctness trials, not controlled performance measurements.
-
-The subsequent matched guarded/original-storage comparison passed twice in each variant. Its shared test list excluded the extra guard tests and shader-access audit, with tone reuse disabled in both. See [GPU output mismatch](./gpu-output-mismatch.md) for the retained sources, executable hashes, logs and limitations. The owner deferred the investigation: no specific cause or guard-based fix has been established.
-
-Cleanup validation: `/tmp/foveonic-cleanup-review-1` freezes the cleaned processor and current concurrent inspection changes. Logs `/tmp/foveonic-cleanup-checks-{1,2}.log` pass release workspace tests (53 ordinary core, 64 GUI), strict all-target Clippy, examples, formatting and documentation checks; the second log follows removal of an obsolete explicit guard drop flagged by Clippy. `/tmp/foveonic-cleanup-gpu-1.log` passes all 52 ignored core and seven GUI GPU/fixture tests, including exact six-original float/golden/TIFF comparisons, guard access checks and paired inspection rendering. Evidence: `.local/ui-responsiveness/cleanup-equality-1`. Eight Python bundle/artwork tests pass. The snapshot includes the still-uncommitted tone prototype; this does not accept it for commit or establish a performance benefit. Temporary repeated-render/paired-tone benchmark tests, raw-root capture hooks, fixture filtering, failure-triggered rerenders and storage event tracing are absent. Exact-output failures retain a bounded numeric report without relaxing equality.
-
-No unexpected ownership violation was reported. These passes validate the migration against current tests; they do not establish the cause of intermittent fresh-render mismatches. No shaders, photographic arithmetic or production completion fences changed. Performance and memory effects have not been accepted from these correctness runs. Snapshots deliberately exclude concurrent uncommitted GUI/inspection work.
+No unexpected ownership violation was reported. These results validate current migration tests, not the mismatch's cause or a performance/memory improvement. Guard-only snapshots excluded concurrent inspection work; combined cleanup snapshots included it. More detailed historical validation prose is preserved in `d916440` and `088a8c2`.

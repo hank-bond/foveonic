@@ -25,6 +25,7 @@ mod repair;
 mod resample;
 pub mod scopes;
 mod scratch;
+pub mod sidecar;
 pub mod source;
 mod spatial_tables;
 mod tone;

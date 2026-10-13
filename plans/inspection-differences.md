@@ -10,9 +10,12 @@ Requirements: [pipeline inspection](../docs/specs/pipeline-inspection.md), [rend
 
 - [x] Expand group rows inline with right-aligned arrows and pointer tests.
 - [x] Define settings-aware comparison inputs for compatible layer/RGB operations.
-- [ ] Retain paired GPU views from one render configuration and subtract before display mapping.
-- [ ] Add Difference, display-only amplification, explicit baseline labels, and unavailable explanations.
-- [ ] Validate mapping, paired worker requests, GPU presentation, and documentation checks.
+- [x] Retain paired GPU views from one render configuration and subtract before display mapping.
+- [x] Add Difference, display-only amplification, explicit baseline labels, and unavailable explanations.
+- [x] Validate mapping, paired worker requests, GPU presentation, and documentation checks.
+- [x] Resolve the release-build artifact mismatch and build the native bundle.
+- [x] Review the drag-publication failure and passing unchanged-binary rerun; owner approved checkpointing with the failure preserved.
+- [ ] Complete native screenshots and owner visual review.
 
 ## Scope
 
@@ -20,6 +23,22 @@ First slice: signed grayscale layer and individual RGB-channel differences. Comb
 
 ## Progress
 
-Menu disclosure and comparison-input catalog tests pass: `cargo test --offline -p foveonic-gui inspect::tests` and `cargo test --offline -p foveonic inspection::tests` (four tests). Native menu review remains pending. Comparison integration is paused at the owner's request until the concurrent responsiveness pass finishes; the worker is actively being rewritten. No worker/presentation changes have been applied by this pass.
+Resumed with owner approval against the updated worker, preserving image-first publication, deferred scopes, cancellation, and active-edit caching. One paired request produces both views; only the input texture is retained after its view is prepared. Difference defaults to 32× display amplification (1–1024×). Toggling off retains the pair for reuse; component/amplification changes do not schedule photographic processing. Both main viewport and deferred navigator share signed-gray mapping; navigator keys include difference amplification. Pending comparisons are explicitly labeled rather than treating an old output as a difference.
+
+Workspace tests pass (GUI: 63 passed, seven GPU/fixture tests ignored); strict all-target GUI Clippy passes. Explicit GPU tests pass for signed differences at gains 1/32/1024, negative/over-range samples, sRGB/Adobe RGB and camera-code/linear units, normal mapping with retained inputs, and existing navigator mappings. A real Merrill worker test passes eight layer/RGB operation-input pairs plus disabled-stage baseline selection and unsupported-output rejection. Pointer tests exercise disclosure and Difference availability/request-once behavior.
+
+Owner menu review caught two gaps: Unicode disclosure glyphs rendered as missing-font squares, and the ComboBox's default click-anywhere dismissal closed it on group clicks. Disclosure icons now reuse the drawn triangle from tool headers. Inspect dismisses on outside clicks (or Escape), with explicit closure only when a component/scalar is chosen. A pointer regression test exercises the actual ComboBox: opening/collapsing groups leaves it open and preserves selection, while component/scalar/outside clicks close it. The isolated row test also requires a drawn triangular path.
+
+The release-build blocker was stale shared Cargo artifacts from a review snapshot, not a missing source API. Cargo marked the processor release library fresh despite its dependency list omitting `x3f/capture.rs` and its symbols omitting the capture reader. `cargo clean --release -p foveonic` invalidated only processor release artifacts; `python3 crates/foveonic-gui/build-macos-app.py --build-only` then rebuilt both crates and the native bundle successfully. Review snapshots must use separate Cargo target directories, as recorded in the responsiveness handoff. No capture source or build-script change was needed. Opt-in native evidence is ready via `FOVEONIC_GUI_SMOKE_INSPECTION=1` with `FOVEONIC_GUI_SMOKE_DIR`; it covers layer differences, amplification, component reuse, normal output, RGB-channel difference, and final return. Native screenshots and owner review are still pending.
+
+Latest checkpoint attempt without tone reuse: `/tmp/foveonic-output-checkpoint-review/2-inspection-differences` passes release workspace tests (52 ordinary core, 64 GUI), strict all-target Clippy, example builds, formatting, documentation checks, and eight Python tests. Its GUI GPU suite passes six tests, including paired comparisons and signed presentation, but `continuous_drag_makes_progress_then_settles_with_matching_scopes` fails at `worker.rs:616` with `continuous dragging starved image publication` during the `base-blend` sequence. Log: `/tmp/foveonic-output-checkpoint-inspection.log`. The preceding independently rebuilt guard-only snapshot passes all five GUI GPU tests, including this drag test. This is a publication-progress failure, not an exact-output mismatch; its cause and reproducibility are not established. The inspection checkpoint was held pending a targeted rerun. Coordinate any scheduling investigation with the editing worktree; no test or scheduling workaround was applied.
+
+Owner-approved targeted rerun: `/tmp/foveonic-output-checkpoint-drag-rerun-1.log` passes all eleven drag controls with the unchanged frozen inspection executable (SHA-256 `a77dbdc007ea1c214f4d32402e7119c86607db9ee3d6a1456171cdcc6959b4a0`, matching `validated-manifest.json`). Every control publishes during dragging and settles with matching settings/scopes; `base-blend` publishes two frames during its sequence. No other Foveonic/Cargo process was detected before this rerun. GPU contention is a plausible explanation for the earlier timing-sensitive failure, not an established cause; no code or test changes were made.
+
+## Imported banding photograph
+
+At the owner's request, the unchanged `_P2M0792.X3F` from the mounted DP2 Merrill SD card was copied to the existing local fixture directory as `~/git/foveonic/references/x3f/paper-and-recycling-can.x3f` (48,458,588 bytes). SHA-256 `8276657823dcdbf1baf6d6d9e654f694ec4e9a185f05c8a9a2009936118cf299` matches the source identity recorded in `~/git/foveonic/guide/row-banding/data/banding-receipts.json`. This is the paper-and-municipal-recycling-can ISO 200 banding example. The SD-card original and published reference manifest were not changed; no asset was published or made a photographic reference default.
+
+`FOVEONIC_FIXTURE_DIR=~/git/foveonic/references/x3f cargo test --offline -p foveonic decode_original_merrill_files -- --ignored --nocapture --test-threads=1` passes on all seven local originals, including the imported photograph. The existing directory-scanning decoder test includes it automatically; tests explicitly listing the original six are unchanged.
 
 Preserve the concurrent interactive rendering work. Comparisons use multiple roots in one request, not separate settings snapshots or a second photographic processing path. Reconstruction compares with its RGB base; noise and column layers each compare with their common pre-filter layer input, not with one another.

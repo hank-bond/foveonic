@@ -22,24 +22,24 @@ pub struct Image {
     pub id: Option<egui::TextureId>,
     pub extent: [u32; 2],
 }
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 struct Key {
     revision: u64,
     source: SourceId,
     path: PathBuf,
     root: String,
-    channel: i32,
+    mapping: viewport::Mapping,
     extent: [u32; 2],
     space: Space,
 }
 impl Key {
-    fn new(frame: &Frame, channel: i32) -> Self {
+    fn new(frame: &Frame, mapping: viewport::Mapping) -> Self {
         Self {
             revision: frame.revision,
             source: SourceId(frame.artifact.metadata.clone()),
             path: frame.path.clone(),
             root: frame.output.clone(),
-            channel,
+            mapping,
             extent: frame.texture.description().extent,
             space: frame.texture.description().space,
         }
@@ -48,7 +48,7 @@ impl Key {
         self.source == new.source
             && self.path == new.path
             && self.root == new.root
-            && self.channel == new.channel
+            && self.mapping == new.mapping
             && self.extent == new.extent
             && self.space == new.space
             && self.revision <= new.revision
@@ -57,6 +57,7 @@ impl Key {
 struct Job {
     key: Key,
     source: Arc<ImageTexture>,
+    input: Option<Arc<ImageTexture>>,
 }
 #[derive(Default)]
 struct Pending {
@@ -116,7 +117,8 @@ impl Navigator {
                 job.source.texture(),
                 job.key.space,
                 &texture,
-                job.key.channel,
+                job.key.mapping,
+                job.input.as_ref().map(|image| image.texture()),
             );
             gpu.device.poll(wgpu::Maintain::Wait);
             if crate::timing::enabled() {
@@ -158,12 +160,18 @@ impl Navigator {
     }
     /// Called after building the main UI; a 16 ms deferral lets that main image submit first.
     /// During processing only remember the newest navigator request, without entering the GPU queue.
-    pub fn update(&mut self, frame: Option<&Frame>, channel: i32, busy: bool, ctx: &egui::Context) {
+    pub fn update(
+        &mut self,
+        frame: Option<&Frame>,
+        mapping: viewport::Mapping,
+        busy: bool,
+        ctx: &egui::Context,
+    ) {
         let Some(frame) = frame else {
             self.clear();
             return;
         };
-        let key = Key::new(frame, channel);
+        let key = Key::new(frame, mapping);
         while let Ok(tile) = self.replies.try_recv() {
             if self.sent.as_ref() == Some(&tile.key) {
                 self.sent = None;
@@ -199,6 +207,11 @@ impl Navigator {
                 Job {
                     key: key.clone(),
                     source: frame.texture.clone(),
+                    input: if mapping.difference_gain > 0. {
+                        frame.comparison.as_ref().map(|c| c.texture.clone())
+                    } else {
+                        None
+                    },
                 },
                 Instant::now() + Duration::from_millis(16),
             ));
@@ -220,8 +233,8 @@ impl Navigator {
             self.pending.1.notify_one();
         }
     }
-    pub fn image(&self, frame: &Frame, channel: i32) -> Image {
-        let key = Key::new(frame, channel);
+    pub fn image(&self, frame: &Frame, mapping: viewport::Mapping) -> Image {
+        let key = Key::new(frame, mapping);
         Image {
             extent: key.extent,
             id: self
@@ -231,10 +244,10 @@ impl Navigator {
                 .map(|(_, id)| *id),
         }
     }
-    pub fn ready(&self, frame: &Frame, channel: i32) -> bool {
+    pub fn ready(&self, frame: &Frame, mapping: viewport::Mapping) -> bool {
         self.displayed
             .as_ref()
-            .is_some_and(|(tile, _)| tile.key == Key::new(frame, channel))
+            .is_some_and(|(tile, _)| tile.key == Key::new(frame, mapping))
     }
 }
 impl Drop for Navigator {
@@ -271,7 +284,7 @@ mod tests {
             })),
             path: "one.x3f".into(),
             root: "final".into(),
-            channel: -1,
+            mapping: viewport::Mapping::normal(-1),
             extent: [3136, 4704],
             space: Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb),
         };
@@ -279,7 +292,10 @@ mod tests {
         b.revision = 2;
         assert!(a.compatible(&b));
         assert!(!b.compatible(&a));
-        b.channel = 0;
+        b.mapping.channel = 0;
+        assert!(!a.compatible(&b));
+        b = a.clone();
+        b.mapping.difference_gain = 8.;
         assert!(!a.compatible(&b));
         b = a.clone();
         b.root = "sensor.layers".into();
