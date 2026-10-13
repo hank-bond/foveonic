@@ -2,7 +2,7 @@
 summary: "The GUI uses a persistent three-pane workspace with a reflowing organizer, current-buffer scopes, and reorderable editor sections."
 kind: reference
 status: accepted
-implementation: conforming
+implementation: incomplete
 ---
 
 # GUI workspace
@@ -29,7 +29,7 @@ implementation: conforming
 - A compact information bar **must** sit below the main image viewport, showing photographic metadata, filename, and visible-region dimensions and coordinates. Its layout and remaining coordinate questions follow [image information bar](./image-information-bar.md).
 - UI preferences **must** survive application restarts using platform-appropriate application storage. Persist pane/window geometry, organizer mode, section order/collapse state, selected scope, and zoom snap target as their controls are implemented. Keep the application identity stable.
 - UI settings **must** save the last successfully opened organizer folder and reopen it on application startup. An explicit launch path **must** take precedence. Opening a file remembers its containing folder; unavailable saved folders **must** report the error without opening a different folder or blocking use of the app.
-- Editing changes are session-only in the current GUI. Per-file sidecars and photographic-settings persistence are deferred; UI-preference storage **must** be limited to workspace choices and geometry.
+- Photographic-settings persistence **must** follow [editing sidecars](./editing-sidecars.md). UI-preference storage **must** remain limited to workspace choices and geometry; sidecar persistence is not yet implemented.
 
 ## Implementation direction
 
