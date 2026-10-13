@@ -26,6 +26,7 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 - **[despeckle.rs](./despeckle.rs)** Prepares reference speckle thresholds and runs deterministic detection and ordered chroma-anchored correction on GPU.
 - **[estimated_iso.rs](./estimated_iso.rs)** Estimates processing ISO from camera histograms and reference metadata.
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
+- **[gpu_storage.rs](./gpu_storage.rs)** Guards GPU buffer contents with shared read ownership, exclusive writes and allocation generations.
 - **[graph.rs](./graph.rs)** Builds typed, dependency-ordered image graphs and validates their connections.
 - **[highlight.rs](./highlight.rs)** Prepares immutable camera saturation provenance and performs reference highlight restoration and neighborhood conditioning on GPU.
 - **[image.rs](./image.rs)** Describes owned GPU image snapshots, their source context, and logical output views.
@@ -44,7 +45,7 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.
 - **[resample.rs](./resample.rs)** Native triangular polyphase metadata preparation and immutable GPU RGB resampling.
 - **[scopes.rs](./scopes.rs)** Samples the current floating GPU buffer into compact histogram and waveform counts.
-- **[scratch.rs](./scratch.rs)** Reuses exclusively owned, fully overwritten buffers within one ordered graph execution.
+- **[scratch.rs](./scratch.rs)** Recycles guarded storage only after the last shared reader releases it on the ordered GPU queue.
 - **[source.rs](./source.rs)** Owns original Merrill sensor samples and typed camera metadata.
 - **[spatial_tables.rs](./spatial_tables.rs)** Prepare Merrill spatial gain grids from camera byte tables, aperture, focus, and chief-ray angle.
 - **[tone.rs](./tone.rs)** Prepares a camera-derived color-mode tone table for application in a shader.

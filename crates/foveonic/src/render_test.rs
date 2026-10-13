@@ -273,36 +273,10 @@ fn scalar_fields_preserve_geometry_and_values_without_rgb_storage() {
         .view_texture(&scalar, None, &mut Profile::default())
         .unwrap();
     assert_eq!(texture.description().space, Space::ScalarField);
-    let readback = engine.device().create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Scalar view readback"),
-        size: 512,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    let mut encoder = engine.device().create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: texture.texture(),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(256),
-                rows_per_image: Some(2),
-            },
-        },
-        wgpu::Extent3d {
-            width: 2,
-            height: 2,
-            depth_or_array_layers: 1,
-        },
-    );
-    engine.queue().submit(Some(encoder.finish()));
-    let bytes = engine.gpu.readback(&readback).unwrap();
+    let bytes = engine
+        .gpu
+        .readback_texture(texture.texture(), [2, 2], 256)
+        .unwrap();
     for (i, value) in [0.75_f32, -0.25, 1.5, 0.5].iter().enumerate() {
         let offset = (i / 2) * 256 + (i % 2) * 16;
         assert_eq!(
@@ -539,38 +513,10 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
         .unwrap();
     assert_eq!(texture.description().extent, [2, 2]);
     assert_eq!(texture.description().space, input.description.space);
-    let readback = engine.device().create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: 512,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    let mut encoder = engine
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: texture.texture(),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(256),
-                rows_per_image: Some(2),
-            },
-        },
-        wgpu::Extent3d {
-            width: 2,
-            height: 2,
-            depth_or_array_layers: 1,
-        },
-    );
-    engine.queue().submit(Some(encoder.finish()));
-    let bytes = engine.gpu.readback(&readback).unwrap();
+    let bytes = engine
+        .gpu
+        .readback_texture(texture.texture(), [2, 2], 256)
+        .unwrap();
     let floats = bytemuck::cast_slice::<u8, f32>(&bytes);
     for (index, source) in [4, 1, 5, 2].into_iter().enumerate() {
         let offset = (index / 2) * 64 + (index % 2) * 4;

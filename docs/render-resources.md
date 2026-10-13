@@ -49,9 +49,13 @@ RGB scopes preserve working primaries; RGB luminance uses matching sRGB or Adobe
 
 Images and textures are immutable owned snapshots. Their storage stays reserved for their lifetime, including during subsequent renders. Export resources must belong to the exporting engine.
 
-The render result shares original metadata through `Arc`. `Source` owns decoded CPU samples; retain it for reprocessing settings. The GUI retains one decoded source and its selected artifact, while coalescing pending requests and waiting for GPU completion on the worker. Interactive intermediate checkpoint caching and invalidation are deferred.
+The render result shares original metadata through `Arc`. `Source` owns decoded CPU samples; retain it for reprocessing settings. The GUI retains one decoded source and its selected artifact, while coalescing pending requests and waiting for GPU completion on the worker. Interactive sessions retain one active edit's unchanged continuation boundary, with processing-owned keys and invalidation.
 
-Scratch pooling is execution-local and limited to transient floating-image buffers. Buffers become reusable after their final graph read has been submitted, and queued overwrites follow those reads.
+Scratch pooling is execution-local and limited to transient floating-image buffers. Graph values, cache entries and retained images share read guards. A write guard requires exclusive ownership; scratch rejects allocations with retained readers. Dispatch bindings declare `Read` or `Write` access and hold their guards through synchronous command submission. On the shared ordered queue, queued overwrites follow prior reads without an extra completion fence. Raw processing buffer handles remain private to the GPU/storage layer.
+
+`Engine::readback_image(image)` provides explicit diagnostic storage readback with engine-owner validation. It replaces direct public buffer access and contributes to engine activity counters; benchmark callers keep it outside measured render/export intervals. It is not a display or photographic-processing path.
+
+Ownership assertions identify the allocation, write generation, size, label and last submitted writer. Tests additionally compare explicit binding modes against the shader compiler's entry-point write analysis. There is no production event-tracing or intermediate-capture path.
 
 Calibration and repairs operate in original sensor coordinates. Texture resizing sets presentation dimensions after processing.
 

@@ -1,7 +1,9 @@
 //! Prepares geometric least-squares row-banding fits and deterministic patch/row traversal for GPU-only photographic estimation and correction.
+
 //!
 //! Adapted with owner permission from Foveonic banding/mod.rs and patches.rs at
 //! e47af35. Host fitting matrices depend only on fixed geometric polynomial bases.
+use crate::gpu::Binding::{Read, Write};
 use crate::source::{MatrixEncoding, Metadata, Result};
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -228,25 +230,25 @@ pub(crate) fn prepare(
     Ok(p)
 }
 pub(crate) struct Output {
-    pub image: Option<wgpu::Buffer>,
-    pub rows: wgpu::Buffer,
+    pub image: Option<crate::gpu::ReadGuard>,
+    pub rows: crate::gpu::ReadGuard,
 }
 pub(crate) fn apply(
     gpu: &crate::gpu::Gpu,
-    input: &wgpu::Buffer,
+    input: &crate::gpu::ReadGuard,
     p: &Prepared,
     want_image: bool,
     profile: &mut crate::profile::Profile,
 ) -> Result<Output> {
     use crate::gpu::Kernel;
-    let offsets = gpu.storage(
+    let mut offsets = gpu.storage(
         "Applied row biases and native counts",
         u64::from(p.params.source[1]) * 16,
     )?;
     if p.patches.is_empty() || p.params.values[0] == 0. {
         let image = if want_image {
-            let output = gpu.storage("Unchanged row-correction layers", input.size())?;
-            gpu.copy(input, &output, input.size());
+            let mut output = gpu.storage("Unchanged row-correction layers", input.size())?;
+            gpu.copy(input, output.write(), input.size());
             Some(output)
         } else {
             None
@@ -259,7 +261,7 @@ pub(crate) fn apply(
     let uniform = gpu.uniform(&p.params);
     let patches = gpu.upload("Native row patch traversal", &p.patches)?;
     let tables = gpu.upload("Geometric fitting basis and inverse", &p.tables)?;
-    let coefficients = gpu.storage(
+    let mut coefficients = gpu.storage(
         "Row patch fitted coefficients",
         p.patches.len() as u64 * 6 * 3 * 4,
     )?;
@@ -269,12 +271,12 @@ pub(crate) fn apply(
         .map(|b| u64::from(b[1]) * u64::from(b[2]) * u64::from(b[2]))
         .max()
         .unwrap();
-    let residuals = gpu.storage("Reused row patch residual workspace", samples * 12)?;
-    let accepted = gpu.storage(
+    let mut residuals = gpu.storage("Reused row patch residual workspace", samples * 12)?;
+    let mut accepted = gpu.storage(
         "Row patch correlation acceptance",
         p.patches.len() as u64 * 4,
     )?;
-    let means = gpu.storage(
+    let mut means = gpu.storage(
         "Ordered row patch contributions",
         u64::from(p.contributions) * 16,
     )?;
@@ -283,12 +285,12 @@ pub(crate) fn apply(
     let mut trace = gpu.trace(profile.enabled, 3 + 3 * p.batches.len() as u32);
     gpu.dispatch(
         Kernel::BandingFit,
-        &[
-            (0, input),
-            (1, &patches),
-            (2, &uniform),
-            (3, &tables),
-            (4, &coefficients),
+        &mut [
+            (0, Read(input)),
+            (1, Read(&patches)),
+            (2, Read(&uniform)),
+            (3, Read(&tables)),
+            (4, Write(coefficients.write())),
         ],
         [p.params.source[2].div_ceil(32), 1],
         &mut trace,
@@ -297,39 +299,39 @@ pub(crate) fn apply(
         let batch_uniform = gpu.uniform(batch);
         gpu.dispatch(
             Kernel::BandingResidual,
-            &[
-                (0, input),
-                (1, &patches),
-                (2, &uniform),
-                (3, &tables),
-                (4, &coefficients),
-                (5, &residuals),
-                (8, &batch_uniform),
+            &mut [
+                (0, Read(input)),
+                (1, Read(&patches)),
+                (2, Read(&uniform)),
+                (3, Read(&tables)),
+                (4, Read(&coefficients)),
+                (5, Write(residuals.write())),
+                (8, Read(&batch_uniform)),
             ],
             [(batch[2] * batch[2]).div_ceil(64), batch[1]],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::BandingQuality,
-            &[
-                (0, input),
-                (1, &patches),
-                (2, &uniform),
-                (5, &residuals),
-                (6, &accepted),
-                (8, &batch_uniform),
+            &mut [
+                (0, Read(input)),
+                (1, Read(&patches)),
+                (2, Read(&uniform)),
+                (5, Read(&residuals)),
+                (6, Write(accepted.write())),
+                (8, Read(&batch_uniform)),
             ],
             [batch[1].div_ceil(32), 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::BandingMeans,
-            &[
-                (1, &patches),
-                (5, &residuals),
-                (6, &accepted),
-                (7, &means),
-                (8, &batch_uniform),
+            &mut [
+                (1, Read(&patches)),
+                (5, Read(&residuals)),
+                (6, Read(&accepted)),
+                (7, Write(means.write())),
+                (8, Read(&batch_uniform)),
             ],
             [batch[2].div_ceil(32), batch[1]],
             &mut trace,
@@ -337,21 +339,26 @@ pub(crate) fn apply(
     }
     gpu.dispatch(
         Kernel::BandingReduce,
-        &[
-            (2, &uniform),
-            (7, &means),
-            (9, &ranges),
-            (10, &links),
-            (11, &offsets),
+        &mut [
+            (2, Read(&uniform)),
+            (7, Read(&means)),
+            (9, Read(&ranges)),
+            (10, Read(&links)),
+            (11, Write(offsets.write())),
         ],
         [p.params.source[1].div_ceil(64), 1],
         &mut trace,
     );
     let image = if want_image {
-        let output = gpu.storage("Row conditioned layers", input.size())?;
+        let mut output = gpu.storage("Row conditioned layers", input.size())?;
         gpu.dispatch(
             Kernel::BandingApply,
-            &[(0, input), (2, &uniform), (11, &offsets), (12, &output)],
+            &mut [
+                (0, Read(input)),
+                (2, Read(&uniform)),
+                (11, Read(&offsets)),
+                (12, Write(output.write())),
+            ],
             [
                 p.params.source[0].div_ceil(8),
                 p.params.source[1].div_ceil(8),

@@ -1,5 +1,6 @@
 //! Samples the current floating GPU buffer into compact histogram and waveform counts.
 
+use crate::gpu::Binding::{Read, Write};
 use crate::{
     gpu::{Gpu, Kernel},
     image::{RenderedImage, Space},
@@ -71,11 +72,15 @@ pub(crate) fn analyze(gpu: &Gpu, image: &RenderedImage, profile: &mut Profile) -
         )),
     ];
     let uniform = gpu.uniform(&params);
-    let counts = gpu.storage("Scope counts", COUNT as u64 * 4)?;
+    let mut counts = gpu.storage("Scope counts", COUNT as u64 * 4)?;
     let mut trace = gpu.trace(profile.enabled, 1);
     gpu.dispatch(
         Kernel::Scopes,
-        &[(0, image.buffer()), (1, &uniform), (2, &counts)],
+        &mut [
+            (0, Read(image.buffer())),
+            (1, Read(&uniform)),
+            (2, Write(counts.write())),
+        ],
         [samples[0].div_ceil(16), samples[1].div_ceil(16)],
         &mut trace,
     );

@@ -1,7 +1,9 @@
 //! Prepares immutable camera saturation provenance and performs reference highlight restoration and neighborhood conditioning on GPU.
+
 //!
 //! Adapted with owner permission from Foveonic source.rs, gains.rs, highlight.rs,
 //! and preprocess.rs at e47af35, including the owner's existing highlight changes.
+use crate::gpu::Binding::{Read, Write};
 use crate::{
     gpu::{Gpu, Kernel},
     profile::Profile,
@@ -26,8 +28,8 @@ impl Prepared {
     }
 }
 pub(crate) struct Output {
-    pub pixels: Option<wgpu::Buffer>,
-    pub density: Option<wgpu::Buffer>,
+    pub pixels: Option<crate::gpu::ReadGuard>,
+    pub density: Option<crate::gpu::ReadGuard>,
 }
 
 fn unsigned(v: f64) -> Result<u32> {
@@ -154,7 +156,7 @@ pub(crate) fn prepare(metadata: &Metadata, gain: f32) -> Result<Prepared> {
 
 pub(crate) fn apply(
     gpu: &Gpu,
-    input: Option<&wgpu::Buffer>,
+    input: Option<&crate::gpu::ReadGuard>,
     p: &Prepared,
     want_density: bool,
     profile: &mut Profile,
@@ -162,8 +164,8 @@ pub(crate) fn apply(
     let size = u64::from(p.params.source[2]) * 4;
     let uniform = gpu.uniform(&p.params);
     let original = gpu.upload("Original camera saturation flags", &p.flags)?;
-    let flags = gpu.storage("Connected saturation processing copy", size)?;
-    let map = gpu.storage("Multi-layer clipped neighborhood map", size)?;
+    let mut flags = gpu.storage("Connected saturation processing copy", size)?;
+    let mut map = gpu.storage("Multi-layer clipped neighborhood map", size)?;
     let groups = [
         p.params.source[0].div_ceil(8),
         p.params.source[1].div_ceil(8),
@@ -171,21 +173,33 @@ pub(crate) fn apply(
     let mut trace = gpu.trace(profile.enabled, 12);
     gpu.dispatch(
         Kernel::HighlightFlags,
-        &[(0, &original), (1, &flags), (2, &uniform)],
+        &mut [
+            (0, Read(&original)),
+            (1, Write(flags.write())),
+            (2, Read(&uniform)),
+        ],
         groups,
         &mut trace,
     );
     gpu.dispatch(
         Kernel::HighlightMap,
-        &[(1, &flags), (2, &uniform), (3, &map)],
+        &mut [
+            (1, Read(&flags)),
+            (2, Read(&uniform)),
+            (3, Write(map.write())),
+        ],
         groups,
         &mut trace,
     );
     let density = if want_density {
-        let output = gpu.storage("Highlight neighborhood density", size)?;
+        let mut output = gpu.storage("Highlight neighborhood density", size)?;
         gpu.dispatch(
             Kernel::HighlightDensity,
-            &[(2, &uniform), (3, &map), (4, &output)],
+            &mut [
+                (2, Read(&uniform)),
+                (3, Read(&map)),
+                (4, Write(output.write())),
+            ],
             groups,
             &mut trace,
         );
@@ -194,106 +208,116 @@ pub(crate) fn apply(
         None
     };
     let pixels = if let Some(input) = input {
-        let marks = gpu.storage("Highlight donor ranks", size)?;
-        let counts = gpu.storage(
+        let mut marks = gpu.storage("Highlight donor ranks", size)?;
+        let mut counts = gpu.storage(
             "Highlight donor prefix counts",
             u64::from(p.params.source[3] + 1) * 4,
         )?;
-        let donors = gpu.storage("Ordered highlight donor indices", size)?;
-        let sorted = gpu.storage("Stable per-bin highlight donor indices", size)?;
-        let histogram = gpu.storage(
+        let mut donors = gpu.storage("Ordered highlight donor indices", size)?;
+        let mut sorted = gpu.storage("Stable per-bin highlight donor indices", size)?;
+        let mut histogram = gpu.storage(
             "Highlight block-bin counts/prefixes",
             u64::from(p.params.source[3]) * 256 * 4,
         )?;
-        let starts = gpu.storage("Highlight bin start offsets", 257 * 4)?;
-        let lookup = gpu.storage("Highlight blue correction table and counts", 512 * 4)?;
+        let mut starts = gpu.storage("Highlight bin start offsets", 257 * 4)?;
+        let mut lookup = gpu.storage("Highlight blue correction table and counts", 512 * 4)?;
         gpu.dispatch(
             Kernel::HighlightDonors,
-            &[
-                (1, &flags),
-                (2, &uniform),
-                (5, input),
-                (6, &marks),
-                (7, &counts),
+            &mut [
+                (1, Read(&flags)),
+                (2, Read(&uniform)),
+                (5, Read(input)),
+                (6, Write(marks.write())),
+                (7, Write(counts.write())),
             ],
             [p.params.source[3], 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightPrefix,
-            &[(2, &uniform), (7, &counts)],
+            &mut [(2, Read(&uniform)), (7, Write(counts.write()))],
             [1, 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightScatter,
-            &[(2, &uniform), (6, &marks), (7, &counts), (8, &donors)],
+            &mut [
+                (2, Read(&uniform)),
+                (6, Read(&marks)),
+                (7, Read(&counts)),
+                (8, Write(donors.write())),
+            ],
             [p.params.source[3], 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightBinHistogram,
-            &[
-                (2, &uniform),
-                (5, input),
-                (6, &marks),
-                (7, &counts),
-                (8, &donors),
-                (11, &histogram),
+            &mut [
+                (2, Read(&uniform)),
+                (5, Read(input)),
+                (6, Write(marks.write())),
+                (7, Read(&counts)),
+                (8, Read(&donors)),
+                (11, Write(histogram.write())),
             ],
             [p.params.source[3], 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightBinPrefix,
-            &[(2, &uniform), (7, &counts), (11, &histogram), (12, &starts)],
+            &mut [
+                (2, Read(&uniform)),
+                (7, Read(&counts)),
+                (11, Write(histogram.write())),
+                (12, Write(starts.write())),
+            ],
             [1, 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightBinScatter,
-            &[
-                (2, &uniform),
-                (6, &marks),
-                (7, &counts),
-                (8, &donors),
-                (10, &sorted),
-                (11, &histogram),
-                (12, &starts),
+            &mut [
+                (2, Read(&uniform)),
+                (6, Read(&marks)),
+                (7, Read(&counts)),
+                (8, Read(&donors)),
+                (10, Write(sorted.write())),
+                (11, Read(&histogram)),
+                (12, Read(&starts)),
             ],
             [p.params.source[3], 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightTable,
-            &[
-                (2, &uniform),
-                (5, input),
-                (9, &lookup),
-                (10, &sorted),
-                (12, &starts),
+            &mut [
+                (2, Read(&uniform)),
+                (5, Read(input)),
+                (9, Write(lookup.write())),
+                (10, Read(&sorted)),
+                (12, Read(&starts)),
             ],
             [256, 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightInterpolation,
-            &[(9, &lookup)],
+            &mut [(9, Write(lookup.write()))],
             [1, 1],
             &mut trace,
         );
-        let output = gpu.storage("Highlight restored layers", size * 3)?;
+        let mut output = gpu.storage("Highlight restored layers", size * 3)?;
         // No density readback or photographic host arithmetic; apply uses the
         // immutable neighborhood map and table, not preceding output writes.
         gpu.dispatch(
             Kernel::HighlightApply,
-            &[
-                (1, &flags),
-                (2, &uniform),
-                (3, &map),
-                (4, &output),
-                (5, input),
-                (9, &lookup),
+            &mut [
+                (1, Read(&flags)),
+                (2, Read(&uniform)),
+                (3, Read(&map)),
+                (4, Write(output.write())),
+                (5, Read(input)),
+                (9, Read(&lookup)),
             ],
             groups,
             &mut trace,

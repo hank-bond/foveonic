@@ -4,6 +4,10 @@ use crate::profile::{Profile, Timing};
 use crate::source::Result;
 use wgpu::util::DeviceExt;
 
+#[path = "gpu_storage.rs"]
+mod storage;
+pub(crate) use storage::{Binding, ReadGuard, WriteGuard};
+
 #[derive(Default)]
 pub(crate) struct GpuTrace {
     query: Option<wgpu::QuerySet>,
@@ -178,6 +182,8 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pipelines: Vec<wgpu::ComputePipeline>,
+    #[cfg(test)]
+    shader_writes: Vec<u32>,
     pub adapter_name: String,
     activity: std::sync::Mutex<crate::profile::GpuActivity>,
 }
@@ -300,6 +306,8 @@ impl Gpu {
                 "detection_block_prefix",
             ),
         ];
+        #[cfg(test)]
+        let mut shader_writes = Vec::new();
         let pipelines = kernels
             .iter()
             .enumerate()
@@ -336,6 +344,35 @@ impl Gpu {
                 } else {
                     code.into()
                 };
+                // Tests audit the explicit host guard mode against actual
+                // transitive entry-point writes, not a second handwritten map.
+                #[cfg(test)]
+                {
+                    use wgpu::naga::{
+                        front::wgsl,
+                        valid::{Capabilities, GlobalUse, ValidationFlags, Validator},
+                    };
+                    let module = wgsl::parse_str(&code).expect("valid shader for guard audit");
+                    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+                        .validate(&module)
+                        .expect("validated guard audit");
+                    let ep = module
+                        .entry_points
+                        .iter()
+                        .position(|p| p.name == entry)
+                        .unwrap();
+                    let function = info.get_entry_point(ep);
+                    let mut writes = 0;
+                    for (handle, variable) in module.global_variables.iter() {
+                        if let Some(binding) = &variable.binding {
+                            if function[handle].intersects(GlobalUse::WRITE | GlobalUse::ATOMIC) {
+                                assert_eq!(binding.group, 0);
+                                writes |= 1 << binding.binding;
+                            }
+                        }
+                    }
+                    shader_writes.push(writes);
+                }
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(entry),
                     source: wgpu::ShaderSource::Wgsl(code),
@@ -357,6 +394,8 @@ impl Gpu {
             device,
             queue,
             pipelines,
+            #[cfg(test)]
+            shader_writes,
             adapter_name,
             activity: Default::default(),
         })
@@ -374,67 +413,76 @@ impl Gpu {
         self.queue.submit(Some(encoder.finish()));
     }
 
-    pub fn upload<T: bytemuck::Pod>(&self, label: &str, values: &[T]) -> Result<wgpu::Buffer> {
+    pub fn upload<T: bytemuck::Pod>(&self, label: &str, values: &[T]) -> Result<ReadGuard> {
         self.check_size(std::mem::size_of_val(values) as u64)?;
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
             activity.upload_bytes += std::mem::size_of_val(values) as u64;
             activity.allocations += 1;
         }
-        Ok(self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(values),
-                // Uploaded image inputs can later enter the execution-local
-                // scratch pool, whose next owner may initialize by GPU copy.
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            }))
+        Ok(ReadGuard::new(
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(values),
+                    // Uploaded image inputs can later enter the execution-local
+                    // scratch pool, whose next owner may initialize by GPU copy.
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                }),
+            label,
+        ))
     }
 
-    pub fn uniform<T: bytemuck::Pod>(&self, value: &T) -> wgpu::Buffer {
+    pub fn uniform<T: bytemuck::Pod>(&self, value: &T) -> ReadGuard {
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
             activity.uniform_bytes += std::mem::size_of::<T>() as u64;
             activity.allocations += 1;
         }
-        self.device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Node parameters"),
-                contents: bytemuck::bytes_of(value),
-                usage: wgpu::BufferUsages::UNIFORM,
-            })
+        ReadGuard::new(
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Node parameters"),
+                    contents: bytemuck::bytes_of(value),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                }),
+            "Node parameters",
+        )
     }
 
-    pub fn storage(&self, label: &str, size: u64) -> Result<wgpu::Buffer> {
+    pub fn storage(&self, label: &str, size: u64) -> Result<ReadGuard> {
         self.check_size(size)?;
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
             activity.storage_bytes += size;
             activity.allocations += 1;
         }
-        Ok(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }))
+        Ok(ReadGuard::new(
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            label,
+        ))
     }
 
-    pub fn copy(&self, source: &wgpu::Buffer, target: &wgpu::Buffer, size: u64) {
+    pub fn copy(&self, source: &ReadGuard, mut target: WriteGuard<'_>, size: u64) {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        encoder.copy_buffer_to_buffer(source, 0, target, 0, size);
+        encoder.copy_buffer_to_buffer(source.raw(), 0, target.raw(), 0, size);
         self.activity
             .lock()
             .expect("GPU activity counter")
             .device_copy_bytes += size;
         self.submit(encoder);
+        target.submitted("copy");
     }
 
     fn check_size(&self, size: u64) -> Result<()> {
@@ -490,7 +538,7 @@ impl Gpu {
             .expect("GPU activity counter")
             .timestamp_resolves += 1;
         self.submit(encoder);
-        let bytes = self.readback(&resolved)?;
+        let bytes = self.readback(&ReadGuard::new(resolved, "Resolved timestamps"))?;
         let timestamps = bytemuck::cast_slice::<u8, u64>(&bytes);
         let period = f64::from(self.queue.get_timestamp_period());
         for (&stage, pair) in trace.labels.iter().zip(timestamps.as_chunks::<2>().0) {
@@ -505,23 +553,38 @@ impl Gpu {
     pub fn dispatch(
         &self,
         kernel: Kernel,
-        buffers: &[(u32, &wgpu::Buffer)],
+        buffers: &mut [(u32, Binding<'_>)],
         groups: [u32; 2],
         trace: &mut GpuTrace,
     ) {
+        #[cfg(test)]
+        for (slot, binding) in buffers.iter() {
+            assert_eq!(
+                matches!(binding, Binding::Write(_)),
+                self.shader_writes[kernel as usize] & (1 << slot) != 0,
+                "incorrect buffer guard for {} binding {}",
+                kernel.label(),
+                slot
+            );
+        }
         let entries: Vec<_> = buffers
             .iter()
             .map(|(binding, buffer)| wgpu::BindGroupEntry {
                 binding: *binding,
-                resource: buffer.as_entire_binding(),
+                resource: buffer.raw().as_entire_binding(),
             })
             .collect();
         self.dispatch_entries(kernel, &entries, groups, trace);
+        // Encoding and submission are synchronous: all binding guards remain
+        // borrowed until the queue has accepted the last read/write command.
+        for (_, binding) in buffers {
+            binding.submitted(kernel.label());
+        }
     }
 
     pub fn view(
         &self,
-        input: &wgpu::Buffer,
+        input: &ReadGuard,
         params: &crate::calibration::EncodeParams,
         texture: &wgpu::TextureView,
         trace: &mut GpuTrace,
@@ -532,11 +595,11 @@ impl Gpu {
             &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: input.as_entire_binding(),
+                    resource: input.raw().as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: uniform.as_entire_binding(),
+                    resource: uniform.raw().as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -582,7 +645,46 @@ impl Gpu {
         self.submit(encoder);
     }
 
-    pub fn readback(&self, source: &wgpu::Buffer) -> Result<Vec<u8>> {
+    #[cfg(test)]
+    pub fn readback_texture(
+        &self,
+        texture: &wgpu::Texture,
+        extent: [u32; 2],
+        bytes_per_row: u32,
+    ) -> Result<Vec<u8>> {
+        let mut target = self.storage(
+            "Texture test readback",
+            u64::from(bytes_per_row) * u64::from(extent[1]),
+        )?;
+        let mut guard = target.write();
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: guard.raw(),
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(extent[1]),
+                },
+            },
+            wgpu::Extent3d {
+                width: extent[0],
+                height: extent[1],
+                depth_or_array_layers: 1,
+            },
+        );
+        self.submit(encoder);
+        guard.submitted("texture test readback");
+        self.readback(&target)
+    }
+
+    pub fn readback(&self, source: &ReadGuard) -> Result<Vec<u8>> {
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
             activity.readbacks += 1;
@@ -599,7 +701,7 @@ impl Gpu {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Export readback"),
             });
-        encoder.copy_buffer_to_buffer(source, 0, &staging, 0, source.size());
+        encoder.copy_buffer_to_buffer(source.raw(), 0, &staging, 0, source.size());
         self.submit(encoder);
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();

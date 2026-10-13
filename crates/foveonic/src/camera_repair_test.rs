@@ -1,5 +1,7 @@
 //! Regresses complete camera list order, raw-signal detection, packed cluster matching, and the reported dark flower defect.
+
 use super::*;
+use crate::gpu::Binding::{Read, Write};
 use crate::source::{Matrix, Metadata};
 fn matrix(dimensions: Vec<usize>, values: Vec<f64>, encoding: MatrixEncoding) -> Matrix {
     Matrix {
@@ -151,13 +153,13 @@ fn capped_integer_prefixes_match_ordered_counts_across_blocks_and_partial_tails(
                 .map(|i| [0, 255, 0, 3, 1, 128, 15][i as usize % 7])
                 .collect();
             let input = gpu.upload("Prefix integer mask fixture", &masks).unwrap();
-            let local = gpu
+            let mut local = gpu
                 .storage("Local prefix fixture", u64::from(n) * 4)
                 .unwrap();
-            let blocks = gpu
+            let mut blocks = gpu
                 .storage("Block prefix fixture", u64::from(n.div_ceil(256)) * 4)
                 .unwrap();
-            let records = gpu
+            let mut records = gpu
                 .storage(
                     "Final capped counter fixture",
                     u64::from(n + capacity + 1) * 8,
@@ -166,13 +168,22 @@ fn capped_integer_prefixes_match_ordered_counts_across_blocks_and_partial_tails(
             let mut trace = Default::default();
             gpu.dispatch(
                 Kernel::CameraPrefix,
-                &[(2, &uniform), (4, &input), (5, &local), (8, &blocks)],
+                &mut [
+                    (2, Read(&uniform)),
+                    (4, Read(&input)),
+                    (5, Write(local.write())),
+                    (8, Write(blocks.write())),
+                ],
                 [n.div_ceil(256), 1],
                 &mut trace,
             );
             gpu.dispatch(
                 Kernel::CameraBlocks,
-                &[(1, &records), (2, &uniform), (8, &blocks)],
+                &mut [
+                    (1, Write(records.write())),
+                    (2, Read(&uniform)),
+                    (8, Write(blocks.write())),
+                ],
                 [1, 1],
                 &mut trace,
             );
@@ -283,16 +294,16 @@ fn cooperative_cluster_search_preserves_first_tie_empty_search_and_uniform_paddi
     let members = gpu.upload("Tie member", &[[69_u32, 69, 0, 0]]).unwrap();
     let params = gpu.uniform(&[12_u32, 8, 1, 2]);
     for (known, expected) in [(256_u32, [111_f32, 222., 333.]), (0, [0., 0., 0.])] {
-        let output = gpu.upload("Tie pixels", &pixels).unwrap();
-        let masks = gpu.upload("Tie masks", &[known; 96]).unwrap();
+        let mut output = gpu.upload("Tie pixels", &pixels).unwrap();
+        let mut masks = gpu.upload("Tie masks", &[known; 96]).unwrap();
         gpu.dispatch(
             Kernel::ClusterRepair,
-            &[
-                (0, &output),
-                (1, &clusters),
-                (2, &members),
-                (3, &masks),
-                (4, &params),
+            &mut [
+                (0, Write(output.write())),
+                (1, Read(&clusters)),
+                (2, Read(&members)),
+                (3, Write(masks.write())),
+                (4, Read(&params)),
             ],
             [1, 1],
             &mut Default::default(),
@@ -348,7 +359,7 @@ fn gpu_complete_camera_matches_native_raw_detection_lists_and_clusters() {
         );
     }
     // Independently inspect runtime main overrides and the ordered dynamic list.
-    let output = gpu
+    let mut output = gpu
         .upload(
             "Detector output backing",
             &numbers(&f["input"])
@@ -357,12 +368,12 @@ fn gpu_complete_camera_matches_native_raw_detection_lists_and_clusters() {
                 .collect::<Vec<_>>(),
         )
         .unwrap();
-    let records = gpu.upload("Detector records", &p.records).unwrap();
+    let mut records = gpu.upload("Detector records", &p.records).unwrap();
     let uniform = gpu.uniform(&p.params);
     select_bad_reds(
         &gpu,
         &original,
-        &records,
+        &mut records,
         &uniform,
         p.params,
         &mut Default::default(),
@@ -371,7 +382,7 @@ fn gpu_complete_camera_matches_native_raw_detection_lists_and_clusters() {
     correct_lists(
         &gpu,
         &records,
-        &output,
+        &mut output,
         &uniform,
         &p,
         &mut Default::default(),
@@ -408,18 +419,18 @@ fn gpu_bad_red_detection_reserves_final_slot_and_preserves_exhausted_masks() {
     let original = gpu
         .upload("Capacity raw signal", &[10_f32, 0., 0.].repeat(32 * 32))
         .unwrap();
-    let output = gpu
+    let mut output = gpu
         .upload(
             "Capacity calibrated output",
             &[30_f32, 20., 10.].repeat(32 * 32),
         )
         .unwrap();
-    let records = gpu.upload("Capacity records", &p.records).unwrap();
+    let mut records = gpu.upload("Capacity records", &p.records).unwrap();
     let uniform = gpu.uniform(&p.params);
     select_bad_reds(
         &gpu,
         &original,
-        &records,
+        &mut records,
         &uniform,
         p.params,
         &mut Default::default(),
@@ -428,7 +439,7 @@ fn gpu_bad_red_detection_reserves_final_slot_and_preserves_exhausted_masks() {
     correct_lists(
         &gpu,
         &records,
-        &output,
+        &mut output,
         &uniform,
         &p,
         &mut Default::default(),

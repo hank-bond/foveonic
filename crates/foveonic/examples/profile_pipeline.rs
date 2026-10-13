@@ -8,31 +8,12 @@ use foveonic::{
 };
 use std::{hash::Hasher, path::PathBuf, time::Instant};
 
-// Diagnostic readback is deliberately outside both the measured render and engine activity.
+// Guarded diagnostic readback is outside measured render/export intervals and their activity deltas.
 fn pixels(
     engine: &Engine,
     image: &RenderedImage,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let staging = engine.device().create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Equivalence readback"),
-        size: image.buffer().size(),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = engine.device().create_command_encoder(&Default::default());
-    encoder.copy_buffer_to_buffer(image.buffer(), 0, &staging, 0, staging.size());
-    engine.queue().submit(Some(encoder.finish()));
-    let (tx, rx) = std::sync::mpsc::channel();
-    staging
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-    engine.device().poll(wgpu::Maintain::Wait);
-    rx.recv()??;
-    let bytes = staging.slice(..).get_mapped_range().to_vec();
-    staging.unmap();
-    Ok(bytes)
+    engine.readback_image(image)
 }
 fn milliseconds(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.

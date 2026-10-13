@@ -1,5 +1,6 @@
 //! Compares ordered GPU camera repair to native mask/order fixtures and regresses the leaf defect block.
 
+use crate::gpu::Binding::{Read, Write};
 use crate::{
     gpu::{Gpu, Kernel},
     source::{Matrix, MatrixEncoding, Metadata},
@@ -86,15 +87,19 @@ fn gpu_camera_repair_matches_reference_masks_order_borders_and_sentinels() {
         for gain in [0., 1., 1.3] {
             let values: Vec<_> = input.iter().map(|v| v * gain).collect();
             let source = gpu.upload("Immutable repair fixture", &values).unwrap();
-            let output = gpu
+            let mut output = gpu
                 .storage("Ordered repair output", (values.len() * 4) as u64)
                 .unwrap();
-            gpu.copy(&source, &output, source.size());
+            gpu.copy(&source, output.write(), source.size());
             let rec = gpu.upload("Ordered camera records", &p.records).unwrap();
             let uniform = gpu.uniform(&p.params);
             gpu.dispatch(
                 Kernel::Repair,
-                &[(1, &rec), (2, &uniform), (3, &output)],
+                &mut [
+                    (1, Read(&rec)),
+                    (2, Read(&uniform)),
+                    (3, Write(output.write())),
+                ],
                 [1, 1],
                 &mut Default::default(),
             );

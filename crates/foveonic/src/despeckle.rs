@@ -1,8 +1,10 @@
 //! Prepares reference speckle thresholds and runs deterministic detection and ordered chroma-anchored correction on GPU.
+
 //!
 //! Tables and detector rules adapted from the owner's read-only Foveonic reference
 //! `despeckle.rs` and `repair.rs`, audited at e47af35 (including permitted unstaged changes).
 
+use crate::gpu::Binding::{Read, Write};
 use crate::{
     gpu::{Gpu, Kernel},
     profile::Profile,
@@ -128,19 +130,19 @@ pub(crate) fn prepare(
 
 pub(crate) fn apply(
     gpu: &Gpu,
-    input: &wgpu::Buffer,
+    input: &crate::gpu::ReadGuard,
     prepared: &Prepared,
     profile: &mut Profile,
-) -> Result<wgpu::Buffer> {
+) -> Result<crate::gpu::ReadGuard> {
     let p = prepared.params;
     let count = u64::from(p.source[0]) * u64::from(p.source[1]);
-    let output = gpu.storage("Despeckled sensor layers", count * 12)?;
-    let marks = gpu.storage("Speckle block ranks", count * 4)?;
-    let counts = gpu.storage(
+    let mut output = gpu.storage("Despeckled sensor layers", count * 12)?;
+    let mut marks = gpu.storage("Speckle block ranks", count * 4)?;
+    let mut counts = gpu.storage(
         "Speckle block prefixes and bank counts",
         u64::from(p.source[2] + BANKS) * 4,
     )?;
-    let records = gpu.storage(
+    let mut records = gpu.storage(
         "Ordered speckle records",
         u64::from(p.source[3]) * u64::from(BANKS) * 8,
     )?;
@@ -149,32 +151,42 @@ pub(crate) fn apply(
     let mut trace = gpu.trace(profile.enabled, 4);
     gpu.dispatch(
         Kernel::SpeckleDetect,
-        &[
-            (0, input),
-            (1, &lookup),
-            (2, &uniform),
-            (3, &output),
-            (4, &marks),
-            (5, &counts),
+        &mut [
+            (0, Read(input)),
+            (1, Read(&lookup)),
+            (2, Read(&uniform)),
+            (3, Write(output.write())),
+            (4, Write(marks.write())),
+            (5, Write(counts.write())),
         ],
         [p.source[2], 1],
         &mut trace,
     );
     gpu.dispatch(
         Kernel::SpecklePrefix,
-        &[(2, &uniform), (5, &counts)],
+        &mut [(2, Read(&uniform)), (5, Write(counts.write()))],
         [8, 1],
         &mut trace,
     );
     gpu.dispatch(
         Kernel::SpeckleScatter,
-        &[(2, &uniform), (4, &marks), (5, &counts), (6, &records)],
+        &mut [
+            (2, Read(&uniform)),
+            (4, Read(&marks)),
+            (5, Read(&counts)),
+            (6, Write(records.write())),
+        ],
         [p.source[2], 1],
         &mut trace,
     );
     gpu.dispatch(
         Kernel::SpeckleRepair,
-        &[(2, &uniform), (3, &output), (5, &counts), (6, &records)],
+        &mut [
+            (2, Read(&uniform)),
+            (3, Write(output.write())),
+            (5, Read(&counts)),
+            (6, Read(&records)),
+        ],
         [1, 1],
         &mut trace,
     );

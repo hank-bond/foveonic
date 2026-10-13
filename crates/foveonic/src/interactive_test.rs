@@ -3,6 +3,35 @@
 use super::*;
 use std::{cell::Cell, path::PathBuf};
 
+// Exact assertions deliberately summarize failures instead of dumping full
+// photographic byte vectors. They do not rerender or change GPU scheduling.
+fn assert_same_pixels(label: &str, actual: &[u8], expected: &[u8]) {
+    assert_eq!(actual.len(), expected.len(), "{label}: readback lengths");
+    assert_eq!(actual.len() % 4, 0, "{label}: float storage alignment");
+    if actual == expected {
+        return;
+    }
+    let mut count = 0;
+    let mut largest = 0_f32;
+    let mut first = None;
+    for (i, (a, b)) in actual
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(expected.as_chunks::<4>().0)
+        .enumerate()
+    {
+        if a != b {
+            let a = f32::from_le_bytes(*a);
+            let b = f32::from_le_bytes(*b);
+            first.get_or_insert((i, a, b));
+            largest = largest.max((a - b).abs());
+            count += 1;
+        }
+    }
+    panic!("{label}: {count} differing float components, max absolute difference={largest}, first={first:?}");
+}
+
 fn session_image(
     engine: &Engine,
     session: &mut RenderSession,
@@ -58,17 +87,17 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
         let fresh = engine
             .render(&session.source, &settings, &mut Profile::default())
             .unwrap();
-        assert_eq!(
-            before,
-            engine.gpu.readback(&fresh.buffer).unwrap(),
-            "cold {name}"
+        assert_same_pixels(
+            &format!("cold {name}"),
+            &before,
+            &engine.gpu.readback(&fresh.buffer).unwrap(),
         );
         drop(fresh);
         if let Some(goldens) = std::env::var_os("FOVEONIC_PERFORMANCE_GOLDENS") {
-            assert_eq!(
-                before,
-                std::fs::read(PathBuf::from(goldens).join(format!("{name}.f32"))).unwrap(),
-                "retained performance golden {name}"
+            assert_same_pixels(
+                &format!("retained performance golden {name}"),
+                &before,
+                &std::fs::read(PathBuf::from(goldens).join(format!("{name}.f32"))).unwrap(),
             );
         }
         let warm = session_image(&engine, &mut session, &settings);
@@ -138,17 +167,14 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
             let fresh = engine
                 .render(&session.source, &settings, &mut Profile::default())
                 .unwrap();
-            assert_eq!(
-                actual,
-                engine.gpu.readback(&fresh.buffer).unwrap(),
-                "{name} step {step}"
-            );
+            let expected = engine.gpu.readback(&fresh.buffer).unwrap();
+            assert_same_pixels(&format!("{name} step {step}"), &actual, &expected);
             assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
         }
-        assert_eq!(
-            engine.gpu.readback(&retained.buffer).unwrap(),
-            before,
-            "retained {name}"
+        assert_same_pixels(
+            &format!("retained {name}"),
+            &engine.gpu.readback(&retained.buffer).unwrap(),
+            &before,
         );
         // Cancel after some stage/preparation checks, then safely resume using any valid checkpoints.
         let checks = Cell::new(0);
@@ -169,9 +195,10 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
         let fresh = engine
             .render(&session.source, &settings, &mut Profile::default())
             .unwrap();
-        assert_eq!(
-            engine.gpu.readback(&resumed.buffer).unwrap(),
-            engine.gpu.readback(&fresh.buffer).unwrap()
+        assert_same_pixels(
+            &format!("resumed {name}"),
+            &engine.gpu.readback(&resumed.buffer).unwrap(),
+            &engine.gpu.readback(&fresh.buffer).unwrap(),
         );
         eprintln!(
             "CACHE-EQUALITY {name} passed bytes={}",
@@ -225,16 +252,20 @@ fn noise_and_override_inputs_match_fresh_outputs() {
             let fresh = engine
                 .render(&session.source, &edited, &mut Profile::default())
                 .unwrap();
-            assert_eq!(
-                bytes,
-                engine.gpu.readback(&fresh.buffer).unwrap(),
-                "{label} movement={movement}"
+            assert_same_pixels(
+                &format!("{label} movement={movement}"),
+                &bytes,
+                &engine.gpu.readback(&fresh.buffer).unwrap(),
             );
             assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
         }
         eprintln!("NOISE-CACHE {label} exact");
     }
-    assert_eq!(original, engine.gpu.readback(&retained.buffer).unwrap());
+    assert_same_pixels(
+        "retained noise/override input",
+        &original,
+        &engine.gpu.readback(&retained.buffer).unwrap(),
+    );
 }
 
 #[test]
@@ -295,7 +326,11 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
     let original = first.gpu.readback(&retained.buffer).unwrap();
     let second = Engine::new().unwrap();
     let rebound = session_image(&second, &mut session, &settings);
-    assert_eq!(original, second.gpu.readback(&rebound.buffer).unwrap());
+    assert_same_pixels(
+        "engine rebound",
+        &original,
+        &second.gpu.readback(&rebound.buffer).unwrap(),
+    );
     assert!(second
         .view_texture(&retained, None, &mut Profile::default())
         .is_err());
@@ -341,8 +376,9 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
     let fresh = second
         .render(&session.source, &changed, &mut Profile::default())
         .unwrap();
-    assert_eq!(
-        second.gpu.readback(&resumed.buffer).unwrap(),
-        second.gpu.readback(&fresh.buffer).unwrap()
+    assert_same_pixels(
+        "engine rebound resumed",
+        &second.gpu.readback(&resumed.buffer).unwrap(),
+        &second.gpu.readback(&fresh.buffer).unwrap(),
     );
 }

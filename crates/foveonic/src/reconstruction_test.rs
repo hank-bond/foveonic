@@ -1,6 +1,7 @@
 //! Checks reference-style shader arithmetic against synthetic fixtures from the read-only reference library.
 
 use super::*;
+use crate::gpu::Binding::{Read, Write};
 use serde_json::Value;
 
 fn parameters() -> Parameters {
@@ -40,31 +41,32 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
     let gpu = Gpu::new().unwrap();
     let source = array(&f["input"]);
     let input = gpu.upload("Immutable reduced fixture", &source).unwrap();
-    let check = |buffer: &wgpu::Buffer, expected: Vec<f32>, tolerance: f32, label: &str| {
-        let actual = floats(&gpu, buffer);
-        let mut max = 0_f32;
-        let mut pos = 0;
-        for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
-            let d = (a - b).abs();
-            if d > max {
-                max = d;
-                pos = i;
+    let check =
+        |buffer: &crate::gpu::ReadGuard, expected: Vec<f32>, tolerance: f32, label: &str| {
+            let actual = floats(&gpu, buffer);
+            let mut max = 0_f32;
+            let mut pos = 0;
+            for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
+                let d = (a - b).abs();
+                if d > max {
+                    max = d;
+                    pos = i;
+                }
             }
-        }
-        assert_eq!(actual.len(), expected.len());
-        eprintln!("{label}: maximum {max} at {pos}");
-        assert!(
-            max < tolerance,
-            "{label} maximum {max} at {pos}, {} vs {}",
-            actual[pos],
-            expected[pos]
-        );
-    };
+            assert_eq!(actual.len(), expected.len());
+            eprintln!("{label}: maximum {max} at {pos}");
+            assert!(
+                max < tolerance,
+                "{label} maximum {max} at {pos}, {} vs {}",
+                actual[pos],
+                expected[pos]
+            );
+        };
     let mut p = parameters();
     p.filter = [0.08, 0.8, 0.6, 0.95];
     p.geometry = [4, 0, 21, 1];
     p.tile[3] = 21;
-    let bilateral = gpu
+    let mut bilateral = gpu
         .storage("Global bilateral verification", 80 * 72 * 12)
         .unwrap();
     let radii = gpu.upload("Unused global radii", &[0_u32]).unwrap();
@@ -73,12 +75,12 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
     let mut trace = gpu.trace(false, 1);
     gpu.dispatch(
         Kernel::NoiseBilateral,
-        &[
-            (0, &input),
-            (1, &uniform),
-            (2, &bilateral),
-            (6, &lookup),
-            (7, &radii),
+        &mut [
+            (0, Read(&input)),
+            (1, Read(&uniform)),
+            (2, Write(bilateral.write())),
+            (6, Read(&lookup)),
+            (7, Read(&radii)),
         ],
         bilateral_groups(p),
         &mut trace,
@@ -239,7 +241,7 @@ fn source() -> Vec<f32> {
         })
         .collect()
 }
-fn floats(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<f32> {
+fn floats(gpu: &Gpu, buffer: &crate::gpu::ReadGuard) -> Vec<f32> {
     bytemuck::cast_slice::<u8, f32>(&gpu.readback(buffer).unwrap()).to_vec()
 }
 fn check(data: &[f32], fixture: &Value, name: &str, channels: usize, tolerance: f32) {
@@ -273,31 +275,39 @@ fn reference_noise_and_detail_components_match_synthetic_fixtures() {
     let input = gpu.upload("Synthetic sensor layers", &source()).unwrap();
     let uniform = gpu.uniform(&p);
     let lookup = gpu.upload("Noise tables", &tables(p)).unwrap();
-    let block = gpu.storage("Block means", 9 * 4).unwrap();
-    let radii = gpu.storage("Radii", 9 * 4).unwrap();
+    let mut block = gpu.storage("Block means", 9 * 4).unwrap();
+    let mut radii = gpu.storage("Radii", 9 * 4).unwrap();
     let mut profile = Profile::new(true);
     let mut trace = gpu.trace(true, 3);
     gpu.dispatch(
         Kernel::NoiseBlock,
-        &[(0, &input), (1, &uniform), (4, &block)],
+        &mut [
+            (0, Read(&input)),
+            (1, Read(&uniform)),
+            (4, Write(block.write())),
+        ],
         [1, 1],
         &mut trace,
     );
     gpu.dispatch(
         Kernel::NoiseRadius,
-        &[(1, &uniform), (4, &block), (7, &radii)],
+        &mut [
+            (1, Read(&uniform)),
+            (4, Read(&block)),
+            (7, Write(radii.write())),
+        ],
         [1, 1],
         &mut trace,
     );
-    let filtered = gpu.storage("Bilateral fixture", 80 * 72 * 12).unwrap();
+    let mut filtered = gpu.storage("Bilateral fixture", 80 * 72 * 12).unwrap();
     gpu.dispatch(
         Kernel::NoiseBilateral,
-        &[
-            (0, &input),
-            (1, &uniform),
-            (2, &filtered),
-            (6, &lookup),
-            (7, &radii),
+        &mut [
+            (0, Read(&input)),
+            (1, Read(&uniform)),
+            (2, Write(filtered.write())),
+            (6, Read(&lookup)),
+            (7, Read(&radii)),
         ],
         bilateral_groups(p),
         &mut trace,
@@ -325,18 +335,22 @@ fn reference_noise_and_detail_components_match_synthetic_fixtures() {
     );
     let base = base.tiles.unwrap();
     check(&floats(&gpu, &base), &fixture, "base", 3, 0.1);
-    let a = gpu.storage("Luminance A", 80 * 72 * 4).unwrap();
-    let b = gpu.storage("Luminance B", 80 * 72 * 4).unwrap();
+    let mut a = gpu.storage("Luminance A", 80 * 72 * 4).unwrap();
+    let mut b = gpu.storage("Luminance B", 80 * 72 * 4).unwrap();
     let mut trace = gpu.trace(false, 5);
     gpu.dispatch(
         Kernel::NoiseLuminance,
-        &[(0, &input), (1, &uniform), (2, &a)],
+        &mut [
+            (0, Read(&input)),
+            (1, Read(&uniform)),
+            (2, Write(a.write())),
+        ],
         groups(p),
         &mut trace,
     );
     gpu.dispatch(
         Kernel::NoiseDiffuse,
-        &[(0, &a), (1, &uniform), (2, &b)],
+        &mut [(0, Read(&a)), (1, Read(&uniform)), (2, Write(b.write()))],
         groups(p),
         &mut trace,
     );
@@ -346,14 +360,14 @@ fn reference_noise_and_detail_components_match_synthetic_fixtures() {
     let fixed = gpu.uniform(&fixed);
     gpu.dispatch(
         Kernel::NoiseDiffuse,
-        &[(0, &b), (1, &fixed), (2, &a)],
+        &mut [(0, Read(&b)), (1, Read(&fixed)), (2, Write(a.write()))],
         groups(p),
         &mut trace,
     );
     check(&floats(&gpu, &a), &fixture, "fixed_diffusion", 1, 0.001);
     gpu.dispatch(
         Kernel::NoiseOsf,
-        &[(0, &a), (1, &uniform), (2, &b)],
+        &mut [(0, Read(&a)), (1, Read(&uniform)), (2, Write(b.write()))],
         groups(p),
         &mut trace,
     );

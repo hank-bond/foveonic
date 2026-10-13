@@ -1,6 +1,7 @@
 //! Builds typed processing and export recipes around owned GPU images and execution-local scratch.
 
 use crate::calibration::{self, ColorSpace};
+use crate::gpu::Binding::{Read, Write};
 use crate::gpu::{Gpu, Kernel};
 use crate::graph::{DataType, Graph, Operation};
 use crate::image::{Description, ImageTexture, Layout, RenderedImage, Space, View};
@@ -165,9 +166,8 @@ impl Input<'_> {
 
 #[derive(Clone)]
 pub(crate) struct Value {
-    pub(crate) buffer: wgpu::Buffer,
+    pub(crate) buffer: crate::gpu::ReadGuard,
     pub(crate) description: Option<Description>,
-    pub(crate) recyclable: bool,
 }
 
 fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
@@ -235,6 +235,13 @@ impl Engine {
     pub fn gpu_activity(&self) -> crate::profile::GpuActivity {
         self.gpu.activity()
     }
+    /// Diagnostic raw storage readback; not a display or photographic-processing path.
+    /// Included in engine activity counters, so benchmark callers measure it separately.
+    pub fn readback_image(&self, image: &RenderedImage) -> Result<Vec<u8>> {
+        self.check_owner(image)?;
+        self.gpu.readback(&image.buffer)
+    }
+
     /// Analyze the retained buffer in its logical view.
     pub fn scopes(
         &self,
@@ -887,11 +894,9 @@ impl Engine {
             let groups = [inherited[0].div_ceil(8), inherited[1].div_ceil(8)];
             let dimensions = [inherited[0], inherited[1], 0, 0];
             let bytes = u64::from(inherited[0]) * u64::from(inherited[1]) * 12;
-            let mut dispatch = |kernel, buffers: &[(u32, &wgpu::Buffer)], groups| {
+            let mut dispatch = |kernel, buffers: &mut [(u32, crate::gpu::Binding<'_>)], groups| {
                 gpu.dispatch(kernel, buffers, groups, &mut trace)
             };
-            let mut recyclable = desc
-                .is_some_and(|d| matches!(d.layout, Layout::Rgb32Float | Layout::Scalar32Float));
             let output = match &node.operation {
                 Operation::Source => {
                     let Input::Source(source) = &context else {
@@ -910,22 +915,29 @@ impl Engine {
                             "imported image representation does not match graph input".into()
                         );
                     }
-                    recyclable = false;
                     Some(image.buffer.clone())
                 }
                 Operation::Black(params) => {
-                    let histogram = gpu.storage("Dark-shield histogram", 3 * 4096 * 4)?;
+                    let mut histogram = gpu.storage("Dark-shield histogram", 3 * 4096 * 4)?;
                     let uniform = gpu.uniform(params);
                     dispatch(
                         Kernel::Histogram,
-                        &[(0, &input(0).buffer), (1, &histogram), (2, &uniform)],
+                        &mut [
+                            (0, Read(&input(0).buffer)),
+                            (1, Write(histogram.write())),
+                            (2, Read(&uniform)),
+                        ],
                         [params.source[2].div_ceil(64), 1],
                     );
                     let black = if required[index] {
-                        let black = gpu.storage("Black levels", 12)?;
+                        let mut black = gpu.storage("Black levels", 12)?;
                         dispatch(
                             Kernel::BlackMean,
-                            &[(1, &histogram), (2, &uniform), (3, &black)],
+                            &mut [
+                                (1, Read(&histogram)),
+                                (2, Read(&uniform)),
+                                (3, Write(black.write())),
+                            ],
                             [3, 1],
                         );
                         Some(black)
@@ -937,7 +949,6 @@ impl Engine {
                         values[side] = Some(Value {
                             buffer: histogram,
                             description: None,
-                            recyclable: false,
                         });
                     }
                     black
@@ -947,17 +958,17 @@ impl Engine {
                     if inherited != [metadata.width as u32, metadata.height as u32] {
                         return Err("calibration requires original sensor coordinates".into());
                     }
-                    let output = scratch.take(gpu, bytes)?;
+                    let mut output = scratch.take(gpu, bytes)?;
                     let grid = gpu.upload("Spatial gain grids", &calibration.grid_values)?;
                     let uniform = gpu.uniform(&calibration.params);
                     dispatch(
                         Kernel::Calibration,
-                        &[
-                            (0, &input(0).buffer),
-                            (1, &input(1).buffer),
-                            (2, &grid),
-                            (3, &uniform),
-                            (4, &output),
+                        &mut [
+                            (0, Read(&input(0).buffer)),
+                            (1, Read(&input(1).buffer)),
+                            (2, Read(&grid)),
+                            (3, Read(&uniform)),
+                            (4, Write(output.write())),
                         ],
                         groups,
                     );
@@ -986,7 +997,6 @@ impl Engine {
                                 profile,
                             )?,
                             description: description(DataType::CalibratedLayers, inherited),
-                            recyclable: false,
                         });
                     }
                     if required[edge_id] {
@@ -1000,14 +1010,12 @@ impl Engine {
                                 profile,
                             )?,
                             description: description(DataType::ScalarField, inherited),
-                            recyclable: false,
                         });
                     }
                     if required[node.outputs[3]] {
                         values[node.outputs[3]] = Some(Value {
                             buffer: base.seed.unwrap(),
                             description: None,
-                            recyclable: false,
                         });
                     }
                     if required[index] {
@@ -1026,7 +1034,6 @@ impl Engine {
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
                             description: description(DataType::CalibratedLayers, inherited),
-                            recyclable: false,
                         });
                     }
                     required[index].then_some(tiles)
@@ -1046,7 +1053,6 @@ impl Engine {
                                 gpu, &ratio, *params, 1, false, profile,
                             )?,
                             description: description(DataType::LuminanceRatio, inherited),
-                            recyclable: false,
                         });
                     }
                     required[index].then_some(ratio)
@@ -1074,7 +1080,6 @@ impl Engine {
                                 profile,
                             )?,
                             description: description(DataType::LuminanceRatio, inherited),
-                            recyclable: false,
                         });
                     }
                     if required[mask] {
@@ -1088,7 +1093,6 @@ impl Engine {
                                 profile,
                             )?,
                             description: description(DataType::ScalarField, inherited),
-                            recyclable: false,
                         });
                     }
                     if required[index] {
@@ -1120,7 +1124,6 @@ impl Engine {
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
                             description: description(graph.outputs[projected].data, inherited),
-                            recyclable: false,
                         });
                     }
                     required[index].then_some(tiles)
@@ -1140,7 +1143,6 @@ impl Engine {
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
                             description: description(graph.outputs[projected].data, inherited),
-                            recyclable: false,
                         });
                     }
                     required[index].then_some(tiles)
@@ -1173,7 +1175,6 @@ impl Engine {
                         values[signal_id] = Some(Value {
                             buffer,
                             description: description(DataType::SignedDetail, inherited),
-                            recyclable: false,
                         });
                     }
                     rgb
@@ -1191,7 +1192,6 @@ impl Engine {
                         values[rows] = Some(Value {
                             buffer: result.rows,
                             description: None,
-                            recyclable: false,
                         });
                     }
                     result.image
@@ -1219,7 +1219,7 @@ impl Engine {
                 Operation::Color { .. }
                 | Operation::SensorGain { .. }
                 | Operation::Saturation { .. } => {
-                    let output = scratch.take(gpu, bytes)?;
+                    let mut output = scratch.take(gpu, bytes)?;
                     let mut params = match &node.operation {
                         Operation::Color { params, .. } | Operation::Saturation { params, .. } => {
                             *params
@@ -1231,22 +1231,26 @@ impl Engine {
                     let uniform = gpu.uniform(&params);
                     dispatch(
                         Kernel::Color,
-                        &[(0, &input(0).buffer), (1, &uniform), (2, &output)],
+                        &mut [
+                            (0, Read(&input(0).buffer)),
+                            (1, Read(&uniform)),
+                            (2, Write(output.write())),
+                        ],
                         groups,
                     );
                     Some(output)
                 }
                 Operation::ColorDq { table, .. } => {
-                    let output = scratch.take(gpu, bytes)?;
+                    let mut output = scratch.take(gpu, bytes)?;
                     let lookup = gpu.upload("ColorDQ lookup", &table.values)?;
                     let uniform = gpu.uniform(&[inherited[0], inherited[1], table.period, 0]);
                     dispatch(
                         Kernel::ColorDq,
-                        &[
-                            (0, &input(0).buffer),
-                            (1, &lookup),
-                            (2, &uniform),
-                            (3, &output),
+                        &mut [
+                            (0, Read(&input(0).buffer)),
+                            (1, Read(&lookup)),
+                            (2, Read(&uniform)),
+                            (3, Write(output.write())),
                         ],
                         groups,
                     );
@@ -1255,7 +1259,7 @@ impl Engine {
                 Operation::Tone {
                     curve, exposure, ..
                 } => {
-                    let output = scratch.take(gpu, bytes)?;
+                    let mut output = scratch.take(gpu, bytes)?;
                     let curve = gpu.upload("Color-mode tone curve", curve)?;
                     let uniform = gpu.uniform(&ScalarParams {
                         source: dimensions,
@@ -1263,18 +1267,18 @@ impl Engine {
                     });
                     dispatch(
                         Kernel::Tone,
-                        &[
-                            (0, &input(0).buffer),
-                            (1, &curve),
-                            (2, &uniform),
-                            (3, &output),
+                        &mut [
+                            (0, Read(&input(0).buffer)),
+                            (1, Read(&curve)),
+                            (2, Read(&uniform)),
+                            (3, Write(output.write())),
                         ],
                         groups,
                     );
                     Some(output)
                 }
                 Operation::SharpSignal { .. } => {
-                    let output = gpu.storage(
+                    let mut output = gpu.storage(
                         "Native signed mono high-pass",
                         u64::from(inherited[0]) * u64::from(inherited[1]) * 4,
                     )?;
@@ -1284,7 +1288,11 @@ impl Engine {
                     });
                     dispatch(
                         Kernel::SharpSignal,
-                        &[(0, &input(0).buffer), (2, &uniform), (3, &output)],
+                        &mut [
+                            (0, Read(&input(0).buffer)),
+                            (2, Read(&uniform)),
+                            (3, Write(output.write())),
+                        ],
                         groups,
                     );
                     Some(output)
@@ -1294,32 +1302,36 @@ impl Engine {
                     {
                         return Err("sharpen inputs have different image extents".into());
                     }
-                    let output = scratch.take(gpu, bytes)?;
+                    let mut output = scratch.take(gpu, bytes)?;
                     let uniform = gpu.uniform(&ScalarParams {
                         source: dimensions,
                         value: [*amount, 0., 0., 0.],
                     });
                     dispatch(
                         Kernel::Sharpen,
-                        &[
-                            (0, &input(0).buffer),
-                            (1, &input(1).buffer),
-                            (2, &uniform),
-                            (3, &output),
+                        &mut [
+                            (0, Read(&input(0).buffer)),
+                            (1, Read(&input(1).buffer)),
+                            (2, Read(&uniform)),
+                            (3, Write(output.write())),
                         ],
                         groups,
                     );
                     Some(output)
                 }
                 Operation::Encode { params, .. } => {
-                    let output = gpu.storage(
+                    let mut output = gpu.storage(
                         "Encoded packed RGB16",
                         desc.expect("encoded description").byte_len(),
                     )?;
                     let uniform = gpu.uniform(params);
                     dispatch(
                         Kernel::Encode,
-                        &[(0, &input(0).buffer), (1, &uniform), (2, &output)],
+                        &mut [
+                            (0, Read(&input(0).buffer)),
+                            (1, Read(&uniform)),
+                            (2, Write(output.write())),
+                        ],
                         [extent[0].div_ceil(8), extent[1].div_ceil(8)],
                     );
                     Some(output)
@@ -1352,11 +1364,10 @@ impl Engine {
                 values[index] = output.map(|buffer| Value {
                     buffer,
                     description: desc,
-                    recyclable,
                 });
             }
             for &id in &node.outputs {
-                if let Some(value) = values[id].as_mut() {
+                if let Some(value) = values[id].as_ref() {
                     execution.store(graph.outputs[id].name, value);
                 }
             }
@@ -1370,7 +1381,12 @@ impl Engine {
                 consumers[id] -= 1;
                 if consumers[id] == 0 {
                     if let Some(value) = values[id].take() {
-                        if value.recyclable {
+                        // Pool ordinary image layouts, not large tiled/atomic
+                        // workspaces that image scratch cannot use. Ownership
+                        // eligibility is enforced by the guards inside release.
+                        if value.description.is_some_and(|d| {
+                            matches!(d.layout, Layout::Rgb32Float | Layout::Scalar32Float)
+                        }) {
                             scratch.release(value.buffer);
                         }
                     }
