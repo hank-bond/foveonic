@@ -2,7 +2,7 @@
 summary: "Original X3Fs and adjacent editing sidecars are authoritative; rendered exports can be regenerated from them."
 kind: reference
 status: accepted
-implementation: incomplete
+implementation: conforming
 ---
 
 # Editing sidecars
@@ -24,3 +24,5 @@ Use the shared processing settings as the version-1 recipe, preserving automatic
 ## Conformance
 
 An edited X3F can be reopened with its saved recipe and used to regenerate an export without reading an earlier DNG. Workspace preferences and inspection amplification do not change the recipe, and the original X3F remains unchanged.
+
+The shared API and GUI slice implement these requirements. Automated checks cover exact round trips and GPU replay, protected malformed/future/unreadable recipes, coalesced latest writes, failed-save retry, photo switches, shutdown flushing, and inspection normalization. The owner accepted settings restoration across application restarts. CLI recipe selection remains outside this slice.

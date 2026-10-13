@@ -17,7 +17,8 @@ use std::time::Instant;
 pub use crate::repair::Threshold as RepairThreshold;
 pub use crate::tone::Controls as ToneControls;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Settings {
     pub white_balance: String,
     pub color_mode: String,
@@ -80,7 +81,7 @@ impl Settings {
     }
 
     /// Numeric validation is shared; inspection resolves WB/mode only when its stages need them.
-    fn validate_values(&self) -> Result<()> {
+    pub(crate) fn validate_values(&self) -> Result<()> {
         if !self.exposure.is_finite()
             || !self.exposure.exp2().is_finite()
             || self.exposure.exp2() <= 0.

@@ -9,7 +9,8 @@ mod tests;
 use crate::source::{MatrixEncoding, Metadata, Result};
 
 /// Five camera-table choices for chroma/luminance and a residual-detail multiplier.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Controls {
     pub chroma: u32,
     pub luminance: u32,
@@ -145,6 +146,62 @@ impl Overrides {
             }
         }
         Ok(())
+    }
+}
+
+impl serde::Serialize for Overrides {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(Parameter::ALL.len()))?;
+        for parameter in Parameter::ALL {
+            map.serialize_entry(parameter.key(), &self.get(parameter))?;
+        }
+        map.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Overrides {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Fields;
+        impl<'de> serde::de::Visitor<'de> for Fields {
+            type Value = Overrides;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("all seven named noise overrides")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> std::result::Result<Overrides, M::Error> {
+                let mut seen = [false; 7];
+                let mut overrides = Overrides::default();
+                while let Some((name, value)) = map.next_entry::<String, Option<f32>>()? {
+                    let index = Parameter::ALL
+                        .iter()
+                        .position(|p| p.key() == name)
+                        .ok_or_else(|| {
+                            serde::de::Error::custom(format!("unknown noise override {name}"))
+                        })?;
+                    if seen[index] {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate noise override {name}"
+                        )));
+                    }
+                    seen[index] = true;
+                    overrides.set(Parameter::ALL[index], value);
+                }
+                if !seen.into_iter().all(|field| field) {
+                    return Err(serde::de::Error::custom(
+                        "expected all seven named noise overrides",
+                    ));
+                }
+                Ok(overrides)
+            }
+        }
+        deserializer.deserialize_map(Fields)
     }
 }
 

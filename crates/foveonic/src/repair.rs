@@ -10,7 +10,8 @@ use crate::source::{MatrixEncoding, Metadata, Result};
 mod ordered_tests;
 
 /// Enabled repair follows the current source's camera cutoff unless explicitly overridden.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Threshold {
     #[default]
     Camera,

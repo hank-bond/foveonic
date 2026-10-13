@@ -1,4 +1,4 @@
-//! Runs a three-pane Merrill workspace with current-buffer inspection, reorderable tools, and UI-only persistence.
+//! Runs a three-pane Merrill workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
 mod advanced;
 mod browser;
@@ -13,6 +13,7 @@ mod navigator;
 mod preferences;
 mod scopes;
 mod sections;
+mod sidecars;
 mod smoke;
 mod viewport;
 mod worker;
@@ -29,6 +30,7 @@ struct App {
     browser: browser::Browser,
     worker: worker::Worker,
     capture: capture::Loader,
+    sidecars: sidecars::Session,
     metadata: Option<Arc<Metadata>>,
     selected: Option<PathBuf>,
     settings: Settings,
@@ -75,6 +77,10 @@ impl App {
             browser: browser::Browser::new(cc.egui_ctx.clone()),
             worker: worker::Worker::new(engine, cc.egui_ctx.clone()),
             capture: capture::Loader::new(cc.egui_ctx.clone()),
+            sidecars: sidecars::Session::new(
+                cc.egui_ctx.clone(),
+                std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_none(),
+            ),
             metadata: None,
             selected: None,
             settings,
@@ -124,6 +130,7 @@ impl App {
                 } else {
                     self.revision += 1;
                     self.selected = None;
+                    self.sidecars.clear();
                     self.capture.select(None);
                     self.metadata = None;
                     self.frame = None;
@@ -140,16 +147,23 @@ impl App {
     }
     fn select(&mut self, path: PathBuf) {
         self.capture.select(Some(path.clone()));
+        self.sidecars.select(path.clone());
         self.selected = Some(path);
-        reset_camera_selection(&mut self.settings, &self.camera_overrides);
+        self.settings = Settings::new("", "");
+        self.revision += 1;
+        self.worker.clear();
+        self.busy = false;
+        self.status = "Loading editing recipe…".into();
         self.metadata = None;
         self.frame = None;
         self.scope_images = None;
         self.viewport.reset();
         viewport::clear(&self.render_state);
-        self.submit(None);
     }
     fn submit(&mut self, export: Option<PathBuf>) {
+        if !self.sidecars.ready() {
+            return;
+        }
         if let Some(path) = &self.selected {
             self.revision += 1;
             self.busy = true;
@@ -333,6 +347,14 @@ impl App {
             ui.add(egui::Label::new(&self.status).truncate())
                 .on_hover_text(&self.status);
         });
+        if let Some(warning) = self.sidecars.warning() {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(egui::Color32::YELLOW, warning);
+                if self.sidecars.can_retry() && ui.button("Retry saving edits").clicked() {
+                    self.sidecars.retry();
+                }
+            });
+        }
     }
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
         match section {
@@ -379,7 +401,7 @@ impl App {
             }
             Section::Editing => {
                 let mut changed = false;
-                ui.add_enabled_ui(!self.exporting, |ui| {
+                ui.add_enabled_ui(!self.exporting && self.sidecars.ready(), |ui| {
                     changed =
                         controls::processing(ui, &mut self.settings, self.metadata.as_deref());
                 });
@@ -557,6 +579,13 @@ impl eframe::App for App {
             }
         }
         self.capture.receive();
+        if let Some(saved) = self.sidecars.receive() {
+            if self.selected.is_some() {
+                self.settings = sidecars::selection_settings(saved, &self.camera_overrides);
+                inspect::normalize(&self.settings, &mut self.output, &mut self.channel);
+                self.submit(None);
+            }
+        }
         if self
             .smoke
             .as_ref()
@@ -567,6 +596,9 @@ impl eframe::App for App {
             self.receive(ctx);
         }
         self.smoke_tick(ctx);
+        self.sidecars.refresh(&self.settings);
+        let previous_settings = self.settings.clone();
+        let previous_selection = self.selected.clone();
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui));
         let mut select = None;
         let organizer_limit = (ctx.available_rect().width() - 540.).clamp(160., 650.);
@@ -606,6 +638,9 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             changed |= self.central(ui);
         });
+        if previous_selection == self.selected && previous_settings != self.settings {
+            self.sidecars.edited(&self.settings);
+        }
         if let Some(path) = select {
             self.select(path);
         } else if changed && !self.exporting {
@@ -641,10 +676,6 @@ fn install_style(ctx: &egui::Context) {
         .text_styles
         .insert(egui::TextStyle::Body, egui::FontId::proportional(13.));
     ctx.set_style(style);
-}
-fn reset_camera_selection(settings: &mut Settings, overrides: &[String; 2]) {
-    settings.white_balance.clone_from(&overrides[0]);
-    settings.color_mode.clone_from(&overrides[1]);
 }
 fn main() -> eframe::Result {
     let mut args = std::env::args().skip(1);
@@ -700,14 +731,37 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn image_changes_reset_camera_choices_but_keep_other_controls() {
-        let mut settings = foveonic::render::Settings::new("Shade", "Vivid");
-        settings.exposure = 1.;
-        super::reset_camera_selection(&mut settings, &[String::new(), String::new()]);
-        assert!(settings.white_balance.is_empty() && settings.color_mode.is_empty());
-        assert_eq!(settings.exposure, 1.);
-        super::reset_camera_selection(&mut settings, &["Auto".into(), "Neutral".into()]);
-        assert_eq!(settings.white_balance, "Auto");
-        assert_eq!(settings.color_mode, "Neutral");
+    fn restored_recipes_normalize_unavailable_inspection_before_rendering() {
+        let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        let mut output = "noise.layers".to_owned();
+        let mut channel = 2;
+        super::inspect::normalize(&settings, &mut output, &mut channel);
+        assert_eq!((&*output, channel), ("final", -1));
+        settings.sensor_gain = 1.5;
+        output = "gain.layers".into();
+        channel = 1;
+        super::inspect::normalize(&settings, &mut output, &mut channel);
+        assert_eq!((&*output, channel), ("gain.layers", 1));
+    }
+    #[test]
+    fn image_defaults_and_saved_recipes_do_not_carry_other_photo_edits() {
+        let mut saved = foveonic::render::Settings::new("Shade", "Vivid");
+        saved.exposure = 1.;
+        let overrides = [String::new(), String::new()];
+        assert_eq!(
+            super::sidecars::selection_settings(saved.clone(), &overrides),
+            saved
+        );
+        let fresh = super::sidecars::selection_settings(
+            foveonic::render::Settings::new("", ""),
+            &overrides,
+        );
+        assert_eq!(fresh.exposure, 0.);
+        assert!(fresh.white_balance.is_empty() && fresh.color_mode.is_empty());
+        let explicit =
+            super::sidecars::selection_settings(saved, &["Auto".into(), "Neutral".into()]);
+        assert_eq!(explicit.white_balance, "Auto");
+        assert_eq!(explicit.color_mode, "Neutral");
+        assert_eq!(explicit.exposure, 1.);
     }
 }

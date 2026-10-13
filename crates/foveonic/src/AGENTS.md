@@ -46,6 +46,7 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 - **[resample.rs](./resample.rs)** Native triangular polyphase metadata preparation and immutable GPU RGB resampling.
 - **[scopes.rs](./scopes.rs)** Samples the current floating GPU buffer into compact histogram and waveform counts.
 - **[scratch.rs](./scratch.rs)** Recycles guarded storage only after the last shared reader releases it on the ordered GPU queue.
+- **[sidecar.rs](./sidecar.rs)** Reads and atomically replaces bounded versioned JSON editing recipes beside immutable X3F inputs.
 - **[source.rs](./source.rs)** Owns original Merrill sensor samples and typed camera metadata.
 - **[spatial_tables.rs](./spatial_tables.rs)** Prepare Merrill spatial gain grids from camera byte tables, aperture, focus, and chief-ray angle.
 - **[tone.rs](./tone.rs)** Prepares a camera-derived color-mode tone table for application in a shader.

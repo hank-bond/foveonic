@@ -9,11 +9,11 @@ Requirements: [editing sidecars](../docs/specs/editing-sidecars.md).
 ## Steps
 
 - [x] Agree adjacent versioned JSON, automatic GUI save/restore, atomic writes, and editing-only content.
-- [ ] Implement strict shared serialization and bounded reads, with numeric validation and named override linkage.
-- [ ] Restore per-photo settings on selection and move coalesced writes off the UI/render workers.
-- [ ] Preserve requested edits across supersession, image changes, and orderly shutdown; protect invalid/unreadable sidecars.
-- [ ] Validate recipe round trips, atomic failures, asynchronous selection/save behavior, and exact photographic replay.
-- [ ] Review and checkpoint the first slice before DNG work.
+- [x] Implement strict shared serialization and bounded reads, with numeric validation and named override linkage.
+- [x] Restore per-photo settings on selection and move coalesced writes off the UI/render workers.
+- [x] Preserve requested edits across supersession, image changes, and orderly shutdown; protect invalid/unreadable sidecars.
+- [x] Validate recipe round trips, atomic failures, asynchronous selection/save behavior, and exact photographic replay.
+- [x] Review and checkpoint the first slice before DNG work.
 - [ ] Agree CLI recipe-selection/override precedence before CLI integration.
 
 ## Scope
@@ -22,4 +22,8 @@ One recipe per X3F, named `<original filename>.foveonic.json`. Store processing 
 
 Use a dedicated filesystem worker: one newest pending load and coalesced pending saves per photo, not a FIFO of slider snapshots. Finish pending saves on orderly shutdown. Invalid loads disable automatic writes for that selection and remain visibly reported. Retain failed-save recipes for explicit retry. Missing recipes initialize per-photo defaults, replacing the previous session-wide carryover of unrelated edits.
 
-Responsiveness continues in `/Users/work/git/foveonic-editing`; do not modify that worktree. Guard/inspection commits are `d916440` and `c3c7572`. Tone-table reuse remains uncommitted and must be excluded from checkpoints. No DNG import or recipe recovery from exported metadata is planned.
+Guard/inspection commits are `d916440` and `c3c7572`. The unaccepted tone-table reuse prototype is preserved separately and excluded from this checkpoint. No DNG import or recipe recovery from exported metadata is planned.
+
+## Review
+
+The owner checked several editing choices across application restarts and accepted the observed behavior. Native failure/retry and export interactions were not separately reported; automated tests cover protected recipes, failed-save retention/retry, photo switches, and shutdown flushing. The tone-free checkpoint passed 57 ordinary core tests, 71 ordinary GUI tests, CLI and docs-index tests, strict Clippy, example builds, format/index checks, and eight Python tests. Exact GPU replay of a restored recipe passed. Restored settings also normalize unavailable inspection choices before the first render request. The full ignored GPU suite remains a separate integration check.

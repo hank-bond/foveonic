@@ -55,14 +55,8 @@ fn group_row(ui: &mut egui::Ui, name: &str, selected: bool) -> bool {
     open
 }
 
-/// Returns true only when processing must produce a different buffer.
-pub fn show(
-    ui: &mut egui::Ui,
-    settings: &Settings,
-    output: &mut String,
-    channel: &mut i32,
-) -> bool {
-    let before = output.clone();
+/// Keep a restored recipe's selection valid before its first worker request.
+pub fn normalize(settings: &Settings, output: &mut String, channel: &mut i32) {
     let outputs = inspection::image_outputs(settings);
     if !outputs.iter().any(|o| o.name == output) {
         choose(output, channel, "final", -1);
@@ -72,6 +66,20 @@ pub fn show(
     if !choices.iter().any(|(c, _)| c == channel) {
         *channel = choices[0].0;
     }
+}
+
+/// Returns true only when processing must produce a different buffer.
+pub fn show(
+    ui: &mut egui::Ui,
+    settings: &Settings,
+    output: &mut String,
+    channel: &mut i32,
+) -> bool {
+    let before = output.clone();
+    normalize(settings, output, channel);
+    let outputs = inspection::image_outputs(settings);
+    let current = outputs.iter().find(|o| o.name == output).unwrap();
+    let choices = components(current.channels);
     let label = choices.iter().find(|(c, _)| c == channel).unwrap().1;
     let selected = if current.channels == Channels::Scalar {
         output.clone()
