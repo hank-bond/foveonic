@@ -19,6 +19,7 @@ pub struct Request {
     pub path: PathBuf,
     pub settings: Settings,
     pub output: String,
+    pub difference: bool,
     pub export: Option<PathBuf>,
 }
 pub struct Frame {
@@ -26,10 +27,15 @@ pub struct Frame {
     pub output: String,
     pub artifact: Artifact,
     pub texture: Arc<ImageTexture>,
+    pub comparison: Option<Comparison>,
     pub scopes: Option<foveonic::scopes::Scopes>,
     pub milliseconds: f64,
     pub revision: u64,
     pub queued_at: std::time::Instant,
+}
+pub struct Comparison {
+    pub input: &'static str,
+    pub texture: Arc<ImageTexture>,
 }
 pub struct Reply {
     pub revision: u64,
@@ -112,12 +118,31 @@ impl Worker {
                         state.clear||state.stop||state.request.as_ref().is_some_and(|pending|{
                             let mut next=pending.settings.clone();
                             resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
-                            pending.path!=request.path||pending.output!=request.output||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
+                            pending.path!=request.path||pending.output!=request.output||pending.difference!=request.difference||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
                         })
                     };
                     let mut profile = Profile::default();
                     let root=if request.export.is_some(){"final"}else{&request.output};
-                    let Some(mut artifacts)=engine.render_session(session,&settings,&[root],cancel,&mut profile)? else{return Ok(None);};
+                    let input = if request.difference && request.export.is_none() {
+                        Some(foveonic::inspection::comparison_input(&settings, root)
+                            .ok_or("selected output has no operation-input comparison")?)
+                    } else {
+                        None
+                    };
+                    let mut roots = vec![root];
+                    if let Some(input) = input { roots.push(input); }
+                    let Some(mut artifacts)=engine.render_session(session,&settings,&roots,cancel,&mut profile)? else{return Ok(None);};
+                    if cancel(){return Ok(None);}
+                    let comparison = if let Some(input) = input {
+                        let baseline = artifacts.pop().ok_or("missing comparison input")?;
+                        let Content::Image(image) = baseline.content else {
+                            return Err("comparison input must be an image".into());
+                        };
+                        Some(Comparison {
+                            input,
+                            texture: Arc::new(engine.view_texture(&image, None, &mut profile)?),
+                        })
+                    } else { None };
                     let artifact = artifacts.pop().ok_or("missing requested artifact")?;
                     let Content::Image(image) = &artifact.content else {
                         return Err(
@@ -128,6 +153,9 @@ impl Worker {
                     if let Some(path)=&request.export{engine.write_tiff(image,path,&mut profile)?;return Ok(None);}
                     if cancel(){return Ok(None);}
                     let texture = Arc::new(engine.view_texture(image, None, &mut profile)?);
+                    if comparison.as_ref().is_some_and(|c| c.texture.description().extent != texture.description().extent) {
+                        return Err("comparison views have different geometry".into());
+                    }
                     engine.device().poll(eframe::wgpu::Maintain::Wait);
                     scope_image=Some((**image).clone());
                     if std::env::var_os("FOVEONIC_UI_TIMING").is_some(){eprintln!("GPU-CACHE revision={} bytes={}",request.revision,session.cached_bytes());}
@@ -136,6 +164,7 @@ impl Worker {
                         output: request.output.clone(),
                         artifact,
                         texture,
+                        comparison,
                         scopes:None,
                         milliseconds: started.elapsed().as_secs_f64() * 1000.,
                         revision:request.revision,
@@ -268,6 +297,7 @@ mod tests {
                 path: path.clone(),
                 settings: foveonic::render::Settings::new("", ""),
                 output: "sensor.layers".into(),
+                difference: false,
                 export: None,
             });
         }
@@ -293,6 +323,7 @@ mod tests {
             path: path.clone(),
             settings: foveonic::render::Settings::new("", ""),
             output: "final".into(),
+            difference: false,
             export: None,
         });
         let reply = receive(&worker);
@@ -310,6 +341,7 @@ mod tests {
             path,
             settings: foveonic::render::Settings::new("", ""),
             output: "black.histogram".into(),
+            difference: false,
             export: None,
         });
         let reply = receive(&worker);
@@ -320,6 +352,91 @@ mod tests {
             .unwrap()
             .contains("GUI inspection requires a visual image buffer"));
         worker.clear();
+    }
+
+    #[test]
+    #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+    fn comparison_frames_pair_operation_inputs_with_the_same_configuration() {
+        use foveonic::{image::Space, render::Settings};
+        let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+            .join("blue-parking-sign.x3f");
+        let worker = super::Worker::new(
+            foveonic::render::Engine::new().unwrap(),
+            eframe::egui::Context::default(),
+        );
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.sensor_gain = 1.5;
+        settings.reconstruction = Some(Default::default());
+        settings.sharpen_amount = 0.75;
+        settings.saturation = 1.2;
+        for (index, (output, input)) in [
+            ("gain.layers", "calibration.layers"),
+            ("repair.layers", "gain.layers"),
+            ("noise.layers", "banding.layers"),
+            ("column.layers", "banding.layers"),
+            ("color-dq.rgb", "color.rgb"),
+            ("reconstruction.rgb", "color-dq.rgb"),
+            ("sharpen.rgb", "reconstruction.rgb"),
+            ("saturation.rgb", "tone.rgb"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let revision = index as u64 + 1;
+            worker.submit(super::Request {
+                revision,
+                path: path.clone(),
+                settings: settings.clone(),
+                output: output.into(),
+                difference: true,
+                export: None,
+            });
+            let reply = receive(&worker);
+            assert_eq!(reply.revision, revision);
+            let frame = reply.result.unwrap().unwrap();
+            assert_eq!(frame.output, output);
+            assert_eq!(frame.artifact.settings, settings);
+            assert!(frame.scopes.is_none()); // image-first publication remains intact
+            let comparison = frame.comparison.as_ref().unwrap();
+            assert_eq!(comparison.input, input);
+            assert_eq!(
+                comparison.texture.description().extent,
+                frame.texture.description().extent
+            );
+            assert_eq!(
+                comparison.texture.description().space,
+                frame.texture.description().space
+            );
+        }
+        settings.sensor_gain = 1.;
+        worker.submit(super::Request {
+            revision: 9,
+            path: path.clone(),
+            settings: settings.clone(),
+            output: "repair.layers".into(),
+            difference: true,
+            export: None,
+        });
+        let frame = receive(&worker).result.unwrap().unwrap();
+        assert_eq!(
+            frame.comparison.as_ref().unwrap().input,
+            "calibration.layers"
+        );
+        assert_eq!(frame.texture.description().space, Space::CalibratedLayers);
+        drop(frame);
+        worker.submit(super::Request {
+            revision: 10,
+            path,
+            settings,
+            output: "final".into(),
+            difference: true,
+            export: None,
+        });
+        assert!(receive(&worker)
+            .result
+            .err()
+            .unwrap()
+            .contains("no operation-input comparison"));
     }
 
     #[test]
@@ -384,6 +501,7 @@ mod tests {
                 path: path.clone(),
                 settings: settings.clone(),
                 output: "final".into(),
+                difference: false,
                 export: None,
             });
             let reply = receive(&worker);
@@ -460,6 +578,7 @@ mod tests {
                     path: path.clone(),
                     settings,
                     output: "final".into(),
+                    difference: false,
                     export: None,
                 })
             };
@@ -555,6 +674,7 @@ mod tests {
                 path: "test.x3f".into(),
                 settings: foveonic::render::Settings::new("Sunlight", "Standard"),
                 output: "final".into(),
+                difference: false,
                 export: None,
             });
         }

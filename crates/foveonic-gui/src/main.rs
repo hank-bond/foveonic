@@ -35,6 +35,7 @@ struct App {
     camera_overrides: [String; 2],
     output: String,
     channel: i32,
+    difference: inspect::Difference,
     frame: Option<worker::Frame>,
     scope_images: Option<scopes::Images>,
     viewport: viewport::Viewport,
@@ -80,6 +81,7 @@ impl App {
             camera_overrides: overrides,
             output: "final".into(),
             channel: -1,
+            difference: Default::default(),
             frame: None,
             scope_images: None,
             viewport: Default::default(),
@@ -167,6 +169,10 @@ impl App {
                 path: path.clone(),
                 settings: self.settings.clone(),
                 output: self.output.clone(),
+                difference: self.difference.enabled
+                    && self.channel >= 0
+                    && foveonic::inspection::comparison_input(&self.settings, &self.output)
+                        .is_some(),
                 export,
             });
         }
@@ -214,6 +220,7 @@ impl App {
                         !self.exporting
                             && self.selected.as_ref() == Some(&frame.path)
                             && self.output == frame.output
+                            && (!self.difference.enabled || frame.comparison.is_some())
                             && self
                                 .frame
                                 .as_ref()
@@ -330,11 +337,11 @@ impl App {
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
         match section {
             Section::Navigator => {
-                let channel = self.displayed_channel();
+                let mapping = self.displayed_mapping();
                 let texture = self
                     .frame
                     .as_ref()
-                    .map(|frame| self.navigator.image(frame, channel));
+                    .map(|frame| self.navigator.image(frame, mapping));
                 let preview = self
                     .selected
                     .as_ref()
@@ -425,26 +432,80 @@ impl App {
             -1
         }
     }
+    fn displayed_mapping(&self) -> viewport::Mapping {
+        let channel = self.displayed_channel();
+        let has_pair = self
+            .frame
+            .as_ref()
+            .is_some_and(|frame| frame.output == self.output && frame.comparison.is_some());
+        if self.difference.enabled && channel >= 0 && has_pair {
+            viewport::Mapping {
+                channel,
+                difference_gain: self.difference.gain,
+            }
+        } else {
+            viewport::Mapping::normal(channel)
+        }
+    }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.weak("Inspect");
             ui.add_enabled_ui(!self.exporting, |ui| {
                 changed |= inspect::show(ui, &self.settings, &mut self.output, &mut self.channel);
+                let requested =
+                    self.difference
+                        .show(ui, &self.settings, &self.output, self.channel);
+                let has_pair = self
+                    .frame
+                    .as_ref()
+                    .is_some_and(|frame| frame.output == self.output && frame.comparison.is_some());
+                changed |= requested && (self.busy || !has_pair);
             });
         });
+        let mapping = self.displayed_mapping();
+        if mapping.difference_gain > 0. {
+            let frame = self.frame.as_ref().unwrap();
+            let input = frame.comparison.as_ref().unwrap().input;
+            let (range, units) = if matches!(
+                frame.texture.description().space,
+                foveonic::image::Space::ToneMappedRgb(_)
+            ) {
+                (1., "linear")
+            } else {
+                (4095., "codes")
+            };
+            ui.add(
+                egui::Label::new(format!(
+                    "Δ {} − {input} · dark − / gray 0 / light + · ±{:.3} {units} · scopes: output",
+                    frame.output,
+                    range / mapping.difference_gain,
+                ))
+                .wrap(),
+            );
+        } else if self.difference.enabled {
+            let name = self
+                .frame
+                .as_ref()
+                .map_or("preview", |frame| frame.output.as_str());
+            ui.small(format!("Difference pending; displaying {name} output."));
+        }
         ui.add_space(3.);
         let height =
             (ui.available_height() - information::HEIGHT - ui.spacing().item_spacing.y).max(0.);
-        let channel = self.displayed_channel();
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), height),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 ui.set_min_height(height);
                 if let Some(frame) = &self.frame {
-                    self.viewport
-                        .show(ui, frame.texture.clone(), channel, self.srgb_target);
+                    self.viewport.show(
+                        ui,
+                        frame.texture.clone(),
+                        frame.comparison.as_ref().map(|c| c.texture.clone()),
+                        mapping,
+                        self.srgb_target,
+                    );
                 } else if let Some(path) = &self.selected {
                     if let Some(preview) = self.browser.thumbnail(path) {
                         self.viewport
@@ -552,7 +613,7 @@ impl eframe::App for App {
         }
         self.navigator.update(
             self.frame.as_ref(),
-            self.displayed_channel(),
+            self.displayed_mapping(),
             self.busy,
             ctx,
         );

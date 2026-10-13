@@ -31,3 +31,5 @@ Output dependency tracking and temporary lifetimes govern execution. Interaction
 ## Conformance
 
 An earlier sensor-stage image and a named side output can each be selected for inspection. Execution follows the requested dependencies, transient outputs become reusable after their last consumer, and retained artifacts stay immutable across subsequent renders. Recomputed artifacts belong to the requested configuration.
+
+Inline group rows have pointer-driven expansion tests. Signed layer/channel comparisons retain paired views from one render configuration; GPU fixtures cover neutral, positive/negative, amplified, signed and over-range samples before display mapping. A Merrill worker fixture checks eight operation/input pairs and settings-dependent baseline changes. Native visual review and combined RGB/scalar comparison work are tracked in the [inspection plan](../../plans/inspection-differences.md).

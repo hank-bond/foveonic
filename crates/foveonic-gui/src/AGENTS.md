@@ -29,7 +29,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[navigator.rs](./navigator.rs)** Defers tiny GPU navigator presentation behind main-image feedback and registers revision-paired egui images.
 - **[preferences.rs](./preferences.rs)** Persists organizer, scope, zoom snap, and tool-section preferences separately from image edits.
 - **[scopes.rs](./scopes.rs)** Displays current-buffer histograms and density scopes for the selected inspection stage.
-- **[sections.rs](./sections.rs)** Draws collapse/drag headers and accepts section drops only inside the tools pane.
+- **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks using isolated preferences and real egui/wgpu frames.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between JPEG previews and GPU images, with diagnostic mapping and manual filtering.
 - **[worker.rs](./worker.rs)** Runs one image job at a time, coalesces pending requests, and waits for GPU completion off the UI thread.

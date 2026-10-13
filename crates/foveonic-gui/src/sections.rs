@@ -1,15 +1,8 @@
-//! Draws collapse/drag headers and accepts section drops only inside the tools pane.
+//! Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
 use crate::preferences::Section;
 use eframe::egui;
 
-pub fn header(ui: &mut egui::Ui, section: Section, collapsed: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 29.),
-        egui::Sense::click_and_drag(),
-    );
-    ui.painter()
-        .rect_filled(rect, 2., egui::Color32::from_gray(31));
-    let center = rect.left_center() + egui::vec2(11., 0.);
+pub fn disclosure_icon(ui: &egui::Ui, center: egui::Pos2, collapsed: bool, color: egui::Color32) {
     let points = if collapsed {
         vec![
             center + egui::vec2(-2., -4.),
@@ -25,9 +18,24 @@ pub fn header(ui: &mut egui::Ui, section: Section, collapsed: bool) -> egui::Res
     };
     ui.painter().add(egui::Shape::convex_polygon(
         points,
-        egui::Color32::GRAY,
+        color,
         egui::Stroke::NONE,
     ));
+}
+
+pub fn header(ui: &mut egui::Ui, section: Section, collapsed: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 29.),
+        egui::Sense::click_and_drag(),
+    );
+    ui.painter()
+        .rect_filled(rect, 2., egui::Color32::from_gray(31));
+    disclosure_icon(
+        ui,
+        rect.left_center() + egui::vec2(11., 0.),
+        collapsed,
+        egui::Color32::GRAY,
+    );
     ui.painter().text(
         rect.left_center() + egui::vec2(24., 0.),
         egui::Align2::LEFT_CENTER,

@@ -99,7 +99,14 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
             },
             source.size(),
         );
-        viewport::prepare_navigator(&rs, &source, space, &target, channel);
+        viewport::prepare_navigator(
+            &rs,
+            &source,
+            space,
+            &target,
+            viewport::Mapping::normal(channel),
+            None,
+        );
         let buffer = rs.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Synthetic navigator pixels"),
             size: 1024,
@@ -151,11 +158,25 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
         wgpu::TextureFormat::Rgba8UnormSrgb,
         wgpu::TextureUsages::RENDER_ATTACHMENT,
     );
-    viewport::prepare_navigator(&rs, &source, Space::ScalarField, &target, -1);
+    viewport::prepare_navigator(
+        &rs,
+        &source,
+        Space::ScalarField,
+        &target,
+        viewport::Mapping::normal(-1),
+        None,
+    );
     rs.device.poll(wgpu::Maintain::Wait);
     let start = Instant::now();
     for _ in 0..25 {
-        viewport::prepare_navigator(&rs, &source, Space::ScalarField, &target, -1);
+        viewport::prepare_navigator(
+            &rs,
+            &source,
+            Space::ScalarField,
+            &target,
+            viewport::Mapping::normal(-1),
+            None,
+        );
         rs.device.poll(wgpu::Maintain::Wait);
     }
     eprintln!(

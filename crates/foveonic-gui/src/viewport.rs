@@ -9,6 +9,28 @@ use eframe::{
 use foveonic::image::{ColorSpace, ImageTexture, Space};
 use std::{collections::HashMap, sync::Arc};
 
+/// Display-only component and difference amplification. Zero gain shows the output normally.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mapping {
+    pub channel: i32,
+    pub difference_gain: f32,
+}
+impl Mapping {
+    pub fn normal(channel: i32) -> Self {
+        Self {
+            channel,
+            difference_gain: 0.,
+        }
+    }
+    fn apply(self, mut params: Params) -> Params {
+        if self.difference_gain > 0. {
+            params.options[1] *= 0.5 * self.difference_gain;
+            params.options[2] = -3.;
+        }
+        params
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
@@ -107,6 +129,16 @@ pub fn install(rs: &egui_wgpu::RenderState) {
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
@@ -181,11 +213,12 @@ pub(crate) fn prepare_navigator(
     source: &wgpu::Texture,
     space: Space,
     target: &wgpu::Texture,
-    channel: i32,
+    mapping: Mapping,
+    input: Option<&wgpu::Texture>,
 ) {
     use wgpu::util::DeviceExt;
     let full = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.));
-    let params = Params::new(full, full, space, channel, true);
+    let params = mapping.apply(Params::new(full, full, space, mapping.channel, true));
     let uniform = rs
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -194,6 +227,7 @@ pub(crate) fn prepare_navigator(
             usage: wgpu::BufferUsages::UNIFORM,
         });
     let view = source.create_view(&Default::default());
+    let input_view = input.unwrap_or(source).create_view(&Default::default());
     let target_view = target.create_view(&Default::default());
     let renderer = rs.renderer.write();
     let resources = renderer.callback_resources.get::<Resources>().unwrap();
@@ -208,6 +242,10 @@ pub(crate) fn prepare_navigator(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&input_view),
             },
         ],
     });
@@ -241,6 +279,7 @@ pub(crate) fn prepare_navigator(
 struct Draw {
     key: &'static str,
     texture: Arc<ImageTexture>,
+    input: Option<Arc<ImageTexture>>,
     params: Params,
 }
 impl CallbackTrait for Draw {
@@ -260,6 +299,12 @@ impl CallbackTrait for Draw {
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let view = self.texture.texture().create_view(&Default::default());
+        let input_view = self
+            .input
+            .as_ref()
+            .unwrap_or(&self.texture)
+            .texture()
+            .create_view(&Default::default());
         r.binds.insert(
             self.key,
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -273,6 +318,10 @@ impl CallbackTrait for Draw {
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&input_view),
                     },
                 ],
             }),
@@ -499,7 +548,8 @@ impl Viewport {
         &mut self,
         ui: &mut egui::Ui,
         texture: Arc<ImageTexture>,
-        channel: i32,
+        input: Option<Arc<ImageTexture>>,
+        mapping: Mapping,
         srgb_target: bool,
     ) {
         let (rect, image) = self.layout(ui, texture.description().extent);
@@ -508,7 +558,7 @@ impl Viewport {
             image,
             ui.clip_rect().intersect(ui.ctx().screen_rect()),
             texture.description().space,
-            channel,
+            mapping.channel,
             srgb_target,
         ) else {
             return;
@@ -518,7 +568,8 @@ impl Viewport {
             Draw {
                 key: "main",
                 texture,
-                params,
+                input,
+                params: mapping.apply(params),
             },
         ));
     }
@@ -767,6 +818,25 @@ mod tests {
         assert!(viewport.visible_pixels().is_none());
         viewport.last_canvas = Some((egui::vec2(800., 800.), [200, 400]));
         assert_eq!(viewport.visible_pixels().unwrap().bottom_right, [199, 399]);
+    }
+
+    #[test]
+    fn difference_mapping_is_signed_display_gray_with_space_aware_amplification() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200., 100.));
+        for (space, expected) in [
+            (Space::CalibratedLayers, 16. / 4095.),
+            (Space::LinearRgb(ColorSpace::AdobeRgb), 16. / 4095.),
+            (Space::ToneMappedRgb(ColorSpace::Srgb), 16.),
+        ] {
+            let normal = Params::new(rect, rect, space, 1, true);
+            let mapped = Mapping {
+                channel: 1,
+                difference_gain: 32.,
+            }
+            .apply(normal);
+            assert_eq!(mapped.options, [1., expected, -3., 1.]);
+            assert_eq!(Mapping::normal(1).apply(normal).options, normal.options);
+        }
     }
 
     #[test]
