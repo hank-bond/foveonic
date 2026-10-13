@@ -2,6 +2,13 @@
 
 use std::time::Instant;
 
+#[cfg(test)]
+#[path = "profile_gpu_test.rs"]
+mod gpu_tests;
+#[cfg(test)]
+#[path = "profile_test.rs"]
+mod tests;
+
 /// Cumulative engine-owned GPU activity; allocation bytes are totals, not peak residency.
 /// Does not include wgpu's internal staging or activity submitted by another queue user.
 #[derive(Clone, Copy, Default, Debug, serde::Serialize)]
@@ -35,6 +42,48 @@ impl GpuActivity {
     }
 }
 
+/// Wall mode collects host observations without timestamp queries or extra GPU synchronization.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Off,
+    Wall,
+    Gpu,
+}
+impl Mode {
+    pub fn enabled(self) -> bool {
+        self != Self::Off
+    }
+    pub fn gpu(self) -> bool {
+        self == Self::Gpu
+    }
+    pub fn check_gpu_features(self, features: wgpu::Features) -> Result<(), &'static str> {
+        if self.gpu() && !features.contains(wgpu::Features::TIMESTAMP_QUERY) {
+            Err("GPU profiling requires timestamp support; use wall mode otherwise")
+        } else {
+            Ok(())
+        }
+    }
+}
+impl std::str::FromStr for Mode {
+    type Err = &'static str;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "off" => Ok(Self::Off),
+            "wall" => Ok(Self::Wall),
+            "gpu" => Ok(Self::Gpu),
+            _ => Err("profiling mode must be off, wall or gpu"),
+        }
+    }
+}
+
+/// One envelope for core profiles and frontend observations; unrelated stderr remains ordinary text.
+pub fn report(event: &str, mode: Mode, data: impl serde::Serialize) -> serde_json::Value {
+    serde_json::json!({"foveonic_profile": 1, "event": event, "mode": mode,
+                      "synchronized": mode.gpu(), "data": data})
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Timing {
     pub stage: &'static str,
@@ -52,7 +101,7 @@ impl Timing {
 
 #[derive(Default, Debug, serde::Serialize)]
 pub struct Profile {
-    pub enabled: bool,
+    pub mode: Mode,
     pub host: Vec<Timing>,
     pub gpu: Vec<Timing>,
     pub scratch_allocations: u32,
@@ -60,20 +109,23 @@ pub struct Profile {
 }
 
 impl Profile {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(mode: Mode) -> Self {
         Self {
-            enabled,
+            mode,
             ..Self::default()
         }
     }
 
     pub(crate) fn record(&mut self, stage: &'static str, start: Instant) {
-        if self.enabled {
+        if self.mode.enabled() {
             self.host.push(Timing::elapsed(stage, start));
         }
     }
 
     pub fn measure<T>(&mut self, stage: &'static str, work: impl FnOnce() -> T) -> T {
+        if !self.mode.enabled() {
+            return work();
+        }
         let start = Instant::now();
         let value = work();
         self.record(stage, start);

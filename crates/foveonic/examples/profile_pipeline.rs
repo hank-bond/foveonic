@@ -1,135 +1,138 @@
-//! Measures completed cold/warm all-enabled processing, transfers, export, and optional bit-exact goldens.
+//! Measures completed fresh processing with normal photographic controls, separate GPU diagnostics and optional exact goldens.
 
+#[path = "../src/options.rs"]
+mod options;
 use foveonic::{
-    image::RenderedImage,
-    profile::Profile,
-    render::{Engine, Settings},
+    profile::{self, Mode, Profile},
+    render::Engine,
     source::Source,
 };
-use std::{hash::Hasher, path::PathBuf, time::Instant};
+use std::{ffi::OsString, hash::Hasher, path::PathBuf, time::Instant};
 
-// Diagnostic readback is deliberately outside both the measured render and engine activity.
-fn pixels(
-    engine: &Engine,
-    image: &RenderedImage,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let staging = engine.device().create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Equivalence readback"),
-        size: image.buffer().size(),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = engine.device().create_command_encoder(&Default::default());
-    encoder.copy_buffer_to_buffer(image.buffer(), 0, &staging, 0, staging.size());
-    engine.queue().submit(Some(encoder.finish()));
-    let (tx, rx) = std::sync::mpsc::channel();
-    staging
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-    engine.device().poll(wgpu::Maintain::Wait);
-    rx.recv()??;
-    let bytes = staging.slice(..).get_mapped_range().to_vec();
-    staging.unmap();
-    Ok(bytes)
-}
 fn milliseconds(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.
 }
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let args: Vec<_> = std::env::args().collect();
-    if args.len() < 3 {
-        return Err(
-            "usage: profile_pipeline INPUT.x3f NEW_EXPORT_DIR [GOLDEN_DIR] [warm-count, default 2]"
-                .into(),
-        );
+    let mut args = std::env::args_os().skip(1);
+    let input=PathBuf::from(args.next().ok_or("usage: profile_pipeline INPUT.x3f NEW_EXPORT_DIR [--warm N] [--goldens DIR] --wb NAME --mode NAME [normal render options]")?);
+    let output = PathBuf::from(args.next().ok_or("missing export directory")?);
+    // Never silently append to an existing experiment.
+    if output.exists() {
+        return Err("export directory must be new".into());
     }
-    let input = PathBuf::from(&args[1]);
-    let output = PathBuf::from(&args[2]);
-    std::fs::create_dir_all(&output)?;
+    let mut warm = 2usize;
+    let mut goldens = None;
+    let mut controls = Vec::<OsString>::new();
+    while let Some(arg) = args.next() {
+        if arg == "--warm" {
+            warm = args
+                .next()
+                .ok_or("missing warm count")?
+                .into_string()
+                .map_err(|_| "warm count must be UTF-8")?
+                .parse()?;
+        } else if arg == "--goldens" {
+            goldens = Some(PathBuf::from(
+                args.next().ok_or("missing golden directory")?,
+            ));
+        } else {
+            controls.push(arg);
+        }
+    }
+    let (settings, paths, mode) = options::parse_settings(controls.into_iter())?;
+    if !paths.is_empty() {
+        return Err("unexpected extra input paths".into());
+    }
+    let source = Source::open(&input)?;
+    let engine = Engine::new()?;
+    mode.check_gpu_features(engine.device().features())?;
+    std::fs::create_dir(&output)?;
     let stem = input
         .file_stem()
         .ok_or("missing input stem")?
         .to_string_lossy();
-    let start = Instant::now();
-    let source = Source::open(&input)?;
-    let source_open = milliseconds(start);
-    let stage = |name| {
-        source
-            .load_timings()
-            .iter()
-            .find(|timing| timing.stage == name)
-            .map(|timing| timing.milliseconds)
-            .ok_or("missing source load timing")
-    };
-    let file_read = stage("file read")?;
-    let decode = stage("X3F decode wall")?;
-    let start = Instant::now();
-    let engine = Engine::new()?;
-    engine.device().poll(wgpu::Maintain::Wait);
-    let setup = milliseconds(start);
-    let mut settings = Settings::new("Sunlight", "Standard");
-    settings.reconstruction = Some(Default::default());
-    settings.sensor_gain = 1.3;
-    settings.exposure = 0.5;
-    settings.tone.contrast = 0.25;
-    settings.tone.shadows = 0.1;
-    settings.tone.highlights = -0.2;
-    settings.saturation = 1.2;
-    settings.sharpen_amount = 0.75;
-    // Also exercise encoding/resizing without repeatedly writing full-frame TIFFs.
-    settings.output_size = Some(if source.metadata.rotation % 180 == 90 {
-        [800, 1200]
-    } else {
-        [1200, 800]
-    });
     println!(
         "{}",
-        serde_json::json!({"event":"setup","input":input,"adapter":engine.adapter_name(),"source_open_ms":source_open,"file_read_ms":file_read,"decode_ms":decode,"read_cache_state":"uncontrolled","engine_ms":setup,"settings":format!("{settings:?}")})
+        profile::report(
+            "session",
+            mode,
+            serde_json::json!({"frontend":"completed_processing","source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
+        )
     );
-    let warm: usize = args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(2);
-    for iteration in 0..warm + 2 {
-        let timestamped = iteration == warm + 1;
-        let mut profile = Profile::new(timestamped);
+    println!(
+        "{}",
+        profile::report(
+            "source_load",
+            mode,
+            serde_json::json!({"source":input,"timings":source.load_timings(),"read_cache_state":"uncontrolled"})
+        )
+    );
+    // Cold plus warm repeated work: no RenderSession or retained edit boundary.
+    // A requested GPU diagnostic is one additional, separately labeled iteration.
+    for iteration in 0..warm + 1 + usize::from(mode.gpu()) {
+        let diagnostic = mode.gpu() && iteration == warm + 1;
+        let sample_mode = if diagnostic {
+            Mode::Gpu
+        } else if mode.enabled() {
+            Mode::Wall
+        } else {
+            Mode::Off
+        };
+        let mut profile = Profile::new(sample_mode);
         let before = engine.gpu_activity();
         let start = Instant::now();
         let image = engine.render(&source, &settings, &mut profile)?;
-        let submission = milliseconds(start);
+        let render_call = milliseconds(start);
         engine.device().poll(wgpu::Maintain::Wait);
-        let complete = milliseconds(start);
-        let render_activity = engine.gpu_activity().since(before);
-        let export_path = output.join(format!("{stem}-{iteration}.tiff"));
+        let completed = milliseconds(start);
+        let activity = engine.gpu_activity().since(before);
+        println!(
+            "{}",
+            profile::report(
+                "processing",
+                sample_mode,
+                serde_json::json!({"source":input,"settings":settings,"output":"final","execution":"fresh","iteration":iteration,"cold":iteration==0,"render_call_ms":render_call,"completed_ms":completed,"profile":profile,"activity":activity})
+            )
+        );
+        let mut profile = Profile::new(sample_mode);
         let before = engine.gpu_activity();
         let start = Instant::now();
-        engine.write_tiff(&image, &export_path, &mut profile)?;
+        let destination = output.join(format!("{stem}-{iteration}.tiff"));
+        engine.write_tiff(&image, &destination, &mut profile)?;
         engine.device().poll(wgpu::Maintain::Wait);
-        let export = milliseconds(start);
-        let export_activity = engine.gpu_activity().since(before);
-        let mut digest = None;
+        println!(
+            "{}",
+            profile::report(
+                "export",
+                sample_mode,
+                serde_json::json!({"source":input,"settings":settings,"iteration":iteration,"destination":destination,"completed_ms":milliseconds(start),"profile":profile,"activity":engine.gpu_activity().since(before)})
+            )
+        );
+        // Full-image comparison is explicit validation, outside measured intervals and activity deltas.
         if iteration == 0 {
-            let bytes = pixels(&engine, &image)?;
+            let bytes = engine.readback_image(&image)?;
             let mut hasher = std::hash::DefaultHasher::new();
             hasher.write(&bytes);
-            digest = Some(format!("{:016x}", hasher.finish()));
-            if let Some(dir) = args.get(3).filter(|d| d.as_str() != "-") {
-                let dir = PathBuf::from(dir);
-                std::fs::create_dir_all(&dir)?;
-                let golden = dir.join(format!("{stem}.f32"));
-                if golden.exists() {
-                    let expected = std::fs::read(golden)?;
-                    if bytes != expected {
+            if let Some(dir) = &goldens {
+                std::fs::create_dir_all(dir)?;
+                let file = dir.join(format!("{stem}.f32"));
+                if file.exists() {
+                    if bytes != std::fs::read(file)? {
                         return Err(format!("non-equivalent output: {stem}").into());
                     }
                 } else {
-                    std::fs::write(golden, bytes)?;
+                    std::fs::write(file, &bytes)?;
                 }
             }
+            println!(
+                "{}",
+                profile::report(
+                    "validation",
+                    sample_mode,
+                    serde_json::json!({"source":input,"digest":format!("{:016x}",hasher.finish()),"outside_timing":true})
+                )
+            );
         }
-        println!(
-            "{}",
-            serde_json::json!({"event":"render","iteration":iteration,"timestamped":timestamped,"submission_ms":submission,"completed_ms":complete,"export_ms":export,"render_activity":render_activity,"export_activity":export_activity,"digest":digest,"profile":profile})
-        );
     }
     Ok(())
 }

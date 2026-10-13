@@ -1,9 +1,10 @@
 //! Checks optional GPU repairs, unsharp masking, cropped resizing, and ColorDQ conditioning.
 
 use crate::calibration::EncodeParams;
+use crate::gpu::Binding::{Read, Write};
 use crate::gpu::{Gpu, Kernel};
 
-fn floats(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<f32> {
+fn floats(gpu: &Gpu, buffer: &crate::gpu::ReadGuard) -> Vec<f32> {
     bytemuck::cast_slice::<u8, f32>(&gpu.readback(buffer).unwrap()).to_vec()
 }
 
@@ -28,13 +29,13 @@ fn shader_native_high_pass_and_final_sharpen_match_reference_limits_and_packing(
         bytes.extend(bytemuck::bytes_of(&[amount, 0., 0., 0.]));
         gpu.uniform(&<[u8; 32]>::try_from(bytes).unwrap())
     };
-    let signal = gpu
+    let mut signal = gpu
         .storage("Native high-pass fixture", 24 * 20 * 4)
         .unwrap();
     let p = uniform(0.);
     gpu.dispatch(
         Kernel::SharpSignal,
-        &[(0, &input), (2, &p), (3, &signal)],
+        &mut [(0, Read(&input)), (2, Read(&p)), (3, Write(signal.write()))],
         [3, 3],
         &mut Default::default(),
     );
@@ -50,10 +51,15 @@ fn shader_native_high_pass_and_final_sharpen_match_reference_limits_and_packing(
         .unwrap();
     for output in fixture["outputs"].as_array().unwrap() {
         let p = uniform(output["amount"].as_f64().unwrap() as f32);
-        let target = gpu.storage("Native sharpen output", 24 * 20 * 12).unwrap();
+        let mut target = gpu.storage("Native sharpen output", 24 * 20 * 12).unwrap();
         gpu.dispatch(
             Kernel::Sharpen,
-            &[(0, &input), (1, &raw), (2, &p), (3, &target)],
+            &mut [
+                (0, Read(&input)),
+                (1, Read(&raw)),
+                (2, Read(&p)),
+                (3, Write(target.write())),
+            ],
             [3, 3],
             &mut Default::default(),
         );
@@ -112,12 +118,16 @@ fn shader_resize_preserves_crop_orientation_and_both_transfer_routes() {
                     output: [size[0], size[1], route, 0],
                 };
                 let uniform = gpu.uniform(&params);
-                let output = gpu
+                let mut output = gpu
                     .storage("Resized output", u64::from(size[0] * size[1]) * 8)
                     .unwrap();
                 gpu.dispatch(
                     Kernel::Encode,
-                    &[(0, &input), (1, &uniform), (2, &output)],
+                    &mut [
+                        (0, Read(&input)),
+                        (1, Read(&uniform)),
+                        (2, Write(output.write())),
+                    ],
                     [1, 1],
                     &mut Default::default(),
                 );
@@ -178,12 +188,17 @@ fn shader_color_dq_matches_signed_lookup_math() {
     let input = gpu.upload("ColorDQ input", &pixels).unwrap();
     let lookup = gpu.upload("ColorDQ lookup", &table.values).unwrap();
     let uniform = gpu.uniform(&[6_u32, 1, table.period, 0]);
-    let output = gpu
+    let mut output = gpu
         .storage("ColorDQ output", pixels.len() as u64 * 4)
         .unwrap();
     gpu.dispatch(
         Kernel::ColorDq,
-        &[(0, &input), (1, &lookup), (2, &uniform), (3, &output)],
+        &mut [
+            (0, Read(&input)),
+            (1, Read(&lookup)),
+            (2, Read(&uniform)),
+            (3, Write(output.write())),
+        ],
         [1, 1],
         &mut Default::default(),
     );

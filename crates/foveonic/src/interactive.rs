@@ -249,7 +249,7 @@ impl Cache {
             .find(|entry| entry.name == name && entry.generation == generation)
             .map(|entry| entry.value.clone())
     }
-    fn put(&mut self, name: &'static str, value: &mut Value) {
+    fn put(&mut self, name: &'static str, value: &Value) {
         if !self.selected.contains(&name) {
             return;
         }
@@ -259,7 +259,6 @@ impl Cache {
             .iter()
             .any(|entry| entry.name == name && entry.generation == generation)
         {
-            value.recyclable = false;
             return;
         }
         if self.bytes() + value.buffer.size() > Self::LIMIT {
@@ -267,7 +266,6 @@ impl Cache {
                 .retain(|entry| self.selected.contains(&entry.name));
         }
         if self.bytes() + value.buffer.size() <= Self::LIMIT {
-            value.recyclable = false;
             self.entries.push(Entry {
                 name,
                 generation,
@@ -312,7 +310,7 @@ impl Execution<'_> {
     pub fn seed(&self, name: &str) -> Option<Value> {
         self.cache.as_ref()?.get(name)
     }
-    pub fn store(&mut self, name: &'static str, value: &mut Value) {
+    pub fn store(&mut self, name: &'static str, value: &Value) {
         if let Some(cache) = &mut self.cache {
             cache.put(name, value);
         }

@@ -1,6 +1,7 @@
 //! Checks GPU black estimation, signed calibration, and RGB16 orientation on small images.
 
 use crate::calibration::{CalibrationParams, EncodeParams};
+use crate::gpu::Binding::{Read, Write};
 use crate::gpu::{Gpu, Kernel};
 
 #[test]
@@ -9,9 +10,9 @@ fn activity_counts_engine_owned_transfers_and_not_device_copies_as_readbacks() {
     let gpu = Gpu::new().unwrap();
     let before = gpu.activity();
     let source = gpu.upload("Activity source", &[1_f32, 2., 3., 4.]).unwrap();
-    let target = gpu.storage("Activity target", 16).unwrap();
+    let mut target = gpu.storage("Activity target", 16).unwrap();
     let _uniform = gpu.uniform(&[1_u32; 4]);
-    gpu.copy(&source, &target, 16);
+    gpu.copy(&source, target.write(), 16);
     let pending = gpu.activity().since(before);
     assert_eq!(pending.upload_bytes, 16);
     assert_eq!(pending.uniform_bytes, 16);
@@ -48,18 +49,26 @@ fn shader_black_calibration_and_orientation() {
     raw[..3].fill(0.);
     raw[297..].fill(2000.);
     let input = gpu.upload("Test raw", &raw).unwrap();
-    let histogram = gpu.storage("Test histogram", 3 * 4096 * 4).unwrap();
-    let black = gpu.storage("Test black", 12).unwrap();
+    let mut histogram = gpu.storage("Test histogram", 3 * 4096 * 4).unwrap();
+    let mut black = gpu.storage("Test black", 12).unwrap();
     let uniform = gpu.uniform(&params);
     gpu.dispatch(
         Kernel::Histogram,
-        &[(0, &input), (1, &histogram), (2, &uniform)],
+        &mut [
+            (0, Read(&input)),
+            (1, Write(histogram.write())),
+            (2, Read(&uniform)),
+        ],
         [2, 1],
         &mut Default::default(),
     );
     gpu.dispatch(
         Kernel::BlackMean,
-        &[(1, &histogram), (2, &uniform), (3, &black)],
+        &mut [
+            (1, Read(&histogram)),
+            (2, Read(&uniform)),
+            (3, Write(black.write())),
+        ],
         [3, 1],
         &mut Default::default(),
     );
@@ -77,15 +86,15 @@ fn shader_black_calibration_and_orientation() {
         .unwrap();
     let grid = gpu.upload("Test gains", &[2_f32, 3., 4.]).unwrap();
     let uniform = gpu.uniform(&params);
-    let calibrated = gpu.storage("Test calibrated", 48).unwrap();
+    let mut calibrated = gpu.storage("Test calibrated", 48).unwrap();
     gpu.dispatch(
         Kernel::Calibration,
-        &[
-            (0, &raw),
-            (1, &black),
-            (2, &grid),
-            (3, &uniform),
-            (4, &calibrated),
+        &mut [
+            (0, Read(&raw)),
+            (1, Read(&black)),
+            (2, Read(&grid)),
+            (3, Read(&uniform)),
+            (4, Write(calibrated.write())),
         ],
         [1, 1],
         &mut Default::default(),
@@ -125,10 +134,14 @@ fn shader_black_calibration_and_orientation() {
             output: [2, 2, 0, 0],
         };
         let uniform = gpu.uniform(&params);
-        let output = gpu.storage("Test RGB16", 32).unwrap();
+        let mut output = gpu.storage("Test RGB16", 32).unwrap();
         gpu.dispatch(
             Kernel::Encode,
-            &[(0, &input), (1, &uniform), (2, &output)],
+            &mut [
+                (0, Read(&input)),
+                (1, Read(&uniform)),
+                (2, Write(output.write())),
+            ],
             [1, 1],
             &mut Default::default(),
         );

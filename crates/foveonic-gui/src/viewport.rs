@@ -242,6 +242,7 @@ struct Draw {
     key: &'static str,
     texture: Arc<ImageTexture>,
     params: Params,
+    probe: crate::timing::DrawProbe,
 }
 impl CallbackTrait for Draw {
     fn prepare(
@@ -252,6 +253,7 @@ impl CallbackTrait for Draw {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        let _span = self.probe.prepare();
         use wgpu::util::DeviceExt;
         let r = resources.get_mut::<Resources>().unwrap();
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -277,6 +279,7 @@ impl CallbackTrait for Draw {
                 ],
             }),
         );
+        self.probe.prepared();
         Vec::new()
     }
     fn paint(
@@ -285,6 +288,7 @@ impl CallbackTrait for Draw {
         pass: &mut wgpu::RenderPass<'static>,
         resources: &CallbackResources,
     ) {
+        let _span = self.probe.encode();
         let r = resources.get::<Resources>().unwrap();
         pass.set_pipeline(&r.pipeline);
         pass.set_bind_group(0, r.binds.get(self.key).unwrap(), &[]);
@@ -501,6 +505,7 @@ impl Viewport {
         texture: Arc<ImageTexture>,
         channel: i32,
         srgb_target: bool,
+        revision: u64,
     ) {
         let (rect, image) = self.layout(ui, texture.description().extent);
         let Some((visible, params)) = Params::clipped(
@@ -519,6 +524,7 @@ impl Viewport {
                 key: "main",
                 texture,
                 params,
+                probe: crate::timing::DrawProbe::new(revision),
             },
         ));
     }

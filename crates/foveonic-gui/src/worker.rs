@@ -93,6 +93,7 @@ impl Worker {
                     )
                 };
                 let started = std::time::Instant::now();
+                crate::timing::worker_started(request.revision, queued_at, started);
                 let mut metadata = None;
                 let mut settings = request.settings.clone();
                 let mut defaults_errors = Vec::new();
@@ -100,7 +101,12 @@ impl Worker {
                 let result = (|| -> foveonic::source::Result<Option<Frame>> {
                     if source.as_ref().is_none_or(|(p, _)| p != &request.path) {
                         source = None; // release the previous decoded image before loading another
-                        source = Some((request.path.clone(), RenderSession::new(Source::open(&request.path)?)));
+                        let _span = crate::timing::Span::new(request.revision, "source_open");
+                        let loaded = Source::open(&request.path)?;
+                        if crate::timing::enabled() {
+                            crate::timing::emit("source_load", serde_json::json!({"revision":request.revision,"source":request.path,"timings":loaded.load_timings(),"read_cache_state":"uncontrolled","extent":[loaded.metadata.width,loaded.metadata.height]}));
+                        }
+                        source = Some((request.path.clone(), RenderSession::new(loaded)));
                     }
                     let session = &mut source.as_mut().unwrap().1;
                     metadata = Some(session.metadata().clone());
@@ -115,9 +121,21 @@ impl Worker {
                             pending.path!=request.path||pending.output!=request.output||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
                         })
                     };
-                    let mut profile = Profile::default();
+                    let mut profile = Profile::new(crate::timing::mode());
+                    let before = crate::timing::enabled().then(||engine.gpu_activity());
+                    let cache_before = before.map(|_|session.cached_bytes());
                     let root=if request.export.is_some(){"final"}else{&request.output};
-                    let Some(mut artifacts)=engine.render_session(session,&settings,&[root],cancel,&mut profile)? else{return Ok(None);};
+                    let rendered = {
+                        // The host probe adds no synchronization. Separately requested
+                        // GPU profiling uses the engine's existing diagnostic resolves.
+                        let _span = crate::timing::Span::new(request.revision, "processing");
+                        engine.render_session(session, &settings, &[root], cancel, &mut profile)?
+                    };
+                    if let Some(before) = before {
+                        crate::timing::emit("processing", serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"settings":settings,"execution":"session","status":if rendered.is_some(){"complete"}else{"superseded"},"cache_before_bytes":cache_before,"cache_after_bytes":session.cached_bytes(),"profile":profile,"activity":engine.gpu_activity().since(before)}));
+                    }
+                    let mut profile = Profile::new(crate::timing::mode());
+                    let Some(mut artifacts) = rendered else { return Ok(None); };
                     let artifact = artifacts.pop().ok_or("missing requested artifact")?;
                     let Content::Image(image) = &artifact.content else {
                         return Err(
@@ -125,12 +143,24 @@ impl Worker {
                                 .into(),
                         );
                     };
-                    if let Some(path)=&request.export{engine.write_tiff(image,path,&mut profile)?;return Ok(None);}
+                    if let Some(path)=&request.export{
+                        let before=crate::timing::enabled().then(||engine.gpu_activity());
+                        engine.write_tiff(image,path,&mut profile)?;
+                        if let Some(before)=before{crate::timing::emit("export",serde_json::json!({"revision":request.revision,"source":request.path,"destination":path,"settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
+                        return Ok(None);
+                    }
                     if cancel(){return Ok(None);}
-                    let texture = Arc::new(engine.view_texture(image, None, &mut profile)?);
-                    engine.device().poll(eframe::wgpu::Maintain::Wait);
+                    let before = crate::timing::enabled().then(||engine.gpu_activity());
+                    let texture = {
+                        let _span = crate::timing::Span::new(request.revision, "view_prepare_host");
+                        Arc::new(engine.view_texture(image, None, &mut profile)?)
+                    };
+                    {
+                        let _span = crate::timing::Span::new(request.revision, "view_completion_wait");
+                        engine.device().poll(eframe::wgpu::Maintain::Wait);
+                    }
+                    if let Some(before)=before{crate::timing::emit("view",serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
                     scope_image=Some((**image).clone());
-                    if std::env::var_os("FOVEONIC_UI_TIMING").is_some(){eprintln!("GPU-CACHE revision={} bytes={}",request.revision,session.cached_bytes());}
                     Ok(Some(Frame {
                         path: request.path.clone(),
                         output: request.output.clone(),
@@ -152,6 +182,8 @@ impl Worker {
                         )
                     }
                 });
+                let publication = crate::timing::Span::new(request.revision, "reply_publication");
+                crate::timing::event(request.revision, "reply_ready");
                 if tx
                     .send(Update::Image(Box::new(Reply {
                         revision: request.revision,
@@ -164,15 +196,27 @@ impl Worker {
                 {
                     break;
                 }
+                drop(publication);
+                crate::timing::event(request.revision, "reply_published");
                 context.request_repaint();
                 if let Some(image) = scope_image {
                     // Image publication is independent; latest image work outranks scope completion.
                     if scope_superseded(&slot) {
                         continue;
                     }
+                    let before = crate::timing::enabled().then(|| engine.gpu_activity());
+                    let mut profile = Profile::new(crate::timing::mode());
+                    let scope_span = crate::timing::Span::new(request.revision, "scopes");
                     let result = engine
-                        .scopes(&image, &mut Profile::default())
+                        .scopes(&image, &mut profile)
                         .map_err(|error| error.to_string());
+                    if let Some(before) = before {
+                        crate::timing::emit(
+                            "scopes",
+                            serde_json::json!({"revision":request.revision,"source":request.path,"profile":profile,"activity":engine.gpu_activity().since(before),"status":if result.is_ok(){"complete"}else{"error"}}),
+                        );
+                    }
+                    drop(scope_span);
                     if scope_superseded(&slot) {
                         continue;
                     }

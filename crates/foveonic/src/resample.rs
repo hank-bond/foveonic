@@ -1,4 +1,6 @@
 //! Native triangular polyphase metadata preparation and immutable GPU RGB resampling.
+
+use crate::gpu::Binding::{Read, Write};
 // Adapted with owner permission from Foveonic filtering/resample{,-params}.rs at e47af35.
 use crate::{
     gpu::{Gpu, Kernel},
@@ -105,33 +107,33 @@ impl Prepared {
 }
 pub(crate) fn apply(
     gpu: &Gpu,
-    input: &wgpu::Buffer,
+    input: &crate::gpu::ReadGuard,
     p: &Prepared,
     profile: &mut Profile,
-) -> Result<wgpu::Buffer> {
+) -> Result<crate::gpu::ReadGuard> {
     apply_components(gpu, input, p, 3, profile)
 }
 pub(crate) fn apply_scalar(
     gpu: &Gpu,
-    input: &wgpu::Buffer,
+    input: &crate::gpu::ReadGuard,
     p: &Prepared,
     profile: &mut Profile,
-) -> Result<wgpu::Buffer> {
+) -> Result<crate::gpu::ReadGuard> {
     apply_components(gpu, input, p, 1, profile)
 }
 fn apply_components(
     gpu: &Gpu,
-    input: &wgpu::Buffer,
+    input: &crate::gpu::ReadGuard,
     p: &Prepared,
     components: u32,
     profile: &mut Profile,
-) -> Result<wgpu::Buffer> {
+) -> Result<crate::gpu::ReadGuard> {
     let [w, h, tiles, _] = p.params.source;
     let [ow, oh, _, _] = p.params.output;
     if input.size() != u64::from(w) * u64::from(h) * u64::from(tiles) * u64::from(components) * 4 {
         return Err("polyphase input extent mismatch".into());
     }
-    let output = gpu.storage(
+    let mut output = gpu.storage(
         "Native polyphase image",
         u64::from(ow) * u64::from(oh) * u64::from(tiles) * u64::from(components) * 4,
     )?;
@@ -140,15 +142,15 @@ fn apply_components(
     let params = gpu.uniform(&geometry);
     let weights = gpu.upload("Native polyphase coefficients", &p.weights)?;
     let starts = gpu.upload("Native polyphase source starts", &p.starts)?;
-    let mut trace = gpu.trace(profile.enabled, 1);
+    let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
         Kernel::Resample,
-        &[
-            (0, input),
-            (1, &weights),
-            (2, &params),
-            (3, &output),
-            (4, &starts),
+        &mut [
+            (0, Read(input)),
+            (1, Read(&weights)),
+            (2, Read(&params)),
+            (3, Write(output.write())),
+            (4, Read(&starts)),
         ],
         [ow.div_ceil(8), (oh * tiles).div_ceil(8)],
         &mut trace,

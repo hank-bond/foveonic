@@ -14,6 +14,7 @@ mod preferences;
 mod scopes;
 mod sections;
 mod smoke;
+mod timing;
 mod viewport;
 mod worker;
 
@@ -47,7 +48,6 @@ struct App {
     srgb_target: bool,
     render_state: egui_wgpu::RenderState,
     smoke: Option<smoke::Smoke>,
-    measure_timing: bool,
     last_frame: Option<std::time::Instant>,
 }
 impl App {
@@ -60,6 +60,11 @@ impl App {
             .wgpu_render_state
             .as_ref()
             .ok_or("wgpu renderer unavailable")?;
+        timing::check_gpu_features(rs.device.features())?;
+        timing::emit(
+            "session",
+            serde_json::json!({"frontend":"gui","adapter":rs.adapter.get_info().name,"gpu_supported":rs.adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY),"gpu_enabled":rs.device.features().contains(wgpu::Features::TIMESTAMP_QUERY)}),
+        );
         viewport::install(rs);
         install_style(&cc.egui_ctx);
         let engine = Engine::from_device(
@@ -92,7 +97,6 @@ impl App {
             srgb_target: rs.target_format.is_srgb(),
             render_state: rs.clone(),
             smoke: smoke::Smoke::from_env(),
-            measure_timing: std::env::var_os("FOVEONIC_UI_TIMING").is_some(),
             last_frame: None,
         };
         app.viewport.zoom_snap = app.preferences.zoom_snap;
@@ -162,6 +166,7 @@ impl App {
             } else {
                 format!("Loading {}…", self.output)
             };
+            timing::requested(self.revision, path, &self.output, &self.settings);
             self.worker.submit(worker::Request {
                 revision: self.revision,
                 path: path.clone(),
@@ -186,12 +191,7 @@ impl App {
                             Ok(data) => {
                                 self.scope_images = Some(scopes::Images::new(ctx, &data));
                                 frame.scopes = Some(data);
-                                if self.measure_timing {
-                                    eprintln!(
-                                        "UI-SCOPES revision={revision} elapsed_ms={:.3}",
-                                        frame.queued_at.elapsed().as_secs_f64() * 1000.
-                                    );
-                                }
+                                timing::event(revision, "scopes_received");
                             }
                             Err(error) => {
                                 if !self.busy {
@@ -241,6 +241,7 @@ impl App {
             }
             match reply.result {
                 Ok(Some(frame)) => {
+                    timing::event(frame.revision, "image_received");
                     self.status = format!(
                         "Displaying {} · {:.0} ms",
                         frame.artifact.name, frame.milliseconds
@@ -254,15 +255,12 @@ impl App {
                             self.output, frame.artifact.name
                         );
                     }
-                    if self.measure_timing {
-                        eprintln!(
-                            "UI-IMAGE revision={} current={} input_to_ui_ms={:.3} worker_ms={:.3}",
-                            frame.revision,
-                            current,
-                            frame.queued_at.elapsed().as_secs_f64() * 1000.,
-                            frame.milliseconds
-                        );
-                    }
+                    timing::image_received(
+                        frame.revision,
+                        current,
+                        frame.queued_at,
+                        frame.milliseconds,
+                    );
                     self.scope_images = None;
                     viewport::clear(&self.render_state);
                     self.frame = Some(frame);
@@ -443,8 +441,13 @@ impl App {
             |ui| {
                 ui.set_min_height(height);
                 if let Some(frame) = &self.frame {
-                    self.viewport
-                        .show(ui, frame.texture.clone(), channel, self.srgb_target);
+                    self.viewport.show(
+                        ui,
+                        frame.texture.clone(),
+                        channel,
+                        self.srgb_target,
+                        frame.revision,
+                    );
                 } else if let Some(path) = &self.selected {
                     if let Some(preview) = self.browser.thumbnail(path) {
                         self.viewport
@@ -481,19 +484,19 @@ impl eframe::App for App {
         self.preferences.zoom_snap = self.viewport.zoom_snap;
         self.preferences.save(storage);
     }
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let began = std::time::Instant::now();
-        if self.measure_timing {
-            if let Some(last) = self.last_frame.replace(began) {
-                eprintln!(
-                    "UI-FRAME gap_ms={:.3} busy={}",
-                    began.duration_since(last).as_secs_f64() * 1000.,
-                    self.busy
-                );
-            }
-            if self.busy {
-                ctx.request_repaint_after(std::time::Duration::from_millis(16));
-            }
+        if timing::enabled() {
+            let gap = self
+                .last_frame
+                .replace(began)
+                .map(|last| began.duration_since(last).as_secs_f64() * 1000.);
+            timing::native_frame(
+                self.frame.as_ref().map_or(0, |image| image.revision),
+                frame.info().cpu_usage,
+                gap,
+                self.busy,
+            );
         }
         self.capture.receive();
         if self
@@ -556,10 +559,10 @@ impl eframe::App for App {
             self.busy,
             ctx,
         );
-        if self.measure_timing {
-            eprintln!(
-                "UI-UPDATE cpu_ms={:.3}",
-                began.elapsed().as_secs_f64() * 1000.
+        if timing::enabled() {
+            timing::emit(
+                "ui_update",
+                serde_json::json!({"elapsed_ms":began.elapsed().as_secs_f64()*1000.}),
             );
         }
     }
@@ -586,6 +589,7 @@ fn reset_camera_selection(settings: &mut Settings, overrides: &[String; 2]) {
     settings.color_mode.clone_from(&overrides[1]);
 }
 fn main() -> eframe::Result {
+    timing::configure().map_err(eframe::Error::AppCreation)?;
     let mut args = std::env::args().skip(1);
     let mut path = None;
     let mut settings = Settings::new("", "");
@@ -609,6 +613,7 @@ fn main() -> eframe::Result {
     let setup = egui_wgpu::WgpuSetupCreateNew {
         device_descriptor: Arc::new(|adapter| wgpu::DeviceDescriptor {
             label: Some("Shared GUI/image device"),
+            required_features: timing::required_features(adapter.features()),
             required_limits: adapter.limits(),
             ..Default::default()
         }),

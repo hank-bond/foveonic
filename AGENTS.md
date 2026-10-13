@@ -44,5 +44,6 @@ After changing indexed documents or source summaries, regenerate indexes and run
 - **[docs/](./docs/AGENTS.md)** Documentation contains agreed requirements and contribution conventions.
 - **[plans/](./plans/AGENTS.md)** Small implementation plans track actionable steps, progress, discoveries, and checks.
 - **[crates/](./crates/AGENTS.md)** Rust workspace crates carry their own source instructions and indexes.
+- **[scripts/](./scripts/AGENTS.md)** Supporting tools provide reproducible external measurements without becoming part of photographic processing.
 
 <!-- INDEX:END -->

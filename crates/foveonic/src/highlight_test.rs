@@ -1,5 +1,7 @@
 //! Compares GPU clipped-layer restoration, immutable flag connectivity, density, and gain handling with native fixtures.
+
 use super::*;
+use crate::gpu::Binding::{Read, Write};
 use crate::source::Matrix;
 fn values(v: &serde_json::Value) -> Vec<f64> {
     v.as_array()
@@ -25,10 +27,10 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
     let input = gpu.upload("Bin RGB", &rgb).unwrap();
     let donors = gpu.upload("Bin donors", &ids).unwrap();
     let counts = gpu.upload("Bin donor total", &[0_u32, 0, 0, 270]).unwrap();
-    let marks = gpu.storage("Reused bin scratch", 600 * 4).unwrap();
-    let histogram = gpu.storage("Bin histograms", 3 * 256 * 4).unwrap();
-    let starts = gpu.storage("Bin offsets", 257 * 4).unwrap();
-    let sorted = gpu.storage("Stable bin output", 600 * 4).unwrap();
+    let mut marks = gpu.storage("Reused bin scratch", 600 * 4).unwrap();
+    let mut histogram = gpu.storage("Bin histograms", 3 * 256 * 4).unwrap();
+    let mut starts = gpu.storage("Bin offsets", 257 * 4).unwrap();
+    let mut sorted = gpu.storage("Stable bin output", 600 * 4).unwrap();
     let params = gpu.uniform(&Params {
         source: [30, 20, 600, 3],
         area: [0; 4],
@@ -36,33 +38,38 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
     });
     gpu.dispatch(
         Kernel::HighlightBinHistogram,
-        &[
-            (2, &params),
-            (5, &input),
-            (6, &marks),
-            (7, &counts),
-            (8, &donors),
-            (11, &histogram),
+        &mut [
+            (2, Read(&params)),
+            (5, Read(&input)),
+            (6, Write(marks.write())),
+            (7, Read(&counts)),
+            (8, Read(&donors)),
+            (11, Write(histogram.write())),
         ],
         [3, 1],
         &mut Default::default(),
     );
     gpu.dispatch(
         Kernel::HighlightBinPrefix,
-        &[(2, &params), (7, &counts), (11, &histogram), (12, &starts)],
+        &mut [
+            (2, Read(&params)),
+            (7, Read(&counts)),
+            (11, Write(histogram.write())),
+            (12, Write(starts.write())),
+        ],
         [1, 1],
         &mut Default::default(),
     );
     gpu.dispatch(
         Kernel::HighlightBinScatter,
-        &[
-            (2, &params),
-            (6, &marks),
-            (7, &counts),
-            (8, &donors),
-            (10, &sorted),
-            (11, &histogram),
-            (12, &starts),
+        &mut [
+            (2, Read(&params)),
+            (6, Read(&marks)),
+            (7, Read(&counts)),
+            (8, Read(&donors)),
+            (10, Write(sorted.write())),
+            (11, Read(&histogram)),
+            (12, Read(&starts)),
         ],
         [3, 1],
         &mut Default::default(),
@@ -127,7 +134,7 @@ fn highlight_density_inspection_skips_photographic_prefix_and_retains_original_p
     metadata.matrices.remove("BadnessTable");
     let settings = Settings::new("missing WB", "missing mode");
     let engine = Engine::new().unwrap();
-    let mut profile = Profile::new(true);
+    let mut profile = Profile::new(crate::profile::Mode::Gpu);
     let artifacts = engine
         .render_artifacts(&source, &settings, &["highlight.density"], &mut profile)
         .unwrap();

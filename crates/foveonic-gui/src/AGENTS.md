@@ -31,6 +31,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[scopes.rs](./scopes.rs)** Displays current-buffer histograms and density scopes for the selected inspection stage.
 - **[sections.rs](./sections.rs)** Draws collapse/drag headers and accepts section drops only inside the tools pane.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks using isolated preferences and real egui/wgpu frames.
+- **[timing.rs](./timing.rs)** Adds opt-in JSON lifecycle and callback observations to the shared core profiler without changing repaint scheduling.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between JPEG previews and GPU images, with diagnostic mapping and manual filtering.
 - **[worker.rs](./worker.rs)** Runs one image job at a time, coalesces pending requests, and waits for GPU completion off the UI thread.
 

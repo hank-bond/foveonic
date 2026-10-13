@@ -119,12 +119,10 @@ impl Navigator {
                 job.key.channel,
             );
             gpu.device.poll(wgpu::Maintain::Wait);
-            if std::env::var_os("FOVEONIC_UI_TIMING").is_some() {
-                eprintln!(
-                    "NAVIGATOR revision={} completed_ms={:.3} bytes={}",
-                    job.key.revision,
-                    started.elapsed().as_secs_f64() * 1000.,
-                    size[0] * size[1] * 4
+            if crate::timing::enabled() {
+                crate::timing::emit(
+                    "navigator",
+                    serde_json::json!({"revision":job.key.revision,"completed_ms":started.elapsed().as_secs_f64()*1000.,"bytes":size[0]*size[1]*4}),
                 );
             }
             if tx

@@ -1,7 +1,9 @@
 //! Metadata/geometry-only setup for native deterministic luminance-ratio pattern conditioning.
+
 //!
 //! Adapted with owner permission from Foveonic noise.rs and filtering/pattern.rs
 //! at e47af35. Photographic detection, ordering, and swaps execute on GPU.
+use crate::gpu::Binding::{Read, Write};
 #[cfg(test)]
 #[path = "pattern_test.rs"]
 mod tests;
@@ -54,13 +56,13 @@ impl Prepared {
     }
 }
 pub(crate) struct Output {
-    pub ratio: Option<wgpu::Buffer>,
-    pub mask: Option<wgpu::Buffer>,
+    pub ratio: Option<crate::gpu::ReadGuard>,
+    pub mask: Option<crate::gpu::ReadGuard>,
 }
 pub(crate) fn apply(
     gpu: &Gpu,
-    input: &wgpu::Buffer,
-    edges: &wgpu::Buffer,
+    input: &crate::gpu::ReadGuard,
+    edges: &crate::gpu::ReadGuard,
     p: &Prepared,
     want_ratio: bool,
     want_mask: bool,
@@ -68,64 +70,78 @@ pub(crate) fn apply(
 ) -> Result<Output> {
     let [w, h, tiles, _] = p.params.shape;
     let n = u64::from(w) * u64::from(h) * u64::from(tiles);
-    let masks = gpu.storage("Native pattern selection", n * 4)?;
+    let mut masks = gpu.storage("Native pattern selection", n * 4)?;
     let uniform = gpu.uniform(&p.params);
     let groups = [w.div_ceil(8), (h * tiles).div_ceil(8)];
-    let mut trace = gpu.trace(profile.enabled, 7);
+    let mut trace = gpu.trace(profile.mode.gpu(), 7);
     gpu.dispatch(
         Kernel::PatternMask,
-        &[(0, input), (1, edges), (2, &uniform), (3, &masks)],
+        &mut [
+            (0, Read(input)),
+            (1, Read(edges)),
+            (2, Read(&uniform)),
+            (3, Write(masks.write())),
+        ],
         groups,
         &mut trace,
     );
     let ratio = if want_ratio {
-        let counts = gpu.storage(
+        let mut counts = gpu.storage(
             "Ordered pattern line prefixes",
             u64::from(w + h) * u64::from(tiles) * 4,
         )?;
         let offsets = gpu.upload("Deterministic pattern offsets", &p.offsets)?;
-        let permuted = gpu.storage("Owned pattern permutation", n * 4)?;
+        let mut permuted = gpu.storage("Owned pattern permutation", n * 4)?;
         gpu.dispatch(
             Kernel::PatternCounts,
-            &[(2, &uniform), (3, &masks), (4, &counts)],
+            &mut [
+                (2, Read(&uniform)),
+                (3, Read(&masks)),
+                (4, Write(counts.write())),
+            ],
             [w.max(h).div_ceil(64), tiles],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::PatternPrefix,
-            &[(2, &uniform), (4, &counts)],
+            &mut [(2, Read(&uniform)), (4, Write(counts.write()))],
             [tiles, 1],
             &mut trace,
         );
-        gpu.copy(input, &permuted, n * 4);
+        gpu.copy(input, permuted.write(), n * 4);
         gpu.dispatch(
             Kernel::PatternHorizontal,
-            &[
-                (2, &uniform),
-                (3, &masks),
-                (4, &counts),
-                (6, &offsets),
-                (7, &permuted),
+            &mut [
+                (2, Read(&uniform)),
+                (3, Read(&masks)),
+                (4, Read(&counts)),
+                (6, Read(&offsets)),
+                (7, Write(permuted.write())),
             ],
             [(h * tiles).div_ceil(64), 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::PatternVertical,
-            &[
-                (2, &uniform),
-                (3, &masks),
-                (4, &counts),
-                (6, &offsets),
-                (7, &permuted),
+            &mut [
+                (2, Read(&uniform)),
+                (3, Read(&masks)),
+                (4, Read(&counts)),
+                (6, Read(&offsets)),
+                (7, Write(permuted.write())),
             ],
             [(w * tiles).div_ceil(64), 1],
             &mut trace,
         );
-        let output = gpu.storage("Pattern conditioned ratios", n * 4)?;
+        let mut output = gpu.storage("Pattern conditioned ratios", n * 4)?;
         gpu.dispatch(
             Kernel::PatternBlend,
-            &[(0, input), (2, &uniform), (7, &permuted), (8, &output)],
+            &mut [
+                (0, Read(input)),
+                (2, Read(&uniform)),
+                (7, Read(&permuted)),
+                (8, Write(output.write())),
+            ],
             groups,
             &mut trace,
         );
@@ -134,10 +150,14 @@ pub(crate) fn apply(
         None
     };
     let mask = if want_mask {
-        let output = gpu.storage("Projected binary pattern mask", n * 4)?;
+        let mut output = gpu.storage("Projected binary pattern mask", n * 4)?;
         gpu.dispatch(
             Kernel::PatternMaskImage,
-            &[(2, &uniform), (3, &masks), (8, &output)],
+            &mut [
+                (2, Read(&uniform)),
+                (3, Read(&masks)),
+                (8, Write(output.write())),
+            ],
             groups,
             &mut trace,
         );

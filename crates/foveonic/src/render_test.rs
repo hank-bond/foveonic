@@ -124,7 +124,7 @@ fn original_result_outlives_source_and_another_render() {
     settings.output_size = Some([64, 96]);
     let retained = {
         let source = Source::open(&files[0]).unwrap();
-        let mut histogram_profile = Profile::new(true);
+        let mut histogram_profile = Profile::new(crate::profile::Mode::Gpu);
         let artifacts = engine
             .render_artifacts(
                 &source,
@@ -157,7 +157,7 @@ fn original_result_outlives_source_and_another_render() {
             .unwrap();
         let mut gain_settings = Settings::new("Sunlight", "");
         gain_settings.sensor_gain = 1.3;
-        let mut gain_profile = Profile::new(true);
+        let mut gain_profile = Profile::new(crate::profile::Mode::Gpu);
         let gain = engine
             .render_artifacts(&source, &gain_settings, &["gain.layers"], &mut gain_profile)
             .unwrap();
@@ -173,7 +173,7 @@ fn original_result_outlives_source_and_another_render() {
         assert!(engine
             .render(&source, &Settings::new("", ""), &mut Profile::default())
             .is_err());
-        let mut multi_profile = Profile::new(true);
+        let mut multi_profile = Profile::new(crate::profile::Mode::Gpu);
         let roots = engine
             .render_artifacts(
                 &source,
@@ -273,36 +273,10 @@ fn scalar_fields_preserve_geometry_and_values_without_rgb_storage() {
         .view_texture(&scalar, None, &mut Profile::default())
         .unwrap();
     assert_eq!(texture.description().space, Space::ScalarField);
-    let readback = engine.device().create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Scalar view readback"),
-        size: 512,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    let mut encoder = engine.device().create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: texture.texture(),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(256),
-                rows_per_image: Some(2),
-            },
-        },
-        wgpu::Extent3d {
-            width: 2,
-            height: 2,
-            depth_or_array_layers: 1,
-        },
-    );
-    engine.queue().submit(Some(encoder.finish()));
-    let bytes = engine.gpu.readback(&readback).unwrap();
+    let bytes = engine
+        .gpu
+        .readback_texture(texture.texture(), [2, 2], 256)
+        .unwrap();
     for (i, value) in [0.75_f32, -0.25, 1.5, 0.5].iter().enumerate() {
         let offset = (i / 2) * 256 + (i % 2) * 16;
         assert_eq!(
@@ -494,7 +468,7 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
             &[b],
         )
         .unwrap();
-    let mut profile = Profile::new(true);
+    let mut profile = Profile::new(crate::profile::Mode::Gpu);
     // Retain two roots while later nodes execute, preserving a while c is written.
     let mut outputs = engine
         .execute(Input::Rendered(&input), &graph, &[a, c], &mut profile)
@@ -539,38 +513,10 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
         .unwrap();
     assert_eq!(texture.description().extent, [2, 2]);
     assert_eq!(texture.description().space, input.description.space);
-    let readback = engine.device().create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: 512,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    let mut encoder = engine
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: texture.texture(),
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(256),
-                rows_per_image: Some(2),
-            },
-        },
-        wgpu::Extent3d {
-            width: 2,
-            height: 2,
-            depth_or_array_layers: 1,
-        },
-    );
-    engine.queue().submit(Some(encoder.finish()));
-    let bytes = engine.gpu.readback(&readback).unwrap();
+    let bytes = engine
+        .gpu
+        .readback_texture(texture.texture(), [2, 2], 256)
+        .unwrap();
     let floats = bytemuck::cast_slice::<u8, f32>(&bytes);
     for (index, source) in [4, 1, 5, 2].into_iter().enumerate() {
         let offset = (index / 2) * 64 + (index % 2) * 4;
@@ -629,7 +575,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     let engine = Engine::new().unwrap();
     let mut settings = Settings::new("Sunlight", "");
     settings.reconstruction = Some(Default::default());
-    let mut profile = Profile::new(true);
+    let mut profile = Profile::new(crate::profile::Mode::Gpu);
     let mut artifacts = engine
         .render_artifacts(&source, &settings, &["noise.edges"], &mut profile)
         .unwrap();
@@ -649,7 +595,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     assert_eq!(edge.description.space, Space::ScalarField);
     assert_eq!(edge.description.layout, Layout::Scalar32Float);
     let before = engine.gpu.readback(&edge.buffer).unwrap();
-    profile = Profile::new(true);
+    profile = Profile::new(crate::profile::Mode::Gpu);
     let mut columns = engine
         .render_artifacts(&source, &settings, &["column.layers"], &mut profile)
         .unwrap();
@@ -668,7 +614,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     };
     assert_eq!(column.description.space, Space::CalibratedLayers);
     let column_before = engine.gpu.readback(&column.buffer).unwrap();
-    profile = Profile::new(true);
+    profile = Profile::new(crate::profile::Mode::Gpu);
     let raw = engine
         .render_artifacts(&source, &settings, &["detail.raw-ratio"], &mut profile)
         .unwrap();
@@ -681,7 +627,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
         .iter()
         .any(|t| t.stage.starts_with("pattern") || t.stage == "residual detail mixing"));
     drop(raw);
-    profile = Profile::new(true);
+    profile = Profile::new(crate::profile::Mode::Gpu);
     let mask = engine
         .render_artifacts(&source, &settings, &["pattern.mask"], &mut profile)
         .unwrap();
@@ -695,7 +641,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
             | "tone"
     )));
     drop(mask);
-    profile = Profile::new(true);
+    profile = Profile::new(crate::profile::Mode::Gpu);
     let artifacts = engine
         .render_artifacts(
             &source,
@@ -726,7 +672,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     }
     drop(artifacts);
     settings.color_mode = "Standard".into();
-    profile = Profile::new(true);
+    profile = Profile::new(crate::profile::Mode::Gpu);
     let mut artifacts = engine
         .render_artifacts(&source, &settings, &["detail.signal"], &mut profile)
         .unwrap();
@@ -818,7 +764,7 @@ fn automatic_color_dq_matches_native_gain_manual_override_and_preserves_source()
         "automatic and explicit native gain differ"
     );
     s.color_dq_gain = Some(0.);
-    let mut profile = Profile::new(true);
+    let mut profile = Profile::new(crate::profile::Mode::Gpu);
     engine
         .render_artifacts(&source, &s, &["reconstruction.rgb"], &mut profile)
         .unwrap();
@@ -846,7 +792,7 @@ fn native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable
         } else {
             "color.rgb"
         };
-        let mut profile = Profile::new(true);
+        let mut profile = Profile::new(crate::profile::Mode::Gpu);
         let mut artifacts = engine
             .render_artifacts(
                 &source,

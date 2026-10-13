@@ -68,7 +68,7 @@ pub struct View {
 /// Consumers have read-only access; the snapshot owns its storage for its lifetime.
 #[derive(Clone)]
 pub struct RenderedImage {
-    pub(crate) buffer: wgpu::Buffer,
+    pub(crate) buffer: crate::gpu::ReadGuard,
     pub(crate) description: Description,
     pub(crate) view: View,
     pub(crate) metadata: Arc<Metadata>,
@@ -77,7 +77,7 @@ pub struct RenderedImage {
 }
 
 impl RenderedImage {
-    pub fn buffer(&self) -> &wgpu::Buffer {
+    pub(crate) fn buffer(&self) -> &crate::gpu::ReadGuard {
         &self.buffer
     }
     pub fn description(&self) -> Description {

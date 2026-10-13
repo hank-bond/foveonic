@@ -158,7 +158,13 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_gain_and_input() {
             params: parameters(64, 64, [8, 8, 56, 56], gain).unwrap(),
             tables: vec![0.; 3 * 4096],
         };
-        let out = apply(&gpu, &input, &p, &mut Profile::new(true)).unwrap();
+        let out = apply(
+            &gpu,
+            &input,
+            &p,
+            &mut Profile::new(crate::profile::Mode::Gpu),
+        )
+        .unwrap();
         let actual: Vec<f32> =
             bytemuck::cast_slice::<u8, f32>(&gpu.readback(&out).unwrap()).to_vec();
         for (i, (&a, &b)) in actual.iter().zip(&expected).enumerate() {
@@ -181,7 +187,13 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_gain_and_input() {
         tables: vec![0.; 3 * 4096],
     };
     p.params.source[3] = 1;
-    let out = apply(&gpu, &input, &p, &mut Profile::new(false)).unwrap();
+    let out = apply(
+        &gpu,
+        &input,
+        &p,
+        &mut Profile::new(crate::profile::Mode::Off),
+    )
+    .unwrap();
     let data = gpu.readback(&out).unwrap();
     let data = bytemuck::cast_slice::<u8, f32>(&data);
     assert_eq!(
@@ -270,7 +282,7 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
             &source,
             &settings,
             &["highlight.layers", "despeckle.layers"],
-            &mut Profile::new(false),
+            &mut Profile::new(crate::profile::Mode::Off),
         )
         .unwrap();
     let images: Vec<_> = artifacts
@@ -314,7 +326,7 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
             &source,
             &settings,
             &["highlight.layers"],
-            &mut Profile::new(false),
+            &mut Profile::new(crate::profile::Mode::Off),
         )
         .unwrap();
     let Content::Image(i) = &again[0].content else {

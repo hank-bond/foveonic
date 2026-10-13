@@ -15,6 +15,6 @@ Setup reports complete file-read, in-memory decode and total source-open wall ti
 
 ### Source files
 
-- **[profile_pipeline.rs](./profile_pipeline.rs)** Measures completed cold/warm all-enabled processing, transfers, export, and optional bit-exact goldens.
+- **[profile_pipeline.rs](./profile_pipeline.rs)** Measures completed fresh processing with normal photographic controls, separate GPU diagnostics and optional exact goldens.
 
 <!-- INDEX:END -->

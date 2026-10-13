@@ -1,7 +1,9 @@
 //! Prepares complete native camera repair metadata and executes raw-signal bad-red selection, dependency-safe pixel phases, and ordered masked cluster matching on GPU.
+
 //!
 //! Adapted with owner permission from Foveonic repair_setup.rs, bad_reds.rs,
 //! and clusters.rs at e47af35. Original sensor data and metadata remain immutable.
+use crate::gpu::Binding::{Read, Write};
 use crate::{
     gpu::{Gpu, Kernel},
     profile::Profile,
@@ -278,9 +280,9 @@ fn prepare_clusters(
 
 fn select_bad_reds(
     gpu: &Gpu,
-    original: &wgpu::Buffer,
-    records: &wgpu::Buffer,
-    uniform: &wgpu::Buffer,
+    original: &crate::gpu::ReadGuard,
+    records: &mut crate::gpu::ReadGuard,
+    uniform: &crate::gpu::ReadGuard,
     p: Params,
     trace: &mut crate::gpu::GpuTrace,
 ) -> Result<()> {
@@ -288,39 +290,53 @@ fn select_bad_reds(
         return Ok(());
     }
     let bytes = u64::from(p.selection[2]) * 4;
-    let detections = gpu.storage("Original-signal bad-red record masks", bytes)?;
-    let prefixes = gpu.storage("Stable local bad-red record prefixes", bytes)?;
-    let blocks = gpu.storage(
+    let mut detections = gpu.storage("Original-signal bad-red record masks", bytes)?;
+    let mut prefixes = gpu.storage("Stable local bad-red record prefixes", bytes)?;
+    let mut blocks = gpu.storage(
         "Stable capped bad-red block prefixes",
         u64::from(p.selection[2].div_ceil(256)) * 4,
     )?;
     let groups = [p.selection[2].div_ceil(64), 1];
     gpu.dispatch(
         Kernel::CameraDetect,
-        &[(0, original), (1, records), (2, uniform), (4, &detections)],
+        &mut [
+            (0, Read(original)),
+            (1, Read(records)),
+            (2, Read(uniform)),
+            (4, Write(detections.write())),
+        ],
         groups,
         trace,
     );
     gpu.dispatch(
         Kernel::CameraPrefix,
-        &[(2, uniform), (4, &detections), (5, &prefixes), (8, &blocks)],
+        &mut [
+            (2, Read(uniform)),
+            (4, Read(&detections)),
+            (5, Write(prefixes.write())),
+            (8, Write(blocks.write())),
+        ],
         [p.selection[2].div_ceil(256), 1],
         trace,
     );
     gpu.dispatch(
         Kernel::CameraBlocks,
-        &[(1, records), (2, uniform), (8, &blocks)],
+        &mut [
+            (1, Write(records.write())),
+            (2, Read(uniform)),
+            (8, Write(blocks.write())),
+        ],
         [1, 1],
         trace,
     );
     gpu.dispatch(
         Kernel::CameraScatter,
-        &[
-            (1, records),
-            (2, uniform),
-            (4, &detections),
-            (5, &prefixes),
-            (8, &blocks),
+        &mut [
+            (1, Write(records.write())),
+            (2, Read(uniform)),
+            (4, Read(&detections)),
+            (5, Read(&prefixes)),
+            (8, Read(&blocks)),
         ],
         groups,
         trace,
@@ -330,9 +346,9 @@ fn select_bad_reds(
 
 fn correct_lists(
     gpu: &Gpu,
-    records: &wgpu::Buffer,
-    output: &wgpu::Buffer,
-    uniform: &wgpu::Buffer,
+    records: &crate::gpu::ReadGuard,
+    output: &mut crate::gpu::ReadGuard,
+    uniform: &crate::gpu::ReadGuard,
     p: &Prepared,
     trace: &mut crate::gpu::GpuTrace,
 ) -> Result<()> {
@@ -342,12 +358,12 @@ fn correct_lists(
             let batch = gpu.uniform(&[phase[0], phase[1], 0, 0]);
             gpu.dispatch(
                 Kernel::CameraRepair,
-                &[
-                    (1, records),
-                    (2, uniform),
-                    (3, output),
-                    (6, &order),
-                    (7, &batch),
+                &mut [
+                    (1, Read(records)),
+                    (2, Read(uniform)),
+                    (3, Write(output.write())),
+                    (6, Read(&order)),
+                    (7, Read(&batch)),
                 ],
                 [phase[1].div_ceil(64), 1],
                 trace,
@@ -357,7 +373,11 @@ fn correct_lists(
     // Runtime-detected records follow every main/JPEG repair in native order.
     gpu.dispatch(
         Kernel::CameraDetected,
-        &[(1, records), (2, uniform), (3, output)],
+        &mut [
+            (1, Read(records)),
+            (2, Read(uniform)),
+            (3, Write(output.write())),
+        ],
         [1, 1],
         trace,
     );
@@ -366,22 +386,22 @@ fn correct_lists(
 
 pub(crate) fn apply(
     gpu: &Gpu,
-    original: &wgpu::Buffer,
-    input: &wgpu::Buffer,
+    original: &crate::gpu::ReadGuard,
+    input: &crate::gpu::ReadGuard,
     p: &Prepared,
     profile: &mut Profile,
-) -> Result<wgpu::Buffer> {
-    let output = gpu.storage("Complete camera repaired layers", input.size())?;
-    gpu.copy(input, &output, input.size());
-    let records = gpu.upload("Main JPEG and detected repair records", &p.records)?;
+) -> Result<crate::gpu::ReadGuard> {
+    let mut output = gpu.storage("Complete camera repaired layers", input.size())?;
+    gpu.copy(input, output.write(), input.size());
+    let mut records = gpu.upload("Main JPEG and detected repair records", &p.records)?;
     let uniform = gpu.uniform(&p.params);
-    let mut trace = gpu.trace(profile.enabled, p.phases.len() as u32 + 6);
-    select_bad_reds(gpu, original, &records, &uniform, p.params, &mut trace)?;
-    correct_lists(gpu, &records, &output, &uniform, p, &mut trace)?;
+    let mut trace = gpu.trace(profile.mode.gpu(), p.phases.len() as u32 + 6);
+    select_bad_reds(gpu, original, &mut records, &uniform, p.params, &mut trace)?;
+    correct_lists(gpu, &records, &mut output, &uniform, p, &mut trace)?;
     if !p.clusters.is_empty() {
         let clusters = gpu.upload("Camera cluster descriptors", &p.clusters)?;
         let members = gpu.upload("Stable quality ordered cluster members", &p.members)?;
-        let masks = gpu.upload("Cluster known and channel masks", &p.masks)?;
+        let mut masks = gpu.upload("Cluster known and channel masks", &p.masks)?;
         let uniform = gpu.uniform(&[
             p.params.source[0],
             p.params.source[1],
@@ -390,12 +410,12 @@ pub(crate) fn apply(
         ]);
         gpu.dispatch(
             Kernel::ClusterRepair,
-            &[
-                (0, &output),
-                (1, &clusters),
-                (2, &members),
-                (3, &masks),
-                (4, &uniform),
+            &mut [
+                (0, Write(output.write())),
+                (1, Read(&clusters)),
+                (2, Read(&members)),
+                (3, Write(masks.write())),
+                (4, Read(&uniform)),
             ],
             [1, 1],
             &mut trace,

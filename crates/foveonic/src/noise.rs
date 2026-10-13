@@ -9,7 +9,7 @@ mod tests;
 use crate::source::{MatrixEncoding, Metadata, Result};
 
 /// Five camera-table choices for chroma/luminance and a residual-detail multiplier.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Controls {
     pub chroma: u32,
     pub luminance: u32,
@@ -123,7 +123,7 @@ impl Parameter {
 }
 
 /// None follows the basic parent; Some replaces its calculated field before detail multiplication.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
 pub struct Overrides([Option<f32>; 7]);
 impl Overrides {
     pub fn get(self, parameter: Parameter) -> Option<f32> {

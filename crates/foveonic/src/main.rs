@@ -1,9 +1,14 @@
 //! Inspects Merrill X3Fs and exports single images or batches through shared TIFF settings.
 
-use foveonic::profile::Profile;
-use foveonic::render::{Engine, RepairThreshold, Settings};
+mod options;
+use foveonic::profile::{self, Mode, Profile};
+#[cfg(test)]
+use foveonic::render::RepairThreshold;
+use foveonic::render::{Engine, Settings};
 use foveonic::source::{Result, Source};
+use options::parse_settings;
 use std::collections::HashSet;
+#[cfg(test)]
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -42,107 +47,8 @@ Options (also available for batch):
   --detail FACTOR           Residual detail multiplier, default 1; enables reconstruction
   --sharpen AMOUNT           Nonnegative native high-pass amount before tone, default 0 (off)
   --size WIDTHxHEIGHT       Exact final oriented dimensions, bilinear sampling
-  --profile                 Report host wall times and GPU timestamps where supported
+  --profile MODE            off (default), wall, or synchronized gpu diagnostics
   --help                    Show this help";
-
-fn parse_settings(args: impl Iterator<Item = OsString>) -> Result<(Settings, Vec<PathBuf>, bool)> {
-    let mut settings = Settings::new("", "");
-    let mut paths = Vec::new();
-    let mut profiling = false;
-    let mut args = args;
-    while let Some(arg) = args.next() {
-        if arg == "--reconstruction" {
-            settings.reconstruction.get_or_insert_with(Default::default);
-            continue;
-        }
-        if arg == "--repair" {
-            settings.repair = Some(RepairThreshold::Camera);
-            continue;
-        }
-        if arg == "--no-repair" {
-            settings.repair = None;
-            continue;
-        }
-        if arg == "--despeckle" || arg == "--no-despeckle" {
-            settings.despeckle = arg == "--despeckle";
-            continue;
-        }
-        if arg == "--highlight-restoration" || arg == "--no-highlight-restoration" {
-            settings.highlight_restoration = arg == "--highlight-restoration";
-            continue;
-        }
-        if arg == "--row-correction" || arg == "--no-row-correction" {
-            settings.row_correction = arg == "--row-correction";
-            continue;
-        }
-        if arg == "--profile" {
-            profiling = true;
-            continue;
-        }
-        if !arg.to_str().is_some_and(|s| s.starts_with("--")) {
-            paths.push(arg.into());
-            continue;
-        }
-        let flag = arg.to_str().ok_or("option must be UTF-8")?;
-        let value = args
-            .next()
-            .ok_or_else(|| format!("missing value for {flag}"))?
-            .into_string()
-            .map_err(|_| "setting must be UTF-8")?;
-        match flag {
-            "--wb" => settings.white_balance = value,
-            "--mode" => settings.color_mode = value,
-            "--exposure" => settings.exposure = value.parse()?,
-            "--contrast" => settings.tone.contrast = value.parse()?,
-            "--shadows" => settings.tone.shadows = value.parse()?,
-            "--highlights" => settings.tone.highlights = value.parse()?,
-            "--saturation" => settings.saturation = value.parse()?,
-            "--sensor-gain" => settings.sensor_gain = value.parse()?,
-            "--color-dq-gain" => settings.color_dq_gain = Some(value.parse()?),
-            "--repair-badness" => settings.repair = Some(RepairThreshold::Manual(value.parse()?)),
-            "--noise-override" => {
-                let (key, value) = value
-                    .split_once('=')
-                    .ok_or("noise override requires KEY=VALUE")?;
-                let parameter = foveonic::noise::Parameter::ALL
-                    .into_iter()
-                    .find(|p| p.key() == key)
-                    .ok_or("unknown noise override parameter")?;
-                settings
-                    .reconstruction
-                    .get_or_insert_with(Default::default)
-                    .overrides
-                    .set(parameter, Some(value.parse()?));
-            }
-            "--chroma-noise" => {
-                settings
-                    .reconstruction
-                    .get_or_insert_with(Default::default)
-                    .chroma = value.parse()?
-            }
-            "--luma-noise" => {
-                settings
-                    .reconstruction
-                    .get_or_insert_with(Default::default)
-                    .luminance = value.parse()?
-            }
-            "--detail" => {
-                settings
-                    .reconstruction
-                    .get_or_insert_with(Default::default)
-                    .detail = value.parse()?
-            }
-            "--sharpen" => settings.sharpen_amount = value.parse()?,
-            "--size" => {
-                let (width, height) = value.split_once('x').ok_or("size requires WIDTHxHEIGHT")?;
-                settings.output_size = Some([width.parse()?, height.parse()?]);
-            }
-            _ => return Err(format!("unknown option {flag}\n{USAGE}").into()),
-        }
-    }
-    settings.validate()?;
-    Ok((settings, paths, profiling))
-}
 
 fn batch_jobs(inputs: &[PathBuf], destination: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
     if destination.exists() && !destination.is_dir() {
@@ -197,6 +103,56 @@ fn batch_jobs(inputs: &[PathBuf], destination: &Path) -> Result<Vec<(PathBuf, Pa
     Ok(jobs)
 }
 
+fn convert(
+    engine: &Engine,
+    source: &Source,
+    input: &Path,
+    settings: &Settings,
+    destination: &Path,
+    mode: Mode,
+) -> Result<[u32; 2]> {
+    mode.check_gpu_features(engine.device().features())?;
+    if mode.enabled() {
+        eprintln!(
+            "{}",
+            profile::report(
+                "source_load",
+                mode,
+                serde_json::json!({"source":input,"timings":source.load_timings(),"read_cache_state":"uncontrolled"})
+            )
+        );
+    }
+    let mut profile = Profile::new(mode);
+    let before = engine.gpu_activity();
+    let start = std::time::Instant::now();
+    let image = engine.render(source, settings, &mut profile)?;
+    if mode.enabled() {
+        eprintln!(
+            "{}",
+            profile::report(
+                "processing",
+                mode,
+                serde_json::json!({"source":input,"settings":settings,"output":"final","execution":"fresh","render_call_ms":start.elapsed().as_secs_f64()*1000.,"profile":profile,"activity":engine.gpu_activity().since(before)})
+            )
+        );
+    }
+    let mut profile = Profile::new(mode);
+    let before = engine.gpu_activity();
+    let start = std::time::Instant::now();
+    let size = engine.write_tiff(&image, destination, &mut profile)?;
+    if mode.enabled() {
+        eprintln!(
+            "{}",
+            profile::report(
+                "export",
+                mode,
+                serde_json::json!({"source":input,"destination":destination,"settings":settings,"completed_ms":start.elapsed().as_secs_f64()*1000.,"profile":profile,"activity":engine.gpu_activity().since(before)})
+            )
+        );
+    }
+    Ok(size)
+}
+
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--help") {
@@ -225,14 +181,27 @@ fn run() -> Result<()> {
             if destination.exists() {
                 return Err(format!("output already exists: {}", destination.display()).into());
             }
-            let source = Source::open(path)?;
-            let mut profile = Profile::new(profiling);
-            let engine = profile.measure("GPU init", Engine::new)?;
-            let image = engine.render(&source, &settings, &mut profile)?;
-            let size = engine.write_tiff(&image, &destination, &mut profile)?;
-            if profiling {
-                eprintln!("Profile: {}", serde_json::to_string(&profile)?);
+            let source = Source::open(&path)?;
+            let mut setup = Profile::new(profiling);
+            let engine = setup.measure("GPU init", Engine::new)?;
+            if profiling.enabled() {
+                eprintln!(
+                    "{}",
+                    profile::report(
+                        "session",
+                        profiling,
+                        serde_json::json!({"frontend":"cli","adapter":engine.adapter_name(),"profile":setup,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
+                    )
+                );
             }
+            let size = convert(
+                &engine,
+                &source,
+                Path::new(&path),
+                &settings,
+                &destination,
+                profiling,
+            )?;
             eprintln!(
                 "Rendered {}x{} RGB16 TIFF using {}: {}",
                 size[0],
@@ -249,21 +218,23 @@ fn run() -> Result<()> {
             }
             let jobs = batch_jobs(&inputs, &destination)?;
             let engine = Engine::new()?;
+            if profiling.enabled() {
+                eprintln!(
+                    "{}",
+                    profile::report(
+                        "session",
+                        profiling,
+                        serde_json::json!({"frontend":"cli","adapter":engine.adapter_name(),"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
+                    )
+                );
+            }
             std::fs::create_dir_all(&destination)?;
             for (index, (input, output)) in jobs.iter().enumerate() {
                 // One source at a time; batch retains neither decoded images nor graph buffers.
                 let source =
                     Source::open(input).map_err(|error| format!("{}: {error}", input.display()))?;
-                let mut profile = Profile::new(profiling);
-                let image = engine
-                    .render(&source, &settings, &mut profile)
+                let size = convert(&engine, &source, input, &settings, output, profiling)
                     .map_err(|error| format!("{}: {error}", input.display()))?;
-                let size = engine
-                    .write_tiff(&image, output, &mut profile)
-                    .map_err(|error| format!("{}: {error}", input.display()))?;
-                if profiling {
-                    eprintln!("Profile: {}", serde_json::to_string(&profile)?);
-                }
                 eprintln!(
                     "[{}/{}] {}x{}: {}",
                     index + 1,
@@ -297,8 +268,20 @@ mod tests {
     fn controls_are_shared_and_defaults_enable_independent_corrections() {
         let parse = |args: &str| parse_settings(args.split_whitespace().map(OsString::from));
         let (neutral, paths, profiling) = parse("--wb Sunlight --mode Standard").unwrap();
-        assert!(!profiling);
-        assert!(parse("--profile --wb Sunlight --mode Standard").unwrap().2);
+        assert_eq!(profiling, Mode::Off);
+        assert_eq!(
+            parse("--profile wall --wb Sunlight --mode Standard")
+                .unwrap()
+                .2,
+            Mode::Wall
+        );
+        assert_eq!(
+            parse("--profile gpu --wb Sunlight --mode Standard")
+                .unwrap()
+                .2,
+            Mode::Gpu
+        );
+        assert!(parse("--profile invalid --wb Sunlight --mode Standard").is_err());
         assert!(paths.is_empty());
         assert_eq!(neutral.exposure, 0.);
         assert_eq!(neutral.sensor_gain, 1.);
