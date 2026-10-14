@@ -55,6 +55,88 @@ fn column_banding_changes_have_a_distinct_parameter_identity() {
     }
 }
 
+#[test]
+fn recovery_threshold_changes_have_a_distinct_parameter_identity() {
+    let automatic = Settings::default();
+    for value in [Some(0.), Some(1.), Some(-2.), Some(2.)] {
+        let manual = Settings {
+            highlight_threshold_ev: value,
+            ..automatic.clone()
+        };
+        assert_eq!(
+            automatic.changed_parameters(&manual),
+            vec!["highlight-threshold"]
+        );
+        assert_eq!(
+            manual.changed_parameters(&automatic),
+            vec!["highlight-threshold"]
+        );
+    }
+    assert!(automatic.changed_parameters(&automatic).is_empty());
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn recovery_threshold_edits_match_fresh_outputs_and_keep_retained_images() {
+    let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let engine = Engine::new().unwrap();
+    let mut session = RenderSession::new(Source::open(dir.join("sunlit-red-flower.x3f")).unwrap());
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.output_size = Some([313, 470]);
+    for reconstruction in [false, true] {
+        settings.reconstruction = reconstruction.then(Default::default);
+        settings.highlight_threshold_ev = None;
+        settings.highlight_restoration = true;
+        let retained = session_image(&engine, &mut session, &settings);
+        let before = engine.readback_image(&retained).unwrap();
+        let mut changed = false;
+        for ev in [Some(0.), Some(1.), Some(-2.), Some(2.), None] {
+            settings.highlight_threshold_ev = ev;
+            let cached = session_image(&engine, &mut session, &settings);
+            let actual = engine.readback_image(&cached).unwrap();
+            let fresh = engine
+                .render(&session.source, &settings, &mut Profile::default())
+                .unwrap();
+            assert_same_pixels(
+                "recovery threshold cached/fresh",
+                &actual,
+                &engine.readback_image(&fresh).unwrap(),
+            );
+            if ev.is_none() || ev == Some(0.) {
+                assert_same_pixels("Auto/manual zero", &actual, &before);
+            } else {
+                changed |= actual != before;
+            }
+        }
+        assert!(changed, "threshold did not change the red-flower render");
+        settings.highlight_restoration = false;
+        settings.highlight_threshold_ev = Some(1.);
+        let off = session_image(&engine, &mut session, &settings);
+        settings.highlight_threshold_ev = Some(-1.);
+        let still_off = session_image(&engine, &mut session, &settings);
+        assert_same_pixels(
+            "disabled threshold",
+            &engine.readback_image(&off).unwrap(),
+            &engine.readback_image(&still_off).unwrap(),
+        );
+        settings.highlight_restoration = true;
+        let on = session_image(&engine, &mut session, &settings);
+        let fresh = engine
+            .render(&session.source, &settings, &mut Profile::default())
+            .unwrap();
+        assert_same_pixels(
+            "re-enabled recovery",
+            &engine.readback_image(&on).unwrap(),
+            &engine.readback_image(&fresh).unwrap(),
+        );
+        assert_same_pixels(
+            "retained Auto",
+            &engine.readback_image(&retained).unwrap(),
+            &before,
+        );
+    }
+}
+
 fn session_image(
     engine: &Engine,
     session: &mut RenderSession,

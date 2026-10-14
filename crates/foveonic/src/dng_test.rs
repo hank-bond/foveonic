@@ -99,6 +99,15 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
     );
     drop(changed);
     signal = presentation.clone();
+    signal.highlight_threshold_ev = Some(1.);
+    let changed = prepare_base(&engine, &source, &signal, &mut Profile::default()).unwrap();
+    assert_eq!(changed.settings().highlight_threshold_ev, Some(1.));
+    assert!(
+        engine.readback_image(&changed).unwrap() != pixels,
+        "recovery threshold was incorrectly deferred"
+    );
+    drop(changed);
+    signal = presentation.clone();
     signal.white_balance = "Overcast".into();
     let changed = prepare_base(&engine, &source, &signal, &mut Profile::default()).unwrap();
     assert!(

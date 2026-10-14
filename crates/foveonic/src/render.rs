@@ -49,6 +49,8 @@ pub struct Settings {
     pub despeckle: bool,
     /// Restore clipped-layer color from original camera saturation maps, independently of tone highlights.
     pub highlight_restoration: bool,
+    /// Camera threshold offset in stops. None selects Auto. Positive values delay neutralization.
+    pub highlight_threshold_ev: Option<f32>,
     /// Estimate and subtract native additive per-row layer bias before reconstruction.
     pub row_correction: bool,
     /// Noise and detail settings. None leaves reconstruction off.
@@ -73,6 +75,7 @@ impl Default for Settings {
             repair: Some(RepairThreshold::Camera),
             despeckle: true,
             highlight_restoration: true,
+            highlight_threshold_ev: None,
             row_correction: true,
             reconstruction: None,
             sharpen_amount: 0.,
@@ -128,6 +131,7 @@ impl Settings {
         if self.color_dq_gain.is_some_and(|v| !v.is_finite() || v < 0.) {
             return Err("ColorDQ gain must be finite and nonnegative".into());
         }
+        crate::highlight::validate_threshold(self.highlight_threshold_ev)?;
         if let Some(threshold) = self.repair {
             threshold.validate()?;
         }
@@ -429,7 +433,11 @@ impl Engine {
         let mut highlight_params = None;
         if settings.highlight_restoration && names.contains(&"highlight.density") {
             let prepared = Arc::new(profile.measure("prepare original saturation", || {
-                crate::highlight::prepare(&source.metadata, settings.sensor_gain)
+                crate::highlight::prepare(
+                    &source.metadata,
+                    settings.sensor_gain,
+                    settings.highlight_threshold_ev,
+                )
             })?);
             graph.add(Operation::HighlightDensity(prepared.clone()), &[])?;
             highlight_params = Some(prepared);
@@ -465,7 +473,11 @@ impl Engine {
             let prepared = match highlight_params {
                 Some(prepared) => prepared,
                 None => Arc::new(profile.measure("prepare highlight restoration", || {
-                    crate::highlight::prepare(&source.metadata, settings.sensor_gain)
+                    crate::highlight::prepare(
+                        &source.metadata,
+                        settings.sensor_gain,
+                        settings.highlight_threshold_ev,
+                    )
                 })?),
             };
             calibrated = graph.add(Operation::Highlights(prepared), &[calibrated])?;

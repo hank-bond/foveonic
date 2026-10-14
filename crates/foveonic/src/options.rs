@@ -57,6 +57,13 @@ pub(crate) fn parse_settings(
             "--contrast" => settings.tone.contrast = value.parse()?,
             "--shadows" => settings.tone.shadows = value.parse()?,
             "--highlights" => settings.tone.highlights = value.parse()?,
+            "--highlight-threshold" => {
+                settings.highlight_threshold_ev = if value == "auto" {
+                    None
+                } else {
+                    Some(value.parse()?)
+                };
+            }
             "--saturation" => settings.saturation = value.parse()?,
             "--sensor-gain" => settings.sensor_gain = value.parse()?,
             "--color-dq-gain" => settings.color_dq_gain = Some(value.parse()?),

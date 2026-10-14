@@ -36,6 +36,7 @@ fn edited() -> Settings {
     settings.despeckle = false;
     settings.row_correction = false;
     settings.highlight_restoration = false;
+    settings.highlight_threshold_ev = Some(1.25);
     settings.sharpen_amount = 0.25;
     settings.output_size = Some([313, 470]);
     let mut controls = noise::Controls {
@@ -202,6 +203,42 @@ fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
 }
 
 #[test]
+fn recovery_threshold_keeps_auto_manual_and_disabled_recipes() {
+    for enabled in [false, true] {
+        for ev in [None, Some(-2.), Some(-0.), Some(0.), Some(1.25), Some(2.)] {
+            let original = Settings {
+                highlight_restoration: enabled,
+                highlight_threshold_ev: ev,
+                ..Default::default()
+            };
+            let restored = decode(&encode(&original).unwrap()).unwrap();
+            assert_eq!(restored, original);
+            assert_eq!(
+                restored.highlight_threshold_ev.map(f32::to_bits),
+                ev.map(f32::to_bits)
+            );
+        }
+    }
+    for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -2.01, 2.01] {
+        let original = Settings {
+            highlight_threshold_ev: Some(invalid),
+            ..Default::default()
+        };
+        assert!(encode(&original).is_err());
+    }
+    for invalid in [
+        serde_json::json!(-2.01),
+        serde_json::json!(2.01),
+        serde_json::json!("auto"),
+    ] {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
+        value["settings"]["highlight_threshold_ev"] = invalid;
+        assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn atomic_save_preserves_x3f_and_rejects_corrupt_existing_recipes() {
     let directory = Directory::new();
     let input = directory.input();
@@ -259,6 +296,7 @@ fn restored_recipe_replays_exact_photographic_pixels() {
     settings.white_balance = "Sunlight".into();
     settings.color_mode = "Standard".into();
     settings.output_size = Some([96, 144]);
+    settings.highlight_restoration = true;
     let restored = decode(&encode(&settings).unwrap()).unwrap();
     let original = engine
         .render(&source, &settings, &mut Profile::default())

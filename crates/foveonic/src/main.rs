@@ -35,6 +35,7 @@ Options (also available for batch):
   --no-despeckle            Disable dynamic speckle correction
   --highlight-restoration   Restore original clipped-layer color (default on)
   --no-highlight-restoration Disable clipped-layer restoration and neutralization
+  --highlight-threshold EV  -2..2 relative to camera threshold, or auto (default); +1 doubles it
   --row-correction          Reduce additive per-row sensor banding (default on)
   --no-row-correction       Disable per-row banding correction
   --repair-badness MIN       Enable ordered repair with a manual cutoff; 0..15
@@ -289,6 +290,7 @@ mod tests {
         assert_eq!(neutral.sensor_gain, 1.);
         assert_eq!(neutral.saturation, 1.);
         assert_eq!(neutral.color_dq_gain, None);
+        assert_eq!(neutral.highlight_threshold_ev, None);
         assert_eq!(neutral.sharpen_amount, 0.);
         assert_eq!(neutral.repair, Some(RepairThreshold::Camera));
         assert!(neutral.despeckle && neutral.highlight_restoration && neutral.row_correction);
@@ -319,6 +321,33 @@ mod tests {
             .0
             .highlight_restoration
         );
+        for ev in [-2., -1., 0., 1., 2.] {
+            let manual = parse(&format!(
+                "--wb Sunlight --mode Standard --highlight-threshold {ev}"
+            ))
+            .unwrap()
+            .0;
+            assert_eq!(manual.highlight_threshold_ev, Some(ev));
+            assert!(manual.highlight_restoration);
+            assert_eq!(manual.tone, neutral.tone);
+            assert_eq!(manual.sensor_gain, neutral.sensor_gain);
+        }
+        let off = parse(
+            "--wb Sunlight --mode Standard --highlight-threshold 1 --no-highlight-restoration",
+        )
+        .unwrap()
+        .0;
+        assert_eq!(off.highlight_threshold_ev, Some(1.));
+        assert!(!off.highlight_restoration);
+        assert_eq!(
+            parse(
+                "--wb Sunlight --mode Standard --highlight-threshold 1 --highlight-threshold auto"
+            )
+            .unwrap()
+            .0,
+            neutral
+        );
+        assert!(parse("--wb Sunlight --mode Standard --highlight-threshold").is_err());
         let disabled = parse("--wb Sunlight --mode Standard --no-repair --no-despeckle")
             .unwrap()
             .0;
@@ -402,6 +431,12 @@ mod tests {
             Some(0.)
         );
         for invalid in [
+            "--highlight-threshold NaN",
+            "--highlight-threshold inf",
+            "--highlight-threshold -inf",
+            "--highlight-threshold -2.01",
+            "--highlight-threshold 2.01",
+            "--highlight-threshold unknown",
             "--contrast NaN",
             "--shadows 3",
             "--channel-gains 1,1,1", // retired CLI option

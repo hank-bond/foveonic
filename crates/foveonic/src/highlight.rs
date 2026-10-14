@@ -92,7 +92,19 @@ fn saturation(metadata: &Metadata) -> Result<Vec<u32>> {
     }
     Ok(flags)
 }
-pub(crate) fn prepare(metadata: &Metadata, gain: f32) -> Result<Prepared> {
+pub(crate) fn validate_threshold(ev: Option<f32>) -> Result<()> {
+    if ev.is_some_and(|v| !(-2. ..=2.).contains(&v)) {
+        return Err("highlight threshold must be in -2..2 EV".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare(
+    metadata: &Metadata,
+    gain: f32,
+    threshold_ev: Option<f32>,
+) -> Result<Prepared> {
+    validate_threshold(threshold_ev)?;
     let count = metadata
         .width
         .checked_mul(metadata.height)
@@ -139,6 +151,9 @@ pub(crate) fn prepare(metadata: &Metadata, gain: f32) -> Result<Prepared> {
         }
     };
     let ramp = (1. - (camera("ExpEstimate")? + camera("ExpNet")? - 1.5).max(0.)).max(0.);
+    // Adjust only neutralization onset in the neutral-gain domain. Scaling the
+    // stage's input would also change donor selection and the transition width.
+    let threshold = ramp.mul_add(3000., 4000.) as f32 * threshold_ev.unwrap_or(0.).exp2();
     Ok(Prepared {
         params: Params {
             source: [
@@ -148,7 +163,7 @@ pub(crate) fn prepare(metadata: &Metadata, gain: f32) -> Result<Prepared> {
                 (count as u32).div_ceil(256),
             ],
             area,
-            value: [ramp.mul_add(3000., 4000.) as f32, gain, 0., 0.],
+            value: [threshold, gain, 0., 0.],
         },
         flags: saturation(metadata)?,
     })

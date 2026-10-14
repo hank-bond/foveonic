@@ -10,6 +10,137 @@ fn values(v: &serde_json::Value) -> Vec<f64> {
         .map(|v| v.as_f64().unwrap())
         .collect()
 }
+fn threshold_metadata() -> Metadata {
+    let mut metadata = Metadata {
+        width: 64,
+        height: 128,
+        rotation: 0,
+        properties: Default::default(),
+        lists: Default::default(),
+        matrices: Default::default(),
+    };
+    for (name, values) in [
+        ("ActiveImageArea", vec![8., 34., 48., 64.]),
+        ("DarkShieldColRange", vec![0., 2., 56., 63.]),
+        ("SatMapR", vec![8192.]),
+        ("SatMapG", vec![8192.]),
+        ("SatMapB", vec![8192.]),
+    ] {
+        metadata.matrices.insert(
+            name.into(),
+            Matrix {
+                encoding: MatrixEncoding::Uint32,
+                representation: "u32",
+                dimensions: vec![values.len()],
+                values,
+            },
+        );
+    }
+    metadata
+}
+
+#[test]
+fn threshold_offsets_scale_only_camera_threshold_and_preserve_reference_defaults() {
+    let mut metadata = threshold_metadata();
+    for (net, expected) in [(0., 7000_f32), (1.71_f32, 6370.), (2.5, 4000.)] {
+        metadata.matrices.insert(
+            "ExpNet".into(),
+            Matrix {
+                encoding: MatrixEncoding::Float32,
+                representation: "f32",
+                dimensions: vec![1],
+                values: vec![net as f64],
+            },
+        );
+        for gain in [0., 1., 1.3] {
+            let automatic = prepare(&metadata, gain, None).unwrap();
+            assert_eq!(automatic.params.value[0].to_bits(), expected.to_bits());
+            assert_eq!(automatic.params.value[1], gain);
+            for ev in [-2_f32, -1., 0., 0.5, 1., 2.] {
+                let manual = prepare(&metadata, gain, Some(ev)).unwrap();
+                assert_eq!(manual.params.value[0], expected * ev.exp2());
+                assert_eq!(manual.flags, automatic.flags);
+                let mut normalized = manual.params;
+                normalized.value[0] = expected;
+                assert_eq!(
+                    bytemuck::bytes_of(&normalized),
+                    bytemuck::bytes_of(&automatic.params)
+                );
+                assert_eq!(manual.key() == automatic.key(), ev == 0.);
+            }
+        }
+    }
+    for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -2.01, 2.01] {
+        assert!(prepare(&metadata, 1., Some(invalid)).is_err());
+        let settings = crate::render::Settings {
+            highlight_restoration: false,
+            highlight_threshold_ev: Some(invalid),
+            ..Default::default()
+        };
+        assert!(settings.validate_values().is_err());
+    }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn gpu_threshold_changes_only_brightness_blend_and_keeps_density_gain_and_input() {
+    let gpu = Gpu::new().unwrap();
+    let count = 64 * 128;
+    let mut prepared = Prepared {
+        params: Params {
+            source: [64, 128, count, count.div_ceil(256)],
+            area: [8, 2, 48, 97],
+            value: [5500., 1., 0., 0.],
+        },
+        // No valid blue donors: the correction table stays empty, making the
+        // expected brightness blend independent of the donor implementation.
+        flags: vec![7; count as usize],
+    };
+    let mut reference_density = None;
+    for gain in [0_f32, 1., 1.3] {
+        let samples = [8000., 6500., 5000.]
+            .map(|v| v * gain)
+            .repeat(count as usize);
+        let input = gpu.upload("Threshold fixture", &samples).unwrap();
+        prepared.params.value[1] = gain;
+        for ev in [-2_f32, -1., 0., 0.25, 1., 2.] {
+            let threshold = 5500. * ev.exp2();
+            prepared.params.value[0] = threshold;
+            let result =
+                apply(&gpu, Some(&input), &prepared, true, &mut Profile::default()).unwrap();
+            let density = gpu.readback(result.density.as_ref().unwrap()).unwrap();
+            assert_eq!(
+                density,
+                *reference_density.get_or_insert_with(|| density.clone())
+            );
+            let pixels = gpu.readback(result.pixels.as_ref().unwrap()).unwrap();
+            let actual = bytemuck::cast_slice::<u8, f32>(&pixels);
+            let p = 40 * 64 + 20;
+            let den = bytemuck::cast_slice::<u8, f32>(&density)[p];
+            assert_eq!(den, 1.);
+            let brightness = 8000_f32 * (2. / 3.) + 6500_f32 * (1. / 3.);
+            let bright = ((brightness - threshold) / 1000.).clamp(0., 1.);
+            let weight = ((bright * bright + den * den) * 0.5).sqrt();
+            let expected = [
+                8000.,
+                (1. - weight) * 6500. + weight * 8000.,
+                (1. - weight) * 5000. + weight * 8000.,
+            ];
+            for (actual, expected) in actual[p * 3..][..3].iter().zip(expected) {
+                assert!(
+                    (actual - expected * gain).abs() < 0.004,
+                    "gain={gain} EV={ev}"
+                );
+            }
+            assert_eq!(&actual[..3], &samples[..3], "outside work area changed");
+            assert_eq!(
+                gpu.readback(&input).unwrap(),
+                bytemuck::cast_slice::<f32, u8>(&samples)
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
@@ -172,6 +303,7 @@ fn highlight_density_inspection_skips_photographic_prefix_and_retains_original_p
     assert!(values.contains(&1.));
     let mut changed = settings;
     changed.sensor_gain = 0.;
+    changed.highlight_threshold_ev = Some(1.);
     engine
         .render_artifacts(
             &source,

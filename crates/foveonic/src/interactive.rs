@@ -63,6 +63,11 @@ impl Settings {
             self.highlight_restoration != next.highlight_restoration,
             "highlight-restoration"
         );
+        changed!(
+            self.highlight_threshold_ev.map(f32::to_bits)
+                != next.highlight_threshold_ev.map(f32::to_bits),
+            "highlight-threshold"
+        );
         changed!(self.despeckle != next.despeckle, "despeckle");
         changed!(self.row_correction != next.row_correction, "row-correction");
         changed!(
