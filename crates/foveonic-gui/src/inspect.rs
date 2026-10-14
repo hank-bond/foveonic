@@ -31,22 +31,20 @@ fn group_row(ui: &mut egui::Ui, name: &str, selected: bool) -> bool {
         open = !open;
         ui.data_mut(|d| d.insert_persisted(id, open));
     }
-    let visuals = ui.style().interact_selectable(&response, selected);
-    ui.painter()
-        .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+    let color = crate::widgets::menu_cell(ui, &response, selected);
     let padding = ui.spacing().button_padding.x;
     ui.painter().text(
         rect.left_center() + egui::vec2(padding, 0.),
         egui::Align2::LEFT_CENTER,
         name,
         egui::TextStyle::Button.resolve(ui.style()),
-        visuals.text_color(),
+        color,
     );
     sections::disclosure_icon(
         ui,
         rect.right_center() - egui::vec2(padding + 4., 0.),
         !open,
-        visuals.text_color(),
+        color,
     );
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, ui.is_enabled(), name)
@@ -92,10 +90,10 @@ pub fn show(
         .width(205.)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.;
             for image in outputs {
                 if image.channels == Channels::Scalar {
-                    if ui
-                        .selectable_label(image.name == output, image.name)
+                    if crate::widgets::menu_row(ui, image.name, image.name == output)
                         .on_hover_text(help::inspection(image.name).unwrap())
                         .clicked()
                     {
@@ -106,10 +104,9 @@ pub fn show(
                     if group_row(ui, image.name, image.name == output) {
                         ui.indent(image.name, |ui| {
                         for &(component, label) in components(image.channels) {
-                            if ui
-                                .selectable_label(
+                            if crate::widgets::menu_row(
+                                    ui, label,
                                     image.name == output && component == *channel,
-                                    label,
                                 )
                                 .on_hover_text(if image.channels == Channels::Layers {
                                     "Shows one of the camera's three color-sensitive sensor layers in gray. Each responds to overlapping colors; it is not a finished red, green, or blue channel."
@@ -172,10 +169,10 @@ impl Difference {
         } else {
             "Shows output minus this operation's input. Middle gray is unchanged; lighter means increased and darker means decreased. This changes display only, not editing or export. Scopes still measure the output."
         };
-        ui.add_enabled(
-            available,
-            egui::Checkbox::new(&mut self.enabled, "Δ Difference"),
-        )
+        ui.add_enabled_ui(available, |ui| {
+            crate::widgets::checkbox(ui, &mut self.enabled, "Δ Difference")
+        })
+        .inner
         .on_disabled_hover_text(explanation)
         .on_hover_text(explanation);
         if self.enabled {

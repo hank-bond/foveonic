@@ -16,6 +16,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[camera-repair-default](./camera-repair-default.md)** Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
+- **[clickable-states](./clickable-states.md)** Group editing corrections and share rounded clickable states without changing processing defaults.
 - **[complete-reference-algorithms](./complete-reference-algorithms.md)** Autonomously complete the remaining Merrill reference algorithm stages and recipe integrations identified by the node audit, then validate the full GPU path. _Resume this autonomous implementation pass after a checkpoint or context compaction._
 - **[despeckle](./despeckle.md)** GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
@@ -28,6 +29,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Deferred intermittent fresh-render differences retain investigation evidence without claiming a known cause or fix.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
+- **[highlight-threshold](./highlight-threshold.md)** Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
 - **[inspection-differences](./inspection-differences.md)** Make Inspect groups expand inline and add amplified signed layer/channel comparisons against explicit operation inputs.
 - **[metadata-first-loading](./metadata-first-loading.md)** Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.

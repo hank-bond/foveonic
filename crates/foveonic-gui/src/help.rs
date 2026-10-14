@@ -18,6 +18,9 @@ pub fn control(response: egui::Response, label: &str) -> egui::Response {
 /// Explain the automatic/manual toggle in photographic rather than pipeline terms.
 pub fn automatic(label: &str) -> Option<&'static str> {
     Some(match label {
+        "Highlight correction" => {
+            "Auto follows the camera threshold. Click A to switch between Auto and a manual offset in stops. 0 matches Auto. Manual controls are disabled in Auto. The checkbox turns restoration off without resetting your choice."
+        }
         "ColorDQ gain" => {
             "A chooses the amount automatically using the camera information, while noise reduction is on. Click A to choose your own amount; 0 turns this correction off. Click again to return to automatic. The slider and value cannot be edited while A is on."
         }
@@ -51,7 +54,7 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Highlights" => {
             "Shapes the brighter part of the tone curve. Use it to adjust the appearance of bright surfaces and their tonal separation. It is not highlight recovery: detail lost at capture cannot be brought back by this slider. 0 leaves it unchanged."
         }
-        "Noise and detail" => {
+        "Noise and Detail" => {
             "Enables noise reduction followed by detail restoration, using the camera's noise information. Use it to balance smoother areas against fine texture. Too much smoothing can look waxy; too much restored detail can bring noise back. The Chroma noise, Luma noise, Banding noise, Detail, and ColorDQ gain controls are shown while this is on."
         }
         "Chroma noise" => {
@@ -61,7 +64,7 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Reduces grain rather than colored blotches. Start at 2. These are five preset settings; 0 still smooths noise and is not an Off setting. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
         }
         "Banding noise" => {
-            "Reduces sensor-column stripes independently of Row banding correction. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger filter to estimate column offsets, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
+            "Reduces sensor-column stripes independently of Row banding in Corrections. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger filter to estimate column offsets, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
         }
         "Detail" => {
             "Controls how much fine texture is kept after noise reduction. At 0 the image is smoother; 1 is the normal starting point. Higher values bring back more texture, but can also bring back grain and colored speckles. This is separate from sharpening."
@@ -72,16 +75,19 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Sharpen" => {
             "Emphasizes edges to make the finished photo look crisper. 0 turns it off. Higher amounts can exaggerate grain and create light or dark outlines around edges. It cannot restore detail that was never recorded."
         }
-        "Bad-pixel repair" => {
-            "Fixes faulty sensor pixels and small faulty patches using the camera's defect information, with an additional check for abnormal red pixels. The camera information chooses which recorded defects to repair automatically. Usually best left on. This is not general noise reduction; Despeckle separately searches the image for additional isolated dots."
+        "Bad pixels" => {
+            "Fixes faulty sensor pixels and small faulty patches using the camera's defect information, with an additional check for abnormal red pixels. The camera information chooses which recorded defects to repair automatically. Usually best left on. This is not general noise reduction; Speckles separately searches the image for additional isolated dots."
         }
-        "Row banding correction" => {
+        "Row banding" => {
             "Reduces faint horizontal brightness or color stripes by estimating small per-row sensor offsets. It acts before general noise reduction and does not smooth image texture. Usually best left on; switch it off to compare an affected shadow area."
         }
-        "Highlight restoration" => {
-            "Attempts to restore natural-looking color in very bright areas where part of the sensor reached its limit. It uses information still recorded by the other color-sensitive layers and can reduce false colors. It cannot recover texture lost in all three layers. This acts before noise reduction and is separate from the Highlights tone slider."
+        "Highlight correction" => {
+            "Restores highlight color using information still recorded by other sensor layers. Auto follows the camera threshold. Manual offsets shift it in stops: +1 doubles the threshold and starts neutralization later, often retaining more color. Negative values start earlier. Higher values can leave false colors; lower values can wash colors toward white. 0 matches Auto, not Off. The checkbox disables restoration. This acts before noise reduction and is separate from the Highlights tone slider. It cannot recover texture lost in all three layers."
         }
-        "Despeckle" => {
+        "Advanced corrections" => {
+            "Speckles, Bad pixels, and Row banding default on for new edits. Expand to toggle them individually. Collapsing preserves your settings."
+        }
+        "Speckles" => {
             "Finds isolated bright, dark, or colored dots that remain after camera-based repairs, then replaces them using nearby pixels. Usually best left on. It does not reduce general grain; switch it off to check whether a tiny real detail is being removed."
         }
         _ => return None,
@@ -231,13 +237,22 @@ mod tests {
         assert!(editing("Sharpen").unwrap().contains("0 turns it off"));
         assert!(editing("Chroma noise").unwrap().contains("0 still"));
         assert!(editing("Luma noise").unwrap().contains("0 still"));
-        let repair = editing("Bad-pixel repair").unwrap();
+        let repair = editing("Bad pixels").unwrap();
         assert!(repair.contains("automatically"));
         assert!(repair.contains("small faulty patches"));
-        assert!(repair.contains("Despeckle"));
+        assert!(repair.contains("Speckles"));
         assert!(editing("Camera-record repair").is_none());
         assert!(editing("Min. badness").is_none());
         assert!(automatic("Min. badness").is_none());
+        let recovery = editing("Highlight correction").unwrap();
+        assert!(editing("Highlights").unwrap().contains("tone curve"));
+        assert_ne!(editing("Highlights"), editing("Highlight correction"));
+        assert!(recovery.contains("+1 doubles the threshold"));
+        assert!(recovery.contains("0 matches Auto, not Off"));
+        assert!(recovery.contains("Highlights tone slider"));
+        assert!(automatic("Highlight correction")
+            .unwrap()
+            .contains("checkbox"));
         for mode in [Scope::Histogram, Scope::Parade, Scope::Waveform] {
             assert!(!scope(mode).is_empty());
         }

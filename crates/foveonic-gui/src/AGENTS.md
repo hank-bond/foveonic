@@ -34,6 +34,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks using isolated preferences and real egui/wgpu frames.
 - **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between JPEG previews and GPU images, with diagnostic mapping and manual filtering.
+- **[widgets.rs](./widgets.rs)** Shares button, checkbox, and dropdown states across the workspace.
 - **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
 <!-- INDEX:END -->

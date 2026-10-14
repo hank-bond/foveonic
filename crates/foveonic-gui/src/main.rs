@@ -17,6 +17,7 @@ mod sidecars;
 mod smoke;
 mod timing;
 mod viewport;
+mod widgets;
 mod worker;
 
 use eframe::{egui, egui_wgpu, wgpu};
@@ -69,7 +70,7 @@ impl App {
             serde_json::json!({"frontend":"gui","adapter":rs.adapter.get_info().name,"gpu_supported":rs.adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY),"gpu_enabled":rs.device.features().contains(wgpu::Features::TIMESTAMP_QUERY)}),
         );
         viewport::install(rs);
-        install_style(&cc.egui_ctx);
+        widgets::install_style(&cc.egui_ctx);
         let engine = Engine::from_device(
             rs.device.clone(),
             rs.queue.clone(),
@@ -302,12 +303,12 @@ impl App {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!self.exporting, |ui| {
-                if ui.button("Open folder").clicked() {
+                if widgets::button(ui, "Open folder", false, egui::Vec2::ZERO).clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_folder() {
                         self.open(path);
                     }
                 }
-                if ui.button("Open X3F").clicked() {
+                if widgets::button(ui, "Open X3F", false, egui::Vec2::ZERO).clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Merrill X3F", &["x3f"])
                         .pick_file()
@@ -317,12 +318,20 @@ impl App {
                 }
                 for format in [worker::ExportFormat::Tiff, worker::ExportFormat::Dng] {
                     if ui
-                        .add_enabled(
+                        .add_enabled_ui(
                             self.sidecars.ready()
                                 && self.selected.is_some()
                                 && self.settings.validate().is_ok(),
-                            egui::Button::new(format!("Export {}", format.label())),
+                            |ui| {
+                                widgets::button(
+                                    ui,
+                                    &format!("Export {}", format.label()),
+                                    false,
+                                    egui::Vec2::ZERO,
+                                )
+                            },
                         )
+                        .inner
                         .clicked()
                     {
                         let name = self
@@ -350,7 +359,9 @@ impl App {
         if let Some(warning) = self.sidecars.warning() {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(egui::Color32::YELLOW, warning);
-                if self.sidecars.can_retry() && ui.button("Retry saving edits").clicked() {
+                if self.sidecars.can_retry()
+                    && widgets::button(ui, "Retry saving edits", false, egui::Vec2::ZERO).clicked()
+                {
                     self.sidecars.retry();
                 }
             });
@@ -380,12 +391,13 @@ impl App {
                         Scope::Waveform => "Combined waveform",
                     })
                     .show_ui(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.;
                         for (value, name) in [
                             (Scope::Histogram, "Histogram"),
                             (Scope::Parade, "RGB / layer parade"),
                             (Scope::Waveform, "Combined waveform"),
                         ] {
-                            ui.selectable_value(&mut self.preferences.scope, value, name)
+                            widgets::menu_value(ui, &mut self.preferences.scope, value, name)
                                 .on_hover_text(help::scope(value));
                         }
                     })
@@ -611,8 +623,18 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.weak(format!("{} files", self.browser.files.len()));
-                    ui.selectable_value(&mut self.preferences.organizer, Organizer::Icons, "Icons");
-                    ui.selectable_value(&mut self.preferences.organizer, Organizer::List, "List");
+                    widgets::selectable_value(
+                        ui,
+                        &mut self.preferences.organizer,
+                        Organizer::Icons,
+                        "Icons",
+                    );
+                    widgets::selectable_value(
+                        ui,
+                        &mut self.preferences.organizer,
+                        Organizer::List,
+                        "List",
+                    );
                 });
                 ui.separator();
                 if let Some(path) = &self.selected {
@@ -661,23 +683,6 @@ impl eframe::App for App {
             );
         }
     }
-}
-fn install_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = egui::Color32::from_gray(22);
-    visuals.window_fill = egui::Color32::from_gray(22);
-    visuals.extreme_bg_color = egui::Color32::from_gray(12);
-    visuals.selection.bg_fill = egui::Color32::from_rgb(35, 65, 100);
-    visuals.selection.stroke = egui::Stroke::new(1_f32, egui::Color32::from_rgb(100, 160, 245));
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(34);
-    visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_gray(29);
-    style.visuals = visuals;
-    style.spacing.item_spacing = egui::vec2(7., 6.);
-    style
-        .text_styles
-        .insert(egui::TextStyle::Body, egui::FontId::proportional(13.));
-    ctx.set_style(style);
 }
 fn main() -> eframe::Result {
     timing::configure().map_err(eframe::Error::AppCreation)?;

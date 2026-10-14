@@ -28,8 +28,7 @@ pub fn header(ui: &mut egui::Ui, section: Section, collapsed: bool) -> egui::Res
         egui::vec2(ui.available_width(), 29.),
         egui::Sense::click_and_drag(),
     );
-    ui.painter()
-        .rect_filled(rect, 2., egui::Color32::from_gray(31));
+    crate::widgets::paint(ui, &response, false);
     disclosure_icon(
         ui,
         rect.left_center() + egui::vec2(11., 0.),

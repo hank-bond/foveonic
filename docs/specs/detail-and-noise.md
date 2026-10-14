@@ -24,14 +24,14 @@ Reconstruction selects native full-resolution or reduced local/global base filte
 
 ## Inspection and controls
 
-`Settings::reconstruction` enables the path with shared `noise::Controls`. The GUI exposes a Noise and detail enable toggle with Chroma noise, Luma noise, Banding noise, Detail, ColorDQ gain, and an Advanced noise and detail subsection, following [GUI workspace](./gui-workspace.md) control requirements. CLI options are `--reconstruction`, `--chroma-noise`, `--luma-noise`, `--banding-noise`, and `--detail`; parameter options also enable the path.
+`Settings::reconstruction` enables the path with shared `noise::Controls`. The GUI exposes a Noise and Detail enable toggle with Chroma noise, Luma noise, Banding noise, Detail, ColorDQ gain, and an Advanced subsection, following [GUI workspace](./gui-workspace.md) control requirements. CLI options are `--reconstruction`, `--chroma-noise`, `--luma-noise`, `--banding-noise`, and `--detail`; parameter options also enable the path.
 
 Public images are `noise.layers` (calibrated sensor codes), `noise.edges` (recursive weights, nominal 0–1), `detail.ratio` (multiplicative luminance residual, displayed 0–2 with 1 neutral), `reconstruction.rgb` (working linear camera-color RGB in 0–4095 code units), and `detail.signal` (signed camera-code detail, displayed −1000…1000 with zero at middle gray). The existing `color.rgb` and optional `color-dq.rgb` expose the filtered base before restoration. Display mappings preserve processing values. Tile atlases remain internal typed connections.
 
 ## Linked advanced controls
 
 - Selected advanced parameters **should** each have one basic reconstruction control as their parent. Camera/ISO metadata may also contribute to their calculated values. Several controls may influence the same visual effect.
-- Each advanced control **must** support linked and overridden states. Linked controls **must** display their calculated values, look slightly darker, and be read-only while the link button remains interactive. Unlinked controls **must** use explicit overrides and normal editable styling.
+- Each advanced control **must** support linked and overridden states. Linked controls **must** display their calculated values, look slightly darker, and be read-only while the link button remains interactive. Unlinked controls **must** use explicit overrides and normal editable styling. Link buttons **must** be neutral when linked and blue when overridden, with guidance in tooltips.
 - Unlinking **must** capture the current calculated value without changing the image. Changing a basic control **must** update its linked advanced values and preserve unlinked overrides. Relinking **must** adopt the latest calculated value.
 - The detail multiplier **must** remain separate and apply after linked/overridden parameters are resolved. It does not become another parent of those advanced controls.
 - GUI displays and engine execution **must** use the same parameter calculation. Retained artifacts **must** preserve the selected basic controls and overrides.

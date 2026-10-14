@@ -434,7 +434,7 @@ impl Viewport {
             ui.label(zoom);
             for preset in ZoomPreset::ALL {
                 let response = crate::help::attach(
-                    ui.button(preset.label()),
+                    crate::widgets::button(ui, preset.label(), false, egui::Vec2::ZERO),
                     &crate::help::navigator(ui.ctx().os()),
                 );
                 if response.clicked() {

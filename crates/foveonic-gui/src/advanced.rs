@@ -7,8 +7,9 @@ use foveonic::{
 };
 
 pub fn link_button(ui: &mut egui::Ui, linked: bool, parent: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(22., 20.), egui::Sense::click());
-    let stroke = egui::Stroke::new(1.3_f32, ui.visuals().text_color());
+    let response = crate::widgets::button(ui, "", !linked, egui::vec2(22., 20.));
+    let rect = response.rect;
+    let stroke = egui::Stroke::new(1.3_f32, ui.style().interact(&response).text_color());
     let offset = if linked { 2.5 } else { 5. };
     for sign in [-1., 1.] {
         ui.painter().circle_stroke(
@@ -27,9 +28,9 @@ pub fn link_button(ui: &mut egui::Ui, linked: bool, parent: &str) -> egui::Respo
         );
     }
     response.on_hover_text(if linked {
-        format!("Follows {parent} automatically. Click to keep the current value and adjust it separately. Changing {parent} will then leave this value alone.")
+        format!("Follows {parent}. Click to keep the current value and adjust it separately. Changes to {parent} will then leave it alone.")
     } else {
-        format!("Set separately from {parent}. Click to follow {parent} again. This replaces your manual value with the current automatic value.")
+        format!("Set separately from {parent}. Click to replace this override with the current automatic value and follow {parent} again.")
     })
 }
 
@@ -41,7 +42,7 @@ pub fn show(
     gain: f32,
 ) -> bool {
     let mut changed = false;
-    egui::CollapsingHeader::new("Advanced noise and detail")
+    egui::CollapsingHeader::new("Advanced")
         .id_salt("advanced-reconstruction")
         .default_open(crate::smoke::editor_review_active())
         .show(ui, |ui| {
@@ -54,10 +55,9 @@ pub fn show(
             for parameter in Parameter::ALL {
                 changed |= row(ui, &mut controls.overrides, parameter, values.map(|v| v[parameter as usize]));
             }
-            ui.small("Linked values follow the basic noise controls. Click a link to adjust a value separately. Detail still controls how much texture is restored.");
         })
         .header_response
-        .on_hover_text("Fine-tunes how noise is smoothed and texture is restored. Start with the basic noise controls; these values normally follow them automatically. Adjusting them separately can preserve more texture, but can also leave grain or introduce artifacts.");
+        .on_hover_text("Fine-tunes noise smoothing and texture restoration. Values follow the basic noise controls until you unlink them. Separate adjustments can preserve texture but leave grain or introduce artifacts. Detail controls how much texture is restored.");
     changed
 }
 
@@ -124,6 +124,121 @@ fn row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_icons_have_rounded_button_outlines_and_interaction_feedback() {
+        for linked in [false, true] {
+            let ctx = egui::Context::default();
+            crate::widgets::install_style(&ctx);
+            let frame = |time, events| {
+                let mut rect = egui::Rect::NOTHING;
+                let mut clicked = false;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 400.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let response = link_button(ui, linked, "Luma noise");
+                            rect = response.rect;
+                            clicked = response.clicked();
+                        });
+                    },
+                );
+                let button = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(shape)
+                            if shape.rect.contains(rect.center()) && shape.rect.width() < 30. =>
+                        {
+                            Some((shape.stroke, shape.fill, shape.corner_radius))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(rect.size(), egui::vec2(22., 20.));
+                assert!(button.0.width > 0.);
+                assert_ne!(button.2, egui::CornerRadius::ZERO);
+                (rect, clicked, button)
+            };
+            frame(0., vec![egui::Event::PointerMoved(egui::pos2(500., 300.))]);
+            let (rect, clicked, normal) = frame(0.02, vec![]);
+            assert!(!clicked);
+            assert_eq!(
+                normal.0.color,
+                if linked {
+                    egui::Color32::from_gray(70)
+                } else {
+                    egui::Color32::from_rgb(100, 160, 245)
+                }
+            );
+            assert_eq!(
+                normal.1,
+                if linked {
+                    egui::Color32::from_gray(29)
+                } else {
+                    egui::Color32::from_rgb(35, 65, 100)
+                }
+            );
+            let point = rect.center();
+            let (_, clicked, hovered) = frame(0.04, vec![egui::Event::PointerMoved(point)]);
+            assert!(!clicked);
+            assert_ne!(normal, hovered);
+            let event = |pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let (_, clicked, pressed) = frame(0.06, vec![event(true)]);
+            assert!(!clicked);
+            assert_ne!(hovered, pressed);
+            assert!(frame(0.08, vec![event(false)]).1);
+        }
+    }
+
+    #[test]
+    fn expanded_noise_controls_have_no_inline_link_note() {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+        let mut controls = Controls::default();
+        let before = controls;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600., 800.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(!show(ui, &mut controls, None, "Sunlight", 1.));
+                });
+            },
+        );
+        assert_eq!(controls, before);
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.contains(&Parameter::MeanDecay.label()));
+        assert!(!texts
+            .iter()
+            .any(|text| text.contains("Linked values follow the basic noise controls.")));
+    }
+
     #[test]
     fn linked_read_only_parameters_still_explain_their_effect() {
         for parameter in Parameter::ALL {

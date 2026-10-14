@@ -139,15 +139,7 @@ impl Browser {
         size: egui::Vec2,
     ) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::CLICK);
-        ui.painter().rect_filled(
-            rect,
-            4.,
-            if selected {
-                egui::Color32::from_rgb(40, 65, 95)
-            } else {
-                egui::Color32::from_gray(24)
-            },
-        );
+        crate::widgets::paint(ui, &response, selected);
         if let Some(image) = ui
             .is_rect_visible(rect)
             .then(|| self.thumbnail(path))
@@ -288,14 +280,10 @@ impl Browser {
                     let path = self.files[row].clone();
                     let (rect, response) =
                         ui.allocate_exact_size(egui::vec2(width, 40.), egui::Sense::CLICK);
-                    ui.painter().rect_filled(
-                        rect,
-                        3.,
-                        if highlighted.as_deref() == Some(path.as_path()) {
-                            egui::Color32::from_rgb(35, 57, 83)
-                        } else {
-                            egui::Color32::from_gray(20)
-                        },
+                    crate::widgets::paint(
+                        ui,
+                        &response,
+                        highlighted.as_deref() == Some(path.as_path()),
                     );
                     if ui.is_rect_visible(rect) {
                         if let Some(thumb) = self.thumbnail(&path) {
