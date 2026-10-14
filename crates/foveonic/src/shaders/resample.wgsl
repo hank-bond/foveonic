@@ -1,5 +1,6 @@
-// Native separable triangular polyphase resampling; source addressing is linear,
-// including right taps entering the next row. Newly owned last four rows remain zero.
+// Match native triangular resampling, including right-edge taps that enter the
+// next row. Clamping them to the current row would change the result.
+// The newly allocated buffer leaves the final four rows zero.
 // Adapted with owner permission from Foveonic filtering/resample.rs at e47af35.
 struct Params{source:vec4<u32>,output:vec4<u32>,advance:vec4<i32>}
 @group(0) @binding(0) var<storage,read> input_pixels:array<f32>;

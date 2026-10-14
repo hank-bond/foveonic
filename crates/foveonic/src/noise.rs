@@ -1,4 +1,4 @@
-//! Prepares shared camera noise recipes, correction couplings, and metadata-selected full/reduced reconstruction controls.
+//! Resolves camera noise presets and linked overrides for shared GPU reconstruction.
 //!
 //! Adapted from Foveonic noise.rs and params.rs at e47af35 with owner permission.
 
@@ -8,7 +8,7 @@ mod tests;
 
 use crate::source::{MatrixEncoding, Metadata, Result};
 
-/// Five camera-table choices for chroma/luminance and a residual-detail multiplier.
+/// Five presets for chroma and luminance, with a residual-detail multiplier.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Controls {
@@ -38,7 +38,8 @@ impl Controls {
     }
 }
 
-/// Preset-driven advanced fields; each has exactly one basic noise-control parent.
+/// Each advanced field follows one basic control so changing that control
+/// has a clear effect and does not unexpectedly reset another override.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum Parameter {
@@ -123,7 +124,8 @@ impl Parameter {
     }
 }
 
-/// None follows the basic parent; Some replaces its calculated field before detail multiplication.
+/// None follows the basic control. Some keeps an explicit value instead,
+/// before the detail multiplier is applied.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Overrides([Option<f32>; 7]);
 impl Overrides {
@@ -239,8 +241,8 @@ pub(crate) struct Parameters {
     pub mono: [f32; 4],
     pub residual: [f32; 4], // Mono mix, color mix, residual strength, detail multiplier.
     pub diffusion: [f32; 4], // Step, noise-model step, fixed contrast, directional axis.
-    pub column_area: [u32; 4], // Native column cuts; distinct from shading/work bounds.
-    pub column: [f32; 4],   // Native default column-preset blend; reserved values.
+    pub column_area: [u32; 4], // Camera column bounds, not the shading or working-area bounds.
+    pub column: [f32; 4],   // Camera column blend, followed by reserved values.
     pub reduction: [f32; 4], // Native eighth-quantized reconstruction scale.
     pub geometry: [u32; 4], // LocalMean margin, edge LUT margin, fixed bilateral size, global branch.
 }
@@ -254,8 +256,8 @@ impl Parameters {
     }
 }
 
-/// Each stage owns the subset of the shared uniform it actually consumes.
-/// Detail/override edits must not invalidate expensive filtering that ignores those fields.
+/// Key only the fields a stage uses. Otherwise a Detail or override edit
+/// would rerun expensive filtering even when its inputs have not changed.
 #[derive(Clone, Copy)]
 pub(crate) enum RecipeStage {
     Base,
@@ -543,7 +545,8 @@ pub(crate) struct Couplings {
 pub(crate) fn couplings(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Couplings> {
     let r = recipe(metadata, wb, controls)?;
     let scale = r.mixed[1] as f32;
-    // Main/slider column 7 is the ColorDQ cap; column 12 is sharpening base.
+    // The ColorDQ cap is in column 7. The similar-looking value in column 12
+    // belongs to sharpening, so it must not drive automatic noise correction.
     let limit = (r.mixed[7] as f32) * r.luminance[7];
     if !scale.is_finite() || scale < 0. || !limit.is_finite() || limit < 0. {
         return Err("invalid production noise coupling".into());

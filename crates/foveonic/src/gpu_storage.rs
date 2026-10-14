@@ -1,4 +1,4 @@
-//! Guards GPU buffer contents with shared read ownership, exclusive writes and allocation generations.
+//! Prevents a later GPU write from changing an image that still has readers.
 
 use std::{
     fmt,
@@ -33,13 +33,14 @@ impl fmt::Debug for Allocation {
     }
 }
 
-/// A claim on this allocation's current contents. Cloning shares the claim,
-/// never an untracked raw handle. Borrowing it prevents exclusive writes.
+/// Keep the current contents alive while a caller reads them. Clones keep
+/// the same read claim, so none of them can be bypassed by a later write.
 #[derive(Clone, Debug)]
 pub(crate) struct ReadGuard(Arc<Allocation>);
 
-/// Exclusive permission to modify storage. Cannot be cloned or outlive the
-/// mutable owner borrow; dispatch consumes the binding before returning.
+/// A write needs sole access so retained images cannot change underneath readers.
+/// This guard cannot be cloned or outlive the mutable borrow. Dispatch submits
+/// its commands while the borrow is still held.
 pub(crate) struct WriteGuard<'a>(&'a mut Allocation);
 
 pub(crate) enum Binding<'a> {
@@ -71,9 +72,9 @@ impl ReadGuard {
         self.readers() == 1
     }
 
-    /// The mutable borrow excludes borrowed readers; Arc ownership excludes
-    /// independently retained graph/cache/image guards. Failure is a bug, not
-    /// an invitation to silently allocate and hide an invalid write.
+    /// Check both borrowed readers and separately retained images or cache entries.
+    /// A failed check means an invalid write was attempted. Allocating another
+    /// buffer here would hide the ownership bug rather than fix it.
     pub fn write(&mut self) -> WriteGuard<'_> {
         assert!(
             self.exclusive(),
@@ -88,8 +89,8 @@ impl ReadGuard {
             .expect("GPU generation overflow");
         WriteGuard(allocation)
     }
-    // Only the parent GPU module can unwrap raw handles. In particular, there
-    // is no Deref/AsRef/escape hatch available to processing code.
+    // Raw handles would let processing code bypass these ownership checks.
+    // Keep access inside the GPU module rather than exposing Deref or AsRef.
     pub(super) fn raw(&self) -> &wgpu::Buffer {
         &self.0.buffer
     }

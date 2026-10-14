@@ -40,7 +40,8 @@ def record(args):
     home.mkdir()
     binary = args.binary.resolve(strict=True)
     fixture = args.fixture.resolve(strict=True)
-    # Hash before startup/timing; source file-cache state is uncontrolled.
+    # Hashing reads the input and can warm the file cache. Do it before timing
+    # and do not label the later app read as cold media access.
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     source_hash = hashlib.sha256(fixture.read_bytes()).hexdigest()
     with (directory / 'stderr.jsonl').open('x') as events:

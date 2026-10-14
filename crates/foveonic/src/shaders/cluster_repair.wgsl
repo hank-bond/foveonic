@@ -22,7 +22,8 @@ fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+
 fn patch_pixel(cx:u32,cy:u32,i:u32)->u32{return (cy+i/3u-1u)*params.source.x+cx+i%3u-1u;}
 @compute @workgroup_size(64)
 fn main(@builtin(local_invocation_index) lane:u32){
-    // Uniform loop bounds keep barriers legal even for empty member slots.
+    // Every lane must reach each barrier, even when its member slot is empty.
+    // Different loop bounds would break that shared barrier order.
     for(var k=0u;k<params.source.z;k++){
         let cluster=clusters[k];let left=cluster.rect.x;let top=cluster.rect.y;let pw=cluster.rect.z;let ph=cluster.rect.w;let mask_base=cluster.indices.z;
         for(var member=0u;member<params.source.w;member++){
@@ -75,7 +76,8 @@ fn main(@builtin(local_invocation_index) lane:u32){
                 pixels[record.x*3u]=colors[0].x;pixels[record.x*3u+1u]=colors[0].y;pixels[record.x*3u+2u]=colors[0].z;
                 masks[mask_base+record.y]=(masks[mask_base+record.y]&256u)|7u;
             }
-            // Later members must see earlier RGB/channel-mask changes.
+            // Repairing a member can change the next member's inputs. Keep these
+            // updates in order even though candidate searches run in parallel.
             storageBarrier();
         }
     }

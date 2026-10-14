@@ -206,8 +206,9 @@ pub fn clear(rs: &egui_wgpu::RenderState) {
         .clear();
 }
 
-/// Map the same oriented float texture as the main viewport into a tiny sRGB tile.
-/// This is queued once per content/mapping change, not a per-frame drawing callback.
+/// Reuse the main viewport's mapping so the navigator shows the same image.
+/// Prepare the small tile only when content or mapping changes. Pan and zoom
+/// should not put another preview conversion ahead of the next photo edit.
 pub(crate) fn prepare_navigator(
     rs: &egui_wgpu::RenderState,
     source: &wgpu::Texture,
@@ -353,7 +354,7 @@ pub struct PixelRegion {
 }
 
 pub struct Viewport {
-    /// None follows Fit; Some fixes the number of UI points per image pixel.
+    /// None follows Fit. Some fixes the number of UI points per image pixel.
     scale: Option<f32>,
     pub pan: egui::Vec2,
     pub one_to_one: bool,
@@ -465,8 +466,8 @@ impl Viewport {
                 let old_canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, old_size);
                 let old_image = self.image_rect(old_canvas, extent);
                 let display = egui::vec2(extent[0] as f32, extent[1] as f32) * scale;
-                // Preserve the continuous crop origin, not rounded information-bar pixels.
-                // Axes that show the whole image remain centred in their letterboxing.
+                // Rounding to the information-bar coordinates would make the image jump
+                // during resize. Keep the precise origin and center fully visible axes.
                 for axis in 0..2 {
                     self.pan[axis] = if display[axis] <= size[axis] {
                         0.
@@ -598,7 +599,8 @@ impl Viewport {
             ),
         )
     }
-    /// Inclusive pixel bounds in the cropped, oriented image grid; includes partly visible pixels.
+    /// Include partly visible pixels so the readout describes everything on screen.
+    /// Bounds are inclusive and use the cropped, oriented image grid.
     pub fn visible_pixels(&self) -> Option<PixelRegion> {
         let (_, extent) = self.last_canvas?;
         let uv = self.visible_uv();
@@ -695,7 +697,8 @@ impl Viewport {
             }
             ui.ctx().request_repaint();
         } else if self.scale.is_some() && (response.dragged() || response.clicked()) {
-            // In Fit the whole image is visible; a click must not leave Fit before a double-click.
+            // A first click must leave Fit unchanged, or the following double-click
+            // would start from the wrong zoom state.
             if let Some(mouse) = response.interact_pointer_pos() {
                 self.pan_to((mouse - image.min) / image.size() - self.navigator_offset);
                 ui.ctx().request_repaint();
@@ -994,7 +997,7 @@ mod tests {
         );
         run(&mut viewport, 0.6, vec![egui::Event::PointerMoved(end)]);
         run(&mut viewport, 0.7, vec![button(end, false)]);
-        assert!((viewport.pan.x + 276.).abs() < 0.01); // retains grab offset; 18 miniature pixels = 96 canvas pixels
+        assert!((viewport.pan.x + 276.).abs() < 0.01); // Keep the grab offset. Here 18 navigator pixels span 96 canvas pixels.
         viewport.one_to_one = true;
         for (time, pressed) in [(1., true), (1.05, false), (1.1, true), (1.15, false)] {
             run(

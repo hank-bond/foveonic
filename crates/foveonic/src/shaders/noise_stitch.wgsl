@@ -17,7 +17,8 @@ fn stitch(@builtin(global_invocation_id) id: vec3<u32>) {
         let tile_xy = id.xy / core;
         for(var c=0u;c<components;c++){result[c]=value(tile_xy.y * params.source.z + tile_xy.x, id.xy % core + params.tile.z,c,components);}
     } else {
-        // Reverse tile order preserves the reference's eight-pixel overlap ramps.
+        // Overlap weights depend on tile order. Reversing this traversal matches
+        // the reference's eight-pixel blend instead of changing seams.
         for (var tile = i32(count) - 1; tile >= 0; tile--) {
             let tx = u32(tile) % params.source.z;
             let ty = u32(tile) / params.source.z;

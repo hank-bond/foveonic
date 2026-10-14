@@ -1,7 +1,7 @@
 //! Generates repository indexes and validates document metadata, titles, and relative file links.
 //!
-//! Imported from Foveonic's documentation tool, adapted from UIX. Documentation layers are explicit;
-//! source owners are discovered beneath Rust and tool roots.
+//! Imported from Foveonic's documentation tool, adapted from UIX.
+//! Discover source owners beneath Rust and tool roots while keeping document layers explicit.
 
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -44,7 +44,8 @@ struct Layer {
     should_sort_newest_first: bool,
 }
 
-// The root is curated; other containers discover their immediate children.
+// The root is a deliberate entry point, not a directory listing.
+// Other containers discover their immediate children.
 const LAYERS: &[Layer] = &[
     Layer {
         directory: ".",
@@ -179,7 +180,8 @@ fn parse_frontmatter(text: &str, file: &str) -> Result<Frontmatter> {
         .map(|offset| offset + 3)
         .ok_or_else(|| format!("{file}: unterminated frontmatter"))?;
     let mut fields = Frontmatter::new();
-    // Read the documented one-line scalar format, not general YAML.
+    // The documented format uses one-line values. A full YAML parser would
+    // add complexity for syntax these documents do not need.
     for line in text[3..end].lines() {
         let Some(captures) = FIELD.captures(line) else {
             continue;
@@ -615,7 +617,8 @@ fn validate_relative_file_links(root: &Path, paths: &[PathBuf]) -> Result<()> {
         let text = read_file_text(path)?;
         for captures in LINK.captures_iter(&text) {
             let start = captures.get(0).unwrap().start();
-            // Image links are deliberately outside the existing file-link check.
+            // Image targets use different rules from document links. Keep them out
+            // of this file-link check rather than treating previews as documents.
             if start > 0 && text.as_bytes()[start - 1] == b'!' {
                 continue;
             }

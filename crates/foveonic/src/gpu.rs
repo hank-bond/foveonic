@@ -99,6 +99,8 @@ pub enum Kernel {
     NoiseMedian,
     CameraDetected,
     CameraBlocks,
+    DngConvert,
+    DngQuantize,
 }
 
 impl Kernel {
@@ -174,6 +176,8 @@ impl Kernel {
             Self::NoiseMedian => "reusable noise cross medians",
             Self::CameraDetected => "ordered detected camera corrections",
             Self::CameraBlocks => "stable capped bad-red block prefixes",
+            Self::DngConvert => "DNG camera basis and range",
+            Self::DngQuantize => "DNG linear uint16 encoding",
         }
     }
 }
@@ -305,6 +309,8 @@ impl Gpu {
                 include_str!("shaders/camera_repair.wgsl"),
                 "detection_block_prefix",
             ),
+            (include_str!("shaders/dng.wgsl"), "convert"),
+            (include_str!("shaders/dng.wgsl"), "quantize"),
         ];
         #[cfg(test)]
         let mut shader_writes = Vec::new();
@@ -316,6 +322,8 @@ impl Gpu {
                     Kernel::Encode as usize,
                     Kernel::View as usize,
                     Kernel::Scopes as usize,
+                    Kernel::DngConvert as usize,
+                    Kernel::DngQuantize as usize,
                 ]
                 .contains(&index)
                 {
@@ -344,8 +352,8 @@ impl Gpu {
                 } else {
                     code.into()
                 };
-                // Tests audit the explicit host guard mode against actual
-                // transitive entry-point writes, not a second handwritten map.
+                // A second handwritten write list could repeat the same mistake.
+                // Tests check shader writes, including writes in called functions.
                 #[cfg(test)]
                 {
                     use wgpu::naga::{
@@ -425,8 +433,8 @@ impl Gpu {
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
                     contents: bytemuck::cast_slice(values),
-                    // Uploaded image inputs can later enter the execution-local
-                    // scratch pool, whose next owner may initialize by GPU copy.
+                    // A later scratch-buffer user may initialize this allocation
+                    // by GPU copy, so uploaded images also need copy-destination usage.
                     usage: wgpu::BufferUsages::STORAGE
                         | wgpu::BufferUsages::COPY_SRC
                         | wgpu::BufferUsages::COPY_DST,
@@ -575,8 +583,8 @@ impl Gpu {
             })
             .collect();
         self.dispatch_entries(kernel, &entries, groups, trace);
-        // Encoding and submission are synchronous: all binding guards remain
-        // borrowed until the queue has accepted the last read/write command.
+        // Keep every guard borrowed until submission has put the commands in
+        // queue order. A later writer must not get ahead of these reads.
         for (_, binding) in buffers {
             binding.submitted(kernel.label());
         }

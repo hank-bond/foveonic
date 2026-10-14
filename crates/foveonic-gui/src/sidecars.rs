@@ -1,4 +1,4 @@
-//! Restores per-photo recipes and coalesces filesystem saves independently of photographic rendering.
+//! Keeps each photo's latest edits saved without making rendering wait for disk access.
 
 use eframe::egui;
 use foveonic::{render::Settings, sidecar};
@@ -100,7 +100,8 @@ impl Drop for Store {
         state.stop = true;
         wake.notify_one();
         drop(state);
-        // Finish already requested writes on orderly shutdown, including previous photos.
+        // Switching photos does not cancel unsaved edits. Finish requested writes
+        // on shutdown so the latest settings are not lost when the window closes.
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -156,7 +157,7 @@ impl Session {
         self.ready
     }
 
-    /// Only the newest selection may initialize the GUI's settings.
+    /// An older load must not replace the settings for the photo now selected.
     pub fn receive(&mut self) -> Option<Settings> {
         let mut loaded = None;
         while let Ok(reply) = self.store.replies.try_recv() {
@@ -210,7 +211,8 @@ impl Session {
         }
         loaded
     }
-    /// Save requested controls, not an older completed frame or display-only changes.
+    /// A completed frame can lag behind the controls. Save the requested edits
+    /// so a quick switch or shutdown does not lose the latest slider value.
     pub fn edited(&mut self, settings: &Settings) {
         if self.ready {
             self.dirty = true;
@@ -256,7 +258,8 @@ impl Session {
     }
 }
 
-/// A saved recipe wins over defaults; only explicit launch camera fields replace it.
+/// Restored edits must not be replaced by per-photo defaults. Only explicit
+/// launch choices override their WB or mode.
 pub fn selection_settings(saved: Settings, overrides: &[String; 2]) -> Settings {
     let mut settings = saved;
     for (value, explicit) in [

@@ -11,7 +11,8 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
 fn fetch(p: vec2<i32>) -> vec3<f32> {
     let q = clamp(p, vec2(0), vec2<i32>(textureDimensions(image)) - 1);
     let output = textureLoad(image, q, 0).rgb;
-    // Subtract immutable, same-geometry signal samples before filtering and display mapping.
+    // Subtract in the signal's own units before display mapping. Subtracting
+    // mapped colors would show display changes rather than correction detail.
     if params.options.z < -2.5 { return output - textureLoad(input_image, q, 0).rgb; }
     return output;
 }
@@ -32,7 +33,8 @@ fn encode(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(v, vec3(1./2.4)
     if params.options.z < -1.5 { rgb += 0.5; }
     rgb = clamp(rgb, vec3(0.), vec3(1.));
     if params.options.z < 0. {
-        // Map scalar coverage directly to display gray.
+        // Coverage is a mask, not a color value. A color transfer would distort
+        // how much of the neighborhood is marked.
         if params.options.w > 0. { rgb = select(pow((rgb + 0.055) / 1.055, vec3(2.4)), rgb / 12.92, rgb <= vec3(0.04045)); }
     } else if params.options.w == 0. { rgb = encode(rgb); }
     return vec4(rgb, 1.);

@@ -67,7 +67,8 @@ fn scatter_detections(@builtin(global_invocation_id)id:vec3<u32>){
             records[params.selection.z+next]=vec2(p,0x4300u|new_mask(camera_offsets[n],mask));next++;remaining-=1u<<n;
         }
     }
-    // Only accepted detections alter main masks; exhaustion retains the original.
+    // A full detection bank must not discard the original repair mask.
+    // Change it only after accepting a record that can actually be replayed.
     if index<params.source.z && index<1000000u && remaining!=0u{records[index].y=(record.y&0xff00u)|remaining;}
 }
 @compute @workgroup_size(64)

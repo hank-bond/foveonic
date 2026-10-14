@@ -15,6 +15,7 @@ Setup reports complete file-read, in-memory decode and total source-open wall ti
 
 ### Source files
 
+- **[export_dng.rs](./export_dng.rs)** Exports one Merrill original with explicit WB/mode for DNG reader validation, without selecting sidecars.
 - **[profile_pipeline.rs](./profile_pipeline.rs)** Measures completed fresh processing with normal photographic controls, separate GPU diagnostics and optional exact goldens.
 
 <!-- INDEX:END -->

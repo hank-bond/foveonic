@@ -1,4 +1,4 @@
-//! Prepares immutable camera saturation provenance and performs reference highlight restoration and neighborhood conditioning on GPU.
+//! Keeps original clipping flags so GPU highlight recovery can use trustworthy neighboring samples.
 
 //!
 //! Adapted with owner permission from Foveonic source.rs, gains.rs, highlight.rs,
@@ -307,8 +307,8 @@ pub(crate) fn apply(
             &mut trace,
         );
         let mut output = gpu.storage("Highlight restored layers", size * 3)?;
-        // No density readback or photographic host arithmetic; apply uses the
-        // immutable neighborhood map and table, not preceding output writes.
+        // Keep the donor map unchanged during correction. Reading earlier output
+        // writes would make later pixels depend on the order they were processed.
         gpu.dispatch(
             Kernel::HighlightApply,
             &mut [

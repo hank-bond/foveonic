@@ -11,7 +11,8 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
-// Capture strings are tiny; do not allocate a sensor-sized buffer for a malformed PROP entry.
+// Capture strings are small. A corrupt PROP length must not cause an
+// allocation as large as the sensor image.
 const MAXIMUM_PROPERTY_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, String>> {

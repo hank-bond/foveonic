@@ -1,4 +1,4 @@
-//! Defers tiny GPU navigator presentation behind main-image feedback and registers revision-paired egui images.
+//! Keeps navigator previews small and lets the main image reach the screen first.
 
 use crate::{viewport, worker::Frame};
 use eframe::{egui, egui_wgpu, wgpu};
@@ -158,8 +158,9 @@ impl Navigator {
             self.rs.renderer.write().free_texture(&id);
         }
     }
-    /// Called after building the main UI; a 16 ms deferral lets that main image submit first.
-    /// During processing only remember the newest navigator request, without entering the GPU queue.
+    /// Wait 16 ms after building the main UI so its image can be submitted first.
+    /// While processing is busy, keep only the newest request. Queuing navigator
+    /// work now would delay feedback from the main image.
     pub fn update(
         &mut self,
         frame: Option<&Frame>,

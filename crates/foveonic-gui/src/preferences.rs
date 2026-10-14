@@ -102,7 +102,8 @@ impl Preferences {
             }
         }
     }
-    /// An explicit launch path wins; a stale saved folder is left for the app to report gracefully.
+    /// A launch path must override the saved folder. Keep a missing saved path
+    /// long enough for the app to explain the problem rather than hiding it.
     pub fn startup_path(&self, explicit: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
         explicit.or_else(|| self.last_folder.clone())
     }

@@ -1,4 +1,4 @@
-//! Provides Merrill source decoding and a shared GPU TIFF rendering engine.
+//! Shares Merrill decoding and GPU photo processing between TIFF and DNG exports.
 
 mod banding;
 mod calibration;
@@ -6,6 +6,7 @@ mod camera_repair;
 mod color_dq;
 mod color_mode;
 mod despeckle;
+pub mod dng;
 mod estimated_iso;
 mod gpu;
 mod graph;

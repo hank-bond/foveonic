@@ -53,8 +53,8 @@ def assemble_bundle(binary, compiled, version):
         "NSHighResolutionCapable": True,
         "NSSupportsAutomaticGraphicsSwitching": True,
     }
-    # actool owns the icon names; Assets.car supplies automatic light/dark
-    # appearances, and its companion ICNS provides the static fallback.
+    # Keep the compiler's icon names so macOS can find the automatic light
+    # and dark appearances. The companion ICNS is only the static fallback.
     metadata.update(icon_metadata)
     with (contents / "Info.plist").open("wb") as target:
         plistlib.dump(metadata, target)

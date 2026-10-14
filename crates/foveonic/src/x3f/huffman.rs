@@ -137,8 +137,9 @@ impl<'a> Bits<'a> {
         })
     }
 
-    /// Amortize byte loads across prefixes and payloads with a cached big-endian word.
-    /// Tail padding supplies lookahead only; advance still checks actual consumed bits.
+    /// Cache a word so prefixes and payloads do not each need fresh byte loads.
+    /// Padding permits lookahead at the tail, not consumption past the real input.
+    /// Advance must still check the number of bits actually available.
     fn peek(&mut self) -> u16 {
         if !self.loaded || self.position - self.packet_start > 64 - CODE_BITS {
             let byte = self.position / 8;

@@ -40,7 +40,15 @@ Use one top-level title, sentence-case headings, relative repository links, and 
 
 Each directory index describes how its files fit together and lists local documents and indexed immediate subdirectories. Add an `AGENTS.md` where navigation or local instructions are useful.
 
-Rust files start with a `//!` responsibility summary. Python tools start with a module docstring summary. Use descriptive names, API documentation for caller obligations, and local comments for nonobvious intent. Preserve attribution for derived code.
+Rust files start with a `//!` responsibility summary. Python tools start with a module docstring summary. Use descriptive names and keep required attribution for third-party code.
+
+### Write comments
+
+Use simple, friendly language. Explain why a choice matters when the reason is not obvious from the code. Record useful lessons, surprising reader or library behavior, and constraints that a future change could accidentally break. Do not narrate routine steps that the code already makes clear.
+
+Keep API contracts clear, including units, ownership, failure behavior, and caller obligations. Short module summaries still describe each file's responsibility. Use technical terms where precision needs them, and explain unfamiliar terms rather than piling them together.
+
+Do not use semicolons in comment prose. Split separate thoughts into sentences. Leave code examples and required license text intact.
 
 The Rust tool generates index blocks between `<!-- INDEX:START -->` and `<!-- INDEX:END -->`. Edit summaries and regenerate rather than editing generated content. Source indexes omit adjacent test files.
 

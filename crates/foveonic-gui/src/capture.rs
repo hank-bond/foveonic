@@ -1,4 +1,4 @@
-//! Loads capture properties independently of rendering, coalescing requests and rejecting stale selections.
+//! Shows capture details without waiting for rendering or publishing an older selection.
 
 use eframe::egui;
 use std::{
@@ -59,7 +59,8 @@ impl Loader {
             if state.stop {
                 break;
             }
-            // Path alone cannot distinguish leaving a photograph and then reselecting it.
+            // Returning to the same path is still a new selection. A path check
+            // alone would let an earlier load publish into that newer selection.
             if state.selected.as_ref() == Some(&request) {
                 state.ready = Some(result);
                 context.request_repaint();
@@ -88,7 +89,8 @@ impl Loader {
 
     pub fn receive(&mut self) {
         if let Some(result) = self.state.0.lock().unwrap().ready.take() {
-            // A capture-read failure must not replace the render worker's loading/error status.
+            // Capture details are optional. Their read error must not hide the
+            // render worker's loading message or processing error.
             self.properties = result.ok();
         }
     }

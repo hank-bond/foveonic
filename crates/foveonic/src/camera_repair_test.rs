@@ -541,8 +541,8 @@ fn flower_dark_defect_is_restored_by_complete_camera_repair() {
         })
         .collect();
     let p = (2016 * source.metadata.width + 868) * 3;
-    // The JPEG-list fixture proves that list independently; the full sensor
-    // route subsequently applies the overlapping packed cluster as native does.
+    // The JPEG-list fixture isolates that repair. The full sensor route must
+    // also apply the overlapping cluster afterward to match the native result.
     for (c, expected) in [392.66168, 406.26483, 328.91763].into_iter().enumerate() {
         assert!(
             (data[1][p + c] - expected).abs() < 0.01,

@@ -1,4 +1,4 @@
-//! Prepares reference speckle thresholds and runs deterministic detection and ordered chroma-anchored correction on GPU.
+//! Prepares camera thresholds for GPU speckle repair without changing detection order.
 
 //!
 //! Tables and detector rules adapted from the owner's read-only Foveonic reference
@@ -20,7 +20,7 @@ const CAPACITY: u32 = 624_999;
 pub(crate) struct Params {
     pub source: [u32; 4], // width, height, block count, records per bank
     pub area: [u32; 4],   // inclusive detector bounds in full-sensor coordinates
-    pub gain: [f32; 4],   // global Sensor gain; detection uses its unscaled signal
+    pub gain: [f32; 4],   // Sensor gain is undone for detection so it does not change thresholds.
 }
 
 pub(crate) struct Prepared {
@@ -93,9 +93,9 @@ fn tables(gains: [f64; 3], adjustment: [f64; 3]) -> Result<Vec<f32>> {
     Ok(result)
 }
 
-/// Threshold WB must match the factors actually applied by calibration, before
-/// global Sensor gain. Multiply the camera's adjustment by the shared native
-/// noise-derived dose; never recompute a duplicate raw-WB calibration recipe.
+/// Use calibration's already-rounded WB factors before Sensor gain. Rebuilding
+/// them from raw metadata can produce slightly different thresholds than the
+/// factors actually applied to the image. Include the shared noise adjustment.
 pub(crate) fn prepare(
     metadata: &Metadata,
     calibration_gains: [f32; 3],

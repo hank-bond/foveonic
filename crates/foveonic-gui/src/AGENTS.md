@@ -18,22 +18,22 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 - **[advanced.rs](./advanced.rs)** Displays preset-linked reconstruction parameters and captures explicit overrides without changing the baseline.
 - **[browser.rs](./browser.rs)** Browses X3F paths with focused keyboard selection and bounded lazy embedded-JPEG thumbnails.
-- **[capture.rs](./capture.rs)** Loads capture properties independently of rendering, coalescing requests and rejecting stale selections.
+- **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
 - **[controls.rs](./controls.rs)** Builds aligned sensor/tone editing rows with reset, focused value nudges, and sample-based rerender signals.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
-- **[icon.rs](./icon.rs)** Loads the default layered-X window icon; macOS Dock appearances come from the app bundle.
+- **[icon.rs](./icon.rs)** Loads the window icon while leaving macOS Dock appearances to the app bundle.
 - **[information.rs](./information.rs)** Paints capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
 - **[inspect.rs](./inspect.rs)** Groups pipeline buffers and component views in one inspection selector without scheduling component-only changes.
 - **[main.rs](./main.rs)** Runs a three-pane Merrill workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
-- **[navigator.rs](./navigator.rs)** Defers tiny GPU navigator presentation behind main-image feedback and registers revision-paired egui images.
+- **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
 - **[preferences.rs](./preferences.rs)** Persists organizer, scope, zoom snap, and tool-section preferences separately from image edits.
 - **[scopes.rs](./scopes.rs)** Displays current-buffer histograms and density scopes for the selected inspection stage.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
-- **[sidecars.rs](./sidecars.rs)** Restores per-photo recipes and coalesces filesystem saves independently of photographic rendering.
+- **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks using isolated preferences and real egui/wgpu frames.
-- **[timing.rs](./timing.rs)** Adds opt-in JSON lifecycle and callback observations to the shared core profiler without changing repaint scheduling.
+- **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between JPEG previews and GPU images, with diagnostic mapping and manual filtering.
-- **[worker.rs](./worker.rs)** Runs one image job at a time, coalesces pending requests, and waits for GPU completion off the UI thread.
+- **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
 <!-- INDEX:END -->

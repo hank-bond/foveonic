@@ -31,7 +31,7 @@ Preserve attribution when importing code. Treat the reference repository as read
 
 Read the applicable specifications and selected plan before implementation. Follow directory indexes to relevant files and avoid rereading documents already in context.
 
-Follow [`docs/contributing.md`](./docs/contributing.md) when writing documentation or source summaries. Keep `AGENTS.md` focused on operating instructions and `README.md` concise as the human entry point.
+Follow [`docs/contributing.md`](./docs/contributing.md) when writing comments, documentation, or source summaries. Keep `AGENTS.md` focused on operating instructions and `README.md` concise as the human entry point.
 
 Record agreed requirements in `docs/specs/`. Use small plans to track implementation progress, discoveries, and corrected assumptions. Capture project-specific knowledge from owner discussions and implementation experience.
 

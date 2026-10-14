@@ -53,8 +53,8 @@ fn metadata() -> Metadata {
 
 #[test]
 fn preparation_uses_actual_calibration_factors_with_explicit_noise_dose() {
-    // No WB lists are needed: threshold preparation consumes the exact factors
-    // already selected/rounded for calibration, not a second metadata recipe.
+    // Clearing WB lists catches a second metadata lookup. Thresholds must use
+    // the factors calibration already selected and rounded.
     let mut metadata = metadata();
     let gains = [4.6_f32, 2.2, 1.6];
     let expected = tables(gains.map(f64::from), [15., 15., 5.]).unwrap();
@@ -179,8 +179,8 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_gain_and_input() {
             original
         );
     }
-    // A capacity-one bank must retain its first row-ordered record, not the
-    // first thread that wins an atomic append. Bank containing y=16 has seven.
+    // A capacity-one bank should keep the first record in row order, not
+    // whichever GPU thread wins a race. The bank containing y=16 has seven candidates.
     let input = gpu.upload("Capacity fixture", &source).unwrap();
     let mut p = Prepared {
         params: parameters(64, 64, [8, 8, 56, 56], 1.).unwrap(),

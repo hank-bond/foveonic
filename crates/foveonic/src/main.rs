@@ -230,7 +230,8 @@ fn run() -> Result<()> {
             }
             std::fs::create_dir_all(&destination)?;
             for (index, (input, output)) in jobs.iter().enumerate() {
-                // One source at a time; batch retains neither decoded images nor graph buffers.
+                // Drop each photo before opening the next so batch memory use does not
+                // grow with the number of files.
                 let source =
                     Source::open(input).map_err(|error| format!("{}: {error}", input.display()))?;
                 let size = convert(&engine, &source, input, &settings, output, profiling)

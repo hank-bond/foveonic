@@ -24,7 +24,8 @@ impl Threshold {
         }
         Ok(())
     }
-    /// Resolve a single-exposure cutoff; manual selection needs no threshold-table metadata.
+    /// A manual cutoff needs no threshold table. Resolve camera metadata only
+    /// for automatic selection.
     pub fn resolve(self, metadata: &Metadata) -> Result<u32> {
         self.validate()?;
         match self {

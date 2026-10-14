@@ -181,7 +181,8 @@ impl Browser {
         selected: Option<&Path>,
         mode: crate::preferences::Organizer,
     ) -> Option<PathBuf> {
-        // One stable focus target owns the whole organizer, including virtualized rows.
+        // Rows come and go as the list scrolls. A stable organizer-level focus
+        // target keeps keyboard selection working when the focused row disappears.
         let focus = ui.interact(
             ui.available_rect_before_wrap(),
             ui.make_persistent_id("organizer focus"),
@@ -193,8 +194,8 @@ impl Browser {
             && ui.rect_contains_pointer(focus.rect)
             && !focus.has_focus()
         {
-            // Focus on press so egui can install the arrow filter on release,
-            // before even the first arrow following the completed click.
+            // Waiting until click release would miss the first arrow key afterward.
+            // Give egui time to install the key filter by focusing on press.
             focus.request_focus();
         }
         ui.memory_mut(|memory| {

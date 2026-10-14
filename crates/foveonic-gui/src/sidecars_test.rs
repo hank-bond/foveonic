@@ -1,4 +1,4 @@
-//! Checks asynchronous recipe restore, coalesced latest writes, shutdown flushing and visible protected failures.
+//! Checks that restored and unsaved edits survive photo switches, failures, and shutdown.
 
 use super::*;
 use std::{
@@ -82,7 +82,8 @@ fn requested_latest_edits_survive_photo_switches_and_orderly_shutdown() {
         a_settings.exposure = step as f32 * 0.01;
         session.edited(&a_settings);
     }
-    // Metadata may resolve after editing; save the requested settings, not a completed frame.
+    // An edit can happen before metadata arrives. Saving a completed frame
+    // instead of the requested controls would lose that newer edit.
     a_settings.white_balance = "Sunlight".into();
     a_settings.color_mode = "Standard".into();
     session.refresh(&a_settings);

@@ -69,7 +69,8 @@ pub fn show(
         .layout_no_wrap(right.clone(), right_font.clone(), color)
         .size()
         .x;
-    // Keep the filename at the true center; side readouts win space and clipped names have a tooltip.
+    // Center the filename independently of the side readouts so it does not
+    // jump when those values change. A tooltip covers names that no longer fit.
     let side = left_width.max(right_width).min(rect.width() * 0.48);
     let regions = [
         (

@@ -23,8 +23,8 @@ fn residual(p:u32)->vec3<f32>{return vec3(residuals[p*3u],residuals[p*3u+1u],res
 @compute @workgroup_size(32)
 fn fit(@builtin(global_invocation_id)id:vec3<u32>){
     let index=id.x;if index>=params.source.z{return;}let estimate=patches[index];let side=estimate.geometry.z;let n=estimate.geometry.w;
-    // Reuse each normalized RGB load across independent coefficient recurrences.
-    // Each coefficient still sees pixels in exactly the native x/y FMA order.
+    // Share RGB loads without changing the order each coefficient accumulates
+    // them. Reordering those float32 operations would change the correction.
     var sums:array<vec3<f32>,6>;
     let start=estimate.storage.x+side*side*n;
     for(var x=0u;x<side;x++){for(var y=0u;y<side;y++){
@@ -82,8 +82,9 @@ fn reduce_rows(@builtin(global_invocation_id)id:vec3<u32>){
 @compute @workgroup_size(8,8)
 fn apply(@builtin(global_invocation_id)id:vec3<u32>){
     let xy=id.xy;if xy.x>=params.source.x || xy.y>=params.source.y{return;}let p=xy.y*params.source.x+xy.x;var bias=vec3(0.0);
-    // Preserve native asymmetric consumption, not a photographic crop fix:
-    // row y reads accumulation y+1; columns end at active width, not right.
+    // These bounds are asymmetric in the native algorithm. Row y reads y+1,
+    // and columns stop at active width rather than right. Making them look like
+    // ordinary crop bounds would change which rows receive correction.
     if xy.y<params.area.w-params.area.y && xy.x>=params.area.x && xy.x<params.area.z-params.area.x{bias=offsets[xy.y+1u].xyz;}
     output[p*3u]=pixels[p*3u]-bias.x;output[p*3u+1u]=pixels[p*3u+1u]-bias.y;output[p*3u+2u]=pixels[p*3u+2u]-bias.z;
 }

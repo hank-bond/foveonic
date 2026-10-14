@@ -1,4 +1,4 @@
-//! Adds opt-in JSON lifecycle and callback observations to the shared core profiler without changing repaint scheduling.
+//! Measures GUI events when requested without changing when the app repaints.
 
 use foveonic::profile::{self, Mode};
 use serde_json::json;
@@ -53,7 +53,8 @@ pub fn check_gpu_features(features: eframe::wgpu::Features) -> Result<(), &'stat
     check_features(mode(), features)
 }
 
-/// A complete JSON line; capture tools distinguish its envelope from unrelated stderr.
+/// Keep each report on one marked JSON line so capture tools can separate
+/// measurements from unrelated stderr messages.
 pub fn emit(event: &'static str, data: impl serde::Serialize) {
     if enabled() {
         eprintln!("{}", profile::report(event, mode(), data));
@@ -127,7 +128,8 @@ impl Record {
             "elapsed_ms":milliseconds(self.start,self.finish)})
     }
 }
-/// Disabled spans sample no clock; enabled spans observe existing host boundaries only.
+/// Leave ordinary runs free of clock sampling. When enabled, measure existing
+/// host boundaries without adding GPU waits.
 pub struct Span(Option<Record>);
 impl Span {
     pub fn new(revision: u64, phase: &'static str) -> Self {
@@ -163,8 +165,9 @@ struct DrawState {
     id: u64,
     prepared: OnceLock<Instant>,
 }
-/// Callback encoding is not GPU completion or screen scanout. The callback gap
-/// includes surface acquisition and other egui work, not just GPU waiting.
+/// Encoding a callback does not mean its image has reached the screen.
+/// The gap between callbacks also includes acquiring the surface and other
+/// egui work, so it cannot be treated as GPU wait time alone.
 pub struct DrawProbe(Option<DrawState>);
 impl DrawProbe {
     pub fn new(revision: u64) -> Self {

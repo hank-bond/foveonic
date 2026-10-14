@@ -1,4 +1,4 @@
-//! Describes owned GPU image snapshots, their source context, and logical output views.
+//! Keeps GPU images with their photo settings and defines crop and orientation views.
 
 pub use crate::calibration::ColorSpace;
 use crate::calibration::EncodeParams;
@@ -12,9 +12,9 @@ pub enum Layout {
     Rgb32Float,
     /// One floating component per pixel, for masks and diagnostic fields.
     Scalar32Float,
-    /// RGBA32Float texture; alpha is one and RGB retains signed floating values.
+    /// RGBA32Float texture. Alpha is one and RGB can retain negative values.
     Rgba32FloatTexture,
-    /// RGB16 in two u32 words per pixel; the final 16 bits are padding.
+    /// RGB16 in two u32 words per pixel. The final 16 bits are padding.
     PackedRgb16,
 }
 
@@ -22,9 +22,9 @@ pub enum Layout {
 pub enum Space {
     SensorLayers,
     ScalarField,
-    /// Multiplicative luminance residual; 1 is neutral and the display range is 0..2.
+    /// Luminance ratio. One leaves brightness unchanged and the display range is 0..2.
     LuminanceRatio,
-    /// Signed reconstruction detail in camera code units; display range is −1000..1000.
+    /// Signed reconstruction detail in camera code units. The display range is −1000..1000.
     SignedDetail,
     CalibratedLayers,
     /// Camera-color RGB in code units, with a nominal inspection range of 0..4095.
@@ -65,7 +65,7 @@ pub struct View {
 }
 
 /// An immutable GPU snapshot with source metadata and rendering settings.
-/// Consumers have read-only access; the snapshot owns its storage for its lifetime.
+/// Its read claim keeps the samples unchanged even when later renders reuse storage.
 #[derive(Clone)]
 pub struct RenderedImage {
     pub(crate) buffer: crate::gpu::ReadGuard,
@@ -122,8 +122,8 @@ impl RenderedImage {
     }
 }
 
-/// Cropped/oriented floating RGB texture on the engine's device, retaining working primaries.
-/// The presentation shader handles working-space conversion and display transfer encoding.
+/// Keep this preview in the working color space so display conversion happens
+/// in the presentation shader, not in the stored photo.
 pub struct ImageTexture {
     pub(crate) texture: wgpu::Texture,
     pub(crate) description: Description,

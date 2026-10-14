@@ -167,7 +167,8 @@ impl Metadata {
 }
 
 /// Read photographic capture properties without loading sensor samples or CAMF calibration.
-/// This is not complete processing metadata; rendering must still open a `Source`.
+/// Rendering still needs a full `Source`. This lighter read lets capture details
+/// appear while sensor samples and calibration are still loading.
 pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String, String>> {
     let mut file = std::fs::File::open(path)?;
     let properties = crate::x3f::capture::read(&mut file)?;
@@ -186,10 +187,11 @@ pub struct Source {
 }
 
 impl Source {
-    /// Recorded once at source opening: file read and in-memory X3F decode wall are separate.
-    /// Nested decode/parallel-plane timings overlap; do not sum them with the decode total.
-    /// Read timing includes opening, size checks, allocation and the complete read into memory.
-    /// Filesystem cache state is not controlled; a first process read is not necessarily cold media I/O.
+    /// Keep reading separate from decoding so cached-file speed is not mistaken
+    /// for decoder speed. Read time includes opening, checks, allocation, and
+    /// reading all bytes. Parallel-plane timings overlap the decode total, so
+    /// adding them would count the same work twice. A first process read may
+    /// still hit the filesystem cache and does not establish SD-card speed.
     pub fn load_timings(&self) -> &[crate::profile::Timing] {
         &self.timings
     }

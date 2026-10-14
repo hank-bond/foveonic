@@ -17,6 +17,16 @@ use std::time::Instant;
 pub use crate::repair::Threshold as RepairThreshold;
 pub use crate::tone::Controls as ToneControls;
 
+/// Sharing the technical stages keeps DNG corrections in step with photo edits.
+/// DNG leaves the appearance in metadata instead of applying it to pixels.
+#[path = "dng/gpu.rs"]
+mod dng_gpu;
+
+enum Recipe<'a> {
+    Photographic(&'a [&'a str]),
+    DngBase,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -29,8 +39,9 @@ pub struct Settings {
     pub sensor_gain: f32,
     /// A factor after tone: zero is grayscale, one leaves saturation unchanged.
     pub saturation: f32,
-    /// Multiplies camera ColorDQ amplitudes after camera color conversion; zero omits conditioning.
-    /// None selects native automatic gain with reconstruction; Some overrides it (0 Off).
+    /// ColorDQ gain after camera color conversion. Zero skips this correction.
+    /// None chooses the camera's automatic gain when reconstruction is on.
+    /// Some keeps an explicit override, including zero for Off.
     pub color_dq_gain: Option<f32>,
     /// Ordered camera-record repair, using the current cutoff or an explicit minimum badness.
     pub repair: Option<RepairThreshold>,
@@ -40,11 +51,11 @@ pub struct Settings {
     pub highlight_restoration: bool,
     /// Estimate and subtract native additive per-row layer bias before reconstruction.
     pub row_correction: bool,
-    /// Reference-style noise filtering and residual reconstruction; None keeps the neutral route.
+    /// Noise and detail settings. None leaves reconstruction off.
     pub reconstruction: Option<crate::noise::Controls>,
-    /// Effective native brightness-proportional sharp strength; zero omits sharpening.
+    /// Sharpening strength relative to brightness. Zero leaves sharpening off.
     pub sharpen_amount: f32,
-    /// Exact final oriented dimensions; None keeps the active crop's native size.
+    /// Final dimensions after orientation. None keeps the active crop's native size.
     pub output_size: Option<[u32; 2]>,
 }
 
@@ -80,7 +91,8 @@ impl Settings {
         self.validate_values()
     }
 
-    /// Numeric validation is shared; inspection resolves WB/mode only when its stages need them.
+    /// Inspection can show sensor data before WB or mode is known. Check numbers
+    /// here and let stages that use those camera choices resolve them later.
     pub(crate) fn validate_values(&self) -> Result<()> {
         if !self.exposure.is_finite()
             || !self.exposure.exp2().is_finite()
@@ -236,8 +248,8 @@ impl Engine {
     pub fn gpu_activity(&self) -> crate::profile::GpuActivity {
         self.gpu.activity()
     }
-    /// Diagnostic raw storage readback; not a display or photographic-processing path.
-    /// Included in engine activity counters, so benchmark callers measure it separately.
+    /// Read stored samples for diagnostics, not for CPU photo processing.
+    /// This transfer counts as engine activity, so keep it outside render timings.
     pub fn readback_image(&self, image: &RenderedImage) -> Result<Vec<u8>> {
         self.check_owner(image)?;
         self.gpu.readback(&image.buffer)
@@ -265,7 +277,7 @@ impl Engine {
     }
 
     /// Returns owned full-sensor, tone-mapped floating RGB with a logical output view.
-    /// Off/wall rendering returns after submission; GPU diagnostics wait for timestamp results.
+    /// Off and wall modes return after submission. GPU diagnostics wait for timestamps.
     pub fn render(
         &self,
         source: &Source,
@@ -283,7 +295,8 @@ impl Engine {
         Ok(*image)
     }
 
-    /// Request stable named outputs. Only their dependencies execute; other outputs are transient.
+    /// Request outputs by name so graph positions can change without changing callers.
+    /// Only their dependencies run. Other intermediate outputs are not retained.
     pub fn render_artifacts(
         &self,
         source: &Source,
@@ -291,16 +304,17 @@ impl Engine {
         names: &[&str],
         profile: &mut Profile,
     ) -> Result<Vec<crate::inspection::Artifact>> {
-        self.render_artifacts_controlled(
+        self.render_recipe(
             source,
             settings,
-            names,
+            Recipe::Photographic(names),
             profile,
             &mut Execution::default(),
         )
     }
 
-    /// Full-quality interactive rendering; None means safe supersession, not a render error.
+    /// Keep full quality during editing. None means a newer request took over safely,
+    /// not that rendering failed.
     /// Checkpoints remain bound to this session's immutable source and this engine's device.
     pub fn render_session(
         &self,
@@ -317,10 +331,10 @@ impl Engine {
             cancel: Some(&cancel),
             checkpoints: Vec::new(),
         };
-        let result = self.render_artifacts_controlled(
+        let result = self.render_recipe(
             &session.source,
             settings,
-            names,
+            Recipe::Photographic(names),
             profile,
             &mut execution,
         );
@@ -332,14 +346,40 @@ impl Engine {
         }
     }
 
-    fn render_artifacts_controlled(
+    pub(crate) fn render_dng_base(
         &self,
         source: &Source,
         settings: &Settings,
-        names: &[&str],
+        profile: &mut Profile,
+    ) -> Result<RenderedImage> {
+        let artifact = self
+            .render_recipe(
+                source,
+                settings,
+                Recipe::DngBase,
+                profile,
+                &mut Execution::default(),
+            )?
+            .pop()
+            .ok_or("missing DNG processing base")?;
+        let crate::inspection::Content::Image(image) = artifact.content else {
+            return Err("DNG processing base is not an image".into());
+        };
+        Ok(*image)
+    }
+
+    fn render_recipe(
+        &self,
+        source: &Source,
+        settings: &Settings,
+        recipe: Recipe<'_>,
         profile: &mut Profile,
         execution: &mut Execution<'_>,
     ) -> Result<Vec<crate::inspection::Artifact>> {
+        let (names, dng_base) = match recipe {
+            Recipe::Photographic(names) => (names, false),
+            Recipe::DngBase => (&["final"][..], true),
+        };
         execution.check()?;
         profile.mode.check_gpu_features(self.device().features())?;
         settings.validate_values()?;
@@ -477,9 +517,19 @@ impl Engine {
         } else {
             None
         };
-        let mode = profile.measure("prepare color mode", || {
-            crate::color_mode::prepare(&source.metadata, &settings.color_mode)
-        })?;
+        let mode = if dng_base {
+            // Content corrections still need calibrated working RGB. Leaving out the
+            // selected mode here prevents its look from becoming baked DNG data.
+            crate::color_mode::Settings {
+                tone_index: 0,
+                contrast: 0.,
+                compensation: None,
+            }
+        } else {
+            profile.measure("prepare color mode", || {
+                crate::color_mode::prepare(&source.metadata, &settings.color_mode)
+            })?
+        };
         let color = profile.measure("prepare color matrix", || {
             calibration::color(&source.metadata, &settings.white_balance, &mode)
         })?;
@@ -560,6 +610,11 @@ impl Engine {
                 &[linear, signal],
             )?;
             finish!();
+        }
+        if dng_base {
+            return self.collect_artifacts(
+                source, settings, &graph, linear, names, params, profile, execution,
+            );
         }
         let curve = profile.measure("prepare tone curve", || {
             crate::tone::prepare(&source.metadata, &mode, settings.tone)
@@ -718,9 +773,9 @@ impl Engine {
     }
 
     /// Materializes the logical view as an RGBA32Float texture on GPU.
-    /// Optional extent sets presentation dimensions; image storage and export dimensions stay fixed.
+    /// An optional extent changes the preview size, not the stored image or export size.
     /// Presenters use textureLoad/manual filtering or enable float32 filtering on the device.
-    /// The texture retains working primaries; the presentation consumer handles color management.
+    /// Colors stay in the working space so the presenter can apply display conversion.
     pub fn view_texture(
         &self,
         image: &RenderedImage,
@@ -832,8 +887,8 @@ impl Engine {
         } else {
             graph.required(targets)?
         };
-        // Compound nodes may need one side output while their primary is cached.
-        // Demand only uncached outputs; keep seeded values intact when the node runs partially.
+        // A cached main output does not guarantee that a side output is cached.
+        // Request only what is missing so a partial run cannot replace retained values.
         let required: Vec<bool> = required
             .iter()
             .zip(&cached)
@@ -1373,9 +1428,9 @@ impl Engine {
                     execution.store(graph.outputs[id].name, value);
                 }
             }
-            // Interactive work must not enqueue the entire obsolete graph ahead of drawing.
-            // Submitted work finishes off-thread; the next stage can then safely observe supersession.
-            // Stateless batch processing retains its asynchronous submission behavior.
+            // Queuing a whole outdated render would delay both drawing and newer edits.
+            // Finish submitted work off-thread, then check for newer work between stages.
+            // Batch rendering has no interactive queue to protect and can stay asynchronous.
             if execution.cancel.is_some() {
                 gpu.device.poll(wgpu::Maintain::Wait);
             }
@@ -1383,9 +1438,9 @@ impl Engine {
                 consumers[id] -= 1;
                 if consumers[id] == 0 {
                     if let Some(value) = values[id].take() {
-                        // Pool ordinary image layouts, not large tiled/atomic
-                        // workspaces that image scratch cannot use. Ownership
-                        // eligibility is enforced by the guards inside release.
+                        // The scratch pool can reuse ordinary image buffers, not tiled or
+                        // atomic workspaces. Release also checks for retained readers
+                        // so a later render cannot overwrite an earlier image.
                         if value.description.is_some_and(|d| {
                             matches!(d.layout, Layout::Rgb32Float | Layout::Scalar32Float)
                         }) {

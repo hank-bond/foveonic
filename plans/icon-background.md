@@ -8,7 +8,7 @@ The owner requested Apple guidance/template research, stronger top-to-bottom bac
 
 ## Steps
 
-- [x] Preserve the original supplied SVG separately and retain an editable revision.
+- [x] Retain an editable SVG source.
 - [x] Read current Apple icon guidance and inspect native Icon Composer workflow.
 - [x] Increase slab thickness 16→24, retain 16-unit gaps, distinguish cobalt blue/yellow-green/vermilion, and shade the graphite face.
 - [x] Trial 90% visible logo width and a stronger light-to-dark background gradient.
@@ -33,7 +33,7 @@ The first Composer preview enabled default materials and produced broad glossy r
 
 ## Implementation
 
-[`logo-original.svg`](../crates/foveonic-gui/assets/logo-original.svg) preserves the initial import; [`logo.svg`](../crates/foveonic-gui/assets/logo.svg) retains the face polygon and projection while revising depth, palette, and light. [`generate-icon.py`](../crates/foveonic-gui/assets/generate-icon.py) reads it without modifying it and derives twelve 1.4-source-unit inward chamfer facets on the top X. Facet normals determine brightness toward upper-left light; concave corners stay sharp without an outside halo.
+[`logo.svg`](../crates/foveonic-gui/assets/logo.svg) retains the face polygon and projection while revising depth, palette, and light. The owner removed the obsolete initial-import copy. [`generate-icon.py`](../crates/foveonic-gui/assets/generate-icon.py) reads it without modifying it and derives twelve 1.4-source-unit inward chamfer facets on the top X. Facet normals determine brightness toward upper-left light; concave corners stay sharp without an outside halo.
 
 Generated unmasked foreground SVGs are 1024×1024, with a 90% visible-width placement. `Foveonic.icon/icon.json` owns the light/dark background gradients, foreground specializations, and disabled glass settings. Generation updates both foregrounds, then invokes Xcode's production `actool` for macOS 26 with all standalone icon sizes. It produces `Assets.car`, `Foveonic.icns`, and icon plist metadata; `iconutil` extracts the default 1024-pixel rendition as `icon.png`. The manual `icon.svg` composition was removed. The document remains editable in Composer.
 
@@ -66,4 +66,4 @@ Checks cover unchanged colored layers and geometry, light-face gradient, directi
 
 Evidence lives in `.local/gui-icon-auto-checks/` and `/tmp/foveonic-auto-app-{build,release-build,launch,tests,clippy,native}.log`. Composer renders verify both appearances. Debug/release bundles build successfully; direct bundled and LaunchServices smoke launches each captured twelve workspace frames with isolated preferences. Eight Python tests and 26 GUI tests pass; GUI Clippy passes. The earlier concurrent `smoke.rs` formatting discrepancy is resolved; final workspace formatting and diff checks pass. Owner visual/system-style review remains pending.
 
-The original download remains unchanged. The owner authorized grouped commits; no system installation or bundle publishing was performed.
+The owner authorized grouped commits; no system installation or bundle publishing was performed.

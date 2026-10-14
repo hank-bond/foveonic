@@ -21,10 +21,10 @@ impl Scratch {
         }
     }
 
-    /// The caller has submitted its last read. Shared guards (including cache
-    /// entries and retained images) prevent recycling even if graph liveness
-    /// bookkeeping mistakenly releases a value early. Scratch consumers must
-    /// fully overwrite storage, never depend on its previous contents/zeroes.
+    /// Call only after submitting the last read. Retained images and cache entries
+    /// still block reuse, even if graph bookkeeping releases a value too early.
+    /// A new user must overwrite the whole buffer because its old contents
+    /// are not guaranteed to be zero.
     pub fn release(&mut self, buffer: crate::gpu::ReadGuard) {
         if buffer.exclusive() {
             self.buffers.push(buffer);

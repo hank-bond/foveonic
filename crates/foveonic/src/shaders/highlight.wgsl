@@ -30,9 +30,9 @@ fn connected_flags(@builtin(global_invocation_id)id:vec3<u32>){
         for(var dy=-1;dy<=1;dy++){for(var dx=-1;dx<=1;dx++){
             if dx!=0 || dy!=0{let q=vec2<i32>(xy)+vec2(dx,dy);neighbors|=original[u32(q.y)*params.source.x+u32(q.x)];}
         }}
-        // In-place native removal and immutable parallel removal are equivalent:
-        // every connected pair keeps each other, so only original isolated flags
-        // can be removed. Border flags are copied, not reclassified.
+        // Connected flags keep each other, so only originally isolated flags can
+        // disappear. That lets us read an unchanged map in parallel without
+        // changing the native in-place result. Keep border flags as they were.
         connected&=neighbors;
     }
     flags[p]=connected;
@@ -114,8 +114,8 @@ fn correction_table(@builtin(local_invocation_index)lane:u32,@builtin(workgroup_
     let bucket=group.x;
     if lane==0u{donor_range=vec2(bin_starts[bucket],bin_starts[bucket+1u]);}
     let range=workgroupUniformLoad(&donor_range);var sum=0.0;var count=0.0;
-    // Parallel RGB loading; the original bin recurrence remains sequential.
-    // Ratio arithmetic stays inline rather than materializing rounded ratios.
+    // Parallel loads are safe, but changing accumulation order changes rounding.
+    // Keep the bin recurrence sequential and do not store separately rounded ratios.
     for(var base=range.x;base<range.y;base+=128u){
         if base+lane<range.y{donor_rgb[lane]=max(color(sorted_donors[base+lane]),vec3(1.0));}
         workgroupBarrier();

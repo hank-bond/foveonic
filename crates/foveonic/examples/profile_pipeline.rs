@@ -16,7 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut args = std::env::args_os().skip(1);
     let input=PathBuf::from(args.next().ok_or("usage: profile_pipeline INPUT.x3f NEW_EXPORT_DIR [--warm N] [--goldens DIR] --wb NAME --mode NAME [normal render options]")?);
     let output = PathBuf::from(args.next().ok_or("missing export directory")?);
-    // Never silently append to an existing experiment.
+    // Mixing old and new runs would make the evidence ambiguous. Require
+    // a new output directory rather than silently appending.
     if output.exists() {
         return Err("export directory must be new".into());
     }
@@ -67,8 +68,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             serde_json::json!({"source":input,"timings":source.load_timings(),"read_cache_state":"uncontrolled"})
         )
     );
-    // Cold plus warm repeated work: no RenderSession or retained edit boundary.
-    // A requested GPU diagnostic is one additional, separately labeled iteration.
+    // Reusing an edit session would measure slider feedback, not a fresh render.
+    // Keep synchronized GPU diagnostics separate because their waits change wall time.
     for iteration in 0..warm + 1 + usize::from(mode.gpu()) {
         let diagnostic = mode.gpu() && iteration == warm + 1;
         let sample_mode = if diagnostic {
@@ -108,7 +109,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 serde_json::json!({"source":input,"settings":settings,"iteration":iteration,"destination":destination,"completed_ms":milliseconds(start),"profile":profile,"activity":engine.gpu_activity().since(before)})
             )
         );
-        // Full-image comparison is explicit validation, outside measured intervals and activity deltas.
+        // Reading every sample for comparison adds work and transfers. Keep that
+        // validation outside the intervals used for performance claims.
         if iteration == 0 {
             let bytes = engine.readback_image(&image)?;
             let mut hasher = std::hash::DefaultHasher::new();

@@ -1,4 +1,4 @@
-//! Prepares complete native camera repair metadata and executes raw-signal bad-red selection, dependency-safe pixel phases, and ordered masked cluster matching on GPU.
+//! Prepares camera repair lists so the GPU can fix pixels in the camera's order.
 
 //!
 //! Adapted with owner permission from Foveonic repair_setup.rs, bad_reds.rs,
@@ -137,9 +137,9 @@ pub(crate) fn prepare(metadata: &Metadata, threshold: Threshold) -> Result<Prepa
     Ok(prepared)
 }
 
-// Every repair reads its own pixel and masked radius-one neighbors. Preserve
-// original order for nearby centers (including duplicates and anti-dependencies);
-// more distant centers can safely run together. This is metadata scheduling only.
+// Nearby repairs can read each other's writes, including repeated centers.
+// Keep those records in camera order. Distant centers can run together safely
+// because they do not share pixels or radius-one neighbors.
 fn prepare_phases(p: &mut Prepared) {
     let w = p.params.source[0];
     let h = p.params.source[1];

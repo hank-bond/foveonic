@@ -53,7 +53,8 @@ def foreground(assets, dark=False):
     points = [tuple(map(float, p.split(','))) for p in face.attrib["points"].split()]
     top = logo.find(f"{{{SVG}}}g[@id='black-layer']")
     if dark:
-        # Derive only the neutral top slab; colored layers and geometry stay identical.
+        # Only the top slab needs a dark variant. Keep the colored layers and
+        # geometry unchanged so both appearances remain the same icon.
         gradient = logo.find(f".//{{{SVG}}}linearGradient[@id='top-light']")
         for stop, color in zip(gradient, ["#f4f6fa", "#dbe1ea", "#adb9cb"]):
             stop.set("stop-color", color)
@@ -84,8 +85,8 @@ def compile_icon(assets, output):
     foreground(assets)
     foreground(assets, dark=True)
     output.mkdir(parents=True, exist_ok=True)
-    # The production compiler supplies Dock margins and all size renditions.
-    # Assets.car, not a static ICNS, carries the native appearance variants.
+    # Composer previews omit Dock margins. Use the production compiler so
+    # macOS supplies the correct padding, sizes, and automatic appearances.
     subprocess.run([
         "xcrun", "actool", "--compile", str(output), "--platform", "macosx",
         "--minimum-deployment-target", "26.0", "--app-icon", "Foveonic",

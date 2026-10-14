@@ -150,7 +150,8 @@ fn interpolate_angle(metadata: &Metadata, aperture: f32, chief_ray: f32) -> Resu
         f32::from_bits(0xbd28_cf0c),
         f64::from_bits(0x3fdd_7343_4719_bb36),
     );
-    // Division by 180 happens before widening, as in the reference request.
+    // Widening before dividing would change rounding. Match the reference
+    // request's float32 division first.
     let angle_coordinate = (std::f64::consts::PI / middle_angle) * (chief_ray / 180.0) as f64;
     let (other_name, middle_weight, other_weight) = if aperture >= 2.0 && angle_coordinate >= 1.0 {
         let other_angle = sample_angle(
@@ -182,7 +183,8 @@ fn interpolate_angle(metadata: &Metadata, aperture: f32, chief_ray: f32) -> Resu
             return Err("spatial gain angle table geometry differs".into());
         }
         for (value, &other) in middle.values.iter_mut().zip(&other.values) {
-            // Each Double product narrows separately; the sum is Float32.
+            // Rounding each product before adding matches the native float32 result.
+            // Rounding only the final sum gives different shading coefficients.
             *value = (*value as f64 * middle_weight) as f32 + (other as f64 * other_weight) as f32;
         }
         Ok(middle)
@@ -218,8 +220,8 @@ fn interpolate_angle_aperture(
     if low.width != high_table.width || low.height != high_table.height {
         return Err("spatial gain aperture table geometry differs".into());
     }
-    // Unlike the focus-indexed route, this route weights squared apertures.
-    // The request's square narrows before the Double coefficient calculation.
+    // This route uses squared aperture, not the focus route's reciprocal.
+    // Keep the request's square rounded before the double-precision blend.
     let high_squared = STOPS[high] * STOPS[high];
     let low_weight = (high_squared - (aperture * aperture) as f64)
         / (high_squared - STOPS[high - 1] * STOPS[high - 1]);

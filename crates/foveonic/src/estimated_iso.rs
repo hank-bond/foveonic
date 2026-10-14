@@ -1,6 +1,6 @@
 //! Estimates processing ISO from camera histograms and reference metadata.
 //!
-//! Adapted from Foveonic estimated_iso.rs at e47af35; used with owner permission.
+//! Adapted from Foveonic estimated_iso.rs at e47af35 with owner permission.
 
 use crate::source::{Metadata, Result};
 
@@ -118,8 +118,8 @@ pub fn calculate(
 
 /// Choose the nearest native ISO stop, retaining table order for ties. Each
 /// accepted distance narrows to float32 before the next double comparison.
-/// The initial search radius is 10000 ISO units; values beyond all candidates
-/// retain the first stop rather than clamp to the largest stop.
+/// The native search starts with a 10000-ISO radius. Outside that radius it
+/// keeps the first stop, which is not the same as clamping to the largest stop.
 pub fn snap_iso(estimate: f64) -> f64 {
     let stops = [
         100., 200., 400., 800., 1600., 3200., 6400., 133.33, 266.67, 533.33, 1066.7, 2133.3,

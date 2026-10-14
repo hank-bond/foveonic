@@ -75,8 +75,8 @@ fn color(p: u32) -> vec3<f32> { return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[
 fn anchor(original: vec3<f32>, sum: vec3<f32>, c: u32, a: u32) -> f32 { return original[a]+(sum[c]-sum[a])/6.0; }
 @compute @workgroup_size(1)
 fn repair() {
-    // A single invocation preserves the native read-after-write record order,
-    // including neighboring detections. Detection never reads these writes.
+    // Neighboring repairs may read earlier repairs. Replay records in order
+    // so parallel writes cannot change that result. Detection uses unchanged input.
     for (var bank=0u; bank<8u; bank++) {
         let count=counts[params.source.z+bank];
         for (var index=0u; index<count; index++) {

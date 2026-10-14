@@ -95,7 +95,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
                 {
                     let delta = fraction * range / gain;
                     upload(&input, [baseline, baseline, baseline, 1.]);
-                    // Channel 1 has the change; the others intentionally do not.
+                    // Change only channel 1 to catch accidental use of another channel.
                     upload(&output, [baseline, baseline + delta, baseline, 1.]);
                     viewport::prepare_navigator(
                         &rs,
@@ -257,7 +257,8 @@ fn ordinary_navigator_drawing_cost() {
     let old = pixels(&rs, &old_target);
     let new = pixels(&rs, &new_target);
     assert!(old.iter().zip(&new).all(|(a, b)| a.abs_diff(*b) <= 1));
-    // Alternate ordering to limit warm/frequency bias. Includes prepare/submit/wait, excludes common overlays.
+    // Alternate the order so warming and clock changes do not favor one path.
+    // Include preparation, submission, and completion but leave shared overlays out.
     let mut old_ms = Vec::new();
     let mut new_ms = Vec::new();
     for round in 0..5 {
@@ -274,7 +275,8 @@ fn ordinary_navigator_drawing_cost() {
                     draw_old();
                 }
             }
-            // Complete the batch, amortizing a host wait instead of injecting a fence into every draw.
+            // Wait once for the batch so per-draw waits do not distort the cost of
+            // ordinary drawing.
             rs.device.poll(wgpu::Maintain::Wait);
             let elapsed = started.elapsed().as_secs_f64() * 1000. / 25.;
             if ordinary {

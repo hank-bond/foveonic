@@ -52,7 +52,8 @@ pub(crate) fn read(path: &Path) -> Result<Source> {
     let read = Timing::elapsed("file read", start);
     let start = Instant::now();
     let mut source = decode(&data)?;
-    // Total in-memory decode wall time includes metadata parsing; nested plane timings overlap.
+    // Parallel-plane timings overlap this total, so adding them would count
+    // part of the same decode twice. Metadata parsing is included here too.
     let decode = Timing::elapsed("X3F decode wall", start);
     source.timings.splice(0..0, [read, decode]);
     Ok(source)
@@ -262,7 +263,8 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     timings.extend(planes.iter().map(|(_, timing)| timing.clone()));
     let start_time = Instant::now();
     let mut pixels = vec![0.; product(count, 3)?];
-    // One contiguous pass over disjoint output triplets; iterator bounds permit autovectorization.
+    // Disjoint contiguous triplets let the compiler vectorize this pass
+    // without changing the channel-interleaving order.
     for (((pixel, red), green), blue) in pixels
         .as_chunks_mut::<3>()
         .0

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 pub enum Content {
     Image(Box<RenderedImage>),
-    /// Small diagnostic tables only; photographic pixels remain on the GPU.
+    /// Small diagnostic tables only. Photo samples stay on the GPU.
     Table {
         columns: usize,
         values: Vec<f32>,
@@ -97,10 +97,10 @@ pub fn image_outputs(settings: &Settings) -> Vec<ImageOutput> {
         .collect()
 }
 
-/// Explicit operation input for same-unit layer/channel differences.
-/// Branch outputs are not a linear list: noise and column conditioning share an input,
-/// and reconstruction adds detail to the color-converted (optionally ColorDQ) base.
-/// Cross-unit tone/color conversion and diagnostic side outputs are deliberately absent.
+/// Compare against the operation's actual input, not the previous item in the UI.
+/// The graph branches, so neighboring list entries may not be related. Keep both
+/// sides in the same units. A tone or color-space change would otherwise look
+/// like correction detail rather than a change in how values are represented.
 pub fn comparison_input(settings: &Settings, output: &str) -> Option<&'static str> {
     let mut input = "sensor.layers";
     for (name, enabled) in [

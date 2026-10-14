@@ -1,4 +1,4 @@
-//! Native triangular polyphase metadata preparation and immutable GPU RGB resampling.
+//! Prepares camera resampling weights and leaves image calculations on the GPU.
 
 use crate::gpu::Binding::{Read, Write};
 // Adapted with owner permission from Foveonic filtering/resample{,-params}.rs at e47af35.

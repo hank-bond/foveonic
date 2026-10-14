@@ -10,8 +10,7 @@
 </linearGradient>
 </defs>
 <!-- Original projected face retained. Orthographic camera tilt: 30 degrees.
-     Slab thickness: 24; air gap: 16. Depth projects as (0.25, 0.4330127).
-     Original supplied geometry/colors are retained separately in logo-original.svg. -->
+     Slab thickness: 24. Air gap: 16. Depth projects as (0.25, 0.4330127). -->
 <g id="red-layer" transform="translate(30 51.9615)">
 <polygon points="359.862,49.761 245.946,139.661 251.946,150.053 365.862,60.153" fill="#bd2d27"/>
 <polygon points="309.503,218.551 223.484,223.714 229.484,234.106 315.503,228.943" fill="#a92421"/>

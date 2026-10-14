@@ -1,4 +1,4 @@
-//! Runs one image job at a time, coalesces pending requests, and waits for GPU completion off the UI thread.
+//! Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
 use eframe::egui;
 use foveonic::{
@@ -14,13 +14,37 @@ use std::{
     thread,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFormat {
+    Tiff,
+    Dng,
+}
+impl ExportFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tiff => "TIFF",
+            Self::Dng => "DNG",
+        }
+    }
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Tiff => "tiff",
+            Self::Dng => "dng",
+        }
+    }
+}
+pub struct Export {
+    pub path: PathBuf,
+    pub format: ExportFormat,
+}
+
 pub struct Request {
     pub revision: u64,
     pub path: PathBuf,
     pub settings: Settings,
     pub output: String,
     pub difference: bool,
-    pub export: Option<PathBuf>,
+    pub export: Option<Export>,
 }
 pub struct Frame {
     pub path: PathBuf,
@@ -42,7 +66,7 @@ pub struct Reply {
     pub metadata: Option<Arc<Metadata>>,
     pub settings: Settings,
     pub result: Result<Option<Frame>, String>,
-    pub exported: bool,
+    pub exported: Option<ExportFormat>,
 }
 
 pub enum Update {
@@ -106,7 +130,7 @@ impl Worker {
                 let mut scope_image = None;
                 let result = (|| -> foveonic::source::Result<Option<Frame>> {
                     if source.as_ref().is_none_or(|(p, _)| p != &request.path) {
-                        source = None; // release the previous decoded image before loading another
+                        source = None; // Avoid keeping two decoded photos in memory during a switch.
                         let _span = crate::timing::Span::new(request.revision, "source_open");
                         let loaded = Source::open(&request.path)?;
                         if crate::timing::enabled() {
@@ -117,6 +141,13 @@ impl Worker {
                     let session = &mut source.as_mut().unwrap().1;
                     metadata = Some(session.metadata().clone());
                     defaults_errors = resolve_camera_settings(&mut settings, session.metadata());
+                    if let Some(export) = request.export.as_ref().filter(|e| e.format == ExportFormat::Dng) {
+                        let mut profile=Profile::new(crate::timing::mode());
+                        let before=crate::timing::enabled().then(||engine.gpu_activity());
+                        foveonic::dng::write_source(&engine,session.source(),&settings,&export.path,&mut profile)?;
+                        if let Some(before)=before {crate::timing::emit("export",serde_json::json!({"revision":request.revision,"source":request.path,"destination":export.path,"format":"dng","settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
+                        return Ok(None);
+                    }
                     let edit=session.changed_parameters(&settings);
                     let cancel=||{
                         if request.export.is_some(){return false;}
@@ -140,8 +171,8 @@ impl Worker {
                     let mut roots = vec![root];
                     if let Some(input) = input { roots.push(input); }
                     let rendered = {
-                        // The host probe adds no synchronization. Separately requested
-                        // GPU profiling uses the engine's existing diagnostic resolves.
+                        // Timing a host span must not add a GPU wait and change the
+                        // responsiveness we are trying to measure.
                         let _span = crate::timing::Span::new(request.revision, "processing");
                         engine.render_session(session, &settings, &roots, cancel, &mut profile)?
                     };
@@ -170,7 +201,8 @@ impl Worker {
                                 .into(),
                         );
                     };
-                    if let Some(path)=&request.export{
+                    if let Some(export)=&request.export{
+                        let path=&export.path;
                         let before=crate::timing::enabled().then(||engine.gpu_activity());
                         engine.write_tiff(image,path,&mut profile)?;
                         if let Some(before)=before{crate::timing::emit("export",serde_json::json!({"revision":request.revision,"source":request.path,"destination":path,"settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
@@ -220,7 +252,7 @@ impl Worker {
                         metadata,
                         settings,
                         result,
-                        exported: request.export.is_some(),
+                        exported: request.export.as_ref().map(|e| e.format),
                     })))
                     .is_err()
                 {
@@ -230,7 +262,8 @@ impl Worker {
                 crate::timing::event(request.revision, "reply_published");
                 context.request_repaint();
                 if let Some(image) = scope_image {
-                    // Image publication is independent; latest image work outranks scope completion.
+                    // Show the image before waiting for scopes. A newer image request
+                    // should not sit behind analysis of an older frame.
                     if scope_superseded(&slot) {
                         continue;
                     }
@@ -294,7 +327,8 @@ fn scope_superseded(slot: &Arc<(Mutex<Pending>, Condvar)>) -> bool {
     state.stop || state.clear || state.request.is_some()
 }
 
-/// Resolve only unspecified fields: explicit launch and current-image edits win.
+/// Camera defaults fill missing choices only. Otherwise loading metadata
+/// could overwrite a launch override or an edit made while the photo was opening.
 fn resolve_camera_settings(settings: &mut Settings, metadata: &Metadata) -> Vec<String> {
     let mut errors = Vec::new();
     for (value, recorded) in [

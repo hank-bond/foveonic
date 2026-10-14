@@ -153,7 +153,8 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
                 }
                 _ => unreachable!(),
             }
-            // Detail slides reuse the complete continuation cut; edit-group changes may warm a new boundary.
+            // Detail edits need all of their unchanged inputs ready. Switching edit
+            // groups may need one render to prepare a different set of inputs.
             let activity = engine.gpu_activity();
             let cached = session_image(&engine, &mut session, &settings);
             let delta = engine.gpu_activity().since(activity);
@@ -301,7 +302,12 @@ fn detail_feedback_profile() {
             .view_texture(&cached, None, &mut Profile::default())
             .unwrap();
         engine.device().poll(wgpu::Maintain::Wait);
-        eprintln!("DETAIL iteration={iteration} fresh_image_ms={fresh_ms:.3} cached_image_ms={:.3} cache_bytes={} dispatches={}",start.elapsed().as_secs_f64()*1000.,session.cached_bytes(),engine.gpu_activity().since(before).dispatches);
+        eprintln!(
+            "DETAIL iteration={iteration} fresh_image_ms={fresh_ms:.3} cached_image_ms={:.3} cache_bytes={} dispatches={}",
+            start.elapsed().as_secs_f64() * 1000.,
+            session.cached_bytes(),
+            engine.gpu_activity().since(before).dispatches
+        );
         drop(texture);
     }
     let mut profile = Profile::new(crate::profile::Mode::Gpu);

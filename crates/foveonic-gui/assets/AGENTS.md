@@ -4,8 +4,6 @@ summary: "Editable layered-X artwork feeds one native Icon Composer document wit
 
 # Desktop assets
 
-`logo-original.svg` preserves the first imported owner artwork from `/Users/work/Downloads/logo.svg`, including its original projection, colors, and 16-unit slabs. The download is untouched.
-
 `logo.svg` is the current editable revision: the original face polygon/projection, 24-unit slabs with 16-unit gaps, distinct cobalt/yellow-green/vermilion layers, and a softly lit graphite face. Its viewBox tightly bounds the projected geometry.
 
 `generate-icon.py` derives a narrow inward bevel on the top X from that face's edges. Upper-left-facing edges are lighter; opposite edges are darker. The bevel is opaque and does not add refraction, blur, or a white outline. The dark artwork changes only the neutral top slab to softly lit silver; colored slabs and all geometry remain identical. Both generated foreground SVGs in `Foveonic.icon/Assets/` are unmasked transparent 1024×1024 canvases. The visible logo occupies 90% of the Composer canvas width as a review choice, not an Apple requirement.

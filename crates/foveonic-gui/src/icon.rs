@@ -1,4 +1,4 @@
-//! Loads the default layered-X window icon; macOS Dock appearances come from the app bundle.
+//! Loads the window icon while leaving macOS Dock appearances to the app bundle.
 
 const PNG: &[u8] = include_bytes!("../assets/icon.png");
 
@@ -20,8 +20,8 @@ mod tests {
         let icon = super::window_icon();
         assert_eq!([icon.width, icon.height], [1024, 1024]);
         assert_eq!(icon.rgba[3], 0);
-        // Apple actool's macOS 26 rendition places the opaque 824px tile at
-        // 100..924 in the 1024px canvas, with extra translucent shadow outside.
+        // Apple's compiler supplies these 100-pixel margins around the tile.
+        // Guard that placement so a full-canvas preview cannot make the Dock icon oversized.
         let alpha = |x: usize, y: usize| icon.rgba[(y * 1024 + x) * 4 + 3];
         assert!(alpha(99, 512) < 128);
         assert!(alpha(100, 512) >= 128);

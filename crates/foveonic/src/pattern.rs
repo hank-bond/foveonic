@@ -1,4 +1,4 @@
-//! Metadata/geometry-only setup for native deterministic luminance-ratio pattern conditioning.
+//! Prepares repeatable pattern-correction geometry without moving photo work to the CPU.
 
 //!
 //! Adapted with owner permission from Foveonic noise.rs and filtering/pattern.rs

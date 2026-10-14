@@ -52,7 +52,8 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err("editing sidecar exceeds 64 KiB".into());
     }
-    // Check the version before interpreting a potentially different settings schema.
+    // A newer version may store settings differently. Do not interpret it
+    // using today's schema and then overwrite edits we cannot understand.
     let header: serde_json::Value = serde_json::from_slice(bytes)?;
     if header.get("format").and_then(|v| v.as_str()) != Some(FORMAT) {
         return Err("not a Foveonic editing recipe".into());
@@ -60,13 +61,15 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
     if header.get("version").and_then(|v| v.as_u64()) != Some(u64::from(VERSION)) {
         return Err("unsupported editing sidecar version".into());
     }
-    // Parse the original bytes again so duplicate struct fields are rejected too.
+    // Parsing through Value loses duplicate fields. Read the original bytes
+    // again so duplicated settings cannot slip through validation.
     let recipe: Recipe = serde_json::from_slice(bytes)?;
     recipe.settings.validate_values()?;
     Ok(recipe.settings)
 }
 
-/// Missing is neutral; all other errors must be surfaced instead of silently replacing a recipe.
+/// A missing sidecar means start with defaults. Other errors need to reach the
+/// caller so an unreadable or newer recipe is not silently replaced.
 pub fn load(input: &Path) -> Result<Option<Settings>> {
     let destination = path(input);
     let file = match File::open(&destination) {
@@ -81,8 +84,9 @@ pub fn load(input: &Path) -> Result<Option<Settings>> {
         .map_err(|error| format!("{}: {error}", destination.display()).into())
 }
 
-/// Replace only a missing or valid recipe. The temporary file lives on the same filesystem.
-/// No X3F bytes are opened for writing, and a failed replacement leaves the old recipe intact.
+/// Do not overwrite a recipe we cannot read. A temporary file beside the
+/// destination lets replacement stay atomic and keeps the old recipe on failure.
+/// The original X3F is never opened for writing.
 pub fn save(input: &Path, settings: &Settings) -> Result<()> {
     let bytes = encode(settings)?;
     load(input)?;

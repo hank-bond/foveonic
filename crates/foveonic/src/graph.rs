@@ -116,8 +116,8 @@ pub enum Operation {
 }
 
 impl Operation {
-    /// Exact local output recipe; processing modules own parameter relevance.
-    /// Dependencies are declared separately on each graph output, including side outputs.
+    /// Let each processing stage decide which settings affect its result.
+    /// Track inputs separately for each output so side outputs can be reused safely.
     pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {
         use crate::{noise::RecipeStage as N, recipe::Key};
         match self {
@@ -245,7 +245,7 @@ pub struct Graph {
 }
 
 impl Graph {
-    /// Inputs must already exist, keeping graph construction acyclic and execution ordered.
+    /// Requiring existing inputs prevents cycles and keeps execution order clear.
     pub fn add(&mut self, operation: Operation, inputs: &[usize]) -> Result<usize> {
         let (expected, output) = operation.types();
         if inputs.len() != expected.len() {
@@ -287,11 +287,13 @@ impl Graph {
         Ok(id)
     }
 
-    /// Output demand is independent of node execution: side outputs can be transient.
+    /// A node may run without keeping every side output. Track which outputs
+    /// are needed so a cached main result does not hide a missing side result.
     pub fn required(&self, roots: &[usize]) -> Result<Vec<bool>> {
         self.required_until(roots, &vec![false; self.outputs.len()])
     }
-    /// Cached immutable outputs terminate dependency traversal without changing node types.
+    /// A retained result already has its inputs baked in, so traversal can stop
+    /// there without changing the stage's type or depending on graph positions.
     pub(crate) fn required_until(&self, roots: &[usize], cached: &[bool]) -> Result<Vec<bool>> {
         let mut required = vec![false; self.outputs.len()];
         let mut pending = roots.to_vec();

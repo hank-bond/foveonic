@@ -223,7 +223,8 @@ fn local_mean(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let first=margin;
     let last=length-margin-1u;
-    // The backward recurrence writes every interior pixel; copy only margins.
+    // The backward pass already writes the interior. Copying it here would
+    // overwrite the filtered values, so only the margins need copying.
     for(var x=0u;x<first;x++){let pixel=line_pixel(id.x,x,vertical);put(pixel,rgb(pixel));}
     for(var x=last+1u;x<length;x++){let pixel=line_pixel(id.x,x,vertical);put(pixel,rgb(pixel));}
     var sum = vec3(0.);

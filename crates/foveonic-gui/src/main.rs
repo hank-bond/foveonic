@@ -164,7 +164,7 @@ impl App {
         self.viewport.reset();
         viewport::clear(&self.render_state);
     }
-    fn submit(&mut self, export: Option<PathBuf>) {
+    fn submit(&mut self, export: Option<worker::Export>) {
         if !self.sidecars.ready() {
             return;
         }
@@ -172,8 +172,8 @@ impl App {
             self.revision += 1;
             self.busy = true;
             self.exporting = export.is_some();
-            self.status = if self.exporting {
-                "Exporting final rendering…".into()
+            self.status = if let Some(export) = &export {
+                format!("Exporting {}…", export.format.label())
             } else if let Some(frame) = &self.frame {
                 format!(
                     "Updating {}; displaying {}",
@@ -287,13 +287,11 @@ impl App {
                     self.frame = Some(frame);
                 }
                 Ok(None) => {
-                    self.status = if reply.exported {
-                        "TIFF exported"
-                    } else {
-                        "Request superseded"
-                    }
-                    .into();
-                    if reply.exported {
+                    self.status = match reply.exported {
+                        Some(format) => format!("{} exported", format.label()),
+                        None => "Request superseded".into(),
+                    };
+                    if reply.exported.is_some() {
                         self.submit(None);
                     }
                 }
@@ -317,25 +315,29 @@ impl App {
                         self.open(path);
                     }
                 }
-                if ui.button("Fit").clicked() {
-                    self.viewport.reset();
-                }
-                if ui.button("100%").clicked() {
-                    self.viewport.one_to_one = true;
-                }
-                if ui
-                    .add_enabled(
-                        self.selected.is_some() && self.settings.validate().is_ok(),
-                        egui::Button::new("Export TIFF"),
-                    )
-                    .clicked()
-                {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("TIFF", &["tiff"])
-                        .set_file_name("render.tiff")
-                        .save_file()
+                for format in [worker::ExportFormat::Tiff, worker::ExportFormat::Dng] {
+                    if ui
+                        .add_enabled(
+                            self.sidecars.ready()
+                                && self.selected.is_some()
+                                && self.settings.validate().is_ok(),
+                            egui::Button::new(format!("Export {}", format.label())),
+                        )
+                        .clicked()
                     {
-                        self.submit(Some(path));
+                        let name = self
+                            .selected
+                            .as_ref()
+                            .and_then(|p| p.file_stem())
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "render".into());
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter(format.label(), &[format.extension()])
+                            .set_file_name(format!("{name}.{}", format.extension()))
+                            .save_file()
+                        {
+                            self.submit(Some(worker::Export { path, format }));
+                        }
                     }
                 }
             });
@@ -445,7 +447,8 @@ impl App {
         changed
     }
     fn displayed_channel(&self) -> i32 {
-        // A pending root's component must not reinterpret the artifact still being displayed.
+        // The displayed image may belong to an older request. Using the new
+        // component choice now could show its samples with the wrong meaning.
         if self.frame.as_ref().is_some_and(|f| f.output == self.output) {
             self.channel
         } else {

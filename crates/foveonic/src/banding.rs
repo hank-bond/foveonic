@@ -1,4 +1,4 @@
-//! Prepares geometric least-squares row-banding fits and deterministic patch/row traversal for GPU-only photographic estimation and correction.
+//! Prepares coordinate-only row-correction weights while keeping photo measurements on the GPU.
 
 //!
 //! Adapted with owner permission from Foveonic banding/mod.rs and patches.rs at
@@ -61,9 +61,9 @@ fn matrices(side: u32) -> Result<(u32, Vec<f32>, Vec<f32>)> {
             }
         }
     }
-    // These three fixed polynomial bases have full rank and no singular value
-    // near the native 1e-4 cutoff. Solve their small geometric Gram system in
-    // double precision; no image values enter this host preparation.
+    // These three fixed geometric fits have no singular value near the native
+    // 1e-4 cutoff, so a small double-precision solve is sufficient here.
+    // The weights depend only on coordinates, not on photo samples.
     let mut gram = [[0_f64; 12]; 6];
     for row in basis.chunks(n) {
         for i in 0..n {

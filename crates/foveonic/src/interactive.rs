@@ -1,4 +1,4 @@
-//! Retains one active edit's immutable input boundary, exact graph recipes, and safe render supersession.
+//! Reuses unchanged inputs for the current edit while keeping earlier images safe.
 
 use crate::{
     graph::{DataType, Graph},
@@ -8,7 +8,8 @@ use crate::{
 };
 use std::{collections::HashMap, sync::Arc};
 
-/// One immutable decoded photo; only the active edit's input buffers are retained.
+/// Keep the original photo and the inputs needed to restart the active edit.
+/// Retaining every stage would spend memory without helping that edit.
 pub struct RenderSession {
     pub(crate) source: Source,
     pub(crate) cache: Cache,
@@ -22,13 +23,19 @@ impl RenderSession {
             last_settings: None,
         }
     }
+    /// Exports need the original samples, not the cached result of a slider edit.
+    pub fn source(&self) -> &Source {
+        &self.source
+    }
+
     pub fn metadata(&self) -> &Arc<crate::source::Metadata> {
         &self.source.metadata
     }
     pub fn cached_bytes(&self) -> u64 {
         self.cache.bytes()
     }
-    /// Parameter identities are for request coalescing, not a second node-invalidation catalog.
+    /// These identities help replace pending requests. Processing stages still
+    /// decide which parameter changes invalidate their own results.
     pub fn changed_parameters(&self, settings: &Settings) -> Vec<&'static str> {
         self.last_settings
             .as_ref()
@@ -150,8 +157,8 @@ impl Cache {
             .map(|entry| entry.value.buffer.size())
             .sum()
     }
-    /// Parameter changes identify dirty operations; upstream versions propagate through output edges.
-    /// Numeric graph positions never become cross-render identities.
+    /// Track changed operations and their inputs rather than graph positions,
+    /// because those positions may change between renders.
     fn plan(&mut self, graph: &Graph, targets: &[usize]) -> crate::source::Result<Vec<usize>> {
         let required = graph.required(targets)?;
         let initial = self.versions.is_empty();
@@ -196,7 +203,8 @@ impl Cache {
                 .insert(output.name, Version { recipe, generation });
         }
         if initial {
-            // Prime the owner's immediate Detail workflow; otherwise prime the final operation.
+            // Detail is the usual first edit when reconstruction is on. Keeping its
+            // inputs ready avoids a full rerender on that first slider movement.
             let node = graph
                 .nodes
                 .iter()
@@ -206,7 +214,8 @@ impl Cache {
                 })
                 .unwrap_or(&graph.nodes[graph.outputs[targets[0]].producer]);
             let pivot = node.outputs[0];
-            // Prime the entire continuation cut, including unchanged colour/signal branches.
+            // Detail needs both color and signal inputs. Keeping only one branch
+            // would still force the other branch to rerun on every edit.
             for (id, output) in graph.outputs.iter().enumerate() {
                 dirty[id] = id == pivot || output.dependencies.iter().any(|input| dirty[*input]);
             }

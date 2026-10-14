@@ -93,13 +93,15 @@ def summarize(records, pointers=None, settle=1.):
             if row['event'] == 'span' and row['phase'] == 'draw_encode':
                 first_encode.setdefault(row['revision'], row['end_ms'])
         summary['receipt_to_first_encoding_end_ms'] = stats([first_encode[rev] - lifecycle[(rev, 'image_received')] for rev in delivered if rev in first_encode and (rev, 'image_received') in lifecycle])
-        # Fresh complete processing stays separate from session feedback, and cold from warm.
+        # Fresh renders and slider feedback measure different work. Mixing them,
+        # or mixing cold and warm runs, would hide the cost the report is meant to show.
         for execution in sorted({r.get('execution') for r in selected_rows if r['event'] == 'processing' and r.get('completed_ms') is not None}):
             for cold in [True, False]:
                 values = [r['completed_ms'] for r in selected_rows if r['event'] == 'processing' and r.get('execution') == execution and bool(r.get('cold')) == cold and r.get('completed_ms') is not None]
                 if values:
                     summary['completed_processing'].append({'execution': execution, 'cold': cold, 'milliseconds': stats(values)})
-        # Do not let cancelled partial profiles dilute delivered-frame stage costs.
+        # Cancelled work did not deliver a frame. Including it would make stage
+        # costs look cheaper than the work needed to show a completed image.
         profile_rows = [r for r in candidates if 'profile' in r and r.get('status') != 'superseded'
                         and (windows is None or r.get('revision') in delivered)]
         for phase in sorted({r['event'] for r in profile_rows if 'activity' in r}):

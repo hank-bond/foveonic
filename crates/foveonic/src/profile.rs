@@ -9,8 +9,8 @@ mod gpu_tests;
 #[path = "profile_test.rs"]
 mod tests;
 
-/// Cumulative engine-owned GPU activity; allocation bytes are totals, not peak residency.
-/// Does not include wgpu's internal staging or activity submitted by another queue user.
+/// These totals count this engine's work, not current or peak GPU memory.
+/// They exclude wgpu's internal staging and work from other users of the queue.
 #[derive(Clone, Copy, Default, Debug, serde::Serialize)]
 pub struct GpuActivity {
     pub upload_bytes: u64,
@@ -78,7 +78,8 @@ impl std::str::FromStr for Mode {
     }
 }
 
-/// One envelope for core profiles and frontend observations; unrelated stderr remains ordinary text.
+/// Use a shared JSON marker so tools can recognize timing reports without
+/// mistaking unrelated stderr messages for measurements.
 pub fn report(event: &str, mode: Mode, data: impl serde::Serialize) -> serde_json::Value {
     serde_json::json!({"foveonic_profile": 1, "event": event, "mode": mode,
                       "synchronized": mode.gpu(), "data": data})

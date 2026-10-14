@@ -112,7 +112,8 @@ fn adjustment_row<T: egui::emath::Numeric>(
             }
             let active = automatic.as_ref().is_some_and(|a| *a.active);
             let unresolved = automatic.as_ref().is_some_and(|a| *a.active && !a.resolved);
-            // Match add_sized's layout, but inspect DragValue's stable child ID before it handles keys.
+            // DragValue handles keys while drawing. Find its stable ID first so our
+            // focused nudge can run without changing the row's layout.
             let response = ui
                 .add_enabled_ui(!active, |ui| {
                     ui.allocate_ui_with_layout(
@@ -140,7 +141,8 @@ fn adjustment_row<T: egui::emath::Numeric>(
                     .inner
                 })
                 .inner;
-            // Clamp keyboard overshoot and refresh the value field's cached text.
+            // Refresh the cached text after clamping so the value box does not show
+            // the overshoot even though the stored setting is already in range.
             let accepted = value
                 .to_f64()
                 .clamp(range.start().to_f64(), range.end().to_f64());
@@ -152,7 +154,8 @@ fn adjustment_row<T: egui::emath::Numeric>(
             help::control(response, label);
         });
     });
-    // Double-click sensing replaces the slider response, so compare actual values for rerendering.
+    // The double-click response can hide the slider's changed flag.
+    // Compare values so a real edit still requests a render.
     before != value.to_f64()
 }
 
