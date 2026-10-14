@@ -42,6 +42,7 @@ struct App {
     difference: inspect::Difference,
     frame: Option<worker::Frame>,
     scope_images: Option<scopes::Images>,
+    scope_key: Option<worker::ScopeKey>,
     viewport: viewport::Viewport,
     navigator: navigator::Navigator,
     revision: u64,
@@ -96,6 +97,7 @@ impl App {
             difference: Default::default(),
             frame: None,
             scope_images: None,
+            scope_key: None,
             viewport: Default::default(),
             navigator: navigator::Navigator::new(rs.clone(), cc.egui_ctx.clone()),
             revision: 0,
@@ -202,17 +204,15 @@ impl App {
         while let Ok(update) = self.worker.replies.try_recv() {
             let reply = match update {
                 worker::Update::Image(reply) => *reply,
-                worker::Update::Scopes { revision, result } => {
-                    if let Some(frame) = self
-                        .frame
-                        .as_mut()
-                        .filter(|frame| frame.revision == revision)
-                    {
+                worker::Update::Scopes { key, result } => {
+                    if let Some(frame) = self.frame.as_mut().filter(|frame| {
+                        frame.revision == key.revision && self.scope_key == Some(key)
+                    }) {
                         match result {
                             Ok(data) => {
-                                self.scope_images = Some(scopes::Images::new(ctx, &data));
-                                frame.scopes = Some(data);
-                                timing::event(revision, "scopes_received");
+                                self.scope_images = Some(scopes::Images::new(&data));
+                                frame.scopes = Some(worker::ScopeSnapshot { key, data });
+                                timing::event(key.revision, "scopes_received");
                             }
                             Err(error) => {
                                 if !self.busy {
@@ -284,6 +284,7 @@ impl App {
                         frame.milliseconds,
                     );
                     self.scope_images = None;
+                    self.scope_key = None;
                     viewport::clear(&self.render_state);
                     self.frame = Some(frame);
                 }
@@ -299,6 +300,41 @@ impl App {
                 Err(e) => self.status = e,
             }
         }
+    }
+    fn update_scopes(&mut self) {
+        let Some(frame) = &self.frame else {
+            self.scope_key = None;
+            return;
+        };
+        let region = if self.preferences.scope_viewport {
+            let Some(pixels) = self.viewport.visible_pixels() else {
+                return;
+            };
+            Some([
+                pixels.top_left[0],
+                pixels.top_left[1],
+                pixels.bottom_right[0] + 1,
+                pixels.bottom_right[1] + 1,
+            ])
+        } else {
+            None
+        };
+        let key = worker::ScopeKey {
+            revision: frame.revision,
+            region,
+        };
+        if self.scope_key == Some(key) {
+            return;
+        }
+        let foveonic::inspection::Content::Image(image) = &frame.artifact.content else {
+            return;
+        };
+        // Keep the previous plots visible while the worker prepares their replacement.
+        self.worker.submit_scopes(worker::ScopeRequest {
+            key,
+            image: (**image).clone(),
+        });
+        self.scope_key = Some(key);
     }
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -403,11 +439,16 @@ impl App {
                     })
                     .response
                     .on_hover_text(help::scope(self.preferences.scope));
+                widgets::checkbox(ui, &mut self.preferences.scope_viewport, "Viewport only")
+                    .on_hover_text("Show scopes for the visible part of the image. Updates as you pan or zoom. Channel and Difference views do not change scope values.");
                 scopes::show(
                     ui,
                     self.preferences.scope,
-                    self.frame.as_ref().and_then(|f| f.scopes.as_ref()),
-                    self.scope_images.as_ref(),
+                    self.frame
+                        .as_ref()
+                        .and_then(|f| f.scopes.as_ref())
+                        .map(|snapshot| &snapshot.data),
+                    self.scope_images.as_mut(),
                 );
                 false
             }
@@ -670,6 +711,8 @@ impl eframe::App for App {
         } else if changed && !self.exporting {
             self.submit(None);
         }
+        self.update_scopes();
+        self.smoke_check_scope_retention();
         self.navigator.update(
             self.frame.as_ref(),
             self.displayed_mapping(),

@@ -43,7 +43,11 @@ Multiple requested roots have independent retention. Imported snapshots validate
 
 ## Analyze the current buffer
 
-`Engine::scopes(image, profile)` analyzes owned floating RGB/scalar storage in its logical crop/orientation. An aspect-preserving grid of at most 512×512 samples produces 256-bin histograms and 256×256 waveform counts, with out-of-range/invalid diagnostics. Only roughly 1 MiB of counts is read back; full images remain on GPU. Run analysis on the processing worker, since count readback waits for GPU completion.
+`Engine::scopes(image, region, profile)` analyzes the retained floating RGB/scalar buffer. `None` selects the whole image. `Some([left, top, right, bottom])` selects a region in cropped, rotated output pixels, with right and bottom excluded. Bounds must fit `image.view().extent`, including resized outputs.
+
+A grid of at most 512×512 samples keeps the region's aspect ratio. Histograms have 256 bins. Waveforms have 256×256 cells, with each sample's weight shared bilinearly between nearby cells. `Scopes::density()` returns weights in `DENSITY_SCALE` units per sample. Divide by that constant to get sample units. Splitting preserves total weight. Histogram and outside counts remain integer sample counts.
+
+Only about 1 MiB of counts and weights is read back. The image stays on the GPU. Run analysis on the background worker because readback waits for the GPU.
 
 RGB scopes preserve working primaries; RGB luminance uses matching sRGB or Adobe RGB weights. Pre-tone `Space::LinearRgb` stores camera-code values and uses a 0–4095 inspection range. Tone-mapped RGB uses linear 0–1. Sensor/calibrated scopes normalize camera codes by 4095, and scalar scopes use 0–1. Luminance-ratio scopes use 0–2, and signed detail scopes use −1000…1000 camera codes. Analysis uses the buffer's values directly. `Scopes::space` and `samples` identify the signal and sample grid. Diagnostic artifacts contain their own tables.
 

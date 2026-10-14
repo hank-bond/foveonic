@@ -22,6 +22,22 @@ const TARGETS: [&str; 12] = [
     "calibration.layers",
 ];
 
+const VIEWPORT_SCOPE_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "viewport-fit",
+    "viewport-zoom",
+    "viewport-pan",
+    "viewport-parade",
+    "viewport-waveform",
+    "viewport-resize",
+    "viewport-whole",
+    "display-wide",
+    "display-narrow",
+    "viewport-sensor",
+    "viewport-fit-again",
+];
+
 const DIFFERENCE_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -126,7 +142,9 @@ impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_INSPECTION").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_SCOPES").is_some() {
+                VIEWPORT_SCOPE_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_INSPECTION").is_some() {
                 DIFFERENCE_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DETAIL").is_some() {
                 DETAIL_TARGETS
@@ -153,6 +171,27 @@ impl Smoke {
 }
 
 impl App {
+    pub(super) fn smoke_check_scope_retention(&self) {
+        let Some(smoke) = &self.smoke else {
+            return;
+        };
+        if smoke.targets != VIEWPORT_SCOPE_TARGETS || smoke.index >= smoke.targets.len() {
+            return;
+        }
+        let target = smoke.targets[smoke.index];
+        if target.starts_with("viewport-") && target != "viewport-sensor" {
+            // Check immediately after scheduling, before the UI can receive a reply.
+            assert!(
+                self.frame.as_ref().unwrap().scopes.is_some(),
+                "scope refresh blanked the counts"
+            );
+            assert!(
+                self.scope_images.is_some(),
+                "scope refresh blanked the textures"
+            );
+        }
+    }
+
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
         let mapping = self.displayed_mapping();
         let Some(smoke) = &mut self.smoke else {
@@ -188,6 +227,41 @@ impl App {
                 image::ColorType::Rgba8,
             )
             .unwrap();
+            if smoke.targets == VIEWPORT_SCOPE_TARGETS && !smoke.preview_pending() {
+                let frame = self.frame.as_ref().unwrap();
+                let snapshot = frame.scopes.as_ref().unwrap();
+                let key = snapshot.key;
+                assert_eq!(self.scope_key, Some(key));
+                let data = &snapshot.data;
+                assert_eq!(key.revision, frame.revision);
+                let expected_region = self.preferences.scope_viewport.then(|| {
+                    let pixels = self.viewport.visible_pixels().unwrap();
+                    [
+                        pixels.top_left[0],
+                        pixels.top_left[1],
+                        pixels.bottom_right[0] + 1,
+                        pixels.bottom_right[1] + 1,
+                    ]
+                });
+                assert_eq!(key.region, expected_region);
+                assert_eq!(
+                    data.histogram(0).iter().sum::<u32>(),
+                    data.samples[0] * data.samples[1]
+                );
+                let density_weight: u32 = data.density(0).iter().sum();
+                assert_eq!(
+                    density_weight,
+                    data.histogram(0).iter().sum::<u32>() * foveonic::scopes::DENSITY_SCALE
+                );
+                let report = serde_json::json!({"revision":key.revision,"region":key.region,"samples":data.samples,"histogram":data.histogram(0),"density_weight":density_weight,"density_scale":foveonic::scopes::DENSITY_SCALE});
+                std::fs::write(
+                    smoke
+                        .directory
+                        .join(format!("{}.json", smoke.targets[smoke.index])),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                )
+                .unwrap();
+            }
             smoke.index += 1;
             smoke.awaiting = false;
             if smoke.index == smoke.targets.len() {
@@ -211,6 +285,32 @@ impl App {
             }
             match smoke.targets[smoke.index] {
                 "final" => {}
+                "viewport-fit" => self.preferences.scope_viewport = true,
+                "viewport-zoom" => self.viewport.zoom_by(4.),
+                "viewport-pan" => self.viewport.pan_to(egui::vec2(0.7, 0.3)),
+                "viewport-parade" => self.preferences.scope = Scope::Parade,
+                "viewport-waveform" => self.preferences.scope = Scope::Waveform,
+                "viewport-resize" => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1200., 800.)))
+                }
+                "viewport-whole" => self.preferences.scope_viewport = false,
+                "display-wide" | "display-narrow" => {
+                    let id = egui::Id::new("settings");
+                    let mut panel = egui::containers::panel::PanelState::load(ctx, id).unwrap();
+                    let width = if smoke.targets[smoke.index] == "display-wide" {
+                        420.
+                    } else {
+                        300.
+                    };
+                    panel.rect.min.x = panel.rect.max.x - width;
+                    ctx.data_mut(|data| data.insert_persisted(id, panel));
+                }
+                "viewport-sensor" => {
+                    self.preferences.scope_viewport = true;
+                    self.output = "sensor.layers".into();
+                    self.submit(None);
+                }
+                "viewport-fit-again" => self.viewport.reset(),
                 "diff-layer" => {
                     self.settings.sensor_gain = 1.05;
                     self.output = "gain.layers".into();
@@ -417,7 +517,11 @@ impl App {
             } else {
                 !self.busy
                     && self.frame.as_ref().is_some_and(|frame| {
-                        frame.scopes.is_some() && self.navigator.ready(frame, mapping)
+                        frame
+                            .scopes
+                            .as_ref()
+                            .is_some_and(|snapshot| Some(snapshot.key) == self.scope_key)
+                            && self.navigator.ready(frame, mapping)
                     })
             };
             if ready {

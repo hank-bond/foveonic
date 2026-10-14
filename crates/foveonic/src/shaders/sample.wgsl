@@ -17,6 +17,11 @@ fn sample_rgb(id: vec2<u32>) -> vec3<f32> {
     if any(oriented_size != params.output_size.xy) {
         oriented = clamp((vec2<f32>(id) + vec2<f32>(0.5)) * vec2<f32>(oriented_size) / vec2<f32>(params.output_size.xy) - vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(oriented_size) - vec2<f32>(1.0));
     }
+    return sample_oriented(oriented);
+}
+
+fn sample_oriented(oriented: vec2<f32>) -> vec3<f32> {
+    let size = params.crop.zw - params.crop.xy;
     var point = oriented;
     switch params.source.z {
         case 90u: { point = vec2<f32>(oriented.y, f32(size.y - 1u) - oriented.x); }

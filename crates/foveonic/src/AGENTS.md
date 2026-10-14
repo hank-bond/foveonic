@@ -47,7 +47,7 @@ Image arithmetic belongs in `shaders/`. Host code prepares metadata-derived para
 - **[render.rs](./render.rs)** Builds typed processing and export recipes around owned GPU images and execution-local scratch.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.
 - **[resample.rs](./resample.rs)** Prepares camera resampling weights and leaves image calculations on the GPU.
-- **[scopes.rs](./scopes.rs)** Samples the current floating GPU buffer into compact histogram and waveform counts.
+- **[scopes.rs](./scopes.rs)** Builds histograms and smooth waveform traces from GPU image regions.
 - **[scratch.rs](./scratch.rs)** Recycles guarded storage only after the last shared reader releases it on the ordered GPU queue.
 - **[sidecar.rs](./sidecar.rs)** Reads and atomically replaces bounded versioned JSON editing recipes beside immutable X3F inputs.
 - **[source.rs](./source.rs)** Owns original Merrill sensor samples and typed camera metadata.
