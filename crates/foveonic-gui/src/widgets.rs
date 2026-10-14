@@ -83,10 +83,33 @@ pub fn paint(ui: &egui::Ui, response: &egui::Response, on: bool) {
 }
 
 pub fn button(ui: &mut egui::Ui, label: &str, on: bool, minimum: egui::Vec2) -> egui::Response {
-    // egui's selected frames have square corners and fixed colors. Paint our
-    // frame behind its text while keeping native layout and input handling.
+    // egui removes padding from frameless buttons. Keep its frame invisible
+    // so we can use padded layout and paint our own border and colors.
     let background = ui.painter().add(egui::Shape::Noop);
-    let response = ui.add(egui::Button::new(label).frame(false).min_size(minimum));
+    let response = ui
+        .scope(|ui| {
+            let style = ui.style();
+            let em = style.override_font_id.as_ref().map_or_else(
+                || {
+                    style
+                        .override_text_style
+                        .as_ref()
+                        .unwrap_or(&egui::TextStyle::Button)
+                        .resolve(style)
+                        .size
+                },
+                |font| font.size,
+            );
+            ui.spacing_mut().button_padding = egui::vec2(0.5 * em, 0.25 * em);
+            ui.add(
+                egui::Button::new(label)
+                    .frame(true)
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::NONE)
+                    .min_size(minimum),
+            )
+        })
+        .inner;
     ui.painter()
         .set(background, frame(ui, &response, on, response.rect));
     response
@@ -244,6 +267,46 @@ mod tests {
     }
 
     #[test]
+    fn buttons_pad_text_in_font_units_without_changing_item_spacing() {
+        for em in [14., 20.] {
+            let ctx = egui::Context::default();
+            install_style(&ctx);
+            let mut rect = egui::Rect::NOTHING;
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(em));
+                    ui.horizontal(|ui| {
+                        let spacing = ui.spacing().clone();
+                        rect = button(ui, "Padding", false, egui::Vec2::ZERO).rect;
+                        let next = button(ui, "Next", true, egui::Vec2::ZERO).rect;
+                        assert!((next.left() - rect.right() - spacing.item_spacing.x).abs() < 0.01);
+                        assert_eq!(ui.spacing().button_padding, spacing.button_padding);
+                        assert_eq!(ui.spacing().item_spacing, spacing.item_spacing);
+                    });
+                });
+            });
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "Padding" => Some(text),
+                    _ => None,
+                })
+                .unwrap();
+            let size = text.galley.size();
+            assert!((rect.width() - size.x - em).abs() < 1.);
+            assert!((rect.height() - size.y - 0.5 * em).abs() < 1.);
+            let bounds = egui::Rect::from_min_size(text.pos, size);
+            for gap in [bounds.left() - rect.left(), rect.right() - bounds.right()] {
+                assert!((gap - 0.5 * em).abs() < 1.);
+            }
+            for gap in [bounds.top() - rect.top(), rect.bottom() - bounds.bottom()] {
+                assert!((gap - 0.25 * em).abs() < 1.);
+            }
+        }
+    }
+
+    #[test]
     fn dropdown_cells_are_full_width_square_borderless_and_use_selection_hover_colors() {
         for selected in [false, true] {
             let ctx = egui::Context::default();
@@ -368,7 +431,8 @@ mod tests {
             let ctx = egui::Context::default();
             install_style(&ctx);
             let (response, normal, normal_fill) = render(&ctx, on, true, 0., vec![]);
-            assert_eq!(response.rect.size(), egui::vec2(22., 20.));
+            assert!(response.rect.width() >= 22.);
+            assert!(response.rect.height() >= 20.);
             assert_eq!(
                 normal.bg_fill,
                 if on {

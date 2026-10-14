@@ -163,7 +163,8 @@ mod tests {
                         _ => None,
                     })
                     .unwrap();
-                assert_eq!(rect.size(), egui::vec2(22., 20.));
+                assert!(rect.width() >= 22.);
+                assert!(rect.height() >= 20.);
                 assert!(button.0.width > 0.);
                 assert_ne!(button.2, egui::CornerRadius::ZERO);
                 (rect, clicked, button)

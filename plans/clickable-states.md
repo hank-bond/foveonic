@@ -11,6 +11,7 @@ Requirements: [GUI workspace](../docs/specs/gui-workspace.md) and [detail and no
 - [x] Group Refinement and Corrections, shorten labels, and separate the two Advanced disclosures.
 - [x] Share rounded button/checkbox styling and square, borderless dropdown cells.
 - [x] Move the noise link explanation into tooltips.
+- [x] Add button padding that scales with the font, keeping spacing between controls.
 - [x] Test layout, disclosures, pointer/keyboard input, and saved choices.
 - [x] Check workspace tests, strict Clippy, documentation, and the rebuilt macOS app.
 
@@ -21,5 +22,11 @@ The trial uses a 4-point corner radius and the existing blue selection hue. Link
 GUI tests pass: 90 passed, 7 GPU tests ignored. They cover group order, alignment, distinct tone/correction Highlights, independent disclosures, unchanged settings when collapsing, preserved saved choices, rounding, hover/press feedback, disabled clicks, keyboard activation, dropdown colors, gap-free cell width, and selection at cell edges. Pointer fixtures use ordinary frame timing so tooltips do not intercept clicks.
 
 Workspace tests, strict all-target Clippy, formatting, whitespace, and explicit-root documentation checks pass. Native captures confirm the layout, neutral checkboxes and links, blue overrides, retained symbols, and removal of the inline note. The app was rebuilt and reopened for owner review. Evidence and failed checks remain in `.local/highlight-threshold/`.
+
+## Internal button padding
+
+egui removes padding from frameless buttons. Buttons now use an invisible egui frame for padded layout and keep the shared painted border. Minimum sizes still apply. The owner approved the appearance.
+
+Tests cover padding at two font sizes and unchanged spacing between buttons and in the parent layout. GUI tests pass (97 passed, 8 GPU tests ignored), as do strict GUI Clippy, documentation checks and tool tests, and whitespace checks.
 
 Processing settings, recipes, and defaults are unchanged by these layout and styling changes.
