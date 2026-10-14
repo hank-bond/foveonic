@@ -1,4 +1,4 @@
-//! Samples the current floating GPU buffer into compact histogram and waveform counts.
+//! Builds histograms and smooth waveform traces from GPU image regions.
 
 use crate::gpu::Binding::{Read, Write};
 use crate::{
@@ -9,12 +9,14 @@ use crate::{
 };
 
 pub const BINS: usize = 256;
+/// One sample contributes this many weight units to the waveform.
+pub const DENSITY_SCALE: u32 = 256;
 const DENSITY_OFFSET: usize = 4 * BINS;
 const OUTSIDE_OFFSET: usize = DENSITY_OFFSET + 4 * BINS * BINS;
 const COUNT: usize = OUTSIDE_OFFSET + 12;
 
-/// Counts describe an oriented, aspect-preserving sample grid.
-/// RGB values remain in the buffer's working primaries and transfer state. Sensor codes use 0–4095.
+/// Histograms count samples. Waveforms share each sample's weight across nearby cells.
+/// RGB keeps the buffer's color space and transfer state. Sensor codes use 0–4095.
 pub struct Scopes {
     pub space: Space,
     pub samples: [u32; 2],
@@ -34,6 +36,7 @@ impl Scopes {
     pub fn histogram(&self, channel: usize) -> &[u32] {
         &self.counts[channel * BINS..(channel + 1) * BINS]
     }
+    /// Waveform cell weights. Divide by DENSITY_SCALE to get sample units.
     pub fn density(&self, channel: usize) -> &[u32] {
         let offset = DENSITY_OFFSET + channel * BINS * BINS;
         &self.counts[offset..offset + BINS * BINS]
@@ -47,9 +50,29 @@ impl Scopes {
     }
 }
 
-pub(crate) fn analyze(gpu: &Gpu, image: &RenderedImage, profile: &mut Profile) -> Result<Scopes> {
+/// [left, top, right, bottom] in cropped, rotated output pixels.
+/// Right and bottom are excluded.
+pub type Region = [u32; 4];
+
+pub(crate) fn analyze(
+    gpu: &Gpu,
+    image: &RenderedImage,
+    region: Option<Region>,
+    profile: &mut Profile,
+) -> Result<Scopes> {
     let mut params = image.params();
-    let [w, h] = image.view().extent;
+    let [width, height] = image.view().extent;
+    let [left, top, right, bottom] = region.unwrap_or([0, 0, width, height]);
+    if left >= right || top >= bottom || right > width || bottom > height {
+        return Err("scope region must be nonempty and inside the oriented image".into());
+    }
+    let [w, h] = [right - left, bottom - top];
+    let region = gpu.uniform(&[
+        left as f32 / width as f32,
+        top as f32 / height as f32,
+        right as f32 / width as f32,
+        bottom as f32 / height as f32,
+    ]);
     let factor = (512. / w as f32).min(512. / h as f32).min(1.);
     let samples = [
         (w as f32 * factor).round().max(1.) as u32,
@@ -80,6 +103,7 @@ pub(crate) fn analyze(gpu: &Gpu, image: &RenderedImage, profile: &mut Profile) -
             (0, Read(image.buffer())),
             (1, Read(&uniform)),
             (2, Write(counts.write())),
+            (3, Read(&region)),
         ],
         [samples[0].div_ceil(16), samples[1].div_ceil(16)],
         &mut trace,

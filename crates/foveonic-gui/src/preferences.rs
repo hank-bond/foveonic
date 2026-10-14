@@ -69,6 +69,7 @@ pub struct Preferences {
     pub last_folder: Option<std::path::PathBuf>,
     pub organizer: Organizer,
     pub scope: Scope,
+    pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
     pub sections: Vec<Section>,
     pub collapsed: BTreeSet<Section>,
@@ -79,6 +80,7 @@ impl Default for Preferences {
             last_folder: None,
             organizer: Organizer::Icons,
             scope: Scope::Histogram,
+            scope_viewport: false,
             zoom_snap: ZoomPreset::default(),
             sections: Section::ALL.to_vec(),
             collapsed: BTreeSet::new(),
@@ -174,6 +176,21 @@ mod tests {
             prefs.save(&mut store);
             assert_eq!(Preferences::load(Some(&store)), prefs);
         }
+    }
+
+    #[test]
+    fn scope_viewport_defaults_off_and_survives_restart() {
+        let mut store = Storage::default();
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(scope:Waveform)".into());
+        assert!(!Preferences::load(Some(&store)).scope_viewport);
+        let prefs = Preferences {
+            scope_viewport: true,
+            ..Default::default()
+        };
+        prefs.save(&mut store);
+        assert_eq!(Preferences::load(Some(&store)), prefs);
     }
 
     #[test]

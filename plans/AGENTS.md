@@ -39,5 +39,6 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.
+- **[viewport-scopes](./viewport-scopes.md)** Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
 
 <!-- INDEX:END -->

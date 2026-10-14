@@ -1,10 +1,10 @@
-//! Displays current-buffer histograms and density scopes for the selected inspection stage.
+//! Draws histograms, waveforms, and parades for the selected image buffer.
 
 use crate::preferences::Scope;
-use eframe::egui;
+use eframe::egui::{self, emath::GuiRounding};
 use foveonic::{
     image::Space,
-    scopes::{Scopes, BINS},
+    scopes::{Scopes, BINS, DENSITY_SCALE},
 };
 const COLORS: [egui::Color32; 3] = [
     egui::Color32::from_rgb(225, 75, 72),
@@ -14,35 +14,115 @@ const COLORS: [egui::Color32; 3] = [
 const VIEWPORT_HEIGHT: f32 = 170.;
 
 pub struct Images {
-    parade: egui::TextureHandle,
-    waveform: egui::TextureHandle,
+    parade: PlotImage,
+    waveform: PlotImage,
 }
 impl Images {
-    pub fn new(ctx: &egui::Context, data: &Scopes) -> Self {
+    pub fn new(data: &Scopes) -> Self {
         Self {
-            parade: ctx.load_texture(
-                "current buffer parade",
-                density_image(data, true),
-                egui::TextureOptions::LINEAR,
-            ),
-            waveform: ctx.load_texture(
-                "current buffer waveform",
-                density_image(data, false),
-                egui::TextureOptions::LINEAR,
-            ),
+            parade: PlotImage::new(density_image(data, true), data.channels()),
+            waveform: PlotImage::new(density_image(data, false), 1),
         }
     }
 }
-fn density_image(data: &Scopes, parade: bool) -> egui::ColorImage {
+
+struct PlotImage {
+    source: image::RgbaImage,
+    panels: usize,
+    texture: Option<egui::TextureHandle>,
+}
+impl PlotImage {
+    fn new(source: image::RgbaImage, panels: usize) -> Self {
+        Self {
+            source,
+            panels,
+            texture: None,
+        }
+    }
+
+    fn texture(&mut self, ctx: &egui::Context, size: [usize; 2]) -> egui::TextureId {
+        if self
+            .texture
+            .as_ref()
+            .is_none_or(|texture| texture.size() != size)
+        {
+            // Resize only the display image. Leave scope measurements unchanged.
+            let resized = resample_display(&self.source, size, self.panels);
+            let image = egui::ColorImage::from_rgba_unmultiplied(size, resized.as_raw());
+            if let Some(texture) = &mut self.texture {
+                texture.set(image, egui::TextureOptions::NEAREST);
+            } else {
+                self.texture = Some(ctx.load_texture(
+                    "Pixel-sized scope plot",
+                    image,
+                    egui::TextureOptions::NEAREST,
+                ));
+            }
+        }
+        self.texture.as_ref().unwrap().id()
+    }
+}
+
+fn resample_display(
+    source: &image::RgbaImage,
+    size: [usize; 2],
+    panels: usize,
+) -> image::RgbaImage {
+    if panels == 1 {
+        return image::imageops::resize(
+            source,
+            size[0] as u32,
+            size[1] as u32,
+            image::imageops::FilterType::Lanczos3,
+        );
+    }
+    let mut output = image::RgbaImage::new(size[0] as u32, size[1] as u32);
+    let source_width = source.width() / panels as u32;
+    for panel in 0..panels {
+        let left = panel * size[0] / panels;
+        let right = (panel + 1) * size[0] / panels;
+        if left == right {
+            continue;
+        }
+        // Resize parade channels separately so their colors do not mix.
+        let input = image::imageops::crop_imm(
+            source,
+            panel as u32 * source_width,
+            0,
+            source_width,
+            source.height(),
+        );
+        let resized = image::imageops::resize(
+            &*input,
+            (right - left) as u32,
+            size[1] as u32,
+            image::imageops::FilterType::Lanczos3,
+        );
+        image::imageops::replace(&mut output, &resized, left as i64, 0);
+    }
+    output
+}
+
+fn display_geometry(plot: egui::Rect, pixels_per_point: f32) -> (egui::Rect, [usize; 2]) {
+    let aligned = plot.round_to_pixels(pixels_per_point);
+    let size = [
+        (aligned.width() * pixels_per_point).round().max(1.) as usize,
+        (aligned.height() * pixels_per_point).round().max(1.) as usize,
+    ];
+    (aligned, size)
+}
+fn density_image(data: &Scopes, parade: bool) -> image::RgbaImage {
     let channels = data.channels();
     let width = if parade { BINS * channels } else { BINS };
-    let mut image = egui::ColorImage::new([width, BINS], egui::Color32::from_gray(10));
+    let mut image = image::RgbaImage::new(width as u32, BINS as u32);
     let max = (0..channels)
         .flat_map(|c| data.density(c))
         .copied()
         .max()
-        .unwrap_or(1)
-        .max(1) as f32;
+        .unwrap_or(DENSITY_SCALE)
+        .max(DENSITY_SCALE) as f32
+        / DENSITY_SCALE as f32;
+    let log_max = (1. + max).ln();
     for y in 0..BINS {
         for x in 0..width {
             let mut rgb = [10_f32; 3];
@@ -50,8 +130,8 @@ fn density_image(data: &Scopes, parade: bool) -> egui::ColorImage {
                 if parade && x / BINS != c {
                     continue;
                 }
-                let n = data.density(c)[y * BINS + x % BINS] as f32;
-                let strength = (1. + n).ln() / (1. + max).ln();
+                let n = data.density(c)[y * BINS + x % BINS] as f32 / DENSITY_SCALE as f32;
+                let strength = (1. + n).ln() / log_max;
                 let color = if channels == 1 {
                     egui::Color32::LIGHT_GRAY
                 } else {
@@ -65,22 +145,27 @@ fn density_image(data: &Scopes, parade: bool) -> egui::ColorImage {
                 && channels == 3
                 && matches!(data.space, Space::LinearRgb(_) | Space::ToneMappedRgb(_))
             {
-                let n = data.density(3)[y * BINS + x] as f32;
-                let white = ((1. + n).ln() / (1. + max).ln()) * 95.;
+                let n = data.density(3)[y * BINS + x] as f32 / DENSITY_SCALE as f32;
+                let white = ((1. + n).ln() / log_max) * 95.;
                 for channel in &mut rgb {
                     *channel += white;
                 }
             }
-            image.pixels[y * width + x] = egui::Color32::from_rgb(
-                rgb[0].min(255.) as u8,
-                rgb[1].min(255.) as u8,
-                rgb[2].min(255.) as u8,
+            image.put_pixel(
+                x as u32,
+                y as u32,
+                image::Rgba([
+                    rgb[0].min(255.) as u8,
+                    rgb[1].min(255.) as u8,
+                    rgb[2].min(255.) as u8,
+                    255,
+                ]),
             );
         }
     }
     image
 }
-pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Option<&Images>) {
+pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Option<&mut Images>) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), VIEWPORT_HEIGHT),
         egui::Sense::hover(),
@@ -92,7 +177,7 @@ pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Optio
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "Awaiting current image buffer",
+            "Waiting for image",
             egui::FontId::proportional(12.5),
             ui.visuals().weak_text_color(),
         );
@@ -172,14 +257,16 @@ pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Optio
         }
         Scope::Parade | Scope::Waveform => {
             if let Some(images) = images {
-                let texture = if mode == Scope::Parade {
-                    &images.parade
+                let image = if mode == Scope::Parade {
+                    &mut images.parade
                 } else {
-                    &images.waveform
+                    &mut images.waveform
                 };
+                let (aligned, size) = display_geometry(plot, ui.ctx().pixels_per_point());
+                let texture = image.texture(ui.ctx(), size);
                 ui.painter().image(
-                    texture.id(),
-                    plot,
+                    texture,
+                    aligned,
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
                     egui::Color32::WHITE,
                 );
@@ -198,6 +285,103 @@ pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
+
+    #[test]
+    fn scope_display_bounds_are_aligned_to_physical_pixels() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.23, 20.61), egui::vec2(397.45, 162.));
+        for density in [1., 1.25, 1.5, 2., 3.] {
+            let (aligned, size) = display_geometry(rect, density);
+            for point in [aligned.min, aligned.max] {
+                for coordinate in [point.x, point.y] {
+                    assert!((coordinate * density - (coordinate * density).round()).abs() < 0.0001);
+                }
+            }
+            assert!((aligned.width() * density - size[0] as f32).abs() < 0.0001);
+            assert!((aligned.height() * density - size[1] as f32).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn one_to_one_display_is_unchanged_and_parade_channels_do_not_bleed() {
+        let mut source = image::RgbaImage::new(6, 2);
+        for (x, _, pixel) in source.enumerate_pixels_mut() {
+            *pixel = image::Rgba(match x / 2 {
+                0 => [200, 10, 10, 255],
+                1 => [10, 200, 10, 255],
+                _ => [10, 10, 200, 255],
+            });
+        }
+        assert_eq!(resample_display(&source, [6, 2], 3), source);
+        let resized = resample_display(&source, [11, 7], 3);
+        for (x, _, pixel) in resized.enumerate_pixels() {
+            let expected = if x < 3 {
+                [200, 10, 10, 255]
+            } else if x < 7 {
+                [10, 200, 10, 255]
+            } else {
+                [10, 10, 200, 255]
+            };
+            assert_eq!(pixel.0, expected);
+        }
+    }
+
+    #[test]
+    fn display_minification_filters_high_frequency_pixels_without_beating() {
+        let source = image::RgbaImage::from_fn(256, 256, |x, y| {
+            let value = if (x + y) % 2 == 0 { 0 } else { 255 };
+            image::Rgba([value, value, value, 255])
+        });
+        for size in [[43, 37], [79, 81], [123, 129]] {
+            let resized = resample_display(&source, size, 1);
+            for (_, _, pixel) in
+                image::imageops::crop_imm(&resized, 3, 3, size[0] as u32 - 6, size[1] as u32 - 6)
+                    .pixels()
+            {
+                assert!((125..=130).contains(&pixel[0]));
+                assert_eq!(pixel[3], 255);
+            }
+        }
+    }
+
+    #[test]
+    fn density_weights_use_sample_units_for_the_existing_brightness_mapping() {
+        let mut data = Scopes {
+            space: Space::SensorLayers,
+            samples: [4, 1],
+            counts: vec![0; 4 * BINS + 4 * BINS * BINS + 12],
+        };
+        data.counts[4 * BINS] = 4 * DENSITY_SCALE;
+        data.counts[4 * BINS + 1] = DENSITY_SCALE / 2;
+        let display = density_image(&data, false);
+        assert_eq!(display.get_pixel(0, 0).0, [201, 73, 71, 255]);
+        let strength = 1.5_f32.ln() / 5_f32.ln();
+        let rgb: [u8; 3] =
+            std::array::from_fn(|i| (10. + COLORS[0][i] as f32 * strength * 0.85) as u8);
+        assert_eq!(display.get_pixel(1, 0).0, [rgb[0], rgb[1], rgb[2], 255]);
+        assert_eq!(display.get_pixel(2, 0).0, [10, 10, 10, 255]);
+    }
+
+    #[test]
+    fn display_resampling_preserves_counts_and_reuses_its_texture() {
+        let ctx = egui::Context::default();
+        let mut data = Scopes {
+            space: Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb),
+            samples: [512, 512],
+            counts: vec![0; 4 * BINS + 4 * BINS * BINS + 12],
+        };
+        data.counts[4 * BINS + 100 * BINS + 50] = 25 * DENSITY_SCALE;
+        let original = data.counts.clone();
+        let mut images = Images::new(&data);
+        let source = images.waveform.source.clone();
+        let id = images.waveform.texture(&ctx, [794, 324]);
+        assert_eq!(images.waveform.texture.as_ref().unwrap().size(), [794, 324]);
+        assert_eq!(images.waveform.texture(&ctx, [794, 324]), id);
+        assert_eq!(images.waveform.texture(&ctx, [633, 324]), id);
+        assert_eq!(images.waveform.source, source);
+        assert_eq!(data.counts, original);
+        assert!(images.parade.texture.is_none());
+    }
 
     fn scope_height(space: Option<Space>) -> f32 {
         let data = space.map(|space| Scopes {

@@ -266,10 +266,12 @@ impl Engine {
         self.gpu.readback(&image.buffer)
     }
 
-    /// Analyze the retained buffer in its logical view.
+    /// Analyze a region in cropped, rotated output pixels, or the whole view with None.
+    /// Right and bottom bounds are excluded. Only counts and weights leave the GPU.
     pub fn scopes(
         &self,
         image: &RenderedImage,
+        region: Option<crate::scopes::Region>,
         profile: &mut Profile,
     ) -> Result<crate::scopes::Scopes> {
         profile.mode.check_gpu_features(self.device().features())?;
@@ -280,7 +282,7 @@ impl Engine {
         ) {
             return Err("scope analysis requires floating image storage".into());
         }
-        crate::scopes::analyze(&self.gpu, image, profile)
+        crate::scopes::analyze(&self.gpu, image, region, profile)
     }
 
     pub fn adapter_name(&self) -> &str {

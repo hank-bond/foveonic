@@ -296,19 +296,30 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
             0., 0., 0., -0.25, 0.5, 1.5, 0., 1., 0.25, 0., 0., 0., 0.75, 0.25, 0.5, 1., -0.5, 2.,
         ],
     );
-    let scopes = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    let scopes = engine
+        .scopes(&buffer, None, &mut Profile::default())
+        .unwrap();
     assert_eq!(scopes.samples, [2, 2]);
     for c in 0..3 {
         assert_eq!(scopes.histogram(c).iter().sum::<u32>(), 4);
-        assert_eq!(scopes.density(c).iter().sum::<u32>(), 4);
+        assert_eq!(
+            scopes.density(c).iter().sum::<u32>(),
+            4 * crate::scopes::DENSITY_SCALE
+        );
     }
     assert_eq!(scopes.outside(0), [1, 0, 0]);
     assert_eq!(scopes.outside(1), [1, 0, 0]);
     assert_eq!(scopes.outside(2), [0, 2, 0]);
-    assert_eq!(scopes.density(0)[64 * 256], 1); // rotated pixel 4 is left/top, red=.75
-    assert_eq!(scopes.density(0)[255 * 256 + 128], 2); // right column contains both negative and zero red
+    // The left sample column is centred at x=63.5, with red=.75 at y=63.75.
+    assert_eq!(scopes.density(0)[63 * 256 + 63], 32);
+    assert_eq!(scopes.density(0)[64 * 256 + 63], 96);
+    // Two zero/clipped red samples share the right column's two neighboring cells.
+    assert_eq!(scopes.density(0)[255 * 256 + 191], 256);
+    assert_eq!(scopes.density(0)[255 * 256 + 192], 256);
     buffer.settings.exposure = 3.; // analysis follows the stored samples
-    let repeat = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    let repeat = engine
+        .scopes(&buffer, None, &mut Profile::default())
+        .unwrap();
     assert_eq!(scopes.counts, repeat.counts);
     buffer.buffer = engine
         .gpu
@@ -321,7 +332,9 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
         )
         .unwrap();
     buffer.description.space = Space::SensorLayers;
-    let sensor = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    let sensor = engine
+        .scopes(&buffer, None, &mut Profile::default())
+        .unwrap();
     for bin in [0, 64, 128, 255] {
         assert_eq!(sensor.histogram(0)[bin], 1);
     }
@@ -332,7 +345,9 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
         .unwrap();
     for (space, bin) in [(ColorSpace::Srgb, 54), (ColorSpace::AdobeRgb, 76)] {
         buffer.description.space = Space::ToneMappedRgb(space);
-        let rgb = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+        let rgb = engine
+            .scopes(&buffer, None, &mut Profile::default())
+            .unwrap();
         assert_eq!(rgb.histogram(3)[bin], 4);
     }
     buffer.buffer = engine
@@ -344,7 +359,9 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
         .unwrap();
     for (space, bin) in [(ColorSpace::Srgb, 54), (ColorSpace::AdobeRgb, 76)] {
         buffer.description.space = Space::LinearRgb(space);
-        let rgb = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+        let rgb = engine
+            .scopes(&buffer, None, &mut Profile::default())
+            .unwrap();
         assert_eq!(rgb.histogram(0)[255], 4);
         assert_eq!(rgb.histogram(3)[bin], 4);
         assert_eq!(rgb.outside(0), [0, 0, 0]);
@@ -358,7 +375,9 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
         .unwrap();
     buffer.description.layout = Layout::Scalar32Float;
     buffer.description.space = Space::ScalarField;
-    let scalar = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    let scalar = engine
+        .scopes(&buffer, None, &mut Profile::default())
+        .unwrap();
     assert_eq!(scalar.channels(), 1);
     assert_eq!(scalar.outside(0), [1, 1, 0]);
     buffer.buffer = engine
@@ -369,7 +388,9 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
         )
         .unwrap();
     buffer.description.space = Space::SignedDetail;
-    let detail = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    let detail = engine
+        .scopes(&buffer, None, &mut Profile::default())
+        .unwrap();
     assert_eq!(detail.channels(), 1);
     assert_eq!(detail.outside(0), [0, 1, 0]);
     assert_eq!(detail.histogram(0)[0], 1);
@@ -383,12 +404,155 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
         )
         .unwrap();
     buffer.description.space = Space::LuminanceRatio;
-    let ratio = engine.scopes(&buffer, &mut Profile::default()).unwrap();
+    let ratio = engine
+        .scopes(&buffer, None, &mut Profile::default())
+        .unwrap();
     assert_eq!(ratio.channels(), 1);
     assert_eq!(ratio.outside(0), [0, 1, 0]);
     assert_eq!(ratio.histogram(0)[0], 1);
     assert_eq!(ratio.histogram(0)[128], 1);
     assert_eq!(ratio.histogram(0)[255], 2);
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn viewport_scopes_use_oriented_region_and_crop_relative_columns() {
+    let engine = Engine::new().unwrap();
+    let mut buffer = image(
+        &engine,
+        &[
+            0., 0., 0., 0.125, 0.125, 0.125, 0.25, 0.25, 0.25, 0., 0., 0., 0.375, 0.375, 0.375,
+            0.5, 0.5, 0.5,
+        ],
+    );
+    // Rotation changes which source pixel occupies the top-left of the logical crop.
+    for (rotation, value) in [(0, 0.125_f32), (90, 0.375), (180, 0.5), (270, 0.25)] {
+        buffer.view.rotation = rotation;
+        let scopes = engine
+            .scopes(&buffer, Some([0, 0, 1, 1]), &mut Profile::default())
+            .unwrap();
+        assert_eq!(scopes.samples, [1, 1]);
+        let bin = (value * 255.).round() as usize;
+        assert_eq!(scopes.histogram(0)[bin], 1);
+        assert_eq!(
+            scopes.density(0).iter().sum::<u32>(),
+            crate::scopes::DENSITY_SCALE
+        );
+        // A one-pixel region lands at the waveform centre, without snapping its level.
+        for x in [127, 128] {
+            assert_eq!(
+                (0..256)
+                    .map(|y| scopes.density(0)[y * 256 + x])
+                    .sum::<u32>(),
+                crate::scopes::DENSITY_SCALE / 2
+            );
+        }
+        let vertical_weight = scopes
+            .density(0)
+            .iter()
+            .enumerate()
+            .map(|(i, weight)| (i / 256) as f64 * f64::from(*weight))
+            .sum::<f64>();
+        assert!(
+            (vertical_weight / f64::from(crate::scopes::DENSITY_SCALE)
+                - f64::from((1. - value) * 255.))
+            .abs()
+                < 0.01
+        );
+        assert_eq!(scopes.histogram(0).iter().sum::<u32>(), 1);
+    }
+    buffer.view.rotation = 90;
+    let whole = engine
+        .scopes(&buffer, None, &mut Profile::default())
+        .unwrap();
+    let fitted = engine
+        .scopes(&buffer, Some([0, 0, 2, 2]), &mut Profile::default())
+        .unwrap();
+    assert_eq!(whole.counts, fitted.counts);
+    let column = engine
+        .scopes(&buffer, Some([1, 0, 2, 2]), &mut Profile::default())
+        .unwrap();
+    assert_eq!(column.samples, [1, 2]);
+    assert_eq!(column.histogram(0).iter().sum::<u32>(), 2);
+    assert_eq!(column.histogram(0)[32], 1);
+    assert_eq!(column.histogram(0)[64], 1);
+    for region in [[0, 0, 0, 1], [0, 1, 1, 1], [0, 0, 3, 2], [2, 0, 1, 1]] {
+        assert!(engine
+            .scopes(&buffer, Some(region), &mut Profile::default())
+            .is_err());
+    }
+    // A resized output still maps region coordinates through the logical view.
+    buffer.view.extent = [1024, 1024];
+    let resized = engine
+        .scopes(&buffer, Some([0, 0, 512, 1024]), &mut Profile::default())
+        .unwrap();
+    assert_eq!(resized.samples, [256, 512]);
+    assert_eq!(resized.histogram(0).iter().sum::<u32>(), 256 * 512);
+    assert_eq!(resized.outside(0), [0, 0, 0]);
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn interpolated_waveforms_conserve_weight_reduce_column_beats_and_track_sub_bin_levels() {
+    let engine = Engine::new().unwrap();
+    let scale = crate::scopes::DENSITY_SCALE;
+    let mut buffer = image(&engine, &[0.5; 18]);
+    for width in [341, 490, 512] {
+        buffer.buffer = engine
+            .gpu
+            .upload("Flat waveform fixture", &vec![0.5_f32; width as usize * 3])
+            .unwrap();
+        buffer.description.extent = [width, 1];
+        buffer.view = View {
+            crop: [0, 0, width, 1],
+            rotation: 0,
+            extent: [width, 1],
+        };
+        let data = engine
+            .scopes(&buffer, None, &mut Profile::default())
+            .unwrap();
+        for channel in 0..4 {
+            assert_eq!(data.histogram(channel).iter().sum::<u32>(), width);
+            assert_eq!(data.density(channel).iter().sum::<u32>(), width * scale);
+        }
+        let columns: Vec<u32> = (0..256)
+            .map(|x| (0..256).map(|y| data.density(0)[y * 256 + x]).sum())
+            .collect();
+        // Hard placement alternates between one and two samples per column here.
+        assert!(columns.iter().max().unwrap() - columns.iter().min().unwrap() <= scale / 4);
+        assert_eq!(
+            data.density(0)[127 * 256..129 * 256].iter().sum::<u32>(),
+            width * scale
+        );
+
+        buffer.buffer = engine
+            .gpu
+            .upload(
+                "Sub-bin waveform fixture",
+                &vec![0.5001_f32; width as usize * 3],
+            )
+            .unwrap();
+        let shifted = engine
+            .scopes(&buffer, None, &mut Profile::default())
+            .unwrap();
+        assert_eq!(data.histogram(0), shifted.histogram(0));
+        assert_ne!(data.density(0), shifted.density(0));
+        assert_eq!(shifted.density(0).iter().sum::<u32>(), width * scale);
+        for (value, outside) in [(-0.1_f32, [width, 0, 0]), (1.1, [0, width, 0])] {
+            buffer.buffer = engine
+                .gpu
+                .upload(
+                    "Waveform boundary fixture",
+                    &vec![value; width as usize * 3],
+                )
+                .unwrap();
+            let clipped = engine
+                .scopes(&buffer, None, &mut Profile::default())
+                .unwrap();
+            assert_eq!(clipped.outside(0), outside);
+            assert_eq!(clipped.density(0).iter().sum::<u32>(), width * scale);
+        }
+    }
 }
 
 fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
@@ -689,7 +853,9 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     let samples = bytemuck::cast_slice::<u8, f32>(&samples);
     assert!(samples.iter().all(|v| v.is_finite()));
     assert!(samples.iter().any(|v| *v < 0.) && samples.iter().any(|v| *v > 0.));
-    let scopes = engine.scopes(&signal, &mut Profile::default()).unwrap();
+    let scopes = engine
+        .scopes(&signal, None, &mut Profile::default())
+        .unwrap();
     assert_eq!(scopes.channels(), 1);
     assert_eq!(
         scopes.histogram(0).iter().sum::<u32>(),

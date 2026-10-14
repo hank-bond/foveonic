@@ -2,7 +2,7 @@
 
 use eframe::egui;
 use foveonic::{
-    image::ImageTexture,
+    image::{ImageTexture, RenderedImage},
     inspection::{Artifact, Content},
     profile::Profile,
     render::{Engine, RenderSession, Settings},
@@ -52,7 +52,7 @@ pub struct Frame {
     pub artifact: Artifact,
     pub texture: Arc<ImageTexture>,
     pub comparison: Option<Comparison>,
-    pub scopes: Option<foveonic::scopes::Scopes>,
+    pub scopes: Option<ScopeSnapshot>,
     pub milliseconds: f64,
     pub revision: u64,
     pub queued_at: std::time::Instant,
@@ -69,16 +69,31 @@ pub struct Reply {
     pub exported: Option<ExportFormat>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScopeKey {
+    pub revision: u64,
+    pub region: Option<foveonic::scopes::Region>,
+}
+pub struct ScopeRequest {
+    pub key: ScopeKey,
+    pub image: RenderedImage,
+}
+pub struct ScopeSnapshot {
+    pub key: ScopeKey,
+    pub data: foveonic::scopes::Scopes,
+}
+
 pub enum Update {
     Image(Box<Reply>),
     Scopes {
-        revision: u64,
+        key: ScopeKey,
         result: Result<foveonic::scopes::Scopes, String>,
     },
 }
 
 struct Pending {
     request: Option<Request>,
+    scopes: Option<ScopeRequest>,
     queued_at: Option<std::time::Instant>,
     stop: bool,
     clear: bool,
@@ -92,6 +107,7 @@ impl Worker {
         let pending = Arc::new((
             Mutex::new(Pending {
                 request: None,
+                scopes: None,
                 queued_at: None,
                 stop: false,
                 clear: false,
@@ -106,7 +122,11 @@ impl Worker {
                 let (request, queued_at) = {
                     let (lock, wake) = &*slot;
                     let mut state = lock.lock().unwrap();
-                    while !state.stop && !state.clear && state.request.is_none() {
+                    while !state.stop
+                        && !state.clear
+                        && state.request.is_none()
+                        && state.scopes.is_none()
+                    {
                         state = wake.wait(state).unwrap();
                     }
                     if state.stop {
@@ -115,6 +135,14 @@ impl Worker {
                     if state.clear {
                         state.clear = false;
                         source = None;
+                        continue;
+                    }
+                    if state.request.is_none() {
+                        let scopes = state.scopes.take().unwrap();
+                        drop(state);
+                        if !analyze_scopes(&engine, &slot, &tx, &context, scopes) {
+                            break;
+                        }
                         continue;
                     }
                     (
@@ -127,7 +155,6 @@ impl Worker {
                 let mut metadata = None;
                 let mut settings = request.settings.clone();
                 let mut defaults_errors = Vec::new();
-                let mut scope_image = None;
                 let result = (|| -> foveonic::source::Result<Option<Frame>> {
                     if source.as_ref().is_none_or(|(p, _)| p != &request.path) {
                         source = None; // Avoid keeping two decoded photos in memory during a switch.
@@ -221,7 +248,6 @@ impl Worker {
                         engine.device().poll(eframe::wgpu::Maintain::Wait);
                     }
                     if let Some(before)=view_before{crate::timing::emit("view",serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
-                    scope_image=Some((**image).clone());
                     Ok(Some(Frame {
                         path: request.path.clone(),
                         output: request.output.clone(),
@@ -261,39 +287,6 @@ impl Worker {
                 drop(publication);
                 crate::timing::event(request.revision, "reply_published");
                 context.request_repaint();
-                if let Some(image) = scope_image {
-                    // Show the image before waiting for scopes. A newer image request
-                    // should not sit behind analysis of an older frame.
-                    if scope_superseded(&slot) {
-                        continue;
-                    }
-                    let before = crate::timing::enabled().then(|| engine.gpu_activity());
-                    let mut profile = Profile::new(crate::timing::mode());
-                    let scope_span = crate::timing::Span::new(request.revision, "scopes");
-                    let result = engine
-                        .scopes(&image, &mut profile)
-                        .map_err(|error| error.to_string());
-                    if let Some(before) = before {
-                        crate::timing::emit(
-                            "scopes",
-                            serde_json::json!({"revision":request.revision,"source":request.path,"profile":profile,"activity":engine.gpu_activity().since(before),"status":if result.is_ok(){"complete"}else{"error"}}),
-                        );
-                    }
-                    drop(scope_span);
-                    if scope_superseded(&slot) {
-                        continue;
-                    }
-                    if tx
-                        .send(Update::Scopes {
-                            revision: request.revision,
-                            result,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    context.request_repaint();
-                }
             }
         });
         Self { pending, replies }
@@ -303,7 +296,13 @@ impl Worker {
         let mut state = lock.lock().unwrap();
         state.clear = true;
         state.request = None;
+        state.scopes = None;
         state.queued_at = None;
+        wake.notify_one();
+    }
+    pub fn submit_scopes(&self, request: ScopeRequest) {
+        let (lock, wake) = &*self.pending;
+        lock.lock().unwrap().scopes = Some(request);
         wake.notify_one();
     }
     pub fn submit(&self, request: Request) {
@@ -322,9 +321,54 @@ impl Drop for Worker {
     }
 }
 
-fn scope_superseded(slot: &Arc<(Mutex<Pending>, Condvar)>) -> bool {
-    let state = slot.0.lock().unwrap();
-    state.stop || state.clear || state.request.is_some()
+fn analyze_scopes(
+    engine: &Engine,
+    slot: &Arc<(Mutex<Pending>, Condvar)>,
+    tx: &mpsc::SyncSender<Update>,
+    context: &egui::Context,
+    request: ScopeRequest,
+) -> bool {
+    // Scope-only jobs reuse the immutable displayed buffer and yield to image work.
+    {
+        let mut state = slot.0.lock().unwrap();
+        if state.stop || state.clear || state.scopes.is_some() {
+            return true;
+        }
+        if state.request.is_some() {
+            state.scopes = Some(request);
+            return true;
+        }
+    }
+    let before = crate::timing::enabled().then(|| engine.gpu_activity());
+    let mut profile = Profile::new(crate::timing::mode());
+    let span = crate::timing::Span::new(request.key.revision, "scopes");
+    let result = engine
+        .scopes(&request.image, request.key.region, &mut profile)
+        .map_err(|error| error.to_string());
+    if let Some(before) = before {
+        crate::timing::emit(
+            "scopes",
+            serde_json::json!({"revision":request.key.revision,"region":request.key.region,"profile":profile,"activity":engine.gpu_activity().since(before),"status":if result.is_ok(){"complete"}else{"error"}}),
+        );
+    }
+    drop(span);
+    {
+        let state = slot.0.lock().unwrap();
+        if state.stop || state.clear || state.scopes.is_some() {
+            return true;
+        }
+    }
+    if tx
+        .send(Update::Scopes {
+            key: request.key,
+            result,
+        })
+        .is_err()
+    {
+        return false;
+    }
+    context.request_repaint();
+    true
 }
 
 /// Camera defaults fill missing choices only. Otherwise loading metadata
@@ -683,9 +727,12 @@ mod tests {
                             assert!(frame.scopes.is_none());
                             progress.push(reply.revision);
                             settled |= reply.revision == last;
+                            if reply.revision == last {
+                                request_scopes(&worker, &frame, None);
+                            }
                         }
-                    } else if let super::Update::Scopes { revision, result } = update {
-                        if revision == last {
+                    } else if let super::Update::Scopes { key, result } = update {
+                        if key.revision == last {
                             assert!(result.is_ok());
                             scopes = true;
                         }
@@ -715,6 +762,7 @@ mod tests {
                             settings.reconstruction
                         );
                         settled = true;
+                        request_scopes(&worker, &frame, None);
                         eprintln!(
                         "DRAG control={control} published_during_drag={} duration_ms={:.3} settled_ms={:.3}",
                         progress.len(),
@@ -722,7 +770,7 @@ mod tests {
                         stopped.elapsed().as_secs_f64() * 1000.
                     );
                     }
-                    super::Update::Scopes { revision, result } if revision == last => {
+                    super::Update::Scopes { key, result } if key.revision == last => {
                         assert!(result.is_ok());
                         scopes = true;
                     }
@@ -732,6 +780,74 @@ mod tests {
         }
     }
 
+    fn request_scopes(
+        worker: &super::Worker,
+        frame: &super::Frame,
+        region: Option<foveonic::scopes::Region>,
+    ) {
+        let foveonic::inspection::Content::Image(image) = &frame.artifact.content else {
+            panic!("expected image");
+        };
+        worker.submit_scopes(super::ScopeRequest {
+            key: super::ScopeKey {
+                revision: frame.revision,
+                region,
+            },
+            image: (**image).clone(),
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+    fn viewport_scope_jobs_reuse_the_displayed_image_and_settle_on_latest_region() {
+        let engine = foveonic::render::Engine::new().unwrap();
+        let worker = super::Worker::new(engine, eframe::egui::Context::default());
+        let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+            .join("blue-parking-sign.x3f");
+        worker.submit(super::Request {
+            revision: 1,
+            path,
+            settings: foveonic::render::Settings::new("Sunlight", "Standard"),
+            output: "final".into(),
+            difference: false,
+            export: None,
+        });
+        let frame = receive(&worker).result.unwrap().unwrap();
+        for left in 0..100 {
+            request_scopes(&worker, &frame, Some([left, 0, left + 64, 32]));
+        }
+        let latest = Some([99, 0, 163, 32]);
+        loop {
+            match worker
+                .replies
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap()
+            {
+                super::Update::Scopes { key, result } => {
+                    assert_eq!(key.revision, frame.revision);
+                    let data = result.unwrap();
+                    if key.region == latest {
+                        assert_eq!(data.samples, [64, 32]);
+                        assert_eq!(data.histogram(0).iter().sum::<u32>(), 64 * 32);
+                        break;
+                    }
+                }
+                super::Update::Image(_) => panic!("scope-only jobs must not render another image"),
+            }
+        }
+        request_scopes(&worker, &frame, None);
+        let super::Update::Scopes { key, result } = worker
+            .replies
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap()
+        else {
+            panic!("expected scopes");
+        };
+        assert_eq!(key.region, None);
+        let samples = result.unwrap().samples;
+        assert_eq!(samples[0].max(samples[1]), 512);
+    }
+
     #[test]
     fn pending_requests_replace_not_accumulate() {
         let (_, replies) = std::sync::mpsc::channel();
@@ -739,6 +855,7 @@ mod tests {
             pending: std::sync::Arc::new((
                 std::sync::Mutex::new(super::Pending {
                     request: None,
+                    scopes: None,
                     queued_at: None,
                     stop: false,
                     clear: false,
