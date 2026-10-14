@@ -21,7 +21,7 @@ fn parameters() -> Parameters {
         residual: [0.6, 0.3, 1.2, 1.],
         diffusion: [0.25, 1., 2., 0.],
         column_area: [0, 8, 80, 64],
-        column: [0.375, 0., 0., 0.],
+        column: [0.375, 27., 0., 0.],
         reduction: [1., 0., 0., 0.],
         geometry: [8, 8, 21, 0],
     }
@@ -170,6 +170,69 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
         "base mutated original source"
     );
 }
+#[test]
+#[ignore = "requires a GPU"]
+fn all_column_banding_presets_match_native_windows_and_coefficients() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../tests/data/column-presets.json")).unwrap();
+    let source: Vec<f32> = fixture["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap() as f32)
+        .collect();
+    let gpu = Gpu::new().unwrap();
+    let input = gpu
+        .upload("Five-preset identical column source", &source)
+        .unwrap();
+    let mut outputs = std::collections::HashSet::new();
+    for row in fixture["positions"].as_array().unwrap() {
+        let mut p = parameters();
+        p.source = [80, 112, 1, 1];
+        p.tile = [80, 112, 0, 11];
+        p.area = [0, 0, 80, 112];
+        p.column_area = [0, 8, 80, 104];
+        p.column = [
+            row["coefficient"].as_f64().unwrap() as f32,
+            row["window"].as_f64().unwrap() as f32,
+            0.,
+            0.,
+        ];
+        let result = column(&gpu, &input, p, &mut Profile::default()).unwrap();
+        let actual = floats(&gpu, &result);
+        let expected = row["corrected"].as_array().unwrap();
+        assert_eq!(actual.len(), expected.len());
+        let maximum = actual
+            .iter()
+            .zip(expected)
+            .map(|(a, b)| (*a - b.as_f64().unwrap() as f32).abs())
+            .fold(0_f32, f32::max);
+        assert!(actual.iter().all(|v| v.is_finite()));
+        assert!(
+            maximum < 0.12,
+            "preset {} maximum error {maximum}",
+            row["preset"]
+        );
+        assert_ne!(actual, source, "preset 0 is not Off");
+        let half = p.column[1] as usize / 2;
+        for y in 0..112 {
+            for x in 0..80 {
+                if !(8..104).contains(&y) || x < half || x >= 80 - half {
+                    let at = (y * 80 + x) * 3;
+                    assert_eq!(
+                        &actual[at..at + 3],
+                        &source[at..at + 3],
+                        "untouched margin ({x},{y})"
+                    );
+                }
+            }
+        }
+        outputs.insert(actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+    }
+    assert_eq!(outputs.len(), 5);
+    assert_eq!(floats(&gpu, &input), source);
+}
+
 #[test]
 #[ignore = "requires a GPU"]
 fn column_conditioning_matches_native_blocks_borders_gain_and_clamps() {

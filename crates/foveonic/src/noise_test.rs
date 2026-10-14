@@ -9,6 +9,7 @@ fn noise_controls_have_five_choices_and_neutral_detail() {
         Controls {
             chroma: 2,
             luminance: 2,
+            banding: 2,
             detail: 1.,
             ..Default::default()
         }
@@ -17,6 +18,7 @@ fn noise_controls_have_five_choices_and_neutral_detail() {
         Controls {
             chroma: choice,
             luminance: 4 - choice,
+            banding: choice,
             detail: 0.,
             ..Default::default()
         }
@@ -30,6 +32,10 @@ fn noise_controls_have_five_choices_and_neutral_detail() {
         },
         Controls {
             luminance: 5,
+            ..Default::default()
+        },
+        Controls {
+            banding: 5,
             ..Default::default()
         },
         Controls {
@@ -254,6 +260,39 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
                     f32::from_bits(0x3faaa993)
                 }
         );
+        for banding in 0..=4 {
+            let selected = prepare(
+                &source.metadata,
+                "Sunlight",
+                1.,
+                Controls {
+                    banding,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                selected.column[0],
+                [0.625, 0.5, 0.375, 0.25, 0.125][banding as usize]
+                    * if selected.edge[3] < 800. {
+                        1.
+                    } else {
+                        f32::from_bits(0x3faaa993)
+                    }
+            );
+            assert_eq!(selected.column[1], (15 + 6 * banding) as f32);
+            assert!(selected.key(RecipeStage::Base) == p.key(RecipeStage::Base));
+            let mut only_column = p;
+            only_column.column = selected.column;
+            assert_eq!(
+                bytemuck::bytes_of(&selected),
+                bytemuck::bytes_of(&only_column)
+            );
+            assert_eq!(
+                selected.key(RecipeStage::Column) == p.key(RecipeStage::Column),
+                banding == 2
+            );
+        }
         let mut incomplete = (*source.metadata).clone();
         incomplete.matrices.remove("DarkShieldTop");
         assert!(prepare(&incomplete, "Sunlight", 1., Controls::default()).is_ok());

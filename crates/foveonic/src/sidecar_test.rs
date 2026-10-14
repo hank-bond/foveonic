@@ -41,6 +41,7 @@ fn edited() -> Settings {
     let mut controls = noise::Controls {
         chroma: 4,
         luminance: 0,
+        banding: 4,
         detail: 0.42,
         ..Default::default()
     };
@@ -80,6 +81,50 @@ fn recipes_round_trip_all_settings_and_named_automatic_choices_exactly() {
 }
 
 #[test]
+fn missing_edit_fields_use_shared_defaults_and_preserve_supplied_values() {
+    let defaults = Settings::default();
+    assert_eq!(defaults, Settings::new("", ""));
+    let minimal = br#"{"format":"foveonic-editing","version":1,"settings":{}}"#;
+    assert_eq!(decode(minimal).unwrap(), defaults);
+    let partial = br#"{"format":"foveonic-editing","version":1,"settings":{"exposure":1.25,"repair":null,"tone":{"shadows":-0.5},"reconstruction":{"chroma":4,"overrides":{"mean-decay":0.7}}}}"#;
+    let mut expected = defaults;
+    expected.exposure = 1.25;
+    expected.repair = None;
+    expected.tone.shadows = -0.5;
+    let mut noise = noise::Controls {
+        chroma: 4,
+        ..Default::default()
+    };
+    noise.overrides.set(noise::Parameter::MeanDecay, Some(0.7));
+    expected.reconstruction = Some(noise);
+    assert_eq!(decode(partial).unwrap(), expected);
+    assert_eq!(decode(&encode(&expected).unwrap()).unwrap(), expected);
+
+    let original: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
+    let default_fields = serde_json::to_value(Settings::default()).unwrap();
+    for (field, default_value) in default_fields.as_object().unwrap() {
+        let mut missing = original.clone();
+        missing["settings"].as_object_mut().unwrap().remove(field);
+        let restored = decode(&serde_json::to_vec(&missing).unwrap()).unwrap();
+        let mut expected = original["settings"].clone();
+        expected[field] = default_value.clone();
+        let actual: serde_json::Value =
+            serde_json::from_slice(&encode(&restored).unwrap()).unwrap();
+        assert_eq!(actual["settings"], expected, "{field}");
+    }
+    // Existing recipes keep their column midpoint when the new field is absent.
+    let mut older = original.clone();
+    older["settings"]["reconstruction"]
+        .as_object_mut()
+        .unwrap()
+        .remove("banding");
+    let restored = decode(&serde_json::to_vec(&older).unwrap()).unwrap();
+    let mut expected = edited();
+    expected.reconstruction.as_mut().unwrap().banding = 2;
+    assert_eq!(restored, expected);
+}
+
+#[test]
 fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
     assert!(decode(b"{").is_err());
     assert!(decode(&vec![b' '; MAX_BYTES as usize + 1]).is_err());
@@ -112,13 +157,45 @@ fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
     let bytes = String::from_utf8(encode(&edited()).unwrap()).unwrap();
     let duplicate = bytes.replace("\"version\": 1,", "\"version\": 1, \"version\": 1,");
     assert!(decode(duplicate.as_bytes()).is_err());
+    let duplicate_setting = bytes.replace(
+        "\"sensor_gain\": 1.375,",
+        "\"sensor_gain\": 1.375, \"sensor_gain\": 1.0,",
+    );
+    assert!(decode(duplicate_setting.as_bytes()).is_err());
+    let invalid_setting = bytes.replace("\"sensor_gain\": 1.375,", "\"sensor_gain\": null,");
+    assert!(decode(invalid_setting.as_bytes()).is_err());
     let duplicate_override = bytes.replace(
         "\"base-blend\": null,",
         "\"base-blend\": null, \"base-blend\": 0.5,",
     );
     assert!(decode(duplicate_override.as_bytes()).is_err());
     let missing_override = bytes.replace("\"base-blend\": null,", "");
-    assert!(decode(missing_override.as_bytes()).is_err());
+    assert_eq!(decode(missing_override.as_bytes()).unwrap(), edited());
+    for (field, invalid) in [
+        ("banding", serde_json::json!(5)),
+        ("banding", serde_json::json!(1.5)),
+        ("banding", serde_json::Value::Null),
+    ] {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
+        value["settings"]["reconstruction"][field] = invalid;
+        assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
+    value["settings"]["last_folder"] = serde_json::json!("/some/folder");
+    assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    value["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("last_folder");
+    value["settings"]["tone"]["last_folder"] = serde_json::json!("/some/folder");
+    assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    value["settings"]["tone"]
+        .as_object_mut()
+        .unwrap()
+        .remove("last_folder");
+    value["settings"]["reconstruction"]["overrides"]["unknown"] = serde_json::json!(0.5);
+    assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut oversized = edited();
     oversized.color_mode = "a".repeat(MAX_BYTES as usize);
     assert!(encode(&oversized).is_err());

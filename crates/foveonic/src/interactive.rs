@@ -99,6 +99,7 @@ impl Settings {
                 changed!(a.detail.to_bits() != b.detail.to_bits(), "detail");
                 changed!(a.chroma != b.chroma, "chroma-noise");
                 changed!(a.luminance != b.luminance, "luma-noise");
+                changed!(a.banding != b.banding, "banding-noise");
                 for p in crate::noise::Parameter::ALL {
                     changed!(
                         a.overrides.get(p).map(f32::to_bits)

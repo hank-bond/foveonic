@@ -28,7 +28,7 @@ enum Recipe<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub white_balance: String,
     pub color_mode: String,
@@ -59,11 +59,12 @@ pub struct Settings {
     pub output_size: Option<[u32; 2]>,
 }
 
-impl Settings {
-    pub fn new(white_balance: impl Into<String>, color_mode: impl Into<String>) -> Self {
+impl Default for Settings {
+    fn default() -> Self {
         Self {
-            white_balance: white_balance.into(),
-            color_mode: color_mode.into(),
+            // Camera choices are resolved from the selected X3F, not a global preset.
+            white_balance: String::new(),
+            color_mode: String::new(),
             exposure: 0.,
             tone: ToneControls::default(),
             sensor_gain: 1.,
@@ -76,6 +77,16 @@ impl Settings {
             reconstruction: None,
             sharpen_amount: 0.,
             output_size: None,
+        }
+    }
+}
+
+impl Settings {
+    pub fn new(white_balance: impl Into<String>, color_mode: impl Into<String>) -> Self {
+        Self {
+            white_balance: white_balance.into(),
+            color_mode: color_mode.into(),
+            ..Self::default()
         }
     }
 

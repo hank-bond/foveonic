@@ -87,6 +87,12 @@ pub(crate) fn parse_settings(
                     .get_or_insert_with(Default::default)
                     .luminance = value.parse()?
             }
+            "--banding-noise" => {
+                settings
+                    .reconstruction
+                    .get_or_insert_with(Default::default)
+                    .banding = value.parse()?
+            }
             "--detail" => {
                 settings
                     .reconstruction

@@ -8,12 +8,13 @@ mod tests;
 
 use crate::source::{MatrixEncoding, Metadata, Result};
 
-/// Five presets for chroma and luminance, with a residual-detail multiplier.
+/// Five presets for chroma, luminance, and column banding, with a residual-detail multiplier.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Controls {
     pub chroma: u32,
     pub luminance: u32,
+    pub banding: u32,
     pub detail: f32,
     pub overrides: Overrides,
 }
@@ -22,6 +23,7 @@ impl Default for Controls {
         Self {
             chroma: 2,
             luminance: 2,
+            banding: 2,
             detail: 1.,
             overrides: Overrides::default(),
         }
@@ -29,7 +31,12 @@ impl Default for Controls {
 }
 impl Controls {
     pub fn validate(self) -> Result<()> {
-        if self.chroma > 4 || self.luminance > 4 || !self.detail.is_finite() || self.detail < 0. {
+        if self.chroma > 4
+            || self.luminance > 4
+            || self.banding > 4
+            || !self.detail.is_finite()
+            || self.detail < 0.
+        {
             return Err(
                 "noise choices must be in 0..4 and detail must be finite and nonnegative".into(),
             );
@@ -172,7 +179,7 @@ impl<'de> serde::Deserialize<'de> for Overrides {
         impl<'de> serde::de::Visitor<'de> for Fields {
             type Value = Overrides;
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("all seven named noise overrides")
+                formatter.write_str("named noise overrides")
             }
             fn visit_map<M: serde::de::MapAccess<'de>>(
                 self,
@@ -194,11 +201,6 @@ impl<'de> serde::Deserialize<'de> for Overrides {
                     }
                     seen[index] = true;
                     overrides.set(Parameter::ALL[index], value);
-                }
-                if !seen.into_iter().all(|field| field) {
-                    return Err(serde::de::Error::custom(
-                        "expected all seven named noise overrides",
-                    ));
                 }
                 Ok(overrides)
             }
@@ -242,7 +244,7 @@ pub(crate) struct Parameters {
     pub residual: [f32; 4], // Mono mix, color mix, residual strength, detail multiplier.
     pub diffusion: [f32; 4], // Step, noise-model step, fixed contrast, directional axis.
     pub column_area: [u32; 4], // Camera column bounds, not the shading or working-area bounds.
-    pub column: [f32; 4],   // Camera column blend, followed by reserved values.
+    pub column: [f32; 4],   // Column range coefficient, horizontal window, and reserved values.
     pub reduction: [f32; 4], // Native eighth-quantized reconstruction scale.
     pub geometry: [u32; 4], // LocalMean margin, edge LUT margin, fixed bilateral size, global branch.
 }
@@ -775,13 +777,13 @@ pub(crate) fn prepare(
         geometry: [8, 8, fixed_size, 0],
         column_area: [0; 4], // Prepared only when the column stage is required.
         column: [
-            0.375
+            [0.625, 0.5, 0.375, 0.25, 0.125][controls.banding as usize]
                 * if iso < 800. {
                     1.
                 } else {
                     f32::from_bits(0x3faaa993)
                 },
-            0.,
+            (15 + 6 * controls.banding) as f32,
             0.,
             0.,
         ],

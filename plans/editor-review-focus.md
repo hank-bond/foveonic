@@ -49,7 +49,7 @@ The existing read-only reference diagnostic library was replayed with Sunlight W
 
 Green/blue samples remain unchanged. The detector emits 2679 records across this photograph. [The retained fixture](../crates/foveonic/tests/data/repair-reference.json) and its [provenance](../crates/foveonic/tests/data/README.md) preserve these results. The ignored camera-selection test checks the original samples and missing flags.
 
-This establishes the missing despeckle stage as the cause of the two reported residuals. The current immutable-neighbor shader's cluster rejection, merged masks, and arithmetic still differ from reference repair and warrant follow-on comparison for other defects. No direct SPP comparison was performed.
+This establishes the missing despeckle stage as the cause of the two reported residuals. The current immutable-neighbor shader's cluster rejection, merged masks, and arithmetic still differ from reference repair and warrant follow-on comparison for other defects. No direct application-output comparison was performed.
 
 Approved next slice: metadata-prepared, shader-based full-image speckle detection and corresponding reference-style correction before reconstruction. Separate controls with both enabled by default are implemented; current evidence is tracked in the [despeckle plan](./despeckle.md).
 

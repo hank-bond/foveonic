@@ -44,6 +44,7 @@ Options (also available for batch):
   --reconstruction          Enable reference-style full-resolution noise/detail processing
   --chroma-noise CHOICE      Camera noise-table choice 0..4, default 2; enables reconstruction
   --luma-noise CHOICE        Camera noise-table choice 0..4, default 2; enables reconstruction
+  --banding-noise CHOICE     Column-noise preset 0..4, default 2; enables reconstruction
   --detail FACTOR           Residual detail multiplier, default 1; enables reconstruction
   --sharpen AMOUNT           Nonnegative native high-pass amount before tone, default 0 (off)
   --size WIDTHxHEIGHT       Exact final oriented dimensions, bilinear sampling
@@ -375,6 +376,15 @@ mod tests {
                 ..Default::default()
             })
         );
+        for banding in 0..=4 {
+            let settings = parse(&format!(
+                "--wb Sunlight --mode Standard --banding-noise {banding}"
+            ))
+            .unwrap()
+            .0;
+            assert_eq!(settings.reconstruction.unwrap().banding, banding);
+            assert!(settings.row_correction);
+        }
         assert!(neutral.output_size.is_none());
         let (settings, paths, _) = parse("a.x3f --wb Auto --mode Vivid --contrast 0.5 --shadows -1 --highlights 1 --sensor-gain 1.3 --saturation 1.2 --color-dq-gain 1.5 --repair-badness 8 --sharpen 0.5 --size 600x400 b.x3f").unwrap();
         assert_eq!(paths, [PathBuf::from("a.x3f"), PathBuf::from("b.x3f")]);
@@ -403,6 +413,9 @@ mod tests {
             "--color-dq-gain NaN",
             "--color-dq-gain inf",
             "--repair-badness 16",
+            "--banding-noise 5",
+            "--banding-noise -1",
+            "--banding-noise 1.5",
             "--noise-override mean-decay=NaN",
             "--noise-override edge-cutoff=1",
             "--noise-override unknown=1",

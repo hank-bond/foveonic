@@ -52,13 +52,16 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Shapes the brighter part of the tone curve. Use it to adjust the appearance of bright surfaces and their tonal separation. It is not highlight recovery: detail lost at capture cannot be brought back by this slider. 0 leaves it unchanged."
         }
         "Noise and detail" => {
-            "Enables noise reduction followed by detail restoration, using the camera's noise information. Use it to balance smoother areas against fine texture. Too much smoothing can look waxy; too much restored detail can bring noise back. The Chroma noise, Luma noise, Detail, and ColorDQ gain controls are shown while this is on."
+            "Enables noise reduction followed by detail restoration, using the camera's noise information. Use it to balance smoother areas against fine texture. Too much smoothing can look waxy; too much restored detail can bring noise back. The Chroma noise, Luma noise, Banding noise, Detail, and ColorDQ gain controls are shown while this is on."
         }
         "Chroma noise" => {
             "Reduces colored speckles and blotches, especially in shadows. Start at 2. These are five preset settings; 0 still smooths noise and is not an Off setting. Compare smooth areas and fine color texture: cleanup can also remove real color detail."
         }
         "Luma noise" => {
             "Reduces grain rather than colored blotches. Start at 2. These are five preset settings; 0 still smooths noise and is not an Off setting. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
+        }
+        "Banding noise" => {
+            "Reduces sensor-column stripes independently of Row banding correction. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger filter to estimate column offsets, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
         }
         "Detail" => {
             "Controls how much fine texture is kept after noise reduction. At 0 the image is smoother; 1 is the normal starting point. Higher values bring back more texture, but can also bring back grain and colored speckles. This is separate from sharpening."
@@ -142,9 +145,15 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "noise.layers" => {
             "The smoothed sensor readings used as the base for detail restoration. Fine texture may look soft here; some is restored later. The three gray layers are not finished color channels."
         }
-        "column.layers"=>"Raw sensor layers after column-stripe correction, projected from the processing tiles. This is the input used to estimate brightness/detail texture; the already-filtered base is separate. Useful for checking narrow vertical noise, not final color or tone.",
-        "detail.raw-ratio"=>"Brightness/detail ratio before deterministic pattern suppression. Neutral is 1; compare with Detail ratio to see the conditioning rather than a final color image.",
-        "pattern.mask"=>"Projected pattern-selection mask: white selects near-neutral ratio texture for deterministic conditioning; black excludes it. Overlap ramps can appear gray. This does not identify camera defects.",
+        "column.layers" => {
+            "Raw sensor layers after column-stripe correction, projected from the processing tiles. This is the input used to estimate brightness/detail texture; the already-filtered base is separate. Useful for checking narrow vertical noise, not final color or tone."
+        }
+        "detail.raw-ratio" => {
+            "Brightness/detail ratio before deterministic pattern suppression. Neutral is 1; compare with Detail ratio to see the conditioning rather than a final color image."
+        }
+        "pattern.mask" => {
+            "Projected pattern-selection mask: white selects near-neutral ratio texture for deterministic conditioning; black excludes it. Overlap ramps can appear gray. This does not identify camera defects."
+        }
         "noise.edges" => {
             "A diagnostic view of how strongly smoothing can pass through different areas. Brighter values allow more smoothing across an area; darker values restrict it near detected edges. This is a guide for noise reduction, not a photograph."
         }

@@ -17,11 +17,12 @@ fn cuts(tile:u32)->vec2<u32>{
 fn horizontal(@builtin(global_invocation_id)id:vec3<u32>){
     if id.x>=params.tile.x || id.y>=params.tile.y*params.source.z*params.source.w{return;}
     let p=atlas_position(id.xy,params);let index=tile_pixel(p,params);var result=vec3(0.0);
+    let half=u32(params.column.y)/2u;
     // Native filtering stops one column before the final correction column.
-    if p.x>=13u && p.x<params.tile.x-14u{
+    if p.x>=half && p.x<params.tile.x-half-1u{
         let center=rgb(index);let scales=(2047.0/(8.0/params.column.x))/variance(center,params);
         var sum=vec3(0.0);var total=0.0;
-        for(var x=p.x-13u;x<=p.x+13u;x++){
+        for(var x=p.x-half;x<=p.x+half;x++){
             let sample=rgb(tile_pixel(vec3(x,p.y,p.z),params));let d=sample-center;
             let distance=fma(d.z*d.z,scales.z,fma(d.x*d.x,scales.x,scales.y*(d.y*d.y)));
             if distance<2047.5{let lookup=u32(floor(max(distance,0.0)+0.5));let weight=table[lookup];total+=weight;sum=fma(sample,vec3(weight),sum);}
@@ -52,7 +53,8 @@ fn block_deltas(@builtin(global_invocation_id)id:vec3<u32>){
 fn correct(@builtin(global_invocation_id)id:vec3<u32>){
     if id.x>=params.tile.x || id.y>=params.tile.y*params.source.z*params.source.w{return;}
     let p=atlas_position(id.xy,params);let index=tile_pixel(p,params);var value=rgb(index);let area=cuts(p.z);let count=(area.y-area.x)/40u;
-    if count>0u && p.y>=area.x && p.y<area.y && p.x>=13u && p.x<params.tile.x-13u{
+    let half=u32(params.column.y)/2u;
+    if count>0u && p.y>=area.x && p.y<area.y && p.x>=half && p.x<params.tile.x-half{
         let block=min((p.y-area.x)/40u,count-1u);let q=((p.z*(params.tile.y/40u)+block)*params.tile.x+p.x)*3u;
         let delta=vec3(deltas[q],deltas[q+1u],deltas[q+2u]);let eligible=abs(value*0.06)>abs(delta);
         value=clamp(value-select(vec3(0.0),delta,eligible),vec3(0.0),vec3(32766.0));

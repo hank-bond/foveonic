@@ -228,6 +228,7 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     if let Some(controls) = &mut settings.reconstruction {
         changed |= adjustment(ui, "Chroma noise", &mut controls.chroma, 0..=4, 2);
         changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
+        changed |= adjustment(ui, "Banding noise", &mut controls.banding, 0..=4, 2);
         changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
         changed |= automatic_adjustment(
             ui,
@@ -320,6 +321,7 @@ mod tests {
             "Noise and detail",
             "Chroma noise",
             "Luma noise",
+            "Banding noise",
             "Detail",
             "ColorDQ gain",
             "Sharpen",
@@ -947,6 +949,75 @@ mod tests {
             vec![arrow(egui::Key::ArrowDown, false)]
         ));
         assert_eq!(value, 8);
+    }
+
+    #[test]
+    fn banding_slider_snaps_to_five_choices_and_double_click_resets() {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400., 100.),
+            )),
+            ..Default::default()
+        };
+        let mut value = 2_u32;
+        let mut frame = |time, events| {
+            let before = value;
+            let mut event = input.clone();
+            event.time = Some(time);
+            event.events = events;
+            let mut changed = false;
+            let _ = ctx.run(event, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    changed = adjustment(ui, "Banding noise", &mut value, 0..=4, 2);
+                });
+            });
+            assert!(value <= 4);
+            assert_eq!(changed, value != before);
+            value
+        };
+        frame(0., vec![]);
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, x) in [112., 140., 170., 195., 215., 240., 260., 285., 310.]
+            .into_iter()
+            .enumerate()
+        {
+            let point = egui::pos2(x, 18.);
+            for (offset, pressed) in [(0., true), (0.1, false)] {
+                let current = frame(
+                    1. + i as f64 * 0.5 + offset,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+                seen.insert(current);
+            }
+        }
+        assert_eq!(seen, (0..=4).collect());
+        let point = egui::pos2(310., 18.);
+        let mut reset = 4;
+        for (time, pressed) in [(10., true), (10.05, false), (10.1, true), (10.15, false)] {
+            reset = frame(
+                time,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        assert_eq!(reset, 2);
     }
 
     #[test]

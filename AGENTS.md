@@ -11,6 +11,7 @@ read_when: "Read first when entering the repository."
 - Implement agreed decisions. Ask when requirements are unclear or work encounters a blocker.
 - Keep changes within approved scope. Do not commit, publish, install, or make generated output the default without explicit approval. Work is reviewed before commit.
 - Keep responses concise. Use plain language and include contrasts only when needed to prevent significant confusion.
+- Refer to the external processing reference as the "reference implementation" in repository prose, source summaries, and filenames.
 
 ## Reference access
 

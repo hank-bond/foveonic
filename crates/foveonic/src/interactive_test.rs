@@ -29,7 +29,30 @@ fn assert_same_pixels(label: &str, actual: &[u8], expected: &[u8]) {
             count += 1;
         }
     }
-    panic!("{label}: {count} differing float components, max absolute difference={largest}, first={first:?}");
+    panic!(
+        "{label}: {count} differing float components, max absolute difference={largest}, first={first:?}"
+    );
+}
+
+#[test]
+fn column_banding_changes_have_a_distinct_parameter_identity() {
+    let settings = Settings {
+        reconstruction: Some(Default::default()),
+        ..Default::default()
+    };
+    for banding in 0..=4 {
+        let mut edited = settings.clone();
+        edited.reconstruction.as_mut().unwrap().banding = banding;
+        assert_eq!(
+            settings.changed_parameters(&edited),
+            if banding == 2 {
+                vec![]
+            } else {
+                vec!["banding-noise"]
+            }
+        );
+        assert_eq!(settings.row_correction, edited.row_correction);
+    }
 }
 
 fn session_image(
@@ -230,6 +253,9 @@ fn noise_and_override_inputs_match_fresh_outputs() {
         let mut luma = settings.clone();
         luma.reconstruction.as_mut().unwrap().luminance = choice;
         cases.push((format!("luma-{choice}"), luma));
+        let mut banding = settings.clone();
+        banding.reconstruction.as_mut().unwrap().banding = choice;
+        cases.push((format!("banding-{choice}"), banding));
     }
     for parameter in Parameter::ALL {
         for fraction in [0.25, 0.75] {
