@@ -1,56 +1,18 @@
-# Foveonic GPU
+# Foveonic
+<img src="crates/foveonic-gui/assets/logo.svg" width="200" alt="Application Icon">
+An X3F processing app with both a GUI and a batch CLI, focused on processing speed, flexibility, and attractive results.
 
-A personal Merrill X3F processing app with a GUI and a batch CLI, focused on attractive photographs and further editing latitude.
+## Supported Formats
+TIFF exports bake all processing into the pixel data, trading maximum compatibility for reduced editing latitude.  This is because tone and color changes are fully baked-in, with downstream editors operating "on top of" those changes.  
 
-A shared shader-based image engine builds internal processing graphs from selected settings and algorithms. Output recipes target compressed DNGs with editable samples and embedded looks, or TIFFs with white balance, color, and tone baked in.
+DNG separates out the base linear image data—only baking in some corrections and detail enhancement—and compresses all tone and color changes into a curve and matrix in the DNG metadata.  Your DNG editor will then take this metadata and apply it on top of the linear pixel data as part of its rendering pipeline.  This makes it a more flexible format for editing further, but does mean that not every editor will render it exactly as it looked in Foveon upon export.
 
-TIFF rendering and an opt-in metadata-selected noise/detail path are implemented. Original-saturation highlight restoration is also implemented. Uncompressed RGB16 DNG export is under validation; compression and target-editor acceptance remain pending.
+## Rendering Techniques
+All correction and enhancement metadata that exists in the X3F file is made use of.  Effort has been made to align with the Sigma's intended processing of the files wherever possible.  Additional controls are made wherever available to alter the processing approaches on a per-image basis.
 
-## Run the GUI
+The processing pipeline has been largely developed using WebGPU shaders, in order to provide a significantly improved editing experience.  This also benefits batch CLI render times.  
 
-On macOS 26 with Xcode 26 or later, build and launch the local app bundle:
+## Requirements
+Development is currently done on a modest Apple M1 Pro with 14 GPU Cores.  The current focus is targeting MacOS.  The tooling chosen should be multi-platform compatible, but focus is not currently on delivering that.  On a machine of that caliber, you may expect full pipeline render times around 900-1600ms, with partial re-renders closer to 200-400ms using cached pipeline partials.
 
-```sh
-python3 crates/foveonic-gui/build-macos-app.py -- {X3F_OR_FOLDER}
-```
-
-This creates `target/release/Foveonic.app` and lets macOS select the light/dark icon according to system icon appearance settings. Nothing is installed or published. Omit the input to reopen the last folder; `--debug` selects the debug profile and `--build-only` skips launching. Other platforms use `cargo run --release -p foveonic-gui -- {X3F_OR_FOLDER}`.
-
-The egui desktop app uses the owner's [layered-X application icon](./crates/foveonic-gui/assets/AGENTS.md) and keeps an embedded-JPEG organizer, GPU image viewport, and tools visible in three resizable panes. Switch the organizer between icons and compact list; drag tool headers to reorder them or click to collapse. Tools include a draggable navigator with a zoom readout and 100%/200%/400% buttons, current-buffer histogram/parade/waveform scopes, processing controls, and photographic metadata. Double-click the main image or navigator image to toggle Fit and the snap zoom (default 200%); main-image zoom keeps the clicked point under the cursor, while navigator zoom centres the clicked image location. ⌘-click a zoom button (Ctrl-click outside macOS) to set the remembered snap target, marked by a colored underline; ordinary clicks zoom immediately. Sliders have editable values and double-click reset. Focused value boxes support Up/Down nudging (0.1 for floats, 1 for integers unless overridden). One Sensor gain scales the calibrated layers before color conversion. Hover over editing controls, inspection choices, or scopes for [plain-English explanations](./docs/specs/photographic-help.md) of their effects and tradeoffs.
-
-Selection restores its editing sidecar, or starts with per-photo defaults and the X3F's recorded WB and color mode; explicit `--wb`/`--mode` override those fields. Inspection offers visual image buffers, including grayscale sensor layers; non-image node diagnostics are deferred. Export TIFF runs the final photographic recipe. Experimental Export DNG reruns technical processing from the original X3F and embeds the selected appearance separately; it currently writes uncompressed RGB16 samples. UI layout, scope/organizer choices, and the last opened folder persist; an explicit launch path takes precedence. Photographic changes save automatically to adjacent [per-X3F sidecars](./docs/specs/editing-sidecars.md); viewing alone creates no recipe. Invalid recipes are protected, and save failures remain visible with retry. The CLI does not select sidecars yet. A bar below the image shows capture settings, filename, and visible image-pixel bounds. Capture settings load independently, so they appear while the selected image is still loading. Click Inspect group rows to expand RGB channels or sensor layers. **Δ Difference** compares compatible layer/channel views with their named operation input; Amplify makes small changes visible without changing edits or export. Presentation uses sRGB SDR; monitor-profile correction is pending. Scopes show values in the buffer's signal space. Enable **Viewport only** inside Scopes to measure the visible crop as you pan or zoom; off measures the whole image.
-
-Editing groups Sharpen under **Refinement** and highlight restoration under **Corrections**. Speckles, Bad pixels, and Row banding are on by default in Corrections' **Advanced** group. Collapsing it keeps their settings. Highlights has an enable checkbox, threshold slider, and **A** button for Auto.
-
-## Run the CLI
-
-Inspect metadata or render an RGB16 TIFF through the GPU graph. TIFF color space follows the file's sRGB or Adobe RGB camera route.
-
-```sh
-cargo run --release -p foveonic -- inspect {INPUT_X3F}
-cargo run --release -p foveonic -- render {INPUT_X3F} {OUTPUT_TIFF} --wb Sunlight --mode Standard
-cargo run --release -p foveonic -- batch {OUTPUT_DIR} {INPUT_DIR} --wb Sunlight --mode Standard
-cargo run --release -p foveonic -- --help
-```
-
-Controls include exposure, contrast, shadows, highlights, saturation, and Sensor gain (`--sensor-gain`, neutral at 1×). Bad-pixel repair, speckle correction, highlight restoration, and [row banding correction](./docs/specs/row-banding.md) default on. Disable them with `--no-repair`, `--no-despeckle`, `--no-highlight-restoration`, or `--no-row-correction`. Repair uses camera defect lists and an automatic cutoff; `--repair-badness MIN` supplies a diagnostic override.
-
-[Highlight restoration](./docs/specs/highlight-restoration.md) is separate from tone Highlights. `--highlight-threshold EV|auto` shifts its camera threshold by −2 to +2 stops; +1 doubles it. Auto is the default. Restored layers and original clipping density are inspectable.
-
-ColorDQ conditioning (automatic with reconstruction; `--color-dq-gain` overrides it, 0 off), [native high-pass sharpening](./docs/specs/native-sharpening.md), and exact-size bilinear resizing are opt-in; `--help` lists their settings. Batch accepts files and nonrecursive directories, reusing one engine and processing one image at a time. Output files must be new, with distinct names within a batch. [Profiling](./docs/profiling.md) uses `--profile wall` for host-stage measurements or `--profile gpu` for synchronized GPU diagnostics; the GUI uses `FOVEONIC_PROFILE=wall|gpu`.
-
-Enable **Noise and Detail** in Editing or use `--reconstruction` for the [noise/detail path](./docs/specs/detail-and-noise.md), including [native reduced local/global filtering](./docs/specs/reduced-reconstruction.md). `--chroma-noise` and `--luma-noise` select camera-table choices 0–4 (default 2); `--banding-noise` selects five snapping column-estimation presets, also default 2, independently of row correction. `--detail` sets residual strength (default 1×). These options also enable reconstruction. Inspection exposes filtered layers, edge weights, a luminance ratio, reconstructed RGB, and a signed detail signal. Advanced noise and detail controls link to their basic presets; unlink a value to override it. CLI accepts repeated `--noise-override KEY=VALUE`. Noise preset 0 still filters; Detail 0 shows the filtered base.
-
-The [render-resource API](./docs/render-resources.md) separates GPU processing, texture preparation, and export. Inspection executes only requested output dependencies and retains selected artifacts. Interactive sessions reuse the active edit's unchanged inputs and deliver images before scopes; the navigator is a deferred GPU-prepared small texture. Combined RGB heatmaps, arbitrary branch comparisons, and native menus remain deferred. See the [responsiveness plan](./plans/ui-responsiveness.md) for measurements and remaining limits.
-
-## Project documents
-
-Start at [`AGENTS.md`](./AGENTS.md) for repository instructions, specifications, and progress plans.
-
-Maintain the documentation and Rust source indexes with:
-
-```sh
-cargo run -p docs-index -- --root .
-cargo run -p docs-index -- --check --root .
-cargo test -p docs-index
-```
+Expect application memory to average around 2GB, with transient operations peaking under 4GB.  Configuration to reduce memory requirements at the cost of increased processing speed will be made available at a later time.
