@@ -25,6 +25,8 @@ Use the shared processing settings as the version-1 recipe, preserving automatic
 
 ## Conformance
 
+Sensor gain was removed before external use. Existing local sidecars were migrated directly by deleting only that field, as recorded in the [removal plan](../../plans/remove-sensor-gain.md). The application has no legacy reader.
+
 An edited X3F can be reopened with its saved recipe and used to regenerate an export without reading an earlier DNG. Workspace preferences and inspection amplification do not change the recipe, and the original X3F remains unchanged.
 
 The shared API and GUI slice implement these requirements. Automated checks cover exact round trips and GPU replay, protected malformed/future/unreadable recipes, coalesced latest writes, failed-save retry, photo switches, shutdown flushing, and inspection normalization. The owner accepted settings restoration across application restarts. CLI recipe selection remains outside this slice.

@@ -39,6 +39,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[pipeline-performance](./pipeline-performance.md)** Pause algorithm expansion, stabilize a buildable baseline, measure completed cold/warm renders and GPU stages, then optimize the largest bottlenecks with output-equivalence checks. _Resume the owner-approved profiling and optimization pivot; remaining algorithm work is paused._
 - **[profiling-consolidation](./profiling-consolidation.md)** Consolidate retained core, GUI and native profiling into explicit modes and reusable structured reports.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
+- **[remove-sensor-gain](./remove-sensor-gain.md)** Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.
