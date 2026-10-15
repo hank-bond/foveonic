@@ -29,7 +29,7 @@ pub fn prepare_base(
     settings.validate()?;
     // Reject an unknown look before spending time on the technical render.
     profile.measure("prepare DNG presentation mode", || {
-        crate::color_mode::prepare(&source.metadata, &settings.color_mode)
+        crate::nodes::color::color_mode::prepare(&source.metadata, &settings.color_mode)
     })?;
     engine.render_dng_base(source, settings, profile)
 }

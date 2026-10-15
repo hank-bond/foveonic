@@ -20,7 +20,7 @@ Implements the owner-approved guard approach in [render resources](../docs/specs
 
 The single ordered device queue remains the submission contract. Guards do not detect missing graph edges or shader-internal races. No production completion fences, shaders, or photographic arithmetic changed.
 
-The private [storage module](../crates/foveonic/src/gpu_storage.rs) holds shared `Arc` allocations. Mutable borrowing and `Arc::get_mut` acquire a non-clonable `WriteGuard`; retained owners block writes in release builds. Processing modules cannot access raw buffers. `Binding::Read` borrows shared ownership; `Binding::Write` holds a mutable lease through synchronous encode/submit, including internal reads of in-place stages.
+The private [storage module](../crates/foveonic/src/gpu/storage.rs) holds shared `Arc` allocations. Mutable borrowing and `Arc::get_mut` acquire a non-clonable `WriteGuard`; retained owners block writes in release builds. Processing modules cannot access raw buffers. `Binding::Read` borrows shared ownership; `Binding::Write` holds a mutable lease through synchronous encode/submit, including internal reads of in-place stages.
 
 Cache/image/graph clones share ownership. Scratch accepts exclusively owned ordinary floating-image layouts, not large tiled/atomic workspaces. Shape eligibility and content ownership are distinct checks. Allocation/generation IDs, size, labels, and last writers remain in assertion diagnostics. Temporary event tracing and capture/rerender probes are removed. Test-only Naga analysis audits transitive shader writes against host bindings without production reflection.
 

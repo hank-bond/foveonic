@@ -1,7 +1,7 @@
 //! Keeps GPU images with their photo settings and defines crop and orientation views.
 
-pub use crate::calibration::ColorSpace;
-use crate::calibration::EncodeParams;
+pub use crate::nodes::sensor::calibration::ColorSpace;
+use crate::nodes::sensor::calibration::EncodeParams;
 use crate::render::Settings;
 use crate::source::Metadata;
 use std::sync::Arc;

@@ -15,8 +15,8 @@ fn export_shader_has_valid_guarded_entry_points_without_hardware() {
     };
     let source = format!(
         "{}\n{}",
-        include_str!("shaders/sample.wgsl"),
-        include_str!("shaders/dng.wgsl")
+        include_str!("gpu/shaders/sample.wgsl"),
+        include_str!("dng/dng.wgsl")
     );
     let module = wgsl::parse_str(&source).unwrap();
     let info = Validator::new(ValidationFlags::all(), Capabilities::all())

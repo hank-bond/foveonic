@@ -1,8 +1,8 @@
 //! Checks optional GPU repairs, unsharp masking, cropped resizing, and ColorDQ conditioning.
 
-use crate::calibration::EncodeParams;
 use crate::gpu::Binding::{Read, Write};
 use crate::gpu::{Gpu, Kernel};
+use crate::nodes::sensor::calibration::EncodeParams;
 
 fn floats(gpu: &Gpu, buffer: &crate::gpu::ReadGuard) -> Vec<f32> {
     bytemuck::cast_slice::<u8, f32>(&gpu.readback(buffer).unwrap()).to_vec()
@@ -175,7 +175,7 @@ fn shader_resize_preserves_crop_orientation_and_both_transfer_routes() {
 #[ignore = "requires a working GPU adapter"]
 fn shader_color_dq_matches_signed_lookup_math() {
     let gpu = Gpu::new().unwrap();
-    let table = crate::color_dq::table([8., 12., 16.]).unwrap();
+    let table = crate::nodes::color::color_dq::table([8., 12., 16.]).unwrap();
     let pixels = [
         [0_f32, 0., 0.],
         [16., 16., 16.],

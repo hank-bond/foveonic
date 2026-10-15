@@ -1,8 +1,8 @@
 //! Checks GPU black estimation, signed calibration, and RGB16 orientation on small images.
 
-use crate::calibration::{CalibrationParams, EncodeParams};
 use crate::gpu::Binding::{Read, Write};
 use crate::gpu::{Gpu, Kernel};
+use crate::nodes::sensor::calibration::{CalibrationParams, EncodeParams};
 
 #[test]
 #[ignore = "requires a working GPU adapter"]

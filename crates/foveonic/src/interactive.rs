@@ -350,7 +350,8 @@ mod tests {
         let base = graph.add(O::NoiseBase(p), &[input]).unwrap();
         let raw = graph.add(O::Column(p), &[input]).unwrap();
         let ratio = graph.add(O::Ratio(p), &[raw, base]).unwrap();
-        let prepared = crate::pattern::Prepared::new([64, 64, 1, 0], [0.; 4]).unwrap();
+        let prepared =
+            crate::nodes::color::pattern::Prepared::new([64, 64, 1, 0], [0.; 4]).unwrap();
         let pattern = graph
             .add(
                 O::Pattern {
@@ -402,7 +403,7 @@ mod tests {
             .add(
                 O::TiledColor {
                     params,
-                    color: crate::calibration::ColorParams::zeroed(),
+                    color: crate::nodes::sensor::calibration::ColorParams::zeroed(),
                     space: C::Srgb,
                 },
                 &[base],

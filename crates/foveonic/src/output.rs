@@ -1,6 +1,6 @@
 //! Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
 
-use crate::calibration::{ColorSpace, EncodeParams};
+use crate::nodes::sensor::calibration::{ColorSpace, EncodeParams};
 use crate::source::Result;
 use std::io::{Seek, Write};
 

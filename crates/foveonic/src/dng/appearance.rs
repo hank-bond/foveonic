@@ -1,10 +1,12 @@
 //! Keeps the selected DNG appearance separate from its editable camera samples.
 use crate::{
-    calibration::{self, ColorSpace},
-    color_mode,
+    nodes::{
+        color::color_mode,
+        finish::tone,
+        sensor::calibration::{self, ColorSpace},
+    },
     render::Settings,
     source::{Metadata, Result},
-    tone,
 };
 
 #[derive(Clone, Copy, Debug)]

@@ -41,6 +41,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
+- **[rendering-organization](./rendering-organization.md)** Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.
 - **[viewport-scopes](./viewport-scopes.md)** Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
