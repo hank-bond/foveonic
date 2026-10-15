@@ -14,7 +14,8 @@ implementation: incomplete
 - DNG export **must** rerun a modified processing recipe from the original X3F and selected editing settings, rather than serialize existing display buffers. The export recipe **must** omit native pixel-tone rendering and generate its selected appearance as embedded profile or look metadata.
 - DNG **may** bake calibration and image-content improvements such as detail recovery and highlight reconstruction into its samples. These corrections **may** depend on the selected processing WB; later DNG WB edits need not recalculate them.
 - Initial DNG sample encoding **must** clamp negative export samples to zero and use a common linear range scale across channels, with matching exposure compensation in metadata. It **must** publish `BlackLevel = 0` and `WhiteLevel = 65535`. Range allocation **should** follow the processed image's needs rather than bake a highlight shoulder. Signed-sample preservation and more advanced WB-headroom allocation are deferred refinements.
-- White balance **must** remain an editing choice in the DNG workflow.
+- White balance **must** remain an editing choice in the DNG workflow. For baked monochrome, later neutral/tint edits cannot reconstruct the original sensor layers or change their baked mix.
+- [Monochrome DNG](./monochrome-rendering.md) **must** bake layer mixing and technical mono reconstruction into linear neutral samples, keeping exposure and mono tone in presentation metadata. Equal RGB channels are permitted for interoperability. Selected color mode and saturation are inactive.
 - The DNG color-mode path **must** reformulate metadata-derived channel tone curves into a common curve with a compensating color matrix.
 - Each DNG **must** carry one selected presentation, not multiple selectable embedded looks. Choosing another Foveonic mode requires regenerating the export.
 - Embedded presentation **must** incorporate the selected camera mode and non-baked RGB edits, including exposure, tone, and saturation, without flattening them into the linear samples. RGB gains or color-balance edits, when supported, **must** follow the same boundary unless needed for baked technical corrections. Composition **must** preserve the intended operation order and color spaces. Residual color look data **may** supplement the common curve and matrix. Receiving editors need not reproduce the application's slider values; their tone controls starting at neutral is expected.
@@ -32,7 +33,7 @@ Compression evaluation should compare lossless file sizes, encoding cost, depend
 
 - The application **must** produce TIFF output with the selected white balance, color, and tone processing baked into the image.
 - TIFF **must** use its own rendering and packaging path within the shared graph engine.
-- TIFF ColorDQ conditioning **must** support an explicit gain override (0 Off). The opt-in reconstruction recipe **must** select native automatic processing-ISO gain capped by its noise-derived limit when no override is set. Without reconstruction, automatic selection **must** remain inactive.
+- Color TIFF ColorDQ conditioning **must** support an explicit gain override (0 Off). The opt-in reconstruction recipe **must** select native automatic processing-ISO gain capped by its noise-derived limit when no override is set. Without reconstruction, automatic selection **must** remain inactive.
 
 ## Conformance
 

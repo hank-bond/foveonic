@@ -109,6 +109,9 @@ pub(crate) struct ProfileData {
 
 impl Prepared {
     pub fn new(m: &Metadata, settings: &Settings) -> Result<Self> {
+        if settings.is_monochrome() {
+            return Self::monochrome(m, settings);
+        }
         let key = m
             .lists
             .get("WhiteBalanceGains")
@@ -182,6 +185,26 @@ impl Prepared {
             after_tone,
             tone: tone::prepare(m, &mode, settings.tone)?,
             calibration_exposure: (f64::from(iso) / maximum).log2(),
+            exposure: f64::from(settings.exposure),
+        })
+    }
+    fn monochrome(m: &Metadata, settings: &Settings) -> Result<Self> {
+        let identity = Matrix::diagonal([1.; 3]);
+        // Equal linear samples are already WB-normalized and include technical ISO gain.
+        // Define neutral RGB in a standard D50 basis without inverting the source color matrix.
+        let romm = ROMM.white_normalized()?;
+        let forward = Matrix(romm.0.map(|v| (v * 1_000_000.).round() / 1_000_000.));
+        let reader = forward.white_normalized()?;
+        Ok(Self {
+            mapping: identity.gain(1. / 4095.),
+            neutral: [1.; 3],
+            forward,
+            color: reader.inverse()?,
+            camera_to_romm: reader.then(romm.inverse()?),
+            camera_to_native: identity,
+            after_tone: identity,
+            tone: tone::prepare_monochrome(m, settings.tone)?,
+            calibration_exposure: 0.,
             exposure: f64::from(settings.exposure),
         })
     }

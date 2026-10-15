@@ -7,6 +7,8 @@ implementation: conforming
 
 # Detail and noise processing
 
+This document describes color reconstruction. [Monochrome rendering](./monochrome-rendering.md) has a separate sensor-layer mixing, filtering, and signed-detail recipe, independent of the retained color reconstruction controls.
+
 ## Requirements
 
 - Noise filtering and detail reconstruction **must** run in GPU shaders through the shared GUI/CLI engine.

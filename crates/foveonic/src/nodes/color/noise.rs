@@ -1,6 +1,6 @@
 //! Resolves camera noise presets and linked overrides for shared GPU reconstruction.
 //!
-//! Adapted from Foveonic noise.rs and params.rs at e47af35 with owner permission.
+//! Adapted from the reference implementation's noise.rs and params.rs at e47af35 with owner permission.
 
 #[cfg(test)]
 #[path = "noise_test.rs"]
@@ -107,7 +107,7 @@ impl Parameter {
     pub fn help(self) -> &'static str {
         match self {
             Self::BaseBlend => {
-                "Chooses how much initial smoothing is used before the later noise-reduction steps. 0 starts with the unsmoothed image; 1 uses the fully smoothed starting image. More smoothing can reduce grain but soften fine texture. 0 does not turn all noise reduction off."
+                "Chooses how much initial smoothing is used before the later noise-reduction steps. 0 starts with the unsmoothed image. 1 uses the fully smoothed starting image. More smoothing can reduce grain but soften fine texture. 0 does not turn all noise reduction off."
             }
             Self::EdgeCutoff => {
                 "Sets how readily smoothing stops at an edge. Higher values stop it at smaller changes, helping preserve fine boundaries but potentially leaving more grain. Lower values let smoothing cross more edges and can soften detail."
@@ -122,7 +122,7 @@ impl Parameter {
                 "Sets how much brightness grain is treated before detail is restored. Higher values allow more smoothing of brightness variations, but can remove fine texture. It works together with Brightness mix and Detail, so its effect depends on those settings."
             }
             Self::BrightnessMix => {
-                "Chooses which brightness texture is restored after smoothing. 0 uses the original texture, including its grain; 1 uses the cleaned-up texture. Higher values can give a smoother result but restore less fine texture. The Detail slider sets the amount restored."
+                "Chooses which brightness texture is restored after smoothing. 0 uses the original texture, including its grain. 1 uses the cleaned-up texture. Higher values can give a smoother result but restore less fine texture. The Detail slider sets the amount restored."
             }
             Self::LayerMix => {
                 "Chooses whether restored detail changes brightness alone (0) or also restores differences between the camera's three color-sensitive sensor layers (1). Higher values can restore more color texture, but also more color noise. The Detail slider sets the amount restored."
@@ -569,6 +569,10 @@ pub(crate) fn couplings(metadata: &Metadata, wb: &str, controls: Controls) -> Re
         color_dq_limit: limit,
     })
 }
+pub(crate) fn monochrome_iso(metadata: &Metadata, wb: &str) -> Result<f32> {
+    Ok(recipe(metadata, wb, Controls::default())?.iso)
+}
+
 fn recipe(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Recipe> {
     controls.validate()?;
     let key = metadata

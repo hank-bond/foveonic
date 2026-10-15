@@ -10,6 +10,7 @@ mod icon;
 mod information;
 mod inspect;
 mod metadata;
+mod mixer;
 mod navigator;
 mod preferences;
 mod scopes;

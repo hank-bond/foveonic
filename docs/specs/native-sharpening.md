@@ -1,5 +1,5 @@
 ---
-summary: "Optional native sharpening applies the separate signed mono high-pass through quarter-code packing and bounded brightness proportions before exposure/tone; Gaussian radius and blur stages are retired."
+summary: "Optional GPU sharpening uses signed high-pass before exposure/tone, with distinct color-proportional and additive monochrome applications."
 kind: reference
 status: accepted
 implementation: conforming
@@ -10,8 +10,9 @@ implementation: conforming
 ## Requirements
 
 - Selected sharpening **must** apply native signed mono high-pass arithmetic before Exposure/tone and photographic resizing, not Gaussian per-channel unsharp masking after tone.
-- With reconstruction, sharpening **must** consume its ratio-aware pre-residual signed signal and post-residual RGB. Without reconstruction, the engine **must** generate native mono high-pass from nonnegative linear RGB brightness with unity ratio and the 32767 brightness ceiling.
-- Application **must** retain upper-only 8191 signal ceiling, quarter-code packing by `signal*4+0.5` → truncating i32 → wrapping i16, nonnegative RGB brightness proportions, absolute ±1000 and relative ±35% limits, and output ceiling 32767.
+- In color rendering with reconstruction, sharpening **must** consume its ratio-aware pre-residual signed signal and post-residual RGB. Without reconstruction, the engine **must** generate native mono high-pass from nonnegative linear RGB brightness with unity ratio and the 32767 brightness ceiling.
+- [Monochrome rendering](./monochrome-rendering.md) must instead derive signed high-pass from its filtered mono plane, apply processing gain before ISO-specific magnitude and ±35% limits, and add the quarter-code packed detail equally to neutral channels. It must not apply color brightness-proportional sharpening.
+- Color application **must** retain upper-only 8191 signal ceiling, quarter-code packing by `signal*4+0.5` → truncating i32 → wrapping i16, nonnegative RGB brightness proportions, absolute ±1000 and relative ±35% limits, and output ceiling 32767.
 - Inputs and retained artifacts **must** remain immutable. Photographic signal generation, packing, and application **must** run on GPU.
 - Shared effective amount **must** remain finite/nonnegative, default 0 Off. Final sharpening **must** remain independent of residual Detail. Native preset-relative/automatic sharpening is not required to replace the selected optional algorithm.
 - Gaussian radius, blur operations, blur inspection roots, and `--sharpen-radius` **must** be removed rather than retained as a second photographic path.

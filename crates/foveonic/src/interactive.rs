@@ -52,6 +52,13 @@ impl Settings {
                 }
             };
         }
+        changed!(self.rendering != next.rendering, "rendering");
+        changed!(self.monochrome.mix != next.monochrome.mix, "mono-mix");
+        changed!(self.monochrome.noise != next.monochrome.noise, "mono-noise");
+        changed!(
+            self.monochrome.banding != next.monochrome.banding,
+            "mono-banding"
+        );
         changed!(self.white_balance != next.white_balance, "white-balance");
         changed!(self.color_mode != next.color_mode, "color-mode");
         changed!(self.repair != next.repair, "repair");
@@ -118,6 +125,7 @@ impl Settings {
 
 #[derive(PartialEq, Eq)]
 struct Recipe {
+    operation: std::mem::Discriminant<crate::graph::Operation>,
     parameters: Key,
     data: DataType,
     inputs: Vec<(&'static str, u64)>,
@@ -176,13 +184,15 @@ impl Cache {
                 })
                 .collect();
             let recipe = Recipe {
+                operation: std::mem::discriminant(&graph.nodes[output.producer].operation),
                 parameters: graph.nodes[output.producer].operation.key(output.name),
                 data: output.data,
                 inputs,
             };
             let old = self.versions.get(output.name);
             let local_changed = old.is_none_or(|old| {
-                old.recipe.parameters != recipe.parameters
+                old.recipe.operation != recipe.operation
+                    || old.recipe.parameters != recipe.parameters
                     || old.recipe.data != recipe.data
                     || !old
                         .recipe

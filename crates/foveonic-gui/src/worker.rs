@@ -386,17 +386,24 @@ fn analyze_scopes(
 /// could overwrite a launch override or an edit made while the photo was opening.
 fn resolve_camera_settings(settings: &mut Settings, metadata: &Metadata) -> Vec<String> {
     let mut errors = Vec::new();
-    for (value, recorded) in [
+    let color_required = !settings.is_monochrome();
+    for (value, recorded, required) in [
         (
             &mut settings.white_balance,
             metadata.recorded_white_balance(),
+            true,
         ),
-        (&mut settings.color_mode, metadata.recorded_color_mode()),
+        (
+            &mut settings.color_mode,
+            metadata.recorded_color_mode(),
+            color_required,
+        ),
     ] {
         if value.is_empty() {
             match recorded {
                 Ok(name) => *value = name,
-                Err(error) => errors.push(error.to_string()),
+                Err(error) if required => errors.push(error.to_string()),
+                Err(_) => (),
             }
         }
     }

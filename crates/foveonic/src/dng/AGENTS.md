@@ -16,6 +16,6 @@ Each file embeds one selected appearance. Combine adjacent matrices in the order
 
 - **[appearance.rs](./appearance.rs)** Keeps the selected DNG appearance separate from its editable camera samples.
 - **[gpu.rs](./gpu.rs)** Makes linear camera samples on the GPU so DNG retains room for later edits.
-- **[writer.rs](./writer.rs)** Writes editable camera samples and one selected look into an uncompressed DNG.
+- **[writer.rs](./writer.rs)** Writes a linear technical base and one selected appearance into an uncompressed DNG.
 
 <!-- INDEX:END -->

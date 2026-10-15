@@ -82,7 +82,7 @@ impl Params {
                 } else {
                     channel as f32
                 },
-                if sensor || matches!(space, Space::LinearRgb(_)) {
+                if sensor || matches!(space, Space::LinearRgb(_) | Space::Monochrome) {
                     1. / 4095.
                 } else if space == Space::LuminanceRatio {
                     0.5
@@ -93,7 +93,10 @@ impl Params {
                 },
                 if space == Space::SignedDetail {
                     -2.
-                } else if matches!(space, Space::ScalarField | Space::LuminanceRatio) {
+                } else if matches!(
+                    space,
+                    Space::ScalarField | Space::LuminanceRatio | Space::Monochrome
+                ) {
                     -1.
                 } else {
                     f32::from(matches!(

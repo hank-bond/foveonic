@@ -8,6 +8,7 @@ pub use operation::Operation;
 pub enum DataType {
     SensorLayers,
     ScalarField,
+    Monochrome,
     LuminanceRatio,
     SignedDetail,
     FilteredTiles,
@@ -33,6 +34,7 @@ impl From<crate::image::Space> for DataType {
         match space {
             Space::SensorLayers => Self::SensorLayers,
             Space::ScalarField => Self::ScalarField,
+            Space::Monochrome => Self::Monochrome,
             Space::LuminanceRatio => Self::LuminanceRatio,
             Space::SignedDetail => Self::SignedDetail,
             Space::CalibratedLayers => Self::CalibratedLayers,

@@ -33,6 +33,21 @@ pub fn output_names(settings: &Settings) -> Vec<&'static str> {
     if settings.row_correction {
         names.extend(["banding.layers", "banding.rows"]);
     }
+    if settings.is_monochrome() {
+        names.extend(["mono.mix", "mono.directional", "mono.column"]);
+        if settings.monochrome.noise > 0 {
+            names.push("mono.filtered");
+        }
+        if settings.despeckle {
+            names.push("mono.despeckle");
+        }
+        names.extend(["detail.signal", "monochrome.rgb"]);
+        if settings.sharpen_amount > 0. {
+            names.push("sharpen.rgb");
+        }
+        names.push("tone.rgb");
+        return names;
+    }
     if settings.reconstruction.is_some() {
         names.extend([
             "noise.layers",
@@ -87,7 +102,8 @@ pub fn image_outputs(settings: &Settings) -> Vec<ImageOutput> {
                     Channels::Layers
                 }
                 "noise.edges" | "detail.ratio" | "detail.raw-ratio" | "pattern.mask"
-                | "detail.signal" | "highlight.density" => Channels::Scalar,
+                | "detail.signal" | "highlight.density" | "mono.mix" | "mono.directional"
+                | "mono.column" | "mono.filtered" | "mono.despeckle" => Channels::Scalar,
                 _ => Channels::Rgb,
             };
             Some(ImageOutput { name, channels })
@@ -114,6 +130,19 @@ pub fn comparison_input(settings: &Settings, output: &str) -> Option<&'static st
             }
             input = name;
         }
+    }
+    if settings.is_monochrome() {
+        return match output {
+            "mono.directional" | "mono.column" => Some("mono.mix"),
+            "mono.filtered" if settings.monochrome.noise > 0 => Some("mono.column"),
+            "mono.despeckle" if settings.despeckle => Some(if settings.monochrome.noise > 0 {
+                "mono.filtered"
+            } else {
+                "mono.column"
+            }),
+            "sharpen.rgb" if settings.sharpen_amount > 0. => Some("monochrome.rgb"),
+            _ => None,
+        };
     }
     if settings.reconstruction.is_some() && matches!(output, "noise.layers" | "column.layers") {
         return Some(input);
@@ -147,6 +176,58 @@ pub struct Artifact {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn monochrome_outputs_ignore_retained_color_controls() {
+        let mut s = crate::render::Settings::new("Sunlight", "Vivid");
+        s.rendering = crate::render::Rendering::Monochrome;
+        s.reconstruction = Some(Default::default());
+        s.sharpen_amount = 0.5;
+        s.saturation = 0.;
+        let names = super::output_names(&s);
+        for name in [
+            "mono.mix",
+            "mono.directional",
+            "mono.column",
+            "mono.filtered",
+            "mono.despeckle",
+            "detail.signal",
+            "monochrome.rgb",
+            "sharpen.rgb",
+            "tone.rgb",
+            "final",
+        ] {
+            assert!(names.contains(&name));
+        }
+        for name in [
+            "color.rgb",
+            "color-dq.rgb",
+            "reconstruction.rgb",
+            "noise.layers",
+            "detail.ratio",
+            "saturation.rgb",
+        ] {
+            assert!(!names.contains(&name));
+        }
+        assert_eq!(
+            super::comparison_input(&s, "sharpen.rgb"),
+            Some("monochrome.rgb")
+        );
+        assert_eq!(
+            super::comparison_input(&s, "mono.despeckle"),
+            Some("mono.filtered")
+        );
+        s.monochrome.noise = 0;
+        assert!(!super::output_names(&s).contains(&"mono.filtered"));
+        assert_eq!(
+            super::comparison_input(&s, "mono.despeckle"),
+            Some("mono.column")
+        );
+        assert!(super::image_outputs(&s)
+            .iter()
+            .filter(|o| o.name.starts_with("mono."))
+            .all(|o| o.channels == super::Channels::Scalar));
+    }
+
     #[test]
     fn comparison_inputs_follow_enabled_stages_and_branches() {
         let mut s = crate::render::Settings::new("Sunlight", "Standard");

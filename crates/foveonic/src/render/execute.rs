@@ -53,6 +53,7 @@ fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
     let (layout, space) = match data {
         DataType::SensorLayers => (Layout::Rgb32Float, Space::SensorLayers),
         DataType::ScalarField => (Layout::Scalar32Float, Space::ScalarField),
+        DataType::Monochrome => (Layout::Scalar32Float, Space::Monochrome),
         DataType::LuminanceRatio => (Layout::Scalar32Float, Space::LuminanceRatio),
         DataType::SignedDetail => (Layout::Scalar32Float, Space::SignedDetail),
         DataType::CalibratedLayers => (Layout::Rgb32Float, Space::CalibratedLayers),
@@ -254,6 +255,14 @@ impl Engine {
                         groups,
                     );
                     Some(output)
+                }
+                Operation::Monochrome {
+                    stage, prepared, ..
+                } => {
+                    let inputs: Vec<_> = (0..node.inputs.len()).map(|i| &input(i).buffer).collect();
+                    Some(crate::nodes::monochrome::apply(
+                        gpu, *stage, &inputs, prepared, profile,
+                    )?)
                 }
                 Operation::NoiseBase(params) => {
                     let projected = node.outputs[1];
@@ -550,7 +559,7 @@ impl Engine {
                     );
                     Some(output)
                 }
-                Operation::Sharpen { amount, .. } => {
+                Operation::Sharpen { amount, .. } | Operation::MonoSharpen { amount, .. } => {
                     if input(0).description.unwrap().extent != input(1).description.unwrap().extent
                     {
                         return Err("sharpen inputs have different image extents".into());
@@ -561,7 +570,11 @@ impl Engine {
                         value: [*amount, 0., 0., 0.],
                     });
                     dispatch(
-                        Kernel::Sharpen,
+                        if matches!(node.operation, Operation::MonoSharpen { .. }) {
+                            Kernel::MonoSharpen
+                        } else {
+                            Kernel::Sharpen
+                        },
                         &mut [
                             (0, Read(&input(0).buffer)),
                             (1, Read(&input(1).buffer)),

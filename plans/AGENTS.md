@@ -26,7 +26,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.
 - **[editor-review-focus](./editor-review-focus.md)** Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
-- **[gpu-output-mismatch](./gpu-output-mismatch.md)** Deferred intermittent fresh-render differences retain investigation evidence without claiming a known cause or fix.
+- **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
 - **[help-comparisons](./help-comparisons.md)** Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
@@ -34,6 +34,8 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[icon-background](./icon-background.md)** A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
 - **[inspection-differences](./inspection-differences.md)** Inspect operation inputs and outputs alongside amplified signed layer/channel differences.
 - **[metadata-first-loading](./metadata-first-loading.md)** Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.
+- **[monochrome-performance](./monochrome-performance.md)** Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output.
+- **[monochrome-rendering](./monochrome-rendering.md)** GPU monochrome rendering, a triangular layer mixer, mode-specific editing, and linear monochrome DNG export are implemented and checked.
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[pipeline-performance](./pipeline-performance.md)** Pause algorithm expansion, stabilize a buildable baseline, measure completed cold/warm renders and GPU stages, then optimize the largest bottlenecks with output-equivalence checks. _Resume the owner-approved profiling and optimization pivot; remaining algorithm work is paused._

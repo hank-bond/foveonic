@@ -1,4 +1,4 @@
-//! Inspects Merrill X3Fs and exports single images or batches through shared TIFF settings.
+//! Inspects Merrill X3Fs and exports TIFF or linear DNG through shared rendering settings.
 
 mod options;
 use foveonic::profile::{self, Mode, Profile};
@@ -15,37 +15,43 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: foveonic inspect INPUT.x3f
-       foveonic render INPUT.x3f OUTPUT.tiff --wb NAME --mode NAME [OPTIONS]
-       foveonic batch OUTPUT_DIR INPUT_OR_DIR... --wb NAME --mode NAME [OPTIONS]
+       foveonic render INPUT.x3f OUTPUT.tiff --wb NAME [--mode NAME] [OPTIONS]
+       foveonic export-dng INPUT.x3f OUTPUT.dng --wb NAME [--mode NAME] [OPTIONS]
+       foveonic batch OUTPUT_DIR INPUT_OR_DIR... --wb NAME [--mode NAME] [OPTIONS]
 
 Batch directories are scanned nonrecursively for .x3f files. Outputs use each input's
 stem with a .tiff extension. Existing outputs and duplicate output names are rejected.
+Color requires --mode. Any --mono-* option selects monochrome automatically.
 
 Options (also available for batch):
   --exposure STOPS           Default 0
   --contrast VALUE          -2..2, default 0
   --shadows VALUE           -2..2, default 0
   --highlights VALUE        -2..2, default 0
-  --saturation FACTOR       Nonnegative, default 1; 0 produces grayscale
-  --color-dq-gain FACTOR     Override native ColorDQ gain (0 off); reconstruction defaults to auto
+  --rendering MODE          color (default) or monochrome
+  --mono-mix R,G,B          Nonnegative sensor-layer amounts, normalized to one
+  --mono-noise N            Mono histogram-noise preset 0..4 (default 2, 0 skips)
+  --mono-banding N          Mono column-correction preset 0..4 (default 2)
+  --saturation FACTOR       Nonnegative, default 1. Inactive in monochrome
+  --color-dq-gain FACTOR     Override native ColorDQ gain (0 off). Reconstruction defaults to auto
   --repair                  Camera-derived ordered repair (default on)
   --no-repair               Disable camera-record repair
   --despeckle               Detect and correct remaining speckles (default on)
   --no-despeckle            Disable dynamic speckle correction
   --highlight-restoration   Restore original clipped-layer color (default on)
   --no-highlight-restoration Disable clipped-layer restoration and neutralization
-  --highlight-threshold EV  -2..2 relative to camera threshold, or auto (default); +1 doubles it
+  --highlight-threshold EV  -2..2 relative to camera threshold, or auto (default). +1 doubles it
   --row-correction          Reduce additive per-row sensor banding (default on)
   --no-row-correction       Disable per-row banding correction
-  --repair-badness MIN       Enable ordered repair with a manual cutoff; 0..15
-  --noise-override KEY=VALUE Override a reconstruction parameter; repeatable, enables reconstruction
+  --repair-badness MIN       Enable ordered repair with a manual cutoff in 0..15
+  --noise-override KEY=VALUE Override a reconstruction parameter. Repeatable, enables reconstruction
                             Keys: base-blend, edge-cutoff, mean-decay, edge-scale,
                             luma-noise-scale, brightness-mix, layer-mix
   --reconstruction          Enable reference-style full-resolution noise/detail processing
-  --chroma-noise CHOICE      Camera noise-table choice 0..4, default 2; enables reconstruction
-  --luma-noise CHOICE        Camera noise-table choice 0..4, default 2; enables reconstruction
-  --banding-noise CHOICE     Column-noise preset 0..4, default 2; enables reconstruction
-  --detail FACTOR           Residual detail multiplier, default 1; enables reconstruction
+  --chroma-noise CHOICE      Camera noise-table choice 0..4, default 2. Enables reconstruction
+  --luma-noise CHOICE        Camera noise-table choice 0..4, default 2. Enables reconstruction
+  --banding-noise CHOICE     Column-noise preset 0..4, default 2. Enables reconstruction
+  --detail FACTOR           Residual detail multiplier, default 1. Enables reconstruction
   --sharpen AMOUNT           Nonnegative native high-pass amount before tone, default 0 (off)
   --size WIDTHxHEIGHT       Exact final oriented dimensions, bilinear sampling
   --profile MODE            off (default), wall, or synchronized gpu diagnostics
@@ -173,7 +179,7 @@ fn run() -> Result<()> {
             serde_json::to_writer_pretty(&mut output, source.metadata.as_ref())?;
             writeln!(output)?;
         }
-        Some("render") => {
+        Some("render") | Some("export-dng") => {
             let destination = PathBuf::from(args.next().ok_or(USAGE)?);
             let (settings, extra, profiling) = parse_settings(args)?;
             if !extra.is_empty() {
@@ -194,6 +200,32 @@ fn run() -> Result<()> {
                         serde_json::json!({"frontend":"cli","adapter":engine.adapter_name(),"profile":setup,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
                     )
                 );
+            }
+            if command == "export-dng" {
+                let mut profile = Profile::new(profiling);
+                foveonic::dng::write_source(
+                    &engine,
+                    &source,
+                    &settings,
+                    &destination,
+                    &mut profile,
+                )?;
+                if profiling.enabled() {
+                    eprintln!(
+                        "{}",
+                        profile::report(
+                            "export",
+                            profiling,
+                            serde_json::json!({"source":path,"destination":destination,"settings":settings,"profile":profile})
+                        )
+                    );
+                }
+                eprintln!(
+                    "Exported linear DNG using {}: {}",
+                    engine.adapter_name(),
+                    destination.display()
+                );
+                return Ok(());
             }
             let size = convert(
                 &engine,
@@ -265,6 +297,38 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monochrome_cli_resolves_actual_layer_proportions_without_a_color_mode() {
+        let parse = |args: &str| parse_settings(args.split_whitespace().map(Into::into));
+        let s = parse("--wb Sunlight --mono-mix 0,0,1 --mono-noise 0 --mono-banding 4")
+            .unwrap()
+            .0;
+        assert!(s.is_monochrome());
+        assert_eq!(s.monochrome.mix, [0., 0., 1.]);
+        assert_eq!(s.monochrome.noise, 0);
+        assert_eq!(s.monochrome.banding, 4);
+        assert_eq!(
+            parse("--wb Sunlight --mono-mix 2,1,1")
+                .unwrap()
+                .0
+                .monochrome
+                .mix,
+            [0.5, 0.25, 0.25]
+        );
+        for bad in [
+            "--mono-mix 0,0,0",
+            "--mono-mix 1,1",
+            "--mono-mix -1,1,1",
+            "--mono-mix NaN,1,1",
+            "--mono-noise 5",
+            "--mono-banding 5",
+            "--rendering invalid",
+        ] {
+            assert!(parse(&format!("--wb Sunlight {bad}")).is_err(), "{bad}");
+        }
+        assert!(parse("--wb Sunlight --rendering color").is_err());
+    }
 
     #[test]
     fn controls_are_shared_and_defaults_enable_independent_corrections() {

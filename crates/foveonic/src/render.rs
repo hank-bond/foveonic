@@ -21,7 +21,7 @@ mod settings;
 use execute::Input;
 pub(crate) use execute::Value;
 use recipes::Recipe;
-pub use settings::{RepairThreshold, Settings, ToneControls};
+pub use settings::{MonochromeControls, Rendering, RepairThreshold, Settings, ToneControls};
 
 pub struct Engine {
     gpu: Gpu,
@@ -304,6 +304,9 @@ impl Engine {
 #[cfg(test)]
 #[path = "render/interactive_test.rs"]
 mod interactive_tests;
+#[cfg(test)]
+#[path = "render/monochrome_test.rs"]
+mod monochrome_tests;
 #[cfg(test)]
 #[path = "render/render_test.rs"]
 mod tests;

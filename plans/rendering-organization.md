@@ -20,7 +20,7 @@ The owner approved a behavior-preserving reorganization. Group sensor, color, an
 
 ## Findings
 
-The reference implementation shares original-source preprocessing before a distinct monochrome filtering/detail path. It bypasses color matrix, ColorDQ, and color residual-gain reconstruction. Mono sharpening and tone also have different behavior. Rendering mode and output strategy are separate choices, but monochrome DNG semantics remain undecided.
+The reference implementation shares original-source preprocessing before a distinct monochrome filtering/detail path. It bypasses color matrix, ColorDQ, and color residual-gain reconstruction. Mono sharpening and tone also have different behavior. Rendering mode and output strategy are separate choices. The subsequent implementation and DNG boundary are recorded in the [monochrome plan](./monochrome-rendering.md).
 
 The existing graph already supports typed nodes, selective side outputs, guarded storage, and interactive reuse. Preserve lazy metadata preparation for early inspection outputs and DNG's stop before photographic exposure/tone/saturation. The public `render`, `noise`, and image APIs remain stable.
 

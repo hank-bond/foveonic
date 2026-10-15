@@ -28,9 +28,11 @@ pub fn prepare_base(
 ) -> Result<RenderedImage> {
     settings.validate()?;
     // Reject an unknown look before spending time on the technical render.
-    profile.measure("prepare DNG presentation mode", || {
-        crate::nodes::color::color_mode::prepare(&source.metadata, &settings.color_mode)
-    })?;
+    if !settings.is_monochrome() {
+        profile.measure("prepare DNG presentation mode", || {
+            crate::nodes::color::color_mode::prepare(&source.metadata, &settings.color_mode)
+        })?;
+    }
     engine.render_dng_base(source, settings, profile)
 }
 

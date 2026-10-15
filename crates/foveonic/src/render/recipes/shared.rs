@@ -96,7 +96,7 @@ impl Engine {
                 crate::noise::couplings(
                     &source.metadata,
                     &settings.white_balance,
-                    settings.reconstruction.unwrap_or_default(),
+                    settings.sensor_noise_controls(),
                 )
             })?;
             couplings = Some(recipe);
@@ -112,6 +112,20 @@ impl Engine {
             })?;
             calibrated = graph.add(Operation::Banding(prepared), &[calibrated])?;
             finish!();
+        }
+        if settings.is_monochrome() {
+            return super::monochrome::build(
+                source,
+                settings,
+                BuiltRecipe {
+                    graph,
+                    final_id: calibrated,
+                    params,
+                },
+                names,
+                profile,
+                execution,
+            );
         }
         let reconstruction = if let Some(controls) = settings.reconstruction {
             let params = profile.measure("prepare reference noise", || {

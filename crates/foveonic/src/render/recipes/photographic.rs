@@ -34,7 +34,11 @@ pub(super) fn build(
     };
     let space = ColorSpace::from_metadata(&source.metadata)?;
     let curve = profile.measure("prepare tone curve", || {
-        tone::prepare(&source.metadata, &mode, settings.tone)
+        if settings.is_monochrome() {
+            tone::prepare_monochrome(&source.metadata, settings.tone)
+        } else {
+            tone::prepare(&source.metadata, &mode, settings.tone)
+        }
     })?;
     recipe.final_id = recipe.graph.add(
         Operation::Tone {
@@ -48,7 +52,7 @@ pub(super) fn build(
     if requested(&recipe.graph, names) {
         return Ok(recipe);
     }
-    if settings.saturation != 1. {
+    if !settings.is_monochrome() && settings.saturation != 1. {
         let dimensions = [
             source.metadata.width as u32,
             source.metadata.height as u32,

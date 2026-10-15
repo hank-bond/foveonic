@@ -11,7 +11,7 @@ implementation: conforming
 
 - The application **must** preserve per-photograph editing recipes in sidecars beside their original X3Fs. The X3F and its sidecar **must** remain the authoritative inputs for re-editing and regenerating exports.
 - Saving edits **must not** modify the original X3F.
-- Sidecars **must** preserve photographic editing choices and advanced override linkage separately from workspace preferences and display-only inspection settings.
+- Sidecars **must** preserve photographic editing choices and advanced override linkage separately from workspace preferences and display-only inspection settings. Rendering mode and [monochrome mixing/noise settings](./monochrome-rendering.md) must persist alongside inactive color controls. Older recipes missing these fields must select Color and the shared default mono controls without a version bump.
 - Recipes **must** use versioned JSON beside the input, named by appending `.foveonic.json` to the complete X3F filename.
 - Omitted image-edit fields **must** use the shared Rust `Default` values, including nested tone/noise controls and linked overrides. Supplied values **must** remain authoritative; explicit null **must** retain its optional-setting meaning. Invalid supplied values, duplicate/unknown fields, and unsupported versions **must** remain errors. Adding a field with unchanged default behavior **must not** require migration or a version bump.
 - Neutral defaults **must** leave camera-dependent WB/mode unresolved for the existing per-photograph selection path. Application preferences **must** remain separate from image-edit settings and sidecars.

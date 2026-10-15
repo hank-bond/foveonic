@@ -105,7 +105,10 @@ fn missing_edit_fields_use_shared_defaults_and_preserve_supplied_values() {
     assert_eq!(decode(&encode(&expected).unwrap()).unwrap(), expected);
 
     let original: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
-    let default_fields = serde_json::to_value(Settings::default()).unwrap();
+    // Compare the on-disk representation on both sides. Direct to_value widens f32 fractions.
+    let default_fields: serde_json::Value =
+        serde_json::from_slice(&encode(&Settings::default()).unwrap()).unwrap();
+    let default_fields = &default_fields["settings"];
     for (field, default_value) in default_fields.as_object().unwrap() {
         let mut missing = original.clone();
         missing["settings"].as_object_mut().unwrap().remove(field);
@@ -126,6 +129,38 @@ fn missing_edit_fields_use_shared_defaults_and_preserve_supplied_values() {
     let mut expected = edited();
     expected.reconstruction.as_mut().unwrap().banding = 2;
     assert_eq!(restored, expected);
+}
+
+#[test]
+fn monochrome_retains_both_modes_and_older_recipes_select_color() {
+    let mut s = edited();
+    s.rendering = crate::render::Rendering::Monochrome;
+    s.monochrome = crate::render::MonochromeControls {
+        mix: [0., 0., 1.],
+        noise: 4,
+        banding: 0,
+    };
+    let restored = decode(&encode(&s).unwrap()).unwrap();
+    assert_eq!(s, restored);
+    let mut color = restored.clone();
+    color.rendering = crate::render::Rendering::Color;
+    let color = decode(&encode(&color).unwrap()).unwrap();
+    assert_eq!(color.monochrome, restored.monochrome);
+    assert_eq!(color.reconstruction, restored.reconstruction);
+    assert_eq!(color.color_mode, "Vivid");
+    assert_eq!(color.saturation, 0.8);
+    let mut older: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
+    for field in ["rendering", "monochrome"] {
+        older["settings"].as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(
+        decode(&serde_json::to_vec(&older).unwrap()).unwrap(),
+        edited()
+    );
+    for mix in [[0.; 3], [-0.5, 0.5, 1.], [0.5; 3], [f32::NAN, 0., 1.]] {
+        s.monochrome.mix = mix;
+        assert!(encode(&s).is_err());
+    }
 }
 
 #[test]

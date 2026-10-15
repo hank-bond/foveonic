@@ -1,4 +1,4 @@
-//! Writes editable camera samples and one selected look into an uncompressed DNG.
+//! Writes a linear technical base and one selected appearance into an uncompressed DNG.
 
 use super::appearance::{Prepared, ProfileData, DIMS};
 use crate::{
@@ -133,6 +133,9 @@ pub(super) fn write<W: Write + Seek>(
         .properties
         .get("CAMMODEL")
         .ok_or("missing DNG camera model")?;
+    if settings.is_monochrome() {
+        tag(&mut directory, 270, "Linear monochrome. Sensor-layer mixing and technical reconstruction are baked into equal neutral RGB samples. Exposure and tone remain presentation metadata. Retain the original X3F and sidecar to change the mix or restore color.")?;
+    }
     tag(&mut directory, 271, "SIGMA")?;
     tag(&mut directory, 272, model.as_str())?;
     tag(&mut directory, 305, "Foveonic GPU")?;
@@ -177,7 +180,14 @@ pub(super) fn write<W: Write + Seek>(
         50964,
         signed_rationals(&prepared.forward.0)?.as_slice(),
     )?;
-    let name = format!("Foveonic {}", settings.color_mode);
+    let name = format!(
+        "Foveonic {}",
+        if settings.is_monochrome() {
+            "Monochrome"
+        } else {
+            &settings.color_mode
+        }
+    );
     tag(&mut directory, 50936, name.as_str())?; // ProfileName.
     tag(&mut directory, 50934, name.as_str())?; // AsShotProfileName.
     tag(&mut directory, 50940, presentation.curve.as_slice())?;
@@ -188,10 +198,41 @@ pub(super) fn write<W: Write + Seek>(
 
     // These samples already include technical corrections. To resume edits,
     // use the X3F and sidecar rather than treating this history as a recipe to replay.
+    let (baked_controls, metadata_controls): (&[&str], &[&str]) = if settings.is_monochrome() {
+        (
+            &[
+                "calibration",
+                "repair",
+                "highlight_restoration",
+                "despeckle",
+                "row_correction",
+                "mono_mix",
+                "mono_noise",
+                "mono_column",
+                "mono_detail",
+                "sharpening",
+            ],
+            &["exposure", "tone"],
+        )
+    } else {
+        (
+            &[
+                "calibration",
+                "repair",
+                "highlight_restoration",
+                "despeckle",
+                "row_correction",
+                "noise_and_detail",
+                "color_dq",
+                "sharpening",
+            ],
+            &["color_mode", "exposure", "tone", "saturation"],
+        )
+    };
     let history = serde_json::json!({
         "format": "foveonic-dng-history", "version": 1, "settings": settings,
-        "baked_controls": ["calibration", "repair", "highlight_restoration", "despeckle", "row_correction", "noise_and_detail", "color_dq", "sharpening"],
-        "metadata_controls": ["color_mode", "exposure", "tone", "saturation"],
+        "baked_controls": baked_controls,
+        "metadata_controls": metadata_controls,
         "levels": {"black": 0, "white": 65535, "negative_samples": "clamped", "common_scale": scale},
         "calibration_exposure": prepared.calibration_exposure
     });

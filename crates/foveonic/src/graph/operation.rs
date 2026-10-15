@@ -4,6 +4,7 @@ use super::DataType;
 use crate::nodes::sensor::calibration::{Calibration, ColorParams, ColorSpace, EncodeParams};
 use crate::nodes::{
     color::{color_dq, pattern},
+    monochrome::{Prepared as MonoPrepared, Stage as MonoStage},
     sensor::{banding, calibration, camera_repair, despeckle, highlight},
 };
 use std::path::PathBuf;
@@ -24,6 +25,15 @@ pub enum Operation {
     Highlights(std::sync::Arc<highlight::Prepared>),
     HighlightDensity(std::sync::Arc<highlight::Prepared>),
     Banding(banding::Prepared),
+    Monochrome {
+        stage: MonoStage,
+        prepared: std::sync::Arc<MonoPrepared>,
+        space: ColorSpace,
+    },
+    MonoSharpen {
+        amount: f32,
+        space: ColorSpace,
+    },
     NoiseBase(crate::noise::Parameters),
     Column(crate::noise::Parameters),
     Ratio(crate::noise::Parameters),
@@ -91,6 +101,10 @@ impl Operation {
             Self::Despeckle(p) => p.key(),
             Self::Highlights(p) | Self::HighlightDensity(p) => p.key(),
             Self::Banding(p) => p.key(),
+            Self::Monochrome {
+                stage, prepared, ..
+            } => prepared.key(*stage),
+            Self::MonoSharpen { amount, .. } => Key::pod(amount),
             Self::NoiseBase(p) => p.key(N::Base),
             Self::Column(p) => p.key(N::Column),
             Self::Ratio(p) => p.key(N::Ratio),
@@ -123,6 +137,8 @@ impl Operation {
             Self::Highlights(_) => "submit highlight restoration",
             Self::HighlightDensity(_) => "submit original saturation density",
             Self::Banding(_) => "submit row banding correction",
+            Self::Monochrome { stage, .. } => stage.label(),
+            Self::MonoSharpen { .. } => "submit monochrome sharpening",
             Self::NoiseBase(_) => "submit reference noise base",
             Self::Column(_) => "submit reference column conditioning",
             Self::Ratio(_) => "submit reference luminance ratio",
@@ -154,6 +170,18 @@ impl Operation {
                 (vec![CalibratedLayers], CalibratedLayers)
             }
             Self::HighlightDensity(_) => (vec![], ScalarField),
+            Self::Monochrome { stage, space, .. } => match stage {
+                MonoStage::Mix => (vec![CalibratedLayers], Monochrome),
+                MonoStage::Directional => (vec![Monochrome], Monochrome),
+                MonoStage::Column | MonoStage::Histogram | MonoStage::Despeckle => {
+                    (vec![Monochrome, Monochrome], Monochrome)
+                }
+                MonoStage::Signal => (vec![Monochrome], SignedDetail),
+                MonoStage::Expand => (vec![Monochrome], LinearRgb(*space)),
+            },
+            Self::MonoSharpen { space, .. } => {
+                (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
+            }
             Self::NoiseBase(_) => (vec![CalibratedLayers], FilteredTiles),
             Self::Column(_) => (vec![CalibratedLayers], ConditionedTiles),
             Self::Ratio(_) => (
@@ -219,6 +247,8 @@ impl Operation {
             Self::Highlights(_) => "highlight.layers",
             Self::HighlightDensity(_) => "highlight.density",
             Self::Banding(_) => "banding.layers",
+            Self::Monochrome { stage, .. } => stage.output_name(),
+            Self::MonoSharpen { .. } => "sharpen.rgb",
             Self::NoiseBase(_) => "noise.tiles",
             Self::Column(_) => "column.tiles",
             Self::Ratio(_) => "detail.raw-ratio-tiles",

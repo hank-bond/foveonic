@@ -1,21 +1,28 @@
 # Foveonic
-<img src="crates/foveonic-gui/assets/logo.svg" width="200" alt="Application Icon">
-An X3F processing app with both a GUI and a batch CLI, focused on processing speed, flexibility, and attractive results.
 
-## Supported Formats
-TIFF exports bake all processing into the pixel data, trading maximum compatibility for reduced editing latitude.  This is because tone and color changes are fully baked-in, with downstream editors operating "on top of" those changes.  
+<img src="crates/foveonic-gui/assets/logo.svg" width="200" alt="Application icon">
 
-DNG separates out the base linear image data—only baking in some corrections and detail enhancement—and compresses all tone and color changes into a curve and matrix in the DNG metadata.  Your DNG editor will then take this metadata and apply it on top of the linear pixel data as part of its rendering pipeline.  This makes it a more flexible format for editing further, but does mean that not every editor will render it exactly as it looked in Foveon upon export.
+A Merrill X3F processing app with a GUI and batch CLI, focused on speed, editing flexibility, and photographic results.
 
-## Rendering Techniques
-All correction and enhancement metadata that exists in the X3F file is made use of.  Effort has been made to align with the Sigma's intended processing of the files wherever possible.  Additional controls are made wherever available to alter the processing approaches on a per-image basis.
+## Output formats
 
-The processing pipeline has been largely developed using WebGPU shaders, in order to provide a significantly improved editing experience.  This also benefits batch CLI render times.  
+TIFF bakes the selected processing into pixels. DNG retains a linear technical base and stores the selected appearance in metadata. Technical corrections and detail processing are baked into the DNG samples. Receiving editors may render the embedded appearance differently.
 
-## Requirements
-Development is currently done on a modest Apple M1 Pro with 14 GPU Cores.  The current focus is targeting MacOS.  The tooling chosen should be multi-platform compatible, but focus is not currently on delivering that.  On a machine of that caliber, you may expect full pipeline render times around 900-1600ms, with partial re-renders closer to 200-400ms using cached pipeline partials.
+## Rendering
 
-Expect application memory to average around 2GB, with transient operations peaking under 4GB.  Configuration to reduce memory requirements at the cost of increased processing speed will be made available at a later time.
+Choose **Color** or **Monochrome** in the editor. Monochrome mixes the original sensor layers with a triangular R/G/B selector before dedicated filtering. Both modes retain their settings, and the editor shows only relevant controls.
+
+Monochrome DNG bakes the mix into linear neutral samples while keeping exposure and tone in metadata. Retain the X3F and sidecar to change the mix or restore color.
+
+Photographic processing runs in GPU shaders. Camera metadata supplies calibration, correction parameters, and color looks.
+
+## Platform and performance
+
+Development targets macOS on an Apple M1 Pro with 14 GPU cores. Cross-platform runtime support is not yet verified.
+
+Earlier color measurements were roughly 900–1600 ms for full processing and 200–400 ms for cached edits. Three full-sensor monochrome originals measured 600–900 ms for warm completed processing without the interactive cache. Source loading and export are separate. See the [monochrome measurements](plans/monochrome-performance.md) for settings, comparisons, and validation.
+
+Normal editing targets about 2 GB of memory, with transient peaks below 4 GB. These are targets, not enforced limits.
 
 ## Build and use
 
@@ -33,12 +40,37 @@ This creates `target/release/Foveonic.app` without installing it. Use `--build-o
 
 ### CLI
 
-Render a TIFF:
+Render a color TIFF:
 
 ```sh
 cargo run --release -p foveonic -- render path/to/photo.x3f output.tiff --wb Sunlight --mode Standard
 ```
 
+Render blue-layer monochrome, or export its linear DNG:
+
+```sh
+cargo run --release -p foveonic -- render path/to/photo.x3f mono.tiff --wb Sunlight --mono-mix 0,0,1
+cargo run --release -p foveonic -- export-dng path/to/photo.x3f mono.dng --wb Sunlight --mono-mix 0,0,1
+```
+
+`--rendering monochrome` selects the equal-layer mix. `--mono-noise` and `--mono-banding` select presets 0–4. Estimated ISO above 6400 is currently unsupported for monochrome column correction.
+
 The output file must not already exist. Use `cargo run --release -p foveonic -- --help` for batch processing and other options. The CLI does not load GUI editing sidecars.
 
 Sample X3Fs are available in the [Example photographs release](https://github.com/hank-bond/foveonic/releases/tag/example-photographs). Download a photograph and open it in the GUI to try the app.
+
+## Checks
+
+```sh
+cargo test --offline --workspace
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo run --offline -p docs-index
+cargo run --offline -p docs-index -- --check
+```
+
+Run GPU and original-file tests serially with `FOVEONIC_FIXTURE_DIR` pointing to the local X3F fixtures:
+
+```sh
+FOVEONIC_FIXTURE_DIR=path/to/x3f cargo test --offline --release --workspace -- --ignored --test-threads=1
+```

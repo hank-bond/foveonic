@@ -77,6 +77,14 @@ pub enum Kernel {
     CameraBlocks,
     DngConvert,
     DngQuantize,
+    MonoMix,
+    MonoDirectional,
+    MonoColumn,
+    MonoHistogram,
+    MonoDespeckle,
+    MonoSignal,
+    MonoExpand,
+    MonoSharpen,
 }
 
 impl Kernel {
@@ -154,6 +162,14 @@ impl Kernel {
             Self::CameraBlocks => "stable capped bad-red block prefixes",
             Self::DngConvert => "DNG camera basis and range",
             Self::DngQuantize => "DNG linear uint16 encoding",
+            Self::MonoMix => "monochrome layer mixing",
+            Self::MonoDirectional => "monochrome directional filtering",
+            Self::MonoColumn => "monochrome column correction",
+            Self::MonoHistogram => "monochrome histogram filtering",
+            Self::MonoDespeckle => "monochrome speckle correction",
+            Self::MonoSignal => "monochrome signed detail",
+            Self::MonoExpand => "monochrome gain replication",
+            Self::MonoSharpen => "monochrome final sharpening",
         }
     }
 }
@@ -176,6 +192,7 @@ impl Gpu {
         let pattern = include_str!("../nodes/color/pattern.wgsl");
         let sharpen = include_str!("../nodes/finish/sharpen.wgsl");
         let dng = include_str!("../dng/dng.wgsl");
+        let mono = include_str!("../nodes/monochrome/mono.wgsl");
         let kernels = [
             (black, "histogram_pass"),
             (black, "mean_pass"),
@@ -249,6 +266,14 @@ impl Gpu {
             (camera, "detection_block_prefix"),
             (dng, "convert"),
             (dng, "quantize"),
+            (mono, "mixing"),
+            (mono, "directional"),
+            (mono, "column"),
+            (mono, "histogram"),
+            (mono, "despeckle"),
+            (mono, "signal"),
+            (mono, "expand"),
+            (sharpen, "monochrome"),
         ];
         #[cfg(test)]
         let mut shader_writes = Vec::new();

@@ -26,7 +26,7 @@ impl Scopes {
     pub fn channels(&self) -> usize {
         if matches!(
             self.space,
-            Space::ScalarField | Space::LuminanceRatio | Space::SignedDetail
+            Space::ScalarField | Space::Monochrome | Space::LuminanceRatio | Space::SignedDetail
         ) {
             1
         } else {
@@ -83,7 +83,10 @@ pub(crate) fn analyze(
         samples[0],
         samples[1],
         match space {
-            Space::SensorLayers | Space::CalibratedLayers | Space::LinearRgb(_) => 1,
+            Space::SensorLayers
+            | Space::CalibratedLayers
+            | Space::Monochrome
+            | Space::LinearRgb(_) => 1,
             Space::SignedDetail => 2,
             Space::LuminanceRatio => 3,
             _ => 0,

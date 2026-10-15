@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod dng_base;
+mod monochrome;
 pub(super) mod photographic;
 mod shared;
 

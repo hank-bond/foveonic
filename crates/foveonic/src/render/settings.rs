@@ -1,19 +1,30 @@
 //! Defines shared photographic settings and validates their values.
 
+pub use crate::nodes::monochrome::Controls as MonochromeControls;
 pub use crate::nodes::{
     finish::tone::Controls as ToneControls, sensor::repair::Threshold as RepairThreshold,
 };
 use crate::source::Result;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rendering {
+    #[default]
+    Color,
+    Monochrome,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub rendering: Rendering,
+    pub monochrome: MonochromeControls,
     pub white_balance: String,
     pub color_mode: String,
-    /// Stops applied to linear RGB before the camera-derived tone curve.
+    /// Stops applied to linear RGB before the selected rendering mode's tone curve.
     pub exposure: f32,
     pub tone: ToneControls,
-    /// A factor after tone: zero is grayscale, one leaves saturation unchanged.
+    /// Color saturation after tone. Zero is grayscale and one leaves it unchanged.
     pub saturation: f32,
     /// ColorDQ gain after camera color conversion. Zero skips this correction.
     /// None chooses the camera's automatic gain when reconstruction is on.
@@ -29,9 +40,9 @@ pub struct Settings {
     pub highlight_threshold_ev: Option<f32>,
     /// Estimate and subtract native additive per-row layer bias before reconstruction.
     pub row_correction: bool,
-    /// Noise and detail settings. None leaves reconstruction off.
+    /// Color noise and detail settings. None leaves color reconstruction off.
     pub reconstruction: Option<crate::noise::Controls>,
-    /// Sharpening strength relative to brightness. Zero leaves sharpening off.
+    /// Final high-pass sharpening strength. Zero leaves sharpening off.
     pub sharpen_amount: f32,
     /// Final dimensions after orientation. None keeps the active crop's native size.
     pub output_size: Option<[u32; 2]>,
@@ -40,6 +51,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            rendering: Rendering::Color,
+            monochrome: MonochromeControls::default(),
             // Camera choices are resolved from the selected X3F, not a global preset.
             white_balance: String::new(),
             color_mode: String::new(),
@@ -68,14 +81,37 @@ impl Settings {
         }
     }
 
+    pub fn is_monochrome(&self) -> bool {
+        self.rendering == Rendering::Monochrome
+    }
+
+    pub(crate) fn sensor_noise_controls(&self) -> crate::noise::Controls {
+        if self.is_monochrome() {
+            crate::noise::Controls {
+                chroma: self.monochrome.noise,
+                banding: self.monochrome.banding,
+                ..Default::default()
+            }
+        } else {
+            self.reconstruction.unwrap_or_default()
+        }
+    }
+
     pub fn color_dq_selected(&self) -> bool {
-        self.color_dq_gain
-            .map_or(self.reconstruction.is_some(), |v| v > 0.)
+        !self.is_monochrome()
+            && self
+                .color_dq_gain
+                .map_or(self.reconstruction.is_some(), |v| v > 0.)
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.white_balance.is_empty() || self.color_mode.is_empty() {
-            return Err("--wb and --mode are required".into());
+        if self.white_balance.is_empty() || (!self.is_monochrome() && self.color_mode.is_empty()) {
+            return Err(if self.is_monochrome() {
+                "--wb is required"
+            } else {
+                "--wb and --mode are required"
+            }
+            .into());
         }
         self.validate_values()
     }
@@ -83,6 +119,7 @@ impl Settings {
     /// Inspection can show sensor data before WB or mode is known. Check numbers
     /// here and let stages that use those camera choices resolve them later.
     pub(crate) fn validate_values(&self) -> Result<()> {
+        self.monochrome.validate()?;
         if !self.exposure.is_finite()
             || !self.exposure.exp2().is_finite()
             || self.exposure.exp2() <= 0.

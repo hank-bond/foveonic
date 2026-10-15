@@ -28,3 +28,12 @@ fn main(@builtin(global_invocation_id)id:vec3<u32>){
     let value=min(fractions*(sum+delta),vec3(32767.0));
     output_pixels[p*3u]=value.x;output_pixels[p*3u+1u]=value.y;output_pixels[p*3u+2u]=value.z;
 }
+@compute @workgroup_size(8,8)
+fn monochrome(@builtin(global_invocation_id)id:vec3<u32>){
+    let w=params.source.x;let h=params.source.y;if id.x>=w || id.y>=h{return;}
+    let p=id.y*w+id.x;
+    let integer=i32(min(fma(detail[p],4.0,0.5),8191.0));let low=u32(integer)&65535u;let packed=i32(low<<16u)>>16;
+    let delta=f32(packed)*0.25*params.value.x;
+    let value=clamp(color(p)+vec3(delta),vec3(0.0),vec3(32767.0));
+    output_pixels[p*3u]=value.x;output_pixels[p*3u+1u]=value.y;output_pixels[p*3u+2u]=value.z;
+}

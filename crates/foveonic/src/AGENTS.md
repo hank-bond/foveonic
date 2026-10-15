@@ -17,7 +17,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[dng/](./dng/AGENTS.md)** DNG export owns camera-coordinate storage, ordered presentation composition, and uncompressed TIFF-based packaging.
 - **[gpu/](./gpu/AGENTS.md)** GPU internals register node shaders and protect storage ownership and scratch reuse.
 - **[graph/](./graph/AGENTS.md)** Graph operations define supported node parameters, typed ports, cache keys, and named output dependencies.
-- **[nodes/](./nodes/AGENTS.md)** Processing nodes group sensor corrections, color reconstruction, and finishing with their shaders and tests.
+- **[nodes/](./nodes/AGENTS.md)** Processing nodes group sensor corrections, color and monochrome reconstruction, and finishing with their shaders and tests.
 - **[render/](./render/AGENTS.md)** Rendering separates shared settings, authored recipes, graph execution, and owned inspection artifacts.
 - **[x3f/](./x3f/AGENTS.md)** The X3F reader decodes Merrill sensor samples and camera metadata from original files.
 
@@ -30,7 +30,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
 - **[interactive.rs](./interactive.rs)** Reuses unchanged inputs for the current edit while keeping earlier images safe.
 - **[lib.rs](./lib.rs)** Shares Merrill decoding and GPU photo processing between TIFF and DNG exports.
-- **[main.rs](./main.rs)** Inspects Merrill X3Fs and exports single images or batches through shared TIFF settings.
+- **[main.rs](./main.rs)** Inspects Merrill X3Fs and exports TIFF or linear DNG through shared rendering settings.
 - **[options.rs](./options.rs)** Shares photographic CLI option parsing between conversion and the completed-processing profiler.
 - **[output.rs](./output.rs)** Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
 - **[preview.rs](./preview.rs)** Reads embedded JPEG previews and presentation dimensions from X3F sections.

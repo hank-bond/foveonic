@@ -1,43 +1,44 @@
 ---
-summary: "Deferred intermittent fresh-render differences retain investigation evidence without claiming a known cause or fix."
+summary: "Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence."
 ---
 
 # GPU output mismatch
 
-## Decision
+## Current state
 
-The owner deferred this investigation after guarded and original-storage builds both passed matched trials and no issue was observed in normal use. The cause and first divergent stage remain unknown. The guards are retained as an ownership improvement, not an established fix. Reopen if the normal exact-output regression fails or the owner observes an issue; do not weaken its assertions.
+The cause and first divergent stage remain unknown. The owner initially deferred investigation after matched guarded/original-storage trials passed and normal use showed no issue. A later exact-output regression failed during monochrome optimization, and the owner approved investigation. Targeted and complete reruns passed, but this does not establish a fix.
 
-Temporary fixture filters, repeated-render campaigns, raw-root capture hooks, failure-triggered rerenders and event tracing have been removed from maintained code. Permanent guard regressions, shader binding-access audits and bounded exact-comparison failures remain. Frozen experimental sources/binaries, logs and photographic evidence are preserved outside maintained source.
+Keep strict equality checks. Do not weaken tolerances or retry a failing comparison until it passes. Guarded storage is an ownership improvement, not an established mismatch fix.
 
-## Findings
+## Established observations
 
-- Same source/settings can yield different final full-resolution RGB floats. The most informative failure occurred in a fresh render; another fresh render matched the cached result in full.
-- Both original final GPU buffers read back byte-identically before and after the repeated render. This argues against an unstable final readback, not every possible measurement error.
-- Regenerated cached-boundary roots matched afterward; outputs from the actual failing execution were not captured, so no stage has been identified.
-- Failures occurred in frozen builds and with tone reuse disabled. Concurrent source edits and tone reuse are therefore not necessary to trigger them.
-- Disabling scratch reuse passed four six-original sequences, but also changed memory lifetime/timing. Guarded runs reported no unexpected ownership violations. Neither result proves a recycling bug or a fix.
+- Identical source/settings have produced different full-resolution RGB floats. In one captured case, a second fresh render matched the cached result in full.
+- Both original final buffers remained byte-identical across rereads. This argues against unstable final readback, not every possible measurement error.
+- Regenerated continuation inputs matched afterward. The actual failing intermediate outputs were not captured, so no stage has been identified.
+- Frozen builds failed with tone reuse disabled. Concurrent source edits and tone reuse are not necessary to trigger the issue.
+- Four no-recycling six-original sequences passed, but disabling recycling changed memory lifetime and timing. No production scratch policy was changed.
+- Guarded runs reported no unexpected ownership violation. Two paired guarded/original-storage trials passed the same 50 tests, with execution order reversed in the second pair. These observations do not establish a cause or failure-rate change.
 
-## Retained evidence
+Temporary fixture filters, repeated-render campaigns, capture hooks, failure-triggered rerenders, and event tracing were removed from maintained code. Guard regressions, binding-access audits, and bounded exact-comparison failures remain. Frozen sources, binaries, manifests, and raw evidence are retained locally. Earlier revisions preserve the detailed artifact inventory.
 
-Initial red-flower failures followed a Shadows edit, a Detail edit and cancellation/resume. `/tmp/foveonic-ui-followup-gpu.log`, `/tmp/foveonic-ui-followup-gpu-2.log` and `/tmp/foveonic-ui-flower-isolation-5.log` are retained. The shadow failure differed in 34382750 components (71.25%), maximum absolute float difference 1.177125. The resume failure differed in 11213165 components (23.24%), maximum 0.0087557435, initially near sensor coordinate (1229,2444). Bounded recovered statistics are in `/tmp/foveonic-ui-{first,flower}-panic-difference.log`; the original large panic logs remain intact.
+## Historical failures
 
-Flower-only runs 1–4 passed, run 5 failed, and runs 6–19 passed. Forty fresh and sixty cached fixed-configuration repeats passed in `/tmp/foveonic-ui-fresh-cached-flower-repeat.log`. A later diagnostic suite passed in `/tmp/foveonic-ui-cache-diagnostic-suite.log`. These are historical observations, not a reliable failure-rate estimate.
+Red-flower failures followed Shadows, Detail, and cancellation/resume edits. The Shadows comparison differed in 34,382,750 components, maximum 1.177125. Resume differed in 11,213,165 components, maximum 0.0087557435, initially near sensor coordinate (1229, 2444). CPU tone equality passed in one failing run.
 
-Frozen `d686266` plus diagnostic/tone overlays: `/tmp/foveonic-mismatch-isolation/{regenerated,reused}`, with SHA-256 overlay manifest and separate build directories. Ten alternating flower-only sequences per variant passed. `/tmp/foveonic-mismatch-regenerated-full-1.log` passed 51 tests; the reused suite failed on flower white-balance step 14, 39531465 differing components and maximum 0.8227475. Sample values reversed on a repeated fresh render, but that probe did not establish full equality against the cached result.
+A frozen turquoise Detail comparison differed in 23,467,527 components, maximum 0.005541146. Both final buffers were stable across rereads, and a second fresh render matched the cached result in full. All five subsequently regenerated continuation inputs matched. Tone reuse was disabled.
 
-Frozen readback probes: `/tmp/foveonic-mismatch-readback/{regenerated,reused}`. `/tmp/foveonic-readback-reused-full-1.log` passed 51 tests. `/tmp/foveonic-readback-regenerated-full-1.log` failed on turquoise still life, Detail step 2: 23467527 differing components (48.63%), maximum 0.005541146. Both buffers were stable across rereads; a second fresh render matched the cached result in full. All five retained continuation inputs matched subsequently regenerated roots. This variant had tone reuse disabled.
+Interleaved passing and failing runs are historical observations, not a reliable estimate of failure rate.
 
-`/tmp/foveonic-mismatch-readback/no-scratch` disables scratch recycling and retains released allocations until the execution ends. `/tmp/foveonic-no-scratch-full-1.log` passed its equality case and 49 other tests, but intentionally failed the existing assertion that scratch reuse occurs. Three further six-original comparisons passed in `/tmp/foveonic-no-scratch-equality-{2,3,4}.log`. No production scratch policy was changed by that experiment.
+## Recurrence during monochrome optimization
 
-Guarded migration and repeat evidence are recorded in [guarded GPU storage](./guarded-gpu-storage.md). Four guard-only suites passed, with 53 tests each. Their test workload included three new guard tests and shader binding-access analysis, so they are not a controlled guards-only comparison with earlier unguarded runs.
+The normal six-original color regression failed on yellow flowers and stroller after Exposure step 5. It reported 35,681,789 differing components, maximum 1.1771249, and first values 0.5896426 / 0.588649. The similar maximum resembles the historical flower failure but does not establish an identical cause.
 
-## Matched comparison
+The changed histogram runs only in Monochrome. The failing case remained Color and did not dispatch it. Review found no missing exposure dependency in the tone key, and no color photographic shader changed during the optimization. This narrows the changed execution path, not the possible cause.
 
-`/tmp/foveonic-matched-guards/{original,guarded}` and its source/binary SHA-256 manifests preserve the matched experiment. Tone reuse, extra guard-test workload and shader-access auditing are absent from both variants. The same 50 ignored core tests run in the same order, with identical bounded readback probes and representation-only test adaptations. Both retain the original image in the separate repeated-render test. No photographic shader or production fence changed.
+The unchanged strict six-original test then passed all edit sequences, retained-image checks, and cancellation/resume checks in about 124 seconds. A subsequent complete serial suite passed all 69 processor and eight GUI GPU tests. The failure log, passing logs, test executable, source snapshot, and hashes are retained locally. Failing intermediate buffers were not captured.
 
-Two paired trials passed in both variants, reversing execution order in the second pair. Logs: `/tmp/foveonic-matched-{original,guarded}-{1,2}.log`; exact-output evidence: `.local/ui-responsiveness/matched-{original,guarded}-{1,2}`. Executables were copied and launched directly, without rebuilding between trials. These passes do not establish that guards changed the outcome. Any future claim about failure rate needs more comparable observations; performance numbers from these correctness runs are not acceptance measurements.
+No tolerance, cache policy, scratch policy, processing fence, or retry behavior changed. The failure remains unresolved.
 
-## If reopened
+## Next diagnostic step
 
-First freeze the failing code and inputs. Review shader access alongside host dispatch dimensions, parameters and order. Capture graph-stage outputs from the actual compared executions if needed, then narrow compound operations to dispatches. Diagnostic retention can prevent recycling, and diagnostic copies/fences change timing; record those differences explicitly. No shader race, driver fault, cache-key error or premature reuse has been established.
+Keep a frozen copy of failing code and inputs. Review shader access alongside dispatch dimensions, parameters, and order. Capture stage outputs from the actual compared executions, then narrow compound operations to dispatches. Retention can prevent recycling, while diagnostic copies and fences change timing. Record those differences explicitly. No shader race, driver fault, cache-key error, or premature reuse has been established.

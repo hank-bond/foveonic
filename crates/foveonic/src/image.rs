@@ -22,6 +22,8 @@ pub enum Layout {
 pub enum Space {
     SensorLayers,
     ScalarField,
+    /// Single-channel monochrome brightness in linear camera-code units.
+    Monochrome,
     /// Luminance ratio. One leaves brightness unchanged and the display range is 0..2.
     LuminanceRatio,
     /// Signed reconstruction detail in camera code units. The display range is −1000..1000.
@@ -101,6 +103,7 @@ impl RenderedImage {
             Space::SensorLayers
             | Space::CalibratedLayers
             | Space::ScalarField
+            | Space::Monochrome
             | Space::LuminanceRatio
             | Space::SignedDetail => ColorSpace::Srgb,
         };

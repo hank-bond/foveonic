@@ -3,7 +3,7 @@
 use crate::help;
 use eframe::egui;
 use foveonic::{
-    render::{RepairThreshold, Settings},
+    render::{Rendering, RepairThreshold, Settings},
     source::Metadata,
 };
 use std::ops::RangeInclusive;
@@ -186,6 +186,32 @@ fn adjustment_row<T: egui::emath::Numeric>(
 
 pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
     let mut changed = false;
+    ui.horizontal(|ui| {
+        help::control(
+            ui.add_sized([92., 20.], egui::Label::new("Rendering")),
+            "Rendering",
+        );
+        for (value, label) in [
+            (Rendering::Color, "Color"),
+            (Rendering::Monochrome, "Monochrome"),
+        ] {
+            if help::control(
+                crate::widgets::button(
+                    ui,
+                    label,
+                    settings.rendering == value,
+                    egui::vec2(if value == Rendering::Color { 55. } else { 100. }, 22.),
+                ),
+                "Rendering",
+            )
+            .clicked()
+            {
+                changed |= settings.rendering != value;
+                settings.rendering = value;
+            }
+        }
+    });
+    let mono = settings.is_monochrome();
     for (title, key, value) in [
         (
             "White balance",
@@ -198,6 +224,9 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
             &mut settings.color_mode,
         ),
     ] {
+        if mono && title == "Color mode" {
+            continue;
+        }
         let choices = metadata.and_then(|metadata| metadata.lists.get(key));
         // Keep the same rows while metadata is loading so later controls do not
         // jump when the first processed frame supplies the camera's choices.
@@ -229,12 +258,18 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         });
     }
     ui.separator();
-    ui.weak("Tone and Color");
+    if mono {
+        changed |= crate::mixer::show(ui, &mut settings.monochrome.mix);
+        ui.separator();
+    }
+    ui.weak(if mono { "Tone" } else { "Tone and Color" });
     for (label, value, range, default) in [
         ("Exposure", &mut settings.exposure, -4. ..=4., 0.),
         ("Saturation", &mut settings.saturation, 0. ..=2., 1.),
     ] {
-        changed |= adjustment(ui, label, value, range, default);
+        if !mono || label != "Saturation" {
+            changed |= adjustment(ui, label, value, range, default);
+        }
     }
     for (label, value) in [
         ("Contrast", &mut settings.tone.contrast),
@@ -244,27 +279,38 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         changed |= adjustment(ui, label, value, -2. ..=2., 0.);
     }
     ui.separator();
-    let mut reconstruction = settings.reconstruction.is_some();
-    if help::control(
-        crate::widgets::checkbox(ui, &mut reconstruction, "Noise and Detail"),
-        "Noise and Detail",
-    )
-    .changed()
-    {
-        settings.reconstruction = reconstruction.then(Default::default);
-        changed = true;
-    }
-    if let Some(controls) = &mut settings.reconstruction {
-        changed |= adjustment(ui, "Chroma noise", &mut controls.chroma, 0..=4, 2);
-        changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
-        changed |= adjustment(ui, "Banding noise", &mut controls.banding, 0..=4, 2);
-        changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
-        changed |= crate::advanced::show(
+    if !mono {
+        let mut reconstruction = settings.reconstruction.is_some();
+        if help::control(
+            crate::widgets::checkbox(ui, &mut reconstruction, "Noise and Detail"),
+            "Noise and Detail",
+        )
+        .changed()
+        {
+            settings.reconstruction = reconstruction.then(Default::default);
+            changed = true;
+        }
+        if let Some(controls) = &mut settings.reconstruction {
+            changed |= adjustment(ui, "Chroma noise", &mut controls.chroma, 0..=4, 2);
+            changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
+            changed |= adjustment(ui, "Banding noise", &mut controls.banding, 0..=4, 2);
+            changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
+            changed |= crate::advanced::show(
+                ui,
+                controls,
+                &mut settings.color_dq_gain,
+                metadata,
+                &settings.white_balance,
+            );
+        }
+    } else {
+        changed |= adjustment(ui, "Mono noise", &mut settings.monochrome.noise, 0..=4, 2);
+        changed |= adjustment(
             ui,
-            controls,
-            &mut settings.color_dq_gain,
-            metadata,
-            &settings.white_balance,
+            "Mono banding",
+            &mut settings.monochrome.banding,
+            0..=4,
+            2,
         );
     }
     ui.separator();
@@ -343,6 +389,183 @@ mod tests {
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: Default::default(),
+        }
+    }
+
+    #[test]
+    fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Vivid");
+        settings.saturation = 1.4;
+        settings.reconstruction = Some(foveonic::noise::Controls {
+            chroma: 4,
+            luminance: 1,
+            detail: 1.3,
+            ..Default::default()
+        });
+        let saved = settings.clone();
+        let mut frame = |time, events| {
+            let mut changed = false;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 2000.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        changed = processing(ui, &mut settings, None);
+                    });
+                },
+            );
+            (changed, output, settings.clone())
+        };
+        frame(0., vec![]);
+        let (_, output, _) = frame(0.1, vec![]);
+        let mono = text_centers(&output, "Monochrome")[0];
+        frame(
+            1.,
+            vec![egui::Event::PointerMoved(mono), pointer_button(mono, true)],
+        );
+        let (changed, _, current) = frame(1.1, vec![pointer_button(mono, false)]);
+        assert!(changed && current.is_monochrome());
+        let (_, output, current) = frame(1.5, vec![]);
+        assert_eq!(current.reconstruction, saved.reconstruction);
+        assert_eq!(current.saturation, saved.saturation);
+        for label in ["Color Mix", "Mono noise", "Mono banding"] {
+            assert_eq!(text_centers(&output, label).len(), 1);
+        }
+        for label in [
+            "Color mode",
+            "Saturation",
+            "Noise and Detail",
+            "Chroma noise",
+            "Luma noise",
+            "Banding noise",
+            "Detail",
+            "ColorDQ gain",
+        ] {
+            assert!(
+                text_centers(&output, label).is_empty(),
+                "{label} must be hidden in monochrome"
+            );
+        }
+        let blue = text_centers(&output, "B")[0] - egui::vec2(12., 0.);
+        frame(
+            4.,
+            vec![egui::Event::PointerMoved(blue), pointer_button(blue, true)],
+        );
+        let (changed, _, after) = frame(4.1, vec![pointer_button(blue, false)]);
+        assert!(changed);
+        assert_eq!(after.monochrome.mix, [0., 0., 1.]);
+        let color = text_centers(&output, "Color")[0];
+        frame(
+            5.,
+            vec![
+                egui::Event::PointerMoved(color),
+                pointer_button(color, true),
+            ],
+        );
+        let (_, output, after) = frame(5.1, vec![pointer_button(color, false)]);
+        assert!(!after.is_monochrome());
+        for label in ["Color mode", "Saturation", "Noise and Detail"] {
+            assert_eq!(text_centers(&output, label).len(), 1);
+        }
+        for label in ["Color Mix", "Mono noise", "Mono banding"] {
+            assert!(text_centers(&output, label).is_empty());
+        }
+        assert_eq!(after.monochrome.mix, [0., 0., 1.]);
+        assert_eq!(after.reconstruction, saved.reconstruction);
+        assert_eq!(after.color_mode, saved.color_mode);
+        assert_eq!(after.saturation, saved.saturation);
+        frame(
+            6.,
+            vec![egui::Event::PointerMoved(mono), pointer_button(mono, true)],
+        );
+        let (_, _, after) = frame(6.1, vec![pointer_button(mono, false)]);
+        assert!(after.is_monochrome());
+        assert_eq!(after.monochrome.mix, [0., 0., 1.]);
+    }
+
+    #[test]
+    fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_values() {
+        for rendering in [Rendering::Color, Rendering::Monochrome] {
+            let ctx = egui::Context::default();
+            let mut settings = Settings::new("Sunlight", "Vivid");
+            settings.rendering = rendering;
+            settings.saturation = 1.4;
+            settings.reconstruction = Some(Default::default());
+            settings
+                .reconstruction
+                .as_mut()
+                .unwrap()
+                .overrides
+                .set(foveonic::noise::Parameter::BaseBlend, Some(0.2));
+            settings.color_dq_gain = Some(1.2);
+            settings.monochrome.mix = [0.2, 0.3, 0.5];
+            settings.monochrome.noise = 4;
+            settings.monochrome.banding = 1;
+            let before = settings.clone();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 2500.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(!processing_expanded(ui, &mut settings, None));
+                    });
+                },
+            );
+            assert_eq!(settings, before);
+            for label in [
+                "Color mode",
+                "Saturation",
+                "Noise and Detail",
+                "Chroma noise",
+                "Luma noise",
+                "Banding noise",
+                "Detail",
+                "ColorDQ gain",
+                "Base filter blend",
+            ] {
+                assert_eq!(
+                    text_centers(&output, label).len(),
+                    usize::from(rendering == Rendering::Color),
+                    "{rendering:?}: {label}"
+                );
+            }
+            for label in ["Color Mix", "Mono noise", "Mono banding"] {
+                assert_eq!(
+                    text_centers(&output, label).len(),
+                    usize::from(rendering == Rendering::Monochrome),
+                    "{rendering:?}: {label}"
+                );
+            }
+            for label in [
+                "White balance",
+                "Exposure",
+                "Contrast",
+                "Shadows",
+                "Sharpen",
+                "Speckles",
+                "Bad pixels",
+                "Row banding",
+            ] {
+                assert_eq!(
+                    text_centers(&output, label).len(),
+                    1,
+                    "{rendering:?}: {label}"
+                );
+            }
+            assert_eq!(text_centers(&output, "Highlights").len(), 2);
         }
     }
 
@@ -528,7 +751,18 @@ mod tests {
         };
         let mut empty_metadata = metadata.clone();
         empty_metadata.lists.clear();
-        for initial in [Settings::new("", ""), Settings::new("Sunlight", "Standard")] {
+        for initial in [
+            Settings::new("", ""),
+            Settings::new("Sunlight", "Standard"),
+            Settings {
+                rendering: Rendering::Monochrome,
+                ..Settings::new("", "")
+            },
+            Settings {
+                rendering: Rendering::Monochrome,
+                ..Settings::new("Sunlight", "Standard")
+            },
+        ] {
             let ctx = egui::Context::default();
             let mut settings = initial.clone();
             let mut time = 0.;
@@ -558,9 +792,17 @@ mod tests {
                 let (changed, output, current) = frame(available, vec![]);
                 assert!(!changed);
                 assert_eq!(current, initial);
-                let positions = ["White balance", "Color mode", "Exposure", "Refinement"]
-                    .map(|label| text_centers(&output, label)[0]);
-                assert_eq!(*anchors.get_or_insert(positions), positions);
+                let labels: &[&str] = if initial.is_monochrome() {
+                    assert!(text_centers(&output, "Color mode").is_empty());
+                    &["White balance", "Exposure", "Refinement"]
+                } else {
+                    &["White balance", "Color mode", "Exposure", "Refinement"]
+                };
+                let positions: Vec<_> = labels
+                    .iter()
+                    .map(|label| text_centers(&output, label)[0])
+                    .collect();
+                assert_eq!(*anchors.get_or_insert(positions.clone()), positions);
             }
             let (_, output, _) = frame(None, vec![]);
             let value = if initial.white_balance.is_empty() {

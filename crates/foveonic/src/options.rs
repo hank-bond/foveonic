@@ -2,7 +2,7 @@
 
 use foveonic::{
     profile::Mode,
-    render::{RepairThreshold, Settings},
+    render::{MonochromeControls, Rendering, RepairThreshold, Settings},
     source::Result,
 };
 use std::{ffi::OsString, path::PathBuf};
@@ -53,6 +53,31 @@ pub(crate) fn parse_settings(
             "--profile" => profiling = value.parse()?,
             "--wb" => settings.white_balance = value,
             "--mode" => settings.color_mode = value,
+            "--rendering" => {
+                settings.rendering = match value.as_str() {
+                    "color" => Rendering::Color,
+                    "monochrome" => Rendering::Monochrome,
+                    _ => return Err("rendering must be color or monochrome".into()),
+                }
+            }
+            "--mono-mix" => {
+                let values: Vec<f32> = value
+                    .split(',')
+                    .map(str::parse)
+                    .collect::<std::result::Result<_, _>>()?;
+                settings.monochrome.mix = MonochromeControls::normalized_mix(
+                    values.try_into().map_err(|_| "mono mix requires R,G,B")?,
+                )?;
+                settings.rendering = Rendering::Monochrome;
+            }
+            "--mono-noise" => {
+                settings.monochrome.noise = value.parse()?;
+                settings.rendering = Rendering::Monochrome;
+            }
+            "--mono-banding" => {
+                settings.monochrome.banding = value.parse()?;
+                settings.rendering = Rendering::Monochrome;
+            }
             "--exposure" => settings.exposure = value.parse()?,
             "--contrast" => settings.tone.contrast = value.parse()?,
             "--shadows" => settings.tone.shadows = value.parse()?,
