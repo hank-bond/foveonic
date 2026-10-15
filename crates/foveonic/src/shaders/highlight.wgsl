@@ -21,7 +21,7 @@ var<workgroup> donor_range:vec2<u32>;
 var<workgroup> donor_rgb:array<vec3<f32>,128>;
 fn in_image(xy:vec2<u32>)->bool{return xy.x<params.source.x && xy.y<params.source.y;}
 fn work(xy:vec2<u32>)->bool{return all(xy>=params.area.xy) && all(xy<=params.area.zw);}
-fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u])/params.value.y;}
+fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u]);}
 @compute @workgroup_size(8,8)
 fn connected_flags(@builtin(global_invocation_id)id:vec3<u32>){
     let xy=id.xy;if !in_image(xy){return;}let p=xy.y*params.source.x+xy.x;var connected=original[p];
@@ -64,7 +64,7 @@ fn density_field(@builtin(global_invocation_id)id:vec3<u32>){
 @compute @workgroup_size(256)
 fn donor_marks(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3<u32>){
     let p=id.x;var donor=false;
-    if p<params.source.z && params.value.y>0.0{
+    if p<params.source.z{
         let xy=vec2(p%params.source.x,p/params.source.x);
         if work(xy) && (flags[p]&1u)==0u{let rgb=color(p);donor=rgb.x+rgb.y>4000.0;}
     }
@@ -138,7 +138,7 @@ fn table_interpolation(){
 @compute @workgroup_size(8,8)
 fn restore(@builtin(global_invocation_id)id:vec3<u32>){
     let xy=id.xy;if !in_image(xy){return;}let p=xy.y*params.source.x+xy.x;
-    if !work(xy) || params.value.y==0.0{for(var c=0u;c<3u;c++){output[p*3u+c]=pixels[p*3u+c];}return;}
+    if !work(xy){for(var c=0u;c<3u;c++){output[p*3u+c]=pixels[p*3u+c];}return;}
     let rgb=color(p);var blue=rgb.z;
     if lookup[0]>0.0 && (flags[p]&1u)!=0u{
         var ratio=0.0;let total=rgb.x+rgb.y;
@@ -149,7 +149,7 @@ fn restore(@builtin(global_invocation_id)id:vec3<u32>){
     let brightness=brightest*(2.0/3.0)+middle*(1.0/3.0);
     let bright=clamp((brightness-params.value.x)/1000.0,0.0,1.0);let den=density(xy);
     let weight=sqrt((bright*bright+den*den)*0.5);let inverse=1.0-weight;let neutral=weight*rgb.x;
-    output[p*3u]=rgb.x*params.value.y;
-    output[p*3u+1u]=fma(inverse,rgb.y,neutral)*params.value.y;
-    output[p*3u+2u]=fma(inverse,blue,neutral)*params.value.y;
+    output[p*3u]=rgb.x;
+    output[p*3u+1u]=fma(inverse,rgb.y,neutral);
+    output[p*3u+2u]=fma(inverse,blue,neutral);
 }

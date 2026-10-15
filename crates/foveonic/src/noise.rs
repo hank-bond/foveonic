@@ -213,11 +213,10 @@ impl<'de> serde::Deserialize<'de> for Overrides {
 pub fn calculated_values(
     metadata: &Metadata,
     wb: &str,
-    sensor_gain: f32,
     mut controls: Controls,
 ) -> Result<[f32; 7]> {
     controls.overrides = Overrides::default();
-    let p = prepare(metadata, wb, sensor_gain, controls)?;
+    let p = prepare(metadata, wb, controls)?;
     Ok([
         p.filter[1],
         p.filter[2],
@@ -632,12 +631,7 @@ fn recipe(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Recipe> {
         iso,
     })
 }
-pub(crate) fn prepare(
-    metadata: &Metadata,
-    wb: &str,
-    sensor_gain: f32,
-    controls: Controls,
-) -> Result<Parameters> {
+pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Parameters> {
     controls.validate()?;
     let (w, h) = (metadata.width as u32, metadata.height as u32);
     if !w.is_multiple_of(4) || !h.is_multiple_of(4) || w < 512 || h < 512 {
@@ -701,7 +695,7 @@ pub(crate) fn prepare(
     let mut model: [[f32; 4]; 3] =
         std::array::from_fn(|r| std::array::from_fn(|c| if c < 3 { model[r][c] } else { 0. }));
     for (c, wb) in wb.iter().enumerate() {
-        let gain = (*wb as f32) * sensor_gain;
+        let gain = *wb as f32;
         model[0][c] *= gain * gain;
         model[1][c] *= gain;
     }
@@ -720,15 +714,7 @@ pub(crate) fn prepare(
     if area[0] >= area[2] || area[1] >= area[3] || area[2] > w || area[3] > h {
         return Err("invalid noise working rectangle".into());
     }
-    let weights = wb.map(|v| {
-        (1. / (v
-            * 3.
-            * if sensor_gain > 0. {
-                sensor_gain as f64
-            } else {
-                1.
-            })) as f32
-    });
+    let weights = wb.map(|v| (1. / (v * 3.)) as f32);
     let original_scale = (mixed[2] as f32) * luminance[2];
     let mut reconstruction_scale =
         ((f64::from(original_scale).mul_add(8., 0.5) as i32) as f32 * 0.125).max(0.375);

@@ -97,21 +97,21 @@ fn linked_parameters_share_engine_values_capture_without_jumps_and_keep_override
         .join("blue-parking-sign.x3f");
     let source = crate::source::Source::open(path).unwrap();
     let mut controls = Controls::default();
-    let original = prepare(&source.metadata, "Sunlight", 1., controls).unwrap();
-    let values = calculated_values(&source.metadata, "Sunlight", 1., controls).unwrap();
+    let original = prepare(&source.metadata, "Sunlight", controls).unwrap();
+    let values = calculated_values(&source.metadata, "Sunlight", controls).unwrap();
     for parameter in Parameter::ALL {
         controls
             .overrides
             .set(parameter, Some(values[parameter as usize]));
     }
     assert_eq!(
-        bytemuck::bytes_of(&prepare(&source.metadata, "Sunlight", 1., controls).unwrap()),
+        bytemuck::bytes_of(&prepare(&source.metadata, "Sunlight", controls).unwrap()),
         bytemuck::bytes_of(&original)
     );
     controls.chroma = 0;
     controls.luminance = 4;
     controls.detail = 0.5;
-    let manual = prepare(&source.metadata, "Sunlight", 1., controls).unwrap();
+    let manual = prepare(&source.metadata, "Sunlight", controls).unwrap();
     assert_eq!(
         [
             manual.filter[1],
@@ -126,7 +126,7 @@ fn linked_parameters_share_engine_values_capture_without_jumps_and_keep_override
     );
     assert_eq!(manual.residual[3], 0.5);
     controls.overrides = Overrides::default();
-    let latest = calculated_values(&source.metadata, "Sunlight", 1., controls).unwrap();
+    let latest = calculated_values(&source.metadata, "Sunlight", controls).unwrap();
     assert_ne!(latest, values);
     for parameter in Parameter::ALL {
         let mut other = controls;
@@ -136,7 +136,7 @@ fn linked_parameters_share_engine_values_capture_without_jumps_and_keep_override
             other.chroma = 4;
         }
         assert_eq!(
-            calculated_values(&source.metadata, "Sunlight", 1., other).unwrap()[parameter as usize],
+            calculated_values(&source.metadata, "Sunlight", other).unwrap()[parameter as usize],
             latest[parameter as usize],
             "{} has a second basic parent",
             parameter.key()
@@ -146,7 +146,7 @@ fn linked_parameters_share_engine_values_capture_without_jumps_and_keep_override
 
 #[test]
 #[ignore = "requires FOVEONIC_FIXTURE_DIR"]
-fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
+fn camera_noise_parameters_match_reference() {
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let fixtures: serde_json::Value =
         serde_json::from_str(include_str!("../tests/data/noise-parameters.json")).unwrap();
@@ -157,7 +157,7 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
     for fixture in fixtures.as_array().unwrap() {
         let source =
             crate::source::Source::open(dir.join(fixture["file"].as_str().unwrap())).unwrap();
-        let p = prepare(&source.metadata, "Sunlight", 1., Controls::default()).unwrap();
+        let p = prepare(&source.metadata, "Sunlight", Controls::default()).unwrap();
         for (name, values) in [
             ("filter", &p.filter[..]),
             ("edge", &p.edge[..]),
@@ -206,7 +206,7 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
                 chroma: expected["chroma"].as_u64().unwrap() as u32,
                 ..Controls::default()
             };
-            let params = prepare(&source.metadata, "Sunlight", 1., controls).unwrap();
+            let params = prepare(&source.metadata, "Sunlight", controls).unwrap();
             let pattern = pattern_parameters(&source.metadata, params, controls).unwrap();
             assert_eq!(
                 u64::from(pattern.params.shape[3]),
@@ -236,7 +236,6 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
             let p = prepare(
                 &source.metadata,
                 "Sunlight",
-                1.,
                 Controls {
                     chroma: choice,
                     luminance: choice,
@@ -272,7 +271,7 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
         small.width = 1;
         small.height = 1;
         assert!(couplings(&small, "Sunlight", Controls::default()).is_ok());
-        assert!(prepare(&small, "Sunlight", 1., Controls::default()).is_err());
+        assert!(prepare(&small, "Sunlight", Controls::default()).is_err());
         assert_eq!(p.column_area, [0; 4]);
         let column = column_parameters(&source.metadata, p).unwrap();
         let active = crate::calibration::rectangle(&source.metadata, "ActiveImageArea").unwrap();
@@ -291,7 +290,6 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
             let selected = prepare(
                 &source.metadata,
                 "Sunlight",
-                1.,
                 Controls {
                     banding,
                     ..Default::default()
@@ -322,15 +320,7 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
         }
         let mut incomplete = (*source.metadata).clone();
         incomplete.matrices.remove("DarkShieldTop");
-        assert!(prepare(&incomplete, "Sunlight", 1., Controls::default()).is_ok());
+        assert!(prepare(&incomplete, "Sunlight", Controls::default()).is_ok());
         assert!(column_parameters(&incomplete, p).is_err());
-        let gained = prepare(&source.metadata, "Sunlight", 0.5, Controls::default()).unwrap();
-        for c in 0..3 {
-            assert_eq!(gained.model[0][c], p.model[0][c] * 0.25);
-            assert_eq!(gained.model[1][c], p.model[1][c] * 0.5);
-            assert_eq!(gained.model[2][c], p.model[2][c]);
-            assert_eq!(gained.weights[c], p.weights[c] * 2.);
-        }
-        assert_eq!(gained.edge[3], p.edge[3]);
     }
 }

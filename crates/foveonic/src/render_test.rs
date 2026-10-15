@@ -3,16 +3,12 @@
 use super::*;
 
 #[test]
-fn control_matrices_preserve_gray_and_signed_uniform_sensor_gain() {
+fn saturation_matrices_preserve_gray() {
     let apply = |params: calibration::ColorParams, rgb: [f32; 3]| -> [f32; 3] {
         params
             .matrix
             .map(|row| (0..3).map(|c| row[c] * rgb[c]).sum())
     };
-    assert_eq!(
-        apply(sensor_gain([1, 1, 0, 0], 2.), [-0.25, 2., 1.]),
-        [-0.5, 4., 2.]
-    );
     assert_eq!(
         apply(saturation([1, 1, 0, 0], 1.), [1., 0.25, 0.5]),
         [1., 0.25, 0.5]
@@ -30,7 +26,7 @@ fn control_matrices_preserve_gray_and_signed_uniform_sensor_gain() {
 
 #[test]
 #[ignore = "requires a working GPU adapter"]
-fn uniform_sensor_gain_preserves_signed_calibrated_layers_before_color() {
+fn color_conversion_preserves_signed_calibrated_layers_and_headroom() {
     let engine = Engine::new().unwrap();
     let original = [
         -0.25_f32, 2., 1., 0.5, -0.5, 3., 1., 0., -1., 0., 0.25, 0.75, 2., 1., 0., -2., -1., -0.5,
@@ -38,7 +34,7 @@ fn uniform_sensor_gain_preserves_signed_calibrated_layers_before_color() {
     let mut input = image(&engine, &original);
     input.description.space = Space::CalibratedLayers;
     let matrix = [[1., 2., 3., 0.], [0., 1., -1., 0.], [2., 0., 1., 0.]];
-    for factor in [0_f32, 0.5, 2.] {
+    {
         let mut graph = Graph::default();
         let root = graph
             .add(
@@ -47,9 +43,6 @@ fn uniform_sensor_gain_preserves_signed_calibrated_layers_before_color() {
                 },
                 &[],
             )
-            .unwrap();
-        let gain = graph
-            .add(Operation::SensorGain { factor }, &[root])
             .unwrap();
         let color = graph
             .add(
@@ -60,14 +53,14 @@ fn uniform_sensor_gain_preserves_signed_calibrated_layers_before_color() {
                     },
                     space: ColorSpace::Srgb,
                 },
-                &[gain],
+                &[root],
             )
             .unwrap();
         let outputs = engine
             .execute(
                 Input::Rendered(&input),
                 &graph,
-                &[gain, color],
+                &[root, color],
                 &mut Profile::default(),
             )
             .unwrap();
@@ -84,7 +77,7 @@ fn uniform_sensor_gain_preserves_signed_calibrated_layers_before_color() {
             .iter()
             .zip(original)
         {
-            assert!((actual - source * factor).abs() < 0.000001);
+            assert_eq!(*actual, source);
         }
         let rgb = engine.gpu.readback(&outputs[1].buffer).unwrap();
         for (actual, source) in bytemuck::cast_slice::<u8, f32>(&rgb)
@@ -94,7 +87,7 @@ fn uniform_sensor_gain_preserves_signed_calibrated_layers_before_color() {
             .zip(original.as_chunks::<3>().0.iter())
         {
             for (c, row) in matrix.iter().enumerate() {
-                let expected = (0..3).map(|k| row[k] * source[k] * factor).sum::<f32>();
+                let expected = (0..3).map(|k| row[k] * source[k]).sum::<f32>();
                 assert!((actual[c] - expected).abs() < 0.000001);
             }
         }
@@ -155,21 +148,6 @@ fn original_result_outlives_source_and_another_render() {
                 &mut Profile::default(),
             )
             .unwrap();
-        let mut gain_settings = Settings::new("Sunlight", "");
-        gain_settings.sensor_gain = 1.3;
-        let mut gain_profile = Profile::new(crate::profile::Mode::Gpu);
-        let gain = engine
-            .render_artifacts(&source, &gain_settings, &["gain.layers"], &mut gain_profile)
-            .unwrap();
-        let crate::inspection::Content::Image(gain) = &gain[0].content else {
-            panic!("expected gained layers")
-        };
-        assert_eq!(gain.description().space, Space::CalibratedLayers);
-        assert_eq!(gain.settings().sensor_gain, 1.3);
-        assert!(!gain_profile
-            .host
-            .iter()
-            .any(|t| t.stage == "prepare color mode" || t.stage == "prepare color matrix"));
         assert!(engine
             .render(&source, &Settings::new("", ""), &mut Profile::default())
             .is_err());
@@ -585,6 +563,14 @@ fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
+    let scale_rgb = |factor| calibration::ColorParams {
+        source: [99, 99, 0, 0],
+        matrix: [
+            [factor, 0., 0., 0.],
+            [0., factor, 0., 0.],
+            [0., 0., factor, 0.],
+        ],
+    };
     let engine = Engine::new().unwrap();
     let original = [
         [0_f32, 0., 0.],
@@ -608,7 +594,7 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     let a = graph
         .add(
             Operation::Saturation {
-                params: sensor_gain([99, 99, 0, 0], 2.),
+                params: scale_rgb(2.),
                 space: ColorSpace::Srgb,
             },
             &[root],
@@ -617,7 +603,7 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     let b = graph
         .add(
             Operation::Saturation {
-                params: sensor_gain([99, 99, 0, 0], 3.),
+                params: scale_rgb(3.),
                 space: ColorSpace::Srgb,
             },
             &[a],
@@ -626,7 +612,7 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     let c = graph
         .add(
             Operation::Saturation {
-                params: sensor_gain([99, 99, 0, 0], 0.5),
+                params: scale_rgb(0.5),
                 space: ColorSpace::Srgb,
             },
             &[b],
@@ -983,8 +969,8 @@ fn native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable
         assert_eq!(signal.description.space, Space::SignedDetail);
         let before = engine.gpu.readback(&input.buffer).unwrap();
         let signal_before = engine.gpu.readback(&signal.buffer).unwrap();
-        settings.sensor_gain = 0.;
-        let zero = engine
+        settings.sharpen_amount = 1.5;
+        let stronger = engine
             .render_artifacts(
                 &source,
                 &settings,
@@ -992,22 +978,13 @@ fn native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable
                 &mut Profile::default(),
             )
             .unwrap();
-        let crate::inspection::Content::Image(zero) = &zero[0].content else {
+        let crate::inspection::Content::Image(stronger) = &stronger[0].content else {
             panic!()
         };
-        let bytes = engine.gpu.readback(&zero.buffer).unwrap();
-        let samples = bytemuck::cast_slice::<u8, f32>(&bytes);
-        assert!(samples.iter().all(|v| v.is_finite()));
-        let [x0, y0, x1, y1] = zero.view.crop;
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let p = ((y * zero.description.extent[0] + x) * 3) as usize;
-                assert!(
-                    samples[p..p + 3].iter().all(|v| *v == 0.),
-                    "zero-gain sharp image at {x},{y}"
-                );
-            }
-        }
+        let bytes = engine.gpu.readback(&stronger.buffer).unwrap();
+        assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
+            .iter()
+            .all(|v| v.is_finite()));
         assert!(
             engine.gpu.readback(&input.buffer).unwrap() == before,
             "sharp processing changed earlier RGB"
@@ -1097,7 +1074,6 @@ fn advanced_overrides_preserve_captured_base_and_produce_finite_extremes() {
     let values = crate::noise::calculated_values(
         &source.metadata,
         "Sunlight",
-        1.,
         settings.reconstruction.unwrap(),
     )
     .unwrap();
@@ -1156,7 +1132,7 @@ fn advanced_overrides_preserve_captured_base_and_produce_finite_extremes() {
 
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
-fn reconstruction_originals_stay_finite_across_noise_choices_and_zero_gain() {
+fn reconstruction_originals_stay_finite_across_noise_choices() {
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let engine = Engine::new().unwrap();
     for file in [
@@ -1176,7 +1152,6 @@ fn reconstruction_originals_stay_finite_across_noise_choices_and_zero_gain() {
                 detail: if choice == 0 { 0. } else { 1. },
                 ..Default::default()
             });
-            settings.sensor_gain = if choice == 2 { 0. } else { 1. };
             settings.color_dq_gain = Some(if choice == 4 { 1. } else { 0. });
             let mut artifacts = engine
                 .render_artifacts(
@@ -1195,19 +1170,6 @@ fn reconstruction_originals_stay_finite_across_noise_choices_and_zero_gain() {
                 samples.iter().all(|v| v.is_finite()),
                 "{file}, choice {choice}"
             );
-            if settings.sensor_gain == 0. {
-                let [x0, y0, x1, y1] = image.view.crop;
-                for y in y0..y1 {
-                    for x in x0..x1 {
-                        let pixel = ((y * image.description.extent[0] + x) * 3) as usize;
-                        assert_eq!(
-                            &samples[pixel..pixel + 3],
-                            &[0.; 3],
-                            "zero gain at {x},{y} in {file}"
-                        );
-                    }
-                }
-            }
         }
     }
 }

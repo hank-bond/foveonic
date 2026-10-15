@@ -1,6 +1,6 @@
 // Reference extrema detector, deterministic bank compaction, and sequential
 // trimmed/chroma-anchored repair. Adapted from Foveonic despeckle.rs / repair.rs.
-struct Params { source: vec4<u32>, area: vec4<u32>, gain: vec4<f32> };
+struct Params { source: vec4<u32>, area: vec4<u32> };
 @group(0) @binding(0) var<storage, read> input_pixels: array<f32>;
 @group(0) @binding(1) var<storage, read> thresholds: array<f32>;
 @group(0) @binding(2) var<uniform> params: Params;
@@ -10,7 +10,7 @@ struct Params { source: vec4<u32>, area: vec4<u32>, gain: vec4<f32> };
 @group(0) @binding(6) var<storage, read_write> records: array<vec2<u32>>;
 var<workgroup> ranks: array<u32, 256>;
 const offsets = array<vec2<i32>, 8>(vec2(-1,-1), vec2(0,-1), vec2(1,-1), vec2(-1,0), vec2(1,0), vec2(-1,1), vec2(0,1), vec2(1,1));
-fn sample(p: u32, c: u32) -> f32 { return input_pixels[p * 3u + c] / params.gain.x; }
+fn sample(p: u32, c: u32) -> f32 { return input_pixels[p * 3u + c]; }
 fn extremum(p: u32, c: u32) -> bool {
     let w = params.source.x;
     let center = sample(p, c);
@@ -36,7 +36,7 @@ fn detect(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocatio
     let p = id.x;
     let x = p % params.source.x; let y = p / params.source.x;
     var layers = 0u;
-    if params.gain.x > 0.0 && x >= params.area.x && x <= params.area.z && y >= params.area.y && y <= params.area.w {
+    if x >= params.area.x && x <= params.area.z && y >= params.area.y && y <= params.area.w {
         for (var c=0u; c<3u; c++) { if extremum(p,c) { layers |= 4u >> c; } }
     }
     for (var c=0u; c<3u; c++) { pixels[p*3u+c] = input_pixels[p*3u+c]; }

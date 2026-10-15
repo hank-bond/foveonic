@@ -229,9 +229,6 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         });
     }
     ui.separator();
-    ui.weak("Sensor");
-    changed |= adjustment(ui, "Sensor gain", &mut settings.sensor_gain, 0. ..=2., 1.);
-    ui.separator();
     ui.weak("Tone and Color");
     for (label, value, range, default) in [
         ("Exposure", &mut settings.exposure, -4. ..=4., 0.),
@@ -268,7 +265,6 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
             &mut settings.color_dq_gain,
             metadata,
             &settings.white_balance,
-            settings.sensor_gain,
         );
     }
     ui.separator();
@@ -562,14 +558,8 @@ mod tests {
                 let (changed, output, current) = frame(available, vec![]);
                 assert!(!changed);
                 assert_eq!(current, initial);
-                let positions = [
-                    "White balance",
-                    "Color mode",
-                    "Sensor gain",
-                    "Exposure",
-                    "Refinement",
-                ]
-                .map(|label| text_centers(&output, label)[0]);
+                let positions = ["White balance", "Color mode", "Exposure", "Refinement"]
+                    .map(|label| text_centers(&output, label)[0]);
                 assert_eq!(*anchors.get_or_insert(positions), positions);
             }
             let (_, output, _) = frame(None, vec![]);
@@ -646,10 +636,11 @@ mod tests {
                 });
             },
         );
+        assert!(text_centers(&output, "Sensor").is_empty());
+        assert!(text_centers(&output, "Sensor gain").is_empty());
         for label in [
             "White balance",
             "Color mode",
-            "Sensor gain",
             "Exposure",
             "Saturation",
             "Contrast",
@@ -1281,14 +1272,14 @@ mod tests {
     }
 
     #[test]
-    fn sensor_gain_help_opens_on_label_slider_and_value_without_changing_settings() {
+    fn exposure_help_opens_on_label_slider_and_value_without_changing_settings() {
         for point in [
             egui::pos2(45., 18.),
             egui::pos2(220., 18.),
             egui::pos2(362., 18.),
         ] {
             let ctx = egui::Context::default();
-            let mut value = 1_f32;
+            let mut value = 0_f32;
             let mut output = None;
             for time in [0., 1., 2.] {
                 output = Some(ctx.run(
@@ -1304,14 +1295,14 @@ mod tests {
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             ui.set_width(384.);
-                            assert!(!adjustment(ui, "Sensor gain", &mut value, 0. ..=2., 1.));
+                            assert!(!adjustment(ui, "Exposure", &mut value, -4. ..=4., 0.));
                         });
                     },
                 ));
             }
-            assert_eq!(value, 1.);
+            assert_eq!(value, 0.);
             assert!(output.unwrap().shapes.iter().any(|shape| matches!(
-                &shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("An ISO-like adjustment")
+                &shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("Makes the photo brighter or darker")
             )), "help did not open at {point:?}");
         }
     }
@@ -1607,7 +1598,6 @@ mod tests {
             assert_eq!(controls, enabled.then(Default::default));
         }
         assert!(settings.reconstruction.is_none());
-        assert_eq!(settings.sensor_gain, 1.);
         assert_eq!(settings.exposure, 0.);
     }
 

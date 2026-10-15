@@ -500,13 +500,11 @@ mod tests {
             eframe::egui::Context::default(),
         );
         let mut settings = Settings::new("Sunlight", "Standard");
-        settings.sensor_gain = 1.5;
         settings.reconstruction = Some(Default::default());
         settings.sharpen_amount = 0.75;
         settings.saturation = 1.2;
         for (index, (output, input)) in [
-            ("gain.layers", "calibration.layers"),
-            ("repair.layers", "gain.layers"),
+            ("repair.layers", "calibration.layers"),
             ("noise.layers", "banding.layers"),
             ("column.layers", "banding.layers"),
             ("color-dq.rgb", "color.rgb"),
@@ -550,7 +548,6 @@ mod tests {
                 frame.texture.description().space
             );
         }
-        settings.sensor_gain = 1.;
         worker.submit(super::Request {
             revision: 9,
             path: path.clone(),
@@ -623,7 +620,6 @@ mod tests {
             eframe::egui::Context::default(),
         );
         let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-        settings.sensor_gain = 1.3;
         settings.reconstruction = Some(Default::default());
         settings.sharpen_amount = 0.75;
         for revision in 0..10 {

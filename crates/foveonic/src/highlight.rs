@@ -99,23 +99,14 @@ pub(crate) fn validate_threshold(ev: Option<f32>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn prepare(
-    metadata: &Metadata,
-    gain: f32,
-    threshold_ev: Option<f32>,
-) -> Result<Prepared> {
+pub(crate) fn prepare(metadata: &Metadata, threshold_ev: Option<f32>) -> Result<Prepared> {
     validate_threshold(threshold_ev)?;
     let count = metadata
         .width
         .checked_mul(metadata.height)
         .ok_or("highlight geometry overflow")?;
-    if metadata.width < 5
-        || metadata.height < 5
-        || count > u32::MAX as usize / 3
-        || !gain.is_finite()
-        || gain < 0.
-    {
-        return Err("unsupported highlight geometry or Sensor gain".into());
+    if metadata.width < 5 || metadata.height < 5 || count > u32::MAX as usize / 3 {
+        return Err("unsupported highlight geometry".into());
     }
     let active = metadata.fixed::<4>("ActiveImageArea")?;
     let columns = metadata.fixed::<4>("DarkShieldColRange")?;
@@ -151,8 +142,8 @@ pub(crate) fn prepare(
         }
     };
     let ramp = (1. - (camera("ExpEstimate")? + camera("ExpNet")? - 1.5).max(0.)).max(0.);
-    // Adjust only neutralization onset in the neutral-gain domain. Scaling the
-    // stage's input would also change donor selection and the transition width.
+    // Adjust only neutralization onset. Scaling the stage's input would also
+    // change donor selection and the transition width.
     let threshold = ramp.mul_add(3000., 4000.) as f32 * threshold_ev.unwrap_or(0.).exp2();
     Ok(Prepared {
         params: Params {
@@ -163,7 +154,7 @@ pub(crate) fn prepare(
                 (count as u32).div_ceil(256),
             ],
             area,
-            value: [threshold, gain, 0., 0.],
+            value: [threshold, 0., 0., 0.],
         },
         flags: saturation(metadata)?,
     })
@@ -306,7 +297,6 @@ pub(crate) fn apply(
         gpu.dispatch(
             Kernel::HighlightTable,
             &mut [
-                (2, Read(&uniform)),
                 (5, Read(input)),
                 (9, Write(lookup.write())),
                 (10, Read(&sorted)),

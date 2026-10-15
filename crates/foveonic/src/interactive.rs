@@ -54,10 +54,6 @@ impl Settings {
         }
         changed!(self.white_balance != next.white_balance, "white-balance");
         changed!(self.color_mode != next.color_mode, "color-mode");
-        changed!(
-            self.sensor_gain.to_bits() != next.sensor_gain.to_bits(),
-            "sensor-gain"
-        );
         changed!(self.repair != next.repair, "repair");
         changed!(
             self.highlight_restoration != next.highlight_restoration,

@@ -9,7 +9,7 @@
   "base_args": [
     "--wb", "Sunlight", "--mode", "Standard", "--exposure", "-0.5",
     "--contrast", "0", "--shadows", "0", "--highlights", "0",
-    "--sensor-gain", "1", "--saturation", "1", "--repair", "--despeckle",
+    "--saturation", "1", "--repair", "--despeckle",
     "--row-correction", "--reconstruction", "--chroma-noise", "2",
     "--luma-noise", "2", "--banding-noise", "2", "--detail", "0.97", "--sharpen", "0"
   ],

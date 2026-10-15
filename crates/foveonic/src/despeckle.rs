@@ -20,7 +20,6 @@ const CAPACITY: u32 = 624_999;
 pub(crate) struct Params {
     pub source: [u32; 4], // width, height, block count, records per bank
     pub area: [u32; 4],   // inclusive detector bounds in full-sensor coordinates
-    pub gain: [f32; 4],   // Sensor gain is undone for detection so it does not change thresholds.
 }
 
 pub(crate) struct Prepared {
@@ -34,7 +33,7 @@ impl Prepared {
     }
 }
 
-fn parameters(width: u32, height: u32, active: [u32; 4], gain: f32) -> Result<Params> {
+fn parameters(width: u32, height: u32, active: [u32; 4]) -> Result<Params> {
     let count = width
         .checked_mul(height)
         .ok_or("despeckle dimensions overflow")?;
@@ -46,10 +45,8 @@ fn parameters(width: u32, height: u32, active: [u32; 4], gain: f32) -> Result<Pa
         || active[1] < 6
         || active[0] >= width / 2
         || active[1] >= height / 2
-        || !gain.is_finite()
-        || gain < 0.
     {
-        return Err("unsupported despeckle geometry or Sensor gain".into());
+        return Err("unsupported despeckle geometry".into());
     }
     Ok(Params {
         source: [width, height, count / BLOCK, CAPACITY.min(count / BANKS)],
@@ -59,7 +56,6 @@ fn parameters(width: u32, height: u32, active: [u32; 4], gain: f32) -> Result<Pa
             width - active[0] + 2,
             height - (active[1] - 4),
         ],
-        gain: [gain, 0., 0., 0.],
     })
 }
 
@@ -93,13 +89,12 @@ fn tables(gains: [f64; 3], adjustment: [f64; 3]) -> Result<Vec<f32>> {
     Ok(result)
 }
 
-/// Use calibration's already-rounded WB factors before Sensor gain. Rebuilding
+/// Use calibration's already-rounded WB factors. Rebuilding
 /// them from raw metadata can produce slightly different thresholds than the
 /// factors actually applied to the image. Include the shared noise adjustment.
 pub(crate) fn prepare(
     metadata: &Metadata,
     calibration_gains: [f32; 3],
-    gain: f32,
     noise_scale: f32,
 ) -> Result<Prepared> {
     if !noise_scale.is_finite() || noise_scale <= 0. {
@@ -123,7 +118,7 @@ pub(crate) fn prepare(
         return Err("despeckle requires full-sensor keep geometry".into());
     }
     Ok(Prepared {
-        params: parameters(metadata.width as u32, metadata.height as u32, active, gain)?,
+        params: parameters(metadata.width as u32, metadata.height as u32, active)?,
         tables: tables(gains, adjustment)?,
     })
 }

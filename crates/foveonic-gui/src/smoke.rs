@@ -7,11 +7,9 @@ use crate::{
 use eframe::egui;
 use std::path::PathBuf;
 
-const TARGETS: [&str; 12] = [
+const TARGETS: [&str; 10] = [
     "preview",
     "final",
-    "sensor-gain",
-    "gain.layers",
     "list",
     "parade",
     "waveform",
@@ -83,7 +81,7 @@ const NOISE_TARGETS: &[&str] = &[
     "noise-low",
     "noise-high",
     "color-dq",
-    "reference-gain",
+    "color-dq-off",
     "parade",
     "waveform",
     "zoom",
@@ -316,8 +314,7 @@ impl App {
                 }
                 "viewport-fit-again" => self.viewport.reset(),
                 "diff-layer" => {
-                    self.settings.sensor_gain = 1.05;
-                    self.output = "gain.layers".into();
+                    self.output = "repair.layers".into();
                     self.channel = 0;
                     self.comparison.difference = true;
                     self.comparison.gain = 8.;
@@ -346,7 +343,6 @@ impl App {
                     self.output = "final".into();
                     self.channel = -1;
                     self.comparison.difference = false;
-                    self.settings.sensor_gain = 1.;
                     self.settings.saturation = 1.;
                     self.submit(None);
                 }
@@ -457,7 +453,7 @@ impl App {
                     self.viewport.pan_to(egui::vec2(0.79, 0.05));
                 }
                 "white-edge" => self.viewport.pan_to(egui::vec2(0.335, 0.75)),
-                "detail-zero" | "noise-low" | "noise-high" | "color-dq" | "reference-gain"
+                "detail-zero" | "noise-low" | "noise-high" | "color-dq" | "color-dq-off"
                 | "final-neutral" => {
                     let mut controls = foveonic::noise::Controls::default();
                     match smoke.targets[smoke.index] {
@@ -471,12 +467,8 @@ impl App {
                             controls.luminance = 4;
                         }
                         "color-dq" => self.settings.color_dq_gain = Some(1.),
-                        "reference-gain" => {
-                            self.settings.color_dq_gain = Some(0.);
-                            self.settings.sensor_gain = 1.3;
-                        }
+                        "color-dq-off" => self.settings.color_dq_gain = Some(0.),
                         "final-neutral" => {
-                            self.settings.sensor_gain = 1.;
                             self.settings.repair = None;
                             self.settings.despeckle = false;
                             self.channel = -1;
@@ -489,18 +481,9 @@ impl App {
                     self.viewport.reset();
                     self.submit(None);
                 }
-                "sensor-gain" => {
-                    self.settings.sensor_gain = 1.3;
-                    self.submit(None);
-                }
-                "gain.layers" => {
-                    self.output = "gain.layers".into();
-                    self.submit(None);
-                }
                 "list" => {
                     self.preferences.organizer = Organizer::List;
                     self.output = "final".into();
-                    self.settings.sensor_gain = 1.;
                     self.submit(None);
                 }
                 "parade" => self.preferences.scope = Scope::Parade,

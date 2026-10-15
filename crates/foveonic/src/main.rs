@@ -27,7 +27,6 @@ Options (also available for batch):
   --shadows VALUE           -2..2, default 0
   --highlights VALUE        -2..2, default 0
   --saturation FACTOR       Nonnegative, default 1; 0 produces grayscale
-  --sensor-gain FACTOR      Nonnegative uniform sensor-layer multiplier, default 1
   --color-dq-gain FACTOR     Override native ColorDQ gain (0 off); reconstruction defaults to auto
   --repair                  Camera-derived ordered repair (default on)
   --no-repair               Disable camera-record repair
@@ -287,7 +286,6 @@ mod tests {
         assert!(parse("--profile invalid --wb Sunlight --mode Standard").is_err());
         assert!(paths.is_empty());
         assert_eq!(neutral.exposure, 0.);
-        assert_eq!(neutral.sensor_gain, 1.);
         assert_eq!(neutral.saturation, 1.);
         assert_eq!(neutral.color_dq_gain, None);
         assert_eq!(neutral.highlight_threshold_ev, None);
@@ -330,7 +328,6 @@ mod tests {
             assert_eq!(manual.highlight_threshold_ev, Some(ev));
             assert!(manual.highlight_restoration);
             assert_eq!(manual.tone, neutral.tone);
-            assert_eq!(manual.sensor_gain, neutral.sensor_gain);
         }
         let off = parse(
             "--wb Sunlight --mode Standard --highlight-threshold 1 --no-highlight-restoration",
@@ -415,12 +412,11 @@ mod tests {
             assert!(settings.row_correction);
         }
         assert!(neutral.output_size.is_none());
-        let (settings, paths, _) = parse("a.x3f --wb Auto --mode Vivid --contrast 0.5 --shadows -1 --highlights 1 --sensor-gain 1.3 --saturation 1.2 --color-dq-gain 1.5 --repair-badness 8 --sharpen 0.5 --size 600x400 b.x3f").unwrap();
+        let (settings, paths, _) = parse("a.x3f --wb Auto --mode Vivid --contrast 0.5 --shadows -1 --highlights 1 --saturation 1.2 --color-dq-gain 1.5 --repair-badness 8 --sharpen 0.5 --size 600x400 b.x3f").unwrap();
         assert_eq!(paths, [PathBuf::from("a.x3f"), PathBuf::from("b.x3f")]);
         assert_eq!(settings.tone.contrast, 0.5);
         assert_eq!(settings.tone.shadows, -1.);
         assert_eq!(settings.tone.highlights, 1.);
-        assert_eq!(settings.sensor_gain, 1.3);
         assert_eq!(settings.output_size, Some([600, 400]));
         assert_eq!(settings.color_dq_gain, Some(1.5));
         assert_eq!(
@@ -440,9 +436,7 @@ mod tests {
             "--contrast NaN",
             "--shadows 3",
             "--channel-gains 1,1,1", // retired CLI option
-            "--sensor-gain -1",
-            "--sensor-gain NaN",
-            "--sensor-gain inf",
+            "--sensor-gain 1",
             "--saturation -1",
             "--color-dq-gain -1",
             "--color-dq-gain NaN",

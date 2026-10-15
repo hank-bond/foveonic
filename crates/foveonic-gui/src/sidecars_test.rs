@@ -89,7 +89,7 @@ fn requested_latest_edits_survive_photo_switches_and_orderly_shutdown() {
     session.refresh(&a_settings);
     session.select(b.clone());
     let mut b_settings = receive(&mut session);
-    b_settings.sensor_gain = 1.7;
+    b_settings.saturation = 1.7;
     session.edited(&b_settings);
     session.select(a.clone());
     assert_eq!(receive(&mut session), a_settings);

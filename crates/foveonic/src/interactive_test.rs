@@ -175,7 +175,6 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
             RenderSession::new(Source::open(dir.join(format!("{name}.x3f"))).unwrap());
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.reconstruction = Some(Default::default());
-        settings.sensor_gain = 1.3;
         settings.exposure = 0.5;
         settings.tone.contrast = 0.25;
         settings.tone.shadows = 0.1;
@@ -236,9 +235,8 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
                 8 => settings.sharpen_amount = 0.,
                 9 => settings.sharpen_amount = 0.6,
                 10 => settings.reconstruction = None,
-                11 => settings.sensor_gain = 0.,
+                11 => settings.white_balance = "Overcast".into(),
                 12 => {
-                    settings.sensor_gain = 1.;
                     settings.repair = None;
                     settings.despeckle = false;
                     settings.row_correction = false;
@@ -323,7 +321,6 @@ fn noise_and_override_inputs_match_fresh_outputs() {
     let mut session = RenderSession::new(Source::open(path).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
-    settings.sensor_gain = 1.3;
     settings.sharpen_amount = 0.75;
     let retained = session_image(&engine, &mut session, &settings);
     let original = engine.gpu.readback(&retained.buffer).unwrap();
@@ -386,7 +383,6 @@ fn detail_feedback_profile() {
     let engine = Engine::new().unwrap();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
-    settings.sensor_gain = 1.3;
     settings.sharpen_amount = 0.75;
     let _warm = session_image(&engine, &mut session, &settings);
     engine.device().poll(wgpu::Maintain::Wait);
@@ -472,7 +468,6 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
     assert_eq!(artifacts[0].name, "sensor.layers");
     assert_eq!(second.gpu_activity().since(before).dispatches, 0);
     let mut changed = settings.clone();
-    changed.sensor_gain = 1.7;
     changed.reconstruction = Some(Default::default());
     let before = second.gpu_activity();
     let cancelled = second

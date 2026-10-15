@@ -85,9 +85,6 @@ pub enum Operation {
         table: crate::color_dq::Table,
         space: ColorSpace,
     },
-    SensorGain {
-        factor: f32,
-    },
     Saturation {
         params: ColorParams,
         space: ColorSpace,
@@ -142,7 +139,6 @@ impl Operation {
                 N::Geometry
             }),
             Self::ColorDq { table, .. } => table.key(),
-            Self::SensorGain { factor } => Key::pod(factor),
             Self::Sharpen { amount, .. } => Key::pod(amount),
             Self::Tone {
                 curve, exposure, ..
@@ -171,7 +167,6 @@ impl Operation {
             Self::TiledColorDq { .. } => "submit tiled ColorDQ",
             Self::Reconstruct { .. } => "submit reconstruction",
             Self::ColorDq { .. } => "submit ColorDQ",
-            Self::SensorGain { .. } => "submit sensor gain",
             Self::Saturation { .. } => "submit saturation",
             Self::SharpSignal { .. } => "submit native high-pass",
             Self::Sharpen { .. } => "submit sharpen",
@@ -211,7 +206,6 @@ impl Operation {
                 vec![ColorTiles(*space), ResidualTiles, RatioTiles],
                 LinearRgb(*space),
             ),
-            Self::SensorGain { .. } => (vec![CalibratedLayers], CalibratedLayers),
             Self::ColorDq { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::Saturation { space, .. } => (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space)),
             Self::SharpSignal { space } => (vec![LinearRgb(*space)], SignedDetail),
@@ -358,7 +352,6 @@ impl Operation {
             Self::Reconstruct { .. } => "reconstruction.rgb",
             Self::Color { .. } => "color.rgb",
             Self::ColorDq { .. } => "color-dq.rgb",
-            Self::SensorGain { .. } => "gain.layers",
             Self::Tone { .. } => "tone.rgb",
             Self::Saturation { .. } => "saturation.rgb",
             Self::SharpSignal { .. } => "detail.signal",
@@ -524,10 +517,6 @@ mod tests {
                 &[linear, source]
             )
             .is_err());
-        let gain = || Operation::SensorGain { factor: 1.3 };
-        assert!(graph.add(gain(), &[source]).is_err()); // gain requires black-corrected layers
-        assert!(graph.add(gain(), &[linear]).is_err()); // gain belongs before working RGB
-        assert!(graph.add(gain(), &[calibrated]).is_ok());
         let color_dq = |space| Operation::ColorDq {
             table: crate::color_dq::table([8.; 3]).unwrap(),
             space,

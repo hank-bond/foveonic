@@ -40,7 +40,6 @@ pub fn show(
     color_dq_gain: &mut Option<f32>,
     metadata: Option<&Metadata>,
     wb: &str,
-    gain: f32,
 ) -> bool {
     let mut changed = false;
     egui::CollapsingHeader::new("Advanced")
@@ -51,7 +50,7 @@ pub fn show(
                 ui, "ColorDQ gain", color_dq_gain, 0. ..=2., 1., None, None,
             );
             let calculated = metadata.ok_or_else(|| "Waiting for camera metadata".to_owned())
-                .and_then(|m| noise::calculated_values(m, wb, gain, *controls).map_err(|e| e.to_string()));
+                .and_then(|m| noise::calculated_values(m, wb, *controls).map_err(|e| e.to_string()));
             let values = match calculated {
                 Ok(values) => Some(values),
                 Err(error) => { ui.weak(error); None }
@@ -229,7 +228,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        changed = show(ui, &mut controls, &mut color_dq_gain, None, "Sunlight", 1.);
+                        changed = show(ui, &mut controls, &mut color_dq_gain, None, "Sunlight");
                     });
                 },
             );
@@ -291,8 +290,7 @@ mod tests {
                         &mut controls,
                         &mut color_dq_gain,
                         None,
-                        "Sunlight",
-                        1.
+                        "Sunlight"
                     ));
                 });
             },

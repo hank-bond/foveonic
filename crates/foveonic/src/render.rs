@@ -35,8 +35,6 @@ pub struct Settings {
     /// Stops applied to linear RGB before the camera-derived tone curve.
     pub exposure: f32,
     pub tone: ToneControls,
-    /// Uniform multiplier for calibrated, black-corrected sensor layers before repair and color conversion.
-    pub sensor_gain: f32,
     /// A factor after tone: zero is grayscale, one leaves saturation unchanged.
     pub saturation: f32,
     /// ColorDQ gain after camera color conversion. Zero skips this correction.
@@ -69,7 +67,6 @@ impl Default for Settings {
             color_mode: String::new(),
             exposure: 0.,
             tone: ToneControls::default(),
-            sensor_gain: 1.,
             saturation: 1.,
             color_dq_gain: None,
             repair: Some(RepairThreshold::Camera),
@@ -120,13 +117,11 @@ impl Settings {
         {
             return Err("contrast, shadows, and highlights must be in -2..2".into());
         }
-        if [self.sensor_gain, self.saturation, self.sharpen_amount]
+        if [self.saturation, self.sharpen_amount]
             .iter()
             .any(|v| !v.is_finite() || *v < 0.)
         {
-            return Err(
-                "sensor gain, saturation, and sharpening must be finite and nonnegative".into(),
-            );
+            return Err("saturation and sharpening must be finite and nonnegative".into());
         }
         if self.color_dq_gain.is_some_and(|v| !v.is_finite() || v < 0.) {
             return Err("ColorDQ gain must be finite and nonnegative".into());
@@ -142,15 +137,6 @@ impl Settings {
             return Err("output dimensions must be nonzero".into());
         }
         Ok(())
-    }
-}
-
-fn sensor_gain(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
-    calibration::ColorParams {
-        source: dimensions,
-        matrix: std::array::from_fn(|row| {
-            std::array::from_fn(|col| if row == col { factor } else { 0. })
-        }),
     }
 }
 
@@ -435,11 +421,7 @@ impl Engine {
         let mut highlight_params = None;
         if settings.highlight_restoration && names.contains(&"highlight.density") {
             let prepared = Arc::new(profile.measure("prepare original saturation", || {
-                crate::highlight::prepare(
-                    &source.metadata,
-                    settings.sensor_gain,
-                    settings.highlight_threshold_ev,
-                )
+                crate::highlight::prepare(&source.metadata, settings.highlight_threshold_ev)
             })?);
             graph.add(Operation::HighlightDensity(prepared.clone()), &[])?;
             highlight_params = Some(prepared);
@@ -455,15 +437,6 @@ impl Engine {
         let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
         let mut calibrated = graph.add(Operation::Calibrate(calibration), &[input, black])?;
         finish!();
-        if settings.sensor_gain != 1. {
-            calibrated = graph.add(
-                Operation::SensorGain {
-                    factor: settings.sensor_gain,
-                },
-                &[calibrated],
-            )?;
-            finish!();
-        }
         if let Some(threshold) = settings.repair {
             let prepared = profile.measure("prepare repair records", || {
                 crate::camera_repair::prepare(&source.metadata, threshold)
@@ -475,11 +448,7 @@ impl Engine {
             let prepared = match highlight_params {
                 Some(prepared) => prepared,
                 None => Arc::new(profile.measure("prepare highlight restoration", || {
-                    crate::highlight::prepare(
-                        &source.metadata,
-                        settings.sensor_gain,
-                        settings.highlight_threshold_ev,
-                    )
+                    crate::highlight::prepare(&source.metadata, settings.highlight_threshold_ev)
                 })?),
             };
             calibrated = graph.add(Operation::Highlights(prepared), &[calibrated])?;
@@ -499,7 +468,6 @@ impl Engine {
                 crate::despeckle::prepare(
                     &source.metadata,
                     calibration_gains,
-                    settings.sensor_gain,
                     recipe.despeckle_scale,
                 )
             })?;
@@ -508,19 +476,14 @@ impl Engine {
         }
         if settings.row_correction {
             let prepared = profile.measure("prepare row correction", || {
-                crate::banding::prepare(&source.metadata, calibration_gains, settings.sensor_gain)
+                crate::banding::prepare(&source.metadata, calibration_gains)
             })?;
             calibrated = graph.add(Operation::Banding(prepared), &[calibrated])?;
             finish!();
         }
         let reconstruction = if let Some(controls) = settings.reconstruction {
             let params = profile.measure("prepare reference noise", || {
-                crate::noise::prepare(
-                    &source.metadata,
-                    &settings.white_balance,
-                    settings.sensor_gain,
-                    controls,
-                )
+                crate::noise::prepare(&source.metadata, &settings.white_balance, controls)
             })?;
             let base = graph.add(Operation::NoiseBase(params), &[calibrated])?;
             finish!();
@@ -1298,17 +1261,9 @@ impl Engine {
                     prepared,
                     profile,
                 )?),
-                Operation::Color { .. }
-                | Operation::SensorGain { .. }
-                | Operation::Saturation { .. } => {
+                Operation::Color { params, .. } | Operation::Saturation { params, .. } => {
                     let mut output = scratch.take(gpu, bytes)?;
-                    let mut params = match &node.operation {
-                        Operation::Color { params, .. } | Operation::Saturation { params, .. } => {
-                            *params
-                        }
-                        Operation::SensorGain { factor } => sensor_gain(dimensions, *factor),
-                        _ => unreachable!(),
-                    };
+                    let mut params = *params;
                     params.source[..2].copy_from_slice(&inherited);
                     let uniform = gpu.uniform(&params);
                     dispatch(

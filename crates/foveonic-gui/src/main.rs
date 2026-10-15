@@ -804,16 +804,15 @@ fn main() -> eframe::Result {
 mod tests {
     #[test]
     fn restored_recipes_normalize_unavailable_inspection_before_rendering() {
-        let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        let settings = foveonic::render::Settings::new("Sunlight", "Standard");
         let mut output = "noise.layers".to_owned();
         let mut channel = 2;
         super::inspect::normalize(&settings, &mut output, &mut channel);
         assert_eq!((&*output, channel), ("final", -1));
-        settings.sensor_gain = 1.5;
-        output = "gain.layers".into();
+        output = "calibration.layers".into();
         channel = 1;
         super::inspect::normalize(&settings, &mut output, &mut channel);
-        assert_eq!((&*output, channel), ("gain.layers", 1));
+        assert_eq!((&*output, channel), ("calibration.layers", 1));
     }
     #[test]
     fn image_defaults_and_saved_recipes_do_not_carry_other_photo_edits() {

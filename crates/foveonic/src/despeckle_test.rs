@@ -1,4 +1,4 @@
-//! Checks reference lookup rounding, deterministic detection/repair, gain invariance, and the two photographed residual defects.
+//! Checks reference lookup rounding, deterministic detection/repair, and the two photographed residual defects.
 use super::*;
 fn fixture() -> serde_json::Value {
     serde_json::from_str(include_str!("../tests/data/despeckle-reference.json")).unwrap()
@@ -22,8 +22,7 @@ fn metadata_tables_match_native_rounding_and_reject_invalid_values() {
     }
     assert!(tables([0., 1., 1.], [15.; 3]).is_err());
     assert!(tables([1.; 3], [f64::NAN, 15., 5.]).is_err());
-    assert!(parameters(64, 64, [4, 8, 56, 56], 1.).is_err());
-    assert!(parameters(64, 64, [8, 8, 56, 56], -1.).is_err());
+    assert!(parameters(64, 64, [4, 8, 56, 56]).is_err());
 }
 fn metadata() -> Metadata {
     let mut metadata = Metadata {
@@ -62,11 +61,8 @@ fn preparation_uses_actual_calibration_factors_with_explicit_noise_dose() {
         expected,
         tables(gains.map(|v| f64::from(v) * 0.5), [15., 15., 5.]).unwrap()
     );
-    for gain in [0., 1., 1.3, 2.] {
-        let prepared = prepare(&metadata, gains, gain, 1.).unwrap();
-        assert_eq!(prepared.tables, expected);
-        assert_eq!(prepared.params.gain[0], gain);
-    }
+    let prepared = prepare(&metadata, gains, 1.).unwrap();
+    assert_eq!(prepared.tables, expected);
     metadata.matrices.insert(
         "DespAdjust".into(),
         crate::source::Matrix {
@@ -76,27 +72,27 @@ fn preparation_uses_actual_calibration_factors_with_explicit_noise_dose() {
             values: vec![10., 10., 5.],
         },
     );
-    assert_eq!(prepare(&metadata, gains, 1., 1.).unwrap().tables, expected);
+    assert_eq!(prepare(&metadata, gains, 1.).unwrap().tables, expected);
     let adjustment = metadata.matrices.get_mut("DespAdjust").unwrap();
     adjustment.encoding = MatrixEncoding::Float32;
     adjustment.values = vec![10.1, 7.3, 2.8];
     assert_eq!(
-        prepare(&metadata, gains, 1., 1.).unwrap().tables,
+        prepare(&metadata, gains, 1.).unwrap().tables,
         tables(gains.map(f64::from), [10.1_f32, 7.3, 2.8].map(f64::from)).unwrap()
     );
     for scale in [0.75_f32, 1.3] {
         let adjustment = [10.1_f32, 7.3, 2.8].map(|v| f64::from(v) * f64::from(scale));
         assert_eq!(
-            prepare(&metadata, gains, 1., scale).unwrap().tables,
+            prepare(&metadata, gains, scale).unwrap().tables,
             tables(gains.map(f64::from), adjustment).unwrap()
         );
     }
     for invalid in [0., -1., f32::NAN, f32::INFINITY] {
-        assert!(prepare(&metadata, [invalid, gains[1], gains[2]], 1., 1.).is_err());
-        assert!(prepare(&metadata, gains, 1., invalid).is_err());
+        assert!(prepare(&metadata, [invalid, gains[1], gains[2]], 1.).is_err());
+        assert!(prepare(&metadata, gains, invalid).is_err());
     }
     metadata.matrices.get_mut("DespAdjust").unwrap().values[0] = f64::NAN;
-    assert!(prepare(&metadata, gains, 1., 1.).is_err());
+    assert!(prepare(&metadata, gains, 1.).is_err());
 }
 
 #[test]
@@ -120,7 +116,7 @@ fn original_presets_share_calibration_factors_with_despeckle_thresholds() {
         for wb in metadata.lists["WhiteBalanceGains"].names() {
             let calibration = crate::calibration::prepare(metadata, wb).unwrap();
             let gains = std::array::from_fn(|c| calibration.params.gains[c]);
-            let prepared = prepare(metadata, gains, 1., 1.).unwrap();
+            let prepared = prepare(metadata, gains, 1.).unwrap();
             assert_eq!(
                 prepared.tables,
                 tables(gains.map(f64::from), [15., 15., 5.]).unwrap(),
@@ -146,16 +142,16 @@ fn corrections_are_independent_and_enabled_by_default() {
 }
 #[test]
 #[ignore = "requires a GPU"]
-fn gpu_despeckle_matches_ordered_reference_and_preserves_gain_and_input() {
+fn gpu_despeckle_matches_ordered_reference_and_preserves_input() {
     let f = fixture();
     let source = floats(&f["input"]);
     let expected = floats(&f["output"]);
     let gpu = Gpu::new().unwrap();
-    for gain in [0., 1., 1.3] {
-        let original: Vec<f32> = source.iter().map(|v| v * gain).collect();
-        let input = gpu.upload("Speckle fixture", &original).unwrap();
+    {
+        let original = &source;
+        let input = gpu.upload("Speckle fixture", original).unwrap();
         let p = Prepared {
-            params: parameters(64, 64, [8, 8, 56, 56], gain).unwrap(),
+            params: parameters(64, 64, [8, 8, 56, 56]).unwrap(),
             tables: vec![0.; 3 * 4096],
         };
         let out = apply(
@@ -168,22 +164,18 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_gain_and_input() {
         let actual: Vec<f32> =
             bytemuck::cast_slice::<u8, f32>(&gpu.readback(&out).unwrap()).to_vec();
         for (i, (&a, &b)) in actual.iter().zip(&expected).enumerate() {
-            assert!(
-                (a - b * gain).abs() < 0.002,
-                "gain {gain}, sample {i}: {a} != {}",
-                b * gain
-            );
+            assert!((a - b).abs() < 0.002, "sample {i}: {a} != {b}");
         }
         assert_eq!(
             bytemuck::cast_slice::<u8, f32>(&gpu.readback(&input).unwrap()),
-            original
+            *original
         );
     }
     // A capacity-one bank should keep the first record in row order, not
     // whichever GPU thread wins a race. The bank containing y=16 has seven candidates.
     let input = gpu.upload("Capacity fixture", &source).unwrap();
     let mut p = Prepared {
-        params: parameters(64, 64, [8, 8, 56, 56], 1.).unwrap(),
+        params: parameters(64, 64, [8, 8, 56, 56]).unwrap(),
         tables: vec![0.; 3 * 4096],
     };
     p.params.source[3] = 1;
@@ -207,10 +199,10 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_gain_and_input() {
 }
 #[test]
 #[ignore = "requires a GPU"]
-fn gpu_scale_matched_thresholds_keep_marginal_detail_and_sensor_gain_invariance() {
+fn gpu_scale_matched_thresholds_keep_marginal_detail_and_correct_strong_defects() {
     let metadata = metadata();
     let factors = [4.6_f32, 2.2, 1.6];
-    let prepared = prepare(&metadata, factors, 1., 1.).unwrap();
+    let prepared = prepare(&metadata, factors, 1.).unwrap();
     let old_tables = tables(factors.map(|v| f64::from(v) * 0.5), [15., 15., 5.]).unwrap();
     let gap = (prepared.tables[200] + old_tables[200]) * 0.5;
     assert!(prepared.tables[200] > old_tables[200]);
@@ -225,27 +217,23 @@ fn gpu_scale_matched_thresholds_keep_marginal_detail_and_sensor_gain_invariance(
     source[marginal] = 200.;
     source[defect] = 3000.;
     let gpu = Gpu::new().unwrap();
-    for gain in [0., 1., 1.3] {
-        let original: Vec<_> = source.iter().map(|v| v * gain).collect();
-        let input = gpu.upload("WB scale fixture", &original).unwrap();
-        let prepared = prepare(&metadata, factors, gain, 1.).unwrap();
+    {
+        let original = &source;
+        let input = gpu.upload("WB scale fixture", original).unwrap();
         let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
         let bytes = gpu.readback(&output).unwrap();
         let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
         assert_eq!(actual[marginal], original[marginal]);
-        assert!((actual[defect] - 100. * gain).abs() < 0.002);
+        assert!((actual[defect] - 100.).abs() < 0.002);
         assert_eq!(
             &actual[defect + 1..defect + 3],
             &original[defect + 1..defect + 3]
         );
-        if gain == 0. {
-            assert!(actual.iter().all(|v| *v == 0.));
-        }
         assert_eq!(
             gpu.readback(&input).unwrap(),
-            bytemuck::cast_slice::<f32, u8>(&original)
+            bytemuck::cast_slice::<f32, u8>(original)
         );
-        if gain == 1. {
+        {
             let old = Prepared {
                 params: prepared.params,
                 tables: old_tables.clone(),
@@ -303,7 +291,7 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
     let calibration =
         crate::calibration::prepare(&source.metadata, &settings.white_balance).unwrap();
     let factors = std::array::from_fn(|c| calibration.params.gains[c]);
-    let prepared = prepare(&source.metadata, factors, settings.sensor_gain, 1.).unwrap();
+    let prepared = prepare(&source.metadata, factors, 1.).unwrap();
     let expected = apply(&gpu, &images[0].buffer, &prepared, &mut Profile::default()).unwrap();
     assert!(
         gpu.readback(&expected).unwrap() == bytemuck::cast_slice::<f32, u8>(after),

@@ -65,7 +65,6 @@ pub(crate) fn parse_settings(
                 };
             }
             "--saturation" => settings.saturation = value.parse()?,
-            "--sensor-gain" => settings.sensor_gain = value.parse()?,
             "--color-dq-gain" => settings.color_dq_gain = Some(value.parse()?),
             "--repair-badness" => settings.repair = Some(RepairThreshold::Manual(value.parse()?)),
             "--noise-override" => {

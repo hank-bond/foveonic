@@ -215,11 +215,7 @@ mod tests {
         prefs.save(&mut store);
         assert_eq!(Preferences::load(Some(&store)), prefs);
         let text = &store.0[STORAGE_KEY];
-        assert!(
-            !text.contains("exposure")
-                && !text.contains("white_balance")
-                && !text.contains("sensor_gain")
-        );
+        assert!(!text.contains("exposure") && !text.contains("white_balance"));
     }
     #[test]
     fn missing_corrupt_or_duplicate_preferences_use_complete_layout() {

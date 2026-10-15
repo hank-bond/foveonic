@@ -17,7 +17,7 @@ struct Batch{value:vec4<u32>};
 @group(0) @binding(10) var<storage,read> links:array<u32>;
 @group(0) @binding(11) var<storage,read_write> offsets:array<vec4<f32>>;
 @group(0) @binding(12) var<storage,read_write> output:array<f32>;
-fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u])/params.values.x;}
+fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u]);}
 fn coefficient(p:u32,k:u32)->vec3<f32>{let i=(p*6u+k)*3u;return vec3(coefficients[i],coefficients[i+1u],coefficients[i+2u]);}
 fn residual(p:u32)->vec3<f32>{return vec3(residuals[p*3u],residuals[p*3u+1u],residuals[p*3u+2u]);}
 @compute @workgroup_size(32)
@@ -77,7 +77,7 @@ fn reduce_rows(@builtin(global_invocation_id)id:vec3<u32>){
     for(var i=0u;i<range.y;i++){let value=means[links[range.x+i]];sum+=value.xyz;count=(count+u32(value.w))&65535u;}
     let denominator=max(count,1u);var bias=vec3(0.0);
     if denominator>=20u{let mean=sum/f32(denominator);bias=select(mean,vec3(0.0),abs(mean)>params.gains.xyz*params.values.y);}
-    offsets[row]=vec4(bias*params.values.x,f32(count));
+    offsets[row]=vec4(bias,f32(count));
 }
 @compute @workgroup_size(8,8)
 fn apply(@builtin(global_invocation_id)id:vec3<u32>){

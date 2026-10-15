@@ -21,9 +21,6 @@ pub fn output_names(settings: &Settings) -> Vec<&'static str> {
         "black.histogram",
         "calibration.layers",
     ];
-    if settings.sensor_gain != 1. {
-        names.push("gain.layers");
-    }
     if settings.repair.is_some() {
         names.push("repair.layers");
     }
@@ -85,9 +82,10 @@ pub fn image_outputs(settings: &Settings) -> Vec<ImageOutput> {
         .filter_map(|name| {
             let channels = match name {
                 "black.levels" | "black.histogram" | "banding.rows" => return None,
-                "sensor.layers" | "calibration.layers" | "gain.layers" | "repair.layers"
-                | "despeckle.layers" | "highlight.layers" | "banding.layers" | "noise.layers"
-                | "column.layers" => Channels::Layers,
+                "sensor.layers" | "calibration.layers" | "repair.layers" | "despeckle.layers"
+                | "highlight.layers" | "banding.layers" | "noise.layers" | "column.layers" => {
+                    Channels::Layers
+                }
                 "noise.edges" | "detail.ratio" | "detail.raw-ratio" | "pattern.mask"
                 | "detail.signal" | "highlight.density" => Channels::Scalar,
                 _ => Channels::Rgb,
@@ -105,7 +103,6 @@ pub fn comparison_input(settings: &Settings, output: &str) -> Option<&'static st
     let mut input = "sensor.layers";
     for (name, enabled) in [
         ("calibration.layers", true),
-        ("gain.layers", settings.sensor_gain != 1.),
         ("repair.layers", settings.repair.is_some()),
         ("highlight.layers", settings.highlight_restoration),
         ("despeckle.layers", settings.despeckle),
@@ -161,18 +158,16 @@ mod tests {
             super::comparison_input(&s, "banding.layers"),
             Some("despeckle.layers")
         );
-        s.sensor_gain = 1.3;
-        assert_eq!(
-            super::comparison_input(&s, "repair.layers"),
-            Some("gain.layers")
-        );
         s.repair = None;
         s.highlight_restoration = false;
         s.despeckle = false;
         s.row_correction = false;
         s.reconstruction = Some(Default::default());
         for output in ["noise.layers", "column.layers"] {
-            assert_eq!(super::comparison_input(&s, output), Some("gain.layers"));
+            assert_eq!(
+                super::comparison_input(&s, output),
+                Some("calibration.layers")
+            );
         }
         assert_eq!(
             super::comparison_input(&s, "reconstruction.rgb"),
@@ -240,7 +235,6 @@ mod tests {
         );
         settings.repair = Some(crate::render::RepairThreshold::Camera);
         settings.color_dq_gain = Some(1.);
-        settings.sensor_gain = 1.3;
         settings.saturation = 1.1;
         settings.sharpen_amount = 0.5;
         let images: Vec<_> = super::image_outputs(&settings)
@@ -250,7 +244,6 @@ mod tests {
         for name in [
             "repair.layers",
             "color-dq.rgb",
-            "gain.layers",
             "saturation.rgb",
             "detail.signal",
             "sharpen.rgb",

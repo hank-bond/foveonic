@@ -190,7 +190,7 @@ pub(super) fn write<W: Write + Seek>(
     // use the X3F and sidecar rather than treating this history as a recipe to replay.
     let history = serde_json::json!({
         "format": "foveonic-dng-history", "version": 1, "settings": settings,
-        "baked_controls": ["calibration", "sensor_gain", "repair", "highlight_restoration", "despeckle", "row_correction", "noise_and_detail", "color_dq", "sharpening"],
+        "baked_controls": ["calibration", "repair", "highlight_restoration", "despeckle", "row_correction", "noise_and_detail", "color_dq", "sharpening"],
         "metadata_controls": ["color_mode", "exposure", "tone", "saturation"],
         "levels": {"black": 0, "white": 65535, "negative_samples": "clamped", "common_scale": scale},
         "calibration_exposure": prepared.calibration_exposure

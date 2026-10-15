@@ -111,11 +111,7 @@ fn matrices(side: u32) -> Result<(u32, Vec<f32>, Vec<f32>)> {
     Ok((n as u32, basis, inverse))
 }
 
-pub(crate) fn prepare(
-    metadata: &Metadata,
-    calibration_gains: [f32; 3],
-    gain: f32,
-) -> Result<Prepared> {
+pub(crate) fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Result<Prepared> {
     let area = crate::calibration::rectangle(metadata, "ActiveImageArea")?;
     if crate::calibration::rectangle(metadata, "KeepImageArea")?
         != [0, 0, metadata.width as u32, metadata.height as u32]
@@ -130,10 +126,7 @@ pub(crate) fn prepare(
         Some(m) if m.values.len() == 1 && (m.values[0] as f32).is_finite() => m.values[0] as f32,
         Some(_) => return Err("invalid row-correction capture ISO".into()),
     };
-    if !gain.is_finite()
-        || gain < 0.
-        || calibration_gains.iter().any(|v| !v.is_finite() || *v <= 0.)
-    {
+    if calibration_gains.iter().any(|v| !v.is_finite() || *v <= 0.) {
         return Err("invalid row-correction gains".into());
     }
     let mut p = Prepared {
@@ -141,7 +134,7 @@ pub(crate) fn prepare(
             source: [metadata.width as u32, metadata.height as u32, 0, 0],
             area,
             values: [
-                gain,
+                0.,
                 if iso < 800. {
                     0.75
                 } else {
@@ -245,7 +238,7 @@ pub(crate) fn apply(
         "Applied row biases and native counts",
         u64::from(p.params.source[1]) * 16,
     )?;
-    if p.patches.is_empty() || p.params.values[0] == 0. {
+    if p.patches.is_empty() {
         let image = if want_image {
             let mut output = gpu.storage("Unchanged row-correction layers", input.size())?;
             gpu.copy(input, output.write(), input.size());

@@ -27,7 +27,6 @@ impl Drop for Directory {
 fn edited() -> Settings {
     let mut settings = Settings::new("Shade", "Vivid");
     settings.exposure = -0.0;
-    settings.sensor_gain = 1.375;
     settings.saturation = 0.8;
     settings.tone.contrast = f64::from_bits(0x3fd5555555555555);
     settings.tone.shadows = -1.25;
@@ -79,6 +78,10 @@ fn recipes_round_trip_all_settings_and_named_automatic_choices_exactly() {
         0.
     );
     assert!(value["settings"].get("viewport").is_none());
+    assert!(value["settings"].get("sensor_gain").is_none());
+    let mut retired = value;
+    retired["settings"]["sensor_gain"] = serde_json::json!(1.);
+    assert!(decode(&serde_json::to_vec(&retired).unwrap()).is_err());
 }
 
 #[test]
@@ -139,9 +142,9 @@ fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
         assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
     }
     let mut value: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
-    value["settings"]["sensor_gain"] = serde_json::json!(-1.);
+    value["settings"]["saturation"] = serde_json::json!(-1.);
     assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
-    value["settings"]["sensor_gain"] = serde_json::json!(1.);
+    value["settings"]["saturation"] = serde_json::json!(1.);
     value["settings"]["new_setting"] = serde_json::json!(1.);
     assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut invalid = edited();
@@ -159,11 +162,11 @@ fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
     let duplicate = bytes.replace("\"version\": 1,", "\"version\": 1, \"version\": 1,");
     assert!(decode(duplicate.as_bytes()).is_err());
     let duplicate_setting = bytes.replace(
-        "\"sensor_gain\": 1.375,",
-        "\"sensor_gain\": 1.375, \"sensor_gain\": 1.0,",
+        "\"saturation\": 0.8,",
+        "\"saturation\": 0.8, \"saturation\": 1.0,",
     );
     assert!(decode(duplicate_setting.as_bytes()).is_err());
-    let invalid_setting = bytes.replace("\"sensor_gain\": 1.375,", "\"sensor_gain\": null,");
+    let invalid_setting = bytes.replace("\"saturation\": 0.8,", "\"saturation\": null,");
     assert!(decode(invalid_setting.as_bytes()).is_err());
     let duplicate_override = bytes.replace(
         "\"base-blend\": null,",

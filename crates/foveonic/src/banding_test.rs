@@ -1,4 +1,4 @@
-//! Checks geometric fitting weights and GPU native patch banks, row+1 bias consumption, gain normalization, and immutable inputs.
+//! Checks geometric fitting weights and GPU native patch banks, row+1 bias consumption, and immutable inputs.
 use super::*;
 use crate::{gpu::Gpu, profile::Profile, source::Matrix};
 fn fixture() -> serde_json::Value {
@@ -58,7 +58,7 @@ fn geometric_weights_match_native_svd_for_all_selected_polynomial_bases() {
 }
 #[test]
 fn bank_geometry_and_row_links_preserve_native_side_bank_and_column_order() {
-    let p = prepare(&metadata(1600, 640), [4.6, 2.2, 1.6], 1.).unwrap();
+    let p = prepare(&metadata(1600, 640), [4.6, 2.2, 1.6]).unwrap();
     assert_eq!(p.batches.len(), 3);
     assert_eq!(p.patches[0].geometry, [8, 8, 31, 3]);
     assert_eq!(p.patches[1].geometry, [39, 8, 31, 3]);
@@ -70,12 +70,12 @@ fn bank_geometry_and_row_links_preserve_native_side_bank_and_column_order() {
             .windows(2)
             .all(|p| p[0] < p[1])
     ));
-    assert!(prepare(&metadata(1600, 640), [0., 1., 1.], 1.).is_err());
+    assert!(prepare(&metadata(1600, 640), [0., 1., 1.]).is_err());
     assert!(matrices(32).is_err());
 }
 #[test]
 #[ignore = "requires a working GPU adapter"]
-fn gpu_row_patch_banks_match_native_biases_counts_bounds_and_gain() {
+fn gpu_row_patch_banks_match_native_biases_counts_and_bounds() {
     let f = fixture();
     let w = f["width"].as_u64().unwrap() as usize;
     let h = f["height"].as_u64().unwrap() as usize;
@@ -97,33 +97,29 @@ fn gpu_row_patch_banks_match_native_biases_counts_bounds_and_gain() {
     }
     let gpu = Gpu::new().unwrap();
     let gains = [4.6, 2.2, 1.6];
-    for gain in [0., 1., 1.3] {
-        let samples: Vec<_> = source.iter().map(|v| v * gain).collect();
+    {
+        let samples = source;
         let input = gpu.upload("Immutable row-banding input", &samples).unwrap();
-        let p = prepare(&metadata(w, h), gains, gain).unwrap();
+        let p = prepare(&metadata(w, h), gains).unwrap();
         let result = apply(&gpu, &input, &p, true, &mut Profile::default()).unwrap();
         let bytes = gpu.readback(&result.rows).unwrap();
         let actual = bytemuck::cast_slice::<u8, [f32; 4]>(&bytes);
         let mut expected = vec![[0_f32; 3]; h];
         for y in 0..h {
-            let count = if gain == 0. {
-                0
-            } else {
-                f["counts"][y].as_u64().unwrap() as u32
-            };
+            let count = f["counts"][y].as_u64().unwrap() as u32;
             assert_eq!(actual[y][3], count as f32, "row {y} contributions");
             if count >= 20 {
                 for c in 0..3 {
                     let mean = f["offsets"][y * 3 + c].as_f64().unwrap() as f32 / count as f32;
                     if mean.abs() as f64 <= f64::from(gains[c]) * 0.75 {
-                        expected[y][c] = mean * gain;
+                        expected[y][c] = mean;
                     }
                 }
             }
             for c in 0..3 {
                 assert!(
                     (actual[y][c] - expected[y][c]).abs() < 0.004,
-                    "gain {gain} row {y} channel {c}: {} != {}",
+                    "row {y} channel {c}: {} != {}",
                     actual[y][c],
                     expected[y][c]
                 );
@@ -143,7 +139,7 @@ fn gpu_row_patch_banks_match_native_biases_counts_bounds_and_gain() {
                     };
                     assert!(
                         (corrected[i] - (sample - bias)).abs() < 0.004,
-                        "gain {gain} image ({x},{y}) channel {c}"
+                        "image ({x},{y}) channel {c}"
                     );
                 }
             }

@@ -42,11 +42,8 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Color mode" => {
             "Chooses the camera's color and contrast look, such as a more natural or vivid rendering. This is a starting look, not just a saturation adjustment; it can also change the tone curve."
         }
-        "Sensor gain" => {
-            "An ISO-like adjustment applied early in processing. It turns the recorded signal up or down, including its noise, before noise reduction and color processing. 1× leaves it unchanged; 2× doubles it, equivalent to one stop. Raising it can make noise more visible and push highlights toward white. It does not change the ISO used to take the photo. Start with Exposure for ordinary brightness changes."
-        }
         "Exposure" => {
-            "Makes the photo brighter or darker, measured in stops: +1 doubles brightness and −1 halves it. Unlike Sensor gain, this acts after noise reduction and color processing. Start here for overall brightness. Brightening can reveal noise or turn bright areas white; darkening cannot recover detail lost when the photo was taken."
+            "Makes the photo brighter or darker, measured in stops: +1 doubles brightness and −1 halves it. This acts after noise reduction and color processing. Start here for overall brightness. Brightening can reveal noise or turn bright areas white. Darkening cannot recover detail lost when the photo was taken."
         }
         "Saturation" => {
             "Adjusts color intensity. 1× leaves it unchanged, 0 removes color, and higher values make colors stronger. Too much can hide subtle color differences or make skin tones unnatural."
@@ -126,10 +123,7 @@ pub fn inspection(name: &str) -> Option<&'static str> {
             "The original recorded sensor readings, before white balance or corrections. This camera records three overlapping color-sensitive layers at each pixel. These grayscale views are not the finished red, green, and blue channels, so a dark or unusual-looking layer is not necessarily a problem."
         }
         "calibration.layers" => {
-            "Sensor readings after the camera's black-level corrections and your white balance choice, before Sensor gain and defect repairs. Each layer is shown in gray, not as a finished color channel."
-        }
-        "gain.layers" => {
-            "The corrected sensor readings after Sensor gain, before defect repairs and noise reduction. Use this to see the early brightness adjustment. The layers are not finished red, green, and blue channels."
+            "Sensor readings after the camera's black-level corrections and your white balance choice, before defect repairs. Each layer is shown in gray, not as a finished color channel."
         }
         "repair.layers" => {
             "Sensor readings after camera-based repairs of faulty pixels and patches. Compare with the earlier stage to inspect a known defect; general grain is not removed here."
@@ -217,7 +211,6 @@ mod tests {
     #[test]
     fn every_available_inspection_stage_has_help() {
         let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-        settings.sensor_gain = 1.3;
         settings.highlight_restoration = true;
         settings.color_dq_gain = Some(1.);
         settings.saturation = 1.2;
@@ -230,8 +223,9 @@ mod tests {
 
     #[test]
     fn scopes_and_editing_help_explain_important_dependencies() {
-        assert!(editing("Sensor gain").unwrap().contains("Exposure"));
-        assert!(editing("Exposure").unwrap().contains("Sensor gain"));
+        assert!(editing("Exposure")
+            .unwrap()
+            .contains("after noise reduction"));
         assert!(editing("Sharpen").unwrap().contains("0 turns it off"));
         assert!(editing("Chroma noise").unwrap().contains("0 still"));
         assert!(editing("Luma noise").unwrap().contains("0 still"));
