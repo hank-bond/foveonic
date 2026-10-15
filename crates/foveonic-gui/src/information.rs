@@ -1,4 +1,4 @@
-//! Paints capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
+//! Shows selectable capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
 
 use crate::viewport::PixelRegion;
 use eframe::egui;
@@ -95,7 +95,7 @@ pub fn show(
             egui::Align2::RIGHT_CENTER,
         ),
     ];
-    for (area, text, font, align) in regions {
+    for (index, (area, text, font, align)) in regions.into_iter().enumerate() {
         if !area.is_positive() {
             continue;
         }
@@ -104,9 +104,19 @@ pub fn show(
             egui::Align2::RIGHT_CENTER => area.right_center(),
             _ => area.center(),
         };
-        ui.painter()
-            .with_clip_rect(area.intersect(ui.clip_rect()))
-            .text(at, align, text, font, color);
+        let galley = ui.painter().layout_no_wrap(text, font, color);
+        let text_rect = align.anchor_size(at, galley.size());
+        // Keep the original alignment and clipping, but let egui handle selection
+        // and copying instead of painting inert text.
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .id_salt(("information", index))
+                .max_rect(area),
+            |ui| {
+                ui.set_clip_rect(area.intersect(ui.clip_rect()));
+                ui.put(text_rect, egui::Label::new(galley).selectable(true));
+            },
+        );
     }
     response.on_hover_text(format!("{filename}\n{}\n{}\n0-based image pixels; inclusive top-left and bottom-right. Includes partly visible pixels.",
         properties.map(capture).unwrap_or_default(), region.map(region_text).unwrap_or_default()));
@@ -115,6 +125,73 @@ pub fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_readout_supports_drag_selection_and_copy() {
+        let properties = [("ISO".into(), "100".into())].into_iter().collect();
+        let region = PixelRegion {
+            top_left: [1150, 2094],
+            bottom_right: [2292, 3123],
+            extent: [1143, 1030],
+        };
+        for expected in [
+            capture(&properties),
+            "sunlit-red-flower.x3f".into(),
+            region_text(region),
+        ] {
+            let ctx = egui::Context::default();
+            let mut time = 0.;
+            let mut frame = |events| {
+                time += 0.1;
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1400., 100.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            show(ui, Some(&properties), "sunlit-red-flower.x3f", Some(region));
+                        });
+                    },
+                )
+            };
+            frame(vec![]);
+            let output = frame(vec![]);
+            let rect = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == expected => {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .expect("readout is visible");
+            let start = rect.left_center() + egui::vec2(0.1, 0.);
+            let end = rect.right_center() - egui::vec2(0.1, 0.);
+            let pointer = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(vec![egui::Event::PointerMoved(start), pointer(start, true)]);
+            frame(vec![egui::Event::PointerMoved(end)]);
+            frame(vec![pointer(end, false)]);
+            let output = frame(vec![egui::Event::Copy]);
+            assert!(
+                output.platform_output.commands.iter().any(|command| {
+                    matches!(command, egui::OutputCommand::CopyText(text) if text == &expected)
+                }),
+                "could not copy {expected:?}"
+            );
+        }
+    }
+
     #[test]
     fn region_labels_and_capture_summary_use_available_photographic_values() {
         assert_eq!(

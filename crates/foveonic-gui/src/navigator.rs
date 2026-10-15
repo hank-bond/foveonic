@@ -40,8 +40,8 @@ impl Key {
             path: frame.path.clone(),
             root: frame.output.clone(),
             mapping,
-            extent: frame.texture.description().extent,
-            space: frame.texture.description().space,
+            extent: frame.view(mapping.input).description().extent,
+            space: frame.view(mapping.input).description().space,
         }
     }
     fn compatible(&self, new: &Self) -> bool {
@@ -207,7 +207,7 @@ impl Navigator {
             self.wanted = Some((
                 Job {
                     key: key.clone(),
-                    source: frame.texture.clone(),
+                    source: frame.view(mapping.input).clone(),
                     input: if mapping.difference_gain > 0. {
                         frame.comparison.as_ref().map(|c| c.texture.clone())
                     } else {
@@ -297,6 +297,9 @@ mod tests {
         assert!(!a.compatible(&b));
         b = a.clone();
         b.mapping.difference_gain = 8.;
+        assert!(!a.compatible(&b));
+        b = a.clone();
+        b.mapping.input = true;
         assert!(!a.compatible(&b));
         b = a.clone();
         b.root = "sensor.layers".into();

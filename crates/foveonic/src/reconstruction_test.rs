@@ -107,7 +107,8 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
     );
     for (key, scale) in [("local", 0.75), ("global_half", 0.5)] {
         let mut p = parameters();
-        p.filter = [0.08, 0.8, 0.6, 0.95];
+        // Base filtering receives resolved coefficients, including linked limits.
+        p.filter = [0.08, 0.8, 0.6, if key == "local" { 0.92 } else { 0.95 }];
         p.reduction[0] = scale;
         let base = base(&gpu, &input, p, true, true, true, &mut Profile::default()).unwrap();
         check(
@@ -145,7 +146,7 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
     }
     // Compact reduced B ends in zeroed native scratch, never the following tile.
     let mut p = parameters();
-    p.filter = [0.08, 0.8, 0.6, 0.95];
+    p.filter = [0.08, 0.8, 0.6, 0.92];
     p.reduction[0] = 0.75;
     let first = base(&gpu, &input, p, false, true, false, &mut Profile::default()).unwrap();
     let first = gpu.readback(first.tiles.as_ref().unwrap()).unwrap();

@@ -43,7 +43,7 @@ pub struct Request {
     pub path: PathBuf,
     pub settings: Settings,
     pub output: String,
-    pub difference: bool,
+    pub comparison: bool,
     pub export: Option<Export>,
 }
 pub struct Frame {
@@ -56,6 +56,17 @@ pub struct Frame {
     pub milliseconds: f64,
     pub revision: u64,
     pub queued_at: std::time::Instant,
+}
+impl Frame {
+    /// Keep the output visible until its matching input is ready.
+    pub fn view(&self, input: bool) -> &Arc<ImageTexture> {
+        if input {
+            if let Some(comparison) = &self.comparison {
+                return &comparison.texture;
+            }
+        }
+        &self.texture
+    }
 }
 pub struct Comparison {
     pub input: &'static str,
@@ -182,14 +193,14 @@ impl Worker {
                         state.clear||state.stop||state.request.as_ref().is_some_and(|pending|{
                             let mut next=pending.settings.clone();
                             resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
-                            pending.path!=request.path||pending.output!=request.output||pending.difference!=request.difference||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
+                            pending.path!=request.path||pending.output!=request.output||pending.comparison!=request.comparison||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
                         })
                     };
                     let mut profile = Profile::new(crate::timing::mode());
                     let before = crate::timing::enabled().then(||engine.gpu_activity());
                     let cache_before = before.map(|_|session.cached_bytes());
                     let root=if request.export.is_some(){"final"}else{&request.output};
-                    let input = if request.difference && request.export.is_none() {
+                    let input = if request.comparison && request.export.is_none() {
                         Some(foveonic::inspection::comparison_input(&settings, root)
                             .ok_or("selected output has no operation-input comparison")?)
                     } else {
@@ -420,7 +431,7 @@ mod tests {
                 path: path.clone(),
                 settings: foveonic::render::Settings::new("", ""),
                 output: "sensor.layers".into(),
-                difference: false,
+                comparison: false,
                 export: None,
             });
         }
@@ -431,6 +442,7 @@ mod tests {
             }
             let frame = reply.result.unwrap().unwrap();
             assert_eq!(frame.artifact.name, "sensor.layers");
+            assert!(std::sync::Arc::ptr_eq(frame.view(true), &frame.texture));
             assert_eq!(
                 frame.texture.description().space,
                 foveonic::image::Space::SensorLayers
@@ -446,7 +458,7 @@ mod tests {
             path: path.clone(),
             settings: foveonic::render::Settings::new("", ""),
             output: "final".into(),
-            difference: false,
+            comparison: false,
             export: None,
         });
         let reply = receive(&worker);
@@ -464,7 +476,7 @@ mod tests {
             path,
             settings: foveonic::render::Settings::new("", ""),
             output: "black.histogram".into(),
-            difference: false,
+            comparison: false,
             export: None,
         });
         let reply = receive(&worker);
@@ -511,7 +523,7 @@ mod tests {
                 path: path.clone(),
                 settings: settings.clone(),
                 output: output.into(),
-                difference: true,
+                comparison: true,
                 export: None,
             });
             let reply = receive(&worker);
@@ -522,6 +534,13 @@ mod tests {
             assert!(frame.scopes.is_none()); // image-first publication remains intact
             let comparison = frame.comparison.as_ref().unwrap();
             assert_eq!(comparison.input, input);
+            for _ in 0..4 {
+                assert!(std::sync::Arc::ptr_eq(frame.view(false), &frame.texture));
+                assert!(std::sync::Arc::ptr_eq(
+                    frame.view(true),
+                    &comparison.texture
+                ));
+            }
             assert_eq!(
                 comparison.texture.description().extent,
                 frame.texture.description().extent
@@ -537,7 +556,7 @@ mod tests {
             path: path.clone(),
             settings: settings.clone(),
             output: "repair.layers".into(),
-            difference: true,
+            comparison: true,
             export: None,
         });
         let frame = receive(&worker).result.unwrap().unwrap();
@@ -552,7 +571,7 @@ mod tests {
             path,
             settings,
             output: "final".into(),
-            difference: true,
+            comparison: true,
             export: None,
         });
         assert!(receive(&worker)
@@ -624,7 +643,7 @@ mod tests {
                 path: path.clone(),
                 settings: settings.clone(),
                 output: "final".into(),
-                difference: false,
+                comparison: false,
                 export: None,
             });
             let reply = receive(&worker);
@@ -701,7 +720,7 @@ mod tests {
                     path: path.clone(),
                     settings,
                     output: "final".into(),
-                    difference: false,
+                    comparison: false,
                     export: None,
                 })
             };
@@ -809,7 +828,7 @@ mod tests {
             path,
             settings: foveonic::render::Settings::new("Sunlight", "Standard"),
             output: "final".into(),
-            difference: false,
+            comparison: false,
             export: None,
         });
         let frame = receive(&worker).result.unwrap().unwrap();
@@ -870,7 +889,7 @@ mod tests {
                 path: "test.x3f".into(),
                 settings: foveonic::render::Settings::new("Sunlight", "Standard"),
                 output: "final".into(),
-                difference: false,
+                comparison: false,
                 export: None,
             });
         }

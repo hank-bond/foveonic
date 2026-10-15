@@ -1,0 +1,39 @@
+{
+  "id": "highlight-correction",
+  "title": "Highlights",
+  "description": "Corrects false color in over-exposed areas where one or more Sensor Layers clip. Auto is the cameras starting point, but can wash out real color or turn smooth shading into flat patches. The slider decides which brightness level to start running the correction on.  Move it right to only correct brighter (and thus fewer) pixels, and left to correct darker (and more) pixels. \n\nThe value shifts the camera's starting point in stops: +1 starts correction one stop later. 0 matches Auto, not Off. Use the checkbox to turn it off. This is separate from the Highlights tone slider.",
+  "note": "Same crop at Exposure −0.5 EV. +0.8 suits this photo, not every highlight.",
+  "source": "sunlit-red-flower.x3f",
+  "crop": [1150, 2094, 2293, 3124],
+  "image_size": [400, 360],
+  "base_args": [
+    "--wb", "Sunlight", "--mode", "Standard", "--exposure", "-0.5",
+    "--contrast", "0", "--shadows", "0", "--highlights", "0",
+    "--sensor-gain", "1", "--saturation", "1", "--repair", "--despeckle",
+    "--row-correction", "--reconstruction", "--chroma-noise", "2",
+    "--luma-noise", "2", "--banding-noise", "2", "--detail", "0.97", "--sharpen", "0"
+  ],
+  "variants": [
+    {
+      "id": "off",
+      "label": "Off",
+      "caption": "Flower color remains stable, but bright leaves have yellow patches due to layer clipping.",
+      "image": "off.png",
+      "args": ["--no-highlight-restoration"]
+    },
+    {
+      "id": "auto",
+      "label": "Auto",
+      "caption": "Yellow patches are removed, but leaves are too pale and petals break into harsh flat patches.",
+      "image": "auto.png",
+      "args": ["--highlight-restoration", "--highlight-threshold", "auto"]
+    },
+    {
+      "id": "plus-0.8",
+      "label": "+0.8",
+      "caption": "Flower color is largely preserved and leaf color looks more natural.",
+      "image": "plus-0.8.png",
+      "args": ["--highlight-restoration", "--highlight-threshold", "0.8"]
+    }
+  ]
+}

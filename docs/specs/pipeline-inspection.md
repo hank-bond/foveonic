@@ -18,7 +18,9 @@ implementation: incomplete
 - Inspect **must** group processing buffers and their component views. RGB stages offer RGB/Red/Green/Blue, sensor-layer stages offer Layer 1/2/3, and scalar stages have a single entry. Component-only changes **must** reuse the retained buffer and texture without processing a new image. Scopes analyze all buffer channels independently of the display component. Their input region follows [GUI workspace](./gui-workspace.md).
 - Group rows **must** have a right-aligned arrow; clicking anywhere on the row **must** expand or collapse their component choices inline without selecting an image.
 - A Difference toggle beside Inspect **must** compare compatible layer and individual RGB-channel outputs with their explicitly identified operation inputs, using the same source and settings. Signed grayscale **must** use middle gray for unchanged, lighter for increased, and darker for decreased values. Display-only amplification and a visible baseline/legend **must** explain small changes without altering processing or export. Unsupported comparisons **must** be disabled with an explanation. Combined RGB magnitude heatmaps and scalar/branch-specific comparisons are subsequent work.
-- Difference subtraction **must** precede display mapping and preserve immutable source samples. Component and amplification changes **must** reuse retained GPU views. Scopes **must** continue analyzing the selected output, clearly distinguished from the display-only difference.
+- An Input/Output toggle beside Difference **must** show the selected operation's actual input or output, with Output as the default. It **must** preserve the channel, zoom, pan, and image bounds when switching. After the compatible pair is prepared, switching **must** reuse the retained GPU views without photographic processing. Compatible combined RGB views **must** support Input/Output even where signed Difference is unavailable.
+- Difference **must** temporarily override and disable Input/Output without losing its selection. Turning Difference off **must** restore that selection. Unsupported input comparisons **must** be disabled with an explanation. A pending input **must** show an explicit output fallback rather than an old or mismatched input.
+- Difference subtraction **must** precede display mapping and preserve immutable source samples. Component, side, and amplification changes **must** reuse retained GPU views. Scopes **must** continue analyzing the selected output, clearly distinguished from the display-only input or difference. The navigator **must** follow the displayed side.
 - Visualization **must** distinguish sensor layers from RGB and scalar fields. Diagnostic display mapping **must** preserve buffer samples and use the selected output's processing space.
 - Interactive scheduling **must** bound in-flight render work and prevent stale results from replacing the current selection.
 
@@ -26,7 +28,7 @@ implementation: incomplete
 
 Use egui with eframe's wgpu backend. Initially use embedded JPEGs for browser thumbnails and the processing pipeline for the selected image. Retain requested outputs selectively.
 
-Output dependency tracking and temporary lifetimes govern execution. Interaction checkpoints determine which results remain available for reuse. General multi-image caching and arbitrary branch/flicker comparisons remain deferred. Operation-input differences use selectively retained pairs of named outputs. Multiple roots and independent output lifetimes must support future branch comparisons and flickering.
+Output dependency tracking and temporary lifetimes govern execution. Interaction checkpoints determine which results remain available for reuse. General multi-image caching and arbitrary branch comparisons remain deferred. Operation-input flickering and differences share selectively retained pairs of named outputs from one render configuration.
 
 ## Conformance
 

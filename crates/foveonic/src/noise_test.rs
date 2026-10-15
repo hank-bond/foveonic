@@ -73,6 +73,24 @@ fn advanced_override_validation_and_link_state_are_parameter_local() {
 }
 
 #[test]
+fn linked_mean_decay_keeps_native_limits_and_manual_values_use_the_full_range() {
+    for scale in [0.375, 0.5, 0.625, 0.75, 0.875, 1.] {
+        for preset in [0.9, 0.95, 0.985] {
+            let linked = mean_decay(preset, scale, None);
+            let expected = match scale {
+                0.625 | 0.75 | 0.875 => preset.min(0.92),
+                _ => preset,
+            };
+            assert_eq!(linked, expected);
+            assert_eq!(mean_decay(preset, scale, Some(linked)), linked);
+            for manual in [0., 0.5, 0.92, 0.95, 0.99, 1.] {
+                assert_eq!(mean_decay(preset, scale, Some(manual)), manual);
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires FOVEONIC_FIXTURE_DIR"]
 fn linked_parameters_share_engine_values_capture_without_jumps_and_keep_overrides() {
     let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
@@ -148,8 +166,17 @@ fn camera_noise_parameters_match_reference_and_scale_with_sensor_gain() {
             ("residual", &p.residual[..]),
             ("diffusion", &p.diffusion[..]),
         ] {
-            for (actual, expected) in values.iter().zip(fixture[name].as_array().unwrap()) {
-                let expected = expected.as_f64().unwrap() as f32;
+            for (index, (actual, expected)) in values
+                .iter()
+                .zip(fixture[name].as_array().unwrap())
+                .enumerate()
+            {
+                let mut expected = expected.as_f64().unwrap() as f32;
+                // Fixtures store the preset before the native reduced-local cap.
+                // Shared preparation now returns the value used by filtering.
+                if name == "filter" && index == 3 && p.reduction[0] > 0.5 && p.reduction[0] < 1. {
+                    expected = expected.min(0.92);
+                }
                 assert!(
                     (*actual - expected).abs() <= expected.abs().max(1.) * 1e-5,
                     "{} {name}: {actual} vs {expected}",

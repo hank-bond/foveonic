@@ -9,9 +9,15 @@ pub fn attach(response: egui::Response, text: &str) -> egui::Response {
 }
 
 pub fn control(response: egui::Response, label: &str) -> egui::Response {
-    match editing(label) {
-        Some(text) => attach(response, text),
-        None => response,
+    match label {
+        "Highlight correction" => crate::help_examples::attach(response, "highlight-correction"),
+        "Bad pixels" => crate::help_examples::attach(response, "bad-pixels"),
+        "Speckles" => crate::help_examples::attach(response, "speckles"),
+        "Row banding" => crate::help_examples::attach(response, "row-banding"),
+        _ => match editing(label) {
+            Some(text) => attach(response, text),
+            None => response,
+        },
     }
 }
 
@@ -19,7 +25,7 @@ pub fn control(response: egui::Response, label: &str) -> egui::Response {
 pub fn automatic(label: &str) -> Option<&'static str> {
     Some(match label {
         "Highlight correction" => {
-            "Auto follows the camera threshold. Click A to switch between Auto and a manual offset in stops. 0 matches Auto. Manual controls are disabled in Auto. The checkbox turns restoration off without resetting your choice."
+            "A uses the camera's suggested setting. Click A to adjust it yourself, or click again to return to Auto. 0 matches Auto. Use the checkbox to turn correction off without losing your setting."
         }
         "ColorDQ gain" => {
             "A chooses the amount automatically using the camera information, while noise reduction is on. Click A to choose your own amount; 0 turns this correction off. Click again to return to automatic. The slider and value cannot be edited while A is on."
@@ -75,21 +81,13 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Sharpen" => {
             "Emphasizes edges to make the finished photo look crisper. 0 turns it off. Higher amounts can exaggerate grain and create light or dark outlines around edges. It cannot restore detail that was never recorded."
         }
-        "Bad pixels" => {
-            "Fixes faulty sensor pixels and small faulty patches using the camera's defect information, with an additional check for abnormal red pixels. The camera information chooses which recorded defects to repair automatically. Usually best left on. This is not general noise reduction; Speckles separately searches the image for additional isolated dots."
-        }
-        "Row banding" => {
-            "Reduces faint horizontal brightness or color stripes by estimating small per-row sensor offsets. It acts before general noise reduction and does not smooth image texture. Usually best left on; switch it off to compare an affected shadow area."
-        }
-        "Highlight correction" => {
-            "Restores highlight color using information still recorded by other sensor layers. Auto follows the camera threshold. Manual offsets shift it in stops: +1 doubles the threshold and starts neutralization later, often retaining more color. Negative values start earlier. Higher values can leave false colors; lower values can wash colors toward white. 0 matches Auto, not Off. The checkbox disables restoration. This acts before noise reduction and is separate from the Highlights tone slider. It cannot recover texture lost in all three layers."
-        }
+        "Bad pixels" => crate::help_examples::text("bad-pixels"),
+        "Row banding" => crate::help_examples::text("row-banding"),
+        "Highlight correction" => crate::help_examples::text("highlight-correction"),
         "Advanced corrections" => {
             "Speckles, Bad pixels, and Row banding default on for new edits. Expand to toggle them individually. Collapsing preserves your settings."
         }
-        "Speckles" => {
-            "Finds isolated bright, dark, or colored dots that remain after camera-based repairs, then replaces them using nearby pixels. Usually best left on. It does not reduce general grain; switch it off to check whether a tiny real detail is being removed."
-        }
+        "Speckles" => crate::help_examples::text("speckles"),
         _ => return None,
     })
 }
@@ -238,8 +236,8 @@ mod tests {
         assert!(editing("Chroma noise").unwrap().contains("0 still"));
         assert!(editing("Luma noise").unwrap().contains("0 still"));
         let repair = editing("Bad pixels").unwrap();
-        assert!(repair.contains("automatically"));
-        assert!(repair.contains("small faulty patches"));
+        assert!(repair.contains("information recorded by the camera"));
+        assert!(repair.contains("small patches"));
         assert!(repair.contains("Speckles"));
         assert!(editing("Camera-record repair").is_none());
         assert!(editing("Min. badness").is_none());
@@ -247,7 +245,9 @@ mod tests {
         let recovery = editing("Highlight correction").unwrap();
         assert!(editing("Highlights").unwrap().contains("tone curve"));
         assert_ne!(editing("Highlights"), editing("Highlight correction"));
-        assert!(recovery.contains("+1 doubles the threshold"));
+        assert!(recovery.contains("+1 starts correction one stop later"));
+        assert!(recovery.contains("Move it right to only correct brighter"));
+        assert!(recovery.contains("flat patches"));
         assert!(recovery.contains("0 matches Auto, not Off"));
         assert!(recovery.contains("Highlights tone slider"));
         assert!(automatic("Highlight correction")

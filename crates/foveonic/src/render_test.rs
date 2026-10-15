@@ -1110,6 +1110,23 @@ fn advanced_overrides_preserve_captured_base_and_produce_finite_extremes() {
             .set(parameter, Some(values[parameter as usize]));
     }
     assert_eq!(read(&settings, "noise.layers"), baseline);
+    for decay in [0.95, 0.99, 1.] {
+        settings
+            .reconstruction
+            .as_mut()
+            .unwrap()
+            .overrides
+            .set(crate::noise::Parameter::MeanDecay, Some(decay));
+        let base = read(&settings, "noise.layers");
+        assert_ne!(base, baseline, "manual Mean decay {decay} was still capped");
+        assert!(bytemuck::cast_slice::<u8, f32>(&base)
+            .iter()
+            .all(|v| v.is_finite()));
+        let result = read(&settings, "reconstruction.rgb");
+        assert!(bytemuck::cast_slice::<u8, f32>(&result)
+            .iter()
+            .all(|v| v.is_finite()));
+    }
     settings
         .reconstruction
         .as_mut()

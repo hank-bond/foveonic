@@ -82,25 +82,42 @@ pub fn paint(ui: &egui::Ui, response: &egui::Response, on: bool) {
     ui.painter().add(frame(ui, response, on, response.rect));
 }
 
+pub fn button_padding(ui: &egui::Ui) -> egui::Vec2 {
+    let style = ui.style();
+    let em = style.override_font_id.as_ref().map_or_else(
+        || {
+            style
+                .override_text_style
+                .as_ref()
+                .unwrap_or(&egui::TextStyle::Button)
+                .resolve(style)
+                .size
+        },
+        |font| font.size,
+    );
+    egui::vec2(0.5 * em, 0.25 * em)
+}
+
+pub fn dropdown<R>(
+    ui: &mut egui::Ui,
+    combo: egui::ComboBox,
+    menu_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    // Keep the parent UI so existing dropdown and popup IDs remain stable.
+    let previous = ui.spacing().button_padding;
+    ui.spacing_mut().button_padding = button_padding(ui);
+    let response = combo.show_ui(ui, menu_contents);
+    ui.spacing_mut().button_padding = previous;
+    response
+}
+
 pub fn button(ui: &mut egui::Ui, label: &str, on: bool, minimum: egui::Vec2) -> egui::Response {
     // egui removes padding from frameless buttons. Keep its frame invisible
     // so we can use padded layout and paint our own border and colors.
     let background = ui.painter().add(egui::Shape::Noop);
     let response = ui
         .scope(|ui| {
-            let style = ui.style();
-            let em = style.override_font_id.as_ref().map_or_else(
-                || {
-                    style
-                        .override_text_style
-                        .as_ref()
-                        .unwrap_or(&egui::TextStyle::Button)
-                        .resolve(style)
-                        .size
-                },
-                |font| font.size,
-            );
-            ui.spacing_mut().button_padding = egui::vec2(0.5 * em, 0.25 * em);
+            ui.spacing_mut().button_padding = button_padding(ui);
             ui.add(
                 egui::Button::new(label)
                     .frame(true)
@@ -166,7 +183,7 @@ pub fn menu_cell(ui: &egui::Ui, response: &egui::Response, selected: bool) -> eg
 }
 
 pub fn menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    let padding = ui.spacing().button_padding;
+    let padding = button_padding(ui);
     let galley = egui::WidgetText::from(label).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -300,6 +317,125 @@ mod tests {
             for gap in [bounds.left() - rect.left(), rect.right() - bounds.right()] {
                 assert!((gap - 0.5 * em).abs() < 1.);
             }
+            for gap in [bounds.top() - rect.top(), rect.bottom() - bounds.bottom()] {
+                assert!((gap - 0.25 * em).abs() < 1.);
+            }
+        }
+    }
+
+    #[test]
+    fn dropdowns_share_button_padding_without_changing_ids_or_parent_spacing() {
+        for em in [14., 20.] {
+            for enabled in [false, true] {
+                let ctx = egui::Context::default();
+                install_style(&ctx);
+                let mut rect = egui::Rect::NOTHING;
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.style_mut().override_font_id = Some(egui::FontId::proportional(em));
+                        ui.add_enabled_ui(enabled, |ui| {
+                            ui.horizontal(|ui| {
+                                let spacing = ui.spacing().clone();
+                                let id = ui.make_persistent_id(egui::Id::new("padded dropdown"));
+                                let response = dropdown(
+                                    ui,
+                                    egui::ComboBox::from_id_salt("padded dropdown")
+                                        .selected_text("Padding"),
+                                    |_| {},
+                                )
+                                .response;
+                                assert_eq!(response.id, id);
+                                assert_eq!(response.enabled(), enabled);
+                                rect = response.rect;
+                                let next = button(ui, "Next", false, egui::Vec2::ZERO).rect;
+                                assert!((next.height() - rect.height()).abs() < 1.);
+                                assert!(
+                                    (next.left() - rect.right() - spacing.item_spacing.x).abs()
+                                        < 0.01
+                                );
+                                assert_eq!(ui.spacing().button_padding, spacing.button_padding);
+                                assert_eq!(ui.spacing().item_spacing, spacing.item_spacing);
+                            });
+                        });
+                    });
+                });
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == "Padding" => Some(text),
+                        _ => None,
+                    })
+                    .unwrap();
+                let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
+                assert!((bounds.left() - rect.left() - 0.5 * em).abs() < 1.);
+                for gap in [bounds.top() - rect.top(), rect.bottom() - bounds.bottom()] {
+                    assert!((gap - 0.25 * em).abs() < 1.);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn open_dropdown_options_keep_font_based_padding_and_gap_free_rows() {
+        for em in [14., 20.] {
+            let ctx = egui::Context::default();
+            install_style(&ctx);
+            // Popup areas use the context's font style rather than local overrides.
+            ctx.style_mut(|style| {
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Button, egui::FontId::proportional(em));
+            });
+            let draw = |time| {
+                let mut response = None;
+                let output = ctx.run(
+                    egui::RawInput {
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let spacing = ui.spacing().clone();
+                            response = Some(dropdown(
+                                ui,
+                                egui::ComboBox::from_id_salt("padded options")
+                                    .selected_text("Closed"),
+                                |ui| {
+                                    ui.spacing_mut().item_spacing.y = 0.;
+                                    let first = menu_row(ui, "Option", false).rect;
+                                    let next = menu_row(ui, "Next", true).rect;
+                                    assert_eq!(first.width(), next.width());
+                                    assert_eq!(first.bottom(), next.top());
+                                    first
+                                },
+                            ));
+                            assert_eq!(ui.spacing().button_padding, spacing.button_padding);
+                            assert_eq!(ui.spacing().item_spacing, spacing.item_spacing);
+                        });
+                    },
+                );
+                (response.unwrap(), output.shapes)
+            };
+            let (closed, _) = draw(0.);
+            ctx.memory_mut(|memory| memory.open_popup(closed.response.id.with("popup")));
+            draw(0.02);
+            let (open, shapes) = draw(0.04);
+            let rect = open.inner.unwrap();
+            let text = shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "Option" => Some(text),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(text.galley.job.sections[0].format.font_id.size, em);
+            let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
+            assert!(
+                (bounds.left() - rect.left() - 0.5 * em).abs() < 1.,
+                "{em} pt dropdown: option bounds {bounds:?}, row {rect:?}, font {:?}",
+                text.galley.job.sections[0].format.font_id,
+            );
             for gap in [bounds.top() - rect.top(), rect.bottom() - bounds.bottom()] {
                 assert!((gap - 0.25 * em).abs() < 1.);
             }

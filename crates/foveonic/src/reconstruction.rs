@@ -206,9 +206,6 @@ pub(crate) fn base(
         reduced.geometry[3] = 1;
         (raw, whole)
     } else {
-        if scale < 1. {
-            reduced.filter[3] = reduced.filter[3].min(0.92);
-        }
         let raw = raw_tiles(gpu, input, p, profile)?;
         let raw = if scale < 1. {
             crate::resample::apply(

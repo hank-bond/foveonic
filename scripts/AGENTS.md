@@ -12,7 +12,7 @@ Keep measurement orchestration outside the Rust processing and GUI layers. Do no
 
 ### Directories
 
+- **[help-examples/](./help-examples/AGENTS.md)** Example tooling downloads missing release photographs and explicitly renders manifest-driven help comparisons.
 - **[profiling/](./profiling/AGENTS.md)** Profiling tools record owned native sessions, summarize shared JSON reports, and flag known overlapping workloads.
-- **[verification/](./verification/AGENTS.md)** Verification tools measure Merrill native control mappings and pixel consumers without modifying reference files.
 
 <!-- INDEX:END -->

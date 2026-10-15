@@ -1,4 +1,4 @@
-//! Groups pipeline buffers and component views in one inspection selector without scheduling component-only changes.
+//! Groups pipeline views and controls display-only Input/Output and Difference comparisons.
 
 use crate::{help, sections};
 use eframe::egui;
@@ -23,8 +23,21 @@ fn choose(output: &mut String, channel: &mut i32, name: &str, component: i32) {
 fn group_row(ui: &mut egui::Ui, name: &str, selected: bool) -> bool {
     let id = ui.make_persistent_id(("inspect group", name));
     let mut open = ui.data_mut(|d| d.get_persisted::<bool>(id).unwrap_or(false));
+    let padding = crate::widgets::button_padding(ui);
+    let galley = egui::WidgetText::from(name).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        ui.available_width(),
+        egui::TextStyle::Button,
+    );
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+        egui::vec2(
+            ui.available_width(),
+            ui.spacing()
+                .interact_size
+                .y
+                .max(galley.size().y + 2. * padding.y),
+        ),
         egui::Sense::click(),
     );
     if response.clicked() {
@@ -32,17 +45,17 @@ fn group_row(ui: &mut egui::Ui, name: &str, selected: bool) -> bool {
         ui.data_mut(|d| d.insert_persisted(id, open));
     }
     let color = crate::widgets::menu_cell(ui, &response, selected);
-    let padding = ui.spacing().button_padding.x;
-    ui.painter().text(
-        rect.left_center() + egui::vec2(padding, 0.),
-        egui::Align2::LEFT_CENTER,
-        name,
-        egui::TextStyle::Button.resolve(ui.style()),
+    ui.painter().galley(
+        egui::pos2(
+            rect.left() + padding.x,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
         color,
     );
     sections::disclosure_icon(
         ui,
-        rect.right_center() - egui::vec2(padding + 4., 0.),
+        rect.right_center() - egui::vec2(padding.x + 4., 0.),
         !open,
         color,
     );
@@ -85,11 +98,11 @@ pub fn show(
         format!("{output} · {label}")
     };
     let current_help = help::inspection(current.name).unwrap();
-    egui::ComboBox::from_id_salt("artifact")
+    let combo = egui::ComboBox::from_id_salt("artifact")
         .selected_text(selected)
         .width(205.)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show_ui(ui, |ui| {
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    crate::widgets::dropdown(ui, combo, |ui| {
             ui.spacing_mut().item_spacing.y = 0.;
             for image in outputs {
                 if image.channels == Channels::Scalar {
@@ -135,19 +148,36 @@ pub fn show(
 }
 
 /// Session-only presentation controls, independent of photographic settings.
-pub struct Difference {
-    pub enabled: bool,
+pub struct Comparison {
+    pub input: bool,
+    pub difference: bool,
     pub gain: f32,
 }
-impl Default for Difference {
+impl Default for Comparison {
     fn default() -> Self {
         Self {
-            enabled: false,
+            input: false,
+            difference: false,
             gain: 32.,
         }
     }
 }
-impl Difference {
+impl Comparison {
+    pub fn requested(&self) -> bool {
+        self.input || self.difference
+    }
+
+    pub fn mapping(&self, channel: i32, has_pair: bool) -> crate::viewport::Mapping {
+        let mut mapping = crate::viewport::Mapping::normal(channel);
+        if has_pair {
+            mapping.input = self.input && !self.difference;
+            if self.difference && channel >= 0 {
+                mapping.difference_gain = self.gain;
+            }
+        }
+        mapping
+    }
+
     /// Returns true only when the user newly requests a comparison pair.
     pub fn show(
         &mut self,
@@ -156,31 +186,48 @@ impl Difference {
         output: &str,
         channel: i32,
     ) -> bool {
-        let before = self.enabled;
+        let before = self.requested();
         let input = inspection::comparison_input(settings, output);
         let available = input.is_some() && channel >= 0;
-        if !available {
-            self.enabled = false;
+        if input.is_none() {
+            self.input = false;
         }
-        let explanation = if input.is_some() && channel < 0 {
-            "Choose an individual RGB channel for a signed difference. Combined RGB change heatmaps are not available yet."
-        } else if input.is_none() {
-            "This view has no same-unit operation-input comparison yet. Original readings and diagnostic maps stand alone; color and tone conversion change the signal's meaning or units."
+        if !available {
+            self.difference = false;
+        }
+        let side_help = if input.is_none() {
+            "This view has no matching input comparison."
+        } else if self.difference {
+            "Turn Difference off to switch between Input and Output."
         } else {
-            "Shows output minus this operation's input. Middle gray is unchanged; lighter means increased and darker means decreased. This changes display only, not editing or export. Scopes still measure the output."
+            "Input shows the image before this step. Output shows it after. Scopes always measure the output. This does not change edits or export."
+        };
+        ui.add_enabled_ui(input.is_some() && !self.difference, |ui| {
+            for (side, label) in [(true, "Input"), (false, "Output")] {
+                crate::widgets::selectable_value(ui, &mut self.input, side, label)
+                    .on_hover_text(side_help)
+                    .on_disabled_hover_text(side_help);
+            }
+        });
+        let explanation = if input.is_some() && channel < 0 {
+            "Choose an individual RGB channel for Difference. Input and Output can still show combined RGB."
+        } else if input.is_none() {
+            "This view has no matching input comparison. Original readings and diagnostic maps stand alone. Color and tone conversion change the meaning or units of the values."
+        } else {
+            "Shows output minus input. Middle gray means no change. Lighter means increased and darker means decreased. Scopes still measure the output. This does not change edits or export."
         };
         ui.add_enabled_ui(available, |ui| {
-            crate::widgets::checkbox(ui, &mut self.enabled, "Δ Difference")
+            crate::widgets::checkbox(ui, &mut self.difference, "Δ Difference")
         })
         .inner
         .on_disabled_hover_text(explanation)
         .on_hover_text(explanation);
-        if self.enabled {
+        if self.difference {
             ui.label("Amplify");
             ui.add(egui::DragValue::new(&mut self.gain).range(1. ..=1024.).speed(1.).suffix("×"))
                 .on_hover_text("Magnifies small differences for display only. Amplification can clip this diagnostic view without clipping the photograph. At 1×, a full nominal signal-range change reaches black or white.");
         }
-        !before && self.enabled
+        !before && self.requested()
     }
 }
 
@@ -288,6 +335,37 @@ mod tests {
     }
 
     #[test]
+    fn disclosure_rows_share_option_padding_at_each_font_size() {
+        for em in [14., 20.] {
+            let ctx = egui::Context::default();
+            crate::widgets::install_style(&ctx);
+            let mut rect = egui::Rect::NOTHING;
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(em));
+                    rect = ui
+                        .scope(|ui| group_row(ui, "noise.layers", false))
+                        .response
+                        .rect;
+                });
+            });
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "noise.layers" => Some(text),
+                    _ => None,
+                })
+                .unwrap();
+            let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
+            assert!((bounds.left() - rect.left() - 0.5 * em).abs() < 1.);
+            for gap in [bounds.top() - rect.top(), rect.bottom() - bounds.bottom()] {
+                assert!((gap - 0.25 * em).abs() < 1.);
+            }
+        }
+    }
+
+    #[test]
     fn disclosure_opens_and_closes_from_both_edges_of_the_row() {
         let ctx = egui::Context::default();
         let draw = |events: Vec<egui::Event>| {
@@ -343,75 +421,124 @@ mod tests {
     }
 
     #[test]
-    fn difference_toggle_requests_once_and_unsupported_views_disable_it() {
+    fn comparison_buttons_reuse_pairs_restore_the_side_and_support_rgb() {
         let ctx = egui::Context::default();
-        let settings = Settings::new("Sunlight", "Standard");
-        let mut difference = Difference::default();
-        let draw =
-            |difference: &mut Difference, output: &str, channel: i32, events: Vec<egui::Event>| {
-                let mut requested = false;
-                let mut rect = egui::Rect::NOTHING;
-                let _ = ctx.run(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            rect = ui
-                                .horizontal(|ui| {
-                                    requested = difference.show(ui, &settings, output, channel);
-                                })
-                                .response
-                                .rect;
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.saturation = 1.2;
+        let mut comparison = Comparison::default();
+        let draw = |comparison: &mut Comparison, output: &str, channel: i32, events| {
+            let mut requested = false;
+            let result = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 400.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            requested = comparison.show(ui, &settings, output, channel);
                         });
-                    },
-                );
-                (requested, rect)
-            };
-        let (_, rect) = draw(&mut difference, "repair.layers", 0, vec![]);
-        let point = rect.left_center() + egui::vec2(10., 0.);
-        let click = |difference: &mut Difference, output, channel| {
-            draw(
-                difference,
-                output,
-                channel,
-                vec![
-                    egui::Event::PointerMoved(point),
-                    egui::Event::PointerButton {
-                        pos: point,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Default::default(),
-                    },
-                ],
+                    });
+                },
             );
-            draw(
-                difference,
-                output,
-                channel,
-                vec![egui::Event::PointerButton {
-                    pos: point,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Default::default(),
-                }],
-            )
-            .0
+            (requested, result)
         };
-        assert!(click(&mut difference, "repair.layers", 0));
-        assert!(difference.enabled);
-        assert!(!draw(&mut difference, "repair.layers", 1, vec![]).0);
-        assert!(!click(&mut difference, "repair.layers", 1));
-        assert!(!difference.enabled);
-        difference.enabled = true;
-        draw(&mut difference, "color.rgb", 0, vec![]);
-        assert!(!difference.enabled);
-        difference.enabled = true;
-        draw(&mut difference, "saturation.rgb", -1, vec![]);
-        assert!(!difference.enabled);
-        assert!(!click(&mut difference, "sensor.layers", 0));
-        assert!(!difference.enabled);
+        let click = |comparison: &mut Comparison, output, channel, label| {
+            let (_, result) = draw(comparison, output, channel, vec![]);
+            let point = result
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let mut requested = false;
+            for pressed in [true, false] {
+                requested |= draw(
+                    comparison,
+                    output,
+                    channel,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                )
+                .0;
+            }
+            requested
+        };
+        assert!(!comparison.requested());
+        assert!(!comparison.input);
+        assert!(click(&mut comparison, "repair.layers", 0, "Input"));
+        assert!(comparison.input);
+        assert!(!draw(&mut comparison, "repair.layers", 1, vec![]).0);
+        assert!(!click(&mut comparison, "repair.layers", 1, "Δ Difference"));
+        assert!(comparison.difference && comparison.input);
+        assert!(!click(&mut comparison, "repair.layers", 1, "Output"));
+        assert!(comparison.input, "Difference must disable the side buttons");
+        assert!(!click(&mut comparison, "repair.layers", 1, "Δ Difference"));
+        assert!(!comparison.difference && comparison.input);
+        assert!(comparison.mapping(1, true).input);
+        assert!(!click(&mut comparison, "repair.layers", 1, "Output"));
+        assert!(!comparison.input);
+        assert!(click(&mut comparison, "repair.layers", 1, "Δ Difference"));
+        assert!(!draw(&mut comparison, "repair.layers", 1, vec![]).0);
+        draw(&mut comparison, "color.rgb", 0, vec![]);
+        assert!(!comparison.requested());
+        assert!(click(&mut comparison, "saturation.rgb", -1, "Input"));
+        assert!(comparison.input);
+        assert!(!click(
+            &mut comparison,
+            "saturation.rgb",
+            -1,
+            "Δ Difference"
+        ));
+        assert!(!comparison.difference);
+        assert!(comparison.mapping(-1, true).input);
+        draw(&mut comparison, "sensor.layers", 0, vec![]);
+        assert!(!comparison.requested());
+        assert!(!click(&mut comparison, "sensor.layers", 0, "Input"));
+        assert!(!comparison.requested());
+    }
+
+    #[test]
+    fn comparison_mapping_keeps_pending_inputs_on_output_and_difference_overrides_the_side() {
+        let mut comparison = Comparison::default();
+        assert_eq!(
+            comparison.mapping(2, true),
+            crate::viewport::Mapping::normal(2)
+        );
+        comparison.input = true;
+        assert_eq!(
+            comparison.mapping(2, false),
+            crate::viewport::Mapping::normal(2)
+        );
+        let input = comparison.mapping(2, true);
+        assert!(input.input);
+        assert_eq!(input.channel, 2);
+        assert_eq!(input.difference_gain, 0.);
+        comparison.difference = true;
+        let difference = comparison.mapping(2, true);
+        assert!(!difference.input);
+        assert_eq!(difference.difference_gain, 32.);
+        assert_eq!(
+            comparison.mapping(2, false),
+            crate::viewport::Mapping::normal(2)
+        );
+        comparison.difference = false;
+        assert_eq!(comparison.mapping(2, true), input);
     }
 
     #[test]

@@ -1,0 +1,31 @@
+{
+  "id": "row-banding",
+  "title": "Row banding",
+  "description": "Reduces faint stripes caused by uneven sensor rows. Usually best left on. This does not smooth general grain. The Banding noise slider is a separate correction.",
+  "note": "Shadow crop at Exposure +3 EV. Noise and Detail is off. The stripes look vertical because the photo is rotated.",
+  "source": "paper-and-recycling-can.x3f",
+  "crop": [1940, 3672, 2340, 4072],
+  "image_size": [400, 400],
+  "base_args": [
+    "--wb", "Sunlight", "--mode", "Standard", "--exposure", "3",
+    "--contrast", "0", "--shadows", "0", "--highlights", "0",
+    "--sensor-gain", "1", "--saturation", "1", "--sharpen", "0",
+    "--repair", "--despeckle", "--highlight-restoration", "--highlight-threshold", "auto"
+  ],
+  "variants": [
+    {
+      "id": "off",
+      "label": "Off",
+      "caption": "Faint stripes run through the blue shadow.",
+      "image": "off.png",
+      "args": ["--no-row-correction"]
+    },
+    {
+      "id": "on",
+      "label": "On",
+      "caption": "The stripes are reduced. The grain remains.",
+      "image": "on.png",
+      "args": ["--row-correction"]
+    }
+  ]
+}

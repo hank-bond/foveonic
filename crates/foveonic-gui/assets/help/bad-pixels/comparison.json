@@ -1,0 +1,32 @@
+{
+  "id": "bad-pixels",
+  "title": "Bad pixels",
+  "description": "Fixes faulty pixels and small patches using information recorded by the camera. It also checks for unusual red pixels. Usually best left on. This is not general noise reduction. Speckles looks for other isolated dots.",
+  "note": "Enlarged 64×64-pixel crop. Speckles stays on in both views. Noise and Detail is off.",
+  "source": "glossy-leaves-and-buds.x3f",
+  "crop": [1550, 2705, 1614, 2769],
+  "image_size": [400, 400],
+  "base_args": [
+    "--wb", "Sunlight", "--mode", "Standard", "--exposure", "0",
+    "--contrast", "0", "--shadows", "0", "--highlights", "0",
+    "--sensor-gain", "1", "--saturation", "1", "--sharpen", "0",
+    "--highlight-restoration", "--highlight-threshold", "auto",
+    "--row-correction", "--despeckle"
+  ],
+  "variants": [
+    {
+      "id": "off",
+      "label": "Off",
+      "caption": "The magenta patch remains with Speckles on.",
+      "image": "off.png",
+      "args": ["--no-repair"]
+    },
+    {
+      "id": "on",
+      "label": "On",
+      "caption": "Bad pixels removes the magenta patch.",
+      "image": "on.png",
+      "args": ["--repair"]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ mod browser;
 mod capture;
 mod controls;
 mod help;
+mod help_examples;
 mod icon;
 mod information;
 mod inspect;
@@ -39,7 +40,7 @@ struct App {
     camera_overrides: [String; 2],
     output: String,
     channel: i32,
-    difference: inspect::Difference,
+    comparison: inspect::Comparison,
     frame: Option<worker::Frame>,
     scope_images: Option<scopes::Images>,
     scope_key: Option<worker::ScopeKey>,
@@ -94,7 +95,7 @@ impl App {
             camera_overrides: overrides,
             output: "final".into(),
             channel: -1,
-            difference: Default::default(),
+            comparison: Default::default(),
             frame: None,
             scope_images: None,
             scope_key: None,
@@ -191,8 +192,7 @@ impl App {
                 path: path.clone(),
                 settings: self.settings.clone(),
                 output: self.output.clone(),
-                difference: self.difference.enabled
-                    && self.channel >= 0
+                comparison: self.comparison.requested()
                     && foveonic::inspection::comparison_input(&self.settings, &self.output)
                         .is_some(),
                 export,
@@ -235,7 +235,7 @@ impl App {
                         !self.exporting
                             && self.selected.as_ref() == Some(&frame.path)
                             && self.output == frame.output
-                            && (!self.difference.enabled || frame.comparison.is_some())
+                            && (!self.comparison.requested() || frame.comparison.is_some())
                             && self
                                 .frame
                                 .as_ref()
@@ -419,28 +419,28 @@ impl App {
                 false
             }
             Section::Scopes => {
-                egui::ComboBox::from_id_salt("scope mode")
+                let combo = egui::ComboBox::from_id_salt("scope mode")
                     .width(ui.available_width() - 8.)
                     .selected_text(match self.preferences.scope {
                         Scope::Histogram => "Histogram",
                         Scope::Parade => "RGB / layer parade",
                         Scope::Waveform => "Combined waveform",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.;
-                        for (value, name) in [
-                            (Scope::Histogram, "Histogram"),
-                            (Scope::Parade, "RGB / layer parade"),
-                            (Scope::Waveform, "Combined waveform"),
-                        ] {
-                            widgets::menu_value(ui, &mut self.preferences.scope, value, name)
-                                .on_hover_text(help::scope(value));
-                        }
-                    })
-                    .response
-                    .on_hover_text(help::scope(self.preferences.scope));
+                    });
+                widgets::dropdown(ui, combo, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.;
+                    for (value, name) in [
+                        (Scope::Histogram, "Histogram"),
+                        (Scope::Parade, "RGB / layer parade"),
+                        (Scope::Waveform, "Combined waveform"),
+                    ] {
+                        widgets::menu_value(ui, &mut self.preferences.scope, value, name)
+                            .on_hover_text(help::scope(value));
+                    }
+                })
+                .response
+                .on_hover_text(help::scope(self.preferences.scope));
                 widgets::checkbox(ui, &mut self.preferences.scope_viewport, "Viewport only")
-                    .on_hover_text("Show scopes for the visible part of the image. Updates as you pan or zoom. Channel and Difference views do not change scope values.");
+                    .on_hover_text("Show scopes for the visible part of the image. Updates as you pan or zoom. Channel, Input/Output, and Difference views do not change scope values.");
                 scopes::show(
                     ui,
                     self.preferences.scope,
@@ -514,14 +514,7 @@ impl App {
             .frame
             .as_ref()
             .is_some_and(|frame| frame.output == self.output && frame.comparison.is_some());
-        if self.difference.enabled && channel >= 0 && has_pair {
-            viewport::Mapping {
-                channel,
-                difference_gain: self.difference.gain,
-            }
-        } else {
-            viewport::Mapping::normal(channel)
-        }
+        self.comparison.mapping(channel, has_pair)
     }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
@@ -530,7 +523,7 @@ impl App {
             ui.add_enabled_ui(!self.exporting, |ui| {
                 changed |= inspect::show(ui, &self.settings, &mut self.output, &mut self.channel);
                 let requested =
-                    self.difference
+                    self.comparison
                         .show(ui, &self.settings, &self.output, self.channel);
                 let has_pair = self
                     .frame
@@ -559,12 +552,39 @@ impl App {
                 ))
                 .wrap(),
             );
-        } else if self.difference.enabled {
+        } else {
             let name = self
                 .frame
                 .as_ref()
                 .map_or("preview", |frame| frame.output.as_str());
-            ui.small(format!("Difference pending; displaying {name} output."));
+            let label = if self.comparison.difference {
+                Some(format!("Difference pending. Showing {name}."))
+            } else if self.comparison.input {
+                Some(if mapping.input {
+                    let input = self
+                        .frame
+                        .as_ref()
+                        .unwrap()
+                        .comparison
+                        .as_ref()
+                        .unwrap()
+                        .input;
+                    format!("Input · {input} · scopes: output")
+                } else {
+                    format!("Input pending. Showing {name}.")
+                })
+            } else if self.frame.as_ref().is_some_and(|frame| {
+                foveonic::inspection::comparison_input(&frame.artifact.settings, &frame.output)
+                    .is_some()
+            }) {
+                Some(format!("Output · {name} · scopes: output"))
+            } else {
+                None
+            };
+            if let Some(label) = label {
+                // Keep one line on both sides so flickering cannot resize the canvas.
+                ui.add(egui::Label::new(label).truncate());
+            }
         }
         ui.add_space(3.);
         let height =
@@ -577,7 +597,7 @@ impl App {
                 if let Some(frame) = &self.frame {
                     self.viewport.show(
                         ui,
-                        frame.texture.clone(),
+                        frame.view(mapping.input).clone(),
                         frame.comparison.as_ref().map(|c| c.texture.clone()),
                         mapping,
                         self.srgb_target,

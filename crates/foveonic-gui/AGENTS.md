@@ -16,11 +16,13 @@ On macOS 26, use `python3 crates/foveonic-gui/build-macos-app.py -- {X3F_OR_FOLD
 
 ### Directories
 
-- **[assets/](./assets/AGENTS.md)** Editable layered-X artwork feeds one native Icon Composer document with glass-free light and dark appearances.
+- **[assets/](./assets/AGENTS.md)** Desktop assets contain layered-X icon artwork and reviewed photographic-help comparisons.
 - **[src/](./src/AGENTS.md)** GUI modules separate thumbnail browsing, interaction, bounded image jobs, and GPU presentation.
 
 ### Source files
 
 - **[build-macos-app.py](./build-macos-app.py)** Build and launch a local macOS app bundle whose native icon follows system appearance settings.
+- **[build.rs](./build.rs)** Embeds checked-in photographic help assets and rejects missing rendered images during offline builds.
+- **[build_support.rs](./build_support.rs)** Validates comparison manifests and embeds their existing PNGs without downloading or rendering.
 
 <!-- INDEX:END -->

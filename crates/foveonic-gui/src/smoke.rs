@@ -45,7 +45,11 @@ const DIFFERENCE_TARGETS: &[&str] = &[
     "diff-amplified",
     "diff-layer-two",
     "diff-output",
+    "compare-input",
+    "compare-output",
     "diff-rgb",
+    "compare-rgb-input",
+    "compare-rgb-output",
     "diff-final",
 ];
 
@@ -315,25 +319,33 @@ impl App {
                     self.settings.sensor_gain = 1.05;
                     self.output = "gain.layers".into();
                     self.channel = 0;
-                    self.difference.enabled = true;
-                    self.difference.gain = 8.;
+                    self.comparison.difference = true;
+                    self.comparison.gain = 8.;
                     self.submit(None);
                 }
-                "diff-amplified" => self.difference.gain = 32.,
+                "diff-amplified" => self.comparison.gain = 32.,
                 "diff-layer-two" => self.channel = 1,
-                "diff-output" => self.difference.enabled = false,
+                "diff-output" => self.comparison.difference = false,
+                "compare-input" => self.comparison.input = true,
+                "compare-output" => self.comparison.input = false,
                 "diff-rgb" => {
                     self.settings.saturation = 1.5;
                     self.output = "saturation.rgb".into();
                     self.channel = 2;
-                    self.difference.enabled = true;
-                    self.difference.gain = 8.;
+                    self.comparison.difference = true;
+                    self.comparison.gain = 8.;
                     self.submit(None);
                 }
+                "compare-rgb-input" => {
+                    self.channel = -1;
+                    self.comparison.difference = false;
+                    self.comparison.input = true;
+                }
+                "compare-rgb-output" => self.comparison.input = false,
                 "diff-final" => {
                     self.output = "final".into();
                     self.channel = -1;
-                    self.difference.enabled = false;
+                    self.comparison.difference = false;
                     self.settings.sensor_gain = 1.;
                     self.settings.saturation = 1.;
                     self.submit(None);

@@ -1,8 +1,10 @@
 ---
-summary: "Editable layered-X artwork feeds one native Icon Composer document with glass-free light and dark appearances."
+summary: "Desktop assets contain layered-X icon artwork and reviewed photographic-help comparisons."
 ---
 
 # Desktop assets
+
+Photographic-help manifests, PNGs, and provenance live in [`help/`](./help/AGENTS.md). The remaining guidance here describes application-icon artwork.
 
 `logo.svg` is the current editable revision: the original face polygon/projection, 24-unit slabs with 16-unit gaps, distinct cobalt/yellow-green/vermilion layers, and a softly lit graphite face. Its viewBox tightly bounds the projected geometry.
 
@@ -30,6 +32,10 @@ Edit `logo.svg` for projection/palette/slab changes; edit the Composer document 
 <!-- INDEX:START -->
 
 <!-- Generated from source summaries and document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
+
+### Directories
+
+- **[help/](./help/AGENTS.md)** Manifest-driven photographic comparisons embed reviewed PNGs with labels, rendering settings, and source names.
 
 ### Source files
 

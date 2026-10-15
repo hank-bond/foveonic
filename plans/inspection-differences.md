@@ -1,5 +1,5 @@
 ---
-summary: "Make Inspect groups expand inline and add amplified signed layer/channel comparisons against explicit operation inputs."
+summary: "Inspect operation inputs and outputs alongside amplified signed layer/channel differences."
 ---
 
 # Inspection differences
@@ -15,9 +15,13 @@ Requirements: [pipeline inspection](../docs/specs/pipeline-inspection.md), [rend
 - [x] Validate mapping, paired worker requests, GPU presentation, and documentation checks.
 - [x] Resolve the release-build artifact mismatch and build the native bundle.
 - [x] Review the drag-publication failure and passing unchanged-binary rerun; owner approved checkpointing with the failure preserved.
+- [x] Add the agreed Input/Output toggle, sharing the retained Difference pair and preserving its side while Difference is on.
+- [x] Check side switching, pending fallbacks, navigator identity, unchanged scopes, and GPU-pair reuse.
 - [ ] Complete native screenshots and owner visual review.
 
 ## Scope
+
+The owner approved Input/Output flickering beside Difference. Output is the default. Both sides use the same component and geometry, and scopes stay on the output. Difference temporarily overrides and disables the side buttons. Compatible RGB views can flicker even though combined RGB Difference remains unavailable.
 
 First slice: signed grayscale layer and individual RGB-channel differences. Combined RGB change-magnitude heatmaps and branching scalar diagnostics remain a subsequent slice. Original sensor readings, color conversion, tone's cross-unit conversion, final composite/export geometry, and diagnostic side outputs do not have an enabled difference in this slice. Scopes continue analyzing the selected output, not the display-only difference.
 
@@ -34,6 +38,16 @@ The release-build blocker was stale shared Cargo artifacts from a review snapsho
 Latest checkpoint attempt without tone reuse: `/tmp/foveonic-output-checkpoint-review/2-inspection-differences` passes release workspace tests (52 ordinary core, 64 GUI), strict all-target Clippy, example builds, formatting, documentation checks, and eight Python tests. Its GUI GPU suite passes six tests, including paired comparisons and signed presentation, but `continuous_drag_makes_progress_then_settles_with_matching_scopes` fails at `worker.rs:616` with `continuous dragging starved image publication` during the `base-blend` sequence. Log: `/tmp/foveonic-output-checkpoint-inspection.log`. The preceding independently rebuilt guard-only snapshot passes all five GUI GPU tests, including this drag test. This is a publication-progress failure, not an exact-output mismatch; its cause and reproducibility are not established. The inspection checkpoint was held pending a targeted rerun. Coordinate any scheduling investigation with the editing worktree; no test or scheduling workaround was applied.
 
 Owner-approved targeted rerun: `/tmp/foveonic-output-checkpoint-drag-rerun-1.log` passes all eleven drag controls with the unchanged frozen inspection executable (SHA-256 `a77dbdc007ea1c214f4d32402e7119c86607db9ee3d6a1456171cdcc6959b4a0`, matching `validated-manifest.json`). Every control publishes during dragging and settles with matching settings/scopes; `base-blend` publishes two frames during its sequence. No other Foveonic/Cargo process was detected before this rerun. GPU contention is a plausible explanation for the earlier timing-sensitive failure, not an established cause; no code or test changes were made.
+
+## Input/Output flickering
+
+The session-only comparison controls now select Input or Output beside Difference. The worker's comparison request retains the same paired views for either feature, including compatible combined RGB. Switching an already prepared pair does not submit a photographic job. Difference disables the side buttons and restores their stored selection when turned off. Unsupported stages return to Output, and pending inputs explicitly show the current output instead.
+
+Main presentation and the navigator select the same retained side. Navigator identity includes the side, so it cannot reuse the other side's preview. A fixed single-line label preserves canvas geometry when flickering. Scope analysis still reads the output artifact.
+
+Workspace tests pass with 106 GUI tests and eight opt-in tests skipped. Pointer tests cover pair requests, disabled side buttons, restoration after Difference, unsupported stages, and combined RGB. Mapping tests cover pending fallbacks. Three explicit GPU tests pass for paired worker frames, normal/difference presentation, and output-only fallback. Retained input/output texture identities stay unchanged across repeated side selections.
+
+The offline release app bundle builds. Twelve isolated native captures in `.local/ab-inspection-checks/native/` cover both sides in layers and combined RGB, plus Difference and final return. The native log contains only the four expected photographic publications. Input/Output captures have identical scope panels and viewport readouts, while navigator pixels change with the side. Owner interaction review remains pending.
 
 ## Imported banding photograph
 

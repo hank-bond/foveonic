@@ -104,6 +104,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
                         &target,
                         viewport::Mapping {
                             channel: 1,
+                            input: false,
                             difference_gain: gain,
                         },
                         Some(&input),
@@ -130,6 +131,18 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
         Some(&input),
     );
     assert!(pixels(&rs, &target)[0].abs_diff(137) <= 1);
+    viewport::prepare_navigator(
+        &rs,
+        &input,
+        Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb),
+        &target,
+        viewport::Mapping {
+            input: true,
+            ..viewport::Mapping::normal(1)
+        },
+        Some(&input),
+    );
+    assert!(pixels(&rs, &target)[0].abs_diff(243) <= 1);
 }
 
 #[test]

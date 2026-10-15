@@ -24,7 +24,7 @@ Reconstruction selects native full-resolution or reduced local/global base filte
 
 ## Inspection and controls
 
-`Settings::reconstruction` enables the path with shared `noise::Controls`. The GUI exposes a Noise and Detail enable toggle with Chroma noise, Luma noise, Banding noise, Detail, ColorDQ gain, and an Advanced subsection, following [GUI workspace](./gui-workspace.md) control requirements. CLI options are `--reconstruction`, `--chroma-noise`, `--luma-noise`, `--banding-noise`, and `--detail`; parameter options also enable the path.
+`Settings::reconstruction` enables the path with shared `noise::Controls`. The GUI exposes a Noise and Detail enable toggle with Chroma noise, Luma noise, Banding noise, and Detail. Its Advanced subsection starts with ColorDQ gain, followed by the linked parameters, following [GUI workspace](./gui-workspace.md) control requirements. CLI options are `--reconstruction`, `--chroma-noise`, `--luma-noise`, `--banding-noise`, and `--detail`; parameter options also enable the path.
 
 Public images are `noise.layers` (calibrated sensor codes), `noise.edges` (recursive weights, nominal 0–1), `detail.ratio` (multiplicative luminance residual, displayed 0–2 with 1 neutral), `reconstruction.rgb` (working linear camera-color RGB in 0–4095 code units), and `detail.signal` (signed camera-code detail, displayed −1000…1000 with zero at middle gray). The existing `color.rgb` and optional `color-dq.rgb` expose the filtered base before restoration. Display mappings preserve processing values. Tile atlases remain internal typed connections.
 
@@ -48,7 +48,9 @@ The first advanced set exposes existing preset-driven fields with their own link
 | Brightness mix | Chroma noise | 0–1 |
 | Layer detail mix | Luma noise | 0–1 |
 
-These coefficients retain the reference's coupling and nonlinear effects; higher numbers do not uniformly mean stronger noise reduction. Tooltips describe each field and its parent. Camera-only bilateral range/radius, diffusion step/contrast, and extrema clamping remain internal. Mean decay near 1 can reveal finite-tile boundaries.
+These coefficients retain the reference's coupling and nonlinear effects. Higher numbers do not uniformly mean stronger noise reduction. Tooltips describe each field and its parent. Camera-only bilateral range/radius, diffusion step/contrast, and extrema clamping remain internal.
+
+Linked Mean decay **must** retain the native 0.92 ceiling for reduced local filtering. Its displayed calculated value **must** include that ceiling so unlinking captures the effective value without changing the image. Manual Mean decay **must** use its full 0–1 range without the linked ceiling. Values near 1 can reveal finite-tile boundaries.
 
 `Controls::overrides` stores optional values by `noise::Parameter`; `None` is linked. `noise::calculated_values` uses the shared engine preparation with overrides removed. CLI accepts repeated `--noise-override KEY=VALUE`, enabling reconstruction. Zero/Off semantics remain a separate decision; the reference's preset 0 and detail multiplier 0 retain their existing meanings.
 

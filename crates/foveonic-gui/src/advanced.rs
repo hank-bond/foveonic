@@ -1,4 +1,4 @@
-//! Displays preset-linked reconstruction parameters and captures explicit overrides without changing the baseline.
+//! Displays advanced reconstruction controls with automatic ColorDQ and preset-linked parameter overrides.
 
 use eframe::egui;
 use foveonic::{
@@ -37,6 +37,7 @@ pub fn link_button(ui: &mut egui::Ui, linked: bool, parent: &str) -> egui::Respo
 pub fn show(
     ui: &mut egui::Ui,
     controls: &mut Controls,
+    color_dq_gain: &mut Option<f32>,
     metadata: Option<&Metadata>,
     wb: &str,
     gain: f32,
@@ -46,6 +47,9 @@ pub fn show(
         .id_salt("advanced-reconstruction")
         .default_open(crate::smoke::editor_review_active())
         .show(ui, |ui| {
+            changed |= crate::controls::automatic_adjustment(
+                ui, "ColorDQ gain", color_dq_gain, 0. ..=2., 1., None, None,
+            );
             let calculated = metadata.ok_or_else(|| "Waiting for camera metadata".to_owned())
                 .and_then(|m| noise::calculated_values(m, wb, gain, *controls).map_err(|e| e.to_string()));
             let values = match calculated {
@@ -57,7 +61,7 @@ pub fn show(
             }
         })
         .header_response
-        .on_hover_text("Fine-tunes noise smoothing and texture restoration. Values follow the basic noise controls until you unlink them. Separate adjustments can preserve texture but leave grain or introduce artifacts. Detail controls how much texture is restored.");
+        .on_hover_text("Fine-tunes color cleanup, noise smoothing, and texture restoration. ColorDQ has its own automatic setting. The other values follow the basic noise controls until you unlink them. Separate adjustments can preserve texture but leave grain or introduce artifacts. Detail controls how much texture is restored.");
     changed
 }
 
@@ -206,10 +210,71 @@ mod tests {
     }
 
     #[test]
+    fn colordq_auto_toggle_reports_changes_without_changing_linked_parameters() {
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+        let mut controls = Controls::default();
+        let mut color_dq_gain = None;
+        let mut frame = |time, events| {
+            let mut changed = false;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 1000.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        changed = show(ui, &mut controls, &mut color_dq_gain, None, "Sunlight", 1.);
+                    });
+                },
+            );
+            assert_eq!(controls, Controls::default());
+            (changed, output, color_dq_gain)
+        };
+        let (_, output, gain) = frame(0., vec![]);
+        assert_eq!(gain, None);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "A" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let click = |pressed| {
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]
+        };
+        assert!(!frame(0.02, click(true)).0);
+        let (changed, _, gain) = frame(0.04, click(false));
+        assert!(changed);
+        assert_eq!(gain, Some(1.));
+        assert!(!frame(0.06, click(true)).0);
+        let (changed, _, gain) = frame(0.08, click(false));
+        assert!(changed);
+        assert_eq!(gain, None);
+    }
+
+    #[test]
     fn expanded_noise_controls_have_no_inline_link_note() {
         let ctx = egui::Context::default();
         ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
         let mut controls = Controls::default();
+        let mut color_dq_gain = None;
         let before = controls;
         let output = ctx.run(
             egui::RawInput {
@@ -221,11 +286,19 @@ mod tests {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(!show(ui, &mut controls, None, "Sunlight", 1.));
+                    assert!(!show(
+                        ui,
+                        &mut controls,
+                        &mut color_dq_gain,
+                        None,
+                        "Sunlight",
+                        1.
+                    ));
                 });
             },
         );
         assert_eq!(controls, before);
+        assert_eq!(color_dq_gain, None);
         let texts: Vec<_> = output
             .shapes
             .iter()

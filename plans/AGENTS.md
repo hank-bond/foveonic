@@ -29,9 +29,10 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Deferred intermittent fresh-render differences retain investigation evidence without claiming a known cause or fix.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
+- **[help-comparisons](./help-comparisons.md)** Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
 - **[highlight-threshold](./highlight-threshold.md)** Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
-- **[inspection-differences](./inspection-differences.md)** Make Inspect groups expand inline and add amplified signed layer/channel comparisons against explicit operation inputs.
+- **[inspection-differences](./inspection-differences.md)** Inspect operation inputs and outputs alongside amplified signed layer/channel differences.
 - **[metadata-first-loading](./metadata-first-loading.md)** Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.

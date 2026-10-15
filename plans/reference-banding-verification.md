@@ -12,6 +12,7 @@ The owner approved native verification before selecting a strength control, then
 - [x] Replay identical Stage 2 inputs at all five positions through full/reduced color and selected monochrome consumers; retain final RGB/detail samples and consumer input/output hashes.
 - [x] Explain the difference-view geometry from the current crop, orientation, and presentation code.
 - [x] Record the corrected window mapping and the limits of the evidence before proposing the shared GUI/CLI control.
+- [x] Retire the temporary investigation harnesses while preserving fixtures, regression tests, and documented findings.
 
 ## Native results
 
@@ -41,7 +42,7 @@ The earlier fixed-window assumption was wrong. The existing reference Rust color
 - [ ] Compare original row preprocessing across application requests and reconcile engine replay with matching application exports.
 - [ ] Extend monochrome photographic coverage beyond the recorded DP3/SD1 cases if that path becomes implementation scope.
 
-These measurements use supplied identical inputs. They are native setup/pixel evidence, not new decoding or preprocessing proof, complete application-output verification, or new Rust parity evidence. Complete RGB/detail planes, identities, and failed captures remain local; reusable measurement tools are checked in.
+These measurements use supplied identical inputs. They are native setup/pixel evidence, not new decoding or preprocessing proof, complete application-output verification, or new Rust parity evidence. Complete RGB/detail planes, identities, and failed captures remain local. Independent component fixtures and their Rust regression tests remain in the repository.
 
 ## Difference-view geometry
 
@@ -51,4 +52,4 @@ Inspection presents the `ActiveImageArea` crop with camera rotation, not the ful
 
 Failed measurements are preserved. Streamed hashing replaced `hashlib.file_digest`, unavailable in the debugger's Python. Persistent return breakpoints keyed by thread replaced overlapping one-shot breakpoints. The first broad pixel sweep stopped on its incorrect fixed-window assertion after observing window 15; the corrected sweep checks actual consumer windows against effective native settings and passes all 65 requests. These changes affected measurement tools, not processing defaults.
 
-Tools: [setup sweep](../scripts/verification/noise_controls.py), [pixel replay](../scripts/verification/replay_banding.py), [native trace](../scripts/verification/trace_banding.py), and [owned native worker](../scripts/verification/reconstruction.cpp). Keep installed libraries and reference repositories read-only, run native/GPU workloads sequentially, preserve the disk reserve and failed evidence, and do not overwrite historical reports. Installation, publication, and commits require owner approval.
+The temporary setup sweep, component capture, pixel replay, debugger trace, and C++ worker were retired after this investigation. Git history at `7742f3a` preserves the harness implementations. Their removal does not change the recorded evidence or unresolved application-export boundary.

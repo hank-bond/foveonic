@@ -48,7 +48,7 @@ Use simple, friendly language. Explain why a choice matters when the reason is n
 
 Keep API contracts clear, including units, ownership, failure behavior, and caller obligations. Short module summaries still describe each file's responsibility. Use technical terms where precision needs them, and explain unfamiliar terms rather than piling them together.
 
-Do not use semicolons in comment prose. Split separate thoughts into sentences. Leave code examples and required license text intact.
+Use short, plain sentences in prose, including comments and user-facing copy. Do not use semicolons. Split separate thoughts into sentences. Leave code examples and required license text intact.
 
 The Rust tool generates index blocks between `<!-- INDEX:START -->` and `<!-- INDEX:END -->`. Edit summaries and regenerate rather than editing generated content. Source indexes omit adjacent test files.
 

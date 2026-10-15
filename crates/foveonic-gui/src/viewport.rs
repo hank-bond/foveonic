@@ -9,16 +9,18 @@ use eframe::{
 use foveonic::image::{ColorSpace, ImageTexture, Space};
 use std::{collections::HashMap, sync::Arc};
 
-/// Display-only component and difference amplification. Zero gain shows the output normally.
+/// Display-only side, component, and difference amplification. Zero gain shows the selected side normally.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mapping {
     pub channel: i32,
+    pub input: bool,
     pub difference_gain: f32,
 }
 impl Mapping {
     pub fn normal(channel: i32) -> Self {
         Self {
             channel,
+            input: false,
             difference_gain: 0.,
         }
     }
@@ -840,6 +842,7 @@ mod tests {
             let normal = Params::new(rect, rect, space, 1, true);
             let mapped = Mapping {
                 channel: 1,
+                input: false,
                 difference_gain: 32.,
             }
             .apply(normal);

@@ -47,6 +47,10 @@ Six labeled A/B cards, individual crops, exports, and exact render commands are 
 
 A clean, in-focus high-contrast edge with a plain background may still be useful for sharpening amount/radius and halos. A noisy or underexposed example can explain gain's brightness/noise tradeoff, but is not guaranteed to visibly distinguish Sensor gain from an equivalent Exposure adjustment. Existing flower/rock images may suit later tone examples; the remaining sliders and advanced coefficients have not yet received dedicated example pairs.
 
+## Managed comparisons
+
+The owner selected the red flower's crop and Off/Auto/+0.8 states at −0.5 EV as the first integrated example, followed by complementary Bad pixels and Speckles examples verified with all four correction combinations. Their manifests, generated PNGs, named source photographs, and shared popover integration follow the [comparison plan](./help-comparisons.md) and [maintenance workflow](../docs/help-examples.md). Official source photographs now live in the long-lived supplemental release; the owner chose not to distribute editing sidecars. The earlier local cards remain historical candidates rather than the current app assets. Native review of the integrated popovers remains pending.
+
 ## Stroller light/shadow boundary
 
 The owner pointed out that the stroller photograph already has the needed scene: adjacent sunlit and shadowed areas of the same concrete. Keeping the surface in one crop makes differences in grain easier to understand without a change of subject. This is preferable to requesting another noisy-shadow file prematurely.

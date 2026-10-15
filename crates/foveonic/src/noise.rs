@@ -113,7 +113,7 @@ impl Parameter {
                 "Sets how readily smoothing stops at an edge. Higher values stop it at smaller changes, helping preserve fine boundaries but potentially leaving more grain. Lower values let smoothing cross more edges and can soften detail."
             }
             Self::MeanDecay => {
-                "Sets how far smoothing reaches through areas without strong edges. Higher values smooth over longer distances, reducing unevenness but potentially spreading softness. Near 1, seams between processing regions may become visible."
+                "Sets how far smoothing reaches through areas without strong edges. Higher values smooth over longer distances, reducing unevenness but potentially spreading softness. Linked values may be limited to 0.92. Unlink to use the full 0 to 1 range. Near 1, seams between processing regions may become visible."
             }
             Self::EdgeScale => {
                 "Sets how strongly detected edges hold back smoothing. Higher values protect edges more strongly but can also leave grain untouched. Lower values allow more smoothing across edges, which can soften real texture."
@@ -227,6 +227,18 @@ pub fn calculated_values(
         p.residual[0],
         p.residual[1],
     ])
+}
+
+fn mean_decay(preset: f32, scale: f32, manual: Option<f32>) -> f32 {
+    // Linked values retain the native reduced-local ceiling. Manual values
+    // bypass it, so unlinking must capture the effective linked value.
+    manual.unwrap_or_else(|| {
+        if scale > 0.5 && scale < 1. {
+            preset.min(0.92)
+        } else {
+            preset
+        }
+    })
 }
 
 /// Uniform layout shared by the reference-style shader passes.
@@ -740,9 +752,11 @@ pub(crate) fn prepare(
             controls
                 .overrides
                 .value(Parameter::EdgeCutoff, (strength as f32).clamp(0., 0.99)),
-            controls
-                .overrides
-                .value(Parameter::MeanDecay, (decay as f32).clamp(0., 1.)),
+            mean_decay(
+                (decay as f32).clamp(0., 1.),
+                reconstruction_scale,
+                controls.overrides.get(Parameter::MeanDecay),
+            ),
         ],
         edge: [
             controls

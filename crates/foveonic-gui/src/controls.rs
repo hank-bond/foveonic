@@ -44,7 +44,7 @@ struct Automatic<'a> {
 }
 
 /// Keep automatic selection on the value row rather than in a separate checkbox.
-fn automatic_adjustment<T: egui::emath::Numeric>(
+pub fn automatic_adjustment<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     label: &str,
     manual: &mut Option<T>,
@@ -186,31 +186,35 @@ fn adjustment_row<T: egui::emath::Numeric>(
 
 pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
     let mut changed = false;
-    if let Some(metadata) = metadata {
-        for (title, key, value) in [
-            (
-                "White balance",
-                "WhiteBalanceGains",
-                &mut settings.white_balance,
-            ),
-            (
-                "Color mode",
-                "ColorModeCompensations",
-                &mut settings.color_mode,
-            ),
-        ] {
-            ui.horizontal(|ui| {
-                help::control(ui.add_sized([92., 20.], egui::Label::new(title)), title);
-                egui::ComboBox::from_id_salt(key)
-                    .width(ui.available_width() - 8.)
-                    .selected_text(if value.is_empty() {
-                        "Choose…"
-                    } else {
-                        value.as_str()
-                    })
-                    .show_ui(ui, |ui| {
+    for (title, key, value) in [
+        (
+            "White balance",
+            "WhiteBalanceGains",
+            &mut settings.white_balance,
+        ),
+        (
+            "Color mode",
+            "ColorModeCompensations",
+            &mut settings.color_mode,
+        ),
+    ] {
+        let choices = metadata.and_then(|metadata| metadata.lists.get(key));
+        // Keep the same rows while metadata is loading so later controls do not
+        // jump when the first processed frame supplies the camera's choices.
+        ui.horizontal(|ui| {
+            help::control(ui.add_sized([92., 20.], egui::Label::new(title)), title);
+            let response = ui
+                .add_enabled_ui(choices.is_some_and(|list| !list.is_empty()), |ui| {
+                    let combo = egui::ComboBox::from_id_salt(key)
+                        .width(ui.available_width() - 8.)
+                        .selected_text(if value.is_empty() {
+                            "Choose…"
+                        } else {
+                            value.as_str()
+                        });
+                    crate::widgets::dropdown(ui, combo, |ui| {
                         ui.spacing_mut().item_spacing.y = 0.;
-                        if let Some(list) = metadata.lists.get(key) {
+                        if let Some(list) = choices {
                             for name in list.names() {
                                 changed |=
                                     crate::widgets::menu_value(ui, value, name.to_owned(), name)
@@ -219,9 +223,10 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
                         }
                     })
                     .response
-                    .on_hover_text(help::editing(title).unwrap());
-            });
-        }
+                })
+                .inner;
+            help::control(response, title);
+        });
     }
     ui.separator();
     ui.weak("Sensor");
@@ -257,18 +262,10 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
         changed |= adjustment(ui, "Banding noise", &mut controls.banding, 0..=4, 2);
         changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
-        changed |= automatic_adjustment(
-            ui,
-            "ColorDQ gain",
-            &mut settings.color_dq_gain,
-            0. ..=2.,
-            1.,
-            None,
-            None,
-        );
         changed |= crate::advanced::show(
             ui,
             controls,
+            &mut settings.color_dq_gain,
             metadata,
             &settings.white_balance,
             settings.sensor_gain,
@@ -389,6 +386,7 @@ mod tests {
         assert!(text_centers(&output, "Speckles").is_empty());
         let noise_parameter = foveonic::noise::Parameter::MeanDecay.label();
         assert!(text_centers(&output, noise_parameter).is_empty());
+        assert!(text_centers(&output, "ColorDQ gain").is_empty());
         assert_eq!(text_centers(&output, "Tone and Color").len(), 1);
         assert_eq!(text_centers(&output, "Noise and Detail").len(), 1);
         for pressed in [true, false] {
@@ -406,6 +404,11 @@ mod tests {
         let (_, output, current) = frame(1.5, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
         assert_eq!(current, defaults);
         assert!(!text_centers(&output, noise_parameter).is_empty());
+        assert_eq!(text_centers(&output, "ColorDQ gain").len(), 1);
+        assert!(
+            text_centers(&output, "ColorDQ gain")[0].y
+                < text_centers(&output, foveonic::noise::Parameter::BaseBlend.label())[0].y
+        );
         assert!(text_centers(&output, "Speckles").is_empty());
         let corrections = text_centers(&output, "Advanced")[1];
         for pressed in [true, false] {
@@ -442,6 +445,7 @@ mod tests {
         let (_, output, current) = frame(3.5, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
         assert_eq!(current, defaults);
         assert!(text_centers(&output, noise_parameter).is_empty());
+        assert!(text_centers(&output, "ColorDQ gain").is_empty());
         let speckles = text_centers(&output, "Speckles")[0];
         frame(
             4.,
@@ -494,6 +498,123 @@ mod tests {
             });
         });
         assert_eq!(saved, edited, "collapsed controls reset a saved choice");
+    }
+
+    #[test]
+    fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() {
+        use foveonic::source::PropertyList;
+        let metadata = Metadata {
+            width: 1,
+            height: 1,
+            rotation: 0,
+            properties: Default::default(),
+            matrices: Default::default(),
+            lists: [
+                (
+                    "WhiteBalanceGains".into(),
+                    PropertyList::new(vec![
+                        ("Sunlight".into(), "sun".into()),
+                        ("Shade".into(), "shade".into()),
+                    ])
+                    .unwrap(),
+                ),
+                (
+                    "ColorModeCompensations".into(),
+                    PropertyList::new(vec![
+                        ("Standard".into(), "standard".into()),
+                        ("Vivid".into(), "vivid".into()),
+                    ])
+                    .unwrap(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let mut empty_metadata = metadata.clone();
+        empty_metadata.lists.clear();
+        for initial in [Settings::new("", ""), Settings::new("Sunlight", "Standard")] {
+            let ctx = egui::Context::default();
+            let mut settings = initial.clone();
+            let mut time = 0.;
+            let mut frame = |metadata: Option<&Metadata>, events| {
+                time += 0.05;
+                let mut changed = false;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 1500.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            changed = processing(ui, &mut settings, metadata);
+                        });
+                    },
+                );
+                (changed, output, settings.clone())
+            };
+            let mut anchors = None;
+            for available in [None, Some(&empty_metadata), Some(&metadata), None] {
+                let (changed, output, current) = frame(available, vec![]);
+                assert!(!changed);
+                assert_eq!(current, initial);
+                let positions = [
+                    "White balance",
+                    "Color mode",
+                    "Sensor gain",
+                    "Exposure",
+                    "Refinement",
+                ]
+                .map(|label| text_centers(&output, label)[0]);
+                assert_eq!(*anchors.get_or_insert(positions), positions);
+            }
+            let (_, output, _) = frame(None, vec![]);
+            let value = if initial.white_balance.is_empty() {
+                "Choose…"
+            } else {
+                "Sunlight"
+            };
+            let point = text_centers(&output, value)[0];
+            for pressed in [true, false] {
+                let (changed, output, current) = frame(
+                    None,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        pointer_button(point, pressed),
+                    ],
+                );
+                assert!(!changed);
+                assert_eq!(current, initial);
+                assert!(text_centers(&output, "Shade").is_empty());
+            }
+            frame(Some(&metadata), vec![]);
+            for pressed in [true, false] {
+                frame(
+                    Some(&metadata),
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        pointer_button(point, pressed),
+                    ],
+                );
+            }
+            let (_, output, _) = frame(Some(&metadata), vec![]);
+            let shade = text_centers(&output, "Shade")[0];
+            frame(
+                Some(&metadata),
+                vec![
+                    egui::Event::PointerMoved(shade),
+                    pointer_button(shade, true),
+                ],
+            );
+            let (changed, _, current) = frame(Some(&metadata), vec![pointer_button(shade, false)]);
+            assert!(changed);
+            assert_eq!(current.white_balance, "Shade");
+            assert_eq!(current.color_mode, initial.color_mode);
+        }
     }
 
     #[test]
@@ -567,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn colordq_is_grouped_with_reconstruction_and_repair_has_no_parameter_row() {
+    fn colordq_stays_inside_collapsed_noise_advanced_and_repair_has_no_parameter_row() {
         for reconstruction in [false, true] {
             for manual_gain in [None, Some(1.2)] {
                 let ctx = egui::Context::default();
@@ -625,7 +746,7 @@ mod tests {
                 ] {
                     assert!(position(removed).is_none(), "obsolete control: {removed}");
                 }
-                assert_eq!(position("ColorDQ gain").is_some(), reconstruction);
+                assert!(position("ColorDQ gain").is_none());
                 let auto_buttons = output
                     .shapes
                     .iter()
@@ -636,15 +757,14 @@ mod tests {
                         )
                     })
                     .count();
-                assert_eq!(auto_buttons, 1 + usize::from(reconstruction));
+                assert_eq!(auto_buttons, 1);
                 let advanced_headers = output.shapes.iter().filter(|shape| matches!(
                     &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Advanced"
                 )).count();
                 assert_eq!(advanced_headers, 1 + usize::from(reconstruction));
                 if reconstruction {
-                    let y = position("ColorDQ gain").unwrap();
+                    let y = position("Advanced").unwrap();
                     assert!(y > position("Detail").unwrap());
-                    assert!(y < position("Advanced").unwrap());
                     assert!(y < position("Refinement").unwrap());
                 }
             }
@@ -671,7 +791,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        assert!(!processing(ui, &mut settings, None));
+                        assert!(!processing_expanded(ui, &mut settings, None));
                     });
                 },
             );
@@ -687,7 +807,7 @@ mod tests {
             assert_eq!(texts.iter().filter(|text| **text == "A").count(), 2);
             assert!(texts.contains(&"ColorDQ gain"));
             assert!(help::automatic("ColorDQ gain").is_some());
-            assert!(!texts.contains(&"Bad pixels"));
+            assert!(texts.contains(&"Bad pixels"));
             assert!(!texts.contains(&"Min. badness"));
             assert!(!texts.iter().any(|text| text.contains("Noise preset 0")
                 || *text == "Auto ColorDQ"
@@ -1193,6 +1313,166 @@ mod tests {
             assert!(output.unwrap().shapes.iter().any(|shape| matches!(
                 &shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("An ISO-like adjustment")
             )), "help did not open at {point:?}");
+        }
+    }
+
+    #[test]
+    fn highlight_popover_opens_on_all_row_parts_and_switches_without_editing() {
+        for initial in [None, Some(0.8_f32)] {
+            for initially_enabled in [true, false] {
+                for point in [
+                    egui::pos2(45., 18.),
+                    egui::pos2(220., 18.),
+                    egui::pos2(362., 18.),
+                ] {
+                    let ctx = egui::Context::default();
+                    let mut manual = initial;
+                    let mut enabled = initially_enabled;
+                    let mut time = 0.;
+                    let mut frame = |events| {
+                        time += 0.5;
+                        ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(800., 1000.),
+                                )),
+                                time: Some(time),
+                                events,
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().show(ctx, |ui| {
+                                    ui.allocate_ui(egui::vec2(384., 20.), |ui| {
+                                        assert!(!automatic_adjustment(
+                                            ui,
+                                            "Highlight correction",
+                                            &mut manual,
+                                            -2_f32..=2.,
+                                            0.,
+                                            Some(0.),
+                                            Some(&mut enabled)
+                                        ));
+                                    });
+                                });
+                                assert_eq!(manual, initial);
+                                assert_eq!(enabled, initially_enabled);
+                            },
+                        )
+                    };
+                    let mut output = frame(vec![]);
+                    for _ in 0..4 {
+                        output = frame(vec![egui::Event::PointerMoved(point)]);
+                    }
+                    let button = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "+0.8" =>
+                            Some(text.pos + text.galley.size() * 0.5),
+                        _ => None,
+                    }).unwrap_or_else(|| panic!("No comparison at {point:?}, manual {initial:?}, enabled {initially_enabled}"));
+                    for pressed in [true, false] {
+                        frame(vec![
+                            egui::Event::PointerMoved(button),
+                            egui::Event::PointerButton {
+                                pos: button,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: Default::default(),
+                            },
+                        ]);
+                    }
+                    let output = frame(vec![egui::Event::PointerMoved(button)]);
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text().starts_with("Flower color is largely preserved"))),
+                        "popover lost selection at {point:?}, manual {initial:?}, enabled {initially_enabled}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn correction_comparisons_open_and_switch_without_editing_even_on_disabled_controls() {
+        for (label, caption) in [
+            ("Bad pixels", "Bad pixels removes the magenta patch."),
+            ("Speckles", "Speckles removes the magenta dot."),
+            ("Row banding", "The stripes are reduced. The grain remains."),
+        ] {
+            for initially_enabled in [true, false] {
+                for interactive in [true, false] {
+                    let ctx = egui::Context::default();
+                    let mut settings = Settings::new("Sunlight", "Standard");
+                    match label {
+                        "Bad pixels" => {
+                            settings.repair = initially_enabled.then_some(RepairThreshold::Camera)
+                        }
+                        "Speckles" => settings.despeckle = initially_enabled,
+                        "Row banding" => settings.row_correction = initially_enabled,
+                        _ => unreachable!(),
+                    }
+                    let initial = settings.clone();
+                    let mut time = 0.;
+                    let mut frame = |events, interactive| {
+                        // egui needs closely spaced samples to recognize movement
+                        // after the disclosure click before allowing hover help.
+                        time += 0.025;
+                        ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(1000., 1600.),
+                                )),
+                                time: Some(time),
+                                events,
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().show(ctx, |ui| {
+                                    ui.set_width(384.);
+                                    ui.add_enabled_ui(interactive, |ui| {
+                                        assert!(!processing(ui, &mut settings, None));
+                                    });
+                                });
+                                assert_eq!(settings, initial);
+                            },
+                        )
+                    };
+                    frame(vec![], true);
+                    let output = frame(vec![], true);
+                    let advanced = text_centers(&output, "Advanced")[0];
+                    for pressed in [true, false] {
+                        frame(
+                            vec![
+                                egui::Event::PointerMoved(advanced),
+                                pointer_button(advanced, pressed),
+                            ],
+                            true,
+                        );
+                    }
+                    let mut output = frame(vec![], true);
+                    for _ in 0..8 {
+                        output = frame(vec![egui::Event::PointerMoved(egui::Pos2::ZERO)], true);
+                    }
+                    let point = text_centers(&output, label)[0];
+                    for _ in 0..32 {
+                        output = frame(vec![egui::Event::PointerMoved(point)], interactive);
+                    }
+                    let button = *text_centers(&output, "On").first().unwrap_or_else(|| {
+                        panic!("No {label} comparison, enabled {initially_enabled}, interactive {interactive}")
+                    });
+                    for pressed in [true, false] {
+                        frame(
+                            vec![
+                                egui::Event::PointerMoved(button),
+                                pointer_button(button, pressed),
+                            ],
+                            interactive,
+                        );
+                    }
+                    let output = frame(vec![egui::Event::PointerMoved(button)], interactive);
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == caption)),
+                        "{label} comparison lost selection, enabled {initially_enabled}, interactive {interactive}");
+                }
+            }
         }
     }
 

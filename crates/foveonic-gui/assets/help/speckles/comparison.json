@@ -1,0 +1,32 @@
+{
+  "id": "speckles",
+  "title": "Speckles",
+  "description": "Removes isolated bright, dark, or colored dots that Bad pixels may miss. Usually best left on. It does not reduce general grain. Turn it off if a tiny real detail disappears.",
+  "note": "Enlarged 64×64-pixel crop. Bad pixels stays on in both views. Noise and Detail is off.",
+  "source": "turquoise-still-life.x3f",
+  "crop": [1246, 1961, 1310, 2025],
+  "image_size": [400, 400],
+  "base_args": [
+    "--wb", "Sunlight", "--mode", "Standard", "--exposure", "0",
+    "--contrast", "0", "--shadows", "0", "--highlights", "0",
+    "--sensor-gain", "1", "--saturation", "1", "--sharpen", "0",
+    "--highlight-restoration", "--highlight-threshold", "auto",
+    "--row-correction", "--repair"
+  ],
+  "variants": [
+    {
+      "id": "off",
+      "label": "Off",
+      "caption": "The magenta dot remains with Bad pixels on.",
+      "image": "off.png",
+      "args": ["--no-despeckle"]
+    },
+    {
+      "id": "on",
+      "label": "On",
+      "caption": "Speckles removes the magenta dot.",
+      "image": "on.png",
+      "args": ["--despeckle"]
+    }
+  ]
+}
