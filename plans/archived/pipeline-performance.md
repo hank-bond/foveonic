@@ -1,13 +1,13 @@
 ---
-summary: "Pause algorithm expansion, stabilize a buildable baseline, measure completed cold/warm renders and GPU stages, then optimize the largest bottlenecks with output-equivalence checks."
-read_when: "Resume the owner-approved profiling and optimization pivot; remaining algorithm work is paused."
+status: archived
+summary: "Completed full-pipeline profiling and output-equivalent optimization reduced six-photo render latency roughly five to seven times."
 ---
 
 # Profile and optimize the pipeline
 
 ## Agreed scope
 
-The owner reported unacceptable processing latency and approved a pivot: finish only the minimal in-flight wiring needed for a buildable baseline; measure cold/warm wall time, GPU stages, synchronization and memory with reconstruction off/on; optimize the largest measured bottleneck and check output equivalence after each change. Algorithm expansion in [the completion plan](./complete-reference-algorithms.md) is paused. The owner authorized branch `perf/pipeline-latency` and commits for successfully checked changes, with final difference review afterward. Keep cleanup, profiling-only work and optimization in separate commits; review diffs and validate before committing. Work autonomously through measured, output-equivalent rounds until returns diminish or complexity outweighs the incremental gain. Profile the full pipeline with all processing enabled. UI responsiveness and caching are follow-up work, not part of this pass. Record output-changing alternatives for later owner review. Installs, reference edits and evidence deletion remain unauthorized; preserve concurrent GUI work.
+The owner reported unacceptable processing latency and approved a pivot: finish only the minimal in-flight wiring needed for a buildable baseline; measure cold/warm wall time, GPU stages, synchronization and memory with reconstruction off/on; optimize the largest measured bottleneck and check output equivalence after each change. Algorithm expansion in [the completion plan](../complete-reference-algorithms.md) is paused. The owner authorized branch `perf/pipeline-latency` and commits for successfully checked changes, with final difference review afterward. Keep cleanup, profiling-only work and optimization in separate commits; review diffs and validate before committing. Work autonomously through measured, output-equivalent rounds until returns diminish or complexity outweighs the incremental gain. Profile the full pipeline with all processing enabled. UI responsiveness and caching are follow-up work, not part of this pass. Record output-changing alternatives for later owner review. Installs, reference edits and evidence deletion remain unauthorized; preserve concurrent GUI work.
 
 ## Steps
 
@@ -49,7 +49,7 @@ Every unprofiled render has **zero CPU readbacks**, 62–64 compute passes, 64�
 
 Largest common stages: masked clusters ~1.89–1.90 s, ordered camera lists ~0.79 s. Flower/yellow donor tables add 2.10/1.47 s. Next costs include edge weights (55–365 ms), row correlation/fits (combined across banks), directional local means, bilateral, and scene-dependent despeckle. GPU sums account for 3.61–6.09 s of timestamped runs; remaining preparation/submission/waits are materially smaller.
 
-Use the [profiling workflow](../docs/profiling.md) for current benchmark commands. Initial goldens are created only when absent. Further rounds fail on any changed full-buffer byte. Small exports also permit direct encoded-TIFF comparison. Counters describe engine-owned work, not hidden driver staging or other shared-device users. Wrapper counter tests, workspace tests, strict Clippy and documentation/format checks pass before this instrumentation-only checkpoint.
+Use the [profiling workflow](../../docs/profiling.md) for current benchmark commands. Initial goldens are created only when absent. Further rounds fail on any changed full-buffer byte. Small exports also permit direct encoded-TIFF comparison. Counters describe engine-owned work, not hidden driver staging or other shared-device users. Wrapper counter tests, workspace tests, strict Clippy and documentation/format checks pass before this instrumentation-only checkpoint.
 
 ## Round 1: cooperative cluster candidate search
 

@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output."
 ---
 
 # Optimize monochrome pipeline performance
 
-Requirements: [profiling](../docs/specs/profiling.md), [monochrome rendering](../docs/specs/monochrome-rendering.md), and [render resources](../docs/specs/render-resources.md).
+Requirements: [profiling](../../docs/specs/profiling.md), [monochrome rendering](../../docs/specs/monochrome-rendering.md), and [render resources](../../docs/specs/render-resources.md).
 
 ## Scope
 
@@ -21,7 +22,7 @@ The owner reported roughly 2700 ms for completed pipeline rendering. The initial
 
 ## Measurement method
 
-Use the release [completed-processing example](../crates/foveonic/examples/profile_pipeline.rs) on Apple M1 Pro. Each case opens its source once and reuses the engine, but reruns the full recipe without an interactive cache. Render intervals include GPU completion and exclude source loading, setup, diagnostic readback, and export. Filesystem cache state is uncontrolled.
+Use the release [completed-processing example](../../crates/foveonic/examples/profile_pipeline.rs) on Apple M1 Pro. Each case opens its source once and reuses the engine, but reruns the full recipe without an interactive cache. Render intervals include GPU completion and exclude source loading, setup, diagnostic readback, and export. Filesystem cache state is uncontrolled.
 
 Settings are Sunlight WB, sharpening 0.75, default corrections, neutral exposure/tone, and 800×1200 TIFF packaging. Processing still runs at full sensor resolution. Color selects Standard and default reconstruction. Monochrome uses equal-layer mixing and noise/banding 2. Noise 0 skips the histogram and is not a quality-equivalent replacement.
 
@@ -76,6 +77,6 @@ Full-sensor floats and resized RGB16 TIFFs match the baseline byte-for-byte on a
 
 A new component test compares an 83×344 signal against an independent rolling histogram. It covers eight strips, both traversal directions, a partial workgroup, distinct preserved borders, zero/HDR samples, three range divisors, repeated runs, and immutable inputs.
 
-The first complete GPU suite failed the existing color cache comparison on yellow flowers after an Exposure edit. The unchanged isolated rerun and subsequent complete suite passed. The [intermittent mismatch](./gpu-output-mismatch.md) remains unresolved. No tolerance, cache policy, or retry behavior was changed.
+The first complete GPU suite failed the existing color cache comparison on yellow flowers after an Exposure edit. The unchanged isolated rerun and subsequent complete suite passed. The [intermittent mismatch](../gpu-output-mismatch.md) remains unresolved. No tolerance, cache policy, or retry behavior was changed.
 
-The owner then requested hiding irrelevant editing controls while retaining both modes' settings. Pointer, expanded-section, and metadata-loading tests cover that follow-up. Final check results and remaining photographic acceptance are recorded in the [implementation plan](./monochrome-rendering.md).
+The owner then requested hiding irrelevant editing controls while retaining both modes' settings. Pointer, expanded-section, and metadata-loading tests cover that follow-up. Final check results and remaining photographic acceptance are recorded in the [implementation plan](../monochrome-rendering.md).

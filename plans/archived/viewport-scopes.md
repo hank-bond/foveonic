@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement."
 ---
 
 # Viewport scopes
 
-Requirements: [GUI workspace](../docs/specs/gui-workspace.md) and [interactive rendering](../docs/specs/interactive-rendering.md).
+Requirements: [GUI workspace](../../docs/specs/gui-workspace.md) and [interactive rendering](../../docs/specs/interactive-rendering.md).
 
 ## Steps
 

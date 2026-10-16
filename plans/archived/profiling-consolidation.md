@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Consolidate retained core, GUI and native profiling into explicit modes and reusable structured reports."
 ---
 
 # Profiling consolidation
 
-Implements [profiling requirements](../docs/specs/profiling.md), approved after the diagnostic design review and completed in the isolated editing branch. Existing core and GUI guards, shaders, arithmetic, operation waits and publication priority stay unchanged.
+Implements [profiling requirements](../../docs/specs/profiling.md), approved after the diagnostic design review and completed in the isolated editing branch. Existing core and GUI guards, shaders, arithmetic, operation waits and publication priority stay unchanged.
 
 - [x] Replace boolean profiling with off/wall/GPU modes; separate loading from render profiles.
 - [x] Use common JSON envelopes, current host/GPU profiles, activity counts and source/settings/execution context.

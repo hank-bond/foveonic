@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Remove global Sensor gain and migrate local sidecars directly without a legacy reader."
 ---
 
 # Remove Sensor gain
 
-Requirements: [processing graphs](../docs/specs/processing-graphs.md), [GUI workspace](../docs/specs/gui-workspace.md), and [editing sidecars](../docs/specs/editing-sidecars.md).
+Requirements: [processing graphs](../../docs/specs/processing-graphs.md), [GUI workspace](../../docs/specs/gui-workspace.md), and [editing sidecars](../../docs/specs/editing-sidecars.md).
 
 ## Decision
 

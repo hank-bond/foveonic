@@ -68,7 +68,7 @@ Source profiling separates complete file reading into memory from total in-memor
 
 ## Ownership and deferred mismatch
 
-The owner approved guarded GPU storage: shared readers, exclusive writes and explicit dispatch bindings replace raw processing handles and the recyclable flag. Implementation and regression evidence are recorded in [guarded GPU storage](./guarded-gpu-storage.md). This is a structural ownership improvement, not an established mismatch fix.
+The owner approved guarded GPU storage: shared readers, exclusive writes and explicit dispatch bindings replace raw processing handles and the recyclable flag. Implementation and regression evidence are recorded in [guarded GPU storage](./archived/guarded-gpu-storage.md). This is a structural ownership improvement, not an established mismatch fix.
 
 The intermittent output difference is **unresolved and deferred**, not a blocker to continued editing work by owner decision. Normal-use symptoms were not observed, and both guarded and original-storage builds passed the latest matched trials. Findings, experiment limitations and all historical failed-run evidence are indexed in [GPU output mismatch](./gpu-output-mismatch.md). Temporary investigation paths are removed; exact-output assertions remain strict. Reopen on a new failure or owner report rather than continuing an unstructured repeat campaign.
 

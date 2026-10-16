@@ -30,7 +30,7 @@ Completion requires useful end-to-end integration of every listed stage, referen
 
 ## Current priority
 
-The owner has approved a [profiling and optimization pivot](./pipeline-performance.md). Pause remaining algorithm expansion. Stabilize only in-flight wiring, measure current completed latency and memory, and optimize measured bottlenecks with output equivalence before resuming this algorithm checklist.
+The owner has approved a [profiling and optimization pivot](./archived/pipeline-performance.md). Pause remaining algorithm expansion. Stabilize only in-flight wiring, measure current completed latency and memory, and optimize measured bottlenecks with output equivalence before resuming this algorithm checklist.
 
 ## Steps
 

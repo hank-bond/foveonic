@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Add a camera-relative highlight threshold while preserving default exports."
 ---
 
 # Adjust the highlight restoration threshold
 
-Requirements: [highlight restoration](../docs/specs/highlight-restoration.md) and [editing sidecars](../docs/specs/editing-sidecars.md).
+Requirements: [highlight restoration](../../docs/specs/highlight-restoration.md) and [editing sidecars](../../docs/specs/editing-sidecars.md).
 
 ## Steps
 

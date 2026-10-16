@@ -104,6 +104,11 @@ const LAYERS: &[Layer] = &[
     },
     Layer {
         directory: "plans",
+        is_container: true,
+        should_sort_newest_first: false,
+    },
+    Layer {
+        directory: "plans/archived",
         is_container: false,
         should_sort_newest_first: false,
     },
@@ -256,7 +261,9 @@ fn collect_document_entries(root: &Path, layer: &Layer) -> Result<Vec<Entry>> {
         let file = format_relative_path(root, &path);
         let text = read_file_text(&path)?;
         let fields = parse_frontmatter(&text, &file)?;
-        if layer.directory != "plans" && frontmatter_value(&fields, "kind").is_empty() {
+        if !matches!(layer.directory, "plans" | "plans/archived")
+            && frontmatter_value(&fields, "kind").is_empty()
+        {
             return Err(format!("{file}: indexed documentation missing \"kind\""));
         }
         if layer.directory == "docs/specs" {
@@ -327,7 +334,8 @@ fn collect_container_entries(root: &Path, layer: &Layer) -> Result<Vec<Entry>> {
                     parse_document_filename(&filename).1,
                     format!("./{filename}"),
                 )?;
-                if frontmatter_value(&entry.fields, "kind").is_empty() {
+                if layer.directory != "plans" && frontmatter_value(&entry.fields, "kind").is_empty()
+                {
                     return Err(format!(
                         "{}: indexed documentation missing \"kind\"",
                         format_relative_path(root, &path)
@@ -571,7 +579,7 @@ fn validate_document_frontmatter(root: &Path, paths: &[PathBuf]) -> Result<()> {
 fn validate_document_titles(root: &Path, paths: &[PathBuf]) -> Result<()> {
     for path in paths {
         let file = format_relative_path(root, path);
-        if file_name(path) == "README.md" || file.starts_with("plans/archive/") {
+        if file_name(path) == "README.md" {
             continue;
         }
         let text = read_file_text(path)?;

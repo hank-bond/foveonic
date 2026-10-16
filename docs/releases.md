@@ -5,7 +5,7 @@ kind: how-to
 
 # Prepare an application release
 
-[Requirements](specs/releases.md) define the unsigned Apple Silicon release scope. The [preparation plan](../plans/cargo-releases.md) records local validation and remaining review.
+[Requirements](specs/releases.md) define the unsigned Apple Silicon release scope. The [preparation plan](../plans/archived/cargo-releases.md) records local validation and the completed first hosted release.
 
 ## Review locally
 

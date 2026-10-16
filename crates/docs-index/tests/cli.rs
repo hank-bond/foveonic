@@ -190,6 +190,42 @@ fn research_notes_have_a_dedicated_index_without_design_lifecycle_metadata() {
 }
 
 #[test]
+fn active_and_archived_plans_have_separate_checked_indexes() {
+    let fixture = create_repository_fixture();
+    let root = fixture.path();
+    write(root, "plans/archived/AGENTS.md", "---\nsummary: \"Routes completed implementation plans.\"\n---\n\n# Archived plans\n\n<!-- INDEX:START -->\n<!-- INDEX:END -->\n");
+    write(root, "plans/active-fixture.md", "---\nsummary: \"Tracks unfinished fixture work.\"\n---\n\n# Active fixture\n\n[Completed](archived/completed-fixture.md)\n");
+    write(root, "plans/archived/completed-fixture.md", "---\nsummary: \"Records completed fixture work.\"\nstatus: archived\n---\n\n# Completed fixture\n\n[Active](../active-fixture.md)\n");
+    assert_success(&run_index_command(root, false));
+    assert_success(&run_index_command(root, true));
+    let active = fs::read_to_string(root.join("plans/AGENTS.md")).unwrap();
+    assert!(active.contains("./archived/AGENTS.md"));
+    assert!(active.contains("./active-fixture.md"));
+    assert!(!active.contains("completed-fixture.md"));
+    let archive = root.join("plans/archived/AGENTS.md");
+    let before = fs::read(&archive).unwrap();
+    assert!(String::from_utf8_lossy(&before).contains("./completed-fixture.md"));
+    write(root, "plans/archived/another-fixture.md", "---\nsummary: \"Records another completed slice.\"\nstatus: archived\n---\n\n# Another fixture\n");
+    let result = run_index_command(root, true);
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("stale index: plans/archived/AGENTS.md")
+    );
+    assert_eq!(fs::read(&archive).unwrap(), before);
+    assert_success(&run_index_command(root, false));
+    assert_success(&run_index_command(root, true));
+    for (text, expected) in [
+        ("---\nsummary: \"Records a broken archive entry.\"\nstatus: archived\n---\n\n# First\n\n# Second\n", "exactly one H1"),
+        ("---\nsummary: \"Records a broken archive entry.\"\nstatus: archived\n---\n\n# Broken\n\n[Missing](missing.md)\n", "relative link target not found"),
+    ] {
+        write(root, "plans/archived/another-fixture.md", text);
+        let result = run_index_command(root, true);
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains(expected));
+    }
+}
+
+#[test]
 fn checks_reject_missing_summaries_malformed_titles_and_broken_links() {
     for (text, expected) in [
         ("# Missing summary\n", "missing frontmatter"),

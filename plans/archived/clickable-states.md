@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Group editing corrections and share rounded clickable states without changing processing defaults."
 ---
 
 # Editing layout and control states
 
-Requirements: [GUI workspace](../docs/specs/gui-workspace.md) and [detail and noise](../docs/specs/detail-and-noise.md).
+Requirements: [GUI workspace](../../docs/specs/gui-workspace.md) and [detail and noise](../../docs/specs/detail-and-noise.md).
 
 ## Steps
 

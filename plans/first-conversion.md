@@ -39,7 +39,7 @@ Detail reconstruction, denoising, and highlight reconstruction can be omitted fr
 - All six local DP2 originals render. Small GPU fixtures check trimmed black estimation, signed calibration, and all four quarter-turn orientations. TIFF readback checks RGB16 samples and embedded profiles. An Auto/Vivid/+0.5-stop export exercises alternate settings.
 - Initial review of exported TIFFs and JPEG previews finds coherent ordinary colors and composition. The red-flower scene has conspicuous yellow clipped-highlight patches, and dark shadows retain noise. Quality remains for owner review.
 - M1 Pro CLI exports took 0.77-1.58 seconds including decoding, GPU initialization, processing, readback, and file writing. Peak RSS was about 786-796 MiB. Reported peak memory footprint was about 1.59-1.60 GiB, including GPU allocations. These are single-run observations.
-- DNG and GUI remain pending. TIFF controls and batch processing continue in [`tiff-controls-and-batch.md`](./tiff-controls-and-batch.md). No optional corrective stages or generated look have been made the application's default recipe.
+- DNG and GUI remain pending. TIFF controls and batch processing continue in [`tiff-controls-and-batch.md`](./archived/tiff-controls-and-batch.md). No optional corrective stages or generated look have been made the application's default recipe.
 
 ## Checks
 

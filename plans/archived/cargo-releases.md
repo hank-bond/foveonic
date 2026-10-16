@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Replace Python app packaging with Cargo tasks and prepare an unsigned v0.1.0 draft-release workflow."
 ---
 
 # Prepare Cargo-based releases
 
-Requirements: [application releases](../docs/specs/releases.md) and [native GUI packaging](../docs/specs/gui-workspace.md).
+Requirements: [application releases](../../docs/specs/releases.md) and [native GUI packaging](../../docs/specs/gui-workspace.md).
 
 ## Steps
 
@@ -14,13 +15,13 @@ Requirements: [application releases](../docs/specs/releases.md) and [native GUI 
 - [x] Prepare the initial changelog and migrate build/release guidance.
 - [x] Run workspace checks, packaging regressions, and a native release build. Inspect bundle metadata, executable architecture, and archive extraction.
 - [x] Owner added release prose and approved the changes for commit and push.
-- [ ] Owner authorizes the release tag and reviews the hosted draft before publication.
+- [x] Complete the first hosted release build, draft upload, and publication of v0.1.0.
 
 ## Decisions
 
 Use the checked-in Icon Composer foregrounds directly during packaging. Artwork generation remains an explicit Python editing tool. The supported GitHub `macos-26` runner is Apple Silicon and includes Xcode 26. Build drafts only. An existing draft keeps its notes, and an already published release rejects uploads.
 
-CI itself cannot be exercised without pushing. Local checks must distinguish verified packaging behavior from the unexecuted hosted workflow.
+Local checks establish packaging behavior separately from hosted validation. The first release workflow has now completed successfully.
 
 ## Validation
 
@@ -30,4 +31,4 @@ The release bundle builds locally with Xcode 26.5. Its executable is arm64, its 
 
 Workflow YAML and shell syntax pass local parsing. A mocked GitHub CLI exercises missing releases, existing drafts, published releases, and API failures. New releases use `--draft` and tagged changelog notes. Existing drafts only receive replacement assets without editing their prose. Published releases and failed creation attempts never upload assets. Validation performed no real release API writes or tag operations. The owner subsequently approved committing and pushing the preparation work.
 
-The first hosted release run and draft review remain pending. The existing upstream `block` future-incompatibility warning is unchanged.
+The first [hosted release run](https://github.com/hank-bond/foveonic/actions/runs/38832699996) passed all checks, built and archived the native app, and uploaded assets to a draft. The [v0.1.0 release](https://github.com/hank-bond/foveonic/releases/tag/v0.1.0) is published with the Apple Silicon ZIP and checksums. This completes the release-preparation slice. The existing upstream `block` future-incompatibility warning is unchanged.

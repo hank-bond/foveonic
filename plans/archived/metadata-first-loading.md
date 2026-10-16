@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads."
 ---
 
 # Show capture highlights before image loading
 
-The owner approved a lightweight latest-selection metadata reader independent of the render worker. Requirements: [image information bar](../docs/specs/image-information-bar.md). Keep processing metadata and render scheduling unchanged.
+The owner approved a lightweight latest-selection metadata reader independent of the render worker. Requirements: [image information bar](../../docs/specs/image-information-bar.md). Keep processing metadata and render scheduling unchanged.
 
 ## Steps
 

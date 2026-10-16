@@ -22,4 +22,4 @@ Active-photo checkpoint caching follows [interactive rendering](./interactive-re
 
 ## Conformance
 
-A result can outlive source decoding, feed GPU display preparation and TIFF export, and remain valid while another image is rendered. Graph branches preserve their inputs until all consumers have submitted their reads. Shared allocation guards prevent writes and recycling while another reader remains; bindings retain borrowed or exclusive guards through synchronous submission. Ownership regressions and shader-access audits are recorded in the [guarded storage plan](../../plans/guarded-gpu-storage.md).
+A result can outlive source decoding, feed GPU display preparation and TIFF export, and remain valid while another image is rendered. Graph branches preserve their inputs until all consumers have submitted their reads. Shared allocation guards prevent writes and recycling while another reader remains; bindings retain borrowed or exclusive guards through synchronous submission. Ownership regressions and shader-access audits are recorded in the [guarded storage plan](../../plans/archived/guarded-gpu-storage.md).

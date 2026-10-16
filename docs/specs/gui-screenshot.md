@@ -21,4 +21,4 @@ implementation: conforming
 
 ## Validation
 
-Native capture produces a 2650×2194-pixel application-content image from the condensed recipe at 2× display density. Online and offline sync, preservation of originals and sidecars, lossless encoding, and automated checks are recorded in the [implementation plan](../../plans/gui-screenshot.md). The owner approved the condensed capture and changes for commit.
+Native capture produces a 2650×2194-pixel application-content image from the condensed recipe at 2× display density. Online and offline sync, preservation of originals and sidecars, lossless encoding, and automated checks are recorded in the [implementation plan](../../plans/archived/gui-screenshot.md). The owner approved the condensed capture and changes for commit.

@@ -2,7 +2,7 @@
 summary: "Cargo packages unsigned macOS apps and release tags build draft GitHub Releases without publishing them."
 kind: reference
 status: accepted
-implementation: incomplete
+implementation: conforming
 ---
 
 # Application releases
@@ -23,4 +23,4 @@ Prepare `v0.1.0` with a concise feature changelog and the owner's introductory p
 
 ## Validation
 
-Local packaging, archive round-trip checks, task/workspace tests, and mocked draft-release handling pass as recorded in the [preparation plan](../../plans/cargo-releases.md). Hosted CI has not run because no release tag has been pushed. Implementation remains incomplete until that first hosted build and draft upload are verified.
+Local packaging, archive round-trip checks, task/workspace tests, and mocked draft-release handling pass as recorded in the [preparation plan](../../plans/archived/cargo-releases.md). The first [hosted release run](https://github.com/hank-bond/foveonic/actions/runs/38832699996) passed checks, built and archived the app, and uploaded assets to a draft. The [v0.1.0 release](https://github.com/hank-bond/foveonic/releases/tag/v0.1.0) is now published with the Apple Silicon archive and checksums.

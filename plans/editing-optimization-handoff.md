@@ -16,8 +16,8 @@ This plan summarizes the measurements and rejected trial without depending on te
 
 - Repository and applicable crate/source `AGENTS.md` instructions.
 - [Interactive rendering requirements](../docs/specs/interactive-rendering.md), [responsiveness plan](./ui-responsiveness.md), and [render resources](../docs/specs/render-resources.md).
-- [GPU output mismatch](./gpu-output-mismatch.md) and [guarded GPU storage](./guarded-gpu-storage.md).
-- [Profiling consolidation](./profiling-consolidation.md), [profiling requirements](../docs/specs/profiling.md), and [current usage](../docs/profiling.md).
+- [GPU output mismatch](./gpu-output-mismatch.md) and [guarded GPU storage](./archived/guarded-gpu-storage.md).
+- [Profiling consolidation](./archived/profiling-consolidation.md), [profiling requirements](../docs/specs/profiling.md), and [current usage](../docs/profiling.md).
 - [Contribution conventions](../docs/contributing.md) before documentation changes.
 
 ## Boundaries

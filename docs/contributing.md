@@ -34,7 +34,7 @@ Link plans to the requirements they implement. Use small action-oriented checkli
 
 Every Markdown file except `README.md` starts with frontmatter containing a one-sentence `summary`. Ordinary documentation also has `kind: reference`, `explanation`, `how-to`, or `tutorial`. Plans and `AGENTS.md` omit `kind`.
 
-Specifications include `status` and `implementation`. Active plans omit `status`. Add `read_when` only when the summary does not make the reading trigger clear. Put each field on one line and quote prose values.
+Specifications include `status` and `implementation`. Active plans omit `status`. Completed implementation slices move to `plans/archived/` with `status: archived`. Preserve their findings, update links, and remove obsolete continuation instructions. Keep unresolved requirements or acceptance work explicit in active plans. Add `read_when` only when the summary does not make the reading trigger clear. Put each field on one line and quote prose values.
 
 Use one top-level title, sentence-case headings, relative repository links, and prose without hard wrapping. README layout is flexible. Avoid unnecessary negative framing and inventories readers can derive from code.
 

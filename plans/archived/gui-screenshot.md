@@ -1,10 +1,11 @@
 ---
+status: archived
 summary: "Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README."
 ---
 
 # Automate the README screenshot
 
-Requirements: [GUI screenshot](../docs/specs/gui-screenshot.md), [photographic-help source management](../docs/specs/photographic-help.md), and [GUI workspace](../docs/specs/gui-workspace.md).
+Requirements: [GUI screenshot](../../docs/specs/gui-screenshot.md), [photographic-help source management](../../docs/specs/photographic-help.md), and [GUI workspace](../../docs/specs/gui-workspace.md).
 
 ## Steps
 

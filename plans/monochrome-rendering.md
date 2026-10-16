@@ -32,7 +32,7 @@ Monochrome brightness has its own scalar type. Operation discriminants and disti
 
 The reference implementation carries Float32 histogram residuals across adjacent columns. GPU columns initialize independently while retaining vertical traversal and strip boundaries. The mathematical filter is unchanged, but rounding history differs. The complete 48×48 reference fixture measures maximum directional, column, histogram, and despeckle differences of approximately 0.000008, 0.000023, 0.000191, and 0.000168 camera codes.
 
-Large private histograms produced nonrepeatable output on Apple M1 Pro Metal. Reducing workgroup width did not fix it. Workgroup-owned state passed the full-sensor checks but was slow. The [performance pass](./monochrome-performance.md) replaced it with column-parallel GPU scratch and retained byte-identical output to the implemented filter. Full-sensor repeatability checks remain necessary when changing storage or traversal.
+Large private histograms produced nonrepeatable output on Apple M1 Pro Metal. Reducing workgroup width did not fix it. Workgroup-owned state passed the full-sensor checks but was slow. The [performance pass](./archived/monochrome-performance.md) replaced it with column-parallel GPU scratch and retained byte-identical output to the implemented filter. Full-sensor repeatability checks remain necessary when changing storage or traversal.
 
 At extreme tone settings, Float32 Bezier evaluation introduced tiny inversions on a nearly flat highlight plateau. A mono-only prefix maximum restores monotonicity for DNG presentation. Native eight-bit tone samples still agree. Color tone is unchanged.
 

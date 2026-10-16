@@ -8,7 +8,7 @@ Follow the [monochrome requirements](../../../../../docs/specs/monochrome-render
 
 Tables contain metadata-derived coefficients, never photographic samples. Keep mixed brightness typed separately from masks, original corrected layers immutable, and histogram neighbors distinct from the corrected mono plane. Preserve the zero-noise route without histogram filtering.
 
-The histogram uses one GPU lane per interior column and interleaved count/sum bins in bin-major GPU scratch. Reuse that scratch across the fixed algorithmic strips and preserve each column's ordered initialization, updates, and weighted sums. Large private histograms previously produced nonrepeatable Metal output. Check full-sensor repeated rendering, fresh/session equality, and full-float/TIFF goldens when changing storage or traversal, not just the small arithmetic fixture. See the [performance plan](../../../../../plans/monochrome-performance.md).
+The histogram uses one GPU lane per interior column and interleaved count/sum bins in bin-major GPU scratch. Reuse that scratch across the fixed algorithmic strips and preserve each column's ordered initialization, updates, and weighted sums. Large private histograms previously produced nonrepeatable Metal output. Check full-sensor repeated rendering, fresh/session equality, and full-float/TIFF goldens when changing storage or traversal, not just the small arithmetic fixture. See the [performance plan](../../../../../plans/archived/monochrome-performance.md).
 
 <!-- INDEX:START -->
 
