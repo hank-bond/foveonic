@@ -17,6 +17,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[despeckle](./despeckle.md)** _(accepted, conforming, reference)._ Full-image GPU despeckling detects channel extrema and corrects them in deterministic reference order, independently of camera-record repair.
 - **[detail-and-noise](./detail-and-noise.md)** _(accepted, conforming, reference)._ Reference-style GPU noise filtering and detail reconstruction provide an inspectable photographic baseline.
 - **[editing-sidecars](./editing-sidecars.md)** _(accepted, conforming, reference)._ Original X3Fs and adjacent editing sidecars are authoritative; rendered exports can be regenerated from them.
+- **[gui-screenshot](./gui-screenshot.md)** _(accepted, conforming, reference)._ An explicit Cargo task refreshes a lossless WebP README screenshot using the shared local example-photograph cache.
 - **[gui-workspace](./gui-workspace.md)** _(accepted, conforming, reference)._ The GUI uses a persistent three-pane workspace with a reflowing organizer, current-buffer scopes, and reorderable editor sections.
 - **[highlight-restoration](./highlight-restoration.md)** _(accepted, conforming, reference)._ Reference highlight restoration uses immutable original saturation provenance, ordered donor statistics, and clipped-neighborhood conditioning before despeckle.
 - **[image-information-bar](./image-information-bar.md)** _(accepted, conforming, reference)._ A compact image information bar shows capture settings, filename, and visible-region dimensions and coordinates for photographic review.
@@ -30,6 +31,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[processing-graphs](./processing-graphs.md)** _(accepted, incomplete, reference)._ Internal processing DAGs use typed connections, shared metadata, node settings, and selectable algorithms for sensor and tone processing.
 - **[profiling](./profiling.md)** _(accepted, conforming, reference)._ Profiling separates ordinary completed work, synchronized GPU diagnostics, and native feedback with reproducible context.
 - **[reduced-reconstruction](./reduced-reconstruction.md)** _(accepted, conforming, reference)._ Metadata-selected eighth-step reconstruction uses native polyphase reduced local or whole-image fixed filtering, restores full tile geometry, and preserves explicit transposed pattern scratch provenance.
+- **[releases](./releases.md)** _(accepted, incomplete, reference)._ Cargo packages unsigned macOS apps and release tags build draft GitHub Releases without publishing them.
 - **[render-resources](./render-resources.md)** _(accepted, conforming, reference)._ Owned GPU render results separate image processing from display and export, with explicit pixel meaning and geometry.
 - **[row-banding](./row-banding.md)** _(accepted, conforming, reference)._ GPU row-banding correction fits the native geometric patch banks, rejects scene-correlated residuals, and subtracts bounded additive per-row sensor bias before reconstruction.
 

@@ -27,6 +27,7 @@ pub struct Browser {
     pending: HashSet<PathBuf>,
     cache: HashMap<PathBuf, Option<Thumbnail>>,
     order: VecDeque<PathBuf>,
+    reveal_selection: bool,
 }
 impl Browser {
     pub fn new(context: egui::Context) -> Self {
@@ -73,6 +74,7 @@ impl Browser {
             pending: HashSet::new(),
             cache: HashMap::new(),
             order: VecDeque::new(),
+            reveal_selection: false,
         }
     }
     pub fn open(&mut self, path: &Path) -> std::io::Result<()> {
@@ -121,6 +123,12 @@ impl Browser {
                 }
             }
         }
+    }
+    pub fn reveal_selection(&mut self) {
+        self.reveal_selection = true;
+    }
+    pub fn thumbnails_ready(&self) -> bool {
+        self.pending.is_empty() && self.cache.values().all(Option::is_some)
     }
     pub fn thumbnail(&mut self, path: &Path) -> Option<Thumbnail> {
         if let Some(texture) = self.cache.get(path) {
@@ -234,8 +242,9 @@ impl Browser {
             }
         }
         let mut scroll = egui::ScrollArea::vertical().id_salt("organizer items");
-        if chosen.is_some() {
-            let row = active.unwrap() / if icons { columns } else { 1 };
+        let reveal_selection = std::mem::take(&mut self.reveal_selection);
+        if let Some(active) = active.filter(|_| chosen.is_some() || reveal_selection) {
+            let row = active / if icons { columns } else { 1 };
             let stride = height + ui.spacing().item_spacing.y;
             let top = row as f32 * stride;
             let bottom = top + height;

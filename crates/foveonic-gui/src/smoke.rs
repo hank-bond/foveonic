@@ -1,4 +1,4 @@
-//! Captures opt-in native workspace checks using isolated preferences and real egui/wgpu frames.
+//! Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
 
 use crate::{
     preferences::{Organizer, Scope, Section},
@@ -6,6 +6,30 @@ use crate::{
 };
 use eframe::egui;
 use std::path::PathBuf;
+
+const SCREENSHOT_TARGETS: &[&str] = &["preview", "readme"];
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenshotRecipe {
+    pub source: String,
+    pub window_size: [f32; 2],
+    pub organizer_width: f32,
+    pub tools_width: f32,
+    zoom: f32,
+    pan: [f32; 2],
+    settings: foveonic::render::Settings,
+}
+
+pub fn screenshot_active() -> bool {
+    std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_some()
+        && std::env::var_os("FOVEONIC_GUI_SMOKE_SCREENSHOT").is_some()
+}
+
+pub fn screenshot_recipe() -> ScreenshotRecipe {
+    serde_json::from_str(include_str!("../assets/gui-screenshot.json"))
+        .expect("Invalid screenshot recipe")
+}
 
 const TARGETS: [&str; 10] = [
     "preview",
@@ -139,12 +163,15 @@ pub struct Smoke {
     index: usize,
     awaiting: bool,
     close_at: Option<std::time::Instant>,
+    settled_frames: u8,
 }
 impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_SCOPES").is_some() {
+            targets: if screenshot_active() {
+                SCREENSHOT_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_SCOPES").is_some() {
                 VIEWPORT_SCOPE_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_INSPECTION").is_some() {
                 DIFFERENCE_TARGETS
@@ -164,6 +191,7 @@ impl Smoke {
             index: 0,
             awaiting: false,
             close_at: None,
+            settled_frames: 0,
         })
     }
     /// Hold processing replies until the embedded preview has been captured.
@@ -267,6 +295,10 @@ impl App {
             smoke.index += 1;
             smoke.awaiting = false;
             if smoke.index == smoke.targets.len() {
+                if smoke.targets == SCREENSHOT_TARGETS {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
                 // Exercise native preference restoration on a subsequent isolated launch.
                 self.preferences.organizer = Organizer::List;
                 self.preferences.scope = Scope::Waveform;
@@ -286,6 +318,24 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "readme" => {
+                    let recipe = screenshot_recipe();
+                    assert_eq!(
+                        self.selected
+                            .as_ref()
+                            .and_then(|path| path.file_name())
+                            .and_then(|name| name.to_str()),
+                        Some(recipe.source.as_str())
+                    );
+                    self.settings = recipe.settings;
+                    self.preferences.scope = Scope::Waveform;
+                    self.preferences.scope_viewport = true;
+                    self.browser.reveal_selection();
+                    self.viewport.zoom_by(recipe.zoom);
+                    self.viewport
+                        .pan_to(egui::vec2(recipe.pan[0], recipe.pan[1]));
+                    self.submit(None);
+                }
                 "final" => {}
                 "viewport-fit" => self.preferences.scope_viewport = true,
                 "viewport-zoom" => self.viewport.zoom_by(4.),
@@ -519,10 +569,43 @@ impl App {
                             && self.navigator.ready(frame, mapping)
                     })
             };
+            let ready =
+                ready && (smoke.targets != SCREENSHOT_TARGETS || self.browser.thumbnails_ready());
             if ready {
+                if smoke.targets == SCREENSHOT_TARGETS && !smoke.preview_pending() {
+                    // Let the selected organizer row and its newly visible thumbnails settle.
+                    smoke.settled_frames += 1;
+                    if smoke.settled_frames < 3 {
+                        ctx.request_repaint();
+                        return;
+                    }
+                }
                 smoke.awaiting = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            } else {
+                smoke.settled_frames = 0;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readme_recipe_has_fixed_valid_source_view_and_photographic_settings() {
+        let recipe = screenshot_recipe();
+        assert_eq!(recipe.source, "yellow-flowers-and-stroller.x3f");
+        assert_eq!(recipe.window_size, [1325., 1097.]);
+        assert_eq!(recipe.organizer_width, 264.);
+        assert_eq!(recipe.tools_width, 330.);
+        assert!(recipe.zoom.is_finite() && recipe.zoom >= 1.);
+        assert!(recipe.pan.iter().all(|value| (0. ..=1.).contains(value)));
+        recipe.settings.validate().unwrap();
+        assert_eq!(recipe.settings.white_balance, "Sunlight");
+        assert_eq!(recipe.settings.color_mode, "Standard");
+        assert!(recipe.settings.reconstruction.is_some());
+        assert_eq!(SCREENSHOT_TARGETS, ["preview", "readme"]);
     }
 }

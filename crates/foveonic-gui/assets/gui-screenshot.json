@@ -1,0 +1,30 @@
+{
+  "source": "yellow-flowers-and-stroller.x3f",
+  "window_size": [1325, 1097],
+  "organizer_width": 264,
+  "tools_width": 330,
+  "zoom": 2.1,
+  "pan": [0.415, 0.49],
+  "settings": {
+    "rendering": "color",
+    "white_balance": "Sunlight",
+    "color_mode": "Standard",
+    "exposure": 0.0,
+    "saturation": 1.0,
+    "tone": {"contrast": 0.0, "shadows": 0.0, "highlights": 0.0},
+    "color_dq_gain": null,
+    "repair": "camera",
+    "despeckle": true,
+    "highlight_restoration": true,
+    "highlight_threshold_ev": null,
+    "row_correction": true,
+    "reconstruction": {
+      "chroma": 2,
+      "luminance": 2,
+      "banding": 2,
+      "detail": 1.0
+    },
+    "sharpen_amount": 0.0,
+    "output_size": null
+  }
+}

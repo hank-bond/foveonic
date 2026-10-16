@@ -113,7 +113,7 @@ cargo run --offline -p docs-index
 cargo run --offline -p docs-index -- --check
 cargo fmt --all -- --check
 git diff --check
-python3 crates/foveonic-gui/build-macos-app.py --build-only
+cargo xtask bundle --offline
 FOVEONIC_GUI_SMOKE_DIR=.local/gui-review target/release/Foveonic.app/Contents/MacOS/foveonic-gui /Users/work/git/foveonic/references/x3f/blue-parking-sign.x3f
 ```
 

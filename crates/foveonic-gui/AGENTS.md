@@ -8,7 +8,9 @@ Follow [`gui-and-batch.md`](../../plans/gui-and-batch.md) and [`pipeline-inspect
 
 Read [`src/AGENTS.md`](./src/AGENTS.md) before implementation.
 
-On macOS 26, use `python3 crates/foveonic-gui/build-macos-app.py -- {X3F_OR_FOLDER}` from the repository root. It builds a local `.app` with native automatic icon appearances, without installing or publishing it. `--build-only` creates the bundle without launching; `--debug` selects the debug profile. Keep the native icon system-owned rather than restoring a runtime Dock override. Bundle tests run with `python3 -m unittest discover -s crates/foveonic-gui -p 'test_*.py'`; artwork tests are separate under `assets/`.
+On macOS 26, use `cargo xtask run -- {X3F_OR_FOLDER}` from the repository root. It builds a local `.app` with native automatic icon appearances, without installing or publishing it. `cargo xtask bundle` builds without launching. Add `--debug` to select the debug profile. Keep the native icon system-owned rather than restoring a runtime Dock override. Bundle tests run in `cargo test --workspace`. Artwork tests are separate under `assets/`. See the [Cargo tasks](../xtask/AGENTS.md) and [release checklist](../../docs/releases.md).
+
+Refresh the README image explicitly with `cargo xtask screenshot`, following the [capture guide](../../docs/gui-screenshot.md). Normal builds do not sync photographs or capture screenshots.
 
 <!-- INDEX:START -->
 
@@ -21,7 +23,6 @@ On macOS 26, use `python3 crates/foveonic-gui/build-macos-app.py -- {X3F_OR_FOLD
 
 ### Source files
 
-- **[build-macos-app.py](./build-macos-app.py)** Build and launch a local macOS app bundle whose native icon follows system appearance settings.
 - **[build.rs](./build.rs)** Embeds checked-in photographic help assets and rejects missing rendered images during offline builds.
 - **[build_support.rs](./build_support.rs)** Validates comparison manifests and embeds their existing PNGs without downloading or rendering.
 

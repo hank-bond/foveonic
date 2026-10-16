@@ -1,4 +1,4 @@
-"""Download official sample files and explicitly render manifest-driven photographic help."""
+"""Render manifest-driven photographic help from the example cache maintained by Cargo."""
 
 import argparse
 import io
@@ -11,8 +11,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / 'crates/foveonic-gui/assets/help'
 SOURCES = ROOT / '.local/example-photographs'
-REPO = 'hank-bond/foveonic'
-RELEASE = 'example-photographs'
 
 
 def basename(name):
@@ -20,15 +18,6 @@ def basename(name):
             or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._' for c in name)):
         raise ValueError(f'Expected a plain filename, got {name!r}')
     return name
-
-
-def sync(destination):
-    destination.mkdir(parents=True, exist_ok=True)
-    subprocess.run([
-        'gh', 'release', 'download', RELEASE, '--repo', REPO,
-        '--dir', str(destination), '--pattern', '*.x3f', '--skip-existing',
-    ], check=True)
-    print(f'Downloaded missing example photographs to {destination}')
 
 
 def load_manifest(path):
@@ -111,7 +100,7 @@ def render(identifier, source_dir, renderer, write):
         raise ValueError('Comparison directory must match its ID')
     source = source_dir / data['source']
     if not source.is_file():
-        raise ValueError(f'Missing {source}; run the sync command first')
+        raise ValueError(f'Missing {source}; run cargo xtask examples sync first')
     output = ROOT / '.local/help-renders' / identifier
     output.mkdir(parents=True, exist_ok=True)
     images = []
@@ -143,16 +132,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-dir', type=Path, default=SOURCES)
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('sync', help='Download missing official X3Fs')
     rendering = commands.add_parser('render', help='Explicitly render one comparison')
     rendering.add_argument('id')
     rendering.add_argument('--renderer', type=Path, default=ROOT / 'target/release/foveonic')
     rendering.add_argument('--write', action='store_true', help='Also update the checked-in PNGs')
     args = parser.parse_args()
-    if args.command == 'sync':
-        sync(args.source_dir.resolve())
-    else:
-        render(args.id, args.source_dir.resolve(), args.renderer.resolve(), args.write)
+    render(args.id, args.source_dir.resolve(), args.renderer.resolve(), args.write)
 
 
 if __name__ == '__main__':

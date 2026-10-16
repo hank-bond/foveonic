@@ -1,42 +1,41 @@
 # Foveonic
+<img src="crates/foveonic-gui/assets/logo.svg" width="200" alt="Application Icon">
+An X3F processing app with both a GUI and a batch CLI, focused on processing speed, flexibility, and attractive results.
 
-<img src="crates/foveonic-gui/assets/logo.svg" width="200" alt="Application icon">
+![Foveonic editing an X3F photograph](crates/foveonic-gui/assets/gui-screenshot.webp)
 
-A Merrill X3F processing app with a GUI and batch CLI, focused on speed, editing flexibility, and photographic results.
+## Supported Formats
+TIFF exports bake all processing into the pixel data, trading maximum compatibility for reduced editing latitude.  This is because tone and color changes are fully baked-in, with downstream editors operating "on top of" those changes.
 
-## Output formats
+DNG separates out the base linear image data—only baking in some corrections and detail enhancement—and compresses all tone and color changes into a curve and matrix in the DNG metadata.  Your DNG editor will then take this metadata and apply it on top of the linear pixel data as part of its rendering pipeline.  This makes it a more flexible format for editing further, but does mean that not every editor will render it exactly as it looked in Foveon upon export.
 
-TIFF bakes the selected processing into pixels. DNG retains a linear technical base and stores the selected appearance in metadata. Technical corrections and detail processing are baked into the DNG samples. Receiving editors may render the embedded appearance differently.
+## Rendering Techniques
+All correction and enhancement metadata that exists in the X3F file is made use of.  Effort has been made to align with the Sigma's intended processing of the files wherever possible.  Additional controls are made wherever available to alter the processing approaches on a per-image basis.
 
-## Rendering
+The processing pipeline has been largely developed using WebGPU shaders, in order to provide a significantly improved editing experience.  This also benefits batch CLI render times.
 
-Choose **Color** or **Monochrome** in the editor. Monochrome mixes the original sensor layers with a triangular R/G/B selector before dedicated filtering steps.
+Choose **Color** or **Monochrome** in the editor. Monochrome mixes the original sensor layers with a triangular R/G/B selector before dedicated filtering steps.  This is different from using a monochrome mode in your editor becuase it operates on the sensor layers *before* they are converted into RGB space.  The primary benefit is that you can use just Layer 3 (B) which has a much better signal-to-noise ratio than the others.
 
 Monochrome DNG bakes the mix into linear neutral samples while keeping exposure and tone in metadata.
 
-Photographic processing runs in GPU shaders. Camera metadata supplies calibration, correction parameters, and color looks.
+## Requirements
+Development is currently done on a modest Apple M1 Pro with 14 GPU Cores.  The current focus is targeting MacOS.  The tooling chosen should be multi-platform compatible, but focus is not currently on delivering that.  On a machine of that caliber, you may expect full pipeline render times around 900-1600ms, with partial re-renders closer to 200-400ms using cached pipeline partials.
 
-## Platform and performance
-
-Development targets macOS on an Apple M1 Pro with 14 GPU cores. Cross-platform runtime support is not yet verified.
-
-Earlier color measurements were roughly 900–1600 ms for full processing and 200–400 ms for cached edits. Three full-sensor monochrome originals measured 600–900 ms for warm completed processing without the interactive cache. Source loading and export are separate. 
-
-Normal editing targets about 2 GB of memory, with transient peaks below 4 GB. These are targets, not enforced limits.
+Expect application memory to average around 2GB, with transient operations peaking under 4GB.  Configuration to reduce memory requirements at the cost of increased processing speed will be made available at a later time.
 
 ## Build and use
 
-For the macOS app, use macOS 26+, Rust 1.88+ with Cargo, Python 3, and Xcode 26+ with its command-line tools selected. Run these commands from the repository root.
+For the macOS app, use macOS 26+, Rust 1.88+ with Cargo, and Xcode 26+ with its command-line tools selected. Run these commands from the repository root.
 
 ### GUI
 
 Build and launch with an X3F file or folder:
 
 ```sh
-python3 crates/foveonic-gui/build-macos-app.py -- path/to/photo.x3f
+cargo xtask run -- path/to/photo.x3f
 ```
 
-This creates `target/release/Foveonic.app` without installing it. Use `--build-only` before `--` to build without launching. Omit the input to reopen the last folder. Select a photograph, adjust its settings, and use **Export TIFF** or the experimental **Export DNG**. Edits save automatically to a sidecar beside the X3F.
+This creates `target/release/Foveonic.app` without installing it. Use `cargo xtask bundle` to build without launching, or add `--debug` before `--` for a debug build. Custom Cargo target directories are respected. Omit the input to reopen the last folder. Select a photograph, adjust its settings, and use **Export TIFF** or the experimental **Export DNG**. Edits save automatically to a sidecar beside the X3F.
 
 ### CLI
 
@@ -58,6 +57,10 @@ cargo run --release -p foveonic -- export-dng path/to/photo.x3f mono.dng --wb Su
 The output file must not already exist. Use `cargo run --release -p foveonic -- --help` for batch processing and other options. The CLI does not load GUI editing sidecars.
 
 Sample X3Fs are available in the [Example photographs release](https://github.com/hank-bond/foveonic/releases/tag/example-photographs). Download a photograph and open it in the GUI to try the app.
+
+## Releases
+
+Release-tag pushes build an unsigned Apple Silicon app for macOS 26+ and attach it to a draft GitHub Release. See the [changelog](CHANGELOG.md) and [release checklist](docs/releases.md). Publication remains manual.
 
 ## Checks
 

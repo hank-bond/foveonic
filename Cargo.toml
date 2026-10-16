@@ -1,3 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/docs-index", "crates/foveonic", "crates/foveonic-gui"]
+members = ["crates/docs-index", "crates/foveonic", "crates/foveonic-gui", "crates/xtask"]
+
+[workspace.package]
+version = "0.1.0"

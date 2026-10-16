@@ -1,4 +1,4 @@
-"""Check sample imports, safe manifests, and explicit comparison generation without real GPU work."""
+"""Check safe manifests and explicit comparison generation without real GPU work."""
 
 import copy
 import importlib.util
@@ -37,33 +37,6 @@ class ExampleTests(unittest.TestCase):
                 path.write_text(json.dumps(invalid))
                 with self.subTest(image=image), self.assertRaises(ValueError):
                     examples.load_manifest(path)
-
-    def test_sync_downloads_x3fs_without_overwriting_existing_files(self):
-        payload = {'sample.x3f': b'raw', 'another.x3f': b'another raw'}
-
-        def download(command, **_):
-            self.assertEqual(command[:4], ['gh', 'release', 'download', examples.RELEASE])
-            self.assertEqual(command[command.index('--pattern') + 1], '*.x3f')
-            self.assertIn('--skip-existing', command)
-            target = Path(command[command.index('--dir') + 1])
-            for name, data in payload.items():
-                if not (target / name).exists():
-                    (target / name).write_bytes(data)
-
-        with tempfile.TemporaryDirectory() as temporary:
-            destination = Path(temporary) / 'samples'
-            destination.mkdir()
-            sidecar = destination / 'sample.x3f.foveonic.json'
-            sidecar.write_text('local edits')
-            original = destination / 'sample.x3f'
-            original.write_bytes(b'local original')
-            with patch.object(examples.subprocess, 'run', side_effect=download) as run:
-                examples.sync(destination)
-                examples.sync(destination)
-                self.assertEqual(run.call_count, 2)
-            self.assertEqual(original.read_bytes(), b'local original')
-            self.assertEqual(sidecar.read_text(), 'local edits')
-            self.assertEqual((destination / 'another.x3f').read_bytes(), payload['another.x3f'])
 
     def test_checked_in_manifests_reference_existing_images(self):
         paths = list(examples.CATALOG.glob('*/comparison.json'))

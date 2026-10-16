@@ -70,7 +70,7 @@ git diff --check
 Native reconstruction checks use isolated preferences:
 
 ```sh
-python3 crates/foveonic-gui/build-macos-app.py --build-only
+cargo xtask bundle --offline
 FOVEONIC_GUI_SMOKE_DIR=.local/gui-noise-final-checks/blue-parking-sign \
 FOVEONIC_GUI_SMOKE_NOISE=1 \
   target/release/Foveonic.app/Contents/MacOS/foveonic-gui \

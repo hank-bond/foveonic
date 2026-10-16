@@ -12,7 +12,7 @@ Keep measurement orchestration outside the Rust processing and GUI layers. Do no
 
 ### Directories
 
-- **[help-examples/](./help-examples/AGENTS.md)** Example tooling downloads missing release photographs and explicitly renders manifest-driven help comparisons.
+- **[help-examples/](./help-examples/AGENTS.md)** Python tooling explicitly renders manifest-driven help comparisons from the source cache maintained by Cargo.
 - **[profiling/](./profiling/AGENTS.md)** Profiling tools record owned native sessions, summarize shared JSON reports, and flag known overlapping workloads.
 
 <!-- INDEX:END -->

@@ -16,6 +16,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[camera-repair-default](./camera-repair-default.md)** Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
+- **[cargo-releases](./cargo-releases.md)** Replace Python app packaging with Cargo tasks and prepare an unsigned v0.1.0 draft-release workflow.
 - **[clickable-states](./clickable-states.md)** Group editing corrections and share rounded clickable states without changing processing defaults.
 - **[complete-reference-algorithms](./complete-reference-algorithms.md)** Autonomously complete the remaining Merrill reference algorithm stages and recipe integrations identified by the node audit, then validate the full GPU path. _Resume this autonomous implementation pass after a checkpoint or context compaction._
 - **[despeckle](./despeckle.md)** GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
@@ -29,6 +30,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
+- **[gui-screenshot](./gui-screenshot.md)** Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README.
 - **[help-comparisons](./help-comparisons.md)** Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
 - **[highlight-threshold](./highlight-threshold.md)** Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.

@@ -74,6 +74,9 @@ impl App {
         );
         viewport::install(rs);
         widgets::install_style(&cc.egui_ctx);
+        if smoke::screenshot_active() {
+            cc.egui_ctx.set_theme(egui::Theme::Dark);
+        }
         let engine = Engine::from_device(
             rs.device.clone(),
             rs.queue.clone(),
@@ -265,10 +268,14 @@ impl App {
             match reply.result {
                 Ok(Some(frame)) => {
                     timing::event(frame.revision, "image_received");
-                    self.status = format!(
-                        "Displaying {} · {:.0} ms",
-                        frame.artifact.name, frame.milliseconds
-                    );
+                    self.status = if smoke::screenshot_active() {
+                        format!("Displaying {}", frame.artifact.name)
+                    } else {
+                        format!(
+                            "Displaying {} · {:.0} ms",
+                            frame.artifact.name, frame.milliseconds
+                        )
+                    };
                     if self.smoke.is_some() {
                         eprintln!("{}: {:.0} ms", frame.artifact.name, frame.milliseconds);
                     }
@@ -677,9 +684,14 @@ impl eframe::App for App {
         let previous_selection = self.selected.clone();
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui));
         let mut select = None;
+        let screenshot = smoke::screenshot_active().then(smoke::screenshot_recipe);
         let organizer_limit = (ctx.available_rect().width() - 540.).clamp(160., 650.);
         egui::SidePanel::left("organizer")
-            .default_width(230.)
+            .default_width(
+                screenshot
+                    .as_ref()
+                    .map_or(230., |recipe| recipe.organizer_width),
+            )
             .width_range(160. ..=organizer_limit)
             .resizable(true)
             .show(ctx, |ui| {
@@ -715,7 +727,11 @@ impl eframe::App for App {
         let mut changed = false;
         let tools_limit = (ctx.available_rect().width() - 240.).clamp(300., 600.);
         egui::SidePanel::right("settings")
-            .default_width(330.)
+            .default_width(
+                screenshot
+                    .as_ref()
+                    .map_or(330., |recipe| recipe.tools_width),
+            )
             .width_range(300. ..=tools_limit)
             .resizable(true)
             .show(ctx, |ui| {
@@ -787,7 +803,11 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_app_id(preferences::APP_ID)
             .with_icon(icon::window_icon())
-            .with_inner_size([1440., 1000.])
+            .with_inner_size(if smoke::screenshot_active() {
+                smoke::screenshot_recipe().window_size
+            } else {
+                [1440., 1000.]
+            })
             .with_min_inner_size([1000., 600.]),
         wgpu_options: egui_wgpu::WgpuConfiguration {
             wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),

@@ -4,7 +4,7 @@ summary: "Desktop assets contain layered-X icon artwork and reviewed photographi
 
 # Desktop assets
 
-Photographic-help manifests, PNGs, and provenance live in [`help/`](./help/AGENTS.md). The remaining guidance here describes application-icon artwork.
+Photographic-help manifests, PNGs, and provenance live in [`help/`](./help/AGENTS.md). The [README capture recipe](./gui-screenshot.json) and generated `gui-screenshot.webp` are maintained through the explicit [screenshot workflow](../../../docs/gui-screenshot.md). Do not regenerate that image during ordinary builds. The remaining guidance here describes application-icon artwork.
 
 `logo.svg` is the current editable revision: the original face polygon/projection, 24-unit slabs with 16-unit gaps, distinct cobalt/yellow-green/vermilion layers, and a softly lit graphite face. Its viewBox tightly bounds the projected geometry.
 
@@ -12,7 +12,7 @@ Photographic-help manifests, PNGs, and provenance live in [`help/`](./help/AGENT
 
 The owner-created [`Foveonic.icon/icon.json`](./Foveonic.icon/icon.json) controls backgrounds and platform rendering. Its default specialization uses a near-white-to-cool-gray background and graphite X; its dark specialization uses a charcoal-to-near-black background and silver X. Foreground glass, specular effects, translucency, and group shadow are explicitly disabled for both. Use specialization arrays instead of retaining plain `fill` or `image-name` fields alongside them: Composer gives plain fields precedence and silently ignores those variants.
 
-Xcode's `actool` compiles the document for macOS 26 with `--standalone-icon-behavior all`, producing `Assets.car`, `Foveonic.icns`, and compiler-owned icon plist keys. [`build-macos-app.py`](../build-macos-app.py) packages them in a local `.app` with a stable bundle identifier. macOS selects the icon appearance according to system icon settings; the Rust app does not set a static Dock image. Direct Cargo launches are not the supported macOS icon workflow. The separate dark document and static Dock override were removed.
+Xcode's `actool` compiles the document for macOS 26 with `--standalone-icon-behavior all`, producing `Assets.car`, `Foveonic.icns`, and compiler-owned icon plist keys. [`cargo xtask bundle`](../../xtask/AGENTS.md) compiles the checked-in Composer document and packages these resources in a local `.app` with a stable bundle identifier. Normal builds do not regenerate artwork or require Python. macOS selects the icon appearance according to system icon settings; the Rust app does not set a static Dock image. Direct `cargo run -p foveonic-gui` launches are not the supported macOS icon workflow. The separate dark document and static Dock override were removed.
 
 `iconutil` extracts the compiled default ICNS rendition as `icon.png` for non-macOS window icons and regression checks. Its opaque tile spans 824 pixels, centered with 100-pixel margins in the 1024 canvas; these margins come from Apple's compiler. Composer's `ictool` preview fills the canvas and is unsuitable as a direct Dock image. No manual mask, padding, or guessed shrink factor is added.
 

@@ -37,7 +37,7 @@ The first Composer preview enabled default materials and produced broad glossy r
 
 Generated unmasked foreground SVGs are 1024×1024, with a 90% visible-width placement. `Foveonic.icon/icon.json` owns the light/dark background gradients, foreground specializations, and disabled glass settings. Generation updates both foregrounds, then invokes Xcode's production `actool` for macOS 26 with all standalone icon sizes. It produces `Assets.car`, `Foveonic.icns`, and icon plist metadata; `iconutil` extracts the default 1024-pixel rendition as `icon.png`. The manual `icon.svg` composition was removed. The document remains editable in Composer.
 
-[`build-macos-app.py`](../crates/foveonic-gui/build-macos-app.py) creates a local `Foveonic.app` beside the reported Cargo executable, packages native icon resources, merges the compiler's icon keys into `Info.plist`, and launches via `open`. The stable bundle ID is `org.foveonic.foveonic`; eframe's existing `foveonic` preference ID is unchanged. No static Dock override remains. Local bundled launches replace direct Cargo launches on macOS; distribution, installation, and publishing remain outside scope.
+The [Cargo tasks](../crates/xtask/AGENTS.md) now create a local `Foveonic.app` beside the reported Cargo executable, package native icon resources, merge the compiler's icon keys into `Info.plist`, and launch via `open`. The stable bundle ID is `org.foveonic.foveonic`. Eframe's existing `foveonic` preference ID is unchanged. No static Dock override remains. Local bundled launches replace direct binary launches on macOS. The original Python packager was migrated in the [release preparation](./cargo-releases.md), which also adds unsigned draft-release builds.
 
 ## Evidence
 
