@@ -23,7 +23,7 @@ The owner approved measurement, one active edit's GPU input cache, image-before-
 - [x] Run release workspace/examples, ignored GPU/worker, strict Clippy, documentation, formatting and Python checks.
 - [x] Quantify synthetic navigator drawing independently of preparation cost.
 - [x] Extend continuous worker dragging and exact cache/fresh coverage to noise presets and all advanced controls.
-- [ ] Record native pointer-driven interaction and owner review.
+- [x] Record native pointer-driven interaction in the [optimization handoff](./editing-optimization-handoff.md). Owner accepted the implemented interface and closed the review checkpoint.
 - [ ] Review the remaining Detail subtree and UI stalls with the owner before expanding the implementation.
 - [x] Review and split the initial slice into tested commits; preserve concurrent inspection changes.
 - [x] Review profiling, capture loading, organizer/control refinements and broader-control checks as separate commits.
@@ -38,7 +38,7 @@ Detail's complete continuation boundary includes filtered sensor tiles, column-c
 
 Worker publication is image-first. Old successful same-photo/root frames can advance displayed feedback without adopting old requested settings. Scopes pair with the displayed revision and never replace a different image. Parameter identities classify coalescing for safe progressive completion; actual image invalidation remains in processing recipes. Interactive execution waits after an operation completes rather than submitting an entire obsolete graph. Already-submitted compound operations remain indivisible, and sharing the drawing queue still permits stalls.
 
-Navigator generation runs separately after image publication and a 16 ms presentation deferral, only when no primary render is busy. One replaceable pending job produces a maximum-512-pixel-edge `Rgba8UnormSrgb` texture through the same presentation shader as the main viewport. Native egui registration happens on the UI thread; old IDs are freed. Keys include retained metadata identity, path/root, revision, channel, extent and signal space. Pan/zoom/scroll do not regenerate it. A compatible older tile can remain visible with an updating label; mismatched content cannot. Concurrent inspection-difference work shares presentation mapping/bindings with this path; its separate progress is recorded in [inspection differences](./inspection-differences.md).
+Navigator generation runs separately after image publication and a 16 ms presentation deferral, only when no primary render is busy. One replaceable pending job produces a maximum-512-pixel-edge `Rgba8UnormSrgb` texture through the same presentation shader as the main viewport. Native egui registration happens on the UI thread; old IDs are freed. Keys include retained metadata identity, path/root, revision, channel, extent and signal space. Pan/zoom/scroll do not regenerate it. A compatible older tile can remain visible with an updating label; mismatched content cannot. Concurrent inspection-difference work shares presentation mapping/bindings with this path; its separate progress is recorded in [inspection differences](./archived/inspection-differences.md).
 
 ## Evidence
 

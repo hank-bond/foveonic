@@ -2,7 +2,7 @@
 summary: "Control help explains photographic effects in plain English, with reviewed A/B crops where they teach the adjustment clearly."
 kind: reference
 status: accepted
-implementation: incomplete
+implementation: conforming
 ---
 
 # Photographic control help
@@ -61,4 +61,4 @@ The note **must** identify the brightened shadow and explain that the stripes ap
 
 ## Implementation direction
 
-Text-only controls keep their existing hover popovers. Reviewed comparisons use the shared manifest-driven template. Follow the [maintenance workflow](../help-examples.md) when adding examples. The [text/example review plan](../../plans/photographic-help.md) records source-image findings, and the [comparison plan](../../plans/help-comparisons.md) records tooling and integration checks. Processing behavior remains unchanged.
+Text-only controls keep their existing hover popovers. Reviewed comparisons use the shared manifest-driven template. Follow the [maintenance workflow](../help-examples.md) when adding examples. The [text/example review plan](../../plans/photographic-help.md) records source-image findings, and the [comparison plan](../../plans/archived/help-comparisons.md) records tooling, integration checks, and owner acceptance of the implemented examples and interface. Unembedded review candidates remain optional future examples. Processing behavior remains unchanged.

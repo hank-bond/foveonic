@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior."
 ---
 
 # Match despeckle WB to calibration
 
-The owner approved fixing the [WB-scale mismatch found by the node audit](./ordered-repair-and-node-audit.md#despeckle-wb-scale-and-recipe-coupling). Requirements: [dynamic despeckling](../docs/specs/despeckle.md).
+## Closure
+
+The owner accepted the implemented photographic results and authorized closing review-only plans. This implementation slice is complete. Pending-review statements below describe earlier checkpoints. Later recipe coupling and Sensor gain removal are separate changes.
+
+The owner approved fixing the [WB-scale mismatch found by the node audit](./ordered-repair-and-node-audit.md#despeckle-wb-scale-and-recipe-coupling). Requirements: [dynamic despeckling](../../docs/specs/despeckle.md).
 
 ## Scope
 
@@ -18,12 +23,12 @@ Pass calibration's actual three float32 WB factors into threshold preparation in
 - [x] Render default/reconstructed/disabled routes; check the exact neutral baseline and review native captures.
 - [x] Update current documentation and indexes; run workspace/GPU tests, strict Clippy, formatting and diff checks.
 - [x] Owner authorized grouped commits after code and automated checks.
-- [ ] Owner photographic review.
+- [x] Owner accepted the implemented photographic results and closed the review checkpoint.
 
 ## Evidence
 
 - `render.rs` passes the three factors from the same prepared calibration object into `despeckle::prepare`. Threshold generation widens those float32 values for its existing reference table arithmetic. Duplicate WB-list/aperture/temperature/sensor preparation is removed; calibration's arithmetic itself is unchanged.
-- [Despeckle tests](../crates/foveonic/src/nodes/sensor/despeckle_test.rs) cover exact factors, all original-file WB presets, Float32 versus integer `DespAdjust`, invalid factors, and Sensor-gain-independent tables. A nonzero-threshold GPU regression demonstrates that the old mismatch repairs a marginal point that the matched scale preserves, while a strong defect is still corrected at gains 0/1/1.3. The photographic test also compares the graph result against direct application prepared from actual calibration factors.
+- [Despeckle tests](../../crates/foveonic/src/nodes/sensor/despeckle_test.rs) cover exact factors, all original-file WB presets, Float32 versus integer `DespAdjust`, invalid factors, and Sensor-gain-independent tables. A nonzero-threshold GPU regression demonstrates that the old mismatch repairs a marginal point that the matched scale preserves, while a strong defect is still corrected at gains 0/1/1.3. The photographic test also compares the graph result against direct application prepared from actual calibration factors.
 - Both original unlisted red speckles remain corrected with green/blue unchanged; the ordered-repair leaf block remains corrected before despeckling. Retained earlier artifacts remain immutable.
 - Reference replay used identical full-sensor inputs and actual float32 calibration factors. Every output sample agrees within 0.000977 camera codes across six originals. Detection counts match the scale-matched audit column: 4800 / 7061 / 62632 / 3164 / 4742 / 16597. These are candidate counts, not verified defect counts.
 - Six TIFFs per default/reconstructed/disabled route were compared. All disabled outputs match the neutral baseline byte-for-byte. Whole-image and native-crop review compared previous mismatched defaults, matched defaults, and matched reconstruction. Whole-image appearance is stable; known highlight/remaining-defect limitations are unchanged.

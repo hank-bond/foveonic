@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "GPU monochrome rendering, a triangular layer mixer, mode-specific editing, and linear monochrome DNG export are implemented and checked."
 ---
 
 # Implement monochrome rendering
 
-Requirements: [monochrome rendering](../docs/specs/monochrome-rendering.md), [processing graphs](../docs/specs/processing-graphs.md), [render resources](../docs/specs/render-resources.md), [interactive rendering](../docs/specs/interactive-rendering.md), [output strategies](../docs/specs/output-strategies.md), and [editing sidecars](../docs/specs/editing-sidecars.md).
+## Closure
+
+The owner accepted the implemented photographic and interface results and authorized closing review-only plans. This implementation slice is complete. Capture One/Lightroom appearance and editing-latitude checks remain unperformed and tracked in the active [DNG export plan](../dng-export.md). No broader camera, high-ISO, or cross-platform coverage is claimed.
+
+Requirements: [monochrome rendering](../../docs/specs/monochrome-rendering.md), [processing graphs](../../docs/specs/processing-graphs.md), [render resources](../../docs/specs/render-resources.md), [interactive rendering](../../docs/specs/interactive-rendering.md), [output strategies](../../docs/specs/output-strategies.md), and [editing sidecars](../../docs/specs/editing-sidecars.md).
 
 ## Scope and approval
 
@@ -32,7 +37,7 @@ Monochrome brightness has its own scalar type. Operation discriminants and disti
 
 The reference implementation carries Float32 histogram residuals across adjacent columns. GPU columns initialize independently while retaining vertical traversal and strip boundaries. The mathematical filter is unchanged, but rounding history differs. The complete 48×48 reference fixture measures maximum directional, column, histogram, and despeckle differences of approximately 0.000008, 0.000023, 0.000191, and 0.000168 camera codes.
 
-Large private histograms produced nonrepeatable output on Apple M1 Pro Metal. Reducing workgroup width did not fix it. Workgroup-owned state passed the full-sensor checks but was slow. The [performance pass](./archived/monochrome-performance.md) replaced it with column-parallel GPU scratch and retained byte-identical output to the implemented filter. Full-sensor repeatability checks remain necessary when changing storage or traversal.
+Large private histograms produced nonrepeatable output on Apple M1 Pro Metal. Reducing workgroup width did not fix it. Workgroup-owned state passed the full-sensor checks but was slow. The [performance pass](./monochrome-performance.md) replaced it with column-parallel GPU scratch and retained byte-identical output to the implemented filter. Full-sensor repeatability checks remain necessary when changing storage or traversal.
 
 At extreme tone settings, Float32 Bezier evaluation introduced tiny inversions on a nearly flat highlight plateau. A mono-only prefix maximum restores monotonicity for DNG presentation. Native eight-bit tone samples still agree. Color tone is unchanged.
 
@@ -40,7 +45,7 @@ The interactive cache retains continuation boundaries, not every finished result
 
 ## Validation
 
-The final workspace passes 79 ordinary processor, three CLI, 113 GUI, and 18 documentation-tool checks. The complete serial GPU suite passes 69 processor and eight GUI/worker checks. Strict all-target Clippy, formatting, generated indexes, and whitespace checks pass. An earlier color comparison failed intermittently and passed on rerun. The [mismatch investigation](./gpu-output-mismatch.md) remains unresolved.
+The final workspace passes 79 ordinary processor, three CLI, 113 GUI, and 18 documentation-tool checks. The complete serial GPU suite passes 69 processor and eight GUI/worker checks. Strict all-target Clippy, formatting, generated indexes, and whitespace checks pass. An earlier color comparison failed intermittently and passed on rerun. The [mismatch investigation](../gpu-output-mismatch.md) remains unresolved.
 
 Tests cover pure layers, noise and banding presets, sharpening, selective inspection, scopes, textures, retained ownership, fresh/session equality, repeated stages, hidden settings, mode switches, and TIFF/DNG boundaries. All seven originals produce finite, nonblack, neutral monochrome output. The all-enabled Sunlight/Vivid color render retains digest `57dfda91a95f6e08` and exact float/TIFF goldens.
 
@@ -50,4 +55,4 @@ On the blue example, SDK/native RGB16 presentation differs by approximately 0.46
 
 ## Remaining acceptance
 
-Owner photographic review and Capture One/Lightroom appearance and editing-latitude checks remain external acceptance. No high-ISO photographic survey was available. The established column table ends at estimated ISO 6400, and larger requests fail explicitly. No installation, native GUI launch, or default generated-output change was made during this work.
+Owner photographic review is closed by acceptance of the implemented results. Capture One/Lightroom appearance and editing-latitude checks remain external acceptance in the active DNG export plan. No high-ISO photographic survey was available. The established column table ends at estimated ISO 6400, and larger requests fail explicitly. No installation, native GUI launch, or default generated-output change was made during this work.

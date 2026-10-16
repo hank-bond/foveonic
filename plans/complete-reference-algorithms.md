@@ -5,9 +5,11 @@ read_when: "Resume this autonomous implementation pass after a checkpoint or con
 
 # Complete the remaining reference algorithms
 
+The owner accepted the implemented photographic and interface results and closed review-only checkpoints. Unperformed integration, reference comparisons, and coverage checks below remain open. Historical pending-review statements do not require another photographic acceptance pass for the existing implementation.
+
 ## Owner directive and continuation
 
-The owner explicitly approved the remaining algorithm work after reviewing the [implemented-node audit](./ordered-repair-and-node-audit.md), and directed: “do it all autonomously until you are done … work across compactions without stopping or asking for approval to continue at each checkpoint … just keep going until its all done.”
+The owner explicitly approved the remaining algorithm work after reviewing the [implemented-node audit](./archived/ordered-repair-and-node-audit.md), and directed: “do it all autonomously until you are done … work across compactions without stopping or asking for approval to continue at each checkpoint … just keep going until its all done.”
 
 This authorizes implementation, necessary shared API/caller/document migrations, fixtures, checks, and algorithm-specific design decisions throughout this pass. Continue to the next unchecked step after each checkpoint or compaction; do not treat intermediate progress as completion or request routine continuation approval. Resolve ordinary compiler/test failures within the pass. Report genuine blockers or unresolved requirements when higher-priority repository instructions require it. Do not commit, install, publish, accept agreements, or delete retained evidence without separate approval. New work remains uncommitted for review.
 

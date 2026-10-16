@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated."
 ---
 
 # Add reference despeckling
 
-The owner approved the stage after the [two residual-defect diagnosis](./editor-review-focus.md#residual-defect-diagnosis), then selected separate controls with **both camera-record repair and despeckling enabled by default**. Requirements: [dynamic despeckling](../docs/specs/despeckle.md), [processing graphs](../docs/specs/processing-graphs.md), and [GUI artwork](../docs/specs/gui-workspace.md).
+## Closure
+
+The owner accepted the implemented photographic results and authorized closing review-only plans. This implementation slice is complete. The findings below describe its historical recipe and controls. Cross-platform runtime checks were not performed and remain a coverage limitation. Later camera correction and noise coupling are recorded in the [algorithm completion plan](../complete-reference-algorithms.md).
+
+The owner approved the stage after the [two residual-defect diagnosis](./editor-review-focus.md#residual-defect-diagnosis), then selected separate controls with **both camera-record repair and despeckling enabled by default**. Requirements: [dynamic despeckling](../../docs/specs/despeckle.md), [processing graphs](../../docs/specs/processing-graphs.md), and [GUI artwork](../../docs/specs/gui-workspace.md).
 
 ## Steps
 
@@ -17,7 +22,7 @@ The owner approved the stage after the [two residual-defect diagnosis](./editor-
 - [x] Import and frame the owner's SVG, generate transparent runtime PNG, and set window/macOS Dock icons.
 - [x] Update indexes and run workspace/ignored GPU tests, Clippy, formatting, and documentation checks.
 - [x] Owner authorized grouped commits after code and automated checks.
-- [ ] Owner photographic review and cross-platform runtime checks.
+- [x] Owner accepted the implemented photographic results and closed the review checkpoint. Cross-platform runtime validation remains unperformed.
 
 ## Implementation
 
@@ -31,11 +36,11 @@ The initial independent stage used unscaled selected WB factors on calibration's
 
 ## Artwork
 
-The owner supplied the logo artwork, preserved in [`crates/foveonic-gui/assets/`](../crates/foveonic-gui/assets/AGENTS.md) alongside the editable revision. The initial static Dock override was subsequently replaced by a local macOS app bundle with native automatic light/dark appearances. Non-macOS window icons use the compiled default PNG. The [icon plan](./icon-background.md) records the selected workflow, composition, source preservation, and checks. Nothing was installed or published.
+The owner supplied the logo artwork, preserved in [`crates/foveonic-gui/assets/`](../../crates/foveonic-gui/assets/AGENTS.md) alongside the editable revision. The initial static Dock override was subsequently replaced by a local macOS app bundle with native automatic light/dark appearances. Non-macOS window icons use the compiled default PNG. The [icon plan](./icon-background.md) records the selected workflow, composition, source preservation, and checks. Nothing was installed or published.
 
 ## Evidence
 
-- `despeckle-reference.json` records 64×64 native detection/ordered repair and threshold samples. The GPU test compares every sample at gain 0/1/1.3, immutable source preservation, and capacity-one bank ordering. See [fixture provenance](../crates/foveonic/tests/data/README.md).
+- `despeckle-reference.json` records 64×64 native detection/ordered repair and threshold samples. The GPU test compares every sample at gain 0/1/1.3, immutable source preservation, and capacity-one bank ordering. See [fixture provenance](../../crates/foveonic/tests/data/README.md).
 - Known-source checks correct the bolt `(220,705)` and white-edge `(3624,2264)` red-layer defects, preserving their green/blue values and retained preceding artifacts.
 - Native review covered 66 frames across six originals, including default rendering, low-preset camera-only/repaired zoom comparisons, corrected-layer inspection, both disabled, and restored defaults. Both reported magenta centers disappear with despeckling; other isolated colored points can remain.
 - Default and reconstructed routes each produced six TIFFs with the new enabled corrections. The disabled route matches all six previous neutral TIFFs byte-for-byte.

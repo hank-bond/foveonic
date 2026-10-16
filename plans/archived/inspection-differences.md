@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "Inspect operation inputs and outputs alongside amplified signed layer/channel differences."
 ---
 
 # Inspection differences
 
-Requirements: [pipeline inspection](../docs/specs/pipeline-inspection.md), [render resources](../docs/specs/render-resources.md), and [GUI workspace](../docs/specs/gui-workspace.md).
+## Closure
+
+The owner accepted the implemented interface results and authorized closing review-only plans. Native captures were completed as recorded below, and the visual-review checkpoint is closed. Combined RGB difference heatmaps and branching scalar diagnostics remain outside this completed slice.
+
+Requirements: [pipeline inspection](../../docs/specs/pipeline-inspection.md), [render resources](../../docs/specs/render-resources.md), and [GUI workspace](../../docs/specs/gui-workspace.md).
 
 ## Steps
 
@@ -17,7 +22,7 @@ Requirements: [pipeline inspection](../docs/specs/pipeline-inspection.md), [rend
 - [x] Review the drag-publication failure and passing unchanged-binary rerun; owner approved checkpointing with the failure preserved.
 - [x] Add the agreed Input/Output toggle, sharing the retained Difference pair and preserving its side while Difference is on.
 - [x] Check side switching, pending fallbacks, navigator identity, unchanged scopes, and GPU-pair reuse.
-- [ ] Complete native screenshots and owner visual review.
+- [x] Complete native screenshots. Owner accepted the implemented interface and closed the visual-review checkpoint.
 
 ## Scope
 

@@ -4,7 +4,7 @@ summary: "Monochrome nodes mix sensor layers before dedicated filtering, column 
 
 # Monochrome nodes
 
-Follow the [monochrome requirements](../../../../../docs/specs/monochrome-rendering.md) and [implementation plan](../../../../../plans/monochrome-rendering.md). Keep reference attribution when adapting arithmetic. Triangle amounts are actual barycentric proportions, not the reference's sequential normalization.
+Follow the [monochrome requirements](../../../../../docs/specs/monochrome-rendering.md) and [implementation plan](../../../../../plans/archived/monochrome-rendering.md). Keep reference attribution when adapting arithmetic. Triangle amounts are actual barycentric proportions, not the reference's sequential normalization.
 
 Tables contain metadata-derived coefficients, never photographic samples. Keep mixed brightness typed separately from masks, original corrected layers immutable, and histogram neighbors distinct from the corrected mono plane. Preserve the zero-noise route without histogram filtering.
 

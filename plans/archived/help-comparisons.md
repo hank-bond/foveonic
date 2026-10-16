@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template."
 ---
 
 # Manage photographic help comparisons
 
-Requirements: [photographic help](../docs/specs/photographic-help.md), [GUI workspace](../docs/specs/gui-workspace.md), and [image information bar](../docs/specs/image-information-bar.md).
+## Closure
+
+The owner accepted the implemented photographic and interface results and authorized closing review-only plans. The implemented examples and tooling are accepted. Pending-review statements below describe earlier checkpoints. Unembedded advanced-control candidates remain optional future examples, not newly approved assets.
+
+Requirements: [photographic help](../../docs/specs/photographic-help.md), [GUI workspace](../../docs/specs/gui-workspace.md), and [image information bar](../../docs/specs/image-information-bar.md).
 
 ## Steps
 
@@ -21,7 +26,7 @@ Requirements: [photographic help](../docs/specs/photographic-help.md), [GUI work
 - [x] Add the brighter +3 EV recycling-bin Row banding example without amplifying the removed pattern.
 - [x] Prepare local comparisons for all seven advanced Noise and Detail controls on three shared crops.
 - [x] Preserve linked Mean decay limits while allowing manual values through 1, then prepare higher-value comparisons for owner review.
-- [ ] Obtain final owner visual review before committing or pushing.
+- [x] Owner accepted the implemented examples and interface and closed the visual-review checkpoint.
 
 ## Agreed approach
 
@@ -33,7 +38,7 @@ Each comparison has one directory. The manifest owns its brief explanation, crop
 
 A three-state A/B survey of all seven official photographs located isolated visible changes with both corrections off, Bad pixels only, and both on. Four-state follow-up renders added Speckles alone. The first proposed Bad pixels dot at `(935,1968)` in `turquoise-still-life.x3f` is repaired identically by either control, so it does not distinguish them.
 
-The owner instead selected the 2×2 magenta leaf defect at `(1582,2737)` in `glossy-leaves-and-buds.x3f` for Bad pixels, and the isolated magenta turquoise dot at `(1278,1993)` for Speckles. Four-state renders confirm that only Bad pixels fixes the leaf patch and only Speckles fixes the turquoise dot. Each help pair keeps the companion correction enabled, with Noise and Detail and sharpening off. The approved crops and recipes are recorded in the [requirements](../docs/specs/photographic-help.md#bad-pixels-and-speckles-examples) and comparison manifests.
+The owner instead selected the 2×2 magenta leaf defect at `(1582,2737)` in `glossy-leaves-and-buds.x3f` for Bad pixels, and the isolated magenta turquoise dot at `(1278,1993)` for Speckles. Four-state renders confirm that only Bad pixels fixes the leaf patch and only Speckles fixes the turquoise dot. Each help pair keeps the companion correction enabled, with Noise and Detail and sharpening off. The approved crops and recipes are recorded in the [requirements](../../docs/specs/photographic-help.md#bad-pixels-and-speckles-examples) and comparison manifests.
 
 The owner subsequently requested simpler copy without semicolons. Descriptions, notes, and captions now use shorter sentences. Image recipes and PNGs are unchanged.
 

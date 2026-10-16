@@ -27,10 +27,10 @@ The filename remains at the true center. Side readouts take priority over filena
 
 ## Conformance
 
-Pointer-driven tests drag-select and copy each of the three readouts, including the full coordinate string. Property-only read fixtures and background-reader tests cover bounded input reads, latest-selection coalescing, clearing, and same-file reselection. Six original files have identical capture properties through the early and full-source paths. A native loading-view capture shows all five highlights before processing replies are displayed; see the [metadata-first plan](../../plans/archived/metadata-first-loading.md). Unit checks cover photographic formatting, fit/zoom/pan bounds, off-canvas handling, and portrait extents. Native captures cover six originals, layer/RGB views, repair settings, and magnified regions. An isolated restart reopens the saved folder with neutral photographic settings. See the [editor review plan](../../plans/editor-review-focus.md).
+Pointer-driven tests drag-select and copy each of the three readouts, including the full coordinate string. Property-only read fixtures and background-reader tests cover bounded input reads, latest-selection coalescing, clearing, and same-file reselection. Six original files have identical capture properties through the early and full-source paths. A native loading-view capture shows all five highlights before processing replies are displayed; see the [metadata-first plan](../../plans/archived/metadata-first-loading.md). Unit checks cover photographic formatting, fit/zoom/pan bounds, off-canvas handling, and portrait extents. Native captures cover six originals, layer/RGB views, repair settings, and magnified regions. An isolated restart reopens the saved folder with neutral photographic settings. See the [editor review plan](../../plans/archived/editor-review-focus.md).
 
 ## Visual reference
 
 The visual reference showed a dark, single-row bar with metadata left and filename centered. Use viewport reporting on the right rather than the reference's rating controls.
 
-The related defect investigation and pending implementation decisions are tracked in the [editor review plan](../../plans/editor-review-focus.md).
+The related defect investigation and owner acceptance are recorded in the [editor review plan](../../plans/archived/editor-review-focus.md).

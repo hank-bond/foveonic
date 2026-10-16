@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults."
 ---
 
 # Banding slider and settings defaults
 
-The owner approved a snapping five-position slider and shared defaults for missing edit fields. Requirements: [column conditioning](../docs/specs/column-conditioning.md), [noise/detail controls](../docs/specs/detail-and-noise.md), and [editing sidecars](../docs/specs/editing-sidecars.md). The [verification plan](./reference-banding-verification.md) records native evidence and the unresolved application-export boundary.
+## Closure
+
+The owner accepted the implemented photographic results and authorized closing review-only plans. This implementation slice is complete. Pending-review statements below describe earlier checkpoints. Matching reference application exports remain tracked in the [verification plan](../reference-banding-verification.md).
+
+The owner approved a snapping five-position slider and shared defaults for missing edit fields. Requirements: [column conditioning](../../docs/specs/column-conditioning.md), [noise/detail controls](../../docs/specs/detail-and-noise.md), and [editing sidecars](../../docs/specs/editing-sidecars.md). The [verification plan](../reference-banding-verification.md) records native evidence and the unresolved application-export boundary.
 
 ## Completed work
 
@@ -21,7 +26,7 @@ Workspace unit/UI tests pass. Recipes lacking banding retain position 2; explici
 
 GPU outputs match all five guarded native component fixtures within the retained `0.12`-camera-code bound, preserving selected-window margins and immutable inputs. The old midpoint fixture passes gains 0/1/1.3. Parameter checks on six original photographs show that only column settings change across presets. Original-file cached-versus-fresh renders pass every nonmidpoint choice, and saved-recipe GPU replay is exact.
 
-The retained [five-position fixture](../crates/foveonic/tests/data/column-presets.json) records the guarded native component samples and their provenance. The temporary capture tool is preserved in Git history; regression tests consume the fixture directly. One test-harness comparison was corrected to compare the same encoded Float32 representation rather than expanded values against their shorter JSON spelling; recipe decoding was unchanged.
+The retained [five-position fixture](../../crates/foveonic/tests/data/column-presets.json) records the guarded native component samples and their provenance. The temporary capture tool is preserved in Git history; regression tests consume the fixture directly. One test-harness comparison was corrected to compare the same encoded Float32 representation rather than expanded values against their shorter JSON spelling; recipe decoding was unchanged.
 
 ## Boundaries and review
 

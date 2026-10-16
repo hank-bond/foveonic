@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel."
 ---
 
 # Refine the application icon
 
-The owner requested Apple guidance/template research, stronger top-to-bottom background shading, clearer colored layers, thicker slabs, a lit top face, and a 90% width trial. The default Liquid Glass trial was rejected; the approved replacement is a narrow, opaque bevel consistent with upper-left lighting. Requirements: [GUI workspace](../docs/specs/gui-workspace.md).
+## Closure
+
+The owner accepted the implemented interface results and authorized closing review-only plans. This implementation slice is complete. Earlier visual/system-style review checkpoints are closed by owner direction, not by a new automated system-style test.
+
+The owner requested Apple guidance/template research, stronger top-to-bottom background shading, clearer colored layers, thicker slabs, a lit top face, and a 90% width trial. The default Liquid Glass trial was rejected; the approved replacement is a narrow, opaque bevel consistent with upper-left lighting. Requirements: [GUI workspace](../../docs/specs/gui-workspace.md).
 
 ## Steps
 
@@ -21,7 +26,7 @@ The owner requested Apple guidance/template research, stronger top-to-bottom bac
 - [x] Build and launch a local `.app` with Apple's compiled asset catalog and icon metadata; remove the runtime static override.
 - [x] Migrate instructions/tests and verify compiled appearances, bundle contents, and native launch.
 - [x] Owner authorized grouped commits after code and automated checks.
-- [ ] Owner visual/system-style review.
+- [x] Owner accepted the implemented appearance and closed the visual/system-style review checkpoint.
 
 ## Research and decisions
 
@@ -33,11 +38,11 @@ The first Composer preview enabled default materials and produced broad glossy r
 
 ## Implementation
 
-[`logo.svg`](../crates/foveonic-gui/assets/logo.svg) retains the face polygon and projection while revising depth, palette, and light. The owner removed the obsolete initial-import copy. [`generate-icon.py`](../crates/foveonic-gui/assets/generate-icon.py) reads it without modifying it and derives twelve 1.4-source-unit inward chamfer facets on the top X. Facet normals determine brightness toward upper-left light; concave corners stay sharp without an outside halo.
+[`logo.svg`](../../crates/foveonic-gui/assets/logo.svg) retains the face polygon and projection while revising depth, palette, and light. The owner removed the obsolete initial-import copy. [`generate-icon.py`](../../crates/foveonic-gui/assets/generate-icon.py) reads it without modifying it and derives twelve 1.4-source-unit inward chamfer facets on the top X. Facet normals determine brightness toward upper-left light; concave corners stay sharp without an outside halo.
 
 Generated unmasked foreground SVGs are 1024×1024, with a 90% visible-width placement. `Foveonic.icon/icon.json` owns the light/dark background gradients, foreground specializations, and disabled glass settings. Generation updates both foregrounds, then invokes Xcode's production `actool` for macOS 26 with all standalone icon sizes. It produces `Assets.car`, `Foveonic.icns`, and icon plist metadata; `iconutil` extracts the default 1024-pixel rendition as `icon.png`. The manual `icon.svg` composition was removed. The document remains editable in Composer.
 
-The [Cargo tasks](../crates/xtask/AGENTS.md) now create a local `Foveonic.app` beside the reported Cargo executable, package native icon resources, merge the compiler's icon keys into `Info.plist`, and launch via `open`. The stable bundle ID is `org.foveonic.foveonic`. Eframe's existing `foveonic` preference ID is unchanged. No static Dock override remains. Local bundled launches replace direct binary launches on macOS. The original Python packager was migrated in the [release preparation](./archived/cargo-releases.md), which also adds unsigned draft-release builds.
+The [Cargo tasks](../../crates/xtask/AGENTS.md) now create a local `Foveonic.app` beside the reported Cargo executable, package native icon resources, merge the compiler's icon keys into `Info.plist`, and launch via `open`. The stable bundle ID is `org.foveonic.foveonic`. Eframe's existing `foveonic` preference ID is unchanged. No static Dock override remains. Local bundled launches replace direct binary launches on macOS. The original Python packager was migrated in the [release preparation](./cargo-releases.md), which also adds unsigned draft-release builds.
 
 ## Evidence
 

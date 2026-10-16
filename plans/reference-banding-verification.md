@@ -4,7 +4,7 @@ summary: "Record native Merrill banding presets, reached pixel consumers, and th
 
 # Reference banding verification
 
-The owner approved native verification before selecting a strength control, then approved a five-position snapping slider based on the results below. Implementation is tracked in the [slider plan](./banding-slider-and-settings-defaults.md). Matching application exports remain unverified.
+The owner approved native verification before selecting a strength control, then approved a five-position snapping slider based on the results below. Implementation is tracked in the [slider plan](./archived/banding-slider-and-settings-defaults.md). Matching application exports remain unverified.
 
 ## Completed checks
 

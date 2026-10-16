@@ -4,6 +4,8 @@ summary: "Replace technical hover copy with photographic explanations, then revi
 
 # Improve photographic help
 
+The owner accepted the implemented help and integrated examples and closed their visual-review checkpoint. Earlier pending-review statements below are historical. Cleaner sharpening-source selection remains open, and unembedded candidates are not approved application assets.
+
 Requirements: [photographic control help](../docs/specs/photographic-help.md), [GUI workspace](../docs/specs/gui-workspace.md), [detail and noise](../docs/specs/detail-and-noise.md), and [pipeline inspection](../docs/specs/pipeline-inspection.md).
 
 ## Steps
@@ -14,7 +16,7 @@ Requirements: [photographic control help](../docs/specs/photographic-help.md), [
 - [x] Assess the six existing originals and prepare a small set of labeled, reproducible A/B crops for owner review.
 - [x] Try the owner's suggested adjacent sunlit/shadowed concrete in the stroller photograph before requesting a new noisy-shadow source.
 - [ ] Obtain a cleaner sharpening-edge source if the existing photographs do not demonstrate it well.
-- [ ] Review copy and examples with the owner before embedding examples or committing.
+- [x] Owner accepted the implemented copy and integrated examples and closed the visual-review checkpoint.
 
 ## Approach
 
@@ -49,7 +51,7 @@ A clean, in-focus high-contrast edge with a plain background may still be useful
 
 ## Managed comparisons
 
-The owner selected the red flower's crop and Off/Auto/+0.8 states at −0.5 EV as the first integrated example, followed by complementary Bad pixels and Speckles examples verified with all four correction combinations. Their manifests, generated PNGs, named source photographs, and shared popover integration follow the [comparison plan](./help-comparisons.md) and [maintenance workflow](../docs/help-examples.md). Official source photographs now live in the long-lived supplemental release; the owner chose not to distribute editing sidecars. The earlier candidate assessments are historical, not the current app assets. Native review of the integrated popovers remains pending.
+The owner selected the red flower's crop and Off/Auto/+0.8 states at −0.5 EV as the first integrated example, followed by complementary Bad pixels and Speckles examples verified with all four correction combinations. Their manifests, generated PNGs, named source photographs, and shared popover integration follow the [comparison plan](./archived/help-comparisons.md) and [maintenance workflow](../docs/help-examples.md). Official source photographs now live in the long-lived supplemental release; the owner chose not to distribute editing sidecars. The earlier candidate assessments are historical, not the current app assets. Native review of the integrated popovers remains pending.
 
 ## Stroller light/shadow boundary
 

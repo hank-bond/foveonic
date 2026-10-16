@@ -27,7 +27,7 @@ Generation requires Xcode's macOS 26-capable `xcrun actool` and macOS `iconutil`
 
 Edit `logo.svg` for projection/palette/slab changes; edit the Composer document for background/platform styling. The generator never overwrites `icon.json`. Reload the document in Icon Composer after outside edits before saving from the app. Do not edit generated foreground/raster files as a second artwork source.
 
-[Apple's guidance](https://developer.apple.com/design/human-interface-guidelines/app-icons) specifies centered 1024×1024 square layers and system masking/effects, without a fixed foreground percentage. The [review plan](../../../plans/icon-background.md) records research, owner rejection of Liquid Glass, and checks.
+[Apple's guidance](https://developer.apple.com/design/human-interface-guidelines/app-icons) specifies centered 1024×1024 square layers and system masking/effects, without a fixed foreground percentage. The [review plan](../../../plans/archived/icon-background.md) records research, owner rejection of Liquid Glass, and checks.
 
 <!-- INDEX:START -->
 

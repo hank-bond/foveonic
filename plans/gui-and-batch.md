@@ -4,6 +4,8 @@ summary: "Expose the working conversion engine through a minimal GUI and batch C
 
 # Connect GUI and batch processing
 
+The owner accepted the implemented photographic and interface results and closed review-only checkpoints. Earlier native/visual-review notes below describe historical checkpoints. Small-batch review, DNG batch integration, and unperformed cross-platform checks remain separate work.
+
 Requirements: [`gui-workspace.md`](../docs/specs/gui-workspace.md), [`application-workflows.md`](../docs/specs/application-workflows.md), [`pipeline-inspection.md`](../docs/specs/pipeline-inspection.md), and [`render-resources.md`](../docs/specs/render-resources.md). Build on the processor snapshot committed as `8da3e78`.
 
 ## Steps
@@ -25,7 +27,8 @@ Requirements: [`gui-workspace.md`](../docs/specs/gui-workspace.md), [`applicatio
 - [x] Add label/slider/value controls, double-click reset, global Sensor gain, and focused numeric nudging.
 - [x] Remove view-only exposure and non-image data from image inspection following owner review.
 - [x] Complete the cleanup pass and regression checks before owner review for commit.
-- [ ] Review interactive use and a small batch with the owner; record concrete processing or responsiveness gaps.
+- [x] Owner accepted the implemented interface and closed the interaction-review checkpoint.
+- [ ] Review a small batch with the owner and record concrete processing gaps.
 - [ ] Select interaction checkpoints only if measurements justify them.
 - [ ] Expose both output recipes through CLI batch processing; TIFF is implemented, DNG remains pending.
 

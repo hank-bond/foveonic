@@ -22,7 +22,7 @@ Requirements: [output strategies](../docs/specs/output-strategies.md). Finish th
 - [x] Implement one selected appearance and uncompressed TIFF-based export, then verify full original exports and independent SDK decoding.
 - [x] Owner review of the initial DNG look.
 - [ ] Compare compression codecs and libraries separately after uncompressed export acceptance.
-- [ ] Validate photographic appearance and editing latitude through the SDK; test Capture One and Lightroom/ACR separately.
+- [ ] Validate photographic appearance and editing latitude through the SDK. Test color and monochrome exports in Capture One and Lightroom/ACR separately.
 
 ## Photographic direction
 
@@ -60,7 +60,7 @@ After the owner closed the GUI and approved confirmation, the [validation exampl
 
 A seventh full export used Sunlight/Vivid on the blue-sign original. Its 44,255,232 camera samples equal Standard's exactly, while the curve, look table, selected history, and SDK rendering differ. Its independent SDK decode is exact and validation is warning-free. Together with the technical-base test, this confirms selected appearance is not baked into these sample payloads.
 
-The full ignored workspace run passed all 57 core and seven GUI tests, including the new DNG encoding test and existing exact-output, ownership, sidecar replay, inspection, and dragging coverage. This is correctness evidence, not a new performance or memory claim; the deferred intermittent mismatch is not declared fixed. No GUI was launched or stopped by this pass, and nothing was committed. A follow-up documentation check initially found a stale reference to owner-removed artwork in the [icon plan](./icon-background.md). The owner subsequently approved reference cleanup, and documentation checks passed.
+The full ignored workspace run passed all 57 core and seven GUI tests, including the new DNG encoding test and existing exact-output, ownership, sidecar replay, inspection, and dragging coverage. This is correctness evidence, not a new performance or memory claim; the deferred intermittent mismatch is not declared fixed. No GUI was launched or stopped by this pass, and nothing was committed. A follow-up documentation check initially found a stale reference to owner-removed artwork in the [icon plan](./archived/icon-background.md). The owner subsequently approved reference cleanup, and documentation checks passed.
 
 The owner reviewed the exported DNG and approved its look. Broader native save-dialog/export/error interaction, Capture One and Lightroom/ACR WB/exposure latitude, and highlight editing still need validation before claiming complete DNG conformance. Compression remains deferred.
 

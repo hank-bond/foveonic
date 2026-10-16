@@ -15,7 +15,7 @@ Requirements: [`processing-graphs.md`](../docs/specs/processing-graphs.md) and [
 - [x] Connect source data and metadata access to a typed internal graph.
 - [x] Implement shader image stages and export an inspectable RGB16 TIFF.
 - [x] Check six original-file exports and small GPU arithmetic fixtures. Record photographic gaps and memory use.
-- [ ] Obtain owner review of the TIFF slice.
+- [x] Owner accepted the implemented photographic results and closed the TIFF review checkpoint.
 - [ ] Resolve DNG sample encoding, compression, calibration, and profile fitting with the owner. Add the DNG recipe and packaging node.
 - [ ] Review DNG editing in Lightroom and Capture One.
 

@@ -1,10 +1,15 @@
 ---
-summary: "The reference-style full-resolution noise/detail shader slice is implemented and validated, with owner photographic review pending."
+status: archived
+summary: "The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner."
 ---
 
 # Build reference-style detail and noise nodes
 
-Requirements: [`detail-and-noise.md`](../docs/specs/detail-and-noise.md), [`processing-graphs.md`](../docs/specs/processing-graphs.md), and [`pipeline-inspection.md`](../docs/specs/pipeline-inspection.md).
+## Closure
+
+The owner accepted the implemented photographic and interface results and authorized closing review-only plans. This implementation slice is complete. Pending-review statements below describe earlier checkpoints. Cross-platform runtime checks were not performed and remain a coverage limitation.
+
+Requirements: [`detail-and-noise.md`](../../docs/specs/detail-and-noise.md), [`processing-graphs.md`](../../docs/specs/processing-graphs.md), and [`pipeline-inspection.md`](../../docs/specs/pipeline-inspection.md).
 
 The owner approved autonomous implementation after selecting the reference algorithms as the first photographic baseline. The reviewed GUI work is committed as `b1a611b`.
 
@@ -19,13 +24,13 @@ The owner approved autonomous implementation after selecting the reference algor
 - [x] Validate reference arithmetic, preserved borders, neutral defaults, and retained outputs.
 - [x] Review six photographs technically, measure resources, and run native checks.
 - [x] Finish documentation/index and regression checks for owner review.
-- [ ] Owner photographic/interaction review and cross-platform runtime checks.
+- [x] Owner accepted the implemented photographic and interface results and closed the review checkpoint. Cross-platform runtime validation remains unperformed.
 
 ## Scope and implementation findings
 
-Reference implementation: audited source snapshot based on revision `e47af35`. Adapted modules/shaders retain attribution; [fixture provenance](../crates/foveonic/tests/data/README.md) identifies the diagnostic library and arithmetic cases.
+Reference implementation: audited source snapshot based on revision `e47af35`. Adapted modules/shaders retain attribution; [fixture provenance](../../crates/foveonic/tests/data/README.md) identifies the diagnostic library and arithmetic cases.
 
-The first slice follows full-resolution tile filtering and reconstruction. [Baseline boundaries](../docs/specs/detail-and-noise.md#baseline-boundaries) record deferred stages and necessary workspace departures. Existing defaults remain unchanged, with reconstruction off. Modern alternatives remain separate future node implementations.
+The first slice follows full-resolution tile filtering and reconstruction. [Baseline boundaries](../../docs/specs/detail-and-noise.md#baseline-boundaries) record deferred stages and necessary workspace departures. Existing defaults remain unchanged, with reconstruction off. Modern alternatives remain separate future node implementations.
 
 The graph keeps overlapping atlases internal and projects immutable sensor/RGB/scalar artifacts. Edge-only inspection skips recursive means; ratio and signed-signal inspection skip residual mixing. Signal-only execution also skips reconstruction and tone. Signed detail remains a pre-mixing signal. Luminance-ratio and signed-detail descriptions carry their own ranges, so zero/neutral samples have meaningful presentation and scopes.
 

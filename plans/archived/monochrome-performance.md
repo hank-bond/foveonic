@@ -79,4 +79,4 @@ A new component test compares an 83×344 signal against an independent rolling h
 
 The first complete GPU suite failed the existing color cache comparison on yellow flowers after an Exposure edit. The unchanged isolated rerun and subsequent complete suite passed. The [intermittent mismatch](../gpu-output-mismatch.md) remains unresolved. No tolerance, cache policy, or retry behavior was changed.
 
-The owner then requested hiding irrelevant editing controls while retaining both modes' settings. Pointer, expanded-section, and metadata-loading tests cover that follow-up. Final check results and remaining photographic acceptance are recorded in the [implementation plan](../monochrome-rendering.md).
+The owner then requested hiding irrelevant editing controls while retaining both modes' settings. Pointer, expanded-section, and metadata-loading tests cover that follow-up. Final check results, owner photographic acceptance, and reader-validation limits are recorded in the [implementation plan](./monochrome-rendering.md).

@@ -1,12 +1,17 @@
 ---
+status: archived
 summary: "Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage."
 ---
 
 # Implement editor review focuses
 
+## Closure
+
+The owner accepted the implemented photographic and interface results and authorized closing review-only plans. This implementation slice is complete. Pending-review statements below describe earlier checkpoints. Cross-platform runtime checks were not performed and remain a coverage limitation.
+
 The owner approved implementation after collecting the discussion. UI/settings changes and the camera-derived enabled repair cutoff are implemented. Reconstruction remains opt-in. The owner subsequently requested separate camera-record repair and despeckle controls, both enabled by default; this is implemented in the [despeckle plan](./despeckle.md). The owner authorized grouped commits after code and automated checks; photographic/interaction review remains pending.
 
-Requirements: [GUI workspace](../docs/specs/gui-workspace.md), [information bar](../docs/specs/image-information-bar.md), [pipeline inspection](../docs/specs/pipeline-inspection.md), [linked reconstruction controls](../docs/specs/detail-and-noise.md#linked-advanced-controls), and [camera repair defaults](./camera-repair-default.md).
+Requirements: [GUI workspace](../../docs/specs/gui-workspace.md), [information bar](../../docs/specs/image-information-bar.md), [pipeline inspection](../../docs/specs/pipeline-inspection.md), [linked reconstruction controls](../../docs/specs/detail-and-noise.md#linked-advanced-controls), and [camera repair defaults](./camera-repair-default.md).
 
 ## Steps
 
@@ -19,13 +24,13 @@ Requirements: [GUI workspace](../docs/specs/gui-workspace.md), [information bar]
 - [x] Implement per-source automatic repair cutoff and explicit GUI/CLI override.
 - [x] Compare the remaining defects with source samples, camera records, and reference repair/despeckle prefixes.
 - [x] Verify tests, native workspace/restart captures, neutral exports, formatting, Clippy, and documentation/index checks.
-- [ ] Owner review of the implemented controls/layout.
+- [x] Owner accepted the implemented controls and layout and closed the review checkpoint.
 - [x] Obtain approval for the proposed full-image despeckle stage.
 - [x] Confirm separate controls, both enabled by default, and implement the [despeckle plan](./despeckle.md).
 
 ## Implementation choices
 
-Seven existing preset-driven fields have single basic parents; the parameter table, bounds, and CLI keys live in the [noise specification](../docs/specs/detail-and-noise.md). Camera-only radius/range, diffusion step/contrast, and extrema clamping remain internal. Detail remains a separate multiplier. Noise preset 0 still filters; an Off/continuous-strength redesign and reference high-pass application are separate follow-ons.
+Seven existing preset-driven fields have single basic parents; the parameter table, bounds, and CLI keys live in the [noise specification](../../docs/specs/detail-and-noise.md). Camera-only radius/range, diffusion step/contrast, and extrema clamping remain internal. Detail remains a separate multiplier. Noise preset 0 still filters; an Off/continuous-strength redesign and reference high-pass application are separate follow-ons.
 
 `inspection::image_outputs` now describes component meanings. Worker frames retain their requested root and source path; pending root changes cannot reinterpret the component of the displayed artifact. Capture readouts use that artifact's metadata. Scopes still analyze the complete buffer.
 
@@ -47,7 +52,7 @@ The existing read-only reference diagnostic library was replayed with Sunlight W
 - Bolt: 754.5583 → 124.3752.
 - White-edge region: 382.0426 → 38.1213.
 
-Green/blue samples remain unchanged. The detector emits 2679 records across this photograph. [The retained fixture](../crates/foveonic/tests/data/repair-reference.json) and its [provenance](../crates/foveonic/tests/data/README.md) preserve these results. The ignored camera-selection test checks the original samples and missing flags.
+Green/blue samples remain unchanged. The detector emits 2679 records across this photograph. [The retained fixture](../../crates/foveonic/tests/data/repair-reference.json) and its [provenance](../../crates/foveonic/tests/data/README.md) preserve these results. The ignored camera-selection test checks the original samples and missing flags.
 
 This establishes the missing despeckle stage as the cause of the two reported residuals. The current immutable-neighbor shader's cluster rejection, merged masks, and arithmetic still differ from reference repair and warrant follow-on comparison for other defects. No direct application-output comparison was performed.
 

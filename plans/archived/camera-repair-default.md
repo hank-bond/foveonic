@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster."
 ---
 
 # Use camera-derived repair defaults
 
-The owner approved camera-derived minimum badness with a manual override. Requirements: [processing graphs](../docs/specs/processing-graphs.md). UI changes and residual-defect diagnosis are tracked in the [editor review plan](./editor-review-focus.md).
+## Closure
+
+The owner accepted the implemented photographic results and authorized closing review-only plans. This implementation slice is complete. Pending-review statements and proposed follow-ups below describe earlier checkpoints. Subsequent camera repair integration is recorded in the [algorithm completion plan](../complete-reference-algorithms.md).
+
+The owner approved camera-derived minimum badness with a manual override. Requirements: [processing graphs](../../docs/specs/processing-graphs.md). UI changes and residual-defect diagnosis are tracked in the [editor review plan](./editor-review-focus.md).
 
 ## Steps
 
@@ -16,7 +21,7 @@ The owner approved camera-derived minimum badness with a manual override. Requir
 - [x] Verify automatic cutoff 2 and manual cutoff 2 produce identical repaired layers on the sign.
 - [x] Check baseline TIFFs remain unchanged and complete regression checks.
 - [x] Owner authorized grouped commits after code and automated checks.
-- [ ] Owner photographic review.
+- [x] Owner accepted the implemented photographic results and closed the review checkpoint.
 
 ## Findings and boundaries
 

@@ -1,10 +1,15 @@
 ---
+status: archived
 summary: "Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps."
 ---
 
 # Fix camera repair and audit implemented nodes
 
-The owner approved fixing the remaining leaf defect and auditing implemented-node logic. Requirements: [processing graphs](../docs/specs/processing-graphs.md), [detail and noise](../docs/specs/detail-and-noise.md), and [despeckle](../docs/specs/despeckle.md).
+## Closure
+
+The owner accepted the implemented photographic and interface results and authorized closing review-only plans. This repair/audit slice is complete. The audit records the implementation at that checkpoint, not today's remaining stage inventory. Subsequent camera coverage, reconstruction, and recipe integration are recorded in the active [algorithm completion plan](../complete-reference-algorithms.md).
+
+The owner approved fixing the remaining leaf defect and auditing implemented-node logic. Requirements: [processing graphs](../../docs/specs/processing-graphs.md), [detail and noise](../../docs/specs/detail-and-noise.md), and [despeckle](../../docs/specs/despeckle.md).
 
 ## Steps
 
@@ -16,7 +21,7 @@ The owner approved fixing the remaining leaf defect and auditing implemented-nod
 - [x] Separate unintended omissions/bugs from approved alternatives, documented departures, and unimplemented stages; record evidence and propose follow-up scope.
 - [x] Run workspace/GPU tests, native launch, Clippy, formatting, and documentation/index checks.
 - [x] Owner authorized grouped commits after code and automated checks.
-- [ ] Owner photographic/interaction review.
+- [x] Owner accepted the implemented photographic and interface results and closed the review checkpoint.
 
 ## Scope
 
@@ -28,7 +33,7 @@ The audit used a reference implementation source snapshot based on revision `e47
 
 Preparation preserves metadata order, duplicates, original neighbor masks, and cutoff selection. The GPU initializes a separately owned output from the input and applies records sequentially, reading prior repairs. All seven layer combinations use reference trimmed means and unaffected-channel anchors. Native asymmetric border rules and genuine-zero extrema sentinels are preserved. Empty selections still copy the input. Scratch buffers, including recycled uploads, support `COPY_DST`; this fixes the validation error exposed by copy initialization.
 
-- `ordered-repair-reference.json` and [repair tests](../crates/foveonic/src/nodes/sensor/repair_test.rs) cover masks, duplicates, adjacency, reversed order, cutoff, borders, zero sentinels, unknown layer flags, gains 0/1/1.3, and immutable artifacts.
+- `ordered-repair-reference.json` and [repair tests](../../crates/foveonic/src/nodes/sensor/repair_test.rs) cover masks, duplicates, adjacency, reversed order, cutoff, borders, zero sentinels, unknown layer flags, gains 0/1/1.3, and immutable artifacts.
 - The leaf's four red samples change approximately `551/1229/1210/766` → `315/321/324/317` in GPU calibrated units. Green/blue remain unchanged; subsequent despeckling leaves the repaired block unchanged.
 - Default, reconstructed, and disabled routes each produced six TIFFs. Every disabled TIFF is byte-identical to the preceding neutral baseline.
 - Native leaf review captures the enlarged magenta block before correction and its disappearance afterward, plus reconstructed/default views. Six complete 18-frame photograph runs exercise reconstruction intermediates and controls (114 complete captures including the leaf run). The first yellow-image run hit the enclosing command's time limit after four captures; a fresh rerun completed successfully. Owner visual review remains pending.
