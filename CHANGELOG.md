@@ -5,6 +5,18 @@ kind: reference
 
 # Changelog
 
+## 0.1.1
+
+Small changes here.  Added the color space export UI element if you wanted to export in a space different from what you selected in camera.  Spacing around buttons has also been improved.
+
+### Changes
+
+- Grouped Open and TIFF export controls, with TIFF color-space selection beside Export TIFF.
+- More consistent spacing, centered file-count and zoom controls, and compact dropdowns with clear disclosure arrows.
+- TIFF export in sRGB, Adobe RGB, or ProPhoto RGB with matching embedded profiles. The camera's stored space remains the default.
+- Camera-derived Auto sharpening alongside manual amounts and Off. Existing settings retain their previous behavior.
+- Higher-quality TIFF resizing using the reference implementation's photographic filter instead of bilinear sampling.
+
 ## 0.1.0
 
 This is the first release that covers the core functinality.  The focus in on replicating the original Merril look we are all used to.  There are some slight processing improvements like the Highlight correction having a brightness inclusion threshold, which helps to avoid artifacts.
