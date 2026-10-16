@@ -10,9 +10,9 @@ TIFF bakes the selected processing into pixels. DNG retains a linear technical b
 
 ## Rendering
 
-Choose **Color** or **Monochrome** in the editor. Monochrome mixes the original sensor layers with a triangular R/G/B selector before dedicated filtering. Both modes retain their settings, and the editor shows only relevant controls.
+Choose **Color** or **Monochrome** in the editor. Monochrome mixes the original sensor layers with a triangular R/G/B selector before dedicated filtering steps.
 
-Monochrome DNG bakes the mix into linear neutral samples while keeping exposure and tone in metadata. Retain the X3F and sidecar to change the mix or restore color.
+Monochrome DNG bakes the mix into linear neutral samples while keeping exposure and tone in metadata.
 
 Photographic processing runs in GPU shaders. Camera metadata supplies calibration, correction parameters, and color looks.
 
@@ -20,7 +20,7 @@ Photographic processing runs in GPU shaders. Camera metadata supplies calibratio
 
 Development targets macOS on an Apple M1 Pro with 14 GPU cores. Cross-platform runtime support is not yet verified.
 
-Earlier color measurements were roughly 900–1600 ms for full processing and 200–400 ms for cached edits. Three full-sensor monochrome originals measured 600–900 ms for warm completed processing without the interactive cache. Source loading and export are separate. See the [monochrome measurements](plans/monochrome-performance.md) for settings, comparisons, and validation.
+Earlier color measurements were roughly 900–1600 ms for full processing and 200–400 ms for cached edits. Three full-sensor monochrome originals measured 600–900 ms for warm completed processing without the interactive cache. Source loading and export are separate. 
 
 Normal editing targets about 2 GB of memory, with transient peaks below 4 GB. These are targets, not enforced limits.
 
