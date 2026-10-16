@@ -23,7 +23,7 @@ Capture application contents only. The recipe fixes UI dimensions in points, whi
 
 ## Layout review
 
-The initial 1440×1000-point capture was too wide. The owner requested the more condensed layout in the supplied screenshot. Measuring that reference gives a roughly 2650-pixel-wide content area, with 264-point organizer and 330-point tools panes at 2× display density. The revised 1325×1097-point recipe produces a 2650×2194-pixel capture. Zoom 2.1× relative to Fit and a fixed pan keep the crop close to the reference, with a 64% navigator zoom readout.
+The initial 1440×1000-point capture was too wide. The owner requested the more condensed layout in the supplied screenshot. Measuring that reference gives a roughly 2650-pixel-wide content area, with 264-point organizer and 330-point tools panes at 2× display density. The revised 1325×1097-point recipe produces a 2650×2194-pixel capture. Zoom 2.1× relative to Fit and a fixed pan keep the crop close to the reference, with a 64% navigator zoom readout. The owner clarified that the reference used a manual highlight-correction threshold of +0.71 EV. The recipe and capture use that value while leaving tone Highlights at zero.
 
 ## Validation
 

@@ -606,6 +606,8 @@ mod tests {
         assert_eq!(recipe.settings.white_balance, "Sunlight");
         assert_eq!(recipe.settings.color_mode, "Standard");
         assert!(recipe.settings.reconstruction.is_some());
+        assert_eq!(recipe.settings.highlight_threshold_ev, Some(0.71));
+        assert_eq!(recipe.settings.tone.highlights, 0.);
         assert_eq!(SCREENSHOT_TARGETS, ["preview", "readme"]);
     }
 }

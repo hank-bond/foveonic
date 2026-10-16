@@ -16,7 +16,7 @@
     "repair": "camera",
     "despeckle": true,
     "highlight_restoration": true,
-    "highlight_threshold_ev": null,
+    "highlight_threshold_ev": 0.71,
     "row_correction": true,
     "reconstruction": {
       "chroma": 2,
