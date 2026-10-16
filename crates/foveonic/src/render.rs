@@ -308,5 +308,8 @@ mod interactive_tests;
 #[path = "render/monochrome_test.rs"]
 mod monochrome_tests;
 #[cfg(test)]
+#[path = "render/resize_export_test.rs"]
+mod resize_export_tests;
+#[cfg(test)]
 #[path = "render/render_test.rs"]
 mod tests;

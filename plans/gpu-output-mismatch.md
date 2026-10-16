@@ -39,6 +39,12 @@ The unchanged strict six-original test then passed all edit sequences, retained-
 
 No tolerance, cache policy, scratch policy, processing fence, or retry behavior changed. The failure remains unresolved.
 
+## Recurrence during photographic resize validation
+
+The full serial core GPU suite with the reference photographic output resizer passed 74 tests and failed `active_inputs_match_fresh_outputs_and_keep_retained_images_immutable` on turquoise at step 13. Blue sign, leaves, rocks, and red flower passed their complete sequences first. Step 13 reenables default reconstruction and explicitly disables ColorDQ after the earlier correction-disable and WB edits. It reported 2,890,022 differing float components, maximum absolute difference `0.0028624088`, first component `36,143,175` with `0.35032853` versus `0.35032818`.
+
+The failed comparison reads full-resolution working floats before TIFF encoding, not resized TIFF pixels. All three new resize-specific GPU/export tests passed in that suite, including frozen reference samples and all destination spaces. The ordinary workspace suite, strict all-target Clippy, formatting, and documentation checks pass. The failing comparison was not retried or weakened. GUI ignored tests were not reached by the combined command after the core failure. Failing intermediate buffers were not captured. Concurrent TIFF/sharpening/toolbar work is present, and no relationship between the failure and these changes is established.
+
 ## Next diagnostic step
 
 Keep a frozen copy of failing code and inputs. Review shader access alongside dispatch dimensions, parameters, and order. Capture stage outputs from the actual compared executions, then narrow compound operations to dispatches. Retention can prevent recycling, while diagnostic copies and fences change timing. Record those differences explicitly. No shader race, driver fault, cache-key error, or premature reuse has been established.

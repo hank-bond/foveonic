@@ -17,7 +17,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
 - **[archived/](./archived/AGENTS.md)** Archived plans record completed implementation slices, their checks, and historical limitations.
-- **[complete-reference-algorithms](./complete-reference-algorithms.md)** Autonomously complete the remaining Merrill reference algorithm stages and recipe integrations identified by the node audit, then validate the full GPU path. _Resume this autonomous implementation pass after a checkpoint or context compaction._
+- **[complete-reference-algorithms](./complete-reference-algorithms.md)** Track remaining reference-algorithm follow-ups and the completed default photographic output resizer.
 - **[dng-export](./dng-export.md)** Implement uncompressed uint16 DNG export through the existing TIFF writer, with baked technical corrections and one embedded appearance; evaluate compression later.
 - **[editing-optimization-handoff](./editing-optimization-handoff.md)** Continue native editing measurements with guarded GPU ownership while preserving the deferred mismatch evidence.
 - **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.

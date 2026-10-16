@@ -33,6 +33,8 @@ Compression evaluation should compare lossless file sizes, encoding cost, depend
 
 - The application **must** produce TIFF output with the selected white balance, color, and tone processing baked into the image.
 - TIFF **must** use its own rendering and packaging path within the shared graph engine.
+- TIFF output resizing **must** default to the reference photographic 4×4 phase-kernel approach for explicit output dimensions, replacing bilinear export resizing. Exact dimensions **may** change aspect ratio. Native-size exports **must** retain their existing crop/orientation behavior. Preview sampling and the reconstruction resampler **must** remain independent.
+- Photographic resizing **must** run on the GPU and retain floating signed samples and headroom until destination transfer/encoding. Kernel coefficients and coordinate mapping **may** be prepared on the host. Sampling at physical storage edges **must** stay within owned storage without introducing diagnostic marker colors.
 - Color TIFF ColorDQ conditioning **must** support an explicit gain override (0 Off). The opt-in reconstruction recipe **must** select native automatic processing-ISO gain capped by its noise-derived limit when no override is set. Without reconstruction, automatic selection **must** remain inactive.
 
 ## Conformance

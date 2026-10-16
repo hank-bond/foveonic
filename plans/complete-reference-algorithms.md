@@ -1,6 +1,5 @@
 ---
-summary: "Autonomously complete the remaining Merrill reference algorithm stages and recipe integrations identified by the node audit, then validate the full GPU path."
-read_when: "Resume this autonomous implementation pass after a checkpoint or context compaction."
+summary: "Track remaining reference-algorithm follow-ups and the completed default photographic output resizer."
 ---
 
 # Complete the remaining reference algorithms
@@ -22,7 +21,7 @@ Complete the algorithm gaps identified in the audit:
 - Row/banding, column, and pattern conditioning at the reference positions in preprocessing/reconstruction.
 - The reduced high-ISO reconstruction route and final reference high-pass application.
 - Production noise-derived despeckle adjustment and automatic ColorDQ gain integration, without reintroducing the fixed WB-scale bug.
-- Reference sharpening and resampling where the audit identified Gaussian/bilinear substitutes; migrate selected callers rather than maintaining duplicate default recipes.
+- Reference sharpening replaces the earlier Gaussian substitute. Explicit TIFF output resizing now defaults to the reference photographic kernel instead of bilinear sampling.
 
 Keep photographic arithmetic on the GPU, host decoding/metadata preparation/packaging in Rust, immutable source and retained artifacts, typed selective DAG execution, and Merrill camera boundaries. GPU float32 arithmetic remains an accepted numerical departure from native double/incremental arithmetic; use measured component tolerances rather than promising bit identity. Preserve attribution.
 
@@ -32,7 +31,7 @@ Completion requires useful end-to-end integration of every listed stage, referen
 
 ## Current priority
 
-The owner has approved a [profiling and optimization pivot](./archived/pipeline-performance.md). Pause remaining algorithm expansion. Stabilize only in-flight wiring, measure current completed latency and memory, and optimize measured bottlenecks with output equivalence before resuming this algorithm checklist.
+The owner superseded the resizing deferral and approved implementing the reference photographic approach as the default for existing CLI resizing. That scoped implementation is complete. Remaining algorithm expansion is not resumed by this change. The [profiling and optimization pivot](./archived/pipeline-performance.md) is complete.
 
 ## Steps
 
@@ -45,13 +44,27 @@ The owner has approved a [profiling and optimization pivot](./archived/pipeline-
 - [x] Implement the reduced high-ISO route and its restoration/projection.
 - [x] Apply the final reference high-pass through native sharpening and retire Gaussian substitutes.
 - [ ] Integrate production despeckle adjustment and automatic ColorDQ gain with shared parameter preparation and explicit controls where still required.
-- [ ] Replace the selected sharpening/resampling substitutes with reference stages and migrate callers/docs.
+- [x] Make reference photographic output resizing the default for explicit TIFF dimensions and update callers/docs.
 - [ ] Check all listed stages together, independent correction controls, zero/positive Sensor gain, selective roots, signed/headroom behavior, borders, and retained ownership.
 - [ ] Render/review all six originals and native GUI controls/intermediates; retain prior evidence and quantify baseline changes.
 - [ ] Run workspace and ignored GPU/fixture tests, strict Clippy, Python tooling tests, builds, documentation/index checks, formatting and diff checks.
 - [ ] Record completion, remaining numerical/fixture limits, and owner-review evidence; leave changes uncommitted.
 
 ## Progress and discoveries
+
+### Photographic output resizing
+
+The dedicated reference photographic resizer is distinct from the existing triangular processing-buffer resampler. TIFF encoding now materializes explicit output dimensions through a GPU 4×4 phase-kernel pass, then performs destination conversion and transfer through the existing encoder. Host preparation retains the reference radial/separate-axis coefficients, fractional phases, signed 16.16 increments, rotations, and derived-unit-scale direct sampling. Native-size exports bypass the new pass. No GUI resize control or resampling-method selector is added.
+
+Floating signed samples and headroom survive interpolation rather than adopting the reference diagnostic's signed integer conversion. Physical-edge taps clamp to owned source storage instead of emitting red diagnostic markers. Singleton-axis handling is an explicit extension. The retained working image, preview sampling, DNG recipe, and reconstruction resampler are unchanged. Resized TIFF pixels intentionally change, so historical resized-output goldens are not conformance targets for the new default.
+
+A frozen reference fixture covers all four rotations, radial enlargement, anisotropic reduction, and 1,032 output components. GPU/reference and independent scalar checks pass, including arbitrary dimensions, crop/full-storage edges, singleton axes, signed/headroom constants, no processing readback, and retained-input equality. TIFF tests verify dimensions, transfer/profile consistency, neutral mono output, and rejection before file creation. The combined TIFF-color working tree additionally passed resized-export checks for all three destination spaces. See [fixture provenance](../crates/foveonic/tests/data/README.md).
+
+Ordinary workspace tests, strict all-target Clippy, formatting, and documentation checks pass. The complete serial core GPU run passed 74 tests, including all three new resize checks, but failed the existing exact cache/fresh regression on turquoise step 13. The failure compares full-resolution working floats before export and remains unresolved. It was not retried or weakened. Details are retained in the [mismatch plan](./gpu-output-mismatch.md). The combined command did not reach GUI ignored tests after that failure. This is not a clean full-suite result or a photographic-performance claim.
+
+Commit isolation checks also pass on the resize-only snapshot, without concurrent TIFF-color, Auto-sharpening, or toolbar changes: 81 ordinary core tests, three CLI tests, all three dedicated GPU/export resize tests, strict core all-target Clippy, formatting, and documentation checks. These scoped checks do not retry or resolve the earlier full-suite cache-equality failure.
+
+### Earlier algorithm checkpoints
 
 - Start: clean tree at `01e47a6`; previous processing, folder, icon, and WB-scale changes are committed.
 - Complete camera repair is integrated: original-signal bad-red detection, main override masks, main/JPEG/detected order, and packed cluster matching. The graph now explicitly retains an immutable SensorLayers dependency for detection. Camera mode selects independent BP/BC offsets; manual badness sets the pixel minimum and exact cluster class. Initial cluster masks and stable quality ordering are metadata-only host preparation; patch costs and all repairs execute on GPU.

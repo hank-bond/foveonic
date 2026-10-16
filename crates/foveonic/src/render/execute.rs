@@ -586,15 +586,21 @@ impl Engine {
                     Some(output)
                 }
                 Operation::Encode { params, .. } => {
+                    let (resized, encoded_params) = crate::nodes::finish::resize::apply(
+                        gpu,
+                        &input(0).buffer,
+                        params,
+                        profile,
+                    )?;
                     let mut output = gpu.storage(
                         "Encoded packed RGB16",
                         desc.expect("encoded description").byte_len(),
                     )?;
-                    let uniform = gpu.uniform(params);
+                    let uniform = gpu.uniform(&encoded_params);
                     dispatch(
                         Kernel::Encode,
                         &mut [
-                            (0, Read(&input(0).buffer)),
+                            (0, Read(&resized)),
                             (1, Read(&uniform)),
                             (2, Write(output.write())),
                         ],

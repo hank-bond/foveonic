@@ -53,7 +53,7 @@ Options (also available for batch):
   --banding-noise CHOICE     Column-noise preset 0..4, default 2. Enables reconstruction
   --detail FACTOR           Residual detail multiplier, default 1. Enables reconstruction
   --sharpen AMOUNT           Nonnegative native high-pass amount before tone, default 0 (off)
-  --size WIDTHxHEIGHT       Exact final oriented dimensions, bilinear sampling
+  --size WIDTHxHEIGHT       Exact final oriented TIFF dimensions, reference photographic resampling
   --profile MODE            off (default), wall, or synchronized gpu diagnostics
   --help                    Show this help";
 

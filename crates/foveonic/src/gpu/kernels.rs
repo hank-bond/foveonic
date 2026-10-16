@@ -85,6 +85,7 @@ pub enum Kernel {
     MonoSignal,
     MonoExpand,
     MonoSharpen,
+    OutputResize,
 }
 
 impl Kernel {
@@ -170,6 +171,7 @@ impl Kernel {
             Self::MonoSignal => "monochrome signed detail",
             Self::MonoExpand => "monochrome gain replication",
             Self::MonoSharpen => "monochrome final sharpening",
+            Self::OutputResize => "photographic output resize",
         }
     }
 }
@@ -274,6 +276,7 @@ impl Gpu {
             (mono, "signal"),
             (mono, "expand"),
             (sharpen, "monochrome"),
+            (include_str!("../nodes/finish/resize.wgsl"), "main"),
         ];
         #[cfg(test)]
         let mut shader_writes = Vec::new();
@@ -287,6 +290,7 @@ impl Gpu {
                     Kernel::Scopes as usize,
                     Kernel::DngConvert as usize,
                     Kernel::DngQuantize as usize,
+                    Kernel::OutputResize as usize,
                 ]
                 .contains(&index)
                 {

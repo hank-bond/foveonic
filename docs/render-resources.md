@@ -63,6 +63,8 @@ Ownership assertions identify the allocation, write generation, size, label and 
 
 Calibration and repairs operate in original sensor coordinates. Texture resizing sets presentation dimensions after processing.
 
+Explicit TIFF output dimensions use the reference photographic 4×4 kernel with 16×16 fractional phases, radial or separate-axis coefficient preparation, and truncated 16.16 crop/orientation increments. This runs on floating tone-mapped working RGB before TIFF destination conversion and transfer. Native-size exports bypass it. Physical-edge taps clamp to owned storage rather than emitting a diagnostic red marker. Singleton axes are supported. The extra GPU allocation holds only the requested output, with no photographic host readback. Preview sampling and the triangular reconstruction resampler are unchanged.
+
 ## Profiling
 
 Use `--profile` with render or batch. Reports include host wall timings and GPU compute-pass timestamps. Plane-worker timings measure overlapping work. GPU timestamps exclude buffer allocation, uploads, implicit clears, readback, and packaging. Readback wall time includes any GPU work still pending at that point.

@@ -56,6 +56,8 @@ cargo run --release -p foveonic -- export-dng path/to/photo.x3f mono.dng --wb Su
 
 `--rendering monochrome` selects the equal-layer mix. `--mono-noise` and `--mono-banding` select presets 0–4. Estimated ISO above 6400 is currently unsupported for monochrome column correction.
 
+Add `--size 600x400` to resize a TIFF export to exact dimensions using reference photographic resampling. This also works for TIFF batches. Omit it for native dimensions.
+
 The output file must not already exist. Use `cargo run --release -p foveonic -- --help` for batch processing and other options. The CLI does not load GUI editing sidecars.
 
 Sample X3Fs are available in the [Example photographs release](https://github.com/hank-bond/foveonic/releases/tag/example-photographs). Download a photograph and open it in the GUI to try the app.
