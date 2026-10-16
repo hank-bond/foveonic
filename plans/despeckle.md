@@ -31,15 +31,15 @@ The initial independent stage used unscaled selected WB factors on calibration's
 
 ## Artwork
 
-The owner supplied `/Users/work/Downloads/logo.svg`, preserved in [`crates/foveonic-gui/assets/`](../crates/foveonic-gui/assets/AGENTS.md) alongside the editable revision. The initial static Dock override was subsequently replaced by a local macOS app bundle with native automatic light/dark appearances. Non-macOS window icons use the compiled default PNG. The [icon plan](./icon-background.md) records the selected workflow, composition, source preservation, and checks. Nothing was installed or published.
+The owner supplied the logo artwork, preserved in [`crates/foveonic-gui/assets/`](../crates/foveonic-gui/assets/AGENTS.md) alongside the editable revision. The initial static Dock override was subsequently replaced by a local macOS app bundle with native automatic light/dark appearances. Non-macOS window icons use the compiled default PNG. The [icon plan](./icon-background.md) records the selected workflow, composition, source preservation, and checks. Nothing was installed or published.
 
 ## Evidence
 
 - `despeckle-reference.json` records 64×64 native detection/ordered repair and threshold samples. The GPU test compares every sample at gain 0/1/1.3, immutable source preservation, and capacity-one bank ordering. See [fixture provenance](../crates/foveonic/tests/data/README.md).
 - Known-source checks correct the bolt `(220,705)` and white-edge `(3624,2264)` red-layer defects, preserving their green/blue values and retained preceding artifacts.
-- `.local/gui-despeckle-checks/`: 66 native frames across six originals, including default rendering, low-preset camera-only/repaired zoom comparisons, corrected-layer inspection, both disabled, and restored defaults. Both reported magenta centers disappear with despeckling; other isolated colored points can remain.
-- `.local/despeckle-checks/default-native/` and `reconstruction-native/`: six TIFFs each with the new enabled corrections. `disabled-native/` matches all six previous neutral TIFFs byte-for-byte.
-- `.local/despeckle-checks/default-native.log`: profiled six-image batch, 5.49 s / 1.67 GiB peak footprint. Despeckle GPU totals span about 49–323 ms, with sequential repair the main image-dependent cost. These are local observations, not a responsiveness target.
-- `/tmp/foveonic-despeckle-{workspace-tests,gpu-tests,clippy,build}.log`: checks. Metadata/test fixtures use the existing read-only reference library audited at `e47af35`, including owner-permitted unstaged changes; source files were not modified.
+- Native review covered 66 frames across six originals, including default rendering, low-preset camera-only/repaired zoom comparisons, corrected-layer inspection, both disabled, and restored defaults. Both reported magenta centers disappear with despeckling; other isolated colored points can remain.
+- Default and reconstructed routes each produced six TIFFs with the new enabled corrections. The disabled route matches all six previous neutral TIFFs byte-for-byte.
+- Profiled six-image default batch: 5.49 s / 1.67 GiB peak footprint. Despeckle GPU totals span about 49–323 ms, with sequential repair the main image-dependent cost. These are local observations, not a responsiveness target.
+- Workspace tests, GPU tests, Clippy, and builds pass. Metadata/test fixtures use the reference implementation's diagnostic library from an audited source snapshot based on `e47af35`.
 
 Highlight restoration and fuller native camera-record repairs remain separate work. General caching and performance parallelization should preserve ordered correction if pursued.

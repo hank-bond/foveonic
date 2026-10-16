@@ -4,7 +4,7 @@ summary: "Profiling tools record owned native sessions, summarize shared JSON re
 
 # Profiling tools
 
-Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement usage](../../docs/profiling.md). Keep portable analysis separate from platform-specific capture. Historical parsers and experiment orchestration remain beside their evidence under `.local/`; do not add live compatibility formats here.
+Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement usage](../../docs/profiling.md). Keep portable analysis separate from platform-specific capture. Do not add compatibility formats for historical parsers or one-off experiments.
 
 <!-- INDEX:START -->
 

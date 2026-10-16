@@ -13,7 +13,7 @@ The [requirements](./specs/profiling.md) distinguish three modes:
 | `wall` | Current host stages, lifecycle/frame/callback observations and engine activity | No profiling-only waits or repaint requests |
 | `gpu` | Wall observations plus supported GPU-pass timestamps | Existing timestamp resolution adds synchronization; diagnostic only |
 
-Use CLI `--profile wall` or `--profile gpu`. For the GUI, set `FOVEONIC_PROFILE=wall` or `gpu` before startup; the default is `off`. GPU diagnostics fail explicitly if timestamps are unavailable. These replace bare CLI `--profile` and the old GUI timing/GPU flags; historical evidence retains its original parsers under `.local/`.
+Use CLI `--profile wall` or `--profile gpu`. For the GUI, set `FOVEONIC_PROFILE=wall` or `gpu` before startup; the default is `off`. GPU diagnostics fail explicitly if timestamps are unavailable. These replace bare CLI `--profile` and the old GUI timing/GPU flags.
 
 Reports are JSON lines with `foveonic_profile: 1`, `event`, `mode`, `synchronized`, and `data`. Other stderr remains ordinary text. The core owns host/GPU stage vectors and engine activity; frontend reports add source, settings, execution and revision context. Loading appears in its own event, not in every warm render. GUI request settings may contain unresolved camera defaults; processing reports contain the selected WB/mode and controls. Derived camera tables are reproduced from the recorded source, not dumped into logs.
 

@@ -1,8 +1,8 @@
 //! Prepares camera thresholds for GPU speckle repair without changing detection order.
 
 //!
-//! Tables and detector rules adapted from the owner's read-only Foveonic reference
-//! `despeckle.rs` and `repair.rs`, audited at e47af35 (including permitted unstaged changes).
+//! Tables and detector rules adapted from the reference implementation's
+//! `despeckle.rs` and `repair.rs`, audited source snapshot based on e47af35.
 
 use crate::gpu::Binding::{Read, Write};
 use crate::{

@@ -1,6 +1,6 @@
 # Foveonic
 <img src="crates/foveonic-gui/assets/logo.svg" width="200" alt="Application Icon">
-An X3F processing app with both a GUI and a batch CLI, focused on processing speed, flexibility, and attractive results.
+An X3F processing app with both a GUI and a batch CLI, focused on processing speed, flexibility, and attractive results.  This is not a hand-made project.
 
 ----
 

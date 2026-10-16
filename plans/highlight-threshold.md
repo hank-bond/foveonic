@@ -21,4 +21,4 @@ All seven default TIFFs match the clean `7742f3a` build byte-for-byte. Manual +1
 
 GPU tests cover offsets and gains 0/1/1.3, density-only inspection, immutable inputs, and cached/fresh flower edits with reconstruction off/on. The six-photo interactive regression and manual-threshold sidecar replay pass. DNG tests verify the correction is baked into technical samples.
 
-GUI tests cover enablement, retained values, Auto/manual switching, dragging, reset, typing, and nudging. Workspace tests, strict all-target Clippy, release builds, formatting, whitespace, and explicit-root documentation checks pass. Evidence is retained in `.local/highlight-threshold/`. Photographic review remains separate from these checks.
+GUI tests cover enablement, retained values, Auto/manual switching, dragging, reset, typing, and nudging. Workspace tests, strict all-target Clippy, release builds, formatting, whitespace, and explicit-root documentation checks pass. Photographic review remains separate from these checks.

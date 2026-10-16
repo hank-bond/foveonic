@@ -53,19 +53,14 @@ This establishes the missing despeckle stage as the cause of the two reported re
 
 Approved next slice: metadata-prepared, shader-based full-image speckle detection and corresponding reference-style correction before reconstruction. Separate controls with both enabled by default are implemented; current evidence is tracked in the [despeckle plan](./despeckle.md).
 
-Original defect screenshots:
-
-- `/var/folders/gy/q6q29v292flbjxhnv2kzvkfm0000gn/T/pi-clipboard-315fe950-6816-4e67-906f-8b1facfefe17.png`
-- `/var/folders/gy/q6q29v292flbjxhnv2kzvkfm0000gn/T/pi-clipboard-aa3ff5a6-70b6-4308-a457-a4b4da2d153d.png`
-
 ## Evidence
 
-- `.local/editor-review-final-checks/`: 84 native captures, fourteen states on each of six originals, covering linked/manual/relinked values, parent changes, RGB/layer inspection, automatic/manual repair, zoom/region reporting, and neutral return.
-- `.local/editor-review-checks/restart/`: fourteen captures from a no-path launch using isolated saved preferences. It reopens the recorded folder, restores organizer/scope/section choices, and renders with neutral session editing settings.
-- `.local/editor-review-checks/neutral-native/`: six TIFFs byte-identical to the previous neutral baseline. `blue-default-reference.tiff` is byte-identical to the preceding reference reconstruction export.
-- `blue-auto-reference.tiff` and `blue-zero-low-reference.tiff` preserve repaired comparisons. Noise settings can conceal some residuals; low presets expose the unlisted white-edge speckle.
-- `/tmp/foveonic-editor-{tests,gpu-tests,clippy,build}.log` records checks. Temporary `/tmp/foveonic-repair-probe.rs` locates native magenta peaks and camera records; `/tmp/foveonic-reference-repair-probe.py` replays reference prefixes. Their probe logs record the numerical comparison.
+- Native review covered 84 captures, fourteen states on each of six originals, covering linked/manual/relinked values, parent changes, RGB/layer inspection, automatic/manual repair, zoom/region reporting, and neutral return.
+- Restart review covered fourteen captures from a no-path launch using isolated saved preferences. It reopens the recorded folder, restores organizer/scope/section choices, and renders with neutral session editing settings.
+- Six neutral TIFFs are byte-identical to the previous neutral baseline. The blue-sign default export is byte-identical to the preceding reference reconstruction export.
+- Automatic and zero-cutoff/low-noise comparisons were reviewed. Noise settings can conceal some residuals; low presets expose the unlisted white-edge speckle.
+- Tests, GPU tests, Clippy, and builds pass. Diagnostic probes located magenta peaks and camera records, then replayed reference prefixes for numerical comparison.
 
-One initial native run captured a transient miniature main image and subsequent partial-fit views. A fresh instrumented run, no-path restart, and final six-image rerun did not reproduce it; geometry logging showed fit at zoom 1. Temporary instrumentation was removed. The first run remains in `.local/editor-review-checks/blue-parking-sign/`; the final evidence is separate. Its cause is unestablished; watch for recurrence during owner review.
+One initial native run captured a transient miniature main image and subsequent partial-fit views. A fresh instrumented run, no-path restart, and final six-image rerun did not reproduce it; geometry logging showed fit at zoom 1. Temporary instrumentation was removed. Its cause is unestablished; watch for recurrence during owner review.
 
 Cross-platform runtime checks remain pending.

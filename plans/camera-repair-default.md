@@ -41,7 +41,7 @@ All four have badness 3; automatic cutoff is 2, so they are selected. The old GP
 
 The read-only reference's ordinary camera-repair prefix corrects red at the four centers from approximately `276/615/605/383` to `157/160/162/158` and preserves green/blue. Highlight restoration and later despeckling do not change them further; no nearby dynamic speckle records are emitted. GPU calibration values have approximately twice the reference diagnostic scale, so these are within-prefix correction comparisons, not claims of bit-identical calibration.
 
-Evidence: `/tmp/foveonic-leaf-{speckle,gpu,reference}-probe.{rs,py,log,json}` as applicable. The reference ABI was called with Sunlight, aperture 2.8, one exposure, and diagnostic 1× adjustment; the GPU probe used shared default correction settings. No processing behavior was changed during diagnosis.
+The reference ABI was called with Sunlight, aperture 2.8, one exposure, and diagnostic 1× adjustment; the GPU probe used shared default correction settings. No processing behavior was changed during diagnosis.
 
 The appropriate next proposal is reference-style ordered/masked camera repair that handles adjacent records, rather than lowering the despeckle thresholds or inventing another cluster-specific toggle. The owner subsequently approved that replacement, now implemented and checked in the [ordered-repair plan](./ordered-repair-and-node-audit.md). Full native repair-list/cluster scope still needs approval before expansion.
 

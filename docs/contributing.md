@@ -6,8 +6,6 @@ read_when: "Read before writing documentation or source summaries."
 
 # Contribution conventions
 
-These conventions follow `~/git/foveonic`.
-
 ## Place knowledge
 
 - `README.md` introduces the project and its goals to humans.
@@ -18,9 +16,13 @@ These conventions follow `~/git/foveonic`.
 
 Create additional document categories when work needs them. Give each fact one home and link instead of duplicating it. Keep documentation lean, plain, and grounded in actual discussions and work.
 
+## Keep documentation portable
+
+Use repository-relative paths or clearly marked placeholders in examples, not personal absolute paths or private checkout locations. Historical evidence references must point to checked-in files or public sources. Summarize findings and limitations instead of citing machine-only captures, logs, scripts, or binaries. Directory conventions and reproducible command examples may use ignored cache and output paths.
+
 ## Write specifications and plans
 
-Give each specification one subject. State required behavior separately from implementation choices and reasons. Use **must**, **should**, and **may** when they clarify requirements.
+Give each specification one subject. Record durable requirements, not personal setup or temporary investigation details. Summarize investigation findings and limitations in plans without depending on private historical artifacts. State required behavior separately from implementation choices and reasons. Use **must**, **should**, and **may** when they clarify requirements.
 
 Set `status: accepted` when requirements are agreed and contain enough detail for their stated scope. Set `status: draft` when requirements remain unresolved, and identify the open questions. Ask the owner about missing decisions.
 

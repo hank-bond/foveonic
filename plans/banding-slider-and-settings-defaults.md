@@ -21,7 +21,7 @@ Workspace unit/UI tests pass. Recipes lacking banding retain position 2; explici
 
 GPU outputs match all five guarded native component fixtures within the retained `0.12`-camera-code bound, preserving selected-window margins and immutable inputs. The old midpoint fixture passes gains 0/1/1.3. Parameter checks on six original photographs show that only column settings change across presets. Original-file cached-versus-fresh renders pass every nonmidpoint choice, and saved-recipe GPU replay is exact.
 
-The retained [five-position fixture](../crates/foveonic/tests/data/column-presets.json) records the guarded native component samples and their provenance. The temporary capture tool is preserved in Git history; regression tests consume the fixture directly. Local check logs use the `banding-slider-*` prefix. One test-harness comparison was corrected to compare the same encoded Float32 representation rather than expanded values against their shorter JSON spelling; recipe decoding was unchanged.
+The retained [five-position fixture](../crates/foveonic/tests/data/column-presets.json) records the guarded native component samples and their provenance. The temporary capture tool is preserved in Git history; regression tests consume the fixture directly. One test-harness comparison was corrected to compare the same encoded Float32 representation rather than expanded values against their shorter JSON spelling; recipe decoding was unchanged.
 
 ## Boundaries and review
 

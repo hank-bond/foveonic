@@ -28,13 +28,13 @@ The existing graph already supports typed nodes, selective side outputs, guarded
 
 Sensor, color, and finishing groups now own their Rust implementations, adjacent tests, and shaders. GPU registration, guarded storage, and scratch reuse have a separate directory. Graph structure is separate from operation definitions. The public renderer is about 310 lines, with settings, execution, artifacts, and authored recipe builders in child modules. No empty monochrome implementation or new processing settings were added.
 
-All 25 moved shaders are byte-identical. The all-enabled blue-sign comparison uses Sunlight/Vivid, reconstruction, sharpening 0.75, exposure +0.5, contrast 0.2, saturation 1.15, and 800×1200 output. Its full-sensor float buffer and exported TIFF match the pre-reorganization output byte-for-byte. The reference repository remains unchanged.
+All 25 moved shaders are byte-identical. The all-enabled blue-sign comparison uses Sunlight/Vivid, reconstruction, sharpening 0.75, exposure +0.5, contrast 0.2, saturation 1.15, and 800×1200 output. Its full-sensor float buffer and exported TIFF match the pre-reorganization output byte-for-byte.
 
 Workspace tests pass, including 73 processor tests and 110 GUI tests. All 62 ignored processor GPU/fixture tests and eight ignored GUI GPU/worker tests pass serially, including selective inspection, interactive ownership/reuse, DNG appearance separation, and sample encoding. Strict all-target Clippy, formatting, documentation generation/checks, and diff checks pass. Documentation links and fixture include paths follow the new locations.
 
 ```sh
 cargo test --offline --workspace
-FOVEONIC_FIXTURE_DIR=/Users/work/git/foveonic/references/x3f cargo test --offline --release --workspace -- --ignored --test-threads=1
+FOVEONIC_FIXTURE_DIR=path/to/x3f cargo test --offline --release --workspace -- --ignored --test-threads=1
 cargo clippy --offline --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo run --offline -p docs-index

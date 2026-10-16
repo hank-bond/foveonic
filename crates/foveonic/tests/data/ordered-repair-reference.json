@@ -1,5 +1,5 @@
 {
-  "provenance": "Foveonic repair.rs e47af35, owner-permitted read-only reference ABI foveonic_bad_pixels; no override masks",
+  "provenance": "Reference implementation repair.rs, audited source snapshot based on e47af35, ABI foveonic_bad_pixels; no override masks",
   "width": 24,
   "height": 20,
   "minimum_badness": 2,

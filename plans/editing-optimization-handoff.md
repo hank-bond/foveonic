@@ -6,7 +6,7 @@ summary: "Continue native editing measurements with guarded GPU ownership while 
 
 ## Current checkpoint
 
-The owner requested continued full-quality editing-performance work and deferred the intermittent output-mismatch investigation. The isolated editing branch started at `d686266`; its maintained profiling work was committed as `088a8c2` on `main`. The owner subsequently approved integrating guarded storage, inspection differences, and sidecars into `main`, then removing the clean editing worktree. The unaccepted CPU tone-cache prototype is preserved separately and excluded from accepted source. No remote is configured.
+The owner requested continued full-quality editing-performance work and deferred the intermittent output-mismatch investigation. The isolated editing branch started at `d686266`; its maintained profiling work was committed as `088a8c2` on `main`. The owner subsequently approved integrating guarded storage, inspection differences, and sidecars into `main`, then removing the clean editing worktree. CPU tone-table reuse remains unaccepted and excluded from accepted source.
 
 Combined integration passed 61 ordinary core and 78 GUI tests, all 54 ignored core and seven GUI tests, strict checks, release workspace/example builds, index/format checks, and 21 Python tests. Six-original exact float/golden/TIFF comparisons, sidecar replay, inspection pairing, and continuous dragging passed. No new native performance benefit or mismatch fix is claimed.
 
@@ -22,7 +22,7 @@ This plan summarizes the measurements and rejected trial without depending on te
 
 ## Boundaries
 
-Prioritize native editing and GUI scheduling/presentation measurements. Relevant code is [worker](../crates/foveonic-gui/src/worker.rs), [viewport](../crates/foveonic-gui/src/viewport.rs), [navigator](../crates/foveonic-gui/src/navigator.rs), and [timing](../crates/foveonic-gui/src/timing.rs). Coordinate shared-file changes with other active work. Reference implementation access remains read-only; preserve attribution and evidence.
+Prioritize native editing and GUI scheduling/presentation measurements. Relevant code is [worker](../crates/foveonic-gui/src/worker.rs), [viewport](../crates/foveonic-gui/src/viewport.rs), [navigator](../crates/foveonic-gui/src/navigator.rs), and [timing](../crates/foveonic-gui/src/timing.rs). Coordinate shared-file changes with other active work. Preserve attribution and evidence.
 
 A separate worktree prevents source/build interference, not physical GPU contention. Never use timings collected during another render, benchmark, memory sample, or native smoke run as acceptance evidence. Do not stop the owner's application without permission.
 

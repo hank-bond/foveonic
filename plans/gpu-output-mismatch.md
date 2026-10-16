@@ -19,7 +19,7 @@ Keep strict equality checks. Do not weaken tolerances or retry a failing compari
 - Four no-recycling six-original sequences passed, but disabling recycling changed memory lifetime and timing. No production scratch policy was changed.
 - Guarded runs reported no unexpected ownership violation. Two paired guarded/original-storage trials passed the same 50 tests, with execution order reversed in the second pair. These observations do not establish a cause or failure-rate change.
 
-Temporary fixture filters, repeated-render campaigns, capture hooks, failure-triggered rerenders, and event tracing were removed from maintained code. Guard regressions, binding-access audits, and bounded exact-comparison failures remain. Frozen sources, binaries, manifests, and raw evidence are retained locally. Earlier revisions preserve the detailed artifact inventory.
+Temporary fixture filters, repeated-render campaigns, capture hooks, failure-triggered rerenders, and event tracing were removed from maintained code. Guard regressions, binding-access audits, and bounded exact-comparison failures remain.
 
 ## Historical failures
 
@@ -35,7 +35,7 @@ The normal six-original color regression failed on yellow flowers and stroller a
 
 The changed histogram runs only in Monochrome. The failing case remained Color and did not dispatch it. Review found no missing exposure dependency in the tone key, and no color photographic shader changed during the optimization. This narrows the changed execution path, not the possible cause.
 
-The unchanged strict six-original test then passed all edit sequences, retained-image checks, and cancellation/resume checks in about 124 seconds. A subsequent complete serial suite passed all 69 processor and eight GUI GPU tests. The failure log, passing logs, test executable, source snapshot, and hashes are retained locally. Failing intermediate buffers were not captured.
+The unchanged strict six-original test then passed all edit sequences, retained-image checks, and cancellation/resume checks in about 124 seconds. A subsequent complete serial suite passed all 69 processor and eight GUI GPU tests. Failing intermediate buffers were not captured.
 
 No tolerance, cache policy, scratch policy, processing fence, or retry behavior changed. The failure remains unresolved.
 

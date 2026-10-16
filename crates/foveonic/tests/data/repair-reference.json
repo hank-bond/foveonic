@@ -1,6 +1,6 @@
 {
   "source": "blue-parking-sign.x3f",
-  "reference": "Foveonic diagnostic library audited at e47af35, including permitted unstaged changes",
+  "reference": "Reference implementation diagnostic library, audited source snapshot based on e47af35",
   "white_balance": "Sunlight",
   "aperture": 3.2,
   "exposure_count": 1,

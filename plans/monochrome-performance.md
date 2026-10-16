@@ -27,7 +27,7 @@ Settings are Sunlight WB, sharpening 0.75, default corrections, neutral exposure
 
 The initial comparison used `--warm 3 --profile gpu`. All cases added `--wb Sunlight --sharpen 0.75 --size 800x1200` and a new export directory. Color added `--mode Standard --reconstruction`. Mono added `--rendering monochrome`, with `--mono-noise 0` for isolation. Warm wall measurements use no timestamps. A separate diagnostic run synchronizes per-stage GPU timing.
 
-The owner closed the GUI before measurement. No known concurrent GUI or benchmark process was running. This does not rule out all system GPU activity. Raw reports, commands, counters, source snapshots, and summaries are retained locally.
+The owner closed the GUI before measurement. No known concurrent GUI or benchmark process was running. This does not rule out all system GPU activity.
 
 ## Initial findings
 

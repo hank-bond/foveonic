@@ -31,8 +31,6 @@ Pointer-driven tests drag-select and copy each of the three readouts, including 
 
 ## Visual reference
 
-The owner supplied a dark, single-row bar with metadata left and filename centered. Use viewport reporting on the right rather than the reference's rating controls:
-
-`/var/folders/gy/q6q29v292flbjxhnv2kzvkfm0000gn/T/pi-clipboard-96275a40-f955-4abd-b21e-bef44e8160f9.png`.
+The visual reference showed a dark, single-row bar with metadata left and filename centered. Use viewport reporting on the right rather than the reference's rating controls.
 
 The related defect investigation and pending implementation decisions are tracked in the [editor review plan](../../plans/editor-review-focus.md).

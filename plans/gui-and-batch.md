@@ -93,12 +93,11 @@ Arrow navigation was previously absent. Individual tiles now receive pointer cli
 
 ## Evidence and remaining work
 
-- `.local/gui-cleanup-checks/{fixture}/` contains twelve-view native macOS checks on all six originals after cleanup. Viewport/navigator pixel comparisons match `.local/gui-sensor-gain-checks/` except for one organizer hover tooltip and its shadow overlapping the canvas; processing/display geometry is unchanged.
+- Twelve-view native macOS checks covered all six originals after cleanup. Viewport/navigator pixel comparisons match the preceding sensor-gain checks except for one organizer hover tooltip and its shadow overlapping the canvas; processing/display geometry is unchanged.
 - Workspace tests, all ignored release GPU/fixture tests, all-target Clippy with warnings denied, documentation/index checks, formatting, and diff checks pass after cleanup.
-- `.local/sensor-gain-checks/neutral/` contains six TIFFs byte-identical to the pre-GUI baseline. `.local/sensor-gain-checks/gain-1.3.tiff` verifies migrated CLI export.
-- `.local/gui-workspace-restart-checks/` verifies restored organizer/scope/tool preferences, neutral session exposure, and isolated preference storage.
+- Six neutral TIFFs are byte-identical to the pre-GUI baseline. A gain-1.3 export verifies migrated CLI behavior.
+- Workspace restart checks verify restored organizer/scope/tool preferences, neutral session exposure, and isolated preference storage.
 - Unit/GPU fixtures cover output dependencies/retention, signed scalar/sensor gain, scopes, camera defaults, preview geometry, metadata, preferences, and pointer/keyboard interactions. Native checks so far are macOS only.
-- Earlier `.local/gui-checks/`, `.local/gui-layout-checks/`, `.local/gui-workspace-final-checks/`, and `.local/gui-review-adjustments/` are historical milestone evidence. Linked-RGB captures and adjusted RGB-gain recipes are superseded.
 - Initial prototype runs measured 458–671 ms for initial decode/render/view and 59–167 ms for subsequent inspection without checkpoints. These are local timing observations.
 
 Owner interaction review, cross-platform runtime checks, checkpoint decisions, monitor profiles, non-image diagnostics, comparisons, and DNG remain pending.
@@ -107,14 +106,14 @@ Owner interaction review, cross-platform runtime checks, checkpoint decisions, m
 
 ```sh
 cargo test --offline --workspace
-FOVEONIC_FIXTURE_DIR=/Users/work/git/foveonic/references/x3f cargo test --offline --release --workspace -- --ignored --test-threads=1
+FOVEONIC_FIXTURE_DIR=path/to/x3f cargo test --offline --release --workspace -- --ignored --test-threads=1
 cargo clippy --offline --workspace --all-targets -- -D warnings
 cargo run --offline -p docs-index
 cargo run --offline -p docs-index -- --check
 cargo fmt --all -- --check
 git diff --check
 cargo xtask bundle --offline
-FOVEONIC_GUI_SMOKE_DIR=.local/gui-review target/release/Foveonic.app/Contents/MacOS/foveonic-gui /Users/work/git/foveonic/references/x3f/blue-parking-sign.x3f
+FOVEONIC_GUI_SMOKE_DIR=path/to/new-smoke-output target/release/Foveonic.app/Contents/MacOS/foveonic-gui path/to/x3f/blue-parking-sign.x3f
 ```
 
 ## Reference findings

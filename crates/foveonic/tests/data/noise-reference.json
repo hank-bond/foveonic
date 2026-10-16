@@ -1,5 +1,5 @@
 {
-  "provenance": "Foveonic e47af35, existing release diagnostic library; synthetic 80x72 input; owner-authorized reference use",
+  "provenance": "Reference implementation diagnostic library, audited source snapshot based on e47af35; synthetic 80x72 input",
   "radii": [
     5,
     5,

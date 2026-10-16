@@ -5,7 +5,7 @@ kind: reference
 
 # Processing reference fixtures
 
-Most fixtures were generated with the reference implementation's diagnostic library while auditing source at `e47af35`, including the permitted unstaged changes. The monochrome fixture uses the standalone adapter described below. The reference repository remained read-only.
+Most fixtures were generated with the reference implementation's diagnostic library from an audited source snapshot based on `e47af35`. The monochrome fixture uses the standalone adapter described below.
 
 - `noise-reference.json` records component outputs for a deterministic 80×72 synthetic signal and a separate 2×2 tile-blending case. [The component test](../../src/nodes/color/reconstruction_test.rs) defines the input, parameters, sample locations, and arithmetic tolerances. Reference functions are `filter_tables`, `radius_map`, `bilateral`, `edge_map`, `edge_lut`, `local_mean`, `brightness`, `noise_diffusion`, `diffusion`, `osf`, `ratio`, `color_mixing`, `foveonic_reconstruction_signal`, `apply_color`, and `foveonic_blend_tiles`.
 - `noise-parameters.json` records `foveonic_processing_params_source` results for the six original Merrill photographs, using Sunlight WB and each file's aperture/shutter properties. [The parameter test](../../src/nodes/color/noise_test.rs) checks the selected tables, histogram-derived ISO, WB-weighted model, and calibration scaling.

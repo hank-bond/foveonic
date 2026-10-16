@@ -50,7 +50,7 @@ Waveform/parade use bilinear placement with 256 weight units per sample. Splitti
 
 RGB keeps its working primaries and linear transfer state. The combined RGB waveform includes matching sRGB or Adobe RGB luminance. Sensor/calibrated layers and pre-tone RGB use 0–4095, scalar fields use 0–1, luminance ratios use 0–2, and signed detail uses −1000…1000 camera codes. Scopes use all buffer channels regardless of display selection. Inspection offers image buffers; node-data diagnostics are deferred.
 
-The owner's Capture One screenshots guide the three-pane arrangement. The local `x3fuse-multiplat` checkout at `7ddebcd` provides visual and behavioral references for navigator, scopes, metadata, and dark neutral styling. Its current branch is `feature/tauri-dng-looks`. These references inform layout and interaction.
+Capture One screenshots informed the three-pane arrangement. The navigator, scopes, and metadata panels use dark neutral styling.
 
 ## Conformance
 

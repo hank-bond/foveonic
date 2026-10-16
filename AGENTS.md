@@ -1,5 +1,5 @@
 ---
-summary: "Repository instructions cover owner collaboration, reference access, implementation scope, and documentation maintenance."
+summary: "Repository instructions cover owner collaboration, implementation scope, and documentation maintenance."
 read_when: "Read first when entering the repository."
 ---
 
@@ -9,15 +9,10 @@ read_when: "Read first when entering the repository."
 
 - Treat questions as requests for information. Discuss design choices and obtain approval before implementation.
 - Implement agreed decisions. Ask when requirements are unclear or work encounters a blocker.
+- Do not assume access to the owner's files outside this repository, other checkouts, or private projects. Ask for required external inputs.
 - Keep changes within approved scope. Do not commit, publish, install, or make generated output the default without explicit approval. Work is reviewed before commit.
 - Keep responses concise. Use plain language and include contrasts only when needed to prevent significant confusion.
 - Refer to the external processing reference as the "reference implementation" in repository prose, source summaries, and filenames.
-
-## Reference access
-
-Read `~/git/foveonic` directly, including its implementation and unstaged changes. The owner permits inspection of reference implementations they provide, including x3fuse-core. Use their approaches where useful, choosing implementations for photographic results and editing latitude. Byte-identical reference output is unnecessary.
-
-Preserve attribution when importing code. Treat the reference repository as read-only unless the owner approves changes there.
 
 ## Implementation approach
 
@@ -26,6 +21,7 @@ Preserve attribution when importing code. Treat the reference repository as read
 - Keep scope grounded in Merrill X3F requirements.
 - Defer advanced logging and production hardening to a dedicated later phase.
 - Use Rust for core code. Supporting scripts may use Python.
+- Preserve attribution when importing code.
 - When replacing a choice, migrate existing callers and documents to the selected approach. Add compatibility paths only when requested.
 
 ## Find and maintain documentation

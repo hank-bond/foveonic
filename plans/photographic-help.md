@@ -34,33 +34,33 @@ Workspace tests pass, including 36 GUI tests with one GPU fixture skipped. New c
 
 ## Example candidates
 
-Six labeled A/B cards, individual crops, exports, and exact render commands are in `.local/photographic-help/`. The local `build-examples.py` uses the existing reference virtual environment without installing dependencies, converts exported embedded profiles to sRGB, and records crop coordinates, display scales, and renderer SHA-256 in `manifest.json`. It refuses to mix renderer builds in the same directory. These candidates used the renderer before the concurrent highlight-restoration integration; regenerate with the reviewed processing recipe before embedding any assets.
+Six labeled A/B candidates were reviewed using color-managed sRGB crops from exported images. These comparisons preceded the concurrent highlight-restoration integration. Regenerate with the reviewed processing recipe before embedding any assets.
 
 | Card | Assessment before owner review |
 | --- | --- |
-| `saturation.png` | Obvious grayscale versus stronger turquoise color; promising. |
-| `detail.png` | Leaf veins and bud texture visibly return between Detail 0 and 2, with more grain; promising. Noise presets remain 2, sharpening off. |
-| `camera-repair.png` | Known magenta leaf defect disappears; promising at explicitly labeled 6× nearest-pixel magnification. Despeckle stays off. |
-| `despeckle.png` | Known isolated magenta bolt dot disappears; promising at explicitly labeled 8× magnification. Camera repair stays on. |
-| `sharpen.png` | Obvious grain amplification, but the reflective sign pattern and existing noise distract from edge sharpening/halos. Hold for a cleaner source. |
-| `gain-vs-exposure.png` | Equal one-stop brightening produces nearly identical-looking leaf crops. Hold: this does not teach their processing-order difference clearly. Do not exaggerate the difference. |
+| Saturation | Obvious grayscale versus stronger turquoise color; promising. |
+| Detail | Leaf veins and bud texture visibly return between Detail 0 and 2, with more grain; promising. Noise presets remain 2, sharpening off. |
+| Camera repair | Known magenta leaf defect disappears; promising at explicitly labeled 6× nearest-pixel magnification. Despeckle stays off. |
+| Despeckle | Known isolated magenta bolt dot disappears; promising at explicitly labeled 8× magnification. Camera repair stays on. |
+| Sharpen | Obvious grain amplification, but the reflective sign pattern and existing noise distract from edge sharpening/halos. Hold for a cleaner source. |
+| Gain versus Exposure | Equal one-stop brightening produces nearly identical-looking leaf crops. Hold: this does not teach their processing-order difference clearly. Do not exaggerate the difference. |
 
 A clean, in-focus high-contrast edge with a plain background may still be useful for sharpening amount/radius and halos. A noisy or underexposed example can explain gain's brightness/noise tradeoff, but is not guaranteed to visibly distinguish Sensor gain from an equivalent Exposure adjustment. Existing flower/rock images may suit later tone examples; the remaining sliders and advanced coefficients have not yet received dedicated example pairs.
 
 ## Managed comparisons
 
-The owner selected the red flower's crop and Off/Auto/+0.8 states at −0.5 EV as the first integrated example, followed by complementary Bad pixels and Speckles examples verified with all four correction combinations. Their manifests, generated PNGs, named source photographs, and shared popover integration follow the [comparison plan](./help-comparisons.md) and [maintenance workflow](../docs/help-examples.md). Official source photographs now live in the long-lived supplemental release; the owner chose not to distribute editing sidecars. The earlier local cards remain historical candidates rather than the current app assets. Native review of the integrated popovers remains pending.
+The owner selected the red flower's crop and Off/Auto/+0.8 states at −0.5 EV as the first integrated example, followed by complementary Bad pixels and Speckles examples verified with all four correction combinations. Their manifests, generated PNGs, named source photographs, and shared popover integration follow the [comparison plan](./help-comparisons.md) and [maintenance workflow](../docs/help-examples.md). Official source photographs now live in the long-lived supplemental release; the owner chose not to distribute editing sidecars. The earlier candidate assessments are historical, not the current app assets. Native review of the integrated popovers remains pending.
 
 ## Stroller light/shadow boundary
 
 The owner pointed out that the stroller photograph already has the needed scene: adjacent sunlit and shadowed areas of the same concrete. Keeping the surface in one crop makes differences in grain easier to understand without a change of subject. This is preferable to requesting another noisy-shadow file prematurely.
 
-The follow-up candidates are in `.local/photographic-help/stroller-boundary/`, with a context image, local reproduction script, frozen renderer, settings/crop manifest, and render log. The 512×512 crop is `[900,2592,1412,3104]` in oriented export coordinates, with right/bottom exclusive, displayed at native pixel scale. The frozen renderer includes the concurrent highlight-restoration integration; all comparisons keep repair and highlight restoration enabled, ColorDQ and sharpening off, and camera/color-mode choices fixed.
+The follow-up comparison used a 512×512 crop at `[900,2592,1412,3104]` in oriented export coordinates, with right/bottom exclusive, displayed at native pixel scale. The renderer included the concurrent highlight-restoration integration; all comparisons keep repair and highlight restoration enabled, ColorDQ and sharpening off, and camera/color-mode choices fixed.
 
-- `noise-reduction.png`: off versus on with noise presets 2 and Detail 1. Colored grain disappears clearly in the shadow while the same surface remains visible in sunlight. Promising for the reconstruction toggle; no new source is needed for this general example.
-- `detail.png`: Detail 0 versus 2 with both noise presets 2. The return of surface variation and grain is obvious across both lighting areas. Promising for explaining the smoothing/restoration tradeoff; this surface is not sharply focused, so keep the leaf example for recognizable fine detail.
-- `chroma-noise.png`: preset 0 versus 4 with Luma 2 and Detail 1. Shows a smoothing/texture change, but does not isolate an obvious colored-speckle difference. Hold as a standalone color-noise explanation.
-- `luma-noise.png`: preset 0 versus 4 with Chroma 2 and Detail 1. Difference remains relatively subtle. Hold rather than claim an intuitive min/max demonstration.
-- `gain-vs-exposure.png`: gain 2/Exposure 0 versus gain 1/Exposure +1 with identical reconstruction controls. The result still looks very similar. Hold; the adjacent lighting does not by itself make the early/late adjustment distinction obvious.
+- Noise reduction: off versus on with noise presets 2 and Detail 1. Colored grain disappears clearly in the shadow while the same surface remains visible in sunlight. Promising for the reconstruction toggle; no new source is needed for this general example.
+- Detail: Detail 0 versus 2 with both noise presets 2. The return of surface variation and grain is obvious across both lighting areas. Promising for explaining the smoothing/restoration tradeoff; this surface is not sharply focused, so keep the leaf example for recognizable fine detail.
+- Chroma noise: preset 0 versus 4 with Luma 2 and Detail 1. Shows a smoothing/texture change, but does not isolate an obvious colored-speckle difference. Hold as a standalone color-noise explanation.
+- Luma noise: preset 0 versus 4 with Chroma 2 and Detail 1. Difference remains relatively subtle. Hold rather than claim an intuitive min/max demonstration.
+- Gain versus Exposure: gain 2/Exposure 0 versus gain 1/Exposure +1 with identical reconstruction controls. The result still looks very similar. Hold; the adjacent lighting does not by itself make the early/late adjustment distinction obvious.
 
 All ten follow-up exports succeeded. These remain review candidates, not installed or default application assets.

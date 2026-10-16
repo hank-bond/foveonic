@@ -16,7 +16,7 @@ The owner approved native verification before selecting a strength control, then
 
 ## Native results
 
-The installed library SHA-256 is `037419dc04bb1afe86dddad7a14888a1b36d6c00a0231ec50a6974a9963ce5e6`, matching the retained independent audit.
+The audited native library SHA-256 is `037419dc04bb1afe86dddad7a14888a1b36d6c00a0231ec50a6974a9963ce5e6`.
 
 The setup sweep passes **58,374 guarded records in 11,550 five-position groups**, including selection-boundary and finite-clipping probes. It covers one original CAMF per DP1/DP2/DP3/SD1, all 125 chroma/luminance/banding combinations, HI/MED/LOW, color and secondary monochrome, and Float32 ISO-knot neighbors through the safe table range. Changing banding alters only the column coefficient, window, and preset-index words (`0xac`, `0xb0`, `0xb4`). Known undefined upper-table reads were excluded.
 
@@ -42,7 +42,7 @@ The earlier fixed-window assumption was wrong. The existing reference Rust color
 - [ ] Compare original row preprocessing across application requests and reconcile engine replay with matching application exports.
 - [ ] Extend monochrome photographic coverage beyond the recorded DP3/SD1 cases if that path becomes implementation scope.
 
-These measurements use supplied identical inputs. They are native setup/pixel evidence, not new decoding or preprocessing proof, complete application-output verification, or new Rust parity evidence. Complete RGB/detail planes, identities, and failed captures remain local. Independent component fixtures and their Rust regression tests remain in the repository.
+These measurements use supplied identical inputs. They are native setup/pixel evidence, not new decoding or preprocessing proof, complete application-output verification, or new Rust parity evidence. Independent component fixtures and their Rust regression tests remain in the repository.
 
 ## Difference-view geometry
 
@@ -50,6 +50,6 @@ Inspection presents the `ActiveImageArea` crop with camera rotation, not the ful
 
 ## Harness corrections
 
-Failed measurements are preserved. Streamed hashing replaced `hashlib.file_digest`, unavailable in the debugger's Python. Persistent return breakpoints keyed by thread replaced overlapping one-shot breakpoints. The first broad pixel sweep stopped on its incorrect fixed-window assertion after observing window 15; the corrected sweep checks actual consumer windows against effective native settings and passes all 65 requests. These changes affected measurement tools, not processing defaults.
+Streamed hashing replaced `hashlib.file_digest`, unavailable in the debugger's Python. Persistent return breakpoints keyed by thread replaced overlapping one-shot breakpoints. The first broad pixel sweep stopped on its incorrect fixed-window assertion after observing window 15; the corrected sweep checks actual consumer windows against effective native settings and passes all 65 requests. These changes affected measurement tools, not processing defaults.
 
 The temporary setup sweep, component capture, pixel replay, debugger trace, and C++ worker were retired after this investigation. Git history at `7742f3a` preserves the harness implementations. Their removal does not change the recorded evidence or unresolved application-export boundary.

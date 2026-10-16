@@ -44,17 +44,17 @@ The [Cargo tasks](../crates/xtask/AGENTS.md) now create a local `Foveonic.app` b
 - Python tests cover inset geometry, directional shading, twelve opaque facets, unchanged source elements, 90% placement, and explicit disabled foreground effects.
 - GUI raster tests check a light opaque top, darker bottom, transparent corner, dark face, and distinct RGB palette within the export's approximately one-code sRGB dithering.
 - Native exports at 128/32 retain band separation and a subtle top-face edge, without the rejected glass rim.
-- `/tmp/foveonic-icon-bevel-{tests,clippy,build,native}.log` and `.local/gui-icon-bevel-checks/` record checks and twelve isolated native launch frames.
+- Tests, Clippy, builds, and twelve isolated native launch frames pass.
 
 ## Correct Dock sizing
 
 The owner's Dock screenshot established that the entire tile, not its foreground, was oversized. Composer's `ictool --export-image` produces a full-canvas preview; it does not include macOS application-icon padding. The HIG describes a 1024-square design canvas but does not prescribe an arbitrary shrink percentage for this export. The earlier suggested 82% was only a screenshot estimate and was not implemented.
 
-Apple's installed [`actool` manual](file:///Applications/Xcode.app/Contents/Developer/usr/share/man/man1/actool.1) documents `--app-icon`, `--compile`, `--platform`, and `--standalone-icon-behavior all`. Compiling the actual owner document produced `Foveonic.icns` with native masks/margins and size-specific renditions. Its 1024-pixel PNG has a centered 824-pixel opaque tile, 100-pixel margins each side (80.46875% width), with translucent shadow outside. The screenshot's neighboring roughly 128-pixel tiles versus our previous roughly 156-pixel tile corroborates that normalization; it is not the source of the geometry.
+The `actool` manual included with Xcode documents `--app-icon`, `--compile`, `--platform`, and `--standalone-icon-behavior all`. Compiling the actual owner document produced `Foveonic.icns` with native masks/margins and size-specific renditions. Its 1024-pixel PNG has a centered 824-pixel opaque tile, 100-pixel margins each side (80.46875% width), with translucent shadow outside. The screenshot's neighboring roughly 128-pixel tiles versus our previous roughly 156-pixel tile corroborates that normalization; it is not the source of the geometry.
 
 The generator uses this production pipeline directly: no manual resizing, alpha padding, guessed percentage, or custom mask. The bundle contains the compiled native asset catalog and fallback ICNS so macOS controls appearance and size renditions. The logo's existing 90%-of-tile placement stays unchanged. Raster tests guard the half-alpha tile boundary at x=100 and x=924 on the center scanline, alongside the existing background/palette tests.
 
-Historical sizing evidence: `/tmp/foveonic-native-size-reference/`, `/tmp/foveonic-actool-native-{compile,all,default}.log`, `/tmp/foveonic-icon-size-{generate,tests,clippy,build,native,docs}.log`, and `.local/gui-icon-size-checks/`. Native resources now live only in the local bundle as build outputs; no second installed icon path is maintained.
+Native resources now live only in the local bundle as build outputs; no second installed icon path is maintained.
 
 ## Automatic appearances
 
@@ -64,6 +64,6 @@ Composer field conventions were researched using public Maccy/CotEditor document
 
 Checks cover unchanged colored layers and geometry, light-face gradient, directional bevel shading, both background settings, specialization references, bundle resources, compiler-owned metadata, executable permissions, rebuild cleanup, custom Cargo target paths, and launch argument preservation. `assetutil` confirms Aqua/DarkAqua icon stacks, different background gradients, and foreground/dark-foreground vector references. `NSWorkspace.icon(forFile:)` recognizes the local app as a native `ISBundleIcon`; drawing it under an app-local dark appearance alone does not override system icon-style settings, so live system-style switching remains for owner review rather than changing the owner's preferences during tests.
 
-Evidence lives in `.local/gui-icon-auto-checks/` and `/tmp/foveonic-auto-app-{build,release-build,launch,tests,clippy,native}.log`. Composer renders verify both appearances. Debug/release bundles build successfully; direct bundled and LaunchServices smoke launches each captured twelve workspace frames with isolated preferences. Eight Python tests and 26 GUI tests pass; GUI Clippy passes. The earlier concurrent `smoke.rs` formatting discrepancy is resolved; final workspace formatting and diff checks pass. Owner visual/system-style review remains pending.
+Composer renders verify both appearances. Debug/release bundles build successfully; direct bundled and LaunchServices smoke launches each captured twelve workspace frames with isolated preferences. Eight Python tests and 26 GUI tests pass; GUI Clippy passes. The earlier concurrent `smoke.rs` formatting discrepancy is resolved; final workspace formatting and diff checks pass. Owner visual/system-style review remains pending.
 
 The owner authorized grouped commits; no system installation or bundle publishing was performed.

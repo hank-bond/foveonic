@@ -23,7 +23,7 @@ The owner approved autonomous implementation after selecting the reference algor
 
 ## Scope and implementation findings
 
-Reference source: `~/git/foveonic`, revision `e47af35`, including the owner's permitted unstaged changes. The repository remained read-only. Adapted modules/shaders retain attribution; [fixture provenance](../crates/foveonic/tests/data/README.md) identifies the diagnostic library and arithmetic cases.
+Reference implementation: audited source snapshot based on revision `e47af35`. Adapted modules/shaders retain attribution; [fixture provenance](../crates/foveonic/tests/data/README.md) identifies the diagnostic library and arithmetic cases.
 
 The first slice follows full-resolution tile filtering and reconstruction. [Baseline boundaries](../docs/specs/detail-and-noise.md#baseline-boundaries) record deferred stages and necessary workspace departures. Existing defaults remain unchanged, with reconstruction off. Modern alternatives remain separate future node implementations.
 
@@ -37,12 +37,12 @@ Inspection review found that existing pre-tone RGB stores camera-code values. Pr
 
 - Reference component fixtures cover adaptive radii, bilateral filtering, edge LUTs, both recursive means, noise/fixed diffusion, extrema conditioning, ratios, residual gains, signed signal, and reconstruction. Metadata fixtures match all six originals' selected noise parameters and effective ISO; tests check uniform gain scaling.
 - GPU integration checks cover stage-local camera requirements, independently retained outputs, signed and ratio scopes, all five chroma/luminance choices, zero detail, explicit ColorDQ, and zero sensor gain. All 30 full-resolution photograph/choice combinations contain finite reconstruction values; zero gain gives a black active crop.
-- `.local/detail-noise-checks/neutral-native/`: six native RGB16 TIFFs byte-identical to `.local/optimization/neutral/`.
-- `.local/detail-noise-checks/reference-native/`: six native reconstructed TIFFs. `.local/detail-noise-checks/review/` contains color-managed whole-image pairs and three native-pixel crop pairs per photograph, with neutral on the left and reconstruction on the right. Review shows less color speckle across sign, leaves, shadows, and fabric while preserving texture. Clipped flower colors and isolated hot pixels remain visible follow-on concerns.
-- `.local/gui-noise-checks/`: 108 native captures, 18 per original. They cover inspection, detail zero, both noise endpoints, ColorDQ, gain, scopes, native zoom, and disabling reconstruction. A pixel comparison confirms distinct control results and exact viewport/navigator restoration to the committed GUI's neutral captures.
-- `.local/gui-noise-final-checks/`: final 108-capture rerun confirms corrected pre-tone RGB and ratio mappings, distinct control results, and exact neutral viewport/navigator restoration. The final Blue TIFF also matches the earlier reconstructed export byte-for-byte.
-- One native attempt timed out awaiting the `noise.edges` screenshot after processing completed. A fresh isolated run completed all 18 captures; the partial attempt is retained under `.local/gui-noise-interrupted-checks/`. Its cause was not reproduced.
-- Final checks pass: core 30 ordinary tests and 17 ignored GPU/fixture tests; GUI 18 ordinary tests and one ignored worker test; workspace/tool tests, Clippy, formatting, documentation/index checks, and diff checks. Logs are `/tmp/foveonic-detail-final-{tests,gpu-tests,clippy,docs,build,capture-check}.log`.
+- Six native RGB16 TIFFs are byte-identical to the preceding neutral baseline.
+- Review compared six native reconstructed TIFFs using color-managed whole-image pairs and three native-pixel crop pairs per photograph, with neutral on the left and reconstruction on the right. Review shows less color speckle across sign, leaves, shadows, and fabric while preserving texture. Clipped flower colors and isolated hot pixels remain visible follow-on concerns.
+- Native review covered 108 captures, 18 per original. They cover inspection, detail zero, both noise endpoints, ColorDQ, gain, scopes, native zoom, and disabling reconstruction. A pixel comparison confirms distinct control results and exact viewport/navigator restoration to the committed GUI's neutral captures.
+- A final 108-capture rerun confirms corrected pre-tone RGB and ratio mappings, distinct control results, and exact neutral viewport/navigator restoration. The final Blue TIFF also matches the earlier reconstructed export byte-for-byte.
+- One native attempt timed out awaiting the `noise.edges` screenshot after processing completed. A fresh isolated run completed all 18 captures. Its cause was not reproduced.
+- Final checks pass: core 30 ordinary tests and 17 ignored GPU/fixture tests; GUI 18 ordinary tests and one ignored worker test; workspace/tool tests, Clippy, formatting, documentation/index checks, and diff checks.
 
 ## Timing and memory
 
@@ -58,7 +58,7 @@ Measured locally on Apple M1 Pro. All processing uses shared physical CPU/GPU me
 
 ```sh
 cargo test --offline --workspace
-FOVEONIC_FIXTURE_DIR=/Users/work/git/foveonic/references/x3f \
+FOVEONIC_FIXTURE_DIR=path/to/x3f \
   cargo test --offline --release --workspace -- --ignored --test-threads=1
 cargo clippy --offline --workspace --all-targets -- -D warnings
 cargo run --offline -p docs-index
@@ -71,10 +71,10 @@ Native reconstruction checks use isolated preferences:
 
 ```sh
 cargo xtask bundle --offline
-FOVEONIC_GUI_SMOKE_DIR=.local/gui-noise-final-checks/blue-parking-sign \
+FOVEONIC_GUI_SMOKE_DIR=path/to/new-smoke-output \
 FOVEONIC_GUI_SMOKE_NOISE=1 \
   target/release/Foveonic.app/Contents/MacOS/foveonic-gui \
-  /Users/work/git/foveonic/references/x3f/blue-parking-sign.x3f
+  path/to/x3f/blue-parking-sign.x3f
 ```
 
 The owner authorized grouped commits after code and automated checks. Photographic/interaction review remains pending.

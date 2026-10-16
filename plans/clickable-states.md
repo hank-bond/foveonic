@@ -23,7 +23,7 @@ The trial uses a 4-point corner radius and the existing blue selection hue. Link
 
 GUI tests pass: 90 passed, 7 GPU tests ignored. They cover group order, alignment, distinct tone/correction Highlights, independent disclosures, unchanged settings when collapsing, preserved saved choices, rounding, hover/press feedback, disabled clicks, keyboard activation, dropdown colors, gap-free cell width, and selection at cell edges. Pointer fixtures use ordinary frame timing so tooltips do not intercept clicks.
 
-Workspace tests, strict all-target Clippy, formatting, whitespace, and explicit-root documentation checks pass. Native captures confirm the layout, neutral checkboxes and links, blue overrides, retained symbols, and removal of the inline note. The app was rebuilt and reopened for owner review. Evidence and failed checks remain in `.local/highlight-threshold/`.
+Workspace tests, strict all-target Clippy, formatting, whitespace, and explicit-root documentation checks pass. Native captures confirm the layout, neutral checkboxes and links, blue overrides, retained symbols, and removal of the inline note. The app was rebuilt and reopened for owner review.
 
 ## Internal button padding
 

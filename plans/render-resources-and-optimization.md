@@ -29,13 +29,13 @@ Interactive result caching and invalidation machinery are deferred. Resource own
 - The [resource API](../docs/render-resources.md) supports externally supplied device/queue, metadata-sharing snapshots, GPU-only floating texture views, and independent export. Calibration remains full-sensor; preview-resolution processing and DNG/WB separation remain later decisions.
 - Three interleaved before/after unprofiled six-file trials on the M1 Pro measured 7.03/6.14/6.08 seconds before and 3.16/3.58/3.35 seconds after. Median batch time decreased from 6.14 to 3.35 seconds (about 45%). Median reported peak footprint decreased from 3.05 to 1.66 GiB. Both use the same native-size controls including ColorDQ, repair, and sharpening. Results are local observations, not performance targets.
 - All six adjusted outputs, all six neutral outputs, and the Auto/Vivid/+0.5-stop export remain byte-identical. Small fixtures cover retained intermediate roots, scratch reuse, signed texture values, view orientation, export preservation, shared-device construction, and engine ownership. Original-file testing verifies a result after source drop and another render.
-- Profiles, variant trials, original comparison outputs, and the baseline executable are in `.local/optimization/`. Timestamp profiling resolves at graph boundaries; use unprofiled runs for throughput/memory comparisons. GPU timestamps measure compute passes, not allocation/transfer overhead.
+- Timestamp profiling resolves at graph boundaries; use unprofiled runs for throughput/memory comparisons. GPU timestamps measure compute passes, not allocation/transfer overhead.
 
 ## Checks
 
 ```sh
 cargo test --offline --workspace
-FOVEONIC_FIXTURE_DIR=/Users/work/git/foveonic/references/x3f cargo test --offline --release -p foveonic -- --ignored --test-threads=1
+FOVEONIC_FIXTURE_DIR=path/to/x3f cargo test --offline --release -p foveonic -- --ignored --test-threads=1
 cargo clippy --offline -p foveonic --all-targets -- -D warnings
 cargo run --offline -p docs-index -- --check
 cargo fmt --all -- --check

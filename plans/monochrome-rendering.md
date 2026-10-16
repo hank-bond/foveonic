@@ -8,7 +8,7 @@ Requirements: [monochrome rendering](../docs/specs/monochrome-rendering.md), [pr
 
 ## Scope and approval
 
-The owner approved the full monochrome implementation after the rendering reorganization in `4d529cd`. Subsequent approvals covered histogram optimization, hiding inactive controls, and cleanup followed by commit and push. The reference implementation remained read-only, including its existing unstaged experiments.
+The owner approved the full monochrome implementation after the rendering reorganization in `4d529cd`. Subsequent approvals covered histogram optimization, hiding inactive controls, and cleanup followed by commit and push.
 
 - [x] Inspect reference processing, controls, WB/gain conventions, tone, and export boundaries.
 - [x] Add shared settings, validated layer proportions, sidecar persistence, and CLI options.

@@ -37,13 +37,13 @@ The owner instead selected the 2×2 magenta leaf defect at `(1582,2737)` in `glo
 
 The owner subsequently requested simpler copy without semicolons. Descriptions, notes, and captions now use shorter sentences. Image recipes and PNGs are unchanged.
 
-Local survey evidence is in `.local/correction-candidates/`, including `speckles-only-check/`. Managed rendering reviews are in `.local/help-renders/`. Help refers to the camera's recorded defect information without assuming its factory/service origin or whether the camera updates it later. The reference implementation establishes how records are consumed, not the camera-side map lifecycle.
+Help refers to the camera's recorded defect information without assuming its factory/service origin or whether the camera updates it later. The reference implementation establishes how records are consumed, not the camera-side map lifecycle.
 
 ## Row banding example
 
 The reference implementation's row-banding guide shows individual camera layers with a narrow fixed display range. Its optional 8× before-view illustration amplifies the removed row pattern, while the actual 1× correction is subtler. The current recycling-bin sidecar already has Noise and Detail off, so smoothing does not explain the owner's current comparison.
 
-Fresh color comparisons at Exposure 0, +3, and +5 EV keep the correction itself unchanged. The owner selected +3 EV with Noise and Detail off. The 400×400 crop near the report's region preserves native pixels and the photograph's orientation. Local comparisons and context are in `.local/row-banding-help/`. The manifest renderer now produces the integrated Off/On pair with simple captions. Its checkbox opens the shared popover, including when disabled. No illustrative amplification was imported into photographic help.
+Fresh color comparisons at Exposure 0, +3, and +5 EV keep the correction itself unchanged. The owner selected +3 EV with Noise and Detail off. The 400×400 crop near the report's region preserves native pixels and the photograph's orientation. The manifest renderer now produces the integrated Off/On pair with simple captions. Its checkbox opens the shared popover, including when disabled. No illustrative amplification was imported into photographic help.
 
 ## Advanced Noise and Detail review
 
