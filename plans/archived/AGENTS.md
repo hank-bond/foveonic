@@ -33,6 +33,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** _(archived)._ Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
 - **[pipeline-performance](./pipeline-performance.md)** _(archived)._ Completed full-pipeline profiling and output-equivalent optimization reduced six-photo render latency roughly five to seven times.
 - **[profiling-consolidation](./profiling-consolidation.md)** _(archived)._ Consolidate retained core, GUI and native profiling into explicit modes and reusable structured reports.
+- **[release-0.1.1](./release-0.1.1.md)** _(archived)._ Release v0.1.1 passed local and hosted checks and was published as GitHub's Latest application release.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** _(archived)._ Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
