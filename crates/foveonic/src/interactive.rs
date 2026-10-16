@@ -78,7 +78,7 @@ impl Settings {
             "color-dq"
         );
         changed!(
-            self.sharpen_amount.to_bits() != next.sharpen_amount.to_bits(),
+            self.sharpen_amount.map(f32::to_bits) != next.sharpen_amount.map(f32::to_bits),
             "sharpen"
         );
         changed!(
@@ -102,6 +102,10 @@ impl Settings {
             "highlights"
         );
         changed!(self.output_size != next.output_size, "output-size");
+        changed!(
+            self.tiff_color_space != next.tiff_color_space,
+            "tiff-color-space"
+        );
         match (self.reconstruction, next.reconstruction) {
             (Some(a), Some(b)) => {
                 changed!(a.detail.to_bits() != b.detail.to_bits(), "detail");

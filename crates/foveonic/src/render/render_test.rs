@@ -942,7 +942,7 @@ fn native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable
     let engine = Engine::new().unwrap();
     for reconstruction in [false, true] {
         let mut settings = Settings::new("Sunlight", "Standard");
-        settings.sharpen_amount = 0.75;
+        settings.sharpen_amount = Some(0.75);
         if reconstruction {
             settings.reconstruction = Some(Default::default());
         }
@@ -976,7 +976,7 @@ fn native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable
         assert_eq!(signal.description.space, Space::SignedDetail);
         let before = engine.gpu.readback(&input.buffer).unwrap();
         let signal_before = engine.gpu.readback(&signal.buffer).unwrap();
-        settings.sharpen_amount = 1.5;
+        settings.sharpen_amount = Some(1.5);
         let stronger = engine
             .render_artifacts(
                 &source,

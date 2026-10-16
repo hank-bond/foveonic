@@ -1,10 +1,15 @@
 //! Defines shared photographic settings and validates their values.
 
+pub use crate::nodes::finish::color_space::TiffColorSpace;
 pub use crate::nodes::monochrome::Controls as MonochromeControls;
 pub use crate::nodes::{
     finish::tone::Controls as ToneControls, sensor::repair::Threshold as RepairThreshold,
 };
 use crate::source::Result;
+
+#[cfg(test)]
+#[path = "settings_test.rs"]
+mod tests;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,8 +47,10 @@ pub struct Settings {
     pub row_correction: bool,
     /// Color noise and detail settings. None leaves color reconstruction off.
     pub reconstruction: Option<crate::noise::Controls>,
-    /// Final high-pass sharpening strength. Zero leaves sharpening off.
-    pub sharpen_amount: f32,
+    /// None selects the camera/noise base. Some(0) is Off, positive is manual.
+    pub sharpen_amount: Option<f32>,
+    /// TIFF-only destination. None preserves the camera's working space.
+    pub tiff_color_space: Option<TiffColorSpace>,
     /// Final dimensions after orientation. None keeps the active crop's native size.
     pub output_size: Option<[u32; 2]>,
 }
@@ -66,7 +73,8 @@ impl Default for Settings {
             highlight_threshold_ev: None,
             row_correction: true,
             reconstruction: None,
-            sharpen_amount: 0.,
+            sharpen_amount: Some(0.),
+            tiff_color_space: None,
             output_size: None,
         }
     }
@@ -94,6 +102,24 @@ impl Settings {
             }
         } else {
             self.reconstruction.unwrap_or_default()
+        }
+    }
+
+    pub fn sharpen_selected(&self) -> bool {
+        self.sharpen_amount.is_none_or(|amount| amount > 0.)
+    }
+
+    /// Resolve Auto from camera coefficients only. Output size and residual
+    /// Detail do not change this amount, including when reconstruction is off.
+    pub fn effective_sharpen_amount(&self, metadata: &crate::source::Metadata) -> Result<f32> {
+        match self.sharpen_amount {
+            Some(amount) => Ok(amount),
+            None => Ok(crate::noise::couplings(
+                metadata,
+                &self.white_balance,
+                self.sensor_noise_controls(),
+            )?
+            .sharpen_base),
         }
     }
 
@@ -132,9 +158,11 @@ impl Settings {
         {
             return Err("contrast, shadows, and highlights must be in -2..2".into());
         }
-        if [self.saturation, self.sharpen_amount]
-            .iter()
-            .any(|v| !v.is_finite() || *v < 0.)
+        if !self.saturation.is_finite()
+            || self.saturation < 0.
+            || self
+                .sharpen_amount
+                .is_some_and(|v| !v.is_finite() || v < 0.)
         {
             return Err("saturation and sharpening must be finite and nonnegative".into());
         }

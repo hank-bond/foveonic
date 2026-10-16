@@ -554,6 +554,7 @@ struct Recipe {
 pub(crate) struct Couplings {
     pub despeckle_scale: f32,
     pub color_dq_limit: f32,
+    pub sharpen_base: f32,
 }
 pub(crate) fn couplings(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Couplings> {
     let r = recipe(metadata, wb, controls)?;
@@ -561,12 +562,20 @@ pub(crate) fn couplings(metadata: &Metadata, wb: &str, controls: Controls) -> Re
     // The ColorDQ cap is in column 7. The similar-looking value in column 12
     // belongs to sharpening, so it must not drive automatic noise correction.
     let limit = (r.mixed[7] as f32) * r.luminance[7];
-    if !scale.is_finite() || scale < 0. || !limit.is_finite() || limit < 0. {
+    // Reference HI, control zero, unit reconstruction-relative scales.
+    let sharpen_base = ((r.mixed[12] as f32) * r.luminance[12]).max(0.);
+    if !scale.is_finite()
+        || scale < 0.
+        || !limit.is_finite()
+        || limit < 0.
+        || !sharpen_base.is_finite()
+    {
         return Err("invalid production noise coupling".into());
     }
     Ok(Couplings {
         despeckle_scale: scale,
         color_dq_limit: limit,
+        sharpen_base,
     })
 }
 pub(crate) fn monochrome_iso(metadata: &Metadata, wb: &str) -> Result<f32> {

@@ -180,7 +180,7 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
         settings.tone.shadows = 0.1;
         settings.tone.highlights = -0.2;
         settings.saturation = 1.2;
-        settings.sharpen_amount = 0.75;
+        settings.sharpen_amount = Some(0.75);
         settings.output_size = Some(if session.metadata().rotation % 180 == 90 {
             [800, 1200]
         } else {
@@ -232,8 +232,8 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
                 5 => settings.exposure = 0.7,
                 6 => settings.tone.shadows = 0.2,
                 7 => settings.saturation = 0.8,
-                8 => settings.sharpen_amount = 0.,
-                9 => settings.sharpen_amount = 0.6,
+                8 => settings.sharpen_amount = Some(0.),
+                9 => settings.sharpen_amount = Some(0.6),
                 10 => settings.reconstruction = None,
                 11 => settings.white_balance = "Overcast".into(),
                 12 => {
@@ -321,7 +321,7 @@ fn noise_and_override_inputs_match_fresh_outputs() {
     let mut session = RenderSession::new(Source::open(path).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
-    settings.sharpen_amount = 0.75;
+    settings.sharpen_amount = Some(0.75);
     let retained = session_image(&engine, &mut session, &settings);
     let original = engine.gpu.readback(&retained.buffer).unwrap();
     let mut cases = Vec::new();
@@ -383,7 +383,7 @@ fn detail_feedback_profile() {
     let engine = Engine::new().unwrap();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
-    settings.sharpen_amount = 0.75;
+    settings.sharpen_amount = Some(0.75);
     let _warm = session_image(&engine, &mut session, &settings);
     engine.device().poll(wgpu::Maintain::Wait);
     for iteration in 0..6 {

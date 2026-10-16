@@ -221,7 +221,10 @@ impl Engine {
             )?;
             finish!();
         }
-        if settings.sharpen_amount > 0. {
+        if settings.sharpen_selected() {
+            let amount = profile.measure("prepare sharpening amount", || {
+                settings.effective_sharpen_amount(&source.metadata)
+            })?;
             let signal = if reconstruction.is_some() {
                 linear + 1
             } else {
@@ -229,13 +232,7 @@ impl Engine {
                 finish!();
                 signal
             };
-            linear = graph.add(
-                Operation::Sharpen {
-                    amount: settings.sharpen_amount,
-                    space,
-                },
-                &[linear, signal],
-            )?;
+            linear = graph.add(Operation::Sharpen { amount, space }, &[linear, signal])?;
             finish!();
         }
         Ok(Prepared::Linear(

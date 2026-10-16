@@ -104,6 +104,8 @@ fn shader_resize_preserves_crop_orientation_and_both_transfer_routes() {
         })
         .collect();
     let input = gpu.upload("Resize input", &pixels).unwrap();
+    let transform =
+        gpu.uniform(&crate::render::TiffColorSpace::Srgb.transform(crate::image::ColorSpace::Srgb));
     for rotation in [0, 90, 180, 270] {
         let natural = if rotation == 90 || rotation == 270 {
             [2_u32, 3]
@@ -127,6 +129,7 @@ fn shader_resize_preserves_crop_orientation_and_both_transfer_routes() {
                         (0, Read(&input)),
                         (1, Read(&uniform)),
                         (2, Write(output.write())),
+                        (3, Read(&transform)),
                     ],
                     [1, 1],
                     &mut Default::default(),

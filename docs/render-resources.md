@@ -19,7 +19,7 @@ let texture = engine.view_texture(&image, Some([800, 1200]), &mut profile)?;
 engine.write_tiff(&image, output, &mut profile)?;
 ```
 
-`RenderedImage::description()` identifies physical storage: full-sensor, interleaved RGB32Float in tone-mapped sRGB or Adobe RGB linear primaries. `view()` separately describes the active crop, rotation, and requested output dimensions. White balance and rendering controls are baked into this TIFF-style result. Its original metadata and selected settings are retained separately.
+`RenderedImage::description()` identifies physical storage: full-sensor, interleaved RGB32Float in tone-mapped sRGB or Adobe RGB linear primaries. `view()` separately describes the active crop, rotation, and requested output dimensions. White balance and rendering controls are baked into this TIFF-style result. Its original metadata and selected settings are retained separately. `Settings::tiff_color_space` selects an optional `render::TiffColorSpace` destination for `write_tiff`. None preserves the camera space. Destination conversion and transfer run only during TIFF export, leaving this image and its display texture in the original working primaries. `Settings::sharpen_amount` is None for Auto, Some(0) for Off, or a positive manual amount. Sharpening is baked before tone in both photographic rendering and the DNG technical base.
 
 `view_texture` creates an oriented/cropped RGBA32Float texture on GPU, preserving signed values and headroom in the working primaries. Its optional size sets presentation dimensions. The egui presentation shader supplies working-RGB conversion to sRGB SDR and display transfer encoding; monitor-profile correction is pending. RGBA32Float requires manual sampling unless the device enables float32 filtering.
 

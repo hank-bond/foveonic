@@ -52,7 +52,8 @@ Options (also available for batch):
   --luma-noise CHOICE        Camera noise-table choice 0..4, default 2. Enables reconstruction
   --banding-noise CHOICE     Column-noise preset 0..4, default 2. Enables reconstruction
   --detail FACTOR           Residual detail multiplier, default 1. Enables reconstruction
-  --sharpen AMOUNT           Nonnegative native high-pass amount before tone, default 0 (off)
+  --sharpen AMOUNT           auto, off (default), or nonnegative manual high-pass amount
+  --tiff-color-space SPACE   camera (default), srgb, adobe-rgb, or prophoto-rgb
   --size WIDTHxHEIGHT       Exact final oriented TIFF dimensions, reference photographic resampling
   --profile MODE            off (default), wall, or synchronized gpu diagnostics
   --help                    Show this help";
@@ -353,7 +354,7 @@ mod tests {
         assert_eq!(neutral.saturation, 1.);
         assert_eq!(neutral.color_dq_gain, None);
         assert_eq!(neutral.highlight_threshold_ev, None);
-        assert_eq!(neutral.sharpen_amount, 0.);
+        assert_eq!(neutral.sharpen_amount, Some(0.));
         assert_eq!(neutral.repair, Some(RepairThreshold::Camera));
         assert!(neutral.despeckle && neutral.highlight_restoration && neutral.row_correction);
         let rows_off = parse("--wb Sunlight --mode Standard --no-row-correction")
@@ -490,7 +491,34 @@ mod tests {
                 .color_dq_gain,
             Some(0.)
         );
+        for (option, amount) in [("auto", None), ("off", Some(0.)), ("0.75", Some(0.75))] {
+            let settings = parse(&format!("--wb Sunlight --mode Standard --sharpen {option}"))
+                .unwrap()
+                .0;
+            assert_eq!(settings.sharpen_amount, amount);
+        }
+        for (option, destination) in [
+            ("camera", None),
+            ("srgb", Some(foveonic::render::TiffColorSpace::Srgb)),
+            (
+                "adobe-rgb",
+                Some(foveonic::render::TiffColorSpace::AdobeRgb),
+            ),
+            (
+                "prophoto-rgb",
+                Some(foveonic::render::TiffColorSpace::ProPhotoRgb),
+            ),
+        ] {
+            let settings = parse(&format!(
+                "--wb Sunlight --mode Standard --tiff-color-space {option}"
+            ))
+            .unwrap()
+            .0;
+            assert_eq!(settings.tiff_color_space, destination);
+        }
         for invalid in [
+            "--sharpen invalid",
+            "--tiff-color-space invalid",
             "--highlight-threshold NaN",
             "--highlight-threshold inf",
             "--highlight-threshold -inf",

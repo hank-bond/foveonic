@@ -171,7 +171,7 @@ fn mono_mix_noise_sharpen_and_mode_switches_match_fresh_and_retain_snapshots() {
             noise,
             banding,
         };
-        s.sharpen_amount = sharpen;
+        s.sharpen_amount = Some(sharpen);
         let cached = session_image(&engine, &mut session, &s);
         let cached_bytes = engine.readback_image(&cached).unwrap();
         neutral(&cached_bytes);
@@ -303,7 +303,7 @@ fn mono_tiff_and_dng_keep_neutral_samples_and_defer_only_presentation() {
     let engine = Engine::new().unwrap();
     let source = source();
     let mut s = settings();
-    s.sharpen_amount = 0.75;
+    s.sharpen_amount = Some(0.75);
     let base = crate::dng::prepare_base(&engine, &source, &s, &mut Profile::default()).unwrap();
     let original = engine.readback_image(&base).unwrap();
     neutral(&original);

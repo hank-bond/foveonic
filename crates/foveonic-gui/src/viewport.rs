@@ -431,7 +431,7 @@ impl Viewport {
 
     fn navigator_zoom_controls(&mut self, ui: &mut egui::Ui) {
         let pixels_per_point = ui.ctx().pixels_per_point();
-        ui.horizontal(|ui| {
+        crate::widgets::control_row(ui, |ui| {
             let zoom = self
                 .zoom_percent(pixels_per_point)
                 .map(|percent| format!("Zoom {percent:.0}%"))

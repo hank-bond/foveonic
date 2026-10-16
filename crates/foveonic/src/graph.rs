@@ -24,7 +24,7 @@ pub enum DataType {
     CalibratedLayers,
     LinearRgb(ColorSpace),
     ToneMappedRgb(ColorSpace),
-    EncodedRgb16(ColorSpace),
+    EncodedRgb16(crate::render::TiffColorSpace),
     File,
 }
 

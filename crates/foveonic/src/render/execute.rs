@@ -564,34 +564,45 @@ impl Engine {
                     {
                         return Err("sharpen inputs have different image extents".into());
                     }
-                    let mut output = scratch.take(gpu, bytes)?;
-                    let uniform = gpu.uniform(&ScalarParams {
-                        source: dimensions,
-                        value: [*amount, 0., 0., 0.],
-                    });
-                    dispatch(
-                        if matches!(node.operation, Operation::MonoSharpen { .. }) {
-                            Kernel::MonoSharpen
-                        } else {
-                            Kernel::Sharpen
-                        },
-                        &mut [
-                            (0, Read(&input(0).buffer)),
-                            (1, Read(&input(1).buffer)),
-                            (2, Read(&uniform)),
-                            (3, Write(output.write())),
-                        ],
-                        groups,
-                    );
-                    Some(output)
+                    // A camera base of zero means Off too. Running the
+                    // native kernel at zero would still clamp signed RGB.
+                    if *amount == 0. {
+                        Some(input(0).buffer.clone())
+                    } else {
+                        let mut output = scratch.take(gpu, bytes)?;
+                        let uniform = gpu.uniform(&ScalarParams {
+                            source: dimensions,
+                            value: [*amount, 0., 0., 0.],
+                        });
+                        dispatch(
+                            if matches!(node.operation, Operation::MonoSharpen { .. }) {
+                                Kernel::MonoSharpen
+                            } else {
+                                Kernel::Sharpen
+                            },
+                            &mut [
+                                (0, Read(&input(0).buffer)),
+                                (1, Read(&input(1).buffer)),
+                                (2, Read(&uniform)),
+                                (3, Write(output.write())),
+                            ],
+                            groups,
+                        );
+                        Some(output)
+                    }
                 }
-                Operation::Encode { params, .. } => {
+                Operation::Encode {
+                    params,
+                    space,
+                    destination,
+                } => {
                     let (resized, encoded_params) = crate::nodes::finish::resize::apply(
                         gpu,
                         &input(0).buffer,
                         params,
                         profile,
                     )?;
+                    let transform = gpu.uniform(&destination.transform(*space));
                     let mut output = gpu.storage(
                         "Encoded packed RGB16",
                         desc.expect("encoded description").byte_len(),
@@ -603,6 +614,7 @@ impl Engine {
                             (0, Read(&resized)),
                             (1, Read(&uniform)),
                             (2, Write(output.write())),
+                            (3, Read(&transform)),
                         ],
                         [extent[0].div_ceil(8), extent[1].div_ceil(8)],
                     );

@@ -18,6 +18,7 @@ mod sections;
 mod sidecars;
 mod smoke;
 mod timing;
+mod toolbar;
 mod viewport;
 mod widgets;
 mod worker;
@@ -345,14 +346,23 @@ impl App {
         self.scope_key = Some(key);
     }
     fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(!self.exporting, |ui| {
-                if widgets::button(ui, "Open folder", false, egui::Vec2::ZERO).clicked() {
+        toolbar::container(ui, |ui| {
+            ui.horizontal(|ui| {
+                let export_ready = self.sidecars.ready()
+                    && self.selected.is_some()
+                    && self.settings.validate().is_ok();
+                let actions = toolbar::show(
+                    ui,
+                    !self.exporting,
+                    export_ready,
+                    &mut self.settings.tiff_color_space,
+                );
+                if actions.open_folder {
                     if let Some(path) = rfd::FileDialog::new().pick_folder() {
                         self.open(path);
                     }
                 }
-                if widgets::button(ui, "Open X3F", false, egui::Vec2::ZERO).clicked() {
+                if actions.open_file {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Merrill X3F", &["x3f"])
                         .pick_file()
@@ -360,45 +370,27 @@ impl App {
                         self.open(path);
                     }
                 }
-                for format in [worker::ExportFormat::Tiff, worker::ExportFormat::Dng] {
-                    if ui
-                        .add_enabled_ui(
-                            self.sidecars.ready()
-                                && self.selected.is_some()
-                                && self.settings.validate().is_ok(),
-                            |ui| {
-                                widgets::button(
-                                    ui,
-                                    &format!("Export {}", format.label()),
-                                    false,
-                                    egui::Vec2::ZERO,
-                                )
-                            },
-                        )
-                        .inner
-                        .clicked()
+                if let Some(format) = actions.export {
+                    let name = self
+                        .selected
+                        .as_ref()
+                        .and_then(|p| p.file_stem())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "render".into());
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter(format.label(), &[format.extension()])
+                        .set_file_name(format!("{name}.{}", format.extension()))
+                        .save_file()
                     {
-                        let name = self
-                            .selected
-                            .as_ref()
-                            .and_then(|p| p.file_stem())
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "render".into());
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter(format.label(), &[format.extension()])
-                            .set_file_name(format!("{name}.{}", format.extension()))
-                            .save_file()
-                        {
-                            self.submit(Some(worker::Export { path, format }));
-                        }
+                        self.submit(Some(worker::Export { path, format }));
                     }
                 }
+                if self.busy {
+                    ui.spinner();
+                }
+                ui.add(egui::Label::new(&self.status).truncate())
+                    .on_hover_text(&self.status);
             });
-            if self.busy {
-                ui.spinner();
-            }
-            ui.add(egui::Label::new(&self.status).truncate())
-                .on_hover_text(&self.status);
         });
         if let Some(warning) = self.sidecars.warning() {
             ui.horizontal_wrapped(|ui| {
@@ -695,8 +687,8 @@ impl eframe::App for App {
             .width_range(160. ..=organizer_limit)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.weak(format!("{} files", self.browser.files.len()));
+                widgets::control_row(ui, |ui| {
+                    ui.label(format!("{} files", self.browser.files.len()));
                     widgets::selectable_value(
                         ui,
                         &mut self.preferences.organizer,

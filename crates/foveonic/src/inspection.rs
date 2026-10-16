@@ -42,7 +42,7 @@ pub fn output_names(settings: &Settings) -> Vec<&'static str> {
             names.push("mono.despeckle");
         }
         names.extend(["detail.signal", "monochrome.rgb"]);
-        if settings.sharpen_amount > 0. {
+        if settings.sharpen_selected() {
             names.push("sharpen.rgb");
         }
         names.push("tone.rgb");
@@ -69,7 +69,7 @@ pub fn output_names(settings: &Settings) -> Vec<&'static str> {
     if settings.saturation != 1. {
         names.push("saturation.rgb");
     }
-    if settings.sharpen_amount > 0. {
+    if settings.sharpen_selected() {
         if settings.reconstruction.is_none() {
             names.push("detail.signal");
         }
@@ -140,7 +140,7 @@ pub fn comparison_input(settings: &Settings, output: &str) -> Option<&'static st
             } else {
                 "mono.column"
             }),
-            "sharpen.rgb" if settings.sharpen_amount > 0. => Some("monochrome.rgb"),
+            "sharpen.rgb" if settings.sharpen_selected() => Some("monochrome.rgb"),
             _ => None,
         };
     }
@@ -155,7 +155,7 @@ pub fn comparison_input(settings: &Settings, output: &str) -> Option<&'static st
     match output {
         "color-dq.rgb" if settings.color_dq_selected() => Some("color.rgb"),
         "reconstruction.rgb" if settings.reconstruction.is_some() => Some(base),
-        "sharpen.rgb" if settings.sharpen_amount > 0. => {
+        "sharpen.rgb" if settings.sharpen_selected() => {
             Some(if settings.reconstruction.is_some() {
                 "reconstruction.rgb"
             } else {
@@ -181,7 +181,7 @@ mod tests {
         let mut s = crate::render::Settings::new("Sunlight", "Vivid");
         s.rendering = crate::render::Rendering::Monochrome;
         s.reconstruction = Some(Default::default());
-        s.sharpen_amount = 0.5;
+        s.sharpen_amount = Some(0.5);
         s.saturation = 0.;
         let names = super::output_names(&s);
         for name in [
@@ -259,7 +259,7 @@ mod tests {
             super::comparison_input(&s, "reconstruction.rgb"),
             Some("color.rgb")
         );
-        s.sharpen_amount = 0.75;
+        s.sharpen_amount = Some(0.75);
         assert_eq!(
             super::comparison_input(&s, "sharpen.rgb"),
             Some("reconstruction.rgb")
@@ -317,7 +317,7 @@ mod tests {
         settings.repair = Some(crate::render::RepairThreshold::Camera);
         settings.color_dq_gain = Some(1.);
         settings.saturation = 1.1;
-        settings.sharpen_amount = 0.5;
+        settings.sharpen_amount = Some(0.5);
         let images: Vec<_> = super::image_outputs(&settings)
             .iter()
             .map(|o| o.name)

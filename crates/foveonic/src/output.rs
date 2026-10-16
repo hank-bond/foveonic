@@ -1,17 +1,14 @@
 //! Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
 
-use crate::nodes::sensor::calibration::{ColorSpace, EncodeParams};
 use crate::source::Result;
+use crate::{nodes::sensor::calibration::EncodeParams, render::TiffColorSpace};
 use std::io::{Seek, Write};
-
-const SRGB_ICC: &[u8] = include_bytes!("../assets/srgb-v4.icc");
-const ADOBE_ICC: &[u8] = include_bytes!("../assets/adobe-rgb-1998-compat.icc");
 
 pub fn write_tiff<W: Write + Seek>(
     writer: W,
     bytes: &[u8],
     params: &EncodeParams,
-    space: ColorSpace,
+    space: TiffColorSpace,
     profile: &mut crate::profile::Profile,
 ) -> Result<()> {
     let [width, height, _, _] = params.output;
@@ -29,10 +26,7 @@ pub fn write_tiff<W: Write + Seek>(
     let start = std::time::Instant::now();
     let mut encoder = tiff::encoder::TiffEncoder::new(writer)?;
     let mut image = encoder.new_image::<tiff::encoder::colortype::RGB16>(width, height)?;
-    let icc = match space {
-        ColorSpace::Srgb => SRGB_ICC,
-        ColorSpace::AdobeRgb => ADOBE_ICC,
-    };
+    let icc = space.profile();
     image
         .encoder()
         .write_tag(tiff::tags::Tag::Unknown(34675), icc)?;
@@ -52,7 +46,7 @@ mod tests {
     use super::*;
     #[test]
     fn tiff_preserves_packed_rgb16_and_matching_profile() {
-        for space in [ColorSpace::Srgb, ColorSpace::AdobeRgb] {
+        for space in TiffColorSpace::ALL {
             let params = EncodeParams {
                 source: [2, 1, 0, 0],
                 crop: [0, 0, 2, 1],
@@ -83,10 +77,7 @@ mod tests {
                 decoder
                     .get_tag_u8_vec(tiff::tags::Tag::Unknown(34675))
                     .unwrap(),
-                match space {
-                    ColorSpace::Srgb => SRGB_ICC,
-                    ColorSpace::AdobeRgb => ADOBE_ICC,
-                }
+                space.profile()
             );
         }
     }

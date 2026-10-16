@@ -7,6 +7,7 @@ use crate::nodes::{
     monochrome::{Prepared as MonoPrepared, Stage as MonoStage},
     sensor::{banding, calibration, camera_repair, despeckle, highlight},
 };
+use crate::render::TiffColorSpace;
 use std::path::PathBuf;
 
 pub enum Operation {
@@ -79,11 +80,12 @@ pub enum Operation {
     Encode {
         params: EncodeParams,
         space: ColorSpace,
+        destination: TiffColorSpace,
     },
     Tiff {
         path: PathBuf,
         params: EncodeParams,
-        space: ColorSpace,
+        space: TiffColorSpace,
     },
 }
 
@@ -122,7 +124,12 @@ impl Operation {
             Self::Tone {
                 curve, exposure, ..
             } => Key::pod(exposure).slice(curve),
-            Self::Encode { params, .. } | Self::Tiff { params, .. } => Key::pod(params),
+            Self::Encode {
+                params,
+                destination,
+                ..
+            } => Key::pod(params).with(&(*destination as u32)),
+            Self::Tiff { params, space, .. } => Key::pod(params).with(&(*space as u32)),
         }
     }
     pub fn label(&self) -> &'static str {
@@ -206,7 +213,9 @@ impl Operation {
                 (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
             }
             Self::Tone { space, .. } => (vec![LinearRgb(*space)], ToneMappedRgb(*space)),
-            Self::Encode { space, .. } => (vec![ToneMappedRgb(*space)], EncodedRgb16(*space)),
+            Self::Encode {
+                space, destination, ..
+            } => (vec![ToneMappedRgb(*space)], EncodedRgb16(*destination)),
             Self::Tiff { space, .. } => (vec![EncodedRgb16(*space)], File),
         }
     }

@@ -79,6 +79,32 @@ pub fn normalize(settings: &Settings, output: &mut String, channel: &mut i32) {
     }
 }
 
+fn menu_width(ui: &egui::Ui, outputs: &[inspection::ImageOutput], selected: &str) -> f32 {
+    let stages = crate::widgets::dropdown_width(
+        ui,
+        std::iter::once(selected).chain(outputs.iter().map(|image| image.name)),
+    );
+    let components = crate::widgets::dropdown_width(
+        ui,
+        outputs
+            .iter()
+            .filter(|image| image.channels != Channels::Scalar)
+            .flat_map(|image| components(image.channels).iter().map(|(_, label)| *label)),
+    ) + ui.spacing().indent;
+    // The popup frame and scrollbar consume width inside the header's span.
+    // Keep the disclosure column clear even when a floating scrollbar is visible.
+    let spacing = ui.spacing();
+    let gutter = spacing.scroll.allocated_width().max(
+        spacing.scroll.bar_width
+            + spacing.scroll.bar_inner_margin
+            + spacing.scroll.bar_outer_margin,
+    );
+    stages.max(components)
+        + f32::from(spacing.menu_margin.left)
+        + f32::from(spacing.menu_margin.right)
+        + gutter
+}
+
 /// Returns true only when processing must produce a different buffer.
 pub fn show(
     ui: &mut egui::Ui,
@@ -98,9 +124,10 @@ pub fn show(
         format!("{output} · {label}")
     };
     let current_help = help::inspection(current.name).unwrap();
+    let width = menu_width(ui, &outputs, &selected);
     let combo = egui::ComboBox::from_id_salt("artifact")
         .selected_text(selected)
-        .width(205.)
+        .width(width)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
     crate::widgets::dropdown(ui, combo, |ui| {
             ui.spacing_mut().item_spacing.y = 0.;
@@ -234,6 +261,152 @@ impl Comparison {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inspect_width_follows_available_labels_and_preserves_long_selected_components() {
+        for em in [13., 20.] {
+            for rendering in [
+                foveonic::render::Rendering::Color,
+                foveonic::render::Rendering::Monochrome,
+            ] {
+                for (name, component, selected) in [
+                    ("final", -1, "final · RGB"),
+                    ("calibration.layers", 0, "calibration.layers · Layer 1 (R)"),
+                ] {
+                    let ctx = egui::Context::default();
+                    crate::widgets::install_style(&ctx);
+                    ctx.style_mut(|style| {
+                        style.override_font_id = Some(egui::FontId::proportional(em))
+                    });
+                    let mut settings = Settings::new("Sunlight", "Standard");
+                    settings.rendering = rendering;
+                    let mut output = name.to_owned();
+                    let mut channel = component;
+                    let mut expected = 0.;
+                    let rendered = ctx.run(egui::RawInput::default(), |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            expected =
+                                menu_width(ui, &inspection::image_outputs(&settings), selected);
+                            assert!(!show(ui, &settings, &mut output, &mut channel));
+                        });
+                    });
+                    let text = rendered
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == selected => {
+                                Some(text)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
+                    let header = rendered
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect)
+                                if rect.stroke.width > 0. && rect.rect.contains_rect(bounds) =>
+                            {
+                                Some(rect.rect)
+                            }
+                            _ => None,
+                        })
+                        .min_by(|a, b| a.area().total_cmp(&b.area()))
+                        .unwrap();
+                    assert!((header.width() - expected).abs() < 1.);
+                    if em == 13. && name == "final" {
+                        assert!(
+                            header.width() < 205.,
+                            "default Inspect still reserves its old fixed width"
+                        );
+                    }
+                    assert_eq!(output, name);
+                    assert_eq!(channel, component);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scrolling_inspect_popup_keeps_disclosure_arrows_clear_of_long_labels() {
+        for em in [13., 20.] {
+            let ctx = egui::Context::default();
+            crate::widgets::install_style(&ctx);
+            ctx.style_mut(|style| style.override_font_id = Some(egui::FontId::proportional(em)));
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.reconstruction = Some(Default::default());
+            settings.sharpen_amount = Some(1.);
+            let mut output = "final".to_owned();
+            let mut channel = -1;
+            let mut draw = |events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 800.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            ui.spacing_mut().combo_height = 180.;
+                            assert!(!show(ui, &settings, &mut output, &mut channel));
+                        });
+                    },
+                )
+            };
+            let closed = draw(vec![]);
+            let point = closed
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "final · RGB" => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            for pressed in [true, false] {
+                draw(vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ]);
+            }
+            let opened = draw(vec![]);
+            let text = opened
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "calibration.layers" => {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let arrow = opened
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Path(path) if path.closed && path.points.len() == 3 => {
+                        let bounds = egui::Rect::from_points(&path.points);
+                        ((bounds.center().y - text.center().y).abs() < 1.).then_some(bounds)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert!(
+                arrow.left() - text.right() >= 4.,
+                "{em}pt label overlaps disclosure: text={text:?}, arrow={arrow:?}"
+            );
+        }
+    }
+
     #[test]
     fn popup_disclosure_stays_open_but_component_scalar_and_outside_clicks_close() {
         fn text_rect(shapes: &[egui::epaint::ClippedShape], label: &str) -> egui::Rect {

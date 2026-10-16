@@ -33,7 +33,7 @@ pub enum Space {
     LinearRgb(ColorSpace),
     /// Tone-mapped components in linear working primaries.
     ToneMappedRgb(ColorSpace),
-    EncodedRgb16(ColorSpace),
+    EncodedRgb16(crate::render::TiffColorSpace),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,16 +96,17 @@ impl RenderedImage {
     }
 
     pub(crate) fn params(&self) -> EncodeParams {
-        let space = match self.description.space {
-            Space::LinearRgb(space) | Space::ToneMappedRgb(space) | Space::EncodedRgb16(space) => {
-                space
+        let transfer = match self.description.space {
+            Space::LinearRgb(space) | Space::ToneMappedRgb(space) => {
+                u32::from(space == ColorSpace::AdobeRgb)
             }
+            Space::EncodedRgb16(space) => space as u32,
             Space::SensorLayers
             | Space::CalibratedLayers
             | Space::ScalarField
             | Space::Monochrome
             | Space::LuminanceRatio
-            | Space::SignedDetail => ColorSpace::Srgb,
+            | Space::SignedDetail => 0,
         };
         EncodeParams {
             source: [
@@ -115,12 +116,7 @@ impl RenderedImage {
                 u32::from(self.description.layout == Layout::Scalar32Float),
             ],
             crop: self.view.crop,
-            output: [
-                self.view.extent[0],
-                self.view.extent[1],
-                u32::from(space == ColorSpace::AdobeRgb),
-                0,
-            ],
+            output: [self.view.extent[0], self.view.extent[1], transfer, 0],
         }
     }
 }

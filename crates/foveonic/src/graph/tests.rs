@@ -119,6 +119,7 @@ fn rejects_wrong_space_and_forward_dependencies() {
             output: [1, 1, 0, 0],
         },
         space: ColorSpace::Srgb,
+        destination: crate::render::TiffColorSpace::Srgb,
     };
     assert!(graph.add(encode(), &[source]).is_err());
     assert!(graph.add(encode(), &[10]).is_err());

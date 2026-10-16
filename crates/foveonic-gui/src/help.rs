@@ -27,6 +27,9 @@ pub fn automatic(label: &str) -> Option<&'static str> {
         "Highlight correction" => {
             "A uses the camera's suggested setting. Click A to adjust it yourself, or click again to return to Auto. 0 matches Auto. Use the checkbox to turn correction off without losing your setting."
         }
+        "Sharpen" => {
+            "A uses the camera's suggested sharpening amount for the current noise settings. Click A to choose your own amount. 0 turns sharpening off. Click again to return to Auto."
+        }
         "ColorDQ gain" => {
             "A chooses the amount automatically using the camera information, while noise reduction is on. Click A to choose your own amount. 0 turns this correction off. Click again to return to automatic. The slider and value cannot be edited while A is on."
         }
@@ -80,8 +83,9 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Tames fine color speckles using camera information. Too much can also weaken real color detail. 0 turns it off. This is different from Saturation. Compare a shadow crop before increasing it. A chooses the amount automatically while noise reduction is on."
         }
         "Sharpen" => {
-            "Emphasizes edges to make the finished photo look crisper. 0 turns it off. Higher amounts can exaggerate grain and create light or dark outlines around edges. It cannot restore detail that was never recorded."
+            "Emphasizes edges to make the finished photo look crisper. 0 turns it off. A chooses the amount from the camera and current noise settings. Higher amounts can exaggerate grain and create light or dark outlines around edges. It cannot restore detail that was never recorded."
         }
+        "TIFF space" => "Chooses the color space written into TIFF pixels and its matching embedded profile. Camera preserves the stored sRGB or Adobe RGB space. sRGB is convenient for sharing. Adobe RGB and ProPhoto RGB retain wider color ranges for color-managed editing. This does not change the preview or DNG.",
         "Bad pixels" => crate::help_examples::text("bad-pixels"),
         "Row banding" => crate::help_examples::text("row-banding"),
         "Highlight correction" => crate::help_examples::text("highlight-correction"),
@@ -224,7 +228,7 @@ mod tests {
         settings.highlight_restoration = true;
         settings.color_dq_gain = Some(1.);
         settings.saturation = 1.2;
-        settings.sharpen_amount = 1.;
+        settings.sharpen_amount = Some(1.);
         settings.reconstruction = Some(Default::default());
         for output in foveonic::inspection::image_outputs(&settings) {
             assert!(inspection(output.name).is_some(), "{}", output.name);

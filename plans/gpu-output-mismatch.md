@@ -39,6 +39,12 @@ The unchanged strict six-original test then passed all edit sequences, retained-
 
 No tolerance, cache policy, scratch policy, processing fence, or retry behavior changed. The failure remains unresolved.
 
+## Recurrence during TIFF color and Auto sharpening checks
+
+The full serial core suite for [TIFF color and Auto sharpening](./tiff-color-and-auto-sharpen.md) passed 71 ignored tests and failed the existing six-original cache-equality regression. Blue sign passed. Leaves failed at Detail step 2 (0.8), with explicit manual sharpening 0.75 and the default camera TIFF destination. The comparison reported 29,432,493 differing float components, maximum absolute difference 0.004963994, first component 12,011,991 with 0.09225379 versus 0.09225992.
+
+The three new feature-specific GPU checks passed, including exact Auto/manual and cached/fresh comparisons, TIFF conversion/profile/preview boundaries, and zero-strength signed/headroom identity. All eight GUI ignored checks passed independently afterward. The failed core comparison was not retried or weakened. The first divergent intermediate was not captured. No cause or relationship to the new features is established.
+
 ## Recurrence during photographic resize validation
 
 The full serial core GPU suite with the reference photographic output resizer passed 74 tests and failed `active_inputs_match_fresh_outputs_and_keep_retained_images_immutable` on turquoise at step 13. Blue sign, leaves, rocks, and red flower passed their complete sequences first. Step 13 reenables default reconstruction and explicitly disables ColorDQ after the earlier correction-disable and WB edits. It reported 2,890,022 differing float components, maximum absolute difference `0.0028624088`, first component `36,143,175` with `0.35032853` versus `0.35032818`.

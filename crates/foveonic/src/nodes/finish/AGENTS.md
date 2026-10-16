@@ -12,6 +12,7 @@ Preserve signed samples and headroom until the selected operation requires encod
 
 ### Source files
 
+- **[color_space.rs](./color_space.rs)** Prepares TIFF destination transforms independently of the photographic working space.
 - **[mod.rs](./mod.rs)** Prepares tone and resampling with shaders for sharpening and final encoding.
 - **[resample.rs](./resample.rs)** Prepares camera resampling weights and leaves image calculations on the GPU.
 - **[resize.rs](./resize.rs)** Prepares reference photographic resize kernels and samples owned floating RGB on the GPU.

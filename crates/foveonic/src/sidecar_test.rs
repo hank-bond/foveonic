@@ -36,7 +36,8 @@ fn edited() -> Settings {
     settings.row_correction = false;
     settings.highlight_restoration = false;
     settings.highlight_threshold_ev = Some(1.25);
-    settings.sharpen_amount = 0.25;
+    settings.sharpen_amount = Some(0.25);
+    settings.tiff_color_space = Some(crate::render::TiffColorSpace::ProPhotoRgb);
     settings.output_size = Some([313, 470]);
     let mut controls = noise::Controls {
         chroma: 4,

@@ -508,7 +508,7 @@ mod tests {
         );
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.reconstruction = Some(Default::default());
-        settings.sharpen_amount = 0.75;
+        settings.sharpen_amount = Some(0.75);
         settings.saturation = 1.2;
         for (index, (output, input)) in [
             ("repair.layers", "calibration.layers"),
@@ -628,7 +628,7 @@ mod tests {
         );
         let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
         settings.reconstruction = Some(Default::default());
-        settings.sharpen_amount = 0.75;
+        settings.sharpen_amount = Some(0.75);
         for revision in 0..10 {
             let control = if revision < 5 {
                 settings.exposure = revision as f32 * 0.1;
@@ -637,7 +637,7 @@ mod tests {
                 settings.saturation = 1. + (revision - 5) as f32 * 0.1;
                 "saturation"
             } else {
-                settings.sharpen_amount = 0.8 + (revision - 8) as f32 * 0.1;
+                settings.sharpen_amount = Some(0.8 + (revision - 8) as f32 * 0.1);
                 "sharpen"
             };
             let start = std::time::Instant::now();
@@ -716,7 +716,7 @@ mod tests {
             );
             let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
             settings.reconstruction = Some(Default::default());
-            settings.sharpen_amount = 0.75;
+            settings.sharpen_amount = Some(0.75);
             let submit = |revision, settings: foveonic::render::Settings| {
                 worker.submit(super::Request {
                     revision,
@@ -743,7 +743,7 @@ mod tests {
                             let mut expected =
                                 foveonic::render::Settings::new("Sunlight", "Standard");
                             expected.reconstruction = Some(Default::default());
-                            expected.sharpen_amount = 0.75;
+                            expected.sharpen_amount = Some(0.75);
                             edit(&mut expected, control, reply.revision);
                             assert_eq!(frame.artifact.settings, expected);
                             assert!(frame.scopes.is_none());

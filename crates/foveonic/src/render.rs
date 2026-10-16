@@ -21,7 +21,9 @@ mod settings;
 use execute::Input;
 pub(crate) use execute::Value;
 use recipes::Recipe;
-pub use settings::{MonochromeControls, Rendering, RepairThreshold, Settings, ToneControls};
+pub use settings::{
+    MonochromeControls, Rendering, RepairThreshold, Settings, TiffColorSpace, ToneControls,
+};
 
 pub struct Engine {
     gpu: Gpu,
@@ -193,7 +195,7 @@ impl Engine {
         if path.exists() {
             return Err("output file already exists".into());
         }
-        let params = image.params();
+        let mut params = image.params();
         let Space::ToneMappedRgb(space) = image.description.space else {
             return Err("TIFF requires tone-mapped RGB".into());
         };
@@ -204,12 +206,26 @@ impl Engine {
             },
             &[],
         )?;
-        let encoded = graph.add(Operation::Encode { params, space }, &[input])?;
+        let destination = image.settings.tiff_color_space.unwrap_or(space.into());
+        params.output[2] = destination as u32;
+        // Neutral mono has the same white in every destination. Avoid adding
+        // rounding differences between its otherwise equal channels.
+        params.output[3] = u32::from(
+            destination != TiffColorSpace::from(space) && !image.settings.is_monochrome(),
+        );
+        let encoded = graph.add(
+            Operation::Encode {
+                params,
+                space,
+                destination,
+            },
+            &[input],
+        )?;
         let file = graph.add(
             Operation::Tiff {
                 path: path.to_owned(),
                 params,
-                space,
+                space: destination,
             },
             &[encoded],
         )?;
@@ -301,6 +317,9 @@ impl Engine {
     }
 }
 
+#[cfg(test)]
+#[path = "render/export_test.rs"]
+mod export_tests;
 #[cfg(test)]
 #[path = "render/interactive_test.rs"]
 mod interactive_tests;

@@ -315,7 +315,20 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     }
     ui.separator();
     ui.weak("Refinement");
-    changed |= adjustment(ui, "Sharpen", &mut settings.sharpen_amount, 0. ..=2., 0.);
+    let calculated = metadata.and_then(|metadata| {
+        let mut automatic = settings.clone();
+        automatic.sharpen_amount = None;
+        automatic.effective_sharpen_amount(metadata).ok()
+    });
+    changed |= automatic_adjustment(
+        ui,
+        "Sharpen",
+        &mut settings.sharpen_amount,
+        0. ..=2_f32.max(calculated.unwrap_or(0.)),
+        0.,
+        calculated,
+        None,
+    );
     ui.separator();
     ui.weak("Corrections");
     changed |= automatic_adjustment(
@@ -389,6 +402,32 @@ mod tests {
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: Default::default(),
+        }
+    }
+
+    #[test]
+    fn editing_hides_export_controls_and_preserves_the_selected_tiff_space() {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::ProPhotoRgb);
+        let before = settings.clone();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 1600.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(!processing(ui, &mut settings, None));
+                });
+            },
+        );
+        assert_eq!(settings, before);
+        for label in ["Export", "TIFF space", "Camera", "ProPhoto RGB"] {
+            assert!(text_centers(&output, label).is_empty());
         }
     }
 
@@ -990,7 +1029,7 @@ mod tests {
                         )
                     })
                     .count();
-                assert_eq!(auto_buttons, 1);
+                assert_eq!(auto_buttons, 2);
                 let advanced_headers = output.shapes.iter().filter(|shape| matches!(
                     &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Advanced"
                 )).count();
@@ -1037,7 +1076,7 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(texts.iter().filter(|text| **text == "A").count(), 2);
+            assert_eq!(texts.iter().filter(|text| **text == "A").count(), 3);
             assert!(texts.contains(&"ColorDQ gain"));
             assert!(help::automatic("ColorDQ gain").is_some());
             assert!(texts.contains(&"Bad pixels"));
@@ -1050,7 +1089,11 @@ mod tests {
 
     #[test]
     fn automatic_row_disables_editing_and_toggles_to_resolved_or_fallback_value() {
-        for calculated in [Some(1.4_f32), None] {
+        for (label, calculated) in ["ColorDQ gain", "Sharpen"].into_iter().flat_map(|label| {
+            [Some(1.4_f32), None]
+                .into_iter()
+                .map(move |calculated| (label, calculated))
+        }) {
             let ctx = egui::Context::default();
             let mut manual = None;
             let mut render = |time, events| {
@@ -1069,7 +1112,7 @@ mod tests {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             changed = automatic_adjustment(
                                 ui,
-                                "ColorDQ gain",
+                                label,
                                 &mut manual,
                                 0. ..=2.,
                                 1.,
@@ -1251,7 +1294,11 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.job.text == "A" => {
+                egui::Shape::Text(text)
+                    if text.galley.job.text == "A"
+                        && (text.pos.y + text.galley.size().y * 0.5 - highlights[1].y).abs()
+                            < 2. =>
+                {
                     Some(text.pos + text.galley.size() * 0.5)
                 }
                 _ => None,

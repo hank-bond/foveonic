@@ -35,6 +35,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
 - **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
+- **[toolbar.rs](./toolbar.rs)** Groups Open/Export actions in nested padded containers outside the editor.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between JPEG previews and GPU images, with diagnostic mapping and manual filtering.
 - **[widgets.rs](./widgets.rs)** Shares button, checkbox, and dropdown states across the workspace.
 - **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.

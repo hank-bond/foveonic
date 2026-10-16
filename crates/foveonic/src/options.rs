@@ -2,7 +2,7 @@
 
 use foveonic::{
     profile::Mode,
-    render::{MonochromeControls, Rendering, RepairThreshold, Settings},
+    render::{MonochromeControls, Rendering, RepairThreshold, Settings, TiffColorSpace},
     source::Result,
 };
 use std::{ffi::OsString, path::PathBuf};
@@ -130,7 +130,27 @@ pub(crate) fn parse_settings(
                     .get_or_insert_with(Default::default)
                     .detail = value.parse()?
             }
-            "--sharpen" => settings.sharpen_amount = value.parse()?,
+            "--sharpen" => {
+                settings.sharpen_amount = match value.as_str() {
+                    "auto" => None,
+                    "off" => Some(0.),
+                    _ => Some(value.parse()?),
+                }
+            }
+            "--tiff-color-space" => {
+                settings.tiff_color_space = match value.as_str() {
+                    "camera" => None,
+                    "srgb" => Some(TiffColorSpace::Srgb),
+                    "adobe-rgb" => Some(TiffColorSpace::AdobeRgb),
+                    "prophoto-rgb" => Some(TiffColorSpace::ProPhotoRgb),
+                    _ => {
+                        return Err(
+                            "TIFF color space must be camera, srgb, adobe-rgb, or prophoto-rgb"
+                                .into(),
+                        )
+                    }
+                }
+            }
             "--size" => {
                 let (width, height) = value.split_once('x').ok_or("size requires WIDTHxHEIGHT")?;
                 settings.output_size = Some([width.parse()?, height.parse()?]);

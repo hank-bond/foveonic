@@ -61,14 +61,13 @@ pub(super) fn build(
     };
     let signal = node!(Stage::Signal, &[corrected]);
     let mut linear = node!(Stage::Expand, &[corrected]);
-    if settings.sharpen_amount > 0. {
-        linear = recipe.graph.add(
-            Operation::MonoSharpen {
-                amount: settings.sharpen_amount,
-                space,
-            },
-            &[linear, signal],
-        )?;
+    if settings.sharpen_selected() {
+        let amount = profile.measure("prepare sharpening amount", || {
+            settings.effective_sharpen_amount(&source.metadata)
+        })?;
+        linear = recipe
+            .graph
+            .add(Operation::MonoSharpen { amount, space }, &[linear, signal])?;
         execution.check()?;
     }
     recipe.final_id = linear;

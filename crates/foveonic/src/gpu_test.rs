@@ -112,6 +112,8 @@ fn shader_black_calibration_and_orientation() {
         [0.5, 0.5, 0.5],
     ];
     let input = gpu.upload("Test RGB", &linear.concat()).unwrap();
+    let transform =
+        gpu.uniform(&crate::render::TiffColorSpace::Srgb.transform(crate::image::ColorSpace::Srgb));
     let expected_codes = |rgb: [f32; 3]| {
         rgb.map(|v| {
             let encoded = if v <= 0.0031308 {
@@ -141,6 +143,7 @@ fn shader_black_calibration_and_orientation() {
                 (0, Read(&input)),
                 (1, Read(&uniform)),
                 (2, Write(output.write())),
+                (3, Read(&transform)),
             ],
             [1, 1],
             &mut Default::default(),

@@ -52,7 +52,7 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
     .unwrap();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(noise::Controls::default());
-    settings.sharpen_amount = 0.5;
+    settings.sharpen_amount = Some(0.5);
     let mut profile = Profile::new(Mode::Wall);
     let base = prepare_base(&engine, &source, &settings, &mut profile).unwrap();
     assert_eq!(base.description().layout, Layout::Rgb32Float);

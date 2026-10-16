@@ -3,6 +3,7 @@
 use eframe::egui;
 
 const RADIUS: u8 = 4;
+pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);
 
 pub fn install_style(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
@@ -98,6 +99,48 @@ pub fn button_padding(ui: &egui::Ui) -> egui::Vec2 {
     egui::vec2(0.5 * em, 0.25 * em)
 }
 
+/// Balance the leading gap with the layout's automatic trailing gap, then
+/// reserve the full control height before laying out the first label.
+pub fn control_row<R>(
+    ui: &mut egui::Ui,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    ui.add_space(ui.spacing().item_spacing.y);
+    let text_height = |style| {
+        egui::WidgetText::from("M")
+            .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style)
+            .size()
+            .y
+    };
+    let height = (text_height(egui::TextStyle::Button) + 2. * button_padding(ui).y)
+        .max(text_height(egui::TextStyle::Body))
+        .max(ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), height),
+        egui::Layout::left_to_right(egui::Align::Center),
+        contents,
+    )
+}
+
+/// Fit the longest label plus the dropdown arrow and normal control padding.
+pub fn dropdown_width<'a>(ui: &egui::Ui, labels: impl IntoIterator<Item = &'a str>) -> f32 {
+    let longest = labels
+        .into_iter()
+        .map(|label| {
+            egui::WidgetText::from(label)
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    egui::TextStyle::Button,
+                )
+                .size()
+                .x
+        })
+        .fold(0_f32, f32::max);
+    longest + 2. * button_padding(ui).x + ui.spacing().icon_width + ui.spacing().icon_spacing
+}
+
 pub fn dropdown<R>(
     ui: &mut egui::Ui,
     combo: egui::ComboBox,
@@ -174,8 +217,10 @@ pub fn menu_cell(ui: &egui::Ui, response: &egui::Response, selected: bool) -> eg
         && (response.hovered() || response.has_focus() || response.highlighted());
     let background = if selected {
         ui.visuals().selection.bg_fill
+    } else if hovered {
+        egui::Color32::from_gray(60)
     } else {
-        egui::Color32::from_gray(if hovered { 60 } else { 29 })
+        MENU_BACKGROUND
     };
     ui.painter()
         .rect_filled(response.rect, egui::CornerRadius::ZERO, background);
@@ -281,6 +326,83 @@ mod tests {
             })
             .unwrap();
         (response, visual, fill)
+    }
+
+    #[test]
+    fn file_count_and_zoom_rows_center_labels_and_buttons_from_the_first_frame() {
+        for em in [13., 20.] {
+            for (label, buttons) in [
+                ("16 files", &["Icons", "List"][..]),
+                ("Zoom 41%", &["100%", "200%", "400%"][..]),
+            ] {
+                let ctx = egui::Context::default();
+                install_style(&ctx);
+                ctx.style_mut(|style| {
+                    style.override_font_id = Some(egui::FontId::proportional(em))
+                });
+                let mut label_rect = egui::Rect::NOTHING;
+                let mut button_rects = Vec::new();
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        control_row(ui, |ui| {
+                            label_rect = ui.label(label).rect;
+                            for name in buttons {
+                                button_rects.push(button(ui, name, false, egui::Vec2::ZERO).rect);
+                            }
+                        });
+                    });
+                });
+                for rect in button_rects {
+                    assert!((rect.center().y - label_rect.center().y).abs() < 0.1);
+                }
+                let text_center = |label: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.job.text == label => {
+                                Some(text.pos.y + text.galley.size().y * 0.5)
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                for name in buttons {
+                    assert!((text_center(name) - text_center(label)).abs() < 1.);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_count_and_zoom_bands_balance_their_surrounding_vertical_spacing() {
+        for pixels_per_point in [1., 2.] {
+            for em in [13., 20.] {
+                let ctx = egui::Context::default();
+                install_style(&ctx);
+                ctx.set_pixels_per_point(pixels_per_point);
+                ctx.style_mut(|style| {
+                    style.override_font_id = Some(egui::FontId::proportional(em))
+                });
+                let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        for label in ["16 files", "Zoom 50%"] {
+                            let before = ui.next_widget_position().y;
+                            let gap = ui.spacing().item_spacing.y;
+                            let row = control_row(ui, |ui| {
+                                ui.label(label);
+                                button(ui, "Mode", false, egui::Vec2::ZERO);
+                            })
+                            .response
+                            .rect;
+                            let after = ui.next_widget_position().y;
+                            assert!((row.top() - before - gap).abs() < 0.01);
+                            assert!((after - row.bottom() - gap).abs() < 0.01);
+                        }
+                    });
+                });
+            }
+        }
     }
 
     #[test]

@@ -20,6 +20,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
 - **[detail-and-noise](./detail-and-noise.md)** _(archived)._ The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner.
 - **[editor-review-focus](./editor-review-focus.md)** _(archived)._ Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
+- **[export-toolbar](./export-toolbar.md)** _(archived)._ Move TIFF color selection from Editing to a padded, grouped Open/Export toolbar.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** _(archived)._ Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[gui-screenshot](./gui-screenshot.md)** _(archived)._ Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README.
 - **[help-comparisons](./help-comparisons.md)** _(archived)._ Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
