@@ -22,7 +22,8 @@ use execute::Input;
 pub(crate) use execute::Value;
 use recipes::Recipe;
 pub use settings::{
-    MonochromeControls, Rendering, RepairThreshold, Settings, TiffColorSpace, ToneControls,
+    ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls, Rendering,
+    RepairThreshold, Settings, TiffColorSpace, ToneControls,
 };
 
 pub struct Engine {

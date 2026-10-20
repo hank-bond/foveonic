@@ -2,7 +2,10 @@
 
 use foveonic::{
     profile::Mode,
-    render::{MonochromeControls, Rendering, RepairThreshold, Settings, TiffColorSpace},
+    render::{
+        ColorFieldApproach, HighlightMode, MonochromeControls, Rendering, RepairThreshold,
+        Settings, TiffColorSpace,
+    },
     source::Result,
 };
 use std::{ffi::OsString, path::PathBuf};
@@ -89,6 +92,24 @@ pub(crate) fn parse_settings(
                     Some(value.parse()?)
                 };
             }
+            "--highlight-mode" => {
+                settings.highlight_mode = match value.as_str() {
+                    "classic" => HighlightMode::Classic,
+                    "color-field-local" | "color-field-global" => {
+                        settings.color_field.approach = if value == "color-field-local" {
+                            ColorFieldApproach::LocalGradient
+                        } else {
+                            ColorFieldApproach::Faithful
+                        };
+                        HighlightMode::ColorField
+                    }
+                    _ => return Err(
+                        "highlight mode must be classic, color-field-local, or color-field-global"
+                            .into(),
+                    ),
+                }
+            }
+            "--color-field-selectivity" => settings.color_field.selectivity = value.parse()?,
             "--saturation" => settings.saturation = value.parse()?,
             "--color-dq-gain" => settings.color_dq_gain = Some(value.parse()?),
             "--repair-badness" => settings.repair = Some(RepairThreshold::Manual(value.parse()?)),
@@ -160,4 +181,140 @@ pub(crate) fn parse_settings(
     }
     settings.validate()?;
     Ok((settings, paths, profiling))
+}
+
+#[cfg(test)]
+mod color_field_tests {
+    use super::*;
+    #[test]
+    fn three_highlight_presets_select_shared_color_field_configurations() {
+        for (name, mode, approach) in [
+            (
+                "classic",
+                HighlightMode::Classic,
+                ColorFieldApproach::Faithful,
+            ),
+            (
+                "color-field-local",
+                HighlightMode::ColorField,
+                ColorFieldApproach::LocalGradient,
+            ),
+            (
+                "color-field-global",
+                HighlightMode::ColorField,
+                ColorFieldApproach::Faithful,
+            ),
+        ] {
+            let (settings, _, _) = parse_settings(
+                [
+                    "--wb",
+                    "Sunlight",
+                    "--mode",
+                    "Standard",
+                    "--highlight-mode",
+                    name,
+                ]
+                .into_iter()
+                .map(OsString::from),
+            )
+            .unwrap();
+            assert_eq!(settings.highlight_mode, mode);
+            assert_eq!(settings.color_field.approach, approach);
+            assert!(settings.highlight_restoration);
+            assert_eq!(settings.highlight_threshold_ev, None);
+        }
+    }
+
+    #[test]
+    fn color_field_cli_bounds_selectivity_and_preserves_strength_across_methods() {
+        for value in ["auto", "-0.001", "1.001", "NaN", "inf"] {
+            assert!(
+                parse_settings(
+                    [
+                        "--wb",
+                        "Sunlight",
+                        "--mode",
+                        "Standard",
+                        "--color-field-selectivity",
+                        value
+                    ]
+                    .into_iter()
+                    .map(OsString::from)
+                )
+                .is_err(),
+                "{value}"
+            );
+        }
+        for method in ["classic", "color-field-local", "color-field-global"] {
+            for (value, expected) in [("0", 0.), ("0.5", 0.5), ("1", 1.)] {
+                let (s, _, _) = parse_settings(
+                    [
+                        "--wb",
+                        "Sunlight",
+                        "--mode",
+                        "Standard",
+                        "--color-field-selectivity",
+                        value,
+                        "--highlight-mode",
+                        method,
+                    ]
+                    .into_iter()
+                    .map(OsString::from),
+                )
+                .unwrap();
+                assert_eq!(s.color_field.selectivity, expected);
+            }
+        }
+        for flag in [
+            "--color-field-restraint",
+            "--color-field-cutoff",
+            "--color-field-donation",
+            "--color-field-agreement",
+            "--color-field-boundary",
+            "--color-field-area",
+            "--color-field-approach",
+        ] {
+            assert!(parse_settings(
+                ["--wb", "Sunlight", "--mode", "Standard", flag, "1"]
+                    .into_iter()
+                    .map(OsString::from)
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn color_field_cli_selects_shared_controls_without_changing_classic_threshold() {
+        let args = [
+            "--wb",
+            "Sunlight",
+            "--mode",
+            "Standard",
+            "--highlight-mode",
+            "color-field-global",
+            "--highlight-threshold",
+            "1.25",
+            "--color-field-selectivity",
+            "0.5",
+        ];
+        let (s, paths, _) = parse_settings(args.into_iter().map(OsString::from)).unwrap();
+        assert!(paths.is_empty());
+        assert_eq!(s.highlight_mode, HighlightMode::ColorField);
+        assert_eq!(s.highlight_threshold_ev, Some(1.25));
+        assert_eq!(s.color_field.selectivity, 0.5);
+        assert_eq!(s.color_field.approach, ColorFieldApproach::Faithful);
+        assert!(parse_settings(
+            [
+                "--wb",
+                "Sunlight",
+                "--mode",
+                "Standard",
+                "--color-field-donation",
+                "2"
+            ]
+            .into_iter()
+            .map(OsString::from)
+        )
+        .is_err());
+    }
 }

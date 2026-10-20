@@ -3,7 +3,7 @@
 use crate::help;
 use eframe::egui;
 use foveonic::{
-    render::{Rendering, RepairThreshold, Settings},
+    render::{ColorFieldApproach, HighlightMode, Rendering, RepairThreshold, Settings},
     source::Metadata,
 };
 use std::ops::RangeInclusive;
@@ -34,12 +34,25 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
     default: T,
     nudge: f64,
 ) -> bool {
-    adjustment_row(ui, label, value, range, default, nudge, None)
+    adjustment_row(
+        ui,
+        label,
+        value,
+        range,
+        default,
+        nudge,
+        RowControls::default(),
+    )
 }
 
 struct Automatic<'a> {
     active: &'a mut bool,
     resolved: bool,
+}
+
+#[derive(Default)]
+struct RowControls<'a> {
+    automatic: Option<Automatic<'a>>,
     enabled: Option<&'a mut bool>,
 }
 
@@ -63,11 +76,13 @@ pub fn automatic_adjustment<T: egui::emath::Numeric>(
         range,
         default,
         if T::INTEGRAL { 1. } else { 0.1 },
-        Some(Automatic {
-            active: &mut automatic,
-            resolved: calculated.is_some(),
+        RowControls {
+            automatic: Some(Automatic {
+                active: &mut automatic,
+                resolved: calculated.is_some(),
+            }),
             enabled,
-        }),
+        },
     );
     *manual = (!automatic).then_some(value);
     changed || before != manual.map(|v| v.to_f64())
@@ -80,13 +95,16 @@ fn adjustment_row<T: egui::emath::Numeric>(
     range: RangeInclusive<T>,
     default: T,
     nudge: f64,
-    mut automatic: Option<Automatic<'_>>,
+    controls: RowControls<'_>,
 ) -> bool {
+    let RowControls {
+        mut automatic,
+        enabled,
+    } = controls;
     // The two Highlights rows need separate help and widget IDs.
-    let display_label = if label == "Highlight correction" {
-        "Highlights"
-    } else {
-        label
+    let display_label = match label {
+        "Highlight correction" | "Color-field highlights" => "Highlights",
+        _ => label,
     };
     let before = value.to_f64();
     let mut toggled = false;
@@ -97,19 +115,18 @@ fn adjustment_row<T: egui::emath::Numeric>(
     };
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
-            let enabled =
-                if let Some(enabled) = automatic.as_mut().and_then(|a| a.enabled.as_deref_mut()) {
-                    toggled =
-                        help::control(crate::widgets::checkbox(ui, enabled, display_label), label)
-                            .changed();
-                    *enabled
-                } else {
-                    help::control(
-                        ui.add_sized([92., 20.], egui::Label::new(display_label)),
-                        label,
-                    );
-                    true
-                };
+            let enabled = if let Some(enabled) = enabled {
+                toggled =
+                    help::control(crate::widgets::checkbox(ui, enabled, display_label), label)
+                        .changed();
+                *enabled
+            } else {
+                help::control(
+                    ui.add_sized([92., 20.], egui::Label::new(display_label)),
+                    label,
+                );
+                true
+            };
             ui.add_enabled_ui(enabled, |ui| {
                 let auto_width = if automatic.is_some() {
                     22. + ui.spacing().item_spacing.x
@@ -182,6 +199,41 @@ fn adjustment_row<T: egui::emath::Numeric>(
     // The double-click response can hide the slider's changed flag.
     // Compare values so a real edit still requests a render.
     toggled || before != value.to_f64()
+}
+
+const HIGHLIGHT_METHODS: [((HighlightMode, ColorFieldApproach), &str); 3] = [
+    (
+        (HighlightMode::Classic, ColorFieldApproach::Faithful),
+        "Classic",
+    ),
+    (
+        (HighlightMode::ColorField, ColorFieldApproach::LocalGradient),
+        "Color Field: Local",
+    ),
+    (
+        (HighlightMode::ColorField, ColorFieldApproach::Faithful),
+        "Color Field: Global",
+    ),
+];
+
+fn highlight_choice(settings: &Settings) -> (HighlightMode, ColorFieldApproach) {
+    (
+        settings.highlight_mode,
+        if settings.highlight_mode == HighlightMode::Classic {
+            ColorFieldApproach::Faithful
+        } else {
+            settings.color_field.approach
+        },
+    )
+}
+
+fn select_highlight(settings: &mut Settings, choice: (HighlightMode, ColorFieldApproach)) -> bool {
+    let before = (settings.highlight_mode, settings.color_field);
+    settings.highlight_mode = choice.0;
+    if choice.0 == HighlightMode::ColorField {
+        settings.color_field.approach = choice.1;
+    }
+    before != (settings.highlight_mode, settings.color_field)
 }
 
 pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
@@ -331,15 +383,54 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     );
     ui.separator();
     ui.weak("Corrections");
-    changed |= automatic_adjustment(
-        ui,
-        "Highlight correction",
-        &mut settings.highlight_threshold_ev,
-        -2. ..=2.,
-        0.,
-        Some(0.),
-        Some(&mut settings.highlight_restoration),
-    );
+    ui.horizontal(|ui| {
+        help::control(
+            ui.add_sized([92., 20.], egui::Label::new("Method")),
+            "Highlight method",
+        );
+        let mut choice = highlight_choice(settings);
+        let label = HIGHLIGHT_METHODS
+            .iter()
+            .find(|(value, _)| *value == choice)
+            .unwrap()
+            .1;
+        let combo = egui::ComboBox::from_id_salt("highlight-method")
+            .width(ui.available_width() - 8.)
+            .selected_text(label);
+        let response = crate::widgets::dropdown(ui, combo, |ui| {
+            for (value, label) in HIGHLIGHT_METHODS {
+                if crate::widgets::menu_value(ui, &mut choice, value, label).clicked() {
+                    changed |= select_highlight(settings, choice);
+                }
+            }
+        })
+        .response;
+        help::control(response, "Highlight method");
+    });
+    if settings.highlight_mode == HighlightMode::Classic {
+        changed |= automatic_adjustment(
+            ui,
+            "Highlight correction",
+            &mut settings.highlight_threshold_ev,
+            -2. ..=2.,
+            0.,
+            Some(0.),
+            Some(&mut settings.highlight_restoration),
+        );
+    } else {
+        changed |= adjustment_row(
+            ui,
+            "Color-field highlights",
+            &mut settings.color_field.selectivity,
+            0. ..=1.,
+            0.,
+            0.1,
+            RowControls {
+                enabled: Some(&mut settings.highlight_restoration),
+                ..Default::default()
+            },
+        );
+    }
     let advanced = egui::CollapsingHeader::new("Advanced")
         .id_salt("advanced-corrections")
         .show(ui, |ui| {
@@ -960,6 +1051,270 @@ mod tests {
     }
 
     #[test]
+    fn three_highlight_choices_preserve_selectivity_threshold_and_enable_state() {
+        assert_eq!(
+            HIGHLIGHT_METHODS.map(|(_, label)| label),
+            ["Classic", "Color Field: Local", "Color Field: Global"]
+        );
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.highlight_restoration = false;
+        settings.highlight_threshold_ev = Some(1.25);
+        settings.color_field.selectivity = 0.5;
+        for index in [2, 1, 0, 1, 2] {
+            let choice = HIGHLIGHT_METHODS[index].0;
+            select_highlight(&mut settings, choice);
+            assert_eq!(highlight_choice(&settings), choice);
+            assert_eq!(settings.highlight_threshold_ev, Some(1.25));
+            assert!(!settings.highlight_restoration);
+            assert_eq!(settings.color_field.selectivity, 0.5);
+            if choice.0 == HighlightMode::ColorField {
+                assert_eq!(settings.color_field.approach, choice.1);
+            }
+            assert!(!select_highlight(&mut settings, choice));
+        }
+    }
+
+    #[test]
+    fn color_field_controls_preserve_edits_and_remain_distinct_from_stock_threshold() {
+        for mode in [HighlightMode::Classic, HighlightMode::ColorField] {
+            for enabled in [false, true] {
+                let ctx = egui::Context::default();
+                let mut settings = Settings::new("Sunlight", "Standard");
+                settings.highlight_mode = mode;
+                settings.highlight_restoration = enabled;
+                settings.highlight_threshold_ev = Some(1.25);
+                settings.color_field.selectivity = 0.54321;
+                let before = settings.clone();
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 2000.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            assert!(!processing(ui, &mut settings, None));
+                        });
+                    },
+                );
+                assert_eq!(settings, before);
+                let shown = |label: &str| {
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text==label))
+                };
+                assert!(!shown("Color donation"));
+                assert!(!shown("Color agreement"));
+                assert!(!shown("Boundary EV"));
+                assert!(!shown("Color-field tuning"));
+                assert!(!shown("Color restraint"));
+                assert!(shown("Highlights"));
+                let y = text_centers(&output, "Highlights").last().unwrap().y;
+                assert_eq!(
+                    text_centers(&output, "A")
+                        .iter()
+                        .filter(|position| (position.y - y).abs() < 2.)
+                        .count(),
+                    if mode == HighlightMode::Classic { 1 } else { 0 }
+                );
+                assert!(
+                    text_centers(&output, "Method")[0].y
+                        < text_centers(&output, "Highlights").last().unwrap().y
+                );
+                assert!(shown("Method"));
+                for label in [
+                    "Highlight method",
+                    "Color-field highlights",
+                    "Highlight correction",
+                ] {
+                    assert!(help::editing(label).is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_highlight_methods_share_manual_reset_and_enabled_pointer_behavior() {
+        for ((mode, approach), label) in HIGHLIGHT_METHODS {
+            let ctx = egui::Context::default();
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.highlight_mode = mode;
+            settings.color_field.approach = approach;
+            settings.highlight_threshold_ev = (mode != HighlightMode::Classic).then_some(1.25);
+            settings.color_field.selectivity = if mode == HighlightMode::Classic {
+                0.5
+            } else {
+                0.
+            };
+            let amount = |s: &Settings| {
+                if mode == HighlightMode::Classic {
+                    s.highlight_threshold_ev
+                } else {
+                    Some(s.color_field.selectivity)
+                }
+            };
+            let reset = 0.;
+            let frame = |time: f64, events: Vec<egui::Event>, settings: &mut Settings| {
+                let mut changed = false;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 2000.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            changed |= processing(ui, settings, None);
+                        });
+                    },
+                );
+                (output, changed)
+            };
+            let (output, changed) = frame(0., Vec::new(), &mut settings);
+            assert!(!changed);
+            let y = text_centers(&output, "Highlights").last().unwrap().y;
+            let auto = text_centers(&output, "A")
+                .into_iter()
+                .find(|position| (position.y - y).abs() < 2.);
+            if mode == HighlightMode::Classic {
+                assert_eq!(amount(&settings), None, "Classic starts in A");
+                let auto = auto.expect("Classic retains A");
+                let mut requested = false;
+                for (time, pressed) in [(0.1, true), (0.2, false)] {
+                    requested |= frame(
+                        time,
+                        vec![
+                            egui::Event::PointerMoved(auto),
+                            pointer_button(auto, pressed),
+                        ],
+                        &mut settings,
+                    )
+                    .1;
+                }
+                assert!(requested);
+                assert_eq!(amount(&settings), Some(reset));
+            } else {
+                assert!(auto.is_none(), "{label} has no redundant A button");
+                assert_eq!(amount(&settings), Some(0.), "Color Field starts at zero");
+            }
+            frame(0.6, Vec::new(), &mut settings);
+            for (time, pos, pressed) in [
+                (1., egui::pos2(420., y), Some(true)),
+                (1.1, egui::pos2(250., y), None),
+                (1.2, egui::pos2(250., y), Some(false)),
+            ] {
+                let before = settings.clone();
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if let Some(pressed) = pressed {
+                    events.push(pointer_button(pos, pressed));
+                }
+                let (_, changed) = frame(time, events, &mut settings);
+                if pressed != Some(false) {
+                    assert_ne!(
+                        amount(&before),
+                        amount(&settings),
+                        "{label} must accept slider edits"
+                    );
+                    assert!(changed, "{label} must request rendering");
+                }
+                let mut expected = before;
+                if mode == HighlightMode::Classic {
+                    expected.highlight_threshold_ev = settings.highlight_threshold_ev;
+                } else {
+                    expected.color_field.selectivity = settings.color_field.selectivity;
+                }
+                assert_eq!(
+                    settings, expected,
+                    "only the current method's amount may change"
+                );
+            }
+            let pos = egui::pos2(350., y);
+            let mut reset_requested = false;
+            for (time, pressed) in [(2., true), (2.1, false), (2.2, true), (2.3, false)] {
+                let (_, changed) = frame(
+                    time,
+                    vec![egui::Event::PointerMoved(pos), pointer_button(pos, pressed)],
+                    &mut settings,
+                );
+                reset_requested |= changed && amount(&settings) == Some(reset);
+            }
+            assert_eq!(
+                amount(&settings),
+                Some(reset),
+                "double-click resets the manual value"
+            );
+            assert!(reset_requested);
+            if let Some(auto) = auto {
+                for (time, pressed) in [(3., true), (3.1, false)] {
+                    frame(
+                        time,
+                        vec![
+                            egui::Event::PointerMoved(auto),
+                            pointer_button(auto, pressed),
+                        ],
+                        &mut settings,
+                    );
+                }
+                assert_eq!(
+                    amount(&settings),
+                    None,
+                    "Classic A restores automatic behavior"
+                );
+            }
+            settings.highlight_restoration = false;
+            if mode == HighlightMode::Classic {
+                settings.highlight_threshold_ev = Some(0.5);
+            } else {
+                settings.color_field.selectivity = 0.5;
+            }
+            // Present disabled hit regions before the next pointer interaction.
+            assert!(!frame(3.7, Vec::new(), &mut settings).1);
+            let disabled = settings.clone();
+            for (time, position, pressed) in [
+                (4., pos, true),
+                (4.1, pos, false),
+                (5., auto.unwrap_or(pos), true),
+                (5.1, auto.unwrap_or(pos), false),
+            ] {
+                assert!(
+                    !frame(
+                        time,
+                        vec![
+                            egui::Event::PointerMoved(position),
+                            pointer_button(position, pressed)
+                        ],
+                        &mut settings
+                    )
+                    .1
+                );
+                assert_eq!(settings, disabled);
+            }
+            let (output, _) = frame(5.5, Vec::new(), &mut settings);
+            let checkbox = *text_centers(&output, "Highlights").last().unwrap();
+            let mut requested = false;
+            for (time, pressed) in [(6., true), (6.1, false)] {
+                requested |= frame(
+                    time,
+                    vec![
+                        egui::Event::PointerMoved(checkbox),
+                        pointer_button(checkbox, pressed),
+                    ],
+                    &mut settings,
+                )
+                .1;
+            }
+            let mut enabled = disabled;
+            enabled.highlight_restoration = true;
+            assert_eq!(settings, enabled, "checkbox enables only reconstruction");
+            assert!(requested, "checkbox must request rendering");
+        }
+    }
+
+    #[test]
     fn colordq_stays_inside_collapsed_noise_advanced_and_repair_has_no_parameter_row() {
         for reconstruction in [false, true] {
             for manual_gain in [None, Some(1.2)] {
@@ -1006,10 +1361,10 @@ mod tests {
                 );
                 assert!(position("Reconstruction").is_none());
                 assert!(position("Advanced reconstruction").is_none());
-                assert!(!output.shapes.iter().any(|shape| matches!(
-                    &shape.shape,
-                    egui::Shape::Text(text) if text.galley.job.text.contains("Reference")
-                )));
+                assert!(
+                    position("Classic").is_some(),
+                    "the selected highlight method is explicit"
+                );
                 for removed in [
                     "Camera-record repair",
                     "Min. badness",

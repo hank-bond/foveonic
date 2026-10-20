@@ -10,6 +10,7 @@ Give each requirement or fact one home and link to it from related documents. Re
 
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+- **[color-field-evaluation](./color-field-evaluation.md)** _(how-to)._ Reproduce saved-sidecar highlight comparisons, completed GPU timings, and a private toggleable browser report.
 - **[contributing](./contributing.md)** _(reference)._ Documentation uses concise requirements, evolving progress plans, frontmatter summaries, and generated directory indexes. _Read before writing documentation or source summaries._
 - **[gui-screenshot](./gui-screenshot.md)** _(how-to)._ Explicitly refresh the README's lossless WebP screenshot from a fixed native GUI capture recipe and shared example-photo cache.
 - **[help-examples](./help-examples.md)** _(how-to)._ Download official photographs and explicitly render named comparisons whose PNGs are embedded in photographic help.

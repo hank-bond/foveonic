@@ -1,5 +1,5 @@
 ---
-summary: "Reference highlight restoration uses immutable original saturation provenance, ordered donor statistics, and clipped-neighborhood conditioning before despeckle."
+summary: "Classic highlight restoration uses immutable original saturation provenance, ordered donor statistics, and clipped-neighborhood conditioning before despeckle."
 kind: reference
 status: accepted
 implementation: conforming
@@ -8,6 +8,8 @@ implementation: conforming
 # Highlight restoration
 
 ## Requirements
+
+These requirements define the default **Classic** mode. The selectable [Color field choices](./color-field.md) have their own reconstruction, original-sample reliability, and shared donor tuning. All share the enable checkbox. Disabling highlights preserves settings. Method switches preserve Classic threshold and shared donor tuning. The Classic threshold has no effect on Color field.
 
 - The GPU **must** restore clipped-layer color and condition highlight neighborhoods using the reference Merrill algorithm after camera repair and before despeckle.
 - Saturation provenance **must** come from original camera run/index maps, not processed-pixel clipping. Original metadata, samples, and retained artifacts **must** remain immutable.
@@ -18,7 +20,7 @@ implementation: conforming
 
 ## Implementation and evidence
 
-`highlight.layers` retains restored calibrated layers; `highlight.density` is a scalar 0–1 neighborhood fraction. Their processing/storage meanings remain independent of display. Density uses original saturation metadata only. Shared settings expose `highlight_restoration` and `highlight_threshold_ev`, where null selects Auto and a number stores the relative EV offset. CLI switches are `--highlight-restoration`, `--no-highlight-restoration`, and `--highlight-threshold EV|auto`. Omitted fields in older sidecars keep Auto. TIFF and DNG technical processing share this setting. The [threshold plan](../../plans/archived/highlight-threshold.md) records implementation checks and photographic review.
+`highlight.layers` retains restored calibrated layers; `highlight.density` is a scalar 0–1 neighborhood fraction. Their processing/storage meanings remain independent of display. Density uses original saturation metadata only, including when Color field is selected. It is not Color field's continuous reliability or donation map. Shared settings expose `highlight_restoration` and `highlight_threshold_ev`, where null selects Auto and a number stores the relative EV offset. CLI switches are `--highlight-restoration`, `--no-highlight-restoration`, and `--highlight-threshold EV|auto`. Omitted fields in older sidecars keep Auto. TIFF and DNG technical processing share this setting. The [threshold plan](../../plans/archived/highlight-threshold.md) records implementation checks and photographic review.
 
 GPU donor compaction and stable integer counting-sort preserve each correction bin's original row-major donor subsequence without photographic readback. Parallel bins use ordered float32 recurrences, then native table filling. Rank scratch is reused for bin labels only after original compaction finishes. Parallel isolated-flag removal is equivalent to native in-place removal: any connected pair preserves both flags, so only originally isolated flags can disappear. Float32 restoration differs slightly from native double arithmetic. Component fixtures cover connectivity, original flags independent of processed values, blue correction, density, borders, and immutable inputs. Six full-sensor identical-input native replays have maximum error `0.001953` camera codes. Density-only tests verify stage-local execution and retained ownership.
 

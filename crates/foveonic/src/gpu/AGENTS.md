@@ -14,6 +14,7 @@ Keep raw buffers inside the GPU/storage layer. Reads borrow tracked ownership an
 
 ### Source files
 
+- **[field.rs](./field.rs)** Compiles optional color-field kernels lazily and reflects their exact guarded resource access.
 - **[kernels.rs](./kernels.rs)** Registers compute kernels and builds pipelines from the owning node shaders.
 - **[scratch.rs](./scratch.rs)** Recycles guarded storage only after the last shared reader releases it on the ordered GPU queue.
 - **[storage.rs](./storage.rs)** Prevents a later GPU write from changing an image that still has readers.

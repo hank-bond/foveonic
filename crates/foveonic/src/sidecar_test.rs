@@ -38,6 +38,9 @@ fn edited() -> Settings {
     settings.highlight_threshold_ev = Some(1.25);
     settings.sharpen_amount = Some(0.25);
     settings.tiff_color_space = Some(crate::render::TiffColorSpace::ProPhotoRgb);
+    settings.highlight_mode = crate::render::HighlightMode::ColorField;
+    settings.color_field.selectivity = 0.5;
+    settings.color_field.approach = crate::render::ColorFieldApproach::LocalGradient;
     settings.output_size = Some([313, 470]);
     let mut controls = noise::Controls {
         chroma: 4,
@@ -130,6 +133,119 @@ fn missing_edit_fields_use_shared_defaults_and_preserve_supplied_values() {
     let mut expected = edited();
     expected.reconstruction.as_mut().unwrap().banding = 2;
     assert_eq!(restored, expected);
+}
+
+#[test]
+fn older_color_field_edits_migrate_to_zero_without_rewriting_sidecars() {
+    let mut older: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
+    older["settings"]["color_field"]
+        .as_object_mut()
+        .unwrap()
+        .remove("selectivity");
+    let mut expected = edited();
+    expected.color_field.selectivity = 0.;
+    assert_eq!(
+        decode(&serde_json::to_vec(&older).unwrap()).unwrap(),
+        expected
+    );
+    let directory = Directory::new();
+    older["settings"]["color_field"]["donation"] = serde_json::json!(0.5);
+    older["settings"]["color_field"]["agreement"] = serde_json::json!(0.75);
+    older["settings"]["color_field"]["boundary_ev"] = serde_json::json!(0.4);
+    older["settings"]["color_field"]["area"] = serde_json::json!("active");
+    for amount in [0., 0.75, 8.] {
+        older["settings"]["color_field"]["restraint"] = serde_json::json!(amount);
+        let bytes = serde_json::to_vec(&older).unwrap();
+        fs::write(path(&directory.input()), &bytes).unwrap();
+        let migrated = load(&directory.input()).unwrap().unwrap();
+        assert_eq!(migrated, expected);
+        assert_eq!(fs::read(path(&directory.input())).unwrap(), bytes);
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&encode(&migrated).unwrap()).unwrap();
+        assert_eq!(
+            encoded["settings"]["color_field"]["selectivity"],
+            serde_json::json!(0.)
+        );
+        assert!(encoded["settings"]["color_field"].get("cutoff").is_none());
+        assert!(encoded["settings"]["color_field"]
+            .get("restraint")
+            .is_none());
+    }
+    older["settings"]["color_field"]["cutoff"] = serde_json::json!(0.01);
+    assert_eq!(
+        decode(&serde_json::to_vec(&older).unwrap()).unwrap(),
+        edited()
+    );
+    for (cutoff, strength) in [(0.005, 1.), (0.01, 0.5), (0.0125, 0.4), (0.02, 0.25)] {
+        older["settings"]["color_field"]["cutoff"] = serde_json::json!(cutoff);
+        let migrated = decode(&serde_json::to_vec(&older).unwrap()).unwrap();
+        assert!((migrated.color_field.selectivity - strength).abs() < 1e-7);
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&encode(&migrated).unwrap()).unwrap();
+        assert!(encoded["settings"]["color_field"].get("cutoff").is_none());
+    }
+    older["settings"]["color_field"]["selectivity"] = serde_json::json!(0.);
+    let mut zero = edited();
+    zero.color_field.selectivity = 0.;
+    assert_eq!(decode(&serde_json::to_vec(&older).unwrap()).unwrap(), zero);
+    older["settings"]["color_field"]["selectivity"] = serde_json::Value::Null;
+    assert_eq!(
+        decode(&serde_json::to_vec(&older).unwrap()).unwrap(),
+        expected
+    );
+    older["settings"]["color_field"]
+        .as_object_mut()
+        .unwrap()
+        .remove("selectivity");
+    for invalid in [0., 0.0049, 0.0201] {
+        older["settings"]["color_field"]["cutoff"] = serde_json::json!(invalid);
+        assert!(decode(&serde_json::to_vec(&older).unwrap()).is_err());
+    }
+    older["settings"]["color_field"]["cutoff"] = serde_json::json!(0.01);
+    for invalid in [-0.001, 1.001] {
+        older["settings"]["color_field"]["selectivity"] = serde_json::json!(invalid);
+        assert!(decode(&serde_json::to_vec(&older).unwrap()).is_err());
+    }
+    assert!(decode(br#"{"format":"foveonic-editing","version":1,"settings":{"color_field":{"selectivity":0,"selectivity":1}}}"#).is_err());
+    assert!(decode(br#"{"format":"foveonic-editing","version":1,"settings":{"color_field":{"cutoff":0.01,"cutoff":0.02}}}"#).is_err());
+    assert!(decode(br#"{"format":"foveonic-editing","version":1,"settings":{"color_field":{"restraint":1,"restraint":2}}}"#).is_err());
+    assert!(decode(
+        br#"{"format":"foveonic-editing","version":1,"settings":{"color_field":{"unknown":1}}}"#
+    )
+    .is_err());
+}
+
+#[test]
+fn exploratory_color_field_recipes_migrate_to_supported_brightness_only() {
+    use crate::render::ColorFieldApproach;
+    let mut saved: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
+    for name in ["donation", "agreement", "boundary_ev", "area"] {
+        saved["settings"]["color_field"][name] = serde_json::json!("retired");
+    }
+    for (name, approach) in [
+        ("faithful", ColorFieldApproach::Faithful),
+        ("anchors", ColorFieldApproach::Faithful),
+        ("uniform_support", ColorFieldApproach::Faithful),
+        ("coarse", ColorFieldApproach::Faithful),
+        ("fast_solve", ColorFieldApproach::Faithful),
+        ("fine", ColorFieldApproach::Faithful),
+        ("local_gradient", ColorFieldApproach::LocalGradient),
+    ] {
+        saved["settings"]["color_field"]["approach"] = serde_json::json!(name);
+        let migrated = decode(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        let mut expected = edited();
+        expected.color_field.approach = approach;
+        assert_eq!(migrated, expected);
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&encode(&migrated).unwrap()).unwrap();
+        assert_eq!(
+            encoded["settings"]["color_field"]
+                .as_object()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
 }
 
 #[test]

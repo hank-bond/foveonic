@@ -3,7 +3,7 @@
 use super::Engine;
 use crate::nodes::{
     color::{pattern, reconstruction},
-    sensor::{banding, camera_repair, despeckle, highlight},
+    sensor::{banding, camera_repair, color_field, despeckle, highlight},
 };
 use crate::{
     gpu::{
@@ -473,6 +473,18 @@ impl Engine {
                 Operation::Highlights(prepared) => {
                     highlight::apply(gpu, Some(&input(0).buffer), prepared, false, profile)?.pixels
                 }
+                Operation::ColorField(prepared) => Some(color_field::apply(
+                    gpu,
+                    color_field::Inputs {
+                        input: &input(0).buffer,
+                        original: &input(1).buffer,
+                        black: &input(2).buffer,
+                        unrepaired: &input(3).buffer,
+                    },
+                    prepared,
+                    profile,
+                    execution,
+                )?),
                 Operation::HighlightDensity(prepared) => {
                     highlight::apply(gpu, None, prepared, true, profile)?.density
                 }

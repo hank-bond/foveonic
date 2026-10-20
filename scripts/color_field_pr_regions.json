@@ -1,0 +1,44 @@
+{
+  "provenance": "https://github.com/sagwaco/x3fuse-core/pull/23",
+  "coordinate_space": "Oriented active-image TIFF pixels. Boxes are [left, top, right, bottom), without resampling.",
+  "registration": "Estimated by multiscale normalized cross-correlation of each screenshot's N2 panel against an existing render, then visually checked. Bounds may differ by a few pixels from the unpublished original crop coordinates. Matching regions does not imply matching processing recipes or appearance.",
+  "scenes": {
+    "_P2M0010": {"dimensions": [3136, 4704], "regions": [
+      {"id": "clouds", "label": "Clouds and sky", "box": [0, 180, 2200, 1400], "attachment": "d559ae94-50b4-4075-b03b-fe5e393a8287", "panel_box": [1050, 108, 2100, 690], "correlation": 0.9939}
+    ]},
+    "_P2M0035": {"dimensions": [4704, 3136], "regions": [
+      {"id": "nose", "label": "Nose and skin", "box": [2818, 769, 3584, 1535], "attachment": "e3ea0766-a198-49fa-8e04-24595289bd41", "panel_box": [768, 108, 1536, 876], "correlation": 0.9870}
+    ]},
+    "_P2M0077": {"dimensions": [3136, 4704], "regions": [
+      {"id": "bud", "label": "Bud", "box": [1857, 769, 2623, 1535], "attachment": "c6c314b9-983b-4366-a37b-6f2830a98030", "panel_box": [768, 108, 1536, 876], "correlation": 0.9975},
+      {"id": "white-petals", "label": "White petals", "box": [1700, 2900, 2550, 3750], "attachment": "cd186f82-e82a-442a-a143-8dcca83ebc46", "panel_box": [850, 108, 1700, 958], "correlation": 0.9932}
+    ]},
+    "_P2M0095": {"dimensions": [4704, 3136], "regions": [
+      {"id": "right-petals", "label": "Right petals", "box": [2440, 1320, 3592, 2152], "attachment": "12a39b21-143b-44ca-8def-76aa3cd0e10b", "panel_box": [1050, 108, 2100, 866], "correlation": 0.9834}
+    ]},
+    "_P2M0170": {"dimensions": [3136, 4704], "regions": [
+      {"id": "skirt-stripes", "label": "Yellow and white skirt stripes", "box": [700, 2440, 1500, 3240], "attachment": "023ba6a1-1d46-4813-ac62-33664356ee10", "panel_box": [800, 108, 1600, 908], "correlation": 0.9940}
+    ]},
+    "_P2M0286": {"dimensions": [3136, 4704], "regions": [
+      {"id": "knit-white", "label": "Knit and white stripes", "box": [1280, 2400, 2048, 3168], "attachment": "7817d608-611a-44c9-8ebf-f13e35efb454", "panel_box": [768, 108, 1536, 876], "correlation": 0.9881}
+    ]},
+    "_P2M0313": {"dimensions": [3136, 4704], "regions": [
+      {"id": "faces", "label": "Faces and skin", "box": [820, 1300, 2300, 2400], "attachment": "e058b377-7b17-48ad-b52b-4717121f401f", "panel_box": [1050, 108, 2100, 888], "correlation": 0.9853},
+      {"id": "swaddle", "label": "Pink swaddle", "box": [1340, 2200, 2680, 3440], "attachment": "561f7466-03ec-4cbd-b654-86ce2c602d07", "panel_box": [1050, 108, 2100, 1080], "correlation": 0.9867}
+    ]},
+    "_P2M0322": {"dimensions": [4704, 3136], "regions": [
+      {"id": "yellow-petals", "label": "Yellow petals", "box": [1792, 1024, 2560, 1792], "attachment": "8ecb57e4-2fe1-4bcf-8753-9ef6d98e06e8", "panel_box": [768, 108, 1536, 876], "correlation": 0.9914}
+    ]},
+    "_P2M0331": {"dimensions": [3136, 4704], "regions": [
+      {"id": "hand", "label": "Hand and skin", "box": [64, 3072, 832, 3840], "attachment": "ba4b611a-5f8d-47db-a164-3f2ece3391c4", "panel_box": [768, 108, 1536, 876], "correlation": 0.9927}
+    ]},
+    "_P2M0352": {"dimensions": [3136, 4704], "regions": [
+      {"id": "orange-flowers", "label": "Foreground orange flowers", "box": [1000, 2750, 2650, 3950], "attachment": "b10864c9-8bea-4ed9-9df4-e82fd0c7bb6c", "panel_box": [1050, 108, 2100, 872], "correlation": 0.9885},
+      {"id": "yellow-flowers", "label": "Yellow flowers", "box": [576, 1024, 1344, 1792], "attachment": "ffe8abe6-036b-4f6c-a0b0-4b7d7ed196b6", "panel_box": [768, 108, 1536, 876], "correlation": 0.9962}
+    ]},
+    "_P2M0373": {"dimensions": [3136, 4704], "regions": [
+      {"id": "flower-center", "label": "Flower center", "box": [981, 1901, 1779, 2699], "attachment": "1c35fb14-8583-4726-a106-6cc0202967da", "panel_box": [800, 108, 1600, 908], "correlation": 0.9902},
+      {"id": "foliage", "label": "Blown foliage", "box": [1856, 3936, 2624, 4704], "attachment": "73e0f71f-93ff-4143-ac63-37d9e5243998", "panel_box": [768, 108, 1536, 876], "correlation": 0.9988}
+    ]}
+  }
+}

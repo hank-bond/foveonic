@@ -6,7 +6,7 @@ use crate::nodes::{
     sensor::{
         banding,
         calibration::{self, ColorSpace},
-        camera_repair, despeckle, highlight,
+        camera_repair, color_field, despeckle, highlight,
     },
 };
 use crate::{
@@ -71,8 +71,10 @@ impl Engine {
             calibration::prepare(&source.metadata, &settings.white_balance)
         })?;
         let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
+        let calibration_params = calibration.params;
         let mut calibrated = graph.add(Operation::Calibrate(calibration), &[input, black])?;
         finish!();
+        let unrepaired = calibrated;
         if let Some(threshold) = settings.repair {
             let prepared = profile.measure("prepare repair records", || {
                 camera_repair::prepare(&source.metadata, threshold)
@@ -80,7 +82,24 @@ impl Engine {
             calibrated = graph.add(Operation::Repair(prepared), &[calibrated, input])?;
             finish!();
         }
-        if settings.highlight_restoration {
+        if settings.highlight_restoration
+            && settings.highlight_mode == super::super::settings::HighlightMode::ColorField
+        {
+            let prepared = profile.measure("prepare color-field highlights", || {
+                color_field::prepare(
+                    &source.metadata,
+                    &settings.white_balance,
+                    calibration_params,
+                    settings.repair.is_some(),
+                    settings.color_field,
+                )
+            })?;
+            calibrated = graph.add(
+                Operation::ColorField(prepared),
+                &[calibrated, input, black, unrepaired],
+            )?;
+            finish!();
+        } else if settings.highlight_restoration {
             let prepared = match highlight_params {
                 Some(prepared) => prepared,
                 None => Arc::new(profile.measure("prepare highlight restoration", || {

@@ -15,6 +15,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[banding.rs](./banding.rs)** Prepares coordinate-only row-correction weights while keeping photo measurements on the GPU.
 - **[calibration.rs](./calibration.rs)** Resolves metadata-derived calibration, white balance, camera color, and image geometry.
 - **[camera_repair.rs](./camera_repair.rs)** Prepares camera repair lists so the GPU can fix pixels in the camera's order.
+- **[color_field.rs](./color_field.rs)** Owns original evidence, GPU brightness/color solves, and native highlight application.
 - **[despeckle.rs](./despeckle.rs)** Prepares camera thresholds for GPU speckle repair without changing detection order.
 - **[estimated_iso.rs](./estimated_iso.rs)** Estimates processing ISO from camera histograms and reference metadata.
 - **[highlight.rs](./highlight.rs)** Keeps original clipping flags so GPU highlight recovery can use trustworthy neighboring samples.

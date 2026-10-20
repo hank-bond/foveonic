@@ -4,6 +4,7 @@ use crate::profile::{Profile, Timing};
 use crate::source::Result;
 use wgpu::util::DeviceExt;
 
+mod field;
 mod kernels;
 pub(crate) mod scratch;
 mod storage;
@@ -33,6 +34,7 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pipelines: Vec<wgpu::ComputePipeline>,
+    field: std::sync::OnceLock<std::result::Result<field::FieldKernels, String>>,
     #[cfg(test)]
     shader_writes: Vec<u32>,
     pub adapter_name: String,
@@ -221,7 +223,7 @@ impl Gpu {
         for (slot, binding) in buffers.iter() {
             assert_eq!(
                 matches!(binding, Binding::Write(_)),
-                self.shader_writes[kernel as usize] & (1 << slot) != 0,
+                self.write_mask(kernel) & (1 << slot) != 0,
                 "incorrect buffer guard for {} binding {}",
                 kernel.label(),
                 slot
@@ -239,6 +241,138 @@ impl Gpu {
         // queue order. A later writer must not get ahead of these reads.
         for (_, binding) in buffers {
             binding.submitted(kernel.label());
+        }
+    }
+
+    /// Bind the actual resources used by a color-field entry point. Reflection
+    /// keeps the many solver passes' access guards tied to their WGSL accesses.
+    pub(crate) fn field_dispatch(
+        &self,
+        kernel: Kernel,
+        resources: &mut [(u32, ReadGuard)],
+        groups: u32,
+        trace: &mut GpuTrace,
+    ) {
+        let (used, writes) =
+            self.field_data().bindings[kernel as usize - Kernel::FieldPrepare as usize];
+        let mut bindings: Vec<_> = resources
+            .iter_mut()
+            .filter(|(slot, _)| used & (1 << *slot) != 0)
+            .map(|(slot, buffer)| {
+                (
+                    *slot,
+                    if writes & (1 << *slot) != 0 {
+                        Binding::Write(buffer.write())
+                    } else {
+                        Binding::Read(buffer)
+                    },
+                )
+            })
+            .collect();
+        assert_eq!(
+            bindings.len(),
+            used.count_ones() as usize,
+            "missing color-field binding"
+        );
+        self.dispatch(kernel, &mut bindings, [groups.max(1), 1], trace);
+    }
+
+    /// Encode a dependent color-field pass sequence under one exclusive resource
+    /// borrow and submit it once. Dispatch order preserves dependent writes.
+    /// No writer or retained reader can escape before the batch is submitted.
+    pub(crate) fn field_batch(
+        &self,
+        tasks: &[(Kernel, u32)],
+        resources: &mut [(u32, ReadGuard)],
+        trace: &mut GpuTrace,
+    ) {
+        let access = |kernel: Kernel| {
+            self.field_data().bindings[kernel as usize - Kernel::FieldPrepare as usize]
+        };
+        let (used, writes) = tasks.iter().fold((0, 0), |(u, w), (kernel, _)| {
+            let (ku, kw) = access(*kernel);
+            (u | ku, w | kw)
+        });
+        // Borrow once for the whole submission. Repeated kernels use the same
+        // bind group, and no write guard is released before queue submission.
+        let mut bindings: Vec<_> = resources
+            .iter_mut()
+            .filter(|(slot, _)| used & (1 << *slot) != 0)
+            .map(|(slot, buffer)| {
+                (
+                    *slot,
+                    if writes & (1 << *slot) != 0 {
+                        Binding::Write(buffer.write())
+                    } else {
+                        Binding::Read(buffer)
+                    },
+                )
+            })
+            .collect();
+        assert_eq!(bindings.len(), used.count_ones() as usize);
+        let mut groups: Vec<(usize, wgpu::BindGroup)> = Vec::new();
+        for &(kernel, _) in tasks {
+            if groups.iter().any(|(key, _)| *key == kernel as usize) {
+                continue;
+            }
+            let (used, _) = access(kernel);
+            let entries: Vec<_> = bindings
+                .iter()
+                .filter(|(slot, _)| used & (1 << *slot) != 0)
+                .map(|(slot, buffer)| wgpu::BindGroupEntry {
+                    binding: *slot,
+                    resource: buffer.raw().as_entire_binding(),
+                })
+                .collect();
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(kernel.label()),
+                layout: &self.pipeline(kernel).get_bind_group_layout(0),
+                entries: &entries,
+            });
+            groups.push((kernel as usize, group));
+        }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Color-field batch"),
+            });
+        let group_for = |kernel: Kernel| {
+            &groups
+                .iter()
+                .find(|(key, _)| *key == kernel as usize)
+                .unwrap()
+                .1
+        };
+        if trace.query.is_none() {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Color-field batch"),
+                timestamp_writes: None,
+            });
+            for &(kernel, count) in tasks {
+                pass.set_pipeline(self.pipeline(kernel));
+                pass.set_bind_group(0, group_for(kernel), &[]);
+                pass.dispatch_workgroups(count.max(1), 1, 1);
+            }
+        } else {
+            // Per-stage diagnostic timestamps need pass boundaries. They are
+            // deliberately separate samples, not normal completed render times.
+            for &(kernel, count) in tasks {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some(kernel.label()),
+                    timestamp_writes: trace.writes(kernel),
+                });
+                pass.set_pipeline(self.pipeline(kernel));
+                pass.set_bind_group(0, group_for(kernel), &[]);
+                pass.dispatch_workgroups(count.max(1), 1, 1);
+            }
+        }
+        self.activity
+            .lock()
+            .expect("GPU activity counter")
+            .dispatches += tasks.len() as u64;
+        self.submit(encoder);
+        for (_, binding) in &mut bindings {
+            binding.submitted("color-field batch");
         }
     }
 
@@ -282,7 +416,7 @@ impl Gpu {
             .lock()
             .expect("GPU activity counter")
             .dispatches += 1;
-        let pipeline = &self.pipelines[kernel as usize];
+        let pipeline = self.pipeline(kernel);
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Node inputs"),
             layout: &pipeline.get_bind_group_layout(0),

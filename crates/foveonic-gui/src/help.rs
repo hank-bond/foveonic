@@ -89,6 +89,8 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Bad pixels" => crate::help_examples::text("bad-pixels"),
         "Row banding" => crate::help_examples::text("row-banding"),
         "Highlight correction" => crate::help_examples::text("highlight-correction"),
+        "Highlight method" => "Classic uses the existing highlight correction and its camera-relative threshold. Color Field: Local uses 64 local brightness sweeps. Color Field: Global solves the full brightness system for smoother gradients at higher cost. Both share the same color reconstruction and tuning. Both use full-sensor recovery and the supported 8px color grid. Your Classic threshold and shared color-field selectivity strength are retained. The Highlights row below edits the selected method's parameter.",
+        "Color-field highlights" => "Controls which mixed color evidence can steer highlight reconstruction. The default, 0, keeps the original behavior. Increase the strength toward 1 to reject more inconsistent evidence and reduce color bleeding. Strong settings can also discard real color variation in flowers, fabric or skin. This does not add a neutral tint or change brightness reconstruction. Local and Global share the strength. Double-click resets to 0.",
         "Advanced corrections" => {
             "Speckles, Bad pixels, and Row banding default on for new edits. Expand to toggle them individually. Collapsing preserves your settings."
         }
@@ -146,7 +148,7 @@ pub fn inspection(name: &str) -> Option<&'static str> {
             "Sensor readings after an attempt to restore natural-looking color in very bright areas. Compare with repair.layers to inspect highlight color changes. This is separate from the Highlights tone slider and cannot recreate all detail lost at capture."
         }
         "highlight.density" => {
-            "A diagnostic map of areas near highlights where several sensor layers reached their limit when the photo was taken. Brighter areas receive stronger highlight treatment. This is not a brightness image or a measure of recovered detail."
+            "A diagnostic map from the camera's original saturation flags. It guides Classic correction, but is not Color field's continuous reliability or donation strength. This is not a brightness image or a measure of recovered detail."
         }
         "despeckle.layers" => {
             "Sensor readings after the extra search for isolated bright, dark, or colored dots. Use this to check remaining speckles before general noise reduction."

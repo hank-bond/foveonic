@@ -71,6 +71,8 @@ impl Settings {
                 != next.highlight_threshold_ev.map(f32::to_bits),
             "highlight-threshold"
         );
+        changed!(self.highlight_mode != next.highlight_mode, "highlight-mode");
+        changed!(self.color_field != next.color_field, "color-field");
         changed!(self.despeckle != next.despeckle, "despeckle");
         changed!(self.row_correction != next.row_correction, "row-correction");
         changed!(

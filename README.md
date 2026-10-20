@@ -20,6 +20,8 @@ Choose **Color** or **Monochrome** in the editor. Monochrome mixes the original 
 
 Monochrome DNG bakes the mix into linear neutral samples while keeping exposure and tone in metadata.
 
+Highlights offers **Classic** (default), **Color Field: Local**, and **Color Field: Global**. Classic retains its threshold control. Local uses 64 local brightness sweeps, while Global solves globally for finer gradients at higher cost. Method comes first, followed by a shared Highlights slider and enable checkbox. Classic retains A. Both Color Field methods default to 0, preserving the original reconstruction, without a redundant A button. Increasing selectivity from 0 toward 1 rejects more inconsistent evidence without increasing the original neutral weights. See the [comparison workflow](docs/color-field-evaluation.md).
+
 ## Requirements
 Development is currently done on a modest Apple M1 Pro with 14 GPU Cores.  The current focus is targeting MacOS.  The tooling chosen should be multi-platform compatible, but focus is not currently on delivering that.  On a machine of that caliber, you may expect full pipeline render times around 900-1600ms, with partial re-renders closer to 200-400ms using cached pipeline partials.
 

@@ -40,7 +40,10 @@ Options (also available for batch):
   --no-despeckle            Disable dynamic speckle correction
   --highlight-restoration   Restore original clipped-layer color (default on)
   --no-highlight-restoration Disable clipped-layer restoration and neutralization
-  --highlight-threshold EV  -2..2 relative to camera threshold, or auto (default). +1 doubles it
+  --highlight-threshold EV  Classic-only: -2..2 relative to camera threshold, or auto
+  --highlight-mode MODE     classic (default), color-field-local, or color-field-global
+  --color-field-selectivity N 0..1 selection strength (default 0: original behavior)
+                            Higher rejects more inconsistent evidence
   --row-correction          Reduce additive per-row sensor banding (default on)
   --no-row-correction       Disable per-row banding correction
   --repair-badness MIN       Enable ordered repair with a manual cutoff in 0..15

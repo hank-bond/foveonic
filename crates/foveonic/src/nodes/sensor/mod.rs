@@ -3,6 +3,7 @@
 pub(crate) mod banding;
 pub(crate) mod calibration;
 pub(crate) mod camera_repair;
+pub(crate) mod color_field;
 pub(crate) mod despeckle;
 pub(crate) mod estimated_iso;
 pub(crate) mod highlight;

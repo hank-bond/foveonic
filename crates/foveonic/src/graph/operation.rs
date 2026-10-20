@@ -5,7 +5,7 @@ use crate::nodes::sensor::calibration::{Calibration, ColorParams, ColorSpace, En
 use crate::nodes::{
     color::{color_dq, pattern},
     monochrome::{Prepared as MonoPrepared, Stage as MonoStage},
-    sensor::{banding, calibration, camera_repair, despeckle, highlight},
+    sensor::{banding, calibration, camera_repair, color_field, despeckle, highlight},
 };
 use crate::render::TiffColorSpace;
 use std::path::PathBuf;
@@ -25,6 +25,7 @@ pub enum Operation {
     Despeckle(despeckle::Prepared),
     Highlights(std::sync::Arc<highlight::Prepared>),
     HighlightDensity(std::sync::Arc<highlight::Prepared>),
+    ColorField(color_field::Prepared),
     Banding(banding::Prepared),
     Monochrome {
         stage: MonoStage,
@@ -102,6 +103,7 @@ impl Operation {
             Self::Repair(p) => p.key(),
             Self::Despeckle(p) => p.key(),
             Self::Highlights(p) | Self::HighlightDensity(p) => p.key(),
+            Self::ColorField(p) => p.key(),
             Self::Banding(p) => p.key(),
             Self::Monochrome {
                 stage, prepared, ..
@@ -143,6 +145,7 @@ impl Operation {
             Self::Despeckle(_) => "submit despeckle",
             Self::Highlights(_) => "submit highlight restoration",
             Self::HighlightDensity(_) => "submit original saturation density",
+            Self::ColorField(_) => "complete color-field highlights",
             Self::Banding(_) => "submit row banding correction",
             Self::Monochrome { stage, .. } => stage.label(),
             Self::MonoSharpen { .. } => "submit monochrome sharpening",
@@ -177,6 +180,15 @@ impl Operation {
                 (vec![CalibratedLayers], CalibratedLayers)
             }
             Self::HighlightDensity(_) => (vec![], ScalarField),
+            Self::ColorField(_) => (
+                vec![
+                    CalibratedLayers,
+                    SensorLayers,
+                    BlackLevels,
+                    CalibratedLayers,
+                ],
+                CalibratedLayers,
+            ),
             Self::Monochrome { stage, space, .. } => match stage {
                 MonoStage::Mix => (vec![CalibratedLayers], Monochrome),
                 MonoStage::Directional => (vec![Monochrome], Monochrome),
@@ -253,7 +265,7 @@ impl Operation {
             Self::Calibrate(_) => "calibration.layers",
             Self::Repair(_) => "repair.layers",
             Self::Despeckle(_) => "despeckle.layers",
-            Self::Highlights(_) => "highlight.layers",
+            Self::Highlights(_) | Self::ColorField(_) => "highlight.layers",
             Self::HighlightDensity(_) => "highlight.density",
             Self::Banding(_) => "banding.layers",
             Self::Monochrome { stage, .. } => stage.output_name(),

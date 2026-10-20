@@ -2,6 +2,9 @@
 
 pub use crate::nodes::finish::color_space::TiffColorSpace;
 pub use crate::nodes::monochrome::Controls as MonochromeControls;
+pub use crate::nodes::sensor::color_field::{
+    Approach as ColorFieldApproach, Controls as ColorFieldControls, HighlightMode,
+};
 pub use crate::nodes::{
     finish::tone::Controls as ToneControls, sensor::repair::Threshold as RepairThreshold,
 };
@@ -43,6 +46,8 @@ pub struct Settings {
     pub highlight_restoration: bool,
     /// Camera threshold offset in stops. None selects Auto. Positive values delay neutralization.
     pub highlight_threshold_ev: Option<f32>,
+    pub highlight_mode: HighlightMode,
+    pub color_field: ColorFieldControls,
     /// Estimate and subtract native additive per-row layer bias before reconstruction.
     pub row_correction: bool,
     /// Color noise and detail settings. None leaves color reconstruction off.
@@ -71,6 +76,8 @@ impl Default for Settings {
             despeckle: true,
             highlight_restoration: true,
             highlight_threshold_ev: None,
+            highlight_mode: HighlightMode::Classic,
+            color_field: ColorFieldControls::default(),
             row_correction: true,
             reconstruction: None,
             sharpen_amount: Some(0.),
@@ -146,6 +153,7 @@ impl Settings {
     /// here and let stages that use those camera choices resolve them later.
     pub(crate) fn validate_values(&self) -> Result<()> {
         self.monochrome.validate()?;
+        self.color_field.validate()?;
         if !self.exposure.is_finite()
             || !self.exposure.exp2().is_finite()
             || self.exposure.exp2() <= 0.
