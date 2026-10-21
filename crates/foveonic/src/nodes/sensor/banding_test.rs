@@ -12,6 +12,7 @@ fn metadata(w: usize, h: usize) -> Metadata {
         values,
     };
     Metadata {
+        processing_version: None,
         width: w,
         height: h,
         rotation: 0,

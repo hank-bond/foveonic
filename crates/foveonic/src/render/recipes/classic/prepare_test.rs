@@ -252,6 +252,7 @@ fn camera_calibration_matches_reference_matrix() {
 fn kept_sensor_origin_and_rotation_define_visible_extent() {
     use crate::source::{Matrix, MatrixEncoding, Metadata};
     let mut metadata = Metadata {
+        processing_version: None,
         width: 2304,
         height: 1531,
         rotation: 0,
@@ -294,6 +295,7 @@ fn sd10_matched_green_filter_is_reduced_before_quadratic_fallback() {
         values,
     };
     let mut metadata = Metadata {
+        processing_version: None,
         width: 2304,
         height: 1531,
         rotation: 0,
@@ -342,6 +344,7 @@ fn despeckle_compares_recorded_exposure_in_microseconds() {
     ] {
         for (seconds, old) in [(0.15, false), (0.2, true)] {
             let mut metadata = Metadata {
+                processing_version: None,
                 width: 16,
                 height: 16,
                 rotation: 0,
@@ -407,6 +410,7 @@ fn disabled_fir_keeps_native_coefficients_and_marks_direct_output() {
         source::{Matrix, MatrixEncoding},
     };
     let mut metadata = Metadata {
+        processing_version: None,
         width: 32,
         height: 32,
         rotation: 0,
@@ -455,6 +459,7 @@ fn monochrome_fallback_builds_rank_one_flash_mixture() {
     use crate::source::{Matrix, MatrixEncoding};
     let flash = [0.7, 0.1, 0.2, 0.2, 0.8, 0.1, 0.1, 0.2, 0.9];
     let metadata = Metadata {
+        processing_version: None,
         width: 32,
         height: 32,
         rotation: 0,
@@ -505,6 +510,7 @@ fn monochrome_color_mode_changes_sensor_mixture_like_reference() {
 fn monochrome_chroma_keeps_only_doubled_small_support() {
     use crate::source::{Matrix, MatrixEncoding};
     let metadata = Metadata {
+        processing_version: None,
         width: 32,
         height: 32,
         rotation: 0,
@@ -546,6 +552,7 @@ fn monochrome_chroma_keeps_only_doubled_small_support() {
 fn selected_mode_contrast_uses_shared_photographic_response() {
     use crate::source::{Matrix, MatrixEncoding, PropertyList};
     let metadata = Metadata {
+        processing_version: None,
         width: 32,
         height: 32,
         rotation: 0,

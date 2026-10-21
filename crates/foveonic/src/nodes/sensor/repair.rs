@@ -181,6 +181,7 @@ mod tests {
     #[test]
     fn camera_cutoff_tracks_source_and_manual_selection_bypasses_camera_tables() {
         let mut metadata = Metadata {
+            processing_version: None,
             width: 3,
             height: 3,
             rotation: 0,
@@ -276,6 +277,7 @@ mod tests {
     #[test]
     fn selection_keeps_layer_flags_and_camera_neighbors() {
         let metadata = Metadata {
+            processing_version: None,
             width: 3,
             height: 3,
             rotation: 0,

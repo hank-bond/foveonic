@@ -1,6 +1,7 @@
 //! Authors sensor-layer monochrome filtering and finishing without the color reconstruction path.
 
-use super::{requested, shared::Prepared, BuiltRecipe};
+use super::super::{requested, BuiltRecipe};
+use super::technical::Prepared;
 use crate::{
     graph::Operation,
     image::ColorSpace,

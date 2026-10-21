@@ -151,6 +151,7 @@ fn selected_sd15_metadata_reproduces_native_threshold_triples() {
     use crate::source::{Matrix, MatrixEncoding};
     use std::collections::BTreeMap;
     let mut metadata = Metadata {
+        processing_version: None,
         width: 2688,
         height: 1792,
         rotation: 0,
@@ -207,6 +208,7 @@ fn selected_sd15_metadata_reproduces_native_threshold_triples() {
 fn early_cameras_keep_capture_shutter_in_seconds() {
     use crate::source::{Matrix, MatrixEncoding};
     let metadata = Metadata {
+        processing_version: None,
         width: 2304,
         height: 1531,
         rotation: 0,

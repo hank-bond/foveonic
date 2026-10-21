@@ -98,6 +98,7 @@ mod tests {
 
     fn metadata(entries: &[(&str, &[f64])]) -> Metadata {
         Metadata {
+            processing_version: None,
             width: 1,
             height: 1,
             rotation: 0,

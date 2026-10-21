@@ -15,7 +15,7 @@ use crate::{
 };
 use crate::{
     graph::{DataType, Graph, Operation},
-    image::{Description, Layout, RenderedImage, Space},
+    image::{Description, Layout, RenderedImage},
     interactive::Execution,
     profile::Profile,
     source::{Result, Source},
@@ -47,39 +47,6 @@ impl Input<'_> {
 pub(crate) struct Value {
     pub(crate) buffer: crate::gpu::ReadGuard,
     pub(crate) description: Option<Description>,
-}
-
-fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
-    let (layout, space) = match data {
-        DataType::SensorLayers => (Layout::Rgb32Float, Space::SensorLayers),
-        DataType::ScalarField => (Layout::Scalar32Float, Space::ScalarField),
-        DataType::Monochrome => (Layout::Scalar32Float, Space::Monochrome),
-        DataType::LuminanceRatio => (Layout::Scalar32Float, Space::LuminanceRatio),
-        DataType::SignedDetail => (Layout::Scalar32Float, Space::SignedDetail),
-        DataType::CalibratedLayers => (Layout::Rgb32Float, Space::CalibratedLayers),
-        DataType::NormalizedCodeRgb => (Layout::Rgb32Float, Space::NormalizedCodeRgb),
-        DataType::LinearCodeRgb => (Layout::Rgb32Float, Space::LinearCodeRgb),
-        DataType::SignedCodeRgb => (Layout::Rgb32Float, Space::SignedCodeRgb),
-        DataType::LinearRgb(space) => (Layout::Rgb32Float, Space::LinearRgb(space)),
-        DataType::ToneMappedRgb(space) => (Layout::Rgb32Float, Space::ToneMappedRgb(space)),
-        DataType::EncodedRgb16(space) => (Layout::PackedRgb16, Space::EncodedRgb16(space)),
-        DataType::BlackLevels
-        | DataType::Histogram
-        | DataType::RowTable
-        | DataType::File
-        | DataType::FilteredTiles
-        | DataType::ConditionedTiles
-        | DataType::PatternSeedTiles
-        | DataType::UnconditionedRatioTiles
-        | DataType::ResidualTiles
-        | DataType::RatioTiles
-        | DataType::ColorTiles(_) => return None,
-    };
-    Some(Description {
-        extent,
-        layout,
-        space,
-    })
 }
 
 impl Engine {
@@ -166,16 +133,14 @@ impl Engine {
                         .map(|d| d.extent)
                 })
                 .unwrap_or_else(|| match &context {
-                    Input::Source(source) => {
-                        [source.metadata.width as u32, source.metadata.height as u32]
-                    }
+                    Input::Source(source) => source.storage_extent().map(|v| v as u32),
                     Input::Rendered(image) => image.description.extent,
                 });
             let extent = match &node.operation {
                 Operation::Encode { params, .. } => [params.output[0], params.output[1]],
                 _ => inherited,
             };
-            let desc = description(graph.outputs[index].data, extent);
+            let desc = graph.outputs[index].data.image_description(extent);
             let groups = [inherited[0].div_ceil(8), inherited[1].div_ceil(8)];
             let dimensions = [inherited[0], inherited[1], 0, 0];
             let bytes = u64::from(inherited[0]) * u64::from(inherited[1]) * 12;
@@ -183,17 +148,57 @@ impl Engine {
                 gpu.dispatch(kernel, buffers, groups, &mut trace)
             };
             let output = match &node.operation {
-                Operation::Source => {
+                Operation::Source | Operation::SourcePhaseCells => {
                     let Input::Source(source) = &context else {
                         return Err("sensor input context required".into());
                     };
+                    let expected = if matches!(node.operation, Operation::SourcePhaseCells) {
+                        crate::source::SourceStorage::PackedRgbBluePhases
+                    } else {
+                        crate::source::SourceStorage::InterleavedRgb
+                    };
+                    if source.storage() != expected {
+                        return Err("source storage does not match graph input".into());
+                    }
                     Some(gpu.upload("Original sensor layers", &source.pixels)?)
+                }
+                Operation::PhaseGain(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("phase gain extent does not match its input".into());
+                    }
+                    Some(crate::nodes::sensor::phase_gain::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::PhaseExtraction(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("phase extraction extent does not match source cells".into());
+                    }
+                    let (rgb, blue) = crate::nodes::sensor::phase_extraction::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    let side = node.outputs[1];
+                    if required[side] {
+                        values[side] = Some(Value {
+                            buffer: blue,
+                            description: graph.outputs[side]
+                                .data
+                                .image_description(inherited.map(|v| v * 2)),
+                        });
+                    }
+                    required[index].then_some(rgb)
                 }
                 Operation::RenderedInput { data } => {
                     let Input::Rendered(image) = &context else {
                         return Err("rendered input context required".into());
                     };
-                    if description(*data, image.description.extent) != Some(image.description)
+                    if data.image_description(image.description.extent) != Some(image.description)
                         || image.buffer.size() < image.description.byte_len()
                     {
                         return Err(
@@ -221,7 +226,7 @@ impl Engine {
                     if required[layer_id] {
                         values[layer_id] = Some(Value {
                             buffer: layers,
-                            description: description(DataType::CalibratedLayers, inherited),
+                            description: DataType::CalibratedLayers.image_description(inherited),
                         });
                     }
                     required[index].then_some(rgb)
@@ -283,7 +288,7 @@ impl Engine {
                     if required[detail_id] {
                         values[detail_id] = Some(Value {
                             buffer: result.detail,
-                            description: description(DataType::SignedDetail, inherited),
+                            description: DataType::SignedDetail.image_description(inherited),
                         });
                     }
                     required[index].then_some(result.rgb)
@@ -395,7 +400,7 @@ impl Engine {
                                 false,
                                 profile,
                             )?,
-                            description: description(DataType::CalibratedLayers, inherited),
+                            description: DataType::CalibratedLayers.image_description(inherited),
                         });
                     }
                     if required[edge_id] {
@@ -408,7 +413,7 @@ impl Engine {
                                 false,
                                 profile,
                             )?,
-                            description: description(DataType::ScalarField, inherited),
+                            description: DataType::ScalarField.image_description(inherited),
                         });
                     }
                     if required[node.outputs[3]] {
@@ -431,7 +436,7 @@ impl Engine {
                             buffer: reconstruction::project(
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
-                            description: description(DataType::CalibratedLayers, inherited),
+                            description: DataType::CalibratedLayers.image_description(inherited),
                         });
                     }
                     required[index].then_some(tiles)
@@ -450,7 +455,7 @@ impl Engine {
                             buffer: reconstruction::project(
                                 gpu, &ratio, *params, 1, false, profile,
                             )?,
-                            description: description(DataType::LuminanceRatio, inherited),
+                            description: DataType::LuminanceRatio.image_description(inherited),
                         });
                     }
                     required[index].then_some(ratio)
@@ -477,7 +482,7 @@ impl Engine {
                                 false,
                                 profile,
                             )?,
-                            description: description(DataType::LuminanceRatio, inherited),
+                            description: DataType::LuminanceRatio.image_description(inherited),
                         });
                     }
                     if required[mask] {
@@ -490,7 +495,7 @@ impl Engine {
                                 false,
                                 profile,
                             )?,
-                            description: description(DataType::ScalarField, inherited),
+                            description: DataType::ScalarField.image_description(inherited),
                         });
                     }
                     if required[index] {
@@ -516,7 +521,7 @@ impl Engine {
                             buffer: reconstruction::project(
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
-                            description: description(graph.outputs[projected].data, inherited),
+                            description: graph.outputs[projected].data.image_description(inherited),
                         });
                     }
                     required[index].then_some(tiles)
@@ -530,7 +535,7 @@ impl Engine {
                             buffer: reconstruction::project(
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
-                            description: description(graph.outputs[projected].data, inherited),
+                            description: graph.outputs[projected].data.image_description(inherited),
                         });
                     }
                     required[index].then_some(tiles)
@@ -562,7 +567,7 @@ impl Engine {
                     if let Some(buffer) = signal {
                         values[signal_id] = Some(Value {
                             buffer,
-                            description: description(DataType::SignedDetail, inherited),
+                            description: DataType::SignedDetail.image_description(inherited),
                         });
                     }
                     rgb

@@ -52,6 +52,7 @@ fn resized_tiff_defaults_to_reference_sampling_before_destination_conversion() {
     let engine = Engine::new().unwrap();
     let directory = Directory::new();
     let metadata = Arc::new(crate::source::Metadata {
+        processing_version: None,
         width: 12,
         height: 10,
         rotation: 0,

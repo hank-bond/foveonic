@@ -68,15 +68,19 @@ pub(crate) fn prepare_metadata(metadata: &Metadata, correction: &mut Correction)
     correction.params.row_spans =
         std::array::from_fn(|i| spans[i].clamp(1., f64::from(width - 1)) as u32);
     let average = scalar("UseColorAverageRowOffset", 0.)? != 0.;
-    let default_scale = if average { 0.75 } else { 0.9 };
-    let default_decay = if average { 13. } else { 22. };
-    let mut scale = scalar("RowCorrectionGain", default_scale)?;
-    let mut decay = scalar("RowCorrectionScale", default_decay)?;
-    // This older metadata pair selects the reference defaults, rather than
-    // literal gain .8 and decay12.
-    if decay == 12. && (scale - 0.8).abs() < 0.01 {
-        scale = default_scale;
-        decay = default_decay;
+    let default_gain = if average { 0.75 } else { 0.9 };
+    let default_decay_rows = if average { 13. } else { 22. };
+    let mut gain = scalar("RowCorrectionGain", default_gain)?;
+    let mut decay_rows = scalar("RowCorrectionScale", default_decay_rows)?;
+    // This older metadata pair selects the reference defaults.
+    const LEGACY_GAIN_MARKER: f64 = 0.8;
+    const LEGACY_GAIN_TOLERANCE: f64 = 0.01;
+    const LEGACY_DECAY_MARKER: f64 = 12.;
+    if decay_rows == LEGACY_DECAY_MARKER
+        && (gain - LEGACY_GAIN_MARKER).abs() < LEGACY_GAIN_TOLERANCE
+    {
+        gain = default_gain;
+        decay_rows = default_decay_rows;
     }
     let active = vector("ActiveImageArea", 4)?;
     let top = (active[1] - origin[1]).clamp(0., f64::from(height)) as u32;
@@ -85,20 +89,22 @@ pub(crate) fn prepare_metadata(metadata: &Metadata, correction: &mut Correction)
     } else {
         height
     };
+    const MIN_ACTIVE_ROWS: u32 = 10;
     let row_enabled = spans[1] - spans[0] >= 3.
         && spans[3] - spans[2] >= 3.
-        && scale > 0.
-        && decay > 0.
-        && bottom.saturating_sub(top) > 9;
+        && gain > 0.
+        && decay_rows > 0.
+        && bottom.saturating_sub(top) >= MIN_ACTIVE_ROWS;
     correction.params.drift_controls =
         [top, bottom, u32::from(estimate), u32::from(preserve_slope)];
-    let [scale_hi, scale_lo] = pair(scale);
-    let [alpha_hi, alpha_lo] = pair(if decay > 0. {
-        1. - (-1. / decay).exp()
+    let [gain_hi, gain_lo] = pair(gain);
+    let [alpha_hi, alpha_lo] = pair(if decay_rows > 0. {
+        // One recurrence step advances one row, so this is a decay length in rows.
+        1. - (-1. / decay_rows).exp()
     } else {
         0.
     });
-    correction.params.row_filter = [scale_hi, scale_lo, alpha_hi, alpha_lo];
+    correction.params.row_filter = [gain_hi, gain_lo, alpha_hi, alpha_lo];
     // The correction kernel consumes signed Q14 polynomial coefficients.
     let polynomial_scale = Q14_SCALE;
     let polynomial = vector("PostPolyMatrix", 27)?;

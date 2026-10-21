@@ -19,7 +19,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[graph/](./graph/AGENTS.md)** Graph operations define supported node parameters, typed ports, cache keys, and named output dependencies.
 - **[nodes/](./nodes/AGENTS.md)** Processing nodes group sensor corrections, color and monochrome reconstruction, and finishing with their shaders and tests.
 - **[render/](./render/AGENTS.md)** Rendering separates shared settings, authored recipes, graph execution, and owned inspection artifacts.
-- **[x3f/](./x3f/AGENTS.md)** The X3F reader decodes equal-resolution sensor samples and camera metadata from original files.
+- **[x3f/](./x3f/AGENTS.md)** The X3F reader decodes sensor samples and camera metadata from original files.
 
 ### Source files
 
@@ -40,6 +40,6 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[render.rs](./render.rs)** Shares GPU engine entry points for photographic rendering, inspection, display, and export.
 - **[scopes.rs](./scopes.rs)** Builds histograms and smooth waveform traces from GPU image regions.
 - **[sidecar.rs](./sidecar.rs)** Reads and atomically replaces bounded versioned JSON editing recipes beside immutable X3F inputs.
-- **[source.rs](./source.rs)** Owns original equal-resolution sensor samples and typed camera metadata.
+- **[source.rs](./source.rs)** Owns original sensor storage layouts and typed camera metadata.
 
 <!-- INDEX:END -->

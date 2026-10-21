@@ -320,3 +320,54 @@ fn code_scale_requires_finalization_once_before_root_detail() {
             != color(fixed_point::CodeScale::Ready).key("color.codes")
     );
 }
+
+#[test]
+fn image_signals_round_trip_with_their_canonical_layout_and_extent() {
+    use crate::image::{Layout, Space};
+    let extent = [17, 9];
+    for (space, layout) in [
+        (Space::SensorRgb, Layout::Rgb32Float),
+        (Space::SensorBlue, Layout::Scalar32Float),
+        (Space::CorrectedSensorRgb, Layout::Rgb32Float),
+        (Space::CorrectedSensorBlue, Layout::Scalar32Float),
+        (Space::SensorLayers, Layout::Rgb32Float),
+        (Space::ScalarField, Layout::Scalar32Float),
+        (Space::Monochrome, Layout::Scalar32Float),
+        (Space::LuminanceRatio, Layout::Scalar32Float),
+        (Space::SignedDetail, Layout::Scalar32Float),
+        (Space::CalibratedLayers, Layout::Rgb32Float),
+        (Space::NormalizedCodeRgb, Layout::Rgb32Float),
+        (Space::LinearCodeRgb, Layout::Rgb32Float),
+        (Space::SignedCodeRgb, Layout::Rgb32Float),
+        (Space::LinearRgb(ColorSpace::Srgb), Layout::Rgb32Float),
+        (
+            Space::ToneMappedRgb(ColorSpace::ProPhotoRgb),
+            Layout::Rgb32Float,
+        ),
+        (
+            Space::EncodedRgb16(crate::render::TiffColorSpace::AdobeRgb),
+            Layout::PackedRgb16,
+        ),
+    ] {
+        let description = DataType::from(space).image_description(extent).unwrap();
+        assert_eq!(description.space, space);
+        assert_eq!(description.layout, layout);
+        assert_eq!(description.extent, extent);
+    }
+    for data in [
+        DataType::PhaseCells,
+        DataType::BlackLevels,
+        DataType::Histogram,
+        DataType::RowTable,
+        DataType::FilteredTiles,
+        DataType::ConditionedTiles,
+        DataType::PatternSeedTiles,
+        DataType::UnconditionedRatioTiles,
+        DataType::ResidualTiles,
+        DataType::RatioTiles,
+        DataType::ColorTiles(ColorSpace::Srgb),
+        DataType::File,
+    ] {
+        assert!(data.image_description(extent).is_none(), "{data:?}");
+    }
+}

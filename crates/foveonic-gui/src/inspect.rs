@@ -5,7 +5,7 @@ use eframe::egui;
 use foveonic::{
     inspection::{self, Channels},
     render::Settings,
-    source::Metadata,
+    source::{Metadata, ProcessingFamily},
 };
 
 pub fn components(channels: Channels) -> &'static [(i32, &'static str)] {
@@ -73,12 +73,15 @@ pub fn normalize(
     output: &mut String,
     channel: &mut i32,
     metadata: Option<&Metadata>,
+    family: Option<ProcessingFamily>,
 ) {
-    let outputs = inspection::image_outputs(settings, metadata);
-    if !outputs.iter().any(|o| o.name == output) {
+    let outputs = inspection::image_outputs_with_family(settings, metadata, family);
+    if !outputs.iter().any(|o| o.name == output) && outputs.iter().any(|o| o.name == "final") {
         choose(output, channel, "final", -1);
     }
-    let current = outputs.iter().find(|o| o.name == output).unwrap();
+    let Some(current) = outputs.iter().find(|o| o.name == output) else {
+        return;
+    };
     let choices = components(current.channels);
     if !choices.iter().any(|(c, _)| c == channel) {
         *channel = choices[0].0;
@@ -118,19 +121,24 @@ pub fn show(
     output: &mut String,
     channel: &mut i32,
     metadata: Option<&Metadata>,
+    family: Option<ProcessingFamily>,
 ) -> bool {
     let before = output.clone();
-    normalize(settings, output, channel, metadata);
-    let outputs = inspection::image_outputs(settings, metadata);
-    let current = outputs.iter().find(|o| o.name == output).unwrap();
-    let choices = components(current.channels);
-    let label = choices.iter().find(|(c, _)| c == channel).unwrap().1;
-    let selected = if current.channels == Channels::Scalar {
-        output.clone()
+    normalize(settings, output, channel, metadata, family);
+    let outputs = inspection::image_outputs_with_family(settings, metadata, family);
+    let current = outputs.iter().find(|o| o.name == output);
+    let selected = if let Some(current) = current {
+        let choices = components(current.channels);
+        let label = choices.iter().find(|(c, _)| c == channel).unwrap().1;
+        if current.channels == Channels::Scalar {
+            output.clone()
+        } else {
+            format!("{output} · {label}")
+        }
     } else {
-        format!("{output} · {label}")
+        format!("{output} (unavailable)")
     };
-    let current_help = help::inspection(current.name).unwrap();
+    let current_help=current.and_then(|image|help::inspection(image.name)).unwrap_or("This processing output is not available for this camera. Choose a supported inspection view.");
     let width = menu_width(ui, &outputs, &selected);
     let combo = egui::ComboBox::from_id_salt("artifact")
         .selected_text(selected)
@@ -297,7 +305,7 @@ mod tests {
                                 &inspection::image_outputs(&settings, None),
                                 selected,
                             );
-                            assert!(!show(ui, &settings, &mut output, &mut channel, None));
+                            assert!(!show(ui, &settings, &mut output, &mut channel, None, None));
                         });
                     });
                     let text = rendered
@@ -362,7 +370,7 @@ mod tests {
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             ui.spacing_mut().combo_height = 180.;
-                            assert!(!show(ui, &settings, &mut output, &mut channel, None));
+                            assert!(!show(ui, &settings, &mut output, &mut channel, None, None));
                         });
                     },
                 )
@@ -451,7 +459,7 @@ mod tests {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.spacing_mut().combo_height = 1000.;
                         id = ui.make_persistent_id(egui::Id::new("artifact"));
-                        changed = show(ui, &settings, output, channel, None);
+                        changed = show(ui, &settings, output, channel, None, None);
                     });
                 },
             );
@@ -741,6 +749,7 @@ mod tests {
 #[test]
 fn classic_selection_normalizes_unavailable_stages_and_layer_components() {
     let mut metadata = Metadata {
+        processing_version: None,
         width: 2688,
         height: 1792,
         rotation: 0,
@@ -765,12 +774,88 @@ fn classic_selection_normalizes_unavailable_stages_and_layer_components() {
     settings.reconstruction = Some(Default::default());
     let mut output = "noise.layers".into();
     let mut channel = 1;
-    normalize(&settings, &mut output, &mut channel, Some(&metadata));
+    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
     assert_eq!((&*output, channel), ("final", -1));
     output = "chroma.layers".into();
-    normalize(&settings, &mut output, &mut channel, Some(&metadata));
+    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
     assert_eq!((&*output, channel), ("chroma.layers", 0));
     metadata.properties.insert("ISO".into(), "400".into());
-    normalize(&settings, &mut output, &mut channel, Some(&metadata));
+    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
     assert_eq!((&*output, channel), ("final", -1));
+}
+
+#[test]
+fn quattro_unavailable_final_preserves_selection_and_plane_views_use_their_components() {
+    let metadata = Metadata {
+        processing_version: Some([3, 1, 2, 0]),
+        width: 5888,
+        height: 3672,
+        rotation: 0,
+        properties: [("CAMMODEL".into(), "SIGMA dp2 Quattro".into())].into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    let settings = Settings::new("Sunlight", "Standard");
+    let outputs = inspection::image_outputs(&settings, Some(&metadata));
+    assert!(!outputs.iter().any(|o| o.name == "final"));
+    for image in &outputs {
+        assert!(help::inspection(image.name).is_some(), "{}", image.name);
+    }
+    let ctx = egui::Context::default();
+    let mut output = "final".to_owned();
+    let mut channel = -1;
+    let rendered = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            assert!(!show(
+                ui,
+                &settings,
+                &mut output,
+                &mut channel,
+                Some(&metadata),
+                None
+            ));
+        });
+    });
+    assert_eq!(output, "final");
+    assert_eq!(channel, -1);
+    assert!(rendered.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="final (unavailable)")));
+    output = "sensor.rgb".into();
+    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
+    assert_eq!(channel, 0);
+    output = "sensor.blue".into();
+    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
+    assert_eq!(channel, -1);
+}
+
+#[test]
+fn early_quattro_hint_keeps_final_unavailable_without_merrill_menu_choices() {
+    let settings = Settings::new("", "");
+    let mut output = "final".to_owned();
+    let mut channel = -1;
+    let ctx = egui::Context::default();
+    let rendered = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            assert!(!show(
+                ui,
+                &settings,
+                &mut output,
+                &mut channel,
+                None,
+                Some(ProcessingFamily::Quattro)
+            ));
+        });
+    });
+    assert_eq!(output, "final");
+    assert!(rendered.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="final (unavailable)")));
+    output = "sensor.blue".into();
+    channel = 2;
+    normalize(
+        &settings,
+        &mut output,
+        &mut channel,
+        None,
+        Some(ProcessingFamily::Quattro),
+    );
+    assert_eq!(output, "sensor.blue");
+    assert_eq!(channel, -1);
 }

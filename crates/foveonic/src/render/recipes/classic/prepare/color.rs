@@ -52,7 +52,7 @@ fn prepare_color_matrix(
 ) -> Result<Color> {
     let mut dq = vector(metadata, "ColorDQCamRGB", [0.; 3])?;
     if dq == [0.; 3] {
-        dq = [4. / (input.ratio.min(8.) as f64).sqrt().sqrt(); 3];
+        dq = input.default_nonlinear_noise();
     }
     let channel_noise =
         std::array::from_fn(|c| input.statistics_factor * input.final_gain[c] * dq[c]);

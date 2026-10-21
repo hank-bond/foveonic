@@ -83,6 +83,11 @@ impl App {
             rs.queue.clone(),
             rs.adapter.get_info().name,
         )?;
+        let engine = if let Some(directory) = std::env::var_os("FOVEONIC_CALIBRATION_RESOURCES") {
+            engine.with_calibration_resources(directory)?
+        } else {
+            engine
+        };
         let overrides = [settings.white_balance.clone(), settings.color_mode.clone()];
         let preferences = preferences::Preferences::load(cc.storage);
         let path = preferences.startup_path(path);
@@ -373,7 +378,7 @@ impl App {
                 }
                 if actions.open_file {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Merrill X3F", &["x3f"])
+                        .add_filter("X3F", &["x3f"])
                         .pick_file()
                     {
                         self.open(path);
@@ -540,6 +545,13 @@ impl App {
                     &mut self.output,
                     &mut self.channel,
                     self.metadata.as_deref(),
+                    self.capture
+                        .properties
+                        .as_ref()
+                        .and_then(|p| p.get("CAMMODEL"))
+                        .and_then(|model| {
+                            foveonic::source::ProcessingFamily::from_camera_model(model)
+                        }),
                 );
                 let requested = self.comparison.show(
                     ui,
@@ -564,6 +576,14 @@ impl App {
                 foveonic::image::Space::ToneMappedRgb(_)
             ) {
                 (1., "linear")
+            } else if matches!(
+                frame.texture.description().space,
+                foveonic::image::Space::SensorRgb
+                    | foveonic::image::Space::SensorBlue
+                    | foveonic::image::Space::CorrectedSensorRgb
+                    | foveonic::image::Space::CorrectedSensorBlue
+            ) {
+                (16383., "codes")
             } else {
                 (4095., "codes")
             };
@@ -689,6 +709,13 @@ impl eframe::App for App {
                     &mut self.output,
                     &mut self.channel,
                     self.metadata.as_deref(),
+                    self.capture
+                        .properties
+                        .as_ref()
+                        .and_then(|p| p.get("CAMMODEL"))
+                        .and_then(|model| {
+                            foveonic::source::ProcessingFamily::from_camera_model(model)
+                        }),
                 );
                 self.submit(None);
             }
@@ -860,11 +887,11 @@ mod tests {
         let settings = foveonic::render::Settings::new("Sunlight", "Standard");
         let mut output = "noise.layers".to_owned();
         let mut channel = 2;
-        super::inspect::normalize(&settings, &mut output, &mut channel, None);
+        super::inspect::normalize(&settings, &mut output, &mut channel, None, None);
         assert_eq!((&*output, channel), ("final", -1));
         output = "calibration.layers".into();
         channel = 1;
-        super::inspect::normalize(&settings, &mut output, &mut channel, None);
+        super::inspect::normalize(&settings, &mut output, &mut channel, None, None);
         assert_eq!((&*output, channel), ("calibration.layers", 1));
     }
     #[test]

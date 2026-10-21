@@ -1,6 +1,7 @@
 //! Completes photographic RGB with selected camera appearance, exposure, tone, and saturation.
 
-use super::{requested, shared, BuiltRecipe};
+use super::super::{requested, BuiltRecipe};
+use super::technical;
 use crate::color_space::ColorSpace;
 use crate::{
     graph::Operation,
@@ -11,7 +12,7 @@ use crate::{
     source::{Result, Source},
 };
 
-pub(super) fn build(
+pub(in crate::render::recipes) fn build(
     engine: &Engine,
     source: &Source,
     settings: &Settings,
@@ -19,7 +20,8 @@ pub(super) fn build(
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
-    let (mut recipe, mode) = match engine.build_technical(
+    let (mut recipe, mode) = match technical::build(
+        engine,
         source,
         settings,
         names,
@@ -27,8 +29,8 @@ pub(super) fn build(
         profile,
         execution,
     )? {
-        shared::Prepared::Requested(recipe) => return Ok(recipe),
-        shared::Prepared::Linear(recipe, mode) => (recipe, mode),
+        technical::Prepared::Requested(recipe) => return Ok(recipe),
+        technical::Prepared::Linear(recipe, mode) => (recipe, mode),
     };
     let space = ColorSpace::from_metadata(&source.metadata)?;
     let curve = profile.measure("prepare tone curve", || {
@@ -70,8 +72,8 @@ pub(super) fn build(
 }
 
 pub(in crate::render) fn saturation(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
-    // Reference-style brightness weights preserve signed RGB and headroom.
-    let luma = [0.299, 0.587, 0.114];
+    // Fixed reference saturation weights are independent of the working primaries.
+    let saturation_weights = [0.299, 0.587, 0.114];
     calibration::ColorParams {
         source: dimensions,
         matrix: std::array::from_fn(|row| {
@@ -79,7 +81,7 @@ pub(in crate::render) fn saturation(dimensions: [u32; 4], factor: f32) -> calibr
                 if col == 3 {
                     0.
                 } else {
-                    (1. - factor) * luma[col] + if row == col { factor } else { 0. }
+                    (1. - factor) * saturation_weights[col] + if row == col { factor } else { 0. }
                 }
             })
         }),

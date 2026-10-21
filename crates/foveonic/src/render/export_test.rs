@@ -43,6 +43,7 @@ fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() 
     ]
     .concat();
     let metadata = Arc::new(crate::source::Metadata {
+        processing_version: None,
         width: 10,
         height: 1,
         rotation: 0,
@@ -202,6 +203,7 @@ fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
             extent: [5, 5],
         },
         metadata: Arc::new(crate::source::Metadata {
+            processing_version: None,
             width: 5,
             height: 5,
             rotation: 0,

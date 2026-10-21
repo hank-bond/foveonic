@@ -20,6 +20,7 @@ fn metadata(
     words: Vec<f64>,
 ) -> Metadata {
     Metadata {
+        processing_version: None,
         width: w,
         height: h,
         rotation: 0,

@@ -1,6 +1,7 @@
 //! Builds a fresh linear technical base while leaving selected appearance to DNG metadata.
 
-use super::{shared, BuiltRecipe};
+use super::super::BuiltRecipe;
+use super::technical;
 use crate::{
     interactive::Execution,
     nodes::color::color_mode,
@@ -9,15 +10,25 @@ use crate::{
     source::{Result, Source},
 };
 
-pub(super) fn build(
+pub(in crate::render::recipes) fn build(
     engine: &Engine,
     source: &Source,
     settings: &Settings,
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
-    match engine.build_technical(source, settings, &["final"], None, profile, execution)? {
-        shared::Prepared::Requested(recipe) | shared::Prepared::Linear(recipe, _) => Ok(recipe),
+    match technical::build(
+        engine,
+        source,
+        settings,
+        &["final"],
+        None,
+        profile,
+        execution,
+    )? {
+        technical::Prepared::Requested(recipe) | technical::Prepared::Linear(recipe, _) => {
+            Ok(recipe)
+        }
     }
 }
 

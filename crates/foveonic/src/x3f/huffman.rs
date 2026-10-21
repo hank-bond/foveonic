@@ -9,7 +9,8 @@ pub(super) const SAMPLE_MAX: u32 = 4095;
 pub(super) const MAXIMUM_PLANE_SAMPLES: usize = 32_000_000;
 const CODE_BITS: usize = 12;
 const PREFIX_TABLE_ENTRIES: usize = 1 << CODE_BITS;
-const CATEGORY_COUNT: usize = 13; // Zero difference, then one through twelve payload bits.
+const PACKED_CATEGORY_COUNT: usize = 18;
+const TWELVE_BIT_CATEGORY_COUNT: usize = 13;
 const SAMPLE_MASK: u32 = 0b1111_1111_1111;
 
 #[derive(Clone, Copy)]
@@ -23,7 +24,7 @@ pub(super) struct Table([Symbol; PREFIX_TABLE_ENTRIES]);
 impl Table {
     /// Codes occupy the high bits of a twelve-bit word, in category order.
     pub(super) fn new(codes: &[(u16, u8)]) -> Result<Self> {
-        if codes.is_empty() || codes.len() > CATEGORY_COUNT {
+        if codes.is_empty() || codes.len() > TWELVE_BIT_CATEGORY_COUNT {
             return Err("unsupported Huffman category count".into());
         }
         let mut table = [Symbol {
@@ -60,12 +61,57 @@ impl Table {
         if symbol.category == 0 {
             return Ok(0);
         }
-        let value = stream.read(symbol.category)? as i16;
-        Ok(if value >= 1 << (symbol.category - 1) {
+        let value = stream.read(symbol.category)? as i32;
+        Ok((if value >= 1 << (symbol.category - 1) {
             value
         } else {
             value + 1 - (1 << symbol.category)
-        })
+        }) as i16)
+    }
+
+    /// Packed words keep the category prefix in the high twelve bits.
+    pub(super) fn packed(words: &[u16]) -> Result<Self> {
+        let codes: Vec<_> = words
+            .iter()
+            .map(|&word| (word >> 4, (word & 15) as u8))
+            .collect();
+        // Unused categories have zero length and no prefix.
+        let mut table = [Symbol {
+            length: 0,
+            category: 0,
+        }; PREFIX_TABLE_ENTRIES];
+        if words.is_empty() || words.len() > PACKED_CATEGORY_COUNT {
+            return Err("unsupported Huffman category count".into());
+        }
+        for (category, &(code, length)) in codes.iter().enumerate() {
+            if length == 0 {
+                continue;
+            }
+            let single = Self::new(&[(code, length)])?;
+            for (destination, source) in table.iter_mut().zip(single.0) {
+                if source.length != 0 {
+                    if destination.length != 0 {
+                        return Err("overlapping Huffman codes".into());
+                    }
+                    *destination = Symbol {
+                        length,
+                        category: category as u8,
+                    };
+                }
+            }
+        }
+        Ok(Self(table))
+    }
+
+    pub(super) fn decode_bytes(&self, input: &[u8], length: usize, seed: u8) -> Result<Vec<u8>> {
+        let mut bits = Bits::new(input)?;
+        let mut value = seed;
+        (0..length)
+            .map(|_| {
+                value = value.wrapping_add(self.difference(&mut bits)? as u8);
+                Ok(value)
+            })
+            .collect()
     }
 
     pub(super) fn decode(
@@ -75,13 +121,24 @@ impl Table {
         height: usize,
         seed: u16,
     ) -> Result<Vec<u16>> {
+        self.decode_bounded(input, width, height, seed, SAMPLE_MAX as u16)
+    }
+
+    pub(super) fn decode_bounded(
+        &self,
+        input: &[u8],
+        width: usize,
+        height: usize,
+        seed: u16,
+        maximum: u16,
+    ) -> Result<Vec<u16>> {
         let count = product(width, height)?;
         if width == 0
             || height == 0
             || width > u16::MAX as usize
             || height > u16::MAX as usize
             || count > MAXIMUM_PLANE_SAMPLES
-            || u32::from(seed) > SAMPLE_MAX
+            || seed > maximum
         {
             return Err("unsupported compressed plane geometry or seed".into());
         }
@@ -101,8 +158,8 @@ impl Table {
                     horizontal[x & 1]
                 };
                 let value = (predictor as i16).wrapping_add(self.difference(&mut bits)?);
-                if !(0..=SAMPLE_MAX as i16).contains(&value) {
-                    return Err("decoded sample outside twelve-bit range".into());
+                if value as u16 > maximum {
+                    return Err("decoded sample outside declared range".into());
                 }
                 let value = value as u16;
                 horizontal[x & 1] = value;
@@ -165,6 +222,10 @@ impl<'a> Bits<'a> {
         Ok(())
     }
     fn read(&mut self, count: u8) -> Result<u16> {
+        if count > 12 {
+            let high = self.read(count - 12)?;
+            return Ok((high << 12) | self.read(12)?);
+        }
         let value = self.peek() >> (12 - count);
         self.advance(count)?;
         Ok(value)
@@ -199,6 +260,25 @@ mod tests {
                 assert_eq!(bits.read(count).unwrap(), expected >> (12 - count));
             }
         }
+    }
+
+    #[test]
+    fn fourteen_bit_payloads_and_wrapping_byte_recurrence() {
+        let mut words = vec![0; 15];
+        words[0] = 1; // zero difference = 0
+        words[14] = 0x8001; // fourteen-bit difference = 1 + payload
+        let table = Table::packed(&words).unwrap();
+        // Prefix one and payload 10_0000_0000_0000: +8192.
+        assert_eq!(
+            table.decode_bounded(&[0xc0, 0], 1, 1, 0, 16383).unwrap(),
+            [8192]
+        );
+        assert!(table.decode(&[0xc0, 0], 1, 1, 0).is_err());
+        assert!(table.decode_bounded(&[0xc0], 1, 1, 0, 16383).is_err());
+        let table = Table::packed(&[1, 0x8001]).unwrap();
+        // +1 then +1 wraps the byte predictor, while independent image seeds do not.
+        assert_eq!(table.decode_bytes(&[0xf0], 2, 255).unwrap(), [0, 1]);
+        assert!(table.decode_bytes(&[], 1, 0).is_err());
     }
 
     #[test]

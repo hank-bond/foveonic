@@ -64,10 +64,23 @@ impl Engine {
                     Content::Image(Box::new(RenderedImage {
                         buffer: value.buffer,
                         description,
-                        view: View {
-                            crop: params.crop,
-                            rotation: params.source[2],
-                            extent: [params.output[0], params.output[1]],
+                        view: if description.space.uses_full_sensor_view() {
+                            let extent = description.extent;
+                            View {
+                                crop: [0, 0, extent[0], extent[1]],
+                                rotation: params.source[2],
+                                extent: if matches!(params.source[2], 90 | 270) {
+                                    [extent[1], extent[0]]
+                                } else {
+                                    extent
+                                },
+                            }
+                        } else {
+                            View {
+                                crop: params.crop,
+                                rotation: params.source[2],
+                                extent: [params.output[0], params.output[1]],
+                            }
                         },
                         metadata: source.metadata.clone(),
                         settings: settings.clone(),

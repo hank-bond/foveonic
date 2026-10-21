@@ -67,6 +67,9 @@ fn reads_only_header_directory_and_properties_and_supports_original_versions() {
     for version in SUPPORTED_FILE_VERSIONS {
         let mut reader = fixture();
         put(reader.bytes.get_mut(), 4, version);
+        if version >= 0x40000 {
+            put(reader.bytes.get_mut(), 8, 1);
+        }
         assert_eq!(read(&mut reader).unwrap()["x"], "a😀");
         assert!(reader
             .reads

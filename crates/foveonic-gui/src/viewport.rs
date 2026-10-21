@@ -70,7 +70,20 @@ impl Params {
         srgb_target: bool,
     ) -> Self {
         let origin = image.min - canvas.min;
-        let sensor = matches!(space, Space::SensorLayers | Space::CalibratedLayers);
+        let sensor14 = matches!(
+            space,
+            Space::SensorRgb
+                | Space::SensorBlue
+                | Space::CorrectedSensorRgb
+                | Space::CorrectedSensorBlue
+        );
+        let sensor = matches!(
+            space,
+            Space::SensorLayers
+                | Space::CalibratedLayers
+                | Space::SensorRgb
+                | Space::CorrectedSensorRgb
+        );
         Self {
             rect: [
                 origin.x / canvas.width(),
@@ -84,7 +97,9 @@ impl Params {
                 } else {
                     channel as f32
                 },
-                if sensor || matches!(space, Space::LinearRgb(_) | Space::Monochrome) {
+                if sensor14 {
+                    1. / 16383.
+                } else if sensor || matches!(space, Space::LinearRgb(_) | Space::Monochrome) {
                     1. / 4095.
                 } else if space == Space::LuminanceRatio {
                     0.5
@@ -95,10 +110,7 @@ impl Params {
                 },
                 if space == Space::SignedDetail {
                     -2.
-                } else if matches!(
-                    space,
-                    Space::ScalarField | Space::LuminanceRatio | Space::Monochrome
-                ) {
+                } else if space.buffer_layout() == foveonic::image::Layout::Scalar32Float {
                     -1.
                 } else {
                     match space {
@@ -842,6 +854,8 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200., 100.));
         for (space, expected) in [
             (Space::CalibratedLayers, 16. / 4095.),
+            (Space::SensorRgb, 16. / 16383.),
+            (Space::CorrectedSensorRgb, 16. / 16383.),
             (Space::LinearRgb(ColorSpace::AdobeRgb), 16. / 4095.),
             (Space::ToneMappedRgb(ColorSpace::Srgb), 16.),
         ] {
@@ -863,6 +877,11 @@ mod tests {
         let image = egui::Rect::from_min_size(egui::pos2(120., 80.), egui::vec2(200., 100.));
         for (space, channel, expected) in [
             (Space::SensorLayers, -1, [0., 1. / 4095., 0., 1.]),
+            (Space::SensorRgb, -1, [0., 1. / 16383., 0., 1.]),
+            (Space::SensorRgb, 2, [2., 1. / 16383., 0., 1.]),
+            (Space::CorrectedSensorRgb, 1, [1., 1. / 16383., 0., 1.]),
+            (Space::SensorBlue, -1, [-1., 1. / 16383., -1., 1.]),
+            (Space::CorrectedSensorBlue, -1, [-1., 1. / 16383., -1., 1.]),
             (Space::CalibratedLayers, 2, [2., 1. / 4095., 0., 1.]),
             (Space::ScalarField, -1, [-1., 1., -1., 1.]),
             (Space::LuminanceRatio, -1, [-1., 0.5, -1., 1.]),

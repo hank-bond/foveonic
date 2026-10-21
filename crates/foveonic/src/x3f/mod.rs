@@ -1,4 +1,4 @@
-//! Reads owned X3F sections and decodes equal-resolution sensor samples and camera metadata.
+//! Reads owned X3F sections and decodes sensor samples and camera metadata.
 //!
 //! Imported from Foveonic's X3F reader.
 
@@ -6,11 +6,12 @@ mod bytes;
 pub(crate) mod camf;
 pub(crate) mod capture;
 mod exif;
+mod format31;
 mod format6;
 mod huffman;
 
 use crate::profile::Timing;
-use crate::source::{Metadata, Result, Source};
+use crate::source::{Metadata, Result, Source, SourceStorage};
 use bytes::{product, Bytes};
 use huffman::Table;
 use std::collections::BTreeMap;
@@ -23,12 +24,14 @@ const BASE_HEADER_BYTES: usize = 40;
 const SECTION_VERSION: u32 = 0x0002_0000;
 // Version words hold major/minor halves. DP1 Merrill review originals use
 // 2.3 with the same directory, property, CAMF, and format-30 sensor sections.
-const SUPPORTED_FILE_VERSIONS: [u32; 5] = [
+const SUPPORTED_FILE_VERSIONS: [u32; 7] = [
     0x0002_0000,
     0x0002_0001,
     0x0002_0002,
     0x0002_0003,
     0x0003_0000,
+    0x0004_0001,
+    0x0004_0002,
 ];
 const MAXIMUM_DIRECTORY_ENTRIES: usize = 1024;
 const DIRECTORY_HEADER_BYTES: usize = 12;
@@ -68,6 +71,7 @@ fn decode(data: &[u8]) -> Result<Source> {
     }
     // Header byte offsets: signature 0, version 4, stored orientation 36.
     let rotation = bytes.u32(36)?;
+    let processing_version = processing_version(data)?;
     let end = data
         .len()
         .checked_sub(4)
@@ -90,6 +94,7 @@ fn decode(data: &[u8]) -> Result<Source> {
         product(count, DIRECTORY_ENTRY_BYTES)?,
     )?;
     let mut preview_properties = BTreeMap::new();
+    let mut preview_area = 0_u64;
     let mut raw = None;
     let mut properties = None;
     let mut camera = None;
@@ -111,9 +116,16 @@ fn decode(data: &[u8]) -> Result<Source> {
                 if image.range(0, 4)? != b"SECi" {
                     return Err("invalid image section signature".into());
                 }
-                if image.u32(8)? == 2 && image.u32(12)? == 18 && preview_properties.is_empty() {
-                    preview_properties =
-                        exif::properties(image.range(28, section.len().saturating_sub(28))?);
+                if image.u32(8)? == 2 && image.u32(12)? == 18 {
+                    let area = u64::from(image.u32(16)?) * u64::from(image.u32(20)?);
+                    if area > preview_area {
+                        let values =
+                            exif::properties(image.range(28, section.len().saturating_sub(28))?);
+                        if !values.is_empty() {
+                            preview_properties = values;
+                            preview_area = area;
+                        }
+                    }
                 }
                 if SENSOR_IMAGE_TYPES.contains(&image.u32(8)?) {
                     insert(&mut raw, section)?;
@@ -128,13 +140,27 @@ fn decode(data: &[u8]) -> Result<Source> {
     if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
         return Err("overlapping X3F sections".into());
     }
-    let mut properties = read_properties(properties.ok_or("missing X3F properties")?)?;
-    if properties.get("CAMMODEL").is_some_and(|m| {
-        m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
-    }) {
-        properties.extend(preview_properties);
+    if properties.is_none() && bytes.u32(4)? < 0x40000 {
+        return Err("missing X3F properties".into());
     }
-    let (width, height, pixels, mut timings) = read_pixels(raw.ok_or("missing X3F sensor image")?)?;
+    let mut properties = properties
+        .map(read_properties)
+        .transpose()?
+        .unwrap_or_default();
+    if properties.is_empty()
+        || properties.get("CAMMODEL").is_some_and(|m| {
+            m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
+        })
+    {
+        merge_preview_properties(&mut properties, preview_properties);
+    }
+    let raw = raw.ok_or("missing X3F sensor image")?;
+    let storage = if [35, 37, 39].contains(&Bytes(raw).u32(12)?) {
+        SourceStorage::PackedRgbBluePhases
+    } else {
+        SourceStorage::InterleavedRgb
+    };
+    let (width, height, pixels, mut timings) = read_pixels(raw)?;
     let start = Instant::now();
     let camf = camf::decompress(camera.ok_or("missing X3F camera metadata")?)?;
     timings.push(Timing::elapsed("CAMF decompress", start));
@@ -146,14 +172,46 @@ fn decode(data: &[u8]) -> Result<Source> {
             width,
             height,
             rotation,
+            processing_version,
             properties,
             matrices,
             lists,
         }),
         pixels,
+        storage,
         camf,
         timings,
     })
+}
+
+/// Older PROP records keep their authoritative camera choices and exposure units.
+/// Files without PROP receive the complete preview capture fallback.
+fn merge_preview_properties(
+    properties: &mut BTreeMap<String, String>,
+    preview: BTreeMap<String, String>,
+) {
+    let fallback = properties.is_empty();
+    properties.extend(
+        preview
+            .into_iter()
+            .filter(|(name, _)| fallback || name.starts_with("EXIF_")),
+    );
+}
+
+pub(super) fn processing_version(header: &[u8]) -> Result<Option<[u16; 4]>> {
+    let bytes = Bytes(header);
+    if bytes.u32(4)? < 0x40000 {
+        return Ok(None);
+    }
+    if bytes.u32(8)? != 1 {
+        return Err("unsupported X3F byte order".into());
+    }
+    Ok(Some([
+        bytes.u16(12)?,
+        bytes.u16(14)?,
+        bytes.u16(16)?,
+        bytes.u16(18)?,
+    ]))
 }
 
 fn insert<'a>(slot: &mut Option<&'a [u8]>, section: &'a [u8]) -> Result<()> {
@@ -203,7 +261,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     if bytes.range(0, 4)? != b"SECi"
         || bytes.u32(4)? != SECTION_VERSION
         || !SENSOR_IMAGE_TYPES.contains(&bytes.u32(8)?)
-        || ![6, SENSOR_HUFFMAN_FORMAT].contains(&bytes.u32(12)?)
+        || ![6, SENSOR_HUFFMAN_FORMAT, 35, 37, 39].contains(&bytes.u32(12)?)
     {
         return Err("unsupported sensor compression".into());
     }
@@ -218,6 +276,16 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
         || count > huffman::MAXIMUM_PLANE_SAMPLES
     {
         return Err("unsupported sensor geometry".into());
+    }
+    if [35, 37, 39].contains(&bytes.u32(12)?) {
+        let start = Instant::now();
+        let pixels = format31::decode(section, width, height, bytes.u32(12)?)?;
+        return Ok((
+            width,
+            height,
+            pixels,
+            vec![Timing::elapsed("sensor packed planes", start)],
+        ));
     }
     if bytes.u32(12)? == 6 {
         let start = Instant::now();
@@ -304,6 +372,22 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn processing_version_is_header_version_gated_and_keeps_word_order() {
+        let mut header = [0_u8; 40];
+        header[4..8].copy_from_slice(&0x30000_u32.to_le_bytes());
+        header[12..20].fill(255);
+        assert_eq!(processing_version(&header).unwrap(), None);
+        header[4..8].copy_from_slice(&0x40001_u32.to_le_bytes());
+        header[8..12].copy_from_slice(&1_u32.to_le_bytes());
+        for (i, word) in [3_u16, 1, 2, 0].into_iter().enumerate() {
+            header[12 + i * 2..14 + i * 2].copy_from_slice(&word.to_le_bytes());
+        }
+        assert_eq!(processing_version(&header).unwrap(), Some([3, 1, 2, 0]));
+        header[8..12].copy_from_slice(&2_u32.to_le_bytes());
+        assert!(processing_version(&header).is_err());
+    }
 
     #[test]
     fn rejects_truncated_headers_and_directory_pointers() {

@@ -27,12 +27,8 @@ pub(super) fn properties(jpeg: &[u8]) -> BTreeMap<String, String> {
             break;
         };
         if marker == 0xe1 && payload.starts_with(b"Exif\0\0") {
-            if let Some(values) = exposure_values(&payload[6..]) {
-                for (name, value) in values {
-                    if value.is_finite() {
-                        result.insert(name.into(), value.to_string());
-                    }
-                }
+            if let Some(values) = tiff_properties(&payload[6..]) {
+                result.extend(values);
             }
             break;
         }
@@ -41,70 +37,157 @@ pub(super) fn properties(jpeg: &[u8]) -> BTreeMap<String, String> {
     result
 }
 
-fn exposure_values(bytes: &[u8]) -> Option<Vec<(&'static str, f64)>> {
+struct Tiff<'a> {
+    bytes: &'a [u8],
+    big: bool,
+}
+
+impl<'a> Tiff<'a> {
+    fn u16(&self, p: usize) -> Option<u16> {
+        let v = self.bytes.get(p..p.checked_add(2)?)?.try_into().ok()?;
+        Some(if self.big {
+            u16::from_be_bytes(v)
+        } else {
+            u16::from_le_bytes(v)
+        })
+    }
+    fn u32(&self, p: usize) -> Option<u32> {
+        let v = self.bytes.get(p..p.checked_add(4)?)?.try_into().ok()?;
+        Some(if self.big {
+            u32::from_be_bytes(v)
+        } else {
+            u32::from_le_bytes(v)
+        })
+    }
+    fn find(&self, dir: usize, tag: u16) -> Option<(u16, usize, usize)> {
+        let count = usize::from(self.u16(dir)?);
+        if count > 4096 {
+            return None;
+        }
+        self.bytes.get(dir..dir.checked_add(2 + count * 12)?)?;
+        for i in 0..count {
+            let p = dir + 2 + i * 12;
+            if self.u16(p)? == tag {
+                let kind = self.u16(p + 2)?;
+                let count = self.u32(p + 4)? as usize;
+                let unit: usize = match kind {
+                    1 | 2 | 7 => 1,
+                    3 => 2,
+                    4 | 9 => 4,
+                    5 | 10 => 8,
+                    _ => return None,
+                };
+                let size = unit.checked_mul(count)?;
+                let offset = if size <= 4 {
+                    p + 8
+                } else {
+                    self.u32(p + 8)? as usize
+                };
+                self.bytes.get(offset..offset.checked_add(size)?)?;
+                return Some((kind, count, offset));
+            }
+        }
+        None
+    }
+    fn text(&self, dir: usize, tag: u16) -> Option<String> {
+        let (kind, count, p) = self.find(dir, tag)?;
+        if kind != 2 || count > 65536 {
+            return None;
+        }
+        let text = std::str::from_utf8(self.bytes.get(p..p + count)?)
+            .ok()?
+            .trim_end_matches('\0')
+            .trim();
+        (!text.is_empty()).then(|| text.to_owned())
+    }
+    fn number(&self, dir: usize, tag: u16) -> Option<f64> {
+        let (kind, count, p) = self.find(dir, tag)?;
+        if count != 1 {
+            return None;
+        }
+        let v = match kind {
+            3 => f64::from(self.u16(p)?),
+            4 => f64::from(self.u32(p)?),
+            5 | 10 => {
+                let (n, d) = (self.u32(p)?, self.u32(p + 4)?);
+                let (n, d) = if kind == 10 {
+                    (f64::from(n as i32), f64::from(d as i32))
+                } else {
+                    (f64::from(n), f64::from(d))
+                };
+                if d == 0. {
+                    return None;
+                }
+                n / d
+            }
+            _ => return None,
+        };
+        v.is_finite().then_some(v)
+    }
+}
+
+fn tiff_properties(bytes: &[u8]) -> Option<BTreeMap<String, String>> {
     let big = match bytes.get(..2)? {
         b"II" => false,
         b"MM" => true,
         _ => return None,
     };
-    let u16_at = |p: usize| -> Option<u16> {
-        let data = bytes.get(p..p.checked_add(2)?)?.try_into().ok()?;
-        Some(if big {
-            u16::from_be_bytes(data)
-        } else {
-            u16::from_le_bytes(data)
-        })
-    };
-    let u32_at = |p: usize| -> Option<u32> {
-        let data = bytes.get(p..p.checked_add(4)?)?.try_into().ok()?;
-        Some(if big {
-            u32::from_be_bytes(data)
-        } else {
-            u32::from_le_bytes(data)
-        })
-    };
-    if u16_at(2)? != 42 {
+    let t = Tiff { bytes, big };
+    if t.u16(2)? != 42 {
         return None;
     }
-    let find = |directory: usize, tag: u16| -> Option<(u16, u32, u32)> {
-        let count = usize::from(u16_at(directory)?);
-        if count > 4096 {
-            return None;
+    let first = t.u32(4)? as usize;
+    let mut out = BTreeMap::new();
+    for (tag, name) in [
+        (0x110, "CAMMODEL"),
+        (0x132, "EXIF_DATETIME"),
+        (0x131, "FIRMVERS"),
+    ] {
+        if let Some(v) = t.text(first, tag) {
+            out.insert(name.into(), v);
         }
-        for i in 0..count {
-            let p = directory.checked_add(2 + 12 * i)?;
-            if u16_at(p)? == tag {
-                return Some((u16_at(p + 2)?, u32_at(p + 4)?, u32_at(p + 8)?));
+    }
+    let exif = t.number(first, 0x8769)? as usize;
+    for (tag, name) in [
+        (0x829d, "EXIF_FNUMBER"),
+        (0x9204, "EXIF_EXPOSURE_BIAS"),
+        (0x829a, "SHUTTER"),
+        (0x8827, "ISO"),
+        (0x920a, "FLENGTH"),
+    ] {
+        if let Some(v) = t.number(exif, tag) {
+            out.insert(name.into(), v.to_string());
+        }
+    }
+    if let Some(v) = t.number(exif, 0x9204) {
+        out.insert("EXPCOMP".into(), v.to_string());
+    }
+    if let Some(v) = t.text(exif, 0xa434) {
+        out.insert("LENSMODEL".into(), v);
+    }
+    if let Some(v) = t.number(exif, 0x829d) {
+        out.insert("APERTURE".into(), v.to_string());
+    }
+    if let Some(v) = t.number(exif, 0x829a) {
+        out.insert("EXPTIME".into(), (v * 1_000_000.).round().to_string());
+    }
+    if let Some((7, count, p)) = t.find(exif, 0x927c) {
+        if count >= 12 && bytes.get(p..p + 8) == Some(b"SIGMA\0\0\0") {
+            let dir = p + 10;
+            for (tag, name) in [
+                (0x2, "CAMSERIAL"),
+                (0x27, "LENSMODEL"),
+                (0x7, "WB_DESC"),
+                (0xb, "COLORSPACE"),
+                (0x3d, "CM_DESC"),
+            ] {
+                if let Some(v) = t.text(dir, tag) {
+                    out.insert(name.into(), v);
+                }
             }
         }
-        None
-    };
-    let (kind, count, directory) = find(u32_at(4)? as usize, 0x8769)?;
-    if kind != 4 || count != 1 {
-        return None;
     }
-    let mut values = Vec::new();
-    for (tag, name) in [(0x829d, "EXIF_FNUMBER"), (0x9204, "EXIF_EXPOSURE_BIAS")] {
-        let Some((kind, count, offset)) = find(directory as usize, tag) else {
-            continue;
-        };
-        if count != 1 || ![5, 10].contains(&kind) {
-            continue;
-        }
-        let p = offset as usize;
-        let (Some(n), Some(d)) = (u32_at(p), u32_at(p + 4)) else {
-            continue;
-        };
-        let (n, d) = if kind == 10 {
-            (f64::from(n as i32), f64::from(d as i32))
-        } else {
-            (f64::from(n), f64::from(d))
-        };
-        if d != 0. {
-            values.push((name, n / d));
-        }
-    }
-    Some(values)
+    Some(out)
 }
 
 #[cfg(test)]
@@ -163,5 +246,45 @@ mod tests {
                 assert!(properties(&jpeg[..length]).is_empty());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn capture_identity_and_camera_choices_use_tiff_relative_makernote_offsets() {
+        let mut bytes = vec![0_u8; 256];
+        bytes[..2].copy_from_slice(b"II");
+        let put16 = |b: &mut [u8], p: usize, v: u16| b[p..p + 2].copy_from_slice(&v.to_le_bytes());
+        let put32 = |b: &mut [u8], p: usize, v: u32| b[p..p + 4].copy_from_slice(&v.to_le_bytes());
+        put16(&mut bytes, 2, 42);
+        put32(&mut bytes, 4, 8);
+        let entry = |b: &mut [u8], p, tag, kind, count, value| {
+            put16(b, p, tag);
+            put16(b, p + 2, kind);
+            put32(b, p + 4, count);
+            put32(b, p + 8, value);
+        };
+        put16(&mut bytes, 8, 2);
+        entry(&mut bytes, 10, 0x110, 2, 11, 200);
+        entry(&mut bytes, 22, 0x8769, 4, 1, 40);
+        bytes[200..211].copy_from_slice(b"sd Quattro\0");
+        put16(&mut bytes, 40, 1);
+        entry(&mut bytes, 42, 0x927c, 7, 90, 80);
+        bytes[80..88].copy_from_slice(b"SIGMA\0\0\0");
+        put16(&mut bytes, 90, 2);
+        entry(&mut bytes, 92, 7, 2, 5, 212);
+        entry(&mut bytes, 104, 0x3d, 2, 9, 220);
+        bytes[212..217].copy_from_slice(b"Auto\0");
+        bytes[220..229].copy_from_slice(b"Standard\0");
+        let values = tiff_properties(&bytes).unwrap();
+        assert_eq!(values["CAMMODEL"], "sd Quattro");
+        assert_eq!(values["WB_DESC"], "Auto");
+        assert_eq!(values["CM_DESC"], "Standard");
+        put32(&mut bytes, 112, u32::MAX);
+        let values = tiff_properties(&bytes).unwrap();
+        assert!(!values.contains_key("CM_DESC"));
     }
 }

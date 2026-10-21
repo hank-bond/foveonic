@@ -591,6 +591,7 @@ mod tests {
     #[test]
     fn defaults_resolve_independently_without_replacing_explicit_choices() {
         let metadata = foveonic::source::Metadata {
+            processing_version: None,
             width: 1,
             height: 1,
             rotation: 0,

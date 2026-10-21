@@ -30,7 +30,10 @@ pub fn read(path: &Path) -> Result<Preview> {
     let mut header = [0; 40];
     file.read_exact(&mut header)?;
     if &header[..4] != b"FOVb"
-        || ![0x20000, 0x20001, 0x20002, 0x20003, 0x30000].contains(&u32_at(&header, 4))
+        || ![
+            0x20000, 0x20001, 0x20002, 0x20003, 0x30000, 0x40001, 0x40002,
+        ]
+        .contains(&u32_at(&header, 4))
     {
         return Err("unsupported X3F header".into());
     }

@@ -21,6 +21,8 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[fixed_point.rs](./fixed_point.rs)** Executes signed fixed-point layer correction and nonlinear matrix transforms with explicit numerical contracts.
 - **[highlight.rs](./highlight.rs)** Keeps original clipping flags so GPU highlight recovery can use trustworthy neighboring samples.
 - **[mod.rs](./mod.rs)** Prepares and corrects original camera layers before rendering-specific reconstruction.
+- **[phase_extraction.rs](./phase_extraction.rs)** Separates six-sample cells into RGB and spatial blue codes with optional affine calibration.
+- **[phase_gain.rs](./phase_gain.rs)** Resizes interleaved phase gain maps and corrects blue samples below a supplied threshold.
 - **[red_detail.rs](./red_detail.rs)** Adds signed red-channel detail using a separable five-row binomial support.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.
 - **[signed_repair.rs](./signed_repair.rs)** Repairs signed RGB code values with ordered packed records or a vertically ordered despeckle sweep.

@@ -276,6 +276,7 @@ mod tests {
         let a = Key {
             revision: 1,
             source: SourceId(Arc::new(foveonic::source::Metadata {
+                processing_version: None,
                 width: 3136,
                 height: 4704,
                 rotation: 0,

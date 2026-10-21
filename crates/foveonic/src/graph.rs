@@ -6,6 +6,12 @@ pub use operation::Operation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DataType {
+    /// Six original codes per cell: R, G and four spatial blue phases.
+    PhaseCells,
+    SensorRgb,
+    SensorBlue,
+    CorrectedSensorRgb,
+    CorrectedSensorBlue,
     SensorLayers,
     ScalarField,
     Monochrome,
@@ -33,11 +39,54 @@ pub enum DataType {
     File,
 }
 
+impl DataType {
+    /// Image outputs carry physical dimensions and a canonical buffer layout.
+    /// Tables, packed cells and reconstruction tiles are not displayable images.
+    pub(crate) fn image_description(self, extent: [u32; 2]) -> Option<crate::image::Description> {
+        use crate::image::{Description, Space};
+        let space = match self {
+            Self::PhaseCells => return None,
+            Self::CorrectedSensorRgb => Space::CorrectedSensorRgb,
+            Self::CorrectedSensorBlue => Space::CorrectedSensorBlue,
+            Self::SensorRgb => Space::SensorRgb,
+            Self::SensorBlue => Space::SensorBlue,
+            Self::SensorLayers => Space::SensorLayers,
+            Self::ScalarField => Space::ScalarField,
+            Self::Monochrome => Space::Monochrome,
+            Self::LuminanceRatio => Space::LuminanceRatio,
+            Self::SignedDetail => Space::SignedDetail,
+            Self::CalibratedLayers => Space::CalibratedLayers,
+            Self::NormalizedCodeRgb => Space::NormalizedCodeRgb,
+            Self::LinearCodeRgb => Space::LinearCodeRgb,
+            Self::SignedCodeRgb => Space::SignedCodeRgb,
+            Self::LinearRgb(space) => Space::LinearRgb(space),
+            Self::ToneMappedRgb(space) => Space::ToneMappedRgb(space),
+            Self::EncodedRgb16(space) => Space::EncodedRgb16(space),
+            Self::BlackLevels
+            | Self::Histogram
+            | Self::RowTable
+            | Self::File
+            | Self::FilteredTiles
+            | Self::ConditionedTiles
+            | Self::PatternSeedTiles
+            | Self::UnconditionedRatioTiles
+            | Self::ResidualTiles
+            | Self::RatioTiles
+            | Self::ColorTiles(_) => return None,
+        };
+        Some(Description::new(extent, space))
+    }
+}
+
 impl From<crate::image::Space> for DataType {
     fn from(space: crate::image::Space) -> Self {
         use crate::image::Space;
         match space {
             Space::SensorLayers => Self::SensorLayers,
+            Space::SensorRgb => Self::SensorRgb,
+            Space::SensorBlue => Self::SensorBlue,
+            Space::CorrectedSensorRgb => Self::CorrectedSensorRgb,
+            Space::CorrectedSensorBlue => Self::CorrectedSensorBlue,
             Space::ScalarField => Self::ScalarField,
             Space::Monochrome => Self::Monochrome,
             Space::LuminanceRatio => Self::LuminanceRatio,

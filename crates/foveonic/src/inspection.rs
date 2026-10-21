@@ -1,6 +1,10 @@
 //! Describes named inspection artifacts and preserves the configuration behind each result.
 
-use crate::{image::RenderedImage, render::Settings, source::Metadata};
+use crate::{
+    image::RenderedImage,
+    render::Settings,
+    source::{Metadata, ProcessingFamily},
+};
 use std::sync::Arc;
 
 pub enum Content {
@@ -14,6 +18,14 @@ pub enum Content {
 
 /// Named outputs available for the selected recipe, independent of transient graph indexes.
 pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'static str> {
+    if metadata.is_some_and(|m| {
+        m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro)
+    }) {
+        return crate::render::quattro_inspection_outputs(metadata)
+            .into_iter()
+            .map(|o| o.name)
+            .collect();
+    }
     if let Some(metadata) = metadata
         .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Classic))
     {
@@ -90,6 +102,7 @@ pub enum Channels {
     Scalar,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct ImageOutput {
     pub name: &'static str,
     pub channels: Channels,
@@ -97,7 +110,26 @@ pub struct ImageOutput {
 
 /// Visual buffers and their component meanings. Components remain views of one retained image.
 pub fn image_outputs(settings: &Settings, metadata: Option<&Metadata>) -> Vec<ImageOutput> {
-    output_names(settings, metadata)
+    image_outputs_with_family(settings, metadata, None)
+}
+
+/// Use early capture identity until complete processing metadata becomes available.
+/// A family hint exposes only planes established by decoding, without guessing calibration.
+pub fn image_outputs_with_family(
+    settings: &Settings,
+    metadata: Option<&Metadata>,
+    family: Option<ProcessingFamily>,
+) -> Vec<ImageOutput> {
+    let family = if let Some(metadata) = metadata {
+        metadata.processing_family().ok()
+    } else {
+        family
+    };
+    if family == Some(ProcessingFamily::Quattro) {
+        return crate::render::quattro_inspection_outputs(metadata);
+    }
+    let names = output_names(settings, metadata);
+    names
         .into_iter()
         .filter_map(|name| {
             let channels = match name {
@@ -133,6 +165,11 @@ pub fn comparison_input(
     output: &str,
     metadata: Option<&Metadata>,
 ) -> Option<&'static str> {
+    if metadata.is_some_and(|m| {
+        m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro)
+    }) {
+        return (output == "phase-gain.blue").then_some("extraction.blue");
+    }
     if let Some(metadata) = metadata
         .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Classic))
     {
@@ -372,5 +409,55 @@ mod tests {
                 kind
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod quattro_tests {
+    use super::*;
+
+    #[test]
+    fn early_family_catalogue_is_decoded_only_and_metadata_remains_authoritative() {
+        let settings = Settings::new("Sunlight", "Standard");
+        let early = image_outputs_with_family(&settings, None, Some(ProcessingFamily::Quattro));
+        assert_eq!(
+            early.iter().map(|o| o.name).collect::<Vec<_>>(),
+            ["sensor.rgb", "sensor.blue"]
+        );
+        let mut metadata = Metadata {
+            width: 5888,
+            height: 3672,
+            rotation: 0,
+            processing_version: Some([3, 1, 2, 0]),
+            properties: [("CAMMODEL".into(), "SIGMA dp2 Quattro".into())].into(),
+            matrices: [(
+                "CAMERAID".into(),
+                crate::source::Matrix {
+                    encoding: crate::source::MatrixEncoding::Float32,
+                    representation: "f64",
+                    dimensions: vec![1],
+                    values: vec![81.],
+                },
+            )]
+            .into(),
+            lists: Default::default(),
+        };
+        let full =
+            image_outputs_with_family(&settings, Some(&metadata), Some(ProcessingFamily::Merrill));
+        for image in full {
+            let expected = if image.name.ends_with(".blue") {
+                Channels::Scalar
+            } else {
+                Channels::Layers
+            };
+            assert_eq!(image.channels, expected, "{}", image.name);
+        }
+        metadata
+            .properties
+            .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
+        let full =
+            image_outputs_with_family(&settings, Some(&metadata), Some(ProcessingFamily::Quattro));
+        assert!(full.iter().any(|o| o.name == "final"));
+        assert!(!full.iter().any(|o| o.name == "sensor.blue"));
     }
 }

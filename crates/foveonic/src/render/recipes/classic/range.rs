@@ -146,7 +146,7 @@ fn controls(
     let intensity = vector(m, "IntensityNoiseModel", DEFAULT_INTENSITY_NOISE_MODEL)?;
     let mut dq = vector(m, "ColorDQCamRGB", [0.; 3])?;
     if dq == [0.; 3] {
-        dq = [4. / f64::from(input.ratio.min(8.)).sqrt().sqrt(); 3];
+        dq = input.default_nonlinear_noise();
     }
     let attenuation =
         super::policy::CameraPolicy::from_metadata(m).color_noise_attenuation(afe * input.ratio);

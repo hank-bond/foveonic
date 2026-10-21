@@ -12,6 +12,7 @@ fn values(v: &serde_json::Value) -> Vec<f64> {
 }
 fn threshold_metadata() -> Metadata {
     let mut metadata = Metadata {
+        processing_version: None,
         width: 64,
         height: 128,
         rotation: 0,
@@ -215,6 +216,7 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
 #[test]
 fn camera_saturation_maps_preserve_original_positions_and_validate_coverage() {
     let mut m = Metadata {
+        processing_version: None,
         width: 8,
         height: 8,
         rotation: 0,

@@ -404,6 +404,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
 fn classic_choices_use_profile_catalogues_and_fixed_standard_mode() {
     use foveonic::source::PropertyList;
     let metadata = Metadata {
+        processing_version: None,
         width: 2688,
         height: 1792,
         rotation: 0,
@@ -449,6 +450,7 @@ fn classic_metadata_restores_intrinsic_correction_contract() {
         "SIGMA DP2X",
     ] {
         let metadata = Metadata {
+            processing_version: None,
             width: 1,
             height: 1,
             rotation: 0,
@@ -472,6 +474,7 @@ fn classic_metadata_restores_intrinsic_correction_contract() {
 fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() {
     use foveonic::source::PropertyList;
     let metadata = Metadata {
+        processing_version: None,
         width: 1,
         height: 1,
         rotation: 0,
@@ -606,6 +609,7 @@ fn all_visible_editing_controls_have_explanations() {
     settings.color_dq_gain = Some(1.);
     settings.repair = Some(RepairThreshold::Camera);
     let metadata = Metadata {
+        processing_version: None,
         width: 1,
         height: 1,
         rotation: 0,
@@ -2261,6 +2265,7 @@ fn double_click_resets_the_slider_and_value_remains_editable() {
 
 fn family_metadata(model: &str) -> Metadata {
     Metadata {
+        processing_version: None,
         width: 2688,
         height: 1792,
         rotation: 0,
@@ -2528,4 +2533,31 @@ fn classic_monochrome_keeps_color_modes_and_preserves_disabled_preferences() {
     let mut expected = initial;
     expected.color_mode = "Vivid".into();
     assert_eq!(current, expected);
+}
+
+#[test]
+fn quattro_panel_exposes_no_unimplemented_photographic_controls() {
+    let ctx = egui::Context::default();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    let expected = settings.clone();
+    let capture = [("CAMMODEL".into(), "SIGMA dp2 Quattro".into())].into();
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            assert!(!super::processing(ui, &mut settings, None, Some(&capture)));
+        });
+    });
+    assert_eq!(settings, expected);
+    assert_eq!(
+        text_centers(&output, "Quattro rendering is not available yet.").len(),
+        1
+    );
+    for label in [
+        "White balance",
+        "Color mode",
+        "Exposure",
+        "Noise and Detail",
+        "Monochrome",
+    ] {
+        assert!(text_centers(&output, label).is_empty());
+    }
 }

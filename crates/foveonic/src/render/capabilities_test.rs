@@ -4,6 +4,7 @@ use super::*;
 
 fn capabilities(model: &str) -> ControlCapabilities {
     ControlCapabilities::from_metadata(&Metadata {
+        processing_version: None,
         width: 1,
         height: 1,
         rotation: 0,

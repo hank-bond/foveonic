@@ -140,6 +140,11 @@ pub fn scope(mode: Scope) -> &'static str {
 
 pub fn inspection(name: &str) -> Option<&'static str> {
     Some(match name {
+        "sensor.rgb" => "Original low-resolution red and green sensor layers with blue averaged over each four-phase cell. These are uncalibrated camera codes.",
+        "phase-gain.blue" => "Blue after the supplied camera gain maps, resized and applied to each sensor phase. This is a calibration inspection output, before reconstruction.",
+        "sensor.blue" => "Original blue sensor readings at full sensor resolution, before calibration. This plane has twice the width and height of sensor.rgb.",
+        "extraction.rgb" => "Low-resolution sensor layers after offset and channel-gain extraction. These remain camera codes before later calibration and reconstruction.",
+        "extraction.blue" => "Full-resolution blue after offset and channel-gain extraction, before later calibration and reconstruction.",
         "red-detail.layers" => {
             "Sensor layers after red-channel detail recovery, before highlight restoration. Only the red sensor layer changes."
         }
@@ -321,6 +326,7 @@ mod tests {
 fn classic_inspection_stages_have_help_and_layer_components() {
     use foveonic::source::{Matrix, MatrixEncoding, Metadata};
     let mut metadata = Metadata {
+        processing_version: None,
         width: 2304,
         height: 1531,
         rotation: 0,

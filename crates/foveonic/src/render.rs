@@ -42,6 +42,7 @@ pub struct Engine {
     // Keep the latest photo's calibration statistics with the engine. Metadata lifetime
     // and the original sample allocation identify the immutable source.
     calibration_statistics: std::sync::Mutex<Vec<CalibrationEstimate>>,
+    calibration_resources: Option<Arc<recipes::quattro::resources::ResourceDirectory>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -63,6 +64,7 @@ impl Engine {
             gpu: Gpu::new()?,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
+            calibration_resources: None,
         })
     }
 
@@ -78,8 +80,18 @@ impl Engine {
             gpu: Gpu::from_device(device, queue, adapter_name)?,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
+            calibration_resources: None,
         })
     }
+    /// Attach an immutable snapshot of explicitly supplied camera calibration maps.
+    /// Resources are loaded once and never resolved through the process directory.
+    pub fn with_calibration_resources(mut self, directory: impl AsRef<Path>) -> Result<Self> {
+        self.calibration_resources = Some(Arc::new(
+            recipes::quattro::resources::ResourceDirectory::new(directory.as_ref())?,
+        ));
+        Ok(self)
+    }
+
     pub(crate) fn cached_neutral(
         &self,
         source: &Source,
@@ -456,3 +468,13 @@ pub(crate) fn classic_inspection_comparison(
 ) -> Option<&'static str> {
     recipes::classic::inspection_comparison(metadata, settings, output)
 }
+
+pub(crate) fn quattro_inspection_outputs(
+    metadata: Option<&crate::source::Metadata>,
+) -> Vec<crate::inspection::ImageOutput> {
+    recipes::quattro::outputs(metadata)
+}
+
+#[cfg(test)]
+#[path = "render/quattro_test.rs"]
+mod quattro_tests;

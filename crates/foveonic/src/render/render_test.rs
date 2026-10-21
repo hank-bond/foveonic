@@ -1,6 +1,6 @@
 //! Checks control preparation, retained GPU image lifetimes, scratch branches, and texture/export consumers.
 
-use super::recipes::photographic::saturation;
+use super::recipes::merrill::saturation;
 use super::*;
 use crate::color_space::ColorSpace;
 use crate::{graph::DataType, image::View, nodes::sensor::calibration, source::Metadata};
@@ -559,6 +559,7 @@ fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
         },
         // Original source geometry differs deliberately: pointwise nodes must use resource extents.
         metadata: Arc::new(Metadata {
+            processing_version: None,
             width: 30,
             height: 20,
             rotation: 90,

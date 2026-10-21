@@ -13,6 +13,9 @@ use std::path::PathBuf;
 
 pub enum Operation {
     Source,
+    SourcePhaseCells,
+    PhaseExtraction(crate::nodes::sensor::phase_extraction::Params),
+    PhaseGain(std::sync::Arc<crate::nodes::sensor::phase_gain::Prepared>),
     RenderedInput {
         data: DataType,
     },
@@ -111,7 +114,12 @@ impl Operation {
     pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {
         use crate::{noise::RecipeStage as N, recipe::Key};
         match self {
-            Self::Source | Self::RenderedInput { .. } | Self::SharpSignal { .. } => Key::default(),
+            Self::Source
+            | Self::SourcePhaseCells
+            | Self::RenderedInput { .. }
+            | Self::SharpSignal { .. } => Key::default(),
+            Self::PhaseExtraction(p) => p.key(),
+            Self::PhaseGain(p) => p.key(),
             Self::FixedPointCalibration(p) => p.key(),
             Self::FixedPointColor(p) => p.key(),
             Self::RangeReconstruct(p) => p.key(),
@@ -170,6 +178,9 @@ impl Operation {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Source => "upload sensor",
+            Self::SourcePhaseCells => "upload sensor phase cells",
+            Self::PhaseExtraction(_) => "extract sensor phases",
+            Self::PhaseGain(_) => "apply sensor phase gain maps",
             Self::RenderedInput { .. } => "import rendered image",
             Self::FixedPointCalibration(_) => "submit fixed-point calibration",
             Self::FixedPointColor(_) => "submit fixed-point color",
@@ -217,6 +228,16 @@ impl Operation {
         use DataType::*;
         match self {
             Self::Source => (vec![], SensorLayers),
+            Self::SourcePhaseCells => (vec![], PhaseCells),
+            Self::PhaseGain(_) => (vec![CorrectedSensorBlue], CorrectedSensorBlue),
+            Self::PhaseExtraction(p) => (
+                vec![PhaseCells],
+                if p.is_calibrated() {
+                    CorrectedSensorRgb
+                } else {
+                    SensorRgb
+                },
+            ),
             Self::RenderedInput { data } => (vec![], *data),
             Self::FixedPointCalibration(_) => (vec![SensorLayers], CalibratedLayers),
             Self::FixedPointColor(p) => (
@@ -306,6 +327,19 @@ impl Operation {
     pub(super) fn side_outputs(&self) -> Vec<(&'static str, DataType, Vec<usize>)> {
         use DataType::*;
         match self {
+            Self::PhaseExtraction(p) => vec![(
+                if p.is_calibrated() {
+                    "extraction.blue"
+                } else {
+                    "sensor.blue"
+                },
+                if p.is_calibrated() {
+                    CorrectedSensorBlue
+                } else {
+                    SensorBlue
+                },
+                vec![0],
+            )],
             Self::FixedPointColor(_) => vec![("color.corrected-layers", CalibratedLayers, vec![0])],
             Self::RootDetail(_) => vec![("detail.signal", SignedDetail, vec![0])],
             Self::Black(_) => vec![("black.histogram", Histogram, vec![0])],
@@ -331,6 +365,15 @@ impl Operation {
     pub fn output_name(&self) -> &'static str {
         match self {
             Self::Source => "sensor.layers",
+            Self::SourcePhaseCells => "sensor.phase-cells",
+            Self::PhaseGain(_) => "phase-gain.blue",
+            Self::PhaseExtraction(p) => {
+                if p.is_calibrated() {
+                    "extraction.rgb"
+                } else {
+                    "sensor.rgb"
+                }
+            }
             Self::RenderedInput { .. } => "import.image",
             Self::FixedPointCalibration(_) => "calibration.layers",
             Self::FixedPointColor(_) => "color.codes",

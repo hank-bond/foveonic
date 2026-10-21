@@ -1,4 +1,4 @@
-//! Owns original equal-resolution sensor samples and typed camera metadata.
+//! Owns original sensor storage layouts and typed camera metadata.
 //!
 //! Adapted from the reference implementation's source types and camera checks.
 
@@ -16,6 +16,7 @@ const SENSOR_HEIGHT: usize = 3264;
 pub enum ProcessingFamily {
     Merrill,
     Classic,
+    Quattro,
 }
 
 impl ProcessingFamily {
@@ -112,6 +113,8 @@ pub struct Metadata {
     pub width: usize,
     pub height: usize,
     pub rotation: u32,
+    /// Version-4 processing words, distinct from camera identity and compression.
+    pub processing_version: Option<[u16; 4]>,
     pub properties: BTreeMap<String, String>,
     pub matrices: BTreeMap<String, Matrix>,
     pub lists: BTreeMap<String, PropertyList>,
@@ -250,17 +253,43 @@ pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String
     Ok(properties)
 }
 
+/// Physical ordering of immutable samples returned by `Source::samples`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceStorage {
+    /// One R, G, B triplet per sensor location.
+    InterleavedRgb,
+    /// One R, G, B00, B01, B10, B11 group per low-resolution cell.
+    PackedRgbBluePhases,
+}
+
 pub struct Source {
     pub metadata: std::sync::Arc<Metadata>,
-    /// Full-sensor, interleaved layer samples in original camera code units.
+    /// Immutable samples in original camera code units, ordered by `storage`.
     pub(crate) pixels: Vec<f32>,
+    pub(crate) storage: SourceStorage,
     pub camf: Vec<u8>,
     pub(crate) timings: Vec<crate::profile::Timing>,
 }
 
 impl Source {
-    /// Original interleaved sensor layers in camera code units. Samples remain
-    /// immutable so render and calibration caches describe the same photograph.
+    /// Physical sample ordering.
+    pub fn storage(&self) -> SourceStorage {
+        self.storage
+    }
+
+    /// Number of stored triplets or six-sample cells along each axis.
+    pub fn storage_extent(&self) -> [usize; 2] {
+        let divisor = match self.storage {
+            SourceStorage::InterleavedRgb => 1,
+            SourceStorage::PackedRgbBluePhases => 2,
+        };
+        [
+            self.metadata.width / divisor,
+            self.metadata.height / divisor,
+        ]
+    }
+
+    /// Original camera codes ordered according to `storage()`. Samples remain immutable.
     pub fn samples(&self) -> &[f32] {
         &self.pixels
     }
@@ -298,6 +327,11 @@ impl Source {
                     return Err("unsupported Classic full-sensor geometry".into());
                 }
             }
+            ProcessingFamily::Quattro => {
+                if source.storage != SourceStorage::PackedRgbBluePhases {
+                    return Err("unsupported Quattro sensor layout".into());
+                }
+            }
         }
         Ok(source)
     }
@@ -322,6 +356,20 @@ fn family(model: Option<&str>) -> Option<ProcessingFamily> {
         )
     ) {
         Some(ProcessingFamily::Classic)
+    } else if matches!(
+        model.map(|m| m.trim().to_ascii_uppercase()).as_deref(),
+        Some(
+            "SIGMA DP0 QUATTRO"
+                | "SIGMA DP1 QUATTRO"
+                | "SIGMA DP2 QUATTRO"
+                | "SIGMA DP3 QUATTRO"
+                | "SIGMA SD QUATTRO"
+                | "SIGMA SD QUATTRO H"
+                | "SD QUATTRO"
+                | "SD QUATTRO H"
+        )
+    ) {
+        Some(ProcessingFamily::Quattro)
     } else {
         None
     }

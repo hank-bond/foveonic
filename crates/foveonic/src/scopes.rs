@@ -24,10 +24,7 @@ pub struct Scopes {
 }
 impl Scopes {
     pub fn channels(&self) -> usize {
-        if matches!(
-            self.space,
-            Space::ScalarField | Space::Monochrome | Space::LuminanceRatio | Space::SignedDetail
-        ) {
+        if self.space.buffer_layout() == crate::image::Layout::Scalar32Float {
             1
         } else {
             3
@@ -83,6 +80,10 @@ pub(crate) fn analyze(
         samples[0],
         samples[1],
         match space {
+            Space::CorrectedSensorRgb
+            | Space::CorrectedSensorBlue
+            | Space::SensorRgb
+            | Space::SensorBlue => 4,
             Space::SensorLayers
             | Space::NormalizedCodeRgb
             | Space::LinearCodeRgb
@@ -126,4 +127,29 @@ pub(crate) fn analyze(
         samples,
         counts,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scalar_sensor_planes_have_one_scope_channel() {
+        for (space, expected) in [
+            (Space::SensorBlue, 1),
+            (Space::CorrectedSensorBlue, 1),
+            (Space::Monochrome, 1),
+            (Space::SignedDetail, 1),
+            (Space::SensorRgb, 3),
+            (Space::CorrectedSensorRgb, 3),
+            (Space::ToneMappedRgb(crate::image::ColorSpace::Srgb), 3),
+        ] {
+            let scopes = Scopes {
+                space,
+                samples: [1, 1],
+                counts: Vec::new(),
+            };
+            assert_eq!(scopes.channels(), expected, "{space:?}");
+        }
+    }
 }

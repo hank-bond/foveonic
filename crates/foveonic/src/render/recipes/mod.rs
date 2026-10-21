@@ -10,10 +10,8 @@ use crate::{
 };
 
 pub(super) mod classic;
-mod dng_base;
-mod monochrome;
-pub(super) mod photographic;
-mod shared;
+pub(super) mod merrill;
+pub(super) mod quattro;
 
 pub(super) enum Recipe<'a> {
     Photographic(&'a [&'a str]),
@@ -55,18 +53,22 @@ impl Engine {
         let built = match recipe {
             Recipe::Photographic(_) => match source.metadata.processing_family()? {
                 crate::source::ProcessingFamily::Merrill => {
-                    photographic::build(self, source, settings, names, profile, execution)?
+                    merrill::build(self, source, settings, names, profile, execution)?
                 }
                 crate::source::ProcessingFamily::Classic => {
                     classic::build(self, source, settings, names, profile, execution)?
                 }
+                crate::source::ProcessingFamily::Quattro => quattro::build(self, source, names)?,
             },
             Recipe::DngBase => match source.metadata.processing_family()? {
                 crate::source::ProcessingFamily::Merrill => {
-                    dng_base::build(self, source, settings, profile, execution)?
+                    merrill::build_dng(self, source, settings, profile, execution)?
                 }
                 crate::source::ProcessingFamily::Classic => {
                     classic::build_dng(self, source, settings, profile, execution)?
+                }
+                crate::source::ProcessingFamily::Quattro => {
+                    return Err("Quattro DNG rendering is not available yet".into())
                 }
             },
         };

@@ -1,5 +1,5 @@
 ---
-summary: "The processor crate decodes equal-resolution X3Fs and renders photographs and editable DNGs through a shared GPU graph."
+summary: "The processor crate decodes X3F sensor layouts and shares a GPU graph for inspection, photographs and editable DNGs."
 ---
 
 # Processor crate

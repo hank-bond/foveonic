@@ -27,6 +27,8 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
     if bytes.range(0, 4)? != b"FOVb" || !SUPPORTED_FILE_VERSIONS.contains(&bytes.u32(4)?) {
         return Err("unsupported X3F header".into());
     }
+    let file_version = bytes.u32(4)?;
+    super::processing_version(&header)?;
     reader.seek(SeekFrom::End(-4))?;
     let mut pointer = [0; 4];
     reader.read_exact(&mut pointer)?;
@@ -81,14 +83,24 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
     if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
         return Err("overlapping X3F sections".into());
     }
-    let (start, size) = properties.ok_or("missing X3F properties")?;
-    reader.seek(SeekFrom::Start(start))?;
-    let mut section = vec![0; size];
-    reader.read_exact(&mut section)?;
-    let mut properties = read_properties(&section)?;
-    if properties.get("CAMMODEL").is_some_and(|m| {
-        m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
-    }) {
+    if properties.is_none() && file_version < 0x40000 {
+        return Err("missing X3F properties".into());
+    }
+    let mut properties = if let Some((start, size)) = properties {
+        reader.seek(SeekFrom::Start(start))?;
+        let mut section = vec![0; size];
+        reader.read_exact(&mut section)?;
+        read_properties(&section)?
+    } else {
+        BTreeMap::new()
+    };
+    if properties.is_empty()
+        || properties.get("CAMMODEL").is_some_and(|m| {
+            m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
+        })
+    {
+        let mut preview_properties = BTreeMap::new();
+        let mut preview_area = 0_u64;
         for (start, size) in images {
             reader.seek(SeekFrom::Start(start))?;
             let mut header = [0; 28];
@@ -97,15 +109,20 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
             if image.range(0, 4)? != b"SECi" || image.u32(8)? != 2 || image.u32(12)? != 18 {
                 continue;
             }
+            let area = u64::from(image.u32(16)?) * u64::from(image.u32(20)?);
+            if area <= preview_area {
+                continue;
+            }
             reader.seek(SeekFrom::Start(start + 28))?;
             let mut jpeg = vec![0; (size - 28).min(128 * 1024)];
             reader.read_exact(&mut jpeg)?;
             let values = super::exif::properties(&jpeg);
             if !values.is_empty() {
-                properties.extend(values);
-                break;
+                preview_properties = values;
+                preview_area = area;
             }
         }
+        super::merge_preview_properties(&mut properties, preview_properties);
     }
     Ok(properties)
 }

@@ -43,6 +43,7 @@ fn recorded_camera_choices_resolve_aliases_and_reject_unknown_presets() {
         width: 1,
         height: 1,
         rotation: 0,
+        processing_version: None,
         properties: [
             ("WB_DESC".into(), " Daylight ".into()),
             ("CM_DESC".into(), "vivid".into()),
@@ -90,6 +91,7 @@ fn matrix_lookup_preserves_names_and_ignores_ascii_case() {
         width: 0,
         height: 0,
         rotation: 0,
+        processing_version: None,
         properties: BTreeMap::new(),
         matrices: [(
             "SensorISO".into(),
@@ -182,11 +184,15 @@ fn classic_selection_stays_at_input_boundary() {
         family(Some("SIGMA DP2 Merrill")),
         Some(ProcessingFamily::Merrill)
     );
-    assert_eq!(family(Some("SIGMA dp2 Quattro")), None);
+    assert_eq!(
+        family(Some("SIGMA dp2 Quattro")),
+        Some(ProcessingFamily::Quattro)
+    );
     let mut metadata = Metadata {
         width: 2688,
         height: 1792,
         rotation: 0,
+        processing_version: None,
         properties: [("CAMMODEL".into(), "SIGMA DP1S".into())].into(),
         matrices: Default::default(),
         lists: Default::default(),
@@ -216,6 +222,7 @@ fn legacy_white_balance_catalogue_resolves_recorded_preset() {
         width: 2304,
         height: 1531,
         rotation: 0,
+        processing_version: None,
         properties: [
             ("CAMMODEL".into(), "SIGMA SD9".into()),
             ("WB_DESC".into(), "Daylight".into()),
@@ -238,6 +245,7 @@ fn classic_white_balance_choices_exclude_monochrome_rendering() {
         width: 1,
         height: 1,
         rotation: 0,
+        processing_version: None,
         properties: [("CAMMODEL".into(), "SIGMA DP2".into())].into(),
         matrices: Default::default(),
         lists: [(
@@ -259,4 +267,82 @@ fn classic_white_balance_choices_exclude_monochrome_rendering() {
         metadata.white_balance_presets(),
         ["Sunlight", "Monochrome", "Shade"]
     );
+}
+
+#[test]
+fn quattro_camera_labels_do_not_determine_processing_version() {
+    for model in [
+        "SIGMA dp0 Quattro",
+        "SIGMA dp1 Quattro",
+        "SIGMA dp2 Quattro",
+        "SIGMA dp3 Quattro",
+        "sd Quattro",
+        "sd Quattro H",
+    ] {
+        assert_eq!(
+            ProcessingFamily::from_camera_model(model),
+            Some(ProcessingFamily::Quattro)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires QUATTRO_FIXTURE_DIR pointing to original Quattro X3Fs"]
+fn decode_quattro_files_preserves_storage_and_capture_contracts() {
+    let directory = std::env::var_os("QUATTRO_FIXTURE_DIR").expect("set QUATTRO_FIXTURE_DIR");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if !path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("quattro")
+            || path
+                .extension()
+                .is_none_or(|e| !e.eq_ignore_ascii_case("x3f"))
+        {
+            continue;
+        }
+        let source = Source::open(&path).unwrap();
+        assert_eq!(
+            source.metadata.processing_family().unwrap(),
+            ProcessingFamily::Quattro
+        );
+        assert_eq!(source.storage(), SourceStorage::PackedRgbBluePhases);
+        assert_eq!(
+            source.storage_extent(),
+            [source.metadata.width / 2, source.metadata.height / 2]
+        );
+        assert_eq!(
+            source.samples().len(),
+            source.metadata.width * source.metadata.height / 4 * 6
+        );
+        assert!(source
+            .samples()
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=16383.0).contains(v)));
+        assert!(source.metadata.processing_version.is_some());
+        assert_eq!(
+            read_capture_properties(&path).unwrap(),
+            source.metadata.properties
+        );
+        assert!(!source.metadata.properties["WB_DESC"].is_empty());
+        assert!(!source.metadata.properties["CM_DESC"].is_empty());
+        assert!(!source.metadata.matrices.is_empty());
+        let preview = crate::preview::read(&path).unwrap();
+        assert_eq!(
+            preview.rgb.len(),
+            preview.extent[0] as usize * preview.extent[1] as usize * 3
+        );
+        eprintln!(
+            "{} {:?} {:?} {:?}",
+            path.display(),
+            source.storage_extent(),
+            source.metadata.processing_version,
+            source.metadata.properties
+        );
+        checked += 1;
+    }
+    assert!(checked > 0);
 }

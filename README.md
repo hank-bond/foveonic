@@ -15,6 +15,10 @@ Classic rendering covers the pre-Merrill SD9, SD10, SD14, SD15, DP1/DP1s/DP1x an
 
 Original-file validation currently covers eight models, including a DP2x ISO50–3200 ladder. DP1x and DP2s use recovered processing contracts but still need genuine originals for validation. See [Classic rendering](docs/specs/classic-rendering.md) and the [coverage evidence](plans/classic-coverage.md).
 
+Quattro decoding and sensor-plane inspection are available for acquired DP0/DP1/DP2 Quattro, sd Quattro and sd Quattro H originals. Inspect exposes low-resolution RGB and full-resolution blue separately. Selected Quattro routes also expose offset/scale correction. Photographic rendering and DNG are still in progress. See the [integration plan](plans/quattro-integration.md).
+
+For blue-map inspection, explicitly set `FOVEONIC_CALIBRATION_RESOURCES` to a directory containing the camera's six `C{camera-id}_{1..6}` maps before launching the GUI. Resources are loaded into an immutable engine snapshot. They are not bundled or discovered through an installed application. Without these files, the other sensor-plane inspection outputs remain available.
+
 ## Rendering Techniques
 All correction and enhancement metadata that exists in the X3F file is made use of.  Effort has been made to align with the Sigma's intended processing of the files wherever possible.  Additional controls are made wherever available to alter the processing approaches on a per-image basis.
 

@@ -25,12 +25,21 @@ pub struct ColorInput {
     pub(super) camera: [f64; 9],
     pub(super) final_gain: [f64; 3],
     pub(super) relative_gain: [f64; 3],
+    /// Capture ISO divided by sensor ISO, using sensor ISO 100 when it is zero.
     pub(super) ratio: f32,
     pub(super) digital_gain: f32,
     pub(super) extent: [usize; 2],
     // Cached color calibration scales both input statistics and nonlinear noise.
     pub(super) statistics_factor: f64,
     pub(super) alternate_matrix: Option<([f64; 9], f64)>,
+}
+
+impl ColorInput {
+    /// Reference fallback amplitude when all ColorDQCamRGB components are zero.
+    /// The ISO ratio is capped before the two square roots, preserving rounding.
+    pub(super) fn default_nonlinear_noise(&self) -> [f64; 3] {
+        [4. / f64::from(self.ratio.min(8.)).sqrt().sqrt(); 3]
+    }
 }
 
 pub struct Color {

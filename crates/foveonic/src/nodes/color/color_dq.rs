@@ -85,6 +85,7 @@ mod tests {
         }
         assert!(super::table([0., 8., 8.]).is_err());
         let metadata = Metadata {
+            processing_version: None,
             width: 1,
             height: 1,
             rotation: 0,

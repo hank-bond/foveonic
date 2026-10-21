@@ -3,6 +3,7 @@
 mod classic;
 mod common;
 mod merrill;
+mod quattro;
 
 pub use common::{adjustment_with_nudge, automatic_adjustment};
 use eframe::egui;
@@ -54,6 +55,7 @@ pub fn processing(
     match capabilities(metadata, capture).map(|c| c.family) {
         Some(ProcessingFamily::Classic) => classic::show(ui, settings, metadata),
         Some(ProcessingFamily::Merrill) => merrill::show(ui, settings, metadata),
+        Some(ProcessingFamily::Quattro) => quattro::show(ui),
         None => {
             let mut changed = common::presets(
                 ui,

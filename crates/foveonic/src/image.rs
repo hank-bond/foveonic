@@ -20,6 +20,14 @@ pub enum Layout {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Space {
+    /// Original camera RGB codes, including blue averaged over a sensor cell.
+    SensorRgb,
+    /// Original full-resolution blue sensor codes.
+    SensorBlue,
+    /// Low-resolution camera RGB after offset and code-scale correction.
+    CorrectedSensorRgb,
+    /// High-resolution blue after offset, code-scale correction and upper cap.
+    CorrectedSensorBlue,
     SensorLayers,
     ScalarField,
     /// Single-channel monochrome brightness in linear camera-code units.
@@ -42,6 +50,41 @@ pub enum Space {
     EncodedRgb16(crate::render::TiffColorSpace),
 }
 
+impl Space {
+    /// Canonical graph-buffer storage. Materialized textures declare their own layout.
+    pub fn buffer_layout(self) -> Layout {
+        match self {
+            Self::SensorBlue
+            | Self::CorrectedSensorBlue
+            | Self::ScalarField
+            | Self::Monochrome
+            | Self::LuminanceRatio
+            | Self::SignedDetail => Layout::Scalar32Float,
+            Self::EncodedRgb16(_) => Layout::PackedRgb16,
+            Self::SensorRgb
+            | Self::CorrectedSensorRgb
+            | Self::SensorLayers
+            | Self::CalibratedLayers
+            | Self::NormalizedCodeRgb
+            | Self::LinearCodeRgb
+            | Self::SignedCodeRgb
+            | Self::LinearRgb(_)
+            | Self::ToneMappedRgb(_) => Layout::Rgb32Float,
+        }
+    }
+
+    /// These intermediate planes expose their complete physical grid for inspection.
+    pub(crate) fn uses_full_sensor_view(self) -> bool {
+        matches!(
+            self,
+            Self::SensorRgb
+                | Self::SensorBlue
+                | Self::CorrectedSensorRgb
+                | Self::CorrectedSensorBlue
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Description {
     /// Physical storage dimensions.
@@ -51,6 +94,14 @@ pub struct Description {
 }
 
 impl Description {
+    pub(crate) fn new(extent: [u32; 2], space: Space) -> Self {
+        Self {
+            extent,
+            layout: space.buffer_layout(),
+            space,
+        }
+    }
+
     pub fn byte_len(self) -> u64 {
         u64::from(self.extent[0])
             * u64::from(self.extent[1])
@@ -105,7 +156,11 @@ impl RenderedImage {
         let transfer = match self.description.space {
             Space::LinearRgb(space) | Space::ToneMappedRgb(space) => space as u32,
             Space::EncodedRgb16(space) => space as u32,
-            Space::SensorLayers
+            Space::CorrectedSensorRgb
+            | Space::CorrectedSensorBlue
+            | Space::SensorRgb
+            | Space::SensorBlue
+            | Space::SensorLayers
             | Space::NormalizedCodeRgb
             | Space::LinearCodeRgb
             | Space::SignedCodeRgb

@@ -26,6 +26,7 @@ fn metadata_tables_match_native_rounding_and_reject_invalid_values() {
 }
 fn metadata() -> Metadata {
     let mut metadata = Metadata {
+        processing_version: None,
         width: 64,
         height: 64,
         rotation: 0,

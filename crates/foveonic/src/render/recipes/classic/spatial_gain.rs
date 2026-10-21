@@ -110,6 +110,7 @@ fn cached_selection_compares_gain_weighted_matrices() {
     use crate::source::{Matrix, MatrixEncoding};
     use std::collections::BTreeMap;
     let mut m = Metadata {
+        processing_version: None,
         width: 32,
         height: 32,
         rotation: 0,

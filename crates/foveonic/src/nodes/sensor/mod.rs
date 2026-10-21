@@ -8,6 +8,8 @@ pub(crate) mod despeckle;
 pub(crate) mod estimated_iso;
 pub(crate) mod fixed_point;
 pub(crate) mod highlight;
+pub(crate) mod phase_extraction;
+pub(crate) mod phase_gain;
 pub(crate) mod repair;
 pub(crate) mod signed_repair;
 pub(crate) mod spatial_tables;

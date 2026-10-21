@@ -5,6 +5,8 @@ use crate::source::Result;
 
 #[derive(Clone, Copy)]
 pub enum Kernel {
+    PhaseExtraction,
+    PhaseGain,
     Histogram,
     BlackMean,
     Calibration,
@@ -170,6 +172,8 @@ pub enum Kernel {
 impl Kernel {
     pub fn label(self) -> &'static str {
         match self {
+            Self::PhaseExtraction => "extract sensor phases",
+            Self::PhaseGain => "apply phase gain maps",
             Self::WbBlack => "weighted white balance black",
             Self::WbReduce => "weighted white balance reduce",
             Self::WbSample => "weighted white balance sample",
@@ -354,6 +358,14 @@ impl Gpu {
         let dng = include_str!("../dng/dng.wgsl");
         let mono = include_str!("../nodes/monochrome/mono.wgsl");
         let kernels = [
+            (
+                include_str!("../nodes/sensor/phase_extraction.wgsl"),
+                "phase_extraction",
+            ),
+            (
+                include_str!("../nodes/sensor/phase_gain.wgsl"),
+                "phase_gain",
+            ),
             (black, "histogram_pass"),
             (black, "mean_pass"),
             (include_str!("../nodes/sensor/calibrate.wgsl"), "main"),

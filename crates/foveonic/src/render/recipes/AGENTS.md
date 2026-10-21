@@ -4,9 +4,11 @@ summary: "Photographic and DNG-base builders compose shared technical nodes befo
 
 # Authored recipes
 
-Shared technical construction stops as soon as all requested intermediate outputs exist. Resolve camera modes only when the color stage needs them. The photographic builder adds pixel exposure, tone, and saturation. DNG uses uncompensated working color and stops at the linear technical base, leaving selected appearance to [DNG metadata](../../dng/AGENTS.md).
+Each family owns a recipe entry point and its preparation modules. The dispatcher selects the family once. Recipes choose processing order and pass numerical parameters to camera-unaware operations. Stop construction as soon as all requested intermediate outputs exist. Keep metadata preparation lazy so an earlier output does not require later calibration or appearance data.
 
-Rendering mode and export format are separate choices. The monochrome builder branches after shared sensor corrections, mixes original layers, and applies dedicated filtering, detail, and gain. Photographic monochrome adds its own tone. DNG stops at the linear technical boundary and packages equal neutral channels without applying the camera color matrix.
+Merrill shares its technical construction between photographic and DNG output. Its monochrome route branches after sensor corrections. Classic owns its signed-code calibration and reconstruction routes. Quattro owns its mixed-resolution calibration and later reconstruction. Share numerical operations where their contracts agree, while keeping camera interpretation beside each recipe.
+
+Rendering mode and export format are separate choices. Photographic recipes apply appearance to pixels. DNG recipes stop at their established linear technical boundary and leave selected appearance to [DNG metadata](../../dng/AGENTS.md).
 
 <!-- INDEX:START -->
 
@@ -15,14 +17,14 @@ Rendering mode and export format are separate choices. The monochrome builder br
 ### Directories
 
 - **[classic/](./classic/AGENTS.md)** Classic recipe preparation resolves camera metadata into functional operation parameters.
+- **[merrill/](./merrill/AGENTS.md)** Merrill recipes share sensor corrections and technical color before photographic or editable DNG output.
+- **[quattro/](./quattro/AGENTS.md)** Quattro preparation owns camera resources and source-derived controls beside its multiresolution recipe.
 
 ### Source files
 
 - **[classic.rs](./classic.rs)** Composes equal-resolution photographic and editable DNG recipes from signed-code operations.
-- **[dng_base.rs](./dng_base.rs)** Builds a fresh linear technical base while leaving selected appearance to DNG metadata.
+- **[merrill.rs](./merrill.rs)** Selects Merrill photographic and editable DNG recipes over their shared technical stages.
 - **[mod.rs](./mod.rs)** Selects authored photographic and DNG-base graphs before shared execution.
-- **[monochrome.rs](./monochrome.rs)** Authors sensor-layer monochrome filtering and finishing without the color reconstruction path.
-- **[photographic.rs](./photographic.rs)** Completes photographic RGB with selected camera appearance, exposure, tone, and saturation.
-- **[shared.rs](./shared.rs)** Builds the shared original-source technical graph with lazy inspection preparation.
+- **[quattro.rs](./quattro.rs)** Builds inspection of independent-resolution sensor planes before photographic reconstruction.
 
 <!-- INDEX:END -->

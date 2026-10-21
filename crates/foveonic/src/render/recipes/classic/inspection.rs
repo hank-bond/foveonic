@@ -90,6 +90,7 @@ mod tests {
 
     fn metadata(iso: f64, blur: f64, fir_disabled: f64) -> Metadata {
         Metadata {
+            processing_version: None,
             width: 2304,
             height: 1531,
             rotation: 0,

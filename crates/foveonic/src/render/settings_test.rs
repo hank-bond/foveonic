@@ -21,6 +21,7 @@ fn metadata() -> Metadata {
         row
     });
     Metadata {
+        processing_version: None,
         width: 1,
         height: 1,
         rotation: 0,
@@ -181,6 +182,7 @@ fn automatic_manual_and_export_choices_round_trip_without_changing_numeric_recip
 #[test]
 fn camera_validation_requires_only_active_photographic_choices() {
     let mut metadata = crate::source::Metadata {
+        processing_version: None,
         width: 1,
         height: 1,
         rotation: 0,

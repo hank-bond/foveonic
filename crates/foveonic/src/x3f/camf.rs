@@ -14,6 +14,7 @@ const MATRIX_BLOCK_VERSION: u32 = 0x0002_0000;
 const LIST_BLOCK_VERSION: u32 = 0x0001_0000;
 const BLOCK_HEADER_BYTES: usize = 20;
 const MAXIMUM_DECODED_BYTES: usize = 64 * 1024 * 1024;
+const BYTE_METADATA_CAPACITY: usize = 0x85bcb8;
 
 pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
     let bytes = Bytes(section);
@@ -41,6 +42,22 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
                 byte ^ ((state * 256) / 244944) as u8
             })
             .collect());
+    }
+    if bytes.u32(8)? == 5 {
+        let declared = bytes.offset(12)?;
+        if !(BLOCK_HEADER_BYTES..=BYTE_METADATA_CAPACITY).contains(&declared) {
+            return Err("invalid camera metadata size".into());
+        }
+        let words = (0..9)
+            .map(|i| bytes.u16(28 + i * 2))
+            .collect::<Result<Vec<_>>>()?;
+        // Native decoding zeroes a fixed-capacity tail. Only the declared block
+        // prefix belongs to the metadata stream, so retain no allocation padding.
+        return Table::packed(&words)?.decode_bytes(
+            bytes.range(60, bytes.offset(56)?)?,
+            declared,
+            bytes.u16(16)? as u8,
+        );
     }
     if bytes.u32(8)? != PACKED_HUFFMAN_COMPRESSION {
         return Err("unsupported camera metadata compression".into());
@@ -223,6 +240,51 @@ mod tests {
         block[20] = b'x';
         block.extend_from_slice(values);
         block
+    }
+
+    #[test]
+    fn byte_metadata_recurrence_preserves_blocks_and_rejects_truncation() {
+        let expected = block(6, &[1, 0, 2, 0]);
+        let mut section = vec![0; 60];
+        section[..4].copy_from_slice(b"SECc");
+        section[8..12].copy_from_slice(&5_u32.to_le_bytes());
+        section[12..16].copy_from_slice(&(expected.len() as u32).to_le_bytes());
+        section[16..18].copy_from_slice(&255_u16.to_le_bytes());
+        for category in 0..9 {
+            let word = ((category as u16) << 12) | 4;
+            section[28 + category * 2..30 + category * 2].copy_from_slice(&word.to_le_bytes());
+        }
+        let mut bits = Vec::new();
+        let mut previous = 255_u8;
+        for &value in &expected {
+            let difference = i16::from(value) - i16::from(previous);
+            let category = (16 - difference.unsigned_abs().leading_zeros()) as u8;
+            for shift in (0..4).rev() {
+                bits.push((category >> shift) & 1);
+            }
+            let payload = if difference < 0 {
+                difference + ((1_i16 << category) - 1)
+            } else {
+                difference
+            } as u16;
+            for shift in (0..category).rev() {
+                bits.push(((payload >> shift) & 1) as u8);
+            }
+            previous = value;
+        }
+        let mut compressed = vec![0; bits.len().div_ceil(8)];
+        for (index, bit) in bits.into_iter().enumerate() {
+            compressed[index / 8] |= bit << (7 - index % 8);
+        }
+        section[56..60].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        section.extend_from_slice(&compressed);
+        assert_eq!(decompress(&section).unwrap(), expected);
+        assert_eq!(
+            parse(&decompress(&section).unwrap()).unwrap().0["x"].values,
+            [1., 2.]
+        );
+        section.pop();
+        assert!(decompress(&section).is_err());
     }
 
     #[test]

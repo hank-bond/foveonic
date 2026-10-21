@@ -8,6 +8,7 @@ use crate::{
 
 fn metadata(width: usize, height: usize, records: &[Vec<f64>]) -> Metadata {
     Metadata {
+        processing_version: None,
         width,
         height,
         rotation: 0,

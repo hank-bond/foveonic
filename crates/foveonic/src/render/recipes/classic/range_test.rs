@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 fn metadata(iso: f64) -> Metadata {
     let mut m = Metadata {
+        processing_version: None,
         width: 32,
         height: 32,
         rotation: 0,

@@ -28,7 +28,7 @@ impl ControlCapabilities {
         let adjustable = family == ProcessingFamily::Merrill;
         Self {
             family,
-            monochrome: true,
+            monochrome: family != ProcessingFamily::Quattro,
             noise_adjustments: adjustable,
             highlight_adjustments: adjustable,
             row_correction_adjustable: adjustable,
@@ -40,17 +40,20 @@ impl ControlCapabilities {
 
     /// White balance remains stored while Classic monochrome selects its own calibration.
     pub fn white_balance_active(&self, settings: &Settings) -> bool {
-        self.family != ProcessingFamily::Classic || !settings.is_monochrome()
+        self.family != ProcessingFamily::Quattro
+            && (self.family != ProcessingFamily::Classic || !settings.is_monochrome())
     }
 
     /// Classic color modes also select the monochrome sensor mixture and appearance.
     pub fn color_mode_active(&self, settings: &Settings) -> bool {
-        self.family == ProcessingFamily::Classic || !settings.is_monochrome()
+        self.family != ProcessingFamily::Quattro
+            && (self.family == ProcessingFamily::Classic || !settings.is_monochrome())
     }
 
     /// Classic monochrome skips chromatic highlight reconstruction.
     pub fn highlights_active(&self, settings: &Settings) -> bool {
-        self.family != ProcessingFamily::Classic || !settings.is_monochrome()
+        self.family != ProcessingFamily::Quattro
+            && (self.family != ProcessingFamily::Classic || !settings.is_monochrome())
     }
 
     /// Restore unsupported saved adjustments to their supported defaults.
@@ -109,6 +112,9 @@ impl ControlCapabilities {
     /// Reject unsupported requests without silently changing processing choices.
     /// Numeric validity and camera metadata requirements are checked separately.
     pub fn validate(&self, settings: &Settings) -> Result<()> {
+        if self.family == ProcessingFamily::Quattro {
+            return Err("Quattro currently supports sensor-plane inspection only".into());
+        }
         if !self.monochrome && settings.is_monochrome() {
             return Err("Classic monochrome rendering is not supported".into());
         }

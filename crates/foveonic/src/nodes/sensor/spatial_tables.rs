@@ -295,6 +295,7 @@ mod tests {
 
     fn metadata() -> Metadata {
         Metadata {
+            processing_version: None,
             width: 4928,
             height: 3264,
             rotation: 0,
