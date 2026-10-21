@@ -1,4 +1,4 @@
-//! Inspects Merrill X3Fs and exports TIFF or linear DNG through shared rendering settings.
+//! Inspects supported X3Fs and exports TIFF or linear DNG through shared rendering settings.
 
 mod options;
 use foveonic::profile::{self, Mode, Profile};

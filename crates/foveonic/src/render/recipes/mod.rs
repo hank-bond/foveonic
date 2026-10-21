@@ -9,6 +9,7 @@ use crate::{
     source::{Result, Source},
 };
 
+pub(super) mod classic;
 mod dng_base;
 mod monochrome;
 pub(super) mod photographic;
@@ -52,10 +53,22 @@ impl Engine {
             return Ok(Vec::new());
         }
         let built = match recipe {
-            Recipe::Photographic(_) => {
-                photographic::build(self, source, settings, names, profile, execution)?
-            }
-            Recipe::DngBase => dng_base::build(self, source, settings, profile, execution)?,
+            Recipe::Photographic(_) => match source.metadata.processing_family()? {
+                crate::source::ProcessingFamily::Merrill => {
+                    photographic::build(self, source, settings, names, profile, execution)?
+                }
+                crate::source::ProcessingFamily::Classic => {
+                    classic::build(self, source, settings, names, profile, execution)?
+                }
+            },
+            Recipe::DngBase => match source.metadata.processing_family()? {
+                crate::source::ProcessingFamily::Merrill => {
+                    dng_base::build(self, source, settings, profile, execution)?
+                }
+                crate::source::ProcessingFamily::Classic => {
+                    classic::build_dng(self, source, settings, profile, execution)?
+                }
+            },
         };
         self.collect_artifacts(
             source,

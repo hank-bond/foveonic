@@ -1,7 +1,8 @@
 //! Defines supported operations, parameter keys, typed ports, and named side outputs.
 
 use super::DataType;
-use crate::nodes::sensor::calibration::{Calibration, ColorParams, ColorSpace, EncodeParams};
+use crate::color_space::ColorSpace;
+use crate::nodes::sensor::calibration::{Calibration, ColorParams, EncodeParams};
 use crate::nodes::{
     color::{color_dq, pattern},
     monochrome::{Prepared as MonoPrepared, Stage as MonoStage},
@@ -15,6 +16,16 @@ pub enum Operation {
     RenderedInput {
         data: DataType,
     },
+    FixedPointCalibration(std::sync::Arc<crate::nodes::sensor::fixed_point::Correction>),
+    FixedPointColor(std::sync::Arc<crate::nodes::sensor::fixed_point::Transform>),
+    ChromaSmooth(crate::nodes::color::chroma::Prepared),
+    SignedRepair(std::sync::Arc<crate::nodes::sensor::signed_repair::Defects>),
+    SignedDespeckle(crate::nodes::sensor::signed_repair::Despeckle),
+    HighlightStream(crate::nodes::color::highlight_stream::Prepared),
+    LogReconstruct(crate::nodes::color::log_reconstruction::Prepared),
+    RootDetail(crate::nodes::finish::root_detail::Prepared),
+    SignedLinearDetail(std::sync::Arc<crate::nodes::finish::signed_response::LinearDetail>),
+    SignedPhotographic(std::sync::Arc<crate::nodes::finish::signed_response::Prepared>),
     Black(calibration::CalibrationParams),
     Calibrate(Calibration),
     Color {
@@ -97,6 +108,21 @@ impl Operation {
         use crate::{noise::RecipeStage as N, recipe::Key};
         match self {
             Self::Source | Self::RenderedInput { .. } | Self::SharpSignal { .. } => Key::default(),
+            Self::FixedPointCalibration(p) => p.key(),
+            Self::FixedPointColor(p) => p.key(),
+            Self::ChromaSmooth(p) => p.key(),
+            Self::RootDetail(p) => p.key(),
+            Self::LogReconstruct(p) => p.key(),
+            Self::HighlightStream(p) => Key::default()
+                .with(&p.extent)
+                .with(&p.fix)
+                .with(&p.apriori)
+                .with(&p.scaled)
+                .with(&(p.bulb as u32)),
+            Self::SignedRepair(p) => p.key(),
+            Self::SignedDespeckle(p) => p.key(),
+            Self::SignedLinearDetail(p) => p.key(),
+            Self::SignedPhotographic(p) => p.key(),
             Self::Black(p) => Key::pod(p),
             Self::Calibrate(p) => p.key(),
             Self::Color { params, .. } | Self::Saturation { params, .. } => Key::pod(params),
@@ -138,6 +164,16 @@ impl Operation {
         match self {
             Self::Source => "upload sensor",
             Self::RenderedInput { .. } => "import rendered image",
+            Self::FixedPointCalibration(_) => "submit fixed-point calibration",
+            Self::FixedPointColor(_) => "submit fixed-point color",
+            Self::ChromaSmooth(_) => "submit signed chroma smoothing",
+            Self::RootDetail(_) => "submit root-space detail",
+            Self::LogReconstruct(_) => "submit logarithmic guided reconstruction",
+            Self::HighlightStream(_) => "submit streaming signed highlight neutralization",
+            Self::SignedRepair(_) => "submit ordered signed defect repair",
+            Self::SignedDespeckle(_) => "submit ordered signed despeckle",
+            Self::SignedLinearDetail(_) => "submit signed linear detail",
+            Self::SignedPhotographic(_) => "submit signed photographic response",
             Self::Black(_) => "submit black",
             Self::Calibrate(_) => "submit calibration",
             Self::Color { .. } => "submit color",
@@ -172,6 +208,20 @@ impl Operation {
         match self {
             Self::Source => (vec![], SensorLayers),
             Self::RenderedInput { data } => (vec![], *data),
+            Self::FixedPointCalibration(_) => (vec![SensorLayers], CalibratedLayers),
+            Self::FixedPointColor(_) => (vec![CalibratedLayers], LinearCodeRgb),
+            Self::RootDetail(_) => (vec![LinearCodeRgb], SignedCodeRgb),
+            Self::LogReconstruct(_) => (vec![LinearCodeRgb, CalibratedLayers], LinearCodeRgb),
+            Self::HighlightStream(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::SignedRepair(_) | Self::SignedDespeckle(_) => {
+                (vec![CalibratedLayers], CalibratedLayers)
+            }
+            Self::ChromaSmooth(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::SignedLinearDetail(_) => (vec![SignedCodeRgb, SignedDetail], LinearCodeRgb),
+            Self::SignedPhotographic(_) => (
+                vec![SignedCodeRgb, SignedDetail],
+                ToneMappedRgb(ColorSpace::ProPhotoRgb),
+            ),
             Self::Black(_) => (vec![SensorLayers], BlackLevels),
             Self::Calibrate(_) => (vec![SensorLayers, BlackLevels], CalibratedLayers),
             Self::Color { space, .. } => (vec![CalibratedLayers], LinearRgb(*space)),
@@ -237,6 +287,8 @@ impl Operation {
     pub(super) fn side_outputs(&self) -> Vec<(&'static str, DataType, Vec<usize>)> {
         use DataType::*;
         match self {
+            Self::FixedPointColor(_) => vec![("color.corrected-layers", CalibratedLayers, vec![0])],
+            Self::RootDetail(_) => vec![("detail.signal", SignedDetail, vec![0])],
             Self::Black(_) => vec![("black.histogram", Histogram, vec![0])],
             Self::Banding(_) => vec![("banding.rows", RowTable, vec![0])],
             Self::NoiseBase(_) => vec![
@@ -261,6 +313,22 @@ impl Operation {
         match self {
             Self::Source => "sensor.layers",
             Self::RenderedInput { .. } => "import.image",
+            Self::FixedPointCalibration(_) => "calibration.layers",
+            Self::FixedPointColor(_) => "color.codes",
+            Self::ChromaSmooth(p) => {
+                if p.params.shape[2] == 0 {
+                    "chroma.small-layers"
+                } else {
+                    "chroma.layers"
+                }
+            }
+            Self::RootDetail(_) => "root.rgb",
+            Self::LogReconstruct(_) => "reconstruction.codes",
+            Self::HighlightStream(_) => "highlight.layers",
+            Self::SignedRepair(_) => "repair.layers",
+            Self::SignedDespeckle(_) => "despeckle.layers",
+            Self::SignedLinearDetail(_) => "detail.linear-codes",
+            Self::SignedPhotographic(_) => "tone.rgb",
             Self::Black(_) => "black.levels",
             Self::Calibrate(_) => "calibration.layers",
             Self::Repair(_) => "repair.layers",

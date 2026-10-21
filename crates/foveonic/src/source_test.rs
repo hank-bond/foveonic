@@ -161,3 +161,40 @@ fn decode_original_merrill_files() {
         );
     }
 }
+
+#[test]
+fn classic_selection_stays_at_input_boundary() {
+    for model in ["SIGMA SD15", "SIGMA DP2", "SIGMA DP1S"] {
+        assert_eq!(family(Some(model)), Some(ProcessingFamily::Classic));
+    }
+    assert_eq!(
+        family(Some("SIGMA DP2 Merrill")),
+        Some(ProcessingFamily::Merrill)
+    );
+    assert_eq!(family(Some("SIGMA dp2 Quattro")), None);
+    let mut metadata = Metadata {
+        width: 2688,
+        height: 1792,
+        rotation: 0,
+        properties: [("CAMMODEL".into(), "SIGMA DP1S".into())].into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    assert_eq!(metadata.recorded_color_mode().unwrap(), "Standard");
+    metadata
+        .properties
+        .insert("WB_DESC".into(), "Daylight".into());
+    metadata.lists.insert(
+        "DP1_WhiteBalanceGains".into(),
+        PropertyList::new(vec![("Sunlight".into(), "DayGain".into())]).unwrap(),
+    );
+    assert_eq!(metadata.recorded_white_balance().unwrap(), "Sunlight");
+    metadata
+        .properties
+        .insert("CM_DESC".into(), "Vivid ".into());
+    metadata.lists.insert(
+        "ColorModeCompensations".into(),
+        PropertyList::new(vec![("Vivid ".into(), "VividMatrix".into())]).unwrap(),
+    );
+    assert_eq!(metadata.recorded_color_mode().unwrap(), "Vivid ");
+}

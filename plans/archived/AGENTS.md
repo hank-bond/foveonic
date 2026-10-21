@@ -15,6 +15,11 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[camera-repair-default](./camera-repair-default.md)** _(archived)._ Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
 - **[cargo-releases](./cargo-releases.md)** _(archived)._ Replace Python app packaging with Cargo tasks and prepare an unsigned v0.1.0 draft-release workflow.
+- **[classic-cleanup](./classic-cleanup.md)** _(archived)._ Clarify the Classic photographic/output boundary, consolidate metadata preparation, and retire obsolete profile machinery.
+- **[classic-dng](./classic-dng.md)** _(archived)._ Add editable Classic color DNG through shared packaging and measure the embedded appearance against photographic rendering.
+- **[classic-efficiency](./classic-efficiency.md)** _(archived)._ Output-equivalent Classic optimizations reduce full SD15 processing from 749 to 173 milliseconds.
+- **[classic-finishing](./classic-finishing.md)** _(archived)._ Separate Classic photographic response from shared wide-gamut output conversion and measure the reference differences.
+- **[classic-pipeline](./classic-pipeline.md)** _(archived)._ Build and validate an isolated end-to-end Classic GPU recipe to evaluate functional operations and shared engine machinery.
 - **[clickable-states](./clickable-states.md)** _(archived)._ Group editing corrections and share rounded clickable states without changing processing defaults.
 - **[despeckle](./despeckle.md)** _(archived)._ GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.

@@ -12,8 +12,13 @@ Rendering mode and export format are separate choices. The monochrome builder br
 
 <!-- Generated from source summaries and document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+### Directories
+
+- **[classic/](./classic/AGENTS.md)** Classic recipe preparation resolves camera metadata into functional operation parameters.
+
 ### Source files
 
+- **[classic.rs](./classic.rs)** Composes equal-resolution photographic and editable DNG recipes from signed-code operations.
 - **[dng_base.rs](./dng_base.rs)** Builds a fresh linear technical base while leaving selected appearance to DNG metadata.
 - **[mod.rs](./mod.rs)** Selects authored photographic and DNG-base graphs before shared execution.
 - **[monochrome.rs](./monochrome.rs)** Authors sensor-layer monochrome filtering and finishing without the color reconstruction path.

@@ -23,14 +23,15 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 ### Source files
 
+- **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[dng.rs](./dng.rs)** Starts DNG exports from the original photo so display edits never become baked samples.
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
 - **[graph.rs](./graph.rs)** Builds typed dependency-ordered graphs and validates connections between operation ports.
 - **[image.rs](./image.rs)** Keeps GPU images with their photo settings and defines crop and orientation views.
 - **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
 - **[interactive.rs](./interactive.rs)** Reuses unchanged inputs for the current edit while keeping earlier images safe.
-- **[lib.rs](./lib.rs)** Shares Merrill decoding and GPU photo processing between TIFF and DNG exports.
-- **[main.rs](./main.rs)** Inspects Merrill X3Fs and exports TIFF or linear DNG through shared rendering settings.
+- **[lib.rs](./lib.rs)** Shares X3F decoding and GPU photo processing between TIFF and DNG exports.
+- **[main.rs](./main.rs)** Inspects supported X3Fs and exports TIFF or linear DNG through shared rendering settings.
 - **[options.rs](./options.rs)** Shares photographic CLI option parsing between conversion and the completed-processing profiler.
 - **[output.rs](./output.rs)** Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
 - **[preview.rs](./preview.rs)** Reads embedded JPEG previews and presentation dimensions from X3F sections.
@@ -39,6 +40,6 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[render.rs](./render.rs)** Shares GPU engine entry points for photographic rendering, inspection, display, and export.
 - **[scopes.rs](./scopes.rs)** Builds histograms and smooth waveform traces from GPU image regions.
 - **[sidecar.rs](./sidecar.rs)** Reads and atomically replaces bounded versioned JSON editing recipes beside immutable X3F inputs.
-- **[source.rs](./source.rs)** Owns original Merrill sensor samples and typed camera metadata.
+- **[source.rs](./source.rs)** Owns original equal-resolution sensor samples and typed camera metadata.
 
 <!-- INDEX:END -->

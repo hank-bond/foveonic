@@ -28,6 +28,8 @@ fn encode(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(v, vec3(1./2.4)
     var rgb = sample_at(uv);
     let channel = i32(params.options.x);
     if channel >= 0 { rgb = vec3(rgb[channel]); }
+    // ROMM to sRGB uses the D50-adapted colorants of the embedded ICC profiles.
+    else if params.options.z > 1.5 { rgb = vec3(dot(vec3(2.0342010513, -0.7274670643, -0.3067339870), rgb), dot(vec3(-0.2286419318, 1.2316059151, -0.0029639833), rgb), dot(vec3(-0.0085179360, -0.1532819171, 1.1617998530), rgb)); }
     else if params.options.z > 0. { rgb = vec3(1.39835574 * rgb.r - 0.39835574 * rgb.g, rgb.g, 1.04292899 * rgb.b - 0.04292899 * rgb.g); }
     rgb *= params.options.y;
     if params.options.z < -1.5 { rgb += 0.5; }

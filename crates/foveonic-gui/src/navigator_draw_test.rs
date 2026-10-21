@@ -4,7 +4,8 @@ use super::gpu_tests::{state, texture};
 use super::*;
 
 fn pixels(rs: &egui_wgpu::RenderState, texture: &wgpu::Texture) -> Vec<u8> {
-    let row = (texture.width() * 4).div_ceil(256) * 256;
+    let row =
+        (texture.width() * texture.format().block_copy_size(None).unwrap()).div_ceil(256) * 256;
     let buffer = rs.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Synthetic presentation comparison"),
         size: u64::from(row * texture.height()),
@@ -143,6 +144,67 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
         Some(&input),
     );
     assert!(pixels(&rs, &target)[0].abs_diff(243) <= 1);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn romm_presentation_converts_and_clips_without_changing_float_source() {
+    let rs = state();
+    let source = texture(
+        &rs,
+        [1, 1],
+        wgpu::TextureFormat::Rgba32Float,
+        wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let target = texture(
+        &rs,
+        [1, 1],
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    // At low intensity, ROMM green converts to approximately (-0.073, 0.123, -0.015)
+    // in linear sRGB. This distinguishes its primary conversion from Adobe RGB.
+    for (green, expected) in [(0.1_f32, 98_u8), (1.2, 255)] {
+        let value = [0., green, 0., 1.];
+        rs.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &source,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&value),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(16),
+                rows_per_image: Some(1),
+            },
+            source.size(),
+        );
+        let before = pixels(&rs, &source);
+        viewport::prepare_navigator(
+            &rs,
+            &source,
+            Space::ToneMappedRgb(foveonic::image::ColorSpace::ProPhotoRgb),
+            &target,
+            viewport::Mapping::normal(-1),
+            None,
+        );
+        let displayed = pixels(&rs, &target);
+        assert_eq!(displayed[0], 0);
+        assert!(
+            displayed[1].abs_diff(expected) <= 1,
+            "green={green}: {:?}",
+            &displayed[..4]
+        );
+        assert_eq!(displayed[2], 0);
+        assert_eq!(displayed[3], 255);
+        assert_eq!(pixels(&rs, &source), before);
+        let retained = f32::from_le_bytes(before[4..8].try_into().unwrap());
+        assert_eq!(retained, green);
+    }
 }
 
 #[test]

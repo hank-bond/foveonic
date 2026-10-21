@@ -4,7 +4,7 @@ summary: "Implement uncompressed uint16 DNG export through the existing TIFF wri
 
 # DNG export
 
-Requirements: [output strategies](../docs/specs/output-strategies.md). Finish the [sidecar checkpoint](./editing-sidecars.md) before implementing the export slice.
+Requirements: [output strategies](../docs/specs/output-strategies.md). The [sidecar checkpoint](./editing-sidecars.md) is complete. [Classic DNG](./archived/classic-dng.md) tracks the additional family preparation and appearance measurements.
 
 ## Steps
 
@@ -124,4 +124,4 @@ The earlier signed-storage probe used uncompressed uint16 to isolate normalizati
 
 Later diagnostic executables were rebuilt as comparison/codec controls were added. The first GPU-run executable hash was not captured before that rebuild, limiting identification of that initial run.
 
-This project's probe has not been run in Capture One or Lightroom; the reference implementation's working Capture One result is separate evidence. No native profile/look fit, alternate photographic WB/mode processing, other Merrill body, high-ISO survey, or owner photographic acceptance of these probes has occurred. Native signed-channel round-trip accuracy and the original editing recipe's appearance are not established by these paired SDK measurements. The sidecar checkpoint and its integration are complete at `218fd90`. Production DNG export remains pending.
+This project's probe has not been run in Capture One or Lightroom; the reference implementation's working Capture One result is separate evidence. No native profile/look fit, alternate photographic WB/mode processing, other Merrill body, high-ISO survey, or owner photographic acceptance of these probes has occurred. Native signed-channel round-trip accuracy and the original editing recipe's appearance are not established by these paired SDK measurements. The sidecar checkpoint and its integration are complete at `218fd90`. Production export was still pending at the end of these historical probes. The uncompressed export implementation and its remaining reader checks are described above.

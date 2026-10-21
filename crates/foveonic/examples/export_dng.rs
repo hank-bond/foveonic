@@ -1,4 +1,4 @@
-//! Exports one Merrill original with explicit WB/mode for DNG reader validation, without selecting sidecars.
+//! Exports one supported original with explicit WB/mode for DNG reader validation, without selecting sidecars.
 
 use foveonic::{
     dng,

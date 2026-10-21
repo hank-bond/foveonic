@@ -1,5 +1,6 @@
-//! Shares Merrill decoding and GPU photo processing between TIFF and DNG exports.
+//! Shares X3F decoding and GPU photo processing between TIFF and DNG exports.
 
+pub mod color_space;
 pub mod dng;
 mod gpu;
 mod graph;

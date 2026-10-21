@@ -279,32 +279,45 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
         if mono && title == "Color mode" {
             continue;
         }
-        let choices = metadata.and_then(|metadata| metadata.lists.get(key));
+        let choices = metadata.map(|metadata| {
+            if key == "WhiteBalanceGains" {
+                metadata.white_balance_presets()
+            } else {
+                metadata.color_mode_presets()
+            }
+        });
         // Keep the same rows while metadata is loading so later controls do not
         // jump when the first processed frame supplies the camera's choices.
         ui.horizontal(|ui| {
             help::control(ui.add_sized([92., 20.], egui::Label::new(title)), title);
             let response = ui
-                .add_enabled_ui(choices.is_some_and(|list| !list.is_empty()), |ui| {
-                    let combo = egui::ComboBox::from_id_salt(key)
-                        .width(ui.available_width() - 8.)
-                        .selected_text(if value.is_empty() {
-                            "Choose…"
-                        } else {
-                            value.as_str()
-                        });
-                    crate::widgets::dropdown(ui, combo, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.;
-                        if let Some(list) = choices {
-                            for name in list.names() {
-                                changed |=
-                                    crate::widgets::menu_value(ui, value, name.to_owned(), name)
-                                        .changed();
+                .add_enabled_ui(
+                    choices.as_ref().is_some_and(|list| !list.is_empty()),
+                    |ui| {
+                        let combo = egui::ComboBox::from_id_salt(key)
+                            .width(ui.available_width() - 8.)
+                            .selected_text(if value.is_empty() {
+                                "Choose…"
+                            } else {
+                                value.as_str()
+                            });
+                        crate::widgets::dropdown(ui, combo, |ui| {
+                            ui.spacing_mut().item_spacing.y = 0.;
+                            if let Some(list) = &choices {
+                                for name in list.iter().copied() {
+                                    changed |= crate::widgets::menu_value(
+                                        ui,
+                                        value,
+                                        name.to_owned(),
+                                        name,
+                                    )
+                                    .changed();
+                                }
                             }
-                        }
-                    })
-                    .response
-                })
+                        })
+                        .response
+                    },
+                )
                 .inner;
             help::control(response, title);
         });
@@ -847,6 +860,40 @@ mod tests {
             });
         });
         assert_eq!(saved, edited, "collapsed controls reset a saved choice");
+    }
+
+    #[test]
+    fn classic_choices_use_profile_catalogues_and_fixed_standard_mode() {
+        use foveonic::source::PropertyList;
+        let metadata = Metadata {
+            width: 2688,
+            height: 1792,
+            rotation: 0,
+            properties: [("CAMMODEL".into(), "SIGMA DP1S".into())].into(),
+            matrices: Default::default(),
+            lists: [(
+                "DP1_WhiteBalanceGains".into(),
+                PropertyList::new(vec![
+                    ("Sunlight".into(), "sun".into()),
+                    ("Shade".into(), "shade".into()),
+                ])
+                .unwrap(),
+            )]
+            .into(),
+        };
+        assert_eq!(metadata.white_balance_presets(), vec!["Sunlight", "Shade"]);
+        assert_eq!(metadata.color_mode_presets(), vec!["Standard"]);
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        let before = settings.clone();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!processing(ui, &mut settings, Some(&metadata)));
+            });
+        });
+        assert_eq!(settings, before);
+        assert_eq!(text_centers(&output, "Sunlight").len(), 1);
+        assert_eq!(text_centers(&output, "Standard").len(), 1);
     }
 
     #[test]

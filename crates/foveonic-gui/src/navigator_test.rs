@@ -80,6 +80,12 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
             1,
             188,
         ),
+        (
+            Space::ToneMappedRgb(foveonic::image::ColorSpace::ProPhotoRgb),
+            [0.5, 0.5, 0.5, 1.],
+            -1,
+            188,
+        ),
         (Space::ScalarField, [0.5, 0.5, 0.5, 1.], -1, 128),
         (Space::LuminanceRatio, [1., 1., 1., 1.], -1, 128),
         (Space::SignedDetail, [0., 0., 0., 1.], -1, 128),

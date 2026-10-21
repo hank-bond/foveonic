@@ -1,13 +1,11 @@
 //! Completes photographic RGB with selected camera appearance, exposure, tone, and saturation.
 
 use super::{requested, shared, BuiltRecipe};
+use crate::color_space::ColorSpace;
 use crate::{
     graph::Operation,
     interactive::Execution,
-    nodes::{
-        finish::tone,
-        sensor::calibration::{self, ColorSpace},
-    },
+    nodes::{finish::tone, sensor::calibration},
     profile::Profile,
     render::{Engine, Settings},
     source::{Result, Source},

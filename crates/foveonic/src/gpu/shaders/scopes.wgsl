@@ -42,7 +42,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Shift before scaling so the signed range's endpoints remain exact.
     if params.output_size.z == 2u { rgb = (rgb + 1000.) / 2000.; }
     if params.output_size.z == 3u { rgb /= 2.; }
-    let weights = select(vec3(0.2126, 0.7152, 0.0722), vec3(0.297344975, 0.627363566, 0.075291459), params.output_size.w == 1u);
+    var weights = select(vec3(0.2126, 0.7152, 0.0722), vec3(0.297344975, 0.627363566, 0.075291459), params.output_size.w == 1u);
+    if params.output_size.w == 2u { weights = vec3(0.288055420, 0.711868286, 0.000076294); }
     let values = vec4(rgb, dot(rgb, weights));
     let x = clamp((f32(id.x) + 0.5) * 256. / f32(params.output_size.x) - 0.5, 0., 255.);
     for (var c = 0u; c < 4u; c++) {

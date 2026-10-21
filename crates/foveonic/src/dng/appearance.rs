@@ -1,10 +1,7 @@
 //! Keeps the selected DNG appearance separate from its editable camera samples.
+use crate::color_space::ColorSpace;
 use crate::{
-    nodes::{
-        color::color_mode,
-        finish::tone,
-        sensor::calibration::{self, ColorSpace},
-    },
+    nodes::{color::color_mode, finish::tone, sensor::calibration},
     render::Settings,
     source::{Metadata, Result},
 };
@@ -89,6 +86,23 @@ const ROMM: Matrix = Matrix([
 pub(crate) const DIMS: [u32; 3] = [72, 33, 65];
 const INTERVALS: usize = 512;
 
+/// Choose where the reader restores the common linear storage scale.
+/// Baseline exposure can exceed the reader's working-RGB range before its look.
+/// Profile-curve compensation keeps that headroom available to the fitted tone.
+#[derive(Clone, Copy)]
+enum RangeCompensation {
+    BaselineExposure,
+    ProfileCurve,
+}
+
+/// An inverse is ambiguous where photographic tone reaches a white plateau.
+/// Keeping its first crossing avoids a jump in the residual look at saturation.
+#[derive(Clone, Copy)]
+enum TonePlateau {
+    WhiteEndpoint,
+    FirstCrossing,
+}
+
 pub(crate) struct Prepared {
     pub mapping: Matrix,
     pub neutral: [f64; 3],
@@ -100,6 +114,17 @@ pub(crate) struct Prepared {
     tone: Vec<f32>,
     pub calibration_exposure: f64,
     exposure: f64,
+    signed_response: Option<crate::nodes::finish::signed_response::Prepared>,
+    range_compensation: RangeCompensation,
+}
+/// Classic's calibrated sample coordinates and its pointwise selected appearance.
+/// The linear basis is a profile approximation, not a claim about sensor spectra.
+pub(crate) struct ClassicAppearance {
+    pub mapping: [f64; 9],
+    pub neutral: [f64; 3],
+    pub camera_to_linear: [f64; 9],
+    pub selected_from_base: [f64; 9],
+    pub response: crate::nodes::finish::signed_response::Prepared,
 }
 pub(crate) struct ProfileData {
     pub curve: Vec<f32>,
@@ -109,6 +134,9 @@ pub(crate) struct ProfileData {
 
 impl Prepared {
     pub fn new(m: &Metadata, settings: &Settings) -> Result<Self> {
+        if m.processing_family()? == crate::source::ProcessingFamily::Classic {
+            return Self::classic(crate::render::classic_dng_appearance(m, settings)?);
+        }
         if settings.is_monochrome() {
             return Self::monochrome(m, settings);
         }
@@ -143,6 +171,9 @@ impl Prepared {
             .then(Matrix::diagonal(gains.map(|v| 1. / v / 4095.)));
         let space = ColorSpace::from_metadata(m)?;
         let pcs = match space {
+            ColorSpace::ProPhotoRgb => {
+                return Err("ROMM is not a camera metadata color space".into())
+            }
             ColorSpace::Srgb => Matrix([
                 0.4360747, 0.3850649, 0.1430804, 0.2225045, 0.7168786, 0.0606169, 0.0139322,
                 0.0971045, 0.7141733,
@@ -186,6 +217,49 @@ impl Prepared {
             tone: tone::prepare(m, &mode, settings.tone)?,
             calibration_exposure: (f64::from(iso) / maximum).log2(),
             exposure: f64::from(settings.exposure),
+            signed_response: None,
+            range_compensation: RangeCompensation::BaselineExposure,
+        })
+    }
+    pub(crate) fn classic(input: ClassicAppearance) -> Result<Self> {
+        let neutral = input.neutral.map(|v| (v * 1_000_000.).round() / 1_000_000.);
+        if neutral.iter().any(|v| !v.is_finite() || *v <= 0.) {
+            return Err("invalid Classic DNG neutral".into());
+        }
+        let mapping = Matrix(input.mapping);
+        let base = Matrix(input.camera_to_linear);
+        let selected = Matrix(input.selected_from_base);
+        // Use the final ROMM interpretation as a provisional linear basis. The
+        // selected nonlinear photographic response remains in the profile look.
+        let romm = ROMM.white_normalized()?;
+        let forward = Matrix::diagonal(neutral)
+            .then(base)
+            .then(romm)
+            .white_normalized()?;
+        let forward = Matrix(forward.0.map(|v| (v * 1_000_000.).round() / 1_000_000.));
+        let reader = forward.white_normalized()?;
+        let color = reader.inverse()?.then(Matrix::diagonal(neutral));
+        let camera_to_romm = Matrix::diagonal(neutral.map(|v| 1. / v))
+            .then(reader)
+            .then(romm.inverse()?);
+        // Validate the storage transform here, before dispatching any samples.
+        mapping.inverse()?;
+        selected.inverse()?;
+        Ok(Self {
+            mapping,
+            neutral,
+            forward,
+            color,
+            camera_to_romm,
+            camera_to_native: base.then(selected),
+            after_tone: Matrix::diagonal([1.; 3]),
+            tone: Vec::new(),
+            calibration_exposure: 0.,
+            exposure: 0.,
+            signed_response: Some(input.response),
+            // Restore the storage range inside photographic tone, rather than
+            // clipping bright linear colors before the reader applies its look.
+            range_compensation: RangeCompensation::ProfileCurve,
         })
     }
     fn monochrome(m: &Metadata, settings: &Settings) -> Result<Self> {
@@ -206,13 +280,20 @@ impl Prepared {
             tone: tone::prepare_monochrome(m, settings.tone)?,
             calibration_exposure: 0.,
             exposure: f64::from(settings.exposure),
+            signed_response: None,
+            range_compensation: RangeCompensation::BaselineExposure,
         })
     }
     pub fn finish(&self, scale: f32) -> Result<ProfileData> {
         // Fit using the exposure the reader will receive. Extra precision here
         // would fit a slightly different rendering than the exported metadata.
-        let baseline = ((f64::from(scale).log2() + self.calibration_exposure) * 1_000_000.).round()
-            / 1_000_000.;
+        let baseline = match self.range_compensation {
+            RangeCompensation::BaselineExposure => {
+                ((f64::from(scale).log2() + self.calibration_exposure) * 1_000_000.).round()
+                    / 1_000_000.
+            }
+            RangeCompensation::ProfileCurve => 0.,
+        };
         let ramp = baseline.max(0.).exp2();
         let before = self
             .camera_to_romm
@@ -220,65 +301,85 @@ impl Prepared {
             .then(self.camera_to_native)
             .gain(f64::from(scale) / ramp * self.exposure.exp2());
         let target = |rgb: [f64; 3]| {
-            self.after_tone
-                .apply(before.apply(rgb).map(|v| native_tone(&self.tone, v)))
-                .map(|v| v.clamp(0., 1.))
-        };
-        let mut curve = Vec::with_capacity((INTERVALS + 1) * 2);
-        for i in 0..=INTERVALS {
-            let x = i as f64 / INTERVALS as f64;
-            let y = if i == INTERVALS {
-                1.
+            let native = before.apply(rgb);
+            let result = if let Some(response) = &self.signed_response {
+                response.evaluate_linear(native)
             } else {
-                target([inverse_exposure(x, baseline); 3])
-                    .into_iter()
-                    .sum::<f64>()
-                    / 3.
+                self.after_tone
+                    .apply(native.map(|v| native_tone(&self.tone, v)))
             };
-            curve.extend([x as f32, y as f32]);
-        }
-        if curve.windows(4).step_by(2).any(|v| v[3] < v[1]) {
-            return Err("non-monotonic DNG presentation curve".into());
-        }
-        let effective: Vec<f64> = (0..=4095)
-            .map(|i| curve_at(&curve, exposure_tone(i as f64 / 4095., baseline)))
-            .collect();
-        // Leave gray brightness to the common curve. Adjusting it in the color
-        // table as well would apply the tone change twice.
-        let [nh, ns, nv] = DIMS;
-        let mut look = Vec::with_capacity((nh * ns * nv * 3) as usize);
-        for v in 0..nv {
-            for h in 0..nh {
-                for s in 0..ns {
-                    if v == 0 || s == 0 {
-                        look.extend([0., 1., 1.]);
-                        continue;
-                    }
-                    let value = v as f64 / (nv - 1) as f64;
-                    let hue = h as f64 / nh as f64;
-                    let sat = s as f64 / (ns - 1) as f64;
-                    let rgb = hsv_to_rgb(hue, sat, decode(value));
-                    let pre = inverse_rgb_tone(target(rgb), &effective);
-                    let [th, ts, tv] = rgb_to_hsv(pre);
-                    let shift = if ts < 1e-7 {
-                        0.
-                    } else {
-                        ((th - hue + 0.5).rem_euclid(1.) - 0.5) * 360.
-                    };
-                    look.extend([shift as f32, (ts / sat) as f32, (encode(tv) / value) as f32]);
-                }
-            }
-        }
-        if look.iter().any(|v| !v.is_finite()) {
-            return Err("non-finite DNG look data".into());
-        }
-        Ok(ProfileData {
-            curve,
-            look,
-            baseline,
-        })
+            result.map(|v| v.clamp(0., 1.))
+        };
+        let plateau = match self.range_compensation {
+            RangeCompensation::BaselineExposure => TonePlateau::WhiteEndpoint,
+            RangeCompensation::ProfileCurve => TonePlateau::FirstCrossing,
+        };
+        fit_profile(baseline, plateau, target)
     }
 }
+
+// Both pipelines describe their desired ROMM appearance at this boundary.
+// The common fitter packages it as the reader's curve and residual color look.
+fn fit_profile(
+    baseline: f64,
+    plateau: TonePlateau,
+    target: impl Fn([f64; 3]) -> [f64; 3],
+) -> Result<ProfileData> {
+    let mut curve = Vec::with_capacity((INTERVALS + 1) * 2);
+    for i in 0..=INTERVALS {
+        let x = i as f64 / INTERVALS as f64;
+        let y = if i == INTERVALS {
+            1.
+        } else {
+            target([inverse_exposure(x, baseline); 3])
+                .into_iter()
+                .sum::<f64>()
+                / 3.
+        };
+        curve.extend([x as f32, y as f32]);
+    }
+    if curve.windows(4).step_by(2).any(|v| v[3] < v[1]) {
+        return Err("non-monotonic DNG presentation curve".into());
+    }
+    let effective: Vec<f64> = (0..=4095)
+        .map(|i| curve_at(&curve, exposure_tone(i as f64 / 4095., baseline)))
+        .collect();
+    // Leave gray brightness to the common curve. Adjusting it in the color
+    // table as well would apply the tone change twice.
+    let [nh, ns, nv] = DIMS;
+    let mut look = Vec::with_capacity((nh * ns * nv * 3) as usize);
+    for v in 0..nv {
+        for h in 0..nh {
+            for s in 0..ns {
+                if v == 0 || s == 0 {
+                    look.extend([0., 1., 1.]);
+                    continue;
+                }
+                let value = v as f64 / (nv - 1) as f64;
+                let hue = h as f64 / nh as f64;
+                let sat = s as f64 / (ns - 1) as f64;
+                let rgb = hsv_to_rgb(hue, sat, decode(value));
+                let pre = inverse_rgb_tone(target(rgb), &effective, plateau);
+                let [th, ts, tv] = rgb_to_hsv(pre);
+                let shift = if ts < 1e-7 {
+                    0.
+                } else {
+                    ((th - hue + 0.5).rem_euclid(1.) - 0.5) * 360.
+                };
+                look.extend([shift as f32, (ts / sat) as f32, (encode(tv) / value) as f32]);
+            }
+        }
+    }
+    if look.iter().any(|v| !v.is_finite()) {
+        return Err("non-finite DNG look data".into());
+    }
+    Ok(ProfileData {
+        curve,
+        look,
+        baseline,
+    })
+}
+
 fn native_tone(table: &[f32], value: f64) -> f64 {
     f64::from(table[(value * 4095. + 0.5).floor().clamp(0., 65535.) as usize])
 }
@@ -320,12 +421,12 @@ fn inverse_exposure(y: f64, exposure: f64) -> f64 {
 }
 // Adobe's tone step keeps the middle channel between the lowest and highest.
 // Undo that relationship too, rather than inverting each channel independently.
-fn inverse_rgb_tone(rgb: [f64; 3], tone: &[f64]) -> [f64; 3] {
+fn inverse_rgb_tone(rgb: [f64; 3], tone: &[f64], plateau: TonePlateau) -> [f64; 3] {
     let inverse = |y: f64| {
         if y <= 0. {
             return 0.;
         }
-        if y >= tone[4095] {
+        if y > tone[4095] || (y == tone[4095] && matches!(plateau, TonePlateau::WhiteEndpoint)) {
             return 1.;
         }
         let r = tone.partition_point(|v| *v < y).clamp(1, 4095);
@@ -381,40 +482,5 @@ fn rgb_to_hsv(rgb: [f64; 3]) -> [f64; 3] {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn adjacent_matrices_compose_in_order_without_crossing_tone() {
-        let m = Matrix([1., 0.2, -0.1, 0., 1., 0.3, 0.1, 0., 1.]);
-        let g = Matrix::diagonal([1.2, 0.8, 1.1]);
-        let x = [0.1, 0.4, 0.6];
-        for (a, b) in m.then(g).apply(x).into_iter().zip(g.apply(m.apply(x))) {
-            assert!((a - b).abs() < 1e-12);
-        }
-        assert_ne!(m.then(g).apply(x), g.then(m).apply(x));
-        let squared = m.apply(x).map(|v| v * v);
-        assert_ne!(g.apply(squared), g.apply(m.apply(x)).map(|v| v * v));
-        let restored = m.then(m.inverse().unwrap()).apply(x);
-        for i in 0..3 {
-            assert!((restored[i] - x[i]).abs() < 1e-12);
-        }
-        assert!(Matrix([0.; 9]).inverse().is_err());
-    }
-    #[test]
-    fn negative_exposure_inverse_and_hsv_coordinates_round_trip() {
-        for e in [-3., -0.5, 0., 1.] {
-            for x in [0., 0.01, 0.18, 0.7, 1.] {
-                assert!((inverse_exposure(exposure_tone(x, e), e) - x).abs() < 1e-12);
-            }
-        }
-        for h in 0..72 {
-            for s in [0.01, 0.5, 1.] {
-                let hsv = [h as f64 / 72., s, 0.3];
-                let r = rgb_to_hsv(hsv_to_rgb(hsv[0], hsv[1], hsv[2]));
-                for i in 0..3 {
-                    assert!((r[i] - hsv[i]).abs() < 1e-12);
-                }
-            }
-        }
-    }
-}
+#[path = "appearance_test.rs"]
+mod tests;

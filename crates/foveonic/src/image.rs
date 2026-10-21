@@ -1,6 +1,6 @@
 //! Keeps GPU images with their photo settings and defines crop and orientation views.
 
-pub use crate::nodes::sensor::calibration::ColorSpace;
+pub use crate::color_space::ColorSpace;
 use crate::nodes::sensor::calibration::EncodeParams;
 use crate::render::Settings;
 use crate::source::Metadata;
@@ -29,6 +29,10 @@ pub enum Space {
     /// Signed reconstruction detail in camera code units. The display range is −1000..1000.
     SignedDetail,
     CalibratedLayers,
+    /// Signed linear RGB in the calibrated color basis, stored as integral code values.
+    LinearCodeRgb,
+    /// Signed root-domain RGB in the calibrated color basis, stored as integral code values.
+    SignedCodeRgb,
     /// Camera-color RGB in code units, with a nominal inspection range of 0..4095.
     LinearRgb(ColorSpace),
     /// Tone-mapped components in linear working primaries.
@@ -97,11 +101,11 @@ impl RenderedImage {
 
     pub(crate) fn params(&self) -> EncodeParams {
         let transfer = match self.description.space {
-            Space::LinearRgb(space) | Space::ToneMappedRgb(space) => {
-                u32::from(space == ColorSpace::AdobeRgb)
-            }
+            Space::LinearRgb(space) | Space::ToneMappedRgb(space) => space as u32,
             Space::EncodedRgb16(space) => space as u32,
             Space::SensorLayers
+            | Space::LinearCodeRgb
+            | Space::SignedCodeRgb
             | Space::CalibratedLayers
             | Space::ScalarField
             | Space::Monochrome

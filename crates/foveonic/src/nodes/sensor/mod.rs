@@ -6,6 +6,8 @@ pub(crate) mod camera_repair;
 pub(crate) mod color_field;
 pub(crate) mod despeckle;
 pub(crate) mod estimated_iso;
+pub(crate) mod fixed_point;
 pub(crate) mod highlight;
 pub(crate) mod repair;
+pub(crate) mod signed_repair;
 pub(crate) mod spatial_tables;

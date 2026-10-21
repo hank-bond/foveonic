@@ -1,6 +1,6 @@
-//! Owns original Merrill sensor samples and typed camera metadata.
+//! Owns original equal-resolution sensor samples and typed camera metadata.
 //!
-//! Adapted from Foveonic's source types and Merrill camera checks.
+//! Adapted from the reference implementation's source types and camera checks.
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -10,6 +10,13 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 
 const SENSOR_WIDTH: usize = 4928;
 const SENSOR_HEIGHT: usize = 3264;
+
+/// Processing selection belongs to input and recipes, never pixel operations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessingFamily {
+    Merrill,
+    Classic,
+}
 
 /// Original CAMF numeric categories, retained separately from widened values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -104,6 +111,40 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    pub fn processing_family(&self) -> Result<ProcessingFamily> {
+        family(self.properties.get("CAMMODEL").map(String::as_str))
+            .ok_or_else(|| "unsupported camera family".into())
+    }
+
+    /// Camera-ordered white-balance choices resolved through the input profile.
+    pub fn white_balance_presets(&self) -> Vec<&str> {
+        self.white_balance_catalogue()
+            .map(|list| list.names().collect())
+            .unwrap_or_default()
+    }
+
+    /// Camera-ordered modes, including the fixed Standard mode of early cached profiles.
+    pub fn color_mode_presets(&self) -> Vec<&str> {
+        if let Some(list) = self.lists.get("ColorModeCompensations") {
+            list.names().collect()
+        } else if self.processing_family().ok() == Some(ProcessingFamily::Classic) {
+            vec!["Standard"]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn white_balance_catalogue(&self) -> Option<&PropertyList> {
+        let name = if self.processing_family().ok() == Some(ProcessingFamily::Classic)
+            && self.lists.contains_key("DP1_WhiteBalanceGains")
+        {
+            "DP1_WhiteBalanceGains"
+        } else {
+            "WhiteBalanceGains"
+        };
+        self.lists.get(name)
+    }
+
     /// Resolve the recorded WB label to this file's canonical CAMF preset name.
     pub fn recorded_white_balance(&self) -> Result<String> {
         let recorded = self
@@ -117,10 +158,22 @@ impl Metadata {
         } else {
             recorded
         };
-        self.recorded_preset("WhiteBalanceGains", name, "white balance")
+        self.white_balance_catalogue()
+            .and_then(|list| {
+                list.names()
+                    .find(|key| key.trim().eq_ignore_ascii_case(name))
+            })
+            .map(str::to_owned)
+            .ok_or_else(|| format!("unavailable recorded white balance: {name}").into())
     }
 
     pub fn recorded_color_mode(&self) -> Result<String> {
+        if self.processing_family().ok() == Some(ProcessingFamily::Classic)
+            && !self.properties.contains_key("CM_DESC")
+            && !self.lists.contains_key("ColorModeCompensations")
+        {
+            return Ok("Standard".into());
+        }
         let recorded = self
             .properties
             .get("CM_DESC")
@@ -132,7 +185,10 @@ impl Metadata {
     fn recorded_preset(&self, list: &str, name: &str, kind: &str) -> Result<String> {
         self.lists
             .get(list)
-            .and_then(|list| list.names().find(|key| key.eq_ignore_ascii_case(name)))
+            .and_then(|list| {
+                list.names()
+                    .find(|key| key.trim().eq_ignore_ascii_case(name))
+            })
             .map(str::to_owned)
             .ok_or_else(|| format!("unavailable recorded {kind}: {name}").into())
     }
@@ -172,7 +228,7 @@ impl Metadata {
 pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String, String>> {
     let mut file = std::fs::File::open(path)?;
     let properties = crate::x3f::capture::read(&mut file)?;
-    if !is_merrill(properties.get("CAMMODEL").map(String::as_str)) {
+    if family(properties.get("CAMMODEL").map(String::as_str)).is_none() {
         return Err("unsupported camera family".into());
     }
     Ok(properties)
@@ -198,19 +254,33 @@ impl Source {
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let source = crate::x3f::read(path.as_ref())?;
-        if !is_merrill(
-            source
-                .metadata
-                .properties
-                .get("CAMMODEL")
-                .map(String::as_str),
-        ) {
-            return Err("unsupported camera family".into());
-        }
-        if source.metadata.width != SENSOR_WIDTH || source.metadata.height != SENSOR_HEIGHT {
-            return Err("unsupported Merrill full-sensor geometry".into());
+        match source.metadata.processing_family()? {
+            ProcessingFamily::Merrill => {
+                if source.metadata.width != SENSOR_WIDTH || source.metadata.height != SENSOR_HEIGHT
+                {
+                    return Err("unsupported Merrill full-sensor geometry".into());
+                }
+            }
+            ProcessingFamily::Classic => {
+                if source.metadata.width != 2688 || source.metadata.height != 1792 {
+                    return Err("unsupported Classic full-sensor geometry".into());
+                }
+            }
         }
         Ok(source)
+    }
+}
+
+fn family(model: Option<&str>) -> Option<ProcessingFamily> {
+    if is_merrill(model) {
+        Some(ProcessingFamily::Merrill)
+    } else if matches!(
+        model,
+        Some("SIGMA SD15" | "SIGMA DP2" | "SIGMA DP1S" | "SIGMA DP1s")
+    ) {
+        Some(ProcessingFamily::Classic)
+    } else {
+        None
     }
 }
 

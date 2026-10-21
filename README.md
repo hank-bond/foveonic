@@ -11,6 +11,8 @@ TIFF exports bake all processing into the pixel data, trading maximum compatibil
 
 DNG separates out the base linear image data—only baking in some corrections and detail enhancement—and compresses all tone and color changes into a curve and matrix in the DNG metadata.  Your DNG editor will then take this metadata and apply it on top of the linear pixel data as part of its rendering pipeline.  This makes it a more flexible format for editing further, but does mean that not every editor will render it exactly as it looked in Foveon upon export.
 
+The Classic experiment also renders low-ISO SD15, DP2 and DP1s format-30 originals to TIFF and editable color DNG. Use `--reconstruction --sharpen 1 --wb Sunlight --mode Standard` for the validated reference baseline. Classic retains linear ROMM working output and uses shared display and TIFF color conversion. Earlier encodings, high-ISO reconstruction, Classic monochrome and custom noise controls remain unsupported. Classic DNG embeds an approximate photographic appearance. See the [experiment requirements](docs/specs/classic-rendering.md).
+
 ## Rendering Techniques
 All correction and enhancement metadata that exists in the X3F file is made use of.  Effort has been made to align with the Sigma's intended processing of the files wherever possible.  Additional controls are made wherever available to alter the processing approaches on a per-image basis.
 
@@ -58,7 +60,7 @@ cargo run --release -p foveonic -- export-dng path/to/photo.x3f mono.dng --wb Su
 
 `--rendering monochrome` selects the equal-layer mix. `--mono-noise` and `--mono-banding` select presets 0–4. Estimated ISO above 6400 is currently unsupported for monochrome column correction.
 
-TIFF exports accept `--tiff-color-space srgb`, `adobe-rgb`, or `prophoto-rgb`. Omit it to preserve the camera's stored space. Use `--sharpen auto` for camera-derived sharpening or a numeric amount for manual sharpening. Sharpening defaults to Off.
+TIFF exports accept `--tiff-color-space srgb`, `adobe-rgb`, or `prophoto-rgb`. Omit it to preserve the camera's stored space, falling back to sRGB when none is recorded. Use `--sharpen auto` for camera-derived sharpening or a numeric amount for manual sharpening. Sharpening defaults to Off.
 
 Add `--size 600x400` to resize a TIFF export to exact dimensions using reference photographic resampling. This also works for TIFF batches. Omit it for native dimensions.
 
@@ -85,3 +87,5 @@ Run GPU and original-file tests serially with `FOVEONIC_FIXTURE_DIR` pointing to
 ```sh
 FOVEONIC_FIXTURE_DIR=path/to/x3f cargo test --offline --release --workspace -- --ignored --test-threads=1
 ```
+
+Classic original-file checks additionally use `CLASSIC_X3F`, `CLASSIC_DECODED_REFERENCE`, `CLASSIC_CORRECTION_REFERENCE` and `CLASSIC_COLOR_REFERENCE`. Set `CLASSIC_REFERENCE_DIR` for the composed reference comparison and `FOVEONIC_LOG_CAPTURE` for the complete FIR boundary. These are local research inputs. Bounded numerical fixtures are checked in.

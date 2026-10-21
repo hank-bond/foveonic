@@ -84,6 +84,8 @@ pub(crate) fn analyze(
         samples[1],
         match space {
             Space::SensorLayers
+            | Space::LinearCodeRgb
+            | Space::SignedCodeRgb
             | Space::CalibratedLayers
             | Space::Monochrome
             | Space::LinearRgb(_) => 1,
@@ -91,11 +93,10 @@ pub(crate) fn analyze(
             Space::LuminanceRatio => 3,
             _ => 0,
         },
-        u32::from(matches!(
-            space,
-            Space::LinearRgb(crate::image::ColorSpace::AdobeRgb)
-                | Space::ToneMappedRgb(crate::image::ColorSpace::AdobeRgb)
-        )),
+        match space {
+            Space::LinearRgb(space) | Space::ToneMappedRgb(space) => space as u32,
+            _ => 0,
+        },
     ];
     let uniform = gpu.uniform(&params);
     let mut counts = gpu.storage("Scope counts", COUNT as u64 * 4)?;

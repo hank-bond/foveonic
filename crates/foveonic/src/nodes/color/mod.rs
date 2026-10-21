@@ -5,3 +5,8 @@ pub(crate) mod color_mode;
 pub mod noise;
 pub(crate) mod pattern;
 pub(crate) mod reconstruction;
+
+pub(crate) mod chroma;
+pub(crate) mod highlight_stream;
+
+pub(crate) mod log_reconstruction;

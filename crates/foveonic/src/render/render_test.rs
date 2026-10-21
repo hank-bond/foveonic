@@ -2,12 +2,8 @@
 
 use super::recipes::photographic::saturation;
 use super::*;
-use crate::{
-    graph::DataType,
-    image::View,
-    nodes::sensor::calibration::{self, ColorSpace},
-    source::Metadata,
-};
+use crate::color_space::ColorSpace;
+use crate::{graph::DataType, image::View, nodes::sensor::calibration, source::Metadata};
 
 #[test]
 fn saturation_matrices_preserve_gray() {
@@ -328,7 +324,11 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
         .gpu
         .upload("RGB luminance fixture", &[1_f32, 0., 0.].repeat(6))
         .unwrap();
-    for (space, bin) in [(ColorSpace::Srgb, 54), (ColorSpace::AdobeRgb, 76)] {
+    for (space, bin) in [
+        (ColorSpace::Srgb, 54),
+        (ColorSpace::AdobeRgb, 76),
+        (ColorSpace::ProPhotoRgb, 73),
+    ] {
         buffer.description.space = Space::ToneMappedRgb(space);
         let rgb = engine
             .scopes(&buffer, None, &mut Profile::default())
@@ -342,7 +342,11 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
             &[4095_f32, 0., 0.].repeat(6),
         )
         .unwrap();
-    for (space, bin) in [(ColorSpace::Srgb, 54), (ColorSpace::AdobeRgb, 76)] {
+    for (space, bin) in [
+        (ColorSpace::Srgb, 54),
+        (ColorSpace::AdobeRgb, 76),
+        (ColorSpace::ProPhotoRgb, 73),
+    ] {
         buffer.description.space = Space::LinearRgb(space);
         let rgb = engine
             .scopes(&buffer, None, &mut Profile::default())

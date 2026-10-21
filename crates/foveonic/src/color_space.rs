@@ -1,6 +1,44 @@
-//! Prepares TIFF destination transforms independently of the photographic working space.
+//! Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 
-use crate::image::ColorSpace;
+use crate::source::{Metadata, Result};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ColorSpace {
+    Srgb,
+    AdobeRgb,
+    ProPhotoRgb,
+}
+
+impl ColorSpace {
+    pub fn from_metadata(metadata: &Metadata) -> Result<Self> {
+        match metadata.properties.get("COLORSPACE").map(String::as_str) {
+            Some("sRGB") => Ok(Self::Srgb),
+            Some("AdobeRGB") => Ok(Self::AdobeRgb),
+            _ => Err("unsupported camera color space".into()),
+        }
+    }
+}
+
+/// Numerical encoding, independent of RGB primaries and camera identity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TransferFunction {
+    Srgb,
+    Power(f64),
+    Romm,
+}
+
+impl TransferFunction {
+    pub(crate) fn decode(self, encoded: f64) -> f64 {
+        match self {
+            Self::Srgb if encoded <= 0.04045 => encoded / 12.92,
+            Self::Srgb => ((encoded + 0.055) / 1.055).powf(2.4),
+            Self::Power(gamma) => encoded.signum() * encoded.abs().powf(gamma),
+            Self::Romm if encoded < 1. / 32. => encoded / 16.,
+            Self::Romm => encoded.powf(1.8),
+        }
+    }
+}
 
 /// TIFF destination primaries and transfer. None in Settings retains the camera space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -18,6 +56,17 @@ impl From<ColorSpace> for TiffColorSpace {
         match space {
             ColorSpace::Srgb => Self::Srgb,
             ColorSpace::AdobeRgb => Self::AdobeRgb,
+            ColorSpace::ProPhotoRgb => Self::ProPhotoRgb,
+        }
+    }
+}
+
+impl From<TiffColorSpace> for TransferFunction {
+    fn from(space: TiffColorSpace) -> Self {
+        match space {
+            TiffColorSpace::Srgb => Self::Srgb,
+            TiffColorSpace::AdobeRgb => Self::Power(2.2),
+            TiffColorSpace::ProPhotoRgb => Self::Romm,
         }
     }
 }
@@ -35,9 +84,9 @@ impl TiffColorSpace {
 
     pub(crate) fn profile(self) -> &'static [u8] {
         match self {
-            Self::Srgb => include_bytes!("../../../assets/srgb-v4.icc"),
-            Self::AdobeRgb => include_bytes!("../../../assets/adobe-rgb-1998-compat.icc"),
-            Self::ProPhotoRgb => include_bytes!("../../../assets/romm-v4.icc"),
+            Self::Srgb => include_bytes!("../assets/srgb-v4.icc"),
+            Self::AdobeRgb => include_bytes!("../assets/adobe-rgb-1998-compat.icc"),
+            Self::ProPhotoRgb => include_bytes!("../assets/romm-v4.icc"),
         }
     }
 
@@ -92,6 +141,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn transfer_decoding_preserves_linear_toe_and_reference_values() {
+        assert_eq!(TransferFunction::from(TiffColorSpace::Srgb).decode(0.), 0.);
+        assert_eq!(
+            TransferFunction::from(TiffColorSpace::ProPhotoRgb).decode(1. / 64.),
+            1. / 1024.
+        );
+        assert!(
+            (TransferFunction::from(TiffColorSpace::ProPhotoRgb).decode(1. / 32.) - 1. / 512.)
+                .abs()
+                < 1e-15
+        );
+        for space in TiffColorSpace::ALL {
+            assert!((TransferFunction::from(space).decode(1.) - 1.).abs() < 1e-15);
+        }
+        assert!(
+            (TransferFunction::from(TiffColorSpace::Srgb).decode(0.4613561295) - 0.18).abs()
+                < 1e-10
+        );
+        assert!(
+            (TransferFunction::from(TiffColorSpace::AdobeRgb).decode(0.5) - 0.5_f64.powf(2.2))
+                .abs()
+                < 1e-15
+        );
+    }
+
+    #[test]
     fn colorants_match_embedded_profiles_and_transforms_preserve_pcs() {
         for destination in TiffColorSpace::ALL {
             let bytes = destination.profile();
@@ -108,7 +183,11 @@ mod tests {
                 }
             }
             assert_eq!(destination.to_xyz(), xyz);
-            for source in [ColorSpace::Srgb, ColorSpace::AdobeRgb] {
+            for source in [
+                ColorSpace::Srgb,
+                ColorSpace::AdobeRgb,
+                ColorSpace::ProPhotoRgb,
+            ] {
                 let transform = destination.transform(source);
                 for input in [[1.; 3], [1., 0., 0.], [0.1, 0.7, 1.2], [-0.1, 0.3, 0.6]] {
                     let output: [f64; 3] = std::array::from_fn(|r| {

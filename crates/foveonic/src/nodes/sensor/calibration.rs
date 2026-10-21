@@ -2,7 +2,10 @@
 //!
 //! Gain factors, spatial-table selection, shading geometry, and ISO scaling follow Foveonic's metadata preparation.
 
-use crate::source::{Metadata, Result};
+use crate::{
+    color_space::ColorSpace,
+    source::{Metadata, Result},
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,22 +25,6 @@ pub struct Calibration {
 impl Calibration {
     pub(crate) fn key(&self) -> crate::recipe::Key {
         crate::recipe::Key::pod(&self.params).slice(&self.grid_values)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ColorSpace {
-    Srgb,
-    AdobeRgb,
-}
-
-impl ColorSpace {
-    pub fn from_metadata(metadata: &Metadata) -> Result<Self> {
-        match metadata.properties.get("COLORSPACE").map(String::as_str) {
-            Some("sRGB") => Ok(Self::Srgb),
-            Some("AdobeRGB") => Ok(Self::AdobeRgb),
-            _ => Err("unsupported camera color space".into()),
-        }
     }
 }
 
@@ -215,11 +202,6 @@ pub fn encode(metadata: &Metadata, space: ColorSpace) -> Result<EncodeParams> {
     Ok(EncodeParams {
         source: [metadata.width as u32, metadata.height as u32, rotation, 0],
         crop,
-        output: [
-            width,
-            height,
-            if space == ColorSpace::Srgb { 0 } else { 1 },
-            0,
-        ],
+        output: [width, height, space as u32, 0],
     })
 }

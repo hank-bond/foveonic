@@ -116,3 +116,172 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
     presentation.color_mode = "unknown-presentation".into();
     assert!(prepare_base(&engine, &source, &presentation, &mut Profile::default()).is_err());
 }
+
+#[test]
+#[ignore = "requires a GPU and CLASSIC_X3F, optionally CLASSIC_DNG_DIR for reader validation"]
+fn classic_dng_defers_appearance_and_preserves_editable_samples() {
+    let engine = Engine::new().unwrap();
+    let source = Source::open(std::env::var_os("CLASSIC_X3F").unwrap()).unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    settings.sharpen_amount = Some(1.);
+    let prepare = |settings: &Settings| {
+        let appearance = appearance::Prepared::new(&source.metadata, settings).unwrap();
+        let base = prepare_base(&engine, &source, settings, &mut Profile::default()).unwrap();
+        assert_eq!(base.description().space, Space::LinearCodeRgb);
+        let bytes = engine.readback_image(&base).unwrap();
+        assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
+            .iter()
+            .all(|v| v.is_finite()));
+        let (packed, scale) = engine
+            .encode_dng_base(&base, &appearance, &mut Profile::default())
+            .unwrap();
+        (base, bytes, packed, scale, appearance)
+    };
+    let (base, bytes, packed, scale, appearance) = prepare(&settings);
+    let mut changed = settings.clone();
+    changed.exposure = 0.75;
+    changed.tone.contrast = 0.3;
+    changed.tone.shadows = 0.4;
+    changed.tone.highlights = -0.3;
+    changed.saturation = 0.5;
+    if let Some(mode) = source
+        .metadata
+        .lists
+        .get("ColorModeCompensations")
+        .and_then(|list| {
+            list.names()
+                .find(|name| !name.eq_ignore_ascii_case("Standard"))
+        })
+    {
+        changed.color_mode = mode.to_string();
+    }
+    let (changed_base, changed_bytes, changed_packed, changed_scale, changed_appearance) =
+        prepare(&changed);
+    assert_eq!(bytes, changed_bytes, "appearance changed technical base");
+    assert_eq!(
+        packed, changed_packed,
+        "appearance changed stored DNG samples"
+    );
+    assert_eq!(scale, changed_scale);
+    let first_profile = appearance.finish(scale).unwrap();
+    let changed_profile = changed_appearance.finish(scale).unwrap();
+    assert_ne!(first_profile.curve, changed_profile.curve);
+    assert_ne!(first_profile.look, changed_profile.look);
+    drop(changed_base);
+    changed = settings.clone();
+    changed.sharpen_amount = Some(0.);
+    let (changed_base, changed_bytes, _, _, _) = prepare(&changed);
+    assert_ne!(
+        bytes, changed_bytes,
+        "spatial detail was incorrectly deferred"
+    );
+    drop(changed_base);
+    changed = settings.clone();
+    changed.white_balance = "Overcast".into();
+    let (changed_base, changed_bytes, _, _, _) = prepare(&changed);
+    assert_ne!(
+        bytes, changed_bytes,
+        "WB calibration was incorrectly deferred"
+    );
+    drop(changed_base);
+    assert_eq!(
+        bytes,
+        engine.readback_image(&base).unwrap(),
+        "retained base was overwritten"
+    );
+    changed = settings.clone();
+    changed.color_mode = "unavailable mode".into();
+    assert!(appearance::Prepared::new(&source.metadata, &changed).is_err());
+    assert!(prepare_base(&engine, &source, &changed, &mut Profile::default()).is_err());
+    if let Some(dir) = std::env::var_os("CLASSIC_DNG_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = source
+            .metadata
+            .properties
+            .get("CAMMODEL")
+            .unwrap()
+            .replace(' ', "-");
+        for (suffix, settings) in [
+            ("default", settings.clone()),
+            ("adjusted", {
+                let mut s = settings.clone();
+                s.exposure = 0.75;
+                s.saturation = 0.5;
+                s.tone.contrast = 0.3;
+                s
+            }),
+        ] {
+            let path = dir.join(format!("{model}-{suffix}.dng"));
+            write_source(&engine, &source, &settings, &path, &mut Profile::default()).unwrap();
+            let file = std::fs::read(&path).unwrap();
+            // Read LONG directory entries directly. The TIFF crate rejects
+            // DNG's LinearRaw photometric interpretation before exposing tags.
+            assert_eq!(&file[..4], b"II\x2a\0");
+            let u16_at = |p| u16::from_le_bytes(file[p..p + 2].try_into().unwrap());
+            let u32_at = |p| u32::from_le_bytes(file[p..p + 4].try_into().unwrap());
+            let directory = u32_at(4) as usize;
+            let longs = |tag| {
+                let entry = (0..u16_at(directory) as usize)
+                    .map(|i| directory + 2 + i * 12)
+                    .find(|p| u16_at(*p) == tag)
+                    .unwrap();
+                assert_eq!(u16_at(entry + 2), 4);
+                let count = u32_at(entry + 4) as usize;
+                let start = if count == 1 {
+                    entry + 8
+                } else {
+                    u32_at(entry + 8) as usize
+                };
+                (0..count)
+                    .map(|i| u32_at(start + i * 4))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!([longs(256)[0], longs(257)[0]], base.view().extent);
+            assert_eq!(longs(50717), [65535; 3]);
+            let offsets = longs(273);
+            let counts = longs(279);
+            let stored: Vec<u8> = offsets
+                .iter()
+                .zip(counts)
+                .flat_map(|(offset, count)| {
+                    file[*offset as usize..(*offset + count) as usize]
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            let expected: Vec<u8> = packed
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .flat_map(|pixel| pixel[..6].iter().copied())
+                .collect();
+            assert_eq!(stored, expected, "packaging changed the uint16 samples");
+            let mut photo_settings = settings.clone();
+            photo_settings.tiff_color_space = Some(crate::render::TiffColorSpace::Srgb);
+            let photo = engine
+                .render_artifacts(
+                    &source,
+                    &photo_settings,
+                    &["final"],
+                    &mut Profile::default(),
+                )
+                .unwrap()
+                .pop()
+                .unwrap();
+            let crate::inspection::Content::Image(photo) = photo.content else {
+                panic!("missing photographic image")
+            };
+            let photographic = dir.join(format!("{model}-{suffix}-photographic.tiff"));
+            // This optional directory holds reproducible test outputs.
+            if photographic.exists() {
+                std::fs::remove_file(&photographic).unwrap();
+            }
+            engine
+                .write_tiff(&photo, &photographic, &mut Profile::default())
+                .unwrap();
+            eprintln!("Classic DNG export: {} scale={scale}", path.display());
+        }
+    }
+}

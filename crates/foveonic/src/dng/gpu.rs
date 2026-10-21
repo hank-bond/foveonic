@@ -27,7 +27,10 @@ impl Engine {
     ) -> Result<(Vec<u8>, f32)> {
         self.check_owner(image)?;
         if image.description().layout != Layout::Rgb32Float
-            || !matches!(image.description().space, Space::LinearRgb(_))
+            || !matches!(
+                image.description().space,
+                Space::LinearRgb(_) | Space::LinearCodeRgb
+            )
         {
             return Err("DNG requires a linear technical base".into());
         }

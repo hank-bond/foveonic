@@ -13,6 +13,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
 - **[application-workflows](./application-workflows.md)** _(accepted, incomplete, reference)._ A personal Merrill X3F app shares processing settings and one image engine between its GUI and batch CLI.
+- **[classic-rendering](./classic-rendering.md)** _(accepted, conforming, reference)._ Classic photographic rendering uses format-selected decoding and family-authored recipes with functional GPU operations and shared engine resources.
 - **[color-field](./color-field.md)** _(accepted, incomplete, reference)._ Color-field highlight reconstruction separates brightness and color in GPU passes with immutable source reliability and optional local color-evidence selection.
 - **[column-conditioning](./column-conditioning.md)** _(accepted, conforming, reference)._ GPU column conditioning corrects raw processing tiles after base filtering and before luminance/detail estimation, retaining native windows, cuts, ordered means, strict eligibility, and clipping.
 - **[despeckle](./despeckle.md)** _(accepted, conforming, reference)._ Full-image GPU despeckling detects channel extrema and corrects them in deterministic reference order, independently of camera-record repair.

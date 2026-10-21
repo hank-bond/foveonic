@@ -1,6 +1,6 @@
 //! Builds typed dependency-ordered graphs and validates connections between operation ports.
 
-use crate::{nodes::sensor::calibration::ColorSpace, source::Result};
+use crate::{color_space::ColorSpace, source::Result};
 mod operation;
 pub use operation::Operation;
 
@@ -22,6 +22,8 @@ pub enum DataType {
     Histogram,
     RowTable,
     CalibratedLayers,
+    LinearCodeRgb,
+    SignedCodeRgb,
     LinearRgb(ColorSpace),
     ToneMappedRgb(ColorSpace),
     EncodedRgb16(crate::render::TiffColorSpace),
@@ -38,6 +40,8 @@ impl From<crate::image::Space> for DataType {
             Space::LuminanceRatio => Self::LuminanceRatio,
             Space::SignedDetail => Self::SignedDetail,
             Space::CalibratedLayers => Self::CalibratedLayers,
+            Space::LinearCodeRgb => Self::LinearCodeRgb,
+            Space::SignedCodeRgb => Self::SignedCodeRgb,
             Space::LinearRgb(space) => Self::LinearRgb(space),
             Space::ToneMappedRgb(space) => Self::ToneMappedRgb(space),
             Space::EncodedRgb16(space) => Self::EncodedRgb16(space),
@@ -105,6 +109,22 @@ impl Graph {
             outputs,
         });
         Ok(id)
+    }
+
+    /// Finds a named output of the node that produced `output`.
+    /// Names are local to that producer, so repeated operation names stay unambiguous.
+    pub fn named_output(&self, output: usize, name: &str) -> Result<usize> {
+        let producer = self
+            .outputs
+            .get(output)
+            .ok_or("node output does not exist")?
+            .producer;
+        self.nodes[producer]
+            .outputs
+            .iter()
+            .copied()
+            .find(|&id| self.outputs[id].name == name)
+            .ok_or_else(|| format!("node output {name:?} does not exist").into())
     }
 
     /// A node may run without keeping every side output. Track which outputs

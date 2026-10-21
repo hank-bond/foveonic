@@ -1,4 +1,4 @@
-//! Read owned X3F sections and decode Merrill sensor samples and camera metadata.
+//! Reads owned X3F sections and decodes equal-resolution format-30 samples and camera metadata.
 //!
 //! Imported from Foveonic's X3F reader.
 
@@ -31,7 +31,7 @@ const SUPPORTED_FILE_VERSIONS: [u32; 5] = [
 const MAXIMUM_DIRECTORY_ENTRIES: usize = 1024;
 const DIRECTORY_HEADER_BYTES: usize = 12;
 const DIRECTORY_ENTRY_BYTES: usize = 12;
-const SENSOR_IMAGE_TYPE: u32 = 1;
+const SENSOR_IMAGE_TYPES: [u32; 2] = [1, 3];
 const SENSOR_HUFFMAN_FORMAT: u32 = 30;
 const PROPERTY_HEADER_BYTES: usize = 24;
 const PROPERTY_ENTRY_BYTES: usize = 8;
@@ -108,7 +108,7 @@ fn decode(data: &[u8]) -> Result<Source> {
                 if image.range(0, 4)? != b"SECi" {
                     return Err("invalid image section signature".into());
                 }
-                if image.u32(8)? == SENSOR_IMAGE_TYPE {
+                if SENSOR_IMAGE_TYPES.contains(&image.u32(8)?) {
                     insert(&mut raw, section)?;
                 }
             }
@@ -190,7 +190,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     let bytes = Bytes(section);
     if bytes.range(0, 4)? != b"SECi"
         || bytes.u32(4)? != SECTION_VERSION
-        || bytes.u32(8)? != SENSOR_IMAGE_TYPE
+        || !SENSOR_IMAGE_TYPES.contains(&bytes.u32(8)?)
         || bytes.u32(12)? != SENSOR_HUFFMAN_FORMAT
     {
         return Err("unsupported sensor compression".into());

@@ -57,6 +57,8 @@ fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
         DataType::LuminanceRatio => (Layout::Scalar32Float, Space::LuminanceRatio),
         DataType::SignedDetail => (Layout::Scalar32Float, Space::SignedDetail),
         DataType::CalibratedLayers => (Layout::Rgb32Float, Space::CalibratedLayers),
+        DataType::LinearCodeRgb => (Layout::Rgb32Float, Space::LinearCodeRgb),
+        DataType::SignedCodeRgb => (Layout::Rgb32Float, Space::SignedCodeRgb),
         DataType::LinearRgb(space) => (Layout::Rgb32Float, Space::LinearRgb(space)),
         DataType::ToneMappedRgb(space) => (Layout::Rgb32Float, Space::ToneMappedRgb(space)),
         DataType::EncodedRgb16(space) => (Layout::PackedRgb16, Space::EncodedRgb16(space)),
@@ -198,6 +200,95 @@ impl Engine {
                         );
                     }
                     Some(image.buffer.clone())
+                }
+                Operation::FixedPointCalibration(prepared) => {
+                    Some(crate::nodes::sensor::fixed_point::apply_correction(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::FixedPointColor(prepared) => {
+                    let (rgb, layers) = crate::nodes::sensor::fixed_point::apply_transform(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    let layer_id = node.outputs[1];
+                    if required[layer_id] {
+                        values[layer_id] = Some(Value {
+                            buffer: layers,
+                            description: description(DataType::CalibratedLayers, inherited),
+                        });
+                    }
+                    required[index].then_some(rgb)
+                }
+                Operation::ChromaSmooth(prepared) => Some(crate::nodes::color::chroma::apply(
+                    gpu,
+                    &input(0).buffer,
+                    prepared,
+                    profile,
+                )?),
+                Operation::SignedRepair(prepared) => {
+                    Some(prepared.apply(gpu, &input(0).buffer, profile)?)
+                }
+                Operation::SignedDespeckle(prepared) => {
+                    Some(prepared.apply(gpu, &input(0).buffer, profile)?)
+                }
+                Operation::HighlightStream(prepared) => {
+                    Some(crate::nodes::color::highlight_stream::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::LogReconstruct(prepared) => {
+                    Some(crate::nodes::color::log_reconstruction::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::RootDetail(prepared) => {
+                    let result = crate::nodes::finish::root_detail::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    let detail_id = node.outputs[1];
+                    if required[detail_id] {
+                        values[detail_id] = Some(Value {
+                            buffer: result.detail,
+                            description: description(DataType::SignedDetail, inherited),
+                        });
+                    }
+                    required[index].then_some(result.rgb)
+                }
+                Operation::SignedLinearDetail(prepared) => {
+                    Some(crate::nodes::finish::signed_response::apply_linear_detail(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        inherited,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::SignedPhotographic(prepared) => {
+                    Some(crate::nodes::finish::signed_response::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        inherited,
+                        prepared,
+                        profile,
+                    )?)
                 }
                 Operation::Black(params) => {
                     let mut histogram = gpu.storage("Dark-shield histogram", 3 * 4096 * 4)?;

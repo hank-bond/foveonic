@@ -12,8 +12,11 @@ Keep tiled sample meanings and side-output dependencies explicit. Noise controls
 
 ### Source files
 
+- **[chroma.rs](./chroma.rs)** Applies signed-code chroma smoothing with caller-selected support and tapered correction tables.
 - **[color_dq.rs](./color_dq.rs)** Builds reference-derived ColorDQ lookup tables with an explicitly selected gain.
 - **[color_mode.rs](./color_mode.rs)** Resolves camera color modes and their camera-ordered tone records.
+- **[highlight_stream.rs](./highlight_stream.rs)** Executes delayed five-row highlight neutralization with explicit threshold controls.
+- **[log_reconstruction.rs](./log_reconstruction.rs)** Reconstructs signed RGB from guided log residuals with caller-selected filtering controls.
 - **[mod.rs](./mod.rs)** Owns color noise preparation, reconstruction, and camera color conditioning.
 - **[noise.rs](./noise.rs)** Resolves camera noise presets and linked overrides for shared GPU reconstruction.
 - **[pattern.rs](./pattern.rs)** Prepares repeatable pattern-correction geometry without moving photo work to the CPU.

@@ -61,7 +61,11 @@ fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() 
         };
         (encoded * 65535. + 0.5).floor() as u16
     };
-    for source in [ColorSpace::Srgb, ColorSpace::AdobeRgb] {
+    for source in [
+        ColorSpace::Srgb,
+        ColorSpace::AdobeRgb,
+        ColorSpace::ProPhotoRgb,
+    ] {
         let mut image = RenderedImage {
             buffer: engine.gpu.upload("Destination fixture", &pixels).unwrap(),
             description: Description {
@@ -97,7 +101,7 @@ fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() 
         .enumerate()
         {
             image.settings.tiff_color_space = destination;
-            let resolved = destination.unwrap_or(source.into());
+            let resolved = destination.unwrap_or(TiffColorSpace::Srgb);
             let path = directory.0.join(format!("{source:?}-{index}.tiff"));
             engine
                 .write_tiff(&image, &path, &mut Profile::default())
@@ -106,7 +110,7 @@ fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() 
             if destination.is_none() {
                 identity_bytes = Some(bytes.clone());
             }
-            if destination == Some(source.into()) {
+            if destination == Some(TiffColorSpace::Srgb) {
                 assert_eq!(Some(&bytes), identity_bytes.as_ref());
             }
             let mut decoder = tiff::decoder::Decoder::new(std::io::Cursor::new(bytes)).unwrap();

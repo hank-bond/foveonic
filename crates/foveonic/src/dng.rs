@@ -28,7 +28,9 @@ pub fn prepare_base(
 ) -> Result<RenderedImage> {
     settings.validate()?;
     // Reject an unknown look before spending time on the technical render.
-    if !settings.is_monochrome() {
+    if !settings.is_monochrome()
+        && source.metadata.processing_family()? == crate::source::ProcessingFamily::Merrill
+    {
         profile.measure("prepare DNG presentation mode", || {
             crate::nodes::color::color_mode::prepare(&source.metadata, &settings.color_mode)
         })?;

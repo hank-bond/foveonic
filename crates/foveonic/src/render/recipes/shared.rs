@@ -1,13 +1,10 @@
 //! Builds the shared original-source technical graph with lazy inspection preparation.
 
 use super::{dng_base, requested, BuiltRecipe};
+use crate::color_space::ColorSpace;
 use crate::nodes::{
     color::{color_dq, color_mode},
-    sensor::{
-        banding,
-        calibration::{self, ColorSpace},
-        camera_repair, color_field, despeckle, highlight,
-    },
+    sensor::{banding, calibration, camera_repair, color_field, despeckle, highlight},
 };
 use crate::{
     graph::{Graph, Operation},
@@ -162,7 +159,8 @@ impl Engine {
             let prepared = profile.measure("prepare pattern recipe", || {
                 crate::noise::pattern_parameters(&source.metadata, params, controls)
             })?;
-            let pattern = graph.add(Operation::Pattern { params, prepared }, &[ratio, base + 3])?;
+            let seed = graph.named_output(base, "noise.pattern-seed-tiles")?;
+            let pattern = graph.add(Operation::Pattern { params, prepared }, &[ratio, seed])?;
             finish!();
             let detail = graph.add(Operation::Detail(params), &[conditioned, base, pattern])?;
             finish!();
@@ -245,7 +243,7 @@ impl Engine {
                 settings.effective_sharpen_amount(&source.metadata)
             })?;
             let signal = if reconstruction.is_some() {
-                linear + 1
+                graph.named_output(linear, "detail.signal")?
             } else {
                 let signal = graph.add(Operation::SharpSignal { space }, &[linear])?;
                 finish!();

@@ -207,7 +207,12 @@ impl Engine {
             },
             &[],
         )?;
-        let destination = image.settings.tiff_color_space.unwrap_or(space.into());
+        // The camera's output preference is independent of working primaries.
+        let destination = image.settings.tiff_color_space.unwrap_or_else(|| {
+            crate::image::ColorSpace::from_metadata(&image.metadata)
+                .unwrap_or(crate::image::ColorSpace::Srgb)
+                .into()
+        });
         params.output[2] = destination as u32;
         // Neutral mono has the same white in every destination. Avoid adding
         // rounding differences between its otherwise equal channels.
@@ -333,3 +338,15 @@ mod resize_export_tests;
 #[cfg(test)]
 #[path = "render/render_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "render/classic_test.rs"]
+mod classic_tests;
+
+/// Resolve Classic metadata at the recipe boundary, before shared DNG fitting.
+pub(crate) fn classic_dng_appearance(
+    metadata: &crate::source::Metadata,
+    settings: &Settings,
+) -> Result<crate::dng::appearance::ClassicAppearance> {
+    recipes::classic::prepare_dng_appearance(metadata, settings)
+}

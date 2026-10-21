@@ -6,7 +6,9 @@ use eframe::{
     egui_wgpu::{self, CallbackResources, CallbackTrait},
     wgpu,
 };
-use foveonic::image::{ColorSpace, ImageTexture, Space};
+#[cfg(test)]
+use foveonic::image::ColorSpace;
+use foveonic::image::{ImageTexture, Space};
 use std::{collections::HashMap, sync::Arc};
 
 /// Display-only side, component, and difference amplification. Zero gain shows the selected side normally.
@@ -99,11 +101,12 @@ impl Params {
                 ) {
                     -1.
                 } else {
-                    f32::from(matches!(
-                        space,
-                        Space::LinearRgb(ColorSpace::AdobeRgb)
-                            | Space::ToneMappedRgb(ColorSpace::AdobeRgb)
-                    ))
+                    match space {
+                        Space::LinearRgb(space) | Space::ToneMappedRgb(space) => {
+                            space as u32 as f32
+                        }
+                        _ => 0.,
+                    }
                 },
                 f32::from(srgb_target),
             ],
@@ -868,6 +871,11 @@ mod tests {
                 Space::LinearRgb(ColorSpace::Srgb),
                 -1,
                 [-1., 1. / 4095., 0., 1.],
+            ),
+            (
+                Space::ToneMappedRgb(ColorSpace::ProPhotoRgb),
+                -1,
+                [-1., 1., 2., 1.],
             ),
             (
                 Space::ToneMappedRgb(ColorSpace::AdobeRgb),

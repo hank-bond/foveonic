@@ -1,6 +1,6 @@
 //! Defines shared photographic settings and validates their values.
 
-pub use crate::nodes::finish::color_space::TiffColorSpace;
+pub use crate::color_space::TiffColorSpace;
 pub use crate::nodes::monochrome::Controls as MonochromeControls;
 pub use crate::nodes::sensor::color_field::{
     Approach as ColorFieldApproach, Controls as ColorFieldControls, HighlightMode,

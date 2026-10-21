@@ -1,7 +1,8 @@
 //! Checks graph port types and selective output dependencies.
 
 use super::*;
-use crate::nodes::sensor::calibration::{Calibration, ColorParams, ColorSpace, EncodeParams};
+use crate::color_space::ColorSpace;
+use crate::nodes::sensor::calibration::{Calibration, ColorParams, EncodeParams};
 
 #[test]
 fn demand_tracks_ports_without_requiring_siblings_or_unrelated_nodes() {
@@ -20,7 +21,7 @@ fn demand_tracks_ports_without_requiring_siblings_or_unrelated_nodes() {
             &[source],
         )
         .unwrap();
-    let histogram = black + 1;
+    let histogram = graph.named_output(black, "black.histogram").unwrap();
     let unrelated = graph.add(Operation::Source, &[]).unwrap();
     let required = graph.required(&[histogram]).unwrap();
     assert!(required[source]);
@@ -49,6 +50,9 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
     let ratio = graph
         .add(Operation::Ratio(params), &[conditioned, base])
         .unwrap();
+    let seed = graph
+        .named_output(base, "noise.pattern-seed-tiles")
+        .unwrap();
     let pattern = graph
         .add(
             Operation::Pattern {
@@ -59,7 +63,7 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
                 )
                 .unwrap(),
             },
-            &[ratio, base + 3],
+            &[ratio, seed],
         )
         .unwrap();
     let detail = graph
@@ -87,17 +91,21 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
             &[colour, detail, pattern],
         )
         .unwrap();
-    let required = graph.required(&[restored + 1]).unwrap();
+    let signal = graph.named_output(restored, "detail.signal").unwrap();
+    let required = graph.required(&[signal]).unwrap();
     assert!(required[raw] && required[base] && required[colour] && required[pattern]);
     assert!(!required[detail] && !required[restored]);
-    assert_eq!(graph.outputs[restored + 1].data, DataType::SignedDetail);
-    let masks = graph.required(&[pattern + 2]).unwrap();
-    assert!(masks[ratio] && masks[base + 3]);
+    assert_eq!(graph.outputs[signal].data, DataType::SignedDetail);
+    let mask = graph.named_output(pattern, "pattern.mask").unwrap();
+    let masks = graph.required(&[mask]).unwrap();
+    assert!(masks[ratio] && masks[seed]);
     assert!(!masks[pattern] && !masks[detail]);
-    let raw_ratio = graph.required(&[ratio + 1]).unwrap();
+    let raw_output = graph.named_output(ratio, "detail.raw-ratio").unwrap();
+    let raw_ratio = graph.required(&[raw_output]).unwrap();
     assert!(raw_ratio[base] && raw_ratio[conditioned]);
-    assert!(!raw_ratio[pattern] && !raw_ratio[base + 3] && !raw_ratio[detail]);
-    let required = graph.required(&[base + 2]).unwrap();
+    assert!(!raw_ratio[pattern] && !raw_ratio[seed] && !raw_ratio[detail]);
+    let edges = graph.named_output(base, "noise.edges").unwrap();
+    let required = graph.required(&[edges]).unwrap();
     assert!(required[raw]);
     assert!(!required[base] && !required[detail] && !required[colour]);
     let tone = Operation::Tone {
@@ -216,4 +224,37 @@ fn rejects_wrong_space_and_forward_dependencies() {
             &[linear, sharp]
         )
         .is_ok());
+}
+
+#[test]
+fn named_outputs_are_producer_local_and_keep_port_types() {
+    let mut graph = Graph::default();
+    let input = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::LinearCodeRgb,
+            },
+            &[],
+        )
+        .unwrap();
+    let root = || {
+        Operation::RootDetail(
+            crate::nodes::finish::root_detail::Prepared::new([1, 1], [0, 0, 1, 1], 0.5, 1000, 1.)
+                .unwrap(),
+        )
+    };
+    let first = graph.add(root(), &[input]).unwrap();
+    let second = graph.add(root(), &[input]).unwrap();
+    let detail = graph.named_output(second, "detail.signal").unwrap();
+    assert_eq!(
+        graph.outputs[detail].producer,
+        graph.outputs[second].producer
+    );
+    assert_ne!(detail, graph.named_output(first, "detail.signal").unwrap());
+    assert_eq!(graph.named_output(detail, "root.rgb").unwrap(), second);
+    assert_eq!(graph.outputs[detail].data, DataType::SignedDetail);
+    assert!(graph.add(root(), &[detail]).is_err());
+    assert!(graph.named_output(input, "detail.signal").is_err());
+    assert!(graph.named_output(second, "missing").is_err());
+    assert!(graph.named_output(usize::MAX, "detail.signal").is_err());
 }
