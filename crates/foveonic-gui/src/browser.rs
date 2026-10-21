@@ -1,4 +1,4 @@
-//! Browses X3F paths with focused keyboard selection and bounded lazy embedded-JPEG thumbnails.
+//! Browses X3F paths with focused keyboard selection and bounded lazy embedded previews.
 
 use eframe::egui;
 use std::{
@@ -11,6 +11,31 @@ use std::{
 struct DecodedThumbnail {
     image: egui::ColorImage,
     native_extent: [u32; 2],
+}
+impl DecodedThumbnail {
+    fn from_preview(preview: foveonic::preview::Preview) -> foveonic::source::Result<Self> {
+        let image = image::RgbImage::from_raw(preview.extent[0], preview.extent[1], preview.rgb)
+            .ok_or("invalid decoded embedded preview")?;
+        let image = image::DynamicImage::ImageRgb8(image);
+        let image = match preview.rotation {
+            90 => image.rotate90(),
+            180 => image.rotate180(),
+            270 => image.rotate270(),
+            _ => image,
+        };
+        let rgba = image.thumbnail(256, 256).to_rgba8();
+        let mut native_extent = preview.native_extent;
+        if matches!(preview.rotation, 90 | 270) {
+            native_extent.swap(0, 1);
+        }
+        Ok(Self {
+            image: egui::ColorImage::from_rgba_unmultiplied(
+                [rgba.width() as usize, rgba.height() as usize],
+                &rgba,
+            ),
+            native_extent,
+        })
+    }
 }
 type Thumb = Result<DecodedThumbnail, String>;
 
@@ -37,28 +62,7 @@ impl Browser {
             while let Ok(path) = requests.recv() {
                 let thumb = (|| -> foveonic::source::Result<DecodedThumbnail> {
                     let preview = foveonic::preview::read(&path)?;
-                    let image = image::load_from_memory_with_format(
-                        &preview.jpeg,
-                        image::ImageFormat::Jpeg,
-                    )?;
-                    let image = match preview.rotation {
-                        90 => image.rotate90(),
-                        180 => image.rotate180(),
-                        270 => image.rotate270(),
-                        _ => image,
-                    };
-                    let rgba = image.thumbnail(256, 256).to_rgba8();
-                    let mut native_extent = preview.native_extent;
-                    if matches!(preview.rotation, 90 | 270) {
-                        native_extent.swap(0, 1);
-                    }
-                    Ok(DecodedThumbnail {
-                        image: egui::ColorImage::from_rgba_unmultiplied(
-                            [rgba.width() as usize, rgba.height() as usize],
-                            &rgba,
-                        ),
-                        native_extent,
-                    })
+                    DecodedThumbnail::from_preview(preview)
                 })()
                 .map_err(|e| e.to_string());
                 if ready.send((path, thumb)).is_err() {
@@ -374,6 +378,41 @@ mod tests {
         assert!(browser.open(&missing).is_err());
         assert_eq!(browser.files, [std::path::PathBuf::from("retained.x3f")]);
     }
+    #[test]
+    fn decoded_preview_rotates_pixels_and_native_extent_once() {
+        let preview = foveonic::preview::Preview {
+            rgb: (0..128)
+                .flat_map(|_| {
+                    (0..256).flat_map(|x| if x < 128 { [255, 0, 0] } else { [0, 255, 0] })
+                })
+                .collect(),
+            extent: [256, 128],
+            rotation: 90,
+            native_extent: [2000, 1000],
+        };
+        let thumbnail = super::DecodedThumbnail::from_preview(preview).unwrap();
+        assert_eq!(thumbnail.native_extent, [1000, 2000]);
+        assert_eq!(thumbnail.image.size, [128, 256]);
+        assert_eq!(thumbnail.image.pixels[0], eframe::egui::Color32::RED);
+        assert_eq!(
+            thumbnail.image.pixels[128 * 255],
+            eframe::egui::Color32::GREEN
+        );
+    }
+
+    #[test]
+    fn decoded_preview_downsampling_preserves_native_extent() {
+        let preview = foveonic::preview::Preview {
+            rgb: vec![128; 600 * 300 * 3],
+            extent: [600, 300],
+            rotation: 0,
+            native_extent: [6000, 3000],
+        };
+        let thumbnail = super::DecodedThumbnail::from_preview(preview).unwrap();
+        assert_eq!(thumbnail.image.size, [256, 128]);
+        assert_eq!(thumbnail.native_extent, [6000, 3000]);
+    }
+
     #[test]
     fn pane_width_reflows_icon_columns() {
         for (width, count) in [(150., 1), (280., 1), (330., 2), (500., 3)] {

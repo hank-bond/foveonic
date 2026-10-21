@@ -15,6 +15,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[camera-repair-default](./camera-repair-default.md)** _(archived)._ Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
 - **[cargo-releases](./cargo-releases.md)** _(archived)._ Replace Python app packaging with Cargo tasks and prepare an unsigned v0.1.0 draft-release workflow.
+- **[classic-auto-performance](./classic-auto-performance.md)** _(archived)._ Parallelize the measured serial reductions in Classic automatic white balance.
 - **[classic-cleanup](./classic-cleanup.md)** _(archived)._ Clarify the Classic photographic/output boundary, consolidate metadata preparation, and retire obsolete profile machinery.
 - **[classic-consolidation](./classic-consolidation.md)** _(archived)._ Consolidate Classic stage selection and preparation while enforcing signal-scale boundaries.
 - **[classic-dng](./classic-dng.md)** _(archived)._ Add editable Classic color DNG through shared packaging and measure the embedded appearance against photographic rendering.
@@ -27,6 +28,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
 - **[detail-and-noise](./detail-and-noise.md)** _(archived)._ The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner.
 - **[editor-review-focus](./editor-review-focus.md)** _(archived)._ Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
+- **[embedded-thumbnails](./embedded-thumbnails.md)** _(archived)._ Read Classic bitmap thumbnails through an encoding-based embedded-preview path.
 - **[export-toolbar](./export-toolbar.md)** _(archived)._ Move TIFF color selection from Editing to a padded, grouped Open/Export toolbar.
 - **[family-controls](./family-controls.md)** _(archived)._ Separate family editing panels and centralize processing control constraints before reviewing broader organization.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** _(archived)._ Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.

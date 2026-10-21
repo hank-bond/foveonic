@@ -1,4 +1,4 @@
-//! Shares viewport geometry between JPEG previews and GPU images, with diagnostic mapping and manual filtering.
+//! Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
 
 use crate::preferences::ZoomPreset;
 use eframe::{

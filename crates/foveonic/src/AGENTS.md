@@ -34,7 +34,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[main.rs](./main.rs)** Inspects supported X3Fs and exports TIFF or linear DNG through shared rendering settings.
 - **[options.rs](./options.rs)** Shares photographic CLI option parsing between conversion and the completed-processing profiler.
 - **[output.rs](./output.rs)** Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
-- **[preview.rs](./preview.rs)** Reads embedded JPEG previews and presentation dimensions from X3F sections.
+- **[preview.rs](./preview.rs)** Decodes embedded bitmap and JPEG previews independently of sensor processing.
 - **[profile.rs](./profile.rs)** Collects host/GPU timings and engine-owned transfer, submission, and allocation counts.
 - **[recipe.rs](./recipe.rs)** Encodes exact effective operation parameters for graph versioning without hashing photographic samples.
 - **[render.rs](./render.rs)** Shares GPU engine entry points for photographic rendering, inspection, display, and export.

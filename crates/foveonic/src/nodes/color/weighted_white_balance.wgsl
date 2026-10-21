@@ -39,40 +39,38 @@ fn working(id:vec3<u32>)->bool {
 fn wrap_signed(v:i32)->i32 {
     return (v<<16)>>16;
 }
-@compute @workgroup_size(1) fn black_statistics() {
-    var mean=vec3(0.);
-    var count=0u;
-    for(var y=2u;y<p.shape.y;y+=4u) {
-        for(var x=2u;x<p.shape.x;x+=4u) {
-            mean+=pixel(y*p.shape.x+x,3u);
-            count++;
-        }
-    }
-    mean=mean/f32(max(1u,count))*p.flare.xyz;
-    var drift=p.drift.xyz;
+const REDUCTION_CHUNK:u32=256u;
+// Each chunk sums original 16-bit samples exactly in Float32. Compact partials
+// are combined in f64 on the host, avoiding a long serial accumulation.
+@compute @workgroup_size(64) fn black_statistics(@builtin(global_invocation_id) id:vec3<u32>) {
+    let sampled=vec2((p.shape.x+1u)/4u,(p.shape.y+1u)/4u);
+    var lengths=vec3<u32>(0u);
+    if(any(p.flare.xyz!=vec3(0.))) { lengths[0]=sampled.x*sampled.y; }
     if(p.options.x!=0u) {
-        var means:array<vec3<f32>,2>;
-        for(var j=0u;j<2u;j++) {
-            let r=p.shields[j];
-            var sum=vec3(0.);
-            var n=0u;
-            for(var y=r.y;y<r.w;y++) {
-                for(var x=r.x;x<r.z;x++) {
-                    sum+=pixel(y*p.shape.x+x,3u);
-                    n++;
-                }
+        for(var region=0u;region<2u;region++) {
+            let r=p.shields[region];
+            lengths[region+1u]=(r.z-r.x)*(r.w-r.y);
+        }
+    }
+    let longest=max(lengths.x,max(lengths.y,lengths.z));
+    let start=id.x*REDUCTION_CHUNK;
+    if(start>=longest) { return; }
+    for(var region=0u;region<3u;region++) {
+        var sum=vec3(0.);
+        for(var i=start;i<min(start+REDUCTION_CHUNK,lengths[region]);i++) {
+            var xy=vec2<u32>(0u);
+            if(region==0u) { xy=vec2(2u+4u*(i%sampled.x),2u+4u*(i/sampled.x)); }
+            else {
+                let r=p.shields[region-1u];
+                let width=r.z-r.x;
+                xy=vec2(r.x+i%width,r.y+i/width);
             }
-            means[j]=sum/f32(max(1u,n));
+            sum+=pixel(xy.y*p.shape.x+xy.x,3u);
         }
-        drift=(means[0]+means[1])*.5;
-        if(abs(means[0].r)>4000.) {
-            drift=vec3(0.);
-        }
+        let offset=id.x*12u+region*4u;
+        for(var c=0u;c<3u;c++) { dst[offset+c]=sum[c]; }
+        dst[offset+3u]=0.;
     }
-    for(var c=0u;c<3u;c++) {
-        dst[c]=mean[c]+drift[c];
-    }
-    dst[3]=0.;
 }
 @compute @workgroup_size(8,8) fn reduce(@builtin(global_invocation_id) id:vec3<u32>) {
     if(!working(id)) {
@@ -188,20 +186,23 @@ fn distance(v:vec3<f32>,white:vec3<f32>)->vec2<f32> {
     let b=(l.y-l.z)*200.;
     return vec2(a*a+b*b,116.*l.y-16.);
 }
-@compute @workgroup_size(1) fn scores() {
+@compute @workgroup_size(64) fn scores(@builtin(global_invocation_id) id:vec3<u32>) {
     let candidates=array<vec3<f32>,6>(vec3(94.9466,100.,138.4398),vec3(94.38,100.,117.898),vec3(95.0456,100.,108.9058),vec3(95.5475,100.,77.986),vec3(102.8524,100.,49.5528),vec3(108.854,100.,33.4394));
     // Candidate scoring uses the first contiguous quarter of the working plane.
     let n=p.shape.z*p.shape.w/4u;
+    let start=id.x*REDUCTION_CHUNK;
+    if(start>=n) { return; }
     for(var c=0u;c<6u;c++) {
         var sum=0.;
         var compensation=0.;
-        for(var i=0u;i<n;i++) {
+        for(var i=start;i<min(start+REDUCTION_CHUNK,n);i++) {
             let term=sqrt(distance(pixel(i,8u),candidates[c]).x)-compensation;
             let total=sum+term;
             compensation=(total-sum)-term;
             sum=total;
         }
-        dst[c]=sum/f32(n);
+        dst[id.x*12u+c]=sum;
+        dst[id.x*12u+6u+c]=compensation;
     }
 }
 @compute @workgroup_size(8,8) fn select_neutral(@builtin(global_invocation_id) id:vec3<u32>) {
@@ -240,11 +241,14 @@ fn bin_for(i:u32)->u32 {
         }
     }
 }
-@compute @workgroup_size(1) fn accumulate() {
+@compute @workgroup_size(64) fn accumulate(@builtin(global_invocation_id) id:vec3<u32>) {
     // Compensated accumulation limits Float32 reduction error.
     var sum=vec3(0.);
     var compensation=vec3(0.);
-    for(var i=0u;i<p.shape.z*p.shape.w;i++) {
+    let n=p.shape.z*p.shape.w;
+    let start=id.x*REDUCTION_CHUNK;
+    if(start>=n) { return; }
+    for(var i=start;i<min(start+REDUCTION_CHUNK,n);i++) {
         if(aux[i]<0.) {
             continue;
         }
@@ -264,9 +268,9 @@ fn bin_for(i:u32)->u32 {
         sum=total;
     }
     for(var c=0u;c<3u;c++) {
-        dst[c]=sum[c];
+        dst[id.x*6u+c]=sum[c];
+        dst[id.x*6u+3u+c]=compensation[c];
     }
-    dst[3]=0.;
 }
 // Stage preparation measures all original signed layers before its Q14 gain.
 // Store integer row sums as bits, preserving their exact value through readback.

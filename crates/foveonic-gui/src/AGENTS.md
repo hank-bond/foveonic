@@ -6,7 +6,7 @@ summary: "GUI modules separate thumbnail browsing, interaction, bounded image jo
 
 Run source decoding and processing on the background image worker. Keep one active image job and one replaceable pending request. Same-photo/root completed older frames may advance feedback without replacing requested settings; reject other-photo/root and out-of-order replies. Deliver images before revision-matched scopes and deferred navigator preparation. Let export jobs finish while editing controls are disabled.
 
-Photographic data stays on the GPU. Small tables and embedded JPEGs may use CPU decoding/readback. Display mapping preserves buffer samples. Preserve the configuration behind the currently displayed artifact while another request is pending.
+Photographic data stays on the GPU. Small tables and embedded previews may use CPU decoding/readback. Display mapping preserves buffer samples. Preserve the configuration behind the currently displayed artifact while another request is pending.
 
 The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures real egui/wgpu frames and closes the window. Never enable it by default. The explicit [README screenshot task](../../../docs/gui-screenshot.md) uses the same isolated capture path with a checked-in recipe. Keep sidecar access disabled and processing durations out of that documentation capture.
 
@@ -21,7 +21,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 ### Source files
 
 - **[advanced.rs](./advanced.rs)** Displays advanced reconstruction controls with automatic ColorDQ and preset-linked parameter overrides.
-- **[browser.rs](./browser.rs)** Browses X3F paths with focused keyboard selection and bounded lazy embedded-JPEG thumbnails.
+- **[browser.rs](./browser.rs)** Browses X3F paths with focused keyboard selection and bounded lazy embedded previews.
 - **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
@@ -40,7 +40,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
 - **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
 - **[toolbar.rs](./toolbar.rs)** Groups Open/Export actions in nested padded containers outside the editor.
-- **[viewport.rs](./viewport.rs)** Shares viewport geometry between JPEG previews and GPU images, with diagnostic mapping and manual filtering.
+- **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
 - **[widgets.rs](./widgets.rs)** Shares button, checkbox, and dropdown states across the workspace.
 - **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 

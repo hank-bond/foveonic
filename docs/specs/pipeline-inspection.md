@@ -27,7 +27,7 @@ implementation: incomplete
 
 ## Implementation direction
 
-Use egui with eframe's wgpu backend. Initially use embedded JPEGs for browser thumbnails and the processing pipeline for the selected image. Retain requested outputs selectively.
+Use egui with eframe's wgpu backend. Use supported embedded bitmaps and JPEGs for browser thumbnails and the processing pipeline for the selected image. Retain requested outputs selectively.
 
 Output dependency tracking and temporary lifetimes govern execution. Interaction checkpoints determine which results remain available for reuse. General multi-image caching and arbitrary branch comparisons remain deferred. Operation-input flickering and differences share selectively retained pairs of named outputs from one render configuration.
 

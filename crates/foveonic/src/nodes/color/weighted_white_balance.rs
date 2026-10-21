@@ -3,7 +3,7 @@
 use crate::{
     gpu::{
         Binding::{Read, Write},
-        Gpu, Kernel, ReadGuard,
+        Gpu, GpuTrace, Kernel, ReadGuard,
     },
     nodes::finish::signed_response,
     profile::Profile,
@@ -88,6 +88,95 @@ fn read_f32(gpu: &Gpu, value: &ReadGuard) -> Result<Vec<f32>> {
     Ok(bytemuck::cast_slice::<u8, f32>(&bytes).to_vec())
 }
 
+// Bounded chunks avoid image-wide Float32 accumulation error. Original 16-bit
+// black samples sum exactly within each chunk. Weighted sums use compensation.
+const REDUCTION_CHUNK: u32 = 256;
+
+fn black_statistics(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    params: &Params,
+    trace: &mut GpuTrace,
+) -> Result<ReadGuard> {
+    let sampled = (params.shape[0] + 1) / 4 * ((params.shape[1] + 1) / 4);
+    let lengths: [u32; 3] = std::array::from_fn(|region| {
+        if region == 0 {
+            if params.flare[..3].iter().any(|v| *v != 0.) {
+                sampled
+            } else {
+                0
+            }
+        } else if params.options[0] != 0 {
+            let r = params.shields[region - 1];
+            (r[2] - r[0]) * (r[3] - r[1])
+        } else {
+            0
+        }
+    });
+    let chunks = lengths.into_iter().max().unwrap().div_ceil(REDUCTION_CHUNK);
+    if chunks == 0 {
+        let fixed = if params.options[0] != 0 {
+            [0.; 4]
+        } else {
+            params.drift
+        };
+        return gpu.upload("White-balance fixed black offsets", &fixed);
+    }
+    let uniform = gpu.uniform(params);
+    let mut partials = gpu.storage("White-balance partial black sums", u64::from(chunks) * 48)?;
+    gpu.dispatch(
+        Kernel::WbBlack,
+        &mut [
+            (0, Read(input)),
+            (1, Read(&uniform)),
+            (3, Write(partials.write())),
+        ],
+        [chunks.div_ceil(64), 1],
+        trace,
+    );
+    let values = read_f32(gpu, &partials)?;
+    let mut sums = [[0_f64; 3]; 3];
+    for chunk in values.as_chunks::<12>().0 {
+        for region in 0..3 {
+            for c in 0..3 {
+                sums[region][c] += f64::from(chunk[region * 4 + c]);
+            }
+        }
+    }
+    let means = std::array::from_fn::<_, 3, _>(|region| {
+        sums[region].map(|v| (v / f64::from(lengths[region].max(1))) as f32)
+    });
+    let drift = if params.options[0] != 0 {
+        if means[1][0].abs() > 4000. {
+            [0.; 3]
+        } else {
+            std::array::from_fn(|c| (means[1][c] + means[2][c]) * 0.5)
+        }
+    } else {
+        [params.drift[0], params.drift[1], params.drift[2]]
+    };
+    let black: [f32; 4] = std::array::from_fn(|c| {
+        if c < 3 {
+            means[0][c] * params.flare[c] + drift[c]
+        } else {
+            0.
+        }
+    });
+    gpu.upload("White-balance black offsets", &black)
+}
+
+// Partial compensated sums are compact statistics, not image readback. Combining
+// them in f64 limits rounding error across the fixed chunk order.
+fn combine_partials(values: &[f32], channels: usize) -> Vec<f64> {
+    let mut sum = vec![0.; channels];
+    for chunk in values.chunks_exact(channels * 2) {
+        for c in 0..channels {
+            sum[c] += f64::from(chunk[c]) - f64::from(chunk[channels + c]);
+        }
+    }
+    sum
+}
+
 /// Measures the original signed layers after the constant mean drift offset.
 /// Only integer row statistics leave the GPU; the reference averages rows in f64.
 pub(crate) fn mean(
@@ -110,17 +199,7 @@ pub(crate) fn mean(
     p.options[0] = u32::from(estimate_drift);
     let uniform = gpu.uniform(&p);
     let mut trace = gpu.trace(profile.mode.gpu(), 2);
-    let mut black = gpu.storage("Camera-layer drift statistics", 16)?;
-    gpu.dispatch(
-        Kernel::WbBlack,
-        &mut [
-            (0, Read(input)),
-            (1, Read(&uniform)),
-            (3, Write(black.write())),
-        ],
-        [1, 1],
-        &mut trace,
-    );
+    let black = black_statistics(gpu, input, &p, &mut trace)?;
     let mut rows = gpu.storage("Camera-layer integer row sums", u64::from(h) * 12)?;
     gpu.dispatch(
         Kernel::WbMean,
@@ -211,17 +290,7 @@ pub(crate) fn estimate(
     let root = signed_response::root();
     let root_gpu = gpu.upload("White-balance root table", &root)?;
     let mut trace = gpu.trace(profile.mode.gpu(), 6);
-    let mut black = gpu.storage("White-balance black statistics", 16)?;
-    gpu.dispatch(
-        Kernel::WbBlack,
-        &mut [
-            (0, Read(input)),
-            (1, Read(&uniform)),
-            (3, Write(black.write())),
-        ],
-        [1, 1],
-        &mut trace,
-    );
+    let black = black_statistics(gpu, input, &params, &mut trace)?;
     let mut work = gpu.storage("White-balance reduced layers", u64::from(rw * rh) * 32)?;
     let mut maxima = gpu.upload("White-balance maxima", &[0_i32; 8])?;
     gpu.dispatch(
@@ -302,7 +371,11 @@ pub(crate) fn estimate(
         coordinate += 0.0016;
     }
     let cube = gpu.upload("White-balance Lab lookup", &cube)?;
-    let mut score = gpu.storage("White-balance candidate scores", 24)?;
+    let score_chunks = (rw * rh / 4).div_ceil(REDUCTION_CHUNK);
+    let mut score = gpu.storage(
+        "White-balance candidate score partials",
+        u64::from(score_chunks) * 48,
+    )?;
     gpu.dispatch(
         Kernel::WbScores,
         &mut [
@@ -311,11 +384,15 @@ pub(crate) fn estimate(
             (2, Read(&cube)),
             (3, Write(score.write())),
         ],
-        [1, 1],
+        [score_chunks.div_ceil(64), 1],
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
-    let scores = read_f32(gpu, &score)?;
+    // Preserve the original Float32 scores and candidate-policy arithmetic.
+    let scores: Vec<_> = combine_partials(&read_f32(gpu, &score)?, 6)
+        .into_iter()
+        .map(|sum| sum as f32 / (rw * rh / 4) as f32)
+        .collect();
     let mut selected = (0..6)
         .min_by(|a, b| scores[*a].total_cmp(&scores[*b]))
         .unwrap();
@@ -422,7 +499,11 @@ fn refine(
         [w.div_ceil(8), h.div_ceil(8)],
         &mut trace,
     );
-    let mut result = gpu.storage("White-balance weighted neutral", 16)?;
+    let chunks = (w * h).div_ceil(REDUCTION_CHUNK);
+    let mut result = gpu.storage(
+        "White-balance weighted neutral partials",
+        u64::from(chunks) * 24,
+    )?;
     gpu.dispatch(
         Kernel::WbAccumulate,
         &mut [
@@ -432,16 +513,15 @@ fn refine(
             (3, Write(result.write())),
             (5, Read(&histogram)),
         ],
-        [1, 1],
+        [chunks.div_ceil(64), 1],
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
-    let values = read_f32(gpu, &result)?;
-    Ok(stats::normalize([
-        f64::from(values[0]),
-        f64::from(values[1]),
-        f64::from(values[2]),
-    ]))
+    let values = combine_partials(&read_f32(gpu, &result)?, 3);
+    // Keep the original Float32 boundary before downstream fixed-point rounding.
+    Ok(stats::normalize(std::array::from_fn(|c| {
+        f64::from(values[c] as f32)
+    })))
 }
 
 #[cfg(test)]
@@ -485,3 +565,7 @@ mod tests {
         .expect("white-balance shader validates");
     }
 }
+
+#[cfg(test)]
+#[path = "weighted_white_balance_test.rs"]
+mod reduction_tests;
