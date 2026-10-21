@@ -5,6 +5,7 @@ use eframe::egui;
 use foveonic::{
     inspection::{self, Channels},
     render::Settings,
+    source::Metadata,
 };
 
 pub fn components(channels: Channels) -> &'static [(i32, &'static str)] {
@@ -67,8 +68,13 @@ fn group_row(ui: &mut egui::Ui, name: &str, selected: bool) -> bool {
 }
 
 /// Keep a restored recipe's selection valid before its first worker request.
-pub fn normalize(settings: &Settings, output: &mut String, channel: &mut i32) {
-    let outputs = inspection::image_outputs(settings);
+pub fn normalize(
+    settings: &Settings,
+    output: &mut String,
+    channel: &mut i32,
+    metadata: Option<&Metadata>,
+) {
+    let outputs = inspection::image_outputs(settings, metadata);
     if !outputs.iter().any(|o| o.name == output) {
         choose(output, channel, "final", -1);
     }
@@ -111,10 +117,11 @@ pub fn show(
     settings: &Settings,
     output: &mut String,
     channel: &mut i32,
+    metadata: Option<&Metadata>,
 ) -> bool {
     let before = output.clone();
-    normalize(settings, output, channel);
-    let outputs = inspection::image_outputs(settings);
+    normalize(settings, output, channel, metadata);
+    let outputs = inspection::image_outputs(settings, metadata);
     let current = outputs.iter().find(|o| o.name == output).unwrap();
     let choices = components(current.channels);
     let label = choices.iter().find(|(c, _)| c == channel).unwrap().1;
@@ -212,9 +219,10 @@ impl Comparison {
         settings: &Settings,
         output: &str,
         channel: i32,
+        metadata: Option<&Metadata>,
     ) -> bool {
         let before = self.requested();
-        let input = inspection::comparison_input(settings, output);
+        let input = inspection::comparison_input(settings, output, metadata);
         let available = input.is_some() && channel >= 0;
         if input.is_none() {
             self.input = false;
@@ -284,9 +292,12 @@ mod tests {
                     let mut expected = 0.;
                     let rendered = ctx.run(egui::RawInput::default(), |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
-                            expected =
-                                menu_width(ui, &inspection::image_outputs(&settings), selected);
-                            assert!(!show(ui, &settings, &mut output, &mut channel));
+                            expected = menu_width(
+                                ui,
+                                &inspection::image_outputs(&settings, None),
+                                selected,
+                            );
+                            assert!(!show(ui, &settings, &mut output, &mut channel, None));
                         });
                     });
                     let text = rendered
@@ -351,7 +362,7 @@ mod tests {
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             ui.spacing_mut().combo_height = 180.;
-                            assert!(!show(ui, &settings, &mut output, &mut channel));
+                            assert!(!show(ui, &settings, &mut output, &mut channel, None));
                         });
                     },
                 )
@@ -440,7 +451,7 @@ mod tests {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.spacing_mut().combo_height = 1000.;
                         id = ui.make_persistent_id(egui::Id::new("artifact"));
-                        changed = show(ui, &settings, output, channel);
+                        changed = show(ui, &settings, output, channel, None);
                     });
                 },
             );
@@ -613,7 +624,7 @@ mod tests {
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.horizontal(|ui| {
-                            requested = comparison.show(ui, &settings, output, channel);
+                            requested = comparison.show(ui, &settings, output, channel, None);
                         });
                     });
                 },
@@ -725,4 +736,41 @@ mod tests {
         assert_eq!(components(Channels::Scalar), &[(-1, "Scalar")]);
         assert_eq!(components(Channels::Layers).len(), 3);
     }
+}
+
+#[test]
+fn classic_selection_normalizes_unavailable_stages_and_layer_components() {
+    let mut metadata = Metadata {
+        width: 2688,
+        height: 1792,
+        rotation: 0,
+        properties: [
+            ("CAMMODEL".into(), "SIGMA SD15".into()),
+            ("ISO".into(), "100".into()),
+        ]
+        .into(),
+        matrices: [(
+            "ChromaBlur".into(),
+            foveonic::source::Matrix {
+                encoding: foveonic::source::MatrixEncoding::Float32,
+                representation: "native",
+                dimensions: vec![1],
+                values: vec![1.],
+            },
+        )]
+        .into(),
+        lists: Default::default(),
+    };
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    let mut output = "noise.layers".into();
+    let mut channel = 1;
+    normalize(&settings, &mut output, &mut channel, Some(&metadata));
+    assert_eq!((&*output, channel), ("final", -1));
+    output = "chroma.layers".into();
+    normalize(&settings, &mut output, &mut channel, Some(&metadata));
+    assert_eq!((&*output, channel), ("chroma.layers", 0));
+    metadata.properties.insert("ISO".into(), "400".into());
+    normalize(&settings, &mut output, &mut channel, Some(&metadata));
+    assert_eq!((&*output, channel), ("final", -1));
 }

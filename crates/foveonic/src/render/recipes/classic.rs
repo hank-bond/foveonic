@@ -1,14 +1,21 @@
 //! Composes equal-resolution photographic and editable DNG recipes from signed-code operations.
 
+mod correction;
 mod highlight;
+mod inspection;
+mod policy;
 mod prepare;
+mod range;
+mod reference;
+mod route;
+mod spatial_gain;
+mod white_balance;
 
 use super::{requested, BuiltRecipe};
 use crate::{
-    color_space::ColorSpace,
     graph::{Graph, Operation},
     interactive::Execution,
-    nodes::sensor::{calibration, signed_repair},
+    nodes::sensor::signed_repair,
     profile::Profile,
     render::{Engine, Settings},
     source::{Result, Source},
@@ -45,6 +52,7 @@ pub(super) fn build_dng(
 }
 
 pub(crate) use prepare::prepare_dng_appearance;
+pub(crate) use white_balance::estimate as estimate_white_balance;
 
 fn compose(
     engine: &Engine,
@@ -56,7 +64,7 @@ fn compose(
     dng: bool,
 ) -> Result<BuiltRecipe> {
     let metadata = &source.metadata;
-    let mut params = calibration::encode(metadata, ColorSpace::ProPhotoRgb)?;
+    let mut params = prepare::geometry(metadata)?;
     if let Some(size) = settings.output_size {
         params.output[..2].copy_from_slice(&size);
     }
@@ -80,8 +88,11 @@ fn compose(
     if dng {
         prepare::validate_color_mode(metadata, &settings.color_mode)?;
     }
+    let route = route::Route::new(metadata, settings);
+    let white_balance = route.white_balance(settings);
+    let neutral = white_balance::estimate(engine, source, white_balance, profile)?;
     let prepared = profile.measure("prepare fixed-point camera recipe", || {
-        prepare::prepare(metadata, &settings.white_balance)
+        prepare::prepare_with_white_balance(metadata, white_balance, neutral)
     })?;
     let gains = prepared.final_gain;
     final_id = graph.add(
@@ -89,49 +100,89 @@ fn compose(
         &[final_id],
     )?;
     finish!();
-    if settings.repair.is_some() {
+    if route.repair {
         let repair = signed_repair::Defects::prepare(metadata)?;
         final_id = graph.add(Operation::SignedRepair(Arc::new(repair)), &[final_id])?;
         finish!();
     }
-    if settings.highlight_restoration {
+    if route.red_detail()? {
+        if let Some(red) = prepare::prepare_red_detail(metadata)? {
+            final_id = graph.add(Operation::RedDetail(red), &[final_id])?;
+            finish!();
+        }
+    }
+    if route.highlights()? {
         if let Some(p) = prepare::prepare_highlight(metadata, gains)? {
             final_id = graph.add(Operation::HighlightStream(p), &[final_id])?;
             finish!();
         }
     }
-    if settings.despeckle {
+    if route.despeckle {
         final_id = graph.add(
             Operation::SignedDespeckle(prepare::prepare_despeckle(metadata)?),
             &[final_id],
         )?;
         finish!();
     }
-    if settings.reconstruction.is_some() {
-        for p in prepare::prepare_chroma(metadata, gains)? {
-            final_id = graph.add(Operation::ChromaSmooth(p), &[final_id])?;
-            finish!();
+    if route.high_iso()? {
+        let reconstruction = range::prepare(
+            metadata,
+            &prepared.color,
+            settings,
+            route.defer_color_mode(dng),
+        )?;
+        final_id = graph.add(
+            Operation::RangeReconstruct(Arc::new(reconstruction)),
+            &[final_id],
+        )?;
+        finish!();
+    } else {
+        if route.small_chroma()? {
+            for p in prepare::prepare_chroma(metadata, gains, route.monochrome)? {
+                final_id = graph.add(Operation::ChromaSmooth(p), &[final_id])?;
+                finish!();
+            }
         }
-    }
-    let color = profile.measure("prepare signed camera color", || {
-        if dng {
-            prepare::prepare_unselected_color(metadata, &prepared.color)
-        } else {
-            prepare::prepare_color(metadata, &prepared.color, &settings.color_mode)
+        let color = profile.measure("prepare signed camera color", || {
+            if route.defer_color_mode(dng) {
+                prepare::prepare_unselected_color(metadata, &prepared.color)
+            } else {
+                prepare::prepare_color(metadata, &prepared.color, &settings.color_mode)
+            }
+        })?;
+        final_id = graph.add(
+            Operation::FixedPointColor(Arc::new(color.transform)),
+            &[final_id],
+        )?;
+        finish!();
+        if route.logarithmic()? {
+            if let Some(fir) = prepare::prepare_reconstruction(
+                metadata,
+                color.matrix_green_sum,
+                color.digital_gain,
+            )? {
+                let corrected = graph.named_output(final_id, "color.corrected-layers")?;
+                final_id = graph.add(Operation::LogReconstruct(fir), &[final_id, corrected])?;
+                finish!();
+            }
+        } else if route.restore_gain()? {
+            if let Some(gain) = prepare::prepare_reconstruction_gain(
+                metadata,
+                color.matrix_green_sum,
+                color.digital_gain,
+            )? {
+                // The filtered reference path fuses this required color gain into
+                // its final integer reconstruction. Bypassing spatial filtering
+                // must retain that gain without changing enabled-path rounding.
+                final_id = graph.add(Operation::CodeGain(gain), &[final_id])?;
+                finish!();
+            }
         }
-    })?;
-    final_id = graph.add(
-        Operation::FixedPointColor(Arc::new(color.transform)),
-        &[final_id],
-    )?;
-    finish!();
-    if settings.reconstruction.is_some() {
-        if let Some(fir) =
-            prepare::prepare_reconstruction(metadata, color.matrix_green_sum, color.digital_gain)?
-        {
-            let corrected = graph.named_output(final_id, "color.corrected-layers")?;
-            final_id = graph.add(Operation::LogReconstruct(fir), &[final_id, corrected])?;
-            finish!();
+        if route.recursive_chroma()? {
+            if let Some(chroma) = prepare::prepare_recursive_chroma(metadata, gains)? {
+                final_id = graph.add(Operation::CodeChromaSmooth(chroma), &[final_id])?;
+                finish!();
+            }
         }
     }
     let root = prepare::prepare_root(metadata, params.crop, params.source[2])?;
@@ -139,7 +190,7 @@ fn compose(
     let detail = graph.named_output(final_id, "detail.signal")?;
     finish!();
     if dng {
-        let detail_amount = settings.sharpen_amount.map_or(0., |a| f64::from(a) - 1.);
+        let detail_amount = f64::from(settings.effective_sharpen_amount(metadata)?) - 1.;
         let linear = crate::nodes::finish::signed_response::prepare_linear_detail(detail_amount)?;
         final_id = graph.add(
             Operation::SignedLinearDetail(Arc::new(linear)),
@@ -162,3 +213,5 @@ fn compose(
         params,
     })
 }
+
+pub(crate) use inspection::{comparison as inspection_comparison, outputs as inspection_outputs};

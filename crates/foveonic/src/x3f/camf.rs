@@ -17,7 +17,32 @@ const MAXIMUM_DECODED_BYTES: usize = 64 * 1024 * 1024;
 
 pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
     let bytes = Bytes(section);
-    if bytes.range(0, 4)? != b"SECc" || bytes.u32(8)? != PACKED_HUFFMAN_COMPRESSION {
+    if bytes.range(0, 4)? != b"SECc" {
+        return Err("invalid camera metadata signature".into());
+    }
+    if bytes.u32(8)? == 2 {
+        let input = bytes.range(
+            28,
+            section
+                .len()
+                .checked_sub(28)
+                .ok_or("truncated legacy camera metadata")?,
+        )?;
+        if !(BLOCK_HEADER_BYTES..=MAXIMUM_DECODED_BYTES).contains(&input.len()) {
+            return Err("invalid legacy camera metadata size".into());
+        }
+        let mut state = bytes.u32(24)?;
+        // Recovered legacy CAMB byte stream. Multiplication wraps before the
+        // modulus, while the byte mask uses integer division.
+        return Ok(input
+            .iter()
+            .map(|byte| {
+                state = state.wrapping_mul(1597).wrapping_add(51749) % 244944;
+                byte ^ ((state * 256) / 244944) as u8
+            })
+            .collect());
+    }
+    if bytes.u32(8)? != PACKED_HUFFMAN_COMPRESSION {
         return Err("unsupported camera metadata compression".into());
     }
     // Type-4 header byte offsets: decoded length 12, predictor seed 16,
@@ -258,4 +283,38 @@ mod tests {
         bad[36..40].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(parse(&bad).is_err());
     }
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires CLASSIC_CAMF_X3F and CLASSIC_CAMF_REFERENCE"]
+fn legacy_metadata_matches_reference_bytes() {
+    let input = std::fs::read(std::env::var_os("CLASSIC_CAMF_X3F").unwrap()).unwrap();
+    let bytes = Bytes(&input);
+    let directory = bytes.u32(input.len() - 4).unwrap() as usize;
+    let count = bytes.u32(directory + 8).unwrap() as usize;
+    let section = (0..count)
+        .find_map(|i| {
+            let entry = directory + 12 + i * 12;
+            if bytes.range(entry + 8, 4).unwrap() != b"CAMF" {
+                return None;
+            }
+            Some(
+                bytes
+                    .range(
+                        bytes.u32(entry).unwrap() as usize,
+                        bytes.u32(entry + 4).unwrap() as usize,
+                    )
+                    .unwrap(),
+            )
+        })
+        .unwrap();
+    let decoded = decompress(section).unwrap();
+    assert_eq!(
+        decoded,
+        std::fs::read(std::env::var_os("CLASSIC_CAMF_REFERENCE").unwrap()).unwrap()
+    );
+    let (matrices, lists) = parse(&decoded).unwrap();
+    assert!(!matrices.is_empty());
+    assert!(!lists.is_empty());
 }

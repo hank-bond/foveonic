@@ -179,7 +179,12 @@ pub(crate) fn parse_settings(
             _ => return Err(format!("unknown option {flag}").into()),
         }
     }
-    settings.validate()?;
+    if settings.is_monochrome() {
+        // Active WB and color-mode requirements depend on the loaded family.
+        settings.validate_values()?;
+    } else {
+        settings.validate()?;
+    }
     Ok((settings, paths, profiling))
 }
 

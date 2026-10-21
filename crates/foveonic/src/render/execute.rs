@@ -57,6 +57,7 @@ fn description(data: DataType, extent: [u32; 2]) -> Option<Description> {
         DataType::LuminanceRatio => (Layout::Scalar32Float, Space::LuminanceRatio),
         DataType::SignedDetail => (Layout::Scalar32Float, Space::SignedDetail),
         DataType::CalibratedLayers => (Layout::Rgb32Float, Space::CalibratedLayers),
+        DataType::NormalizedCodeRgb => (Layout::Rgb32Float, Space::NormalizedCodeRgb),
         DataType::LinearCodeRgb => (Layout::Rgb32Float, Space::LinearCodeRgb),
         DataType::SignedCodeRgb => (Layout::Rgb32Float, Space::SignedCodeRgb),
         DataType::LinearRgb(space) => (Layout::Rgb32Float, Space::LinearRgb(space)),
@@ -225,18 +226,21 @@ impl Engine {
                     }
                     required[index].then_some(rgb)
                 }
-                Operation::ChromaSmooth(prepared) => Some(crate::nodes::color::chroma::apply(
-                    gpu,
-                    &input(0).buffer,
-                    prepared,
-                    profile,
-                )?),
+                Operation::ChromaSmooth(prepared) | Operation::CodeChromaSmooth(prepared) => Some(
+                    crate::nodes::color::chroma::apply(gpu, &input(0).buffer, prepared, profile)?,
+                ),
                 Operation::SignedRepair(prepared) => {
                     Some(prepared.apply(gpu, &input(0).buffer, profile)?)
                 }
                 Operation::SignedDespeckle(prepared) => {
                     Some(prepared.apply(gpu, &input(0).buffer, profile)?)
                 }
+                Operation::RedDetail(prepared) => Some(crate::nodes::sensor::red_detail::apply(
+                    gpu,
+                    &input(0).buffer,
+                    prepared,
+                    profile,
+                )?),
                 Operation::HighlightStream(prepared) => {
                     Some(crate::nodes::color::highlight_stream::apply(
                         gpu,
@@ -245,11 +249,25 @@ impl Engine {
                         profile,
                     )?)
                 }
+                Operation::CodeGain(prepared) => Some(crate::nodes::color::code_gain::apply(
+                    gpu,
+                    &input(0).buffer,
+                    prepared,
+                    profile,
+                )?),
                 Operation::LogReconstruct(prepared) => {
                     Some(crate::nodes::color::log_reconstruction::apply(
                         gpu,
                         &input(0).buffer,
                         &input(1).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::RangeReconstruct(prepared) => {
+                    Some(crate::nodes::color::range_reconstruction::apply(
+                        gpu,
+                        &input(0).buffer,
                         prepared,
                         profile,
                     )?)

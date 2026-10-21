@@ -122,11 +122,25 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
 fn classic_dng_defers_appearance_and_preserves_editable_samples() {
     let engine = Engine::new().unwrap();
     let source = Source::open(std::env::var_os("CLASSIC_X3F").unwrap()).unwrap();
-    let mut settings = Settings::new("Sunlight", "Standard");
+    let mut settings = Settings::new(
+        std::env::var("CLASSIC_WHITE_BALANCE")
+            .as_deref()
+            .unwrap_or("Sunlight"),
+        "Standard",
+    );
     settings.reconstruction = Some(Default::default());
     settings.sharpen_amount = Some(1.);
     let prepare = |settings: &Settings| {
-        let appearance = appearance::Prepared::new(&source.metadata, settings).unwrap();
+        let statistics = crate::render::estimated_white_balance(
+            &engine,
+            &source,
+            settings,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let appearance =
+            appearance::Prepared::with_white_balance(&source.metadata, settings, statistics)
+                .unwrap();
         let base = prepare_base(&engine, &source, settings, &mut Profile::default()).unwrap();
         assert_eq!(base.description().space, Space::LinearCodeRgb);
         let bytes = engine.readback_image(&base).unwrap();
@@ -282,6 +296,143 @@ fn classic_dng_defers_appearance_and_preserves_editable_samples() {
                 .write_tiff(&photo, &photographic, &mut Profile::default())
                 .unwrap();
             eprintln!("Classic DNG export: {} scale={scale}", path.display());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU and CLASSIC_X3F, optionally CLASSIC_DNG_DIR for reader validation"]
+fn classic_monochrome_dng_bakes_mixture_and_defers_response() {
+    let engine = Engine::new().unwrap();
+    let source = Source::open(std::env::var_os("CLASSIC_X3F").unwrap()).unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.rendering = crate::render::Rendering::Monochrome;
+    settings.reconstruction = Some(Default::default());
+    let prepare = |settings: &Settings| {
+        let statistics = crate::render::estimated_white_balance(
+            &engine,
+            &source,
+            settings,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let appearance =
+            appearance::Prepared::with_white_balance(&source.metadata, settings, statistics)
+                .unwrap();
+        assert_eq!(appearance.neutral, [1.; 3]);
+        assert!(appearance.baked_color_mode);
+        let base = prepare_base(&engine, &source, settings, &mut Profile::default()).unwrap();
+        let bytes = engine.readback_image(&base).unwrap();
+        let (packed, scale) = engine
+            .encode_dng_base(&base, &appearance, &mut Profile::default())
+            .unwrap();
+        (bytes, packed, scale, appearance)
+    };
+    let (bytes, packed, scale, appearance) = prepare(&settings);
+    for pixel in packed.as_chunks::<8>().0 {
+        let channel = |c: usize| u16::from_le_bytes(pixel[c * 2..c * 2 + 2].try_into().unwrap());
+        assert_eq!(channel(0), channel(1));
+        assert_eq!(channel(1), channel(2));
+    }
+    let samples: &[f32] = bytemuck::cast_slice(&bytes);
+    assert!(samples.iter().all(|v| v.is_finite()));
+    let maximum = samples.iter().copied().fold(0., f32::max);
+    assert!(maximum > 1., "empty monochrome technical base");
+    let spread = samples
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|p| {
+            p[..3].iter().copied().fold(f32::NEG_INFINITY, f32::max)
+                - p[..3].iter().copied().fold(f32::INFINITY, f32::min)
+        })
+        .fold(0., f32::max);
+    assert!(
+        spread < maximum * 0.002,
+        "non-neutral monochrome base: {spread}/{maximum}"
+    );
+
+    let mut changed = settings.clone();
+    changed.white_balance.clear();
+    let (_, changed_packed, changed_scale, _) = prepare(&changed);
+    assert_eq!(
+        packed, changed_packed,
+        "inactive color WB changed mono samples"
+    );
+    assert_eq!(scale, changed_scale);
+
+    changed = settings.clone();
+    changed.exposure = 0.75;
+    changed.tone.contrast = 0.3;
+    changed.tone.shadows = 0.4;
+    let (_, changed_packed, changed_scale, changed_appearance) = prepare(&changed);
+    assert_eq!(packed, changed_packed, "tone/exposure changed mono samples");
+    assert_eq!(scale, changed_scale);
+    assert_ne!(
+        appearance.finish(scale).unwrap().curve,
+        changed_appearance.finish(scale).unwrap().curve
+    );
+
+    let mut exports = vec![
+        ("monochrome", settings.clone()),
+        ("monochrome-adjusted", changed),
+    ];
+    if source
+        .metadata
+        .lists
+        .get("ColorModeCompensations")
+        .is_some_and(|list| {
+            list.names()
+                .any(|name| name.trim().eq_ignore_ascii_case("Vivid"))
+        })
+    {
+        let mut vivid = settings.clone();
+        vivid.color_mode = "Vivid".into();
+        let (_, vivid_packed, _, _) = prepare(&vivid);
+        assert_ne!(
+            packed, vivid_packed,
+            "monochrome mode mixture was incorrectly deferred"
+        );
+        exports.push(("monochrome-vivid", vivid));
+    }
+    if let Some(dir) = std::env::var_os("CLASSIC_DNG_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = source.metadata.properties["CAMMODEL"].replace(' ', "-");
+        for (suffix, mut settings) in exports {
+            let destination = dir.join(format!("{model}-{suffix}.dng"));
+            write_source(
+                &engine,
+                &source,
+                &settings,
+                &destination,
+                &mut Profile::default(),
+            )
+            .unwrap();
+            let exported = std::fs::read(&destination).unwrap();
+            let profile_name = format!("Foveonic Monochrome {}", settings.color_mode);
+            assert!(exported
+                .windows(profile_name.len())
+                .any(|w| w == profile_name.as_bytes()));
+            assert!(!exported
+                .windows(b"\"mono_noise\"".len())
+                .any(|w| w == b"\"mono_noise\""));
+            settings.tiff_color_space = Some(crate::render::TiffColorSpace::Srgb);
+            let artifact = engine
+                .render_artifacts(&source, &settings, &["final"], &mut Profile::default())
+                .unwrap()
+                .pop()
+                .unwrap();
+            let crate::inspection::Content::Image(photo) = artifact.content else {
+                panic!("missing monochrome photograph")
+            };
+            let destination = dir.join(format!("{model}-{suffix}-photographic.tiff"));
+            if destination.exists() {
+                std::fs::remove_file(&destination).unwrap();
+            }
+            engine
+                .write_tiff(&photo, &destination, &mut Profile::default())
+                .unwrap();
         }
     }
 }

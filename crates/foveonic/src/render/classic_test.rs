@@ -193,3 +193,274 @@ fn classic_calibration_inspection_defers_color_selection() {
             .is_err());
     }
 }
+
+#[test]
+#[ignore = "requires CLASSIC_X3F and CLASSIC_REFERENCE_DIR original-file fixtures"]
+fn classic_original_stage2_matches_reference() {
+    let source = Source::open(std::env::var("CLASSIC_X3F").unwrap()).unwrap();
+    let white_balance =
+        std::env::var("CLASSIC_WHITE_BALANCE").unwrap_or_else(|_| "Sunlight".into());
+    let mut settings = Settings::new(white_balance, "Standard");
+    settings.reconstruction = Some(Default::default());
+    settings.sharpen_amount = Some(1.);
+    let engine = Engine::new().unwrap();
+    let iso = source
+        .metadata
+        .scalar("CaptureISO")
+        .unwrap_or_else(|_| source.metadata.properties["ISO"].parse().unwrap());
+    let recursive_chroma = iso < 400. && source.metadata.scalar("ChromaBlur").unwrap_or(0.) > 100.;
+    let stage2_name = if recursive_chroma {
+        "chroma.rgb-codes"
+    } else {
+        "reconstruction.codes"
+    };
+    let artifacts = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["despeckle.layers", stage2_name],
+            &mut Profile::default(),
+        )
+        .unwrap();
+    for artifact in artifacts {
+        let Content::Image(image) = artifact.content else {
+            panic!("expected image")
+        };
+        let data = engine.readback_image(&image).unwrap();
+        if let Some(directory) = std::env::var_os("CLASSIC_DUMP_DIR") {
+            let directory = Path::new(&directory);
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join(format!("{}.f32", artifact.name)), &data).unwrap();
+        }
+        if artifact.name == stage2_name {
+            let directory = std::env::var_os("CLASSIC_REFERENCE_DIR").unwrap();
+            let native = Path::new(&directory).join("progress-0060/cache-0258.bin");
+            let pixels = bytemuck::cast_slice::<u8, f32>(&data);
+            let difference = if std::env::var_os("CLASSIC_STAGE2_VISIBLE").is_some() {
+                let active: [f64; 4] = source.metadata.fixed("ActiveImageArea").unwrap();
+                let keep: [f64; 4] = source.metadata.fixed("KeepImageArea").unwrap();
+                let expected = std::fs::read(&native).unwrap();
+                let expected: Vec<f32> = expected
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|v| i16::from_le_bytes(*v) as f32)
+                    .collect();
+                let mut changed = 0;
+                let mut maximum = 0_f32;
+                let mut total = 0_f64;
+                let mut count = 0;
+                for y in (active[1] - keep[1]) as usize..=(active[3] - keep[1]) as usize {
+                    for x in (active[0] - keep[0]) as usize..=(active[2] - keep[0]) as usize {
+                        for c in 0..3 {
+                            let at = (y * source.metadata.width + x) * 3 + c;
+                            let delta = (pixels[at] - expected[at]).abs();
+                            changed += usize::from(delta != 0.);
+                            maximum = maximum.max(delta);
+                            total += f64::from(delta);
+                            count += 1;
+                        }
+                    }
+                }
+                (changed, maximum, total / count as f64)
+            } else {
+                reference_difference(pixels, &native)
+            };
+            eprintln!(
+                "Complete Stage2: changed={}, max={}, mean={}",
+                difference.0, difference.1, difference.2
+            );
+            let maximum =
+                std::env::var("CLASSIC_STAGE2_MAX_ERROR").map_or(1., |v| v.parse::<f32>().unwrap());
+            let mean = std::env::var("CLASSIC_STAGE2_MAX_MEAN")
+                .map_or(0.001, |v| v.parse::<f64>().unwrap());
+            assert!(
+                difference.1 <= maximum && difference.2 <= mean,
+                "composed Stage2 exceeds the supplied reference precision budget"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires CLASSIC_X3F original and a GPU"]
+fn classic_low_iso_filter_toggle_preserves_photographic_and_dng_brightness() {
+    let source = Source::open(std::env::var("CLASSIC_X3F").unwrap()).unwrap();
+    assert!(
+        source.metadata.scalar("CaptureISO").unwrap() < 400.,
+        "use a low-ISO original for the fixed-point reconstruction bypass regression"
+    );
+    let engine = Engine::new().unwrap();
+    let mut means = Vec::new();
+    for enabled in [false, true] {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.reconstruction = enabled.then(Default::default);
+        settings.sharpen_amount = Some(0.);
+        let mut profile = Profile::default();
+        let photograph = engine
+            .render_artifacts(&source, &settings, &["final"], &mut profile)
+            .unwrap();
+        let Content::Image(photo) = &photograph[0].content else {
+            panic!("expected image")
+        };
+        let dng = engine
+            .render_dng_base(&source, &settings, &mut profile)
+            .unwrap();
+        let mean = |image: &crate::image::RenderedImage| {
+            let data = engine.readback_image(image).unwrap();
+            let values = bytemuck::cast_slice::<u8, f32>(&data);
+            values.iter().map(|v| f64::from(*v)).sum::<f64>() / values.len() as f64
+        };
+        means.push([mean(photo), mean(&dng)]);
+    }
+    for (i, domain) in ["photographic linear RGB", "DNG linear codes"]
+        .into_iter()
+        .enumerate()
+    {
+        let stops = (means[1][i] / means[0][i]).log2();
+        eprintln!(
+            "{domain}: off {}, on {}, change {stops} stops",
+            means[0][i], means[1][i]
+        );
+        // Spatial filtering can change averages slightly. It must not drop the
+        // camera normalization or digital gain at either export boundary.
+        assert!(
+            stops.abs() < 0.1,
+            "{domain} brightness changes by {stops} stops"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CLASSIC_X3F and optionally CLASSIC_REFERENCE_DIR monochrome original captures"]
+fn classic_monochrome_original_matches_reference_and_ignores_color_wb() {
+    let mut source = Source::open(std::env::var("CLASSIC_X3F").unwrap()).unwrap();
+    if std::env::var_os("CLASSIC_REFERENCE_DIR").is_some() {
+        // The explicit native fixture request uses eRotate=1 (unrotated).
+        // Match its presentation before comparing spatial pixels.
+        std::sync::Arc::make_mut(&mut source.metadata).rotation = 0;
+    }
+    let engine = Engine::new().unwrap();
+    let mode = std::env::var("CLASSIC_COLOR_MODE").unwrap_or_else(|_| "Standard".into());
+    let mut settings = Settings::new("Auto", mode);
+    settings.rendering = Rendering::Monochrome;
+    settings.reconstruction = Some(Default::default());
+    settings.sharpen_amount = Some(1.);
+    settings.tiff_color_space = Some(TiffColorSpace::Srgb);
+    let high_iso = source.metadata.scalar("CaptureISO").unwrap() >= 400.;
+    let codes_name = if high_iso {
+        "reconstruction.codes"
+    } else {
+        "color.codes"
+    };
+    let all_names = crate::inspection::output_names(&settings, Some(&source.metadata));
+    assert!(!all_names.contains(&"red-detail.layers"));
+    assert!(!all_names.contains(&"highlight.layers"));
+    assert!(!all_names.contains(&"chroma.layers"));
+    assert!(!all_names.contains(&"color.gained-codes"));
+    let artifacts = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &[codes_name, "final"],
+            &mut Profile::default(),
+        )
+        .unwrap();
+    let Content::Image(codes) = &artifacts[0].content else {
+        panic!("expected codes")
+    };
+    let Content::Image(photo) = &artifacts[1].content else {
+        panic!("expected photograph")
+    };
+    let codes = engine.readback_image(codes).unwrap();
+    let photograph = engine.readback_image(photo).unwrap();
+    assert!(bytemuck::cast_slice::<u8, f32>(&photograph)
+        .iter()
+        .all(|x| x.is_finite()));
+    settings.white_balance = "Incandescent".into();
+    let again = engine
+        .render_artifacts(&source, &settings, &["final"], &mut Profile::default())
+        .unwrap();
+    let Content::Image(again) = &again[0].content else {
+        panic!("expected photograph")
+    };
+    assert_eq!(
+        photograph,
+        engine.readback_image(again).unwrap(),
+        "ordinary WB must be inactive"
+    );
+    if let Some(directory) = std::env::var_os("CLASSIC_REFERENCE_DIR") {
+        let native =
+            std::fs::read(Path::new(&directory).join("progress-0060/cache-0258.bin")).unwrap();
+        let native: Vec<_> = native
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i16::from_le_bytes(*b) as f32)
+            .collect();
+        let actual = bytemuck::cast_slice::<u8, f32>(&codes);
+        assert_eq!(actual.len(), native.len());
+        let active: [f64; 4] = source.metadata.fixed("ActiveImageArea").unwrap();
+        let keep: [f64; 4] = source.metadata.fixed("KeepImageArea").unwrap();
+        let mut total = 0.;
+        let mut maximum = 0_f32;
+        let mut count = 0;
+        for y in (active[1] - keep[1]) as usize..=(active[3] - keep[1]) as usize {
+            for x in (active[0] - keep[0]) as usize..=(active[2] - keep[0]) as usize {
+                for c in 0..3 {
+                    let at = (y * source.metadata.width + x) * 3 + c;
+                    let error = (actual[at] - native[at]).abs();
+                    total += f64::from(error);
+                    maximum = maximum.max(error);
+                    count += 1;
+                }
+            }
+        }
+        let mean = total / count as f64;
+        eprintln!("Monochrome Stage2 mean {mean} codes, max {maximum}");
+        assert!(
+            mean < 2. && maximum < 100.,
+            "monochrome technical boundary differs from reference"
+        );
+        let temporary = std::env::temp_dir().join(format!(
+            "classic-mono-reference-{}.tiff",
+            std::process::id()
+        ));
+        engine
+            .write_tiff(photo, &temporary, &mut Profile::default())
+            .unwrap();
+        let mut decoder = tiff::decoder::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&temporary).unwrap(),
+        ))
+        .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(Path::new(&directory).join("receipt.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            decoder.dimensions().unwrap(),
+            (
+                receipt["output_dimensions"][0].as_u64().unwrap() as u32,
+                receipt["output_dimensions"][1].as_u64().unwrap() as u32,
+            ),
+            "reference presentation dimensions differ"
+        );
+        let tiff::decoder::DecodingResult::U16(actual) = decoder.read_image().unwrap() else {
+            panic!("expected RGB16")
+        };
+        std::fs::remove_file(&temporary).unwrap();
+        let native = std::fs::read(Path::new(&directory).join("output.pixels.bin")).unwrap();
+        assert_eq!(actual.len() * 2, native.len());
+        let mean = actual
+            .iter()
+            .zip(native.as_chunks::<2>().0)
+            .map(|(a, b)| f64::from((*a as i32 - u16::from_le_bytes(*b) as i32).abs()))
+            .sum::<f64>()
+            / actual.len() as f64;
+        eprintln!("Monochrome photographic mean {mean} sRGB16 codes");
+        assert!(
+            mean < 256.,
+            "monochrome photographic boundary differs from reference"
+        );
+    }
+}

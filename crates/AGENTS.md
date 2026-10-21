@@ -13,7 +13,7 @@ Read a crate's local instructions before changing it. Follow [`contributing.md`]
 ### Directories
 
 - **[docs-index/](./docs-index/AGENTS.md)** The Rust documentation tool generates directory indexes and checks document fields, titles, and relative links.
-- **[foveonic/](./foveonic/AGENTS.md)** The processor crate decodes Merrill X3Fs and renders RGB16 TIFFs through a shared GPU graph.
+- **[foveonic/](./foveonic/AGENTS.md)** The processor crate decodes equal-resolution X3Fs and renders photographs and editable DNGs through a shared GPU graph.
 - **[foveonic-gui/](./foveonic-gui/AGENTS.md)** The egui desktop app browses embedded previews and inspects named outputs of the shared GPU engine.
 - **[xtask/](./xtask/AGENTS.md)** Cargo tasks package native apps, prepare draft-release notes, sync example photographs, and capture the README image.
 

@@ -84,6 +84,7 @@ pub(crate) fn analyze(
         samples[1],
         match space {
             Space::SensorLayers
+            | Space::NormalizedCodeRgb
             | Space::LinearCodeRgb
             | Space::SignedCodeRgb
             | Space::CalibratedLayers

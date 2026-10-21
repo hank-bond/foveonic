@@ -18,6 +18,13 @@ pub enum ProcessingFamily {
     Classic,
 }
 
+impl ProcessingFamily {
+    /// Identify processing from the lightweight capture properties before RAW decoding.
+    pub fn from_camera_model(model: &str) -> Option<Self> {
+        family(Some(model))
+    }
+}
+
 /// Original CAMF numeric categories, retained separately from widened values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[repr(u32)]
@@ -116,10 +123,15 @@ impl Metadata {
             .ok_or_else(|| "unsupported camera family".into())
     }
 
-    /// Camera-ordered white-balance choices resolved through the input profile.
+    /// Camera-ordered illuminants. Classic monochrome is a separate rendering choice.
     pub fn white_balance_presets(&self) -> Vec<&str> {
+        let classic = self.processing_family().ok() == Some(ProcessingFamily::Classic);
         self.white_balance_catalogue()
-            .map(|list| list.names().collect())
+            .map(|list| {
+                list.names()
+                    .filter(|name| !classic || *name != "Monochrome")
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -142,7 +154,11 @@ impl Metadata {
         } else {
             "WhiteBalanceGains"
         };
-        self.lists.get(name)
+        self.lists.get(name).or_else(|| {
+            (self.processing_family().ok() == Some(ProcessingFamily::Classic))
+                .then(|| self.lists.get("WhiteBalanceCorrections"))
+                .flatten()
+        })
     }
 
     /// Resolve the recorded WB label to this file's canonical CAMF preset name.
@@ -237,12 +253,18 @@ pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String
 pub struct Source {
     pub metadata: std::sync::Arc<Metadata>,
     /// Full-sensor, interleaved layer samples in original camera code units.
-    pub pixels: Vec<f32>,
+    pub(crate) pixels: Vec<f32>,
     pub camf: Vec<u8>,
     pub(crate) timings: Vec<crate::profile::Timing>,
 }
 
 impl Source {
+    /// Original interleaved sensor layers in camera code units. Samples remain
+    /// immutable so render and calibration caches describe the same photograph.
+    pub fn samples(&self) -> &[f32] {
+        &self.pixels
+    }
+
     /// Keep reading separate from decoding so cached-file speed is not mistaken
     /// for decoder speed. Read time includes opening, checks, allocation, and
     /// reading all bytes. Parallel-plane timings overlap the decode total, so
@@ -262,7 +284,17 @@ impl Source {
                 }
             }
             ProcessingFamily::Classic => {
-                if source.metadata.width != 2688 || source.metadata.height != 1792 {
+                let model = source
+                    .metadata
+                    .properties
+                    .get("CAMMODEL")
+                    .map(|m| m.trim().to_ascii_uppercase());
+                let expected = if matches!(model.as_deref(), Some("SIGMA SD9" | "SIGMA SD10")) {
+                    [2304, 1531]
+                } else {
+                    [2688, 1792]
+                };
+                if [source.metadata.width, source.metadata.height] != expected {
                     return Err("unsupported Classic full-sensor geometry".into());
                 }
             }
@@ -275,8 +307,19 @@ fn family(model: Option<&str>) -> Option<ProcessingFamily> {
     if is_merrill(model) {
         Some(ProcessingFamily::Merrill)
     } else if matches!(
-        model,
-        Some("SIGMA SD15" | "SIGMA DP2" | "SIGMA DP1S" | "SIGMA DP1s")
+        model.map(|m| m.trim().to_ascii_uppercase()).as_deref(),
+        Some(
+            "SIGMA SD9"
+                | "SIGMA SD10"
+                | "SIGMA SD14"
+                | "SIGMA SD15"
+                | "SIGMA DP1"
+                | "SIGMA DP1S"
+                | "SIGMA DP1X"
+                | "SIGMA DP2"
+                | "SIGMA DP2S"
+                | "SIGMA DP2X"
+        )
     ) {
         Some(ProcessingFamily::Classic)
     } else {

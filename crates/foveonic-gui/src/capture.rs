@@ -42,28 +42,30 @@ impl Loader {
     ) -> Self {
         let state = Arc::new((Mutex::new(State::default()), Condvar::new()));
         let slot = state.clone();
-        thread::spawn(move || loop {
-            let request = {
-                let (lock, wake) = &*slot;
-                let mut state = lock.lock().unwrap();
-                while !state.stop && state.pending.is_none() {
-                    state = wake.wait(state).unwrap();
-                }
+        thread::spawn(move || {
+            loop {
+                let request = {
+                    let (lock, wake) = &*slot;
+                    let mut state = lock.lock().unwrap();
+                    while !state.stop && state.pending.is_none() {
+                        state = wake.wait(state).unwrap();
+                    }
+                    if state.stop {
+                        break;
+                    }
+                    state.pending.take().unwrap()
+                };
+                let result = read(&request.path);
+                let mut state = slot.0.lock().unwrap();
                 if state.stop {
                     break;
                 }
-                state.pending.take().unwrap()
-            };
-            let result = read(&request.path);
-            let mut state = slot.0.lock().unwrap();
-            if state.stop {
-                break;
-            }
-            // Returning to the same path is still a new selection. A path check
-            // alone would let an earlier load publish into that newer selection.
-            if state.selected.as_ref() == Some(&request) {
-                state.ready = Some(result);
-                context.request_repaint();
+                // Returning to the same path is still a new selection. A path check
+                // alone would let an earlier load publish into that newer selection.
+                if state.selected.as_ref() == Some(&request) {
+                    state.ready = Some(result);
+                    context.request_repaint();
+                }
             }
         });
         Self {

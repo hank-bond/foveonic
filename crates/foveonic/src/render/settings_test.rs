@@ -61,6 +61,27 @@ fn metadata() -> Metadata {
 }
 
 #[test]
+fn classic_auto_sharpening_matches_recipe_default_without_merrill_descriptors() {
+    let mut metadata = metadata();
+    metadata
+        .properties
+        .insert("CAMMODEL".into(), "SIGMA SD14".into());
+    metadata.matrices.clear();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.sharpen_amount = None;
+    assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.);
+    settings.reconstruction = None;
+    assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.);
+    for amount in [0., 0.75, 2.] {
+        settings.sharpen_amount = Some(amount);
+        assert_eq!(
+            settings.effective_sharpen_amount(&metadata).unwrap(),
+            amount
+        );
+    }
+}
+
+#[test]
 fn automatic_sharpening_uses_iso_interpolation_and_luminance_not_detail_or_export_size() {
     let metadata = metadata();
     let mut settings = Settings::new("Sunlight", "Standard");
@@ -73,7 +94,7 @@ fn automatic_sharpening_uses_iso_interpolation_and_luminance_not_detail_or_expor
     assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.75);
     settings.sharpen_amount = None;
     assert!(settings.sharpen_selected());
-    assert!(crate::inspection::output_names(&settings).contains(&"sharpen.rgb"));
+    assert!(crate::inspection::output_names(&settings, None).contains(&"sharpen.rgb"));
     // ISO 200 lies one third between the two source knots: base 1.75.
     assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.75);
     for (choice, multiplier) in [0.5, 0.75, 1., 1.25, 1.5].into_iter().enumerate() {
@@ -97,9 +118,9 @@ fn automatic_sharpening_uses_iso_interpolation_and_luminance_not_detail_or_expor
     }
     settings.rendering = Rendering::Monochrome;
     assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.75);
-    assert!(crate::inspection::output_names(&settings).contains(&"sharpen.rgb"));
+    assert!(crate::inspection::output_names(&settings, None).contains(&"sharpen.rgb"));
     assert_eq!(
-        crate::inspection::comparison_input(&settings, "sharpen.rgb"),
+        crate::inspection::comparison_input(&settings, "sharpen.rgb", None),
         Some("monochrome.rgb")
     );
     let mut zero = metadata.clone();
@@ -155,4 +176,39 @@ fn automatic_manual_and_export_choices_round_trip_without_changing_numeric_recip
     edited = settings.clone();
     edited.tiff_color_space = Some(TiffColorSpace::ProPhotoRgb);
     assert_eq!(settings.changed_parameters(&edited), ["tiff-color-space"]);
+}
+
+#[test]
+fn camera_validation_requires_only_active_photographic_choices() {
+    let mut metadata = crate::source::Metadata {
+        width: 1,
+        height: 1,
+        rotation: 0,
+        properties: [("CAMMODEL".into(), "SIGMA DP2".into())].into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    let mut settings = Settings::new("", "Standard");
+    settings.rendering = Rendering::Monochrome;
+    assert!(
+        settings.validate_for_camera(&metadata).is_ok(),
+        "Classic mono WB is inactive"
+    );
+    settings.color_mode.clear();
+    assert!(
+        settings.validate_for_camera(&metadata).is_err(),
+        "Classic mono color mode is active"
+    );
+    metadata
+        .properties
+        .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
+    assert!(
+        settings.validate_for_camera(&metadata).is_err(),
+        "Merrill mono needs WB"
+    );
+    settings.white_balance = "Sunlight".into();
+    assert!(
+        settings.validate_for_camera(&metadata).is_ok(),
+        "Merrill mono color mode is inactive"
+    );
 }

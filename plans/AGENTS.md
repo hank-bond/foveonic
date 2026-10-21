@@ -17,6 +17,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
 - **[archived/](./archived/AGENTS.md)** Archived plans record completed implementation slices, their checks, and historical limitations.
+- **[classic-coverage](./classic-coverage.md)** Complete ordinary color rendering and editable DNG export across all pre-Merrill Sigma Classic cameras.
 - **[color-field-bleeding](./color-field-bleeding.md)** Profile color-field parameters that may reduce yellow bleeding into the 0170 striped skirt without losing genuine highlight color.
 - **[color-field-controls](./color-field-controls.md)** Investigate whether color agreement and boundary controls produce visible changes independently of GUI and cache behavior.
 - **[color-field-determinism](./color-field-determinism.md)** Make color-field GPU solver row ordering deterministic without changing equations, tolerances, Classic processing or per-image controls.

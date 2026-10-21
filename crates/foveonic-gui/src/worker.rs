@@ -201,7 +201,7 @@ impl Worker {
                     let cache_before = before.map(|_|session.cached_bytes());
                     let root=if request.export.is_some(){"final"}else{&request.output};
                     let input = if request.comparison && request.export.is_none() {
-                        Some(foveonic::inspection::comparison_input(&settings, root)
+                        Some(foveonic::inspection::comparison_input(&settings, root, metadata.as_deref())
                             .ok_or("selected output has no operation-input comparison")?)
                     } else {
                         None
@@ -386,12 +386,15 @@ fn analyze_scopes(
 /// could overwrite a launch override or an edit made while the photo was opening.
 fn resolve_camera_settings(settings: &mut Settings, metadata: &Metadata) -> Vec<String> {
     let mut errors = Vec::new();
-    let color_required = !settings.is_monochrome();
+    let capabilities = foveonic::render::ControlCapabilities::from_metadata(metadata).ok();
+    let color_required =
+        capabilities.map_or(!settings.is_monochrome(), |c| c.color_mode_active(settings));
+    let wb_required = capabilities.is_none_or(|c| c.white_balance_active(settings));
     for (value, recorded, required) in [
         (
             &mut settings.white_balance,
             metadata.recorded_white_balance(),
-            true,
+            wb_required,
         ),
         (
             &mut settings.color_mode,
@@ -786,11 +789,11 @@ mod tests {
                         settled = true;
                         request_scopes(&worker, &frame, None);
                         eprintln!(
-                        "DRAG control={control} published_during_drag={} duration_ms={:.3} settled_ms={:.3}",
-                        progress.len(),
-                        start.elapsed().as_secs_f64() * 1000.,
-                        stopped.elapsed().as_secs_f64() * 1000.
-                    );
+                            "DRAG control={control} published_during_drag={} duration_ms={:.3} settled_ms={:.3}",
+                            progress.len(),
+                            start.elapsed().as_secs_f64() * 1000.,
+                            stopped.elapsed().as_secs_f64() * 1000.
+                        );
                     }
                     super::Update::Scopes { key, result } if key.revision == last => {
                         assert!(result.is_ok());

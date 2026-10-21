@@ -21,6 +21,12 @@ const LOG_TABLE_LEN: usize = 245760;
 const LOG_CODE_SCALE: f32 = 23637.115;
 const SIGNAL_CODE_UNIT: f32 = 4096.;
 
+/// Required output normalization, also used when spatial reconstruction is bypassed.
+/// The reference finalizer caps the matrix response before applying digital gain.
+pub(crate) fn output_gain(matrix_green_sum: f32, digital_gain: f32) -> f32 {
+    matrix_green_sum.min(7.) * digital_gain
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Params {
@@ -86,7 +92,7 @@ impl Prepared {
             controls: [decay, self.controls[3], self.controls[4], slope],
             extra: [
                 self.range as f32,
-                ((self.controls[8].min(7.) * self.controls[9]) * SIGNAL_CODE_UNIT) as i32 as f32,
+                (output_gain(self.controls[8], self.controls[9]) * SIGNAL_CODE_UNIT) as i32 as f32,
                 0.,
                 0.,
             ],

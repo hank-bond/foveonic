@@ -1,4 +1,6 @@
 //! Selects Classic camera highlight controls before an architecture-unaware row stream.
+use super::reference::*;
+
 use crate::{
     nodes::color::highlight_stream::Prepared,
     source::{Metadata, Result},
@@ -41,15 +43,20 @@ pub(crate) fn prepare(metadata: &Metadata, final_gain: [f64; 3]) -> Result<Optio
         return Err("Classic bulb highlight preparation is outside the selected experiment".into());
     }
     let gain = ratio.min(2.);
-    let mut shutter = scalar(metadata, "CaptureShutter", 0.)? / 1_000_000.;
+    let units = super::policy::capture_shutter_units(&model);
+    let mut shutter = scalar(metadata, "CaptureShutter", 0.)? / units;
     if shutter == 0. {
         // The native caller falls back to the recorded exposure. The shared
         // metadata property stores that exposure in seconds.
-        shutter = metadata
-            .properties
-            .get("SHUTTER")
-            .ok_or("missing recorded exposure for Classic highlight preparation")?
-            .parse()?;
+        shutter = if let Some(value) = metadata.properties.get("SHUTTER") {
+            value.parse()?
+        } else if let Some(value) = metadata.properties.get("EXPTIME") {
+            // Early bodies may store only the exposure in microseconds.
+            // Prefer this measured duration to parsing the display label.
+            value.parse::<f64>()? / MICROSECONDS_PER_SECOND
+        } else {
+            return Err("missing recorded exposure for Classic highlight preparation".into());
+        };
         if shutter == 0. {
             shutter = 1.;
         }
@@ -59,30 +66,28 @@ pub(crate) fn prepare(metadata: &Metadata, final_gain: [f64; 3]) -> Result<Optio
     } else {
         1.
     };
-    let factor =
-        match model.as_str() {
-            "SIGMA SD15" | "SD15" => 0.8,
-            "SIGMA DP2" | "DP2" | "SIGMA DP2S" | "DP2S" | "SIGMA DP2X" | "DP2X" => {
-                if ratio < 1. {
-                    1.3
-                } else {
-                    1.
-                }
+    let factor = match model.as_str() {
+        "SIGMA SD9" | "SD9" | "SIGMA SD10" | "SD10" => 1.2,
+        "SIGMA SD14" | "SD14" => 1.,
+        "SIGMA SD15" | "SD15" => 0.8,
+        "SIGMA DP2" | "DP2" | "SIGMA DP2S" | "DP2S" | "SIGMA DP2X" | "DP2X" => {
+            if ratio < 1. {
+                1.3
+            } else {
+                1.
             }
-            "SIGMA DP1" | "DP1" | "SIGMA DP1S" | "DP1S" | "SIGMA DP1X" | "DP1X" => {
-                if shutter < 0.5 {
-                    statistics
-                } else if shutter < 1.5 {
-                    (statistics - 1.) * (1.5 - shutter) + 1.
-                } else {
-                    1.
-                }
+        }
+        "SIGMA DP1" | "DP1" | "SIGMA DP1S" | "DP1S" | "SIGMA DP1X" | "DP1X" => {
+            if shutter < 0.5 {
+                statistics
+            } else if shutter < 1.5 {
+                (statistics - 1.) * (1.5 - shutter) + 1.
+            } else {
+                1.
             }
-            _ => return Err(
-                "Classic highlight preparation currently supports DP1/DP2/SD15 generation cameras"
-                    .into(),
-            ),
-        };
+        }
+        _ => return Err("unknown Classic camera highlight controls".into()),
+    };
     let values = metadata
         .matrix("SaturationLevel")
         .filter(|m| m.values.len() == 3)
@@ -91,10 +96,8 @@ pub(crate) fn prepare(metadata: &Metadata, final_gain: [f64; 3]) -> Result<Optio
     // its camera threshold adjustment with a separate rounding step.
     // final_gain already includes the first ISO gain; do not apply it twice.
     let pregain = (f64::from(sensor) / 100.).max(1.);
-    let sat = std::array::from_fn(|c| {
-        let calibrated = (pregain * final_gain[c] * values.values[c]) as i32;
-        (f64::from(calibrated) * factor + 0.5) as i32
-    });
+    let calibrated = std::array::from_fn(|c| (pregain * final_gain[c] * values.values[c]) as i32);
+    let sat = adjusted_saturation(&model, calibrated, factor);
     let extent = [metadata.width as u32, metadata.height as u32];
     Ok(Some(Prepared::new(
         extent,
@@ -104,6 +107,42 @@ pub(crate) fn prepare(metadata: &Metadata, final_gain: [f64; 3]) -> Result<Optio
         gain,
         false,
     )?))
+}
+
+// The earliest sensors lower their channel limits before the final threshold
+// multiplier. Integer division keeps the reference's truncation toward zero.
+fn adjusted_saturation(model: &str, mut levels: [i32; 3], factor: f64) -> [i32; 3] {
+    match model {
+        "SIGMA SD9" | "SD9" => {
+            levels = levels.map(|v| v - v / 32);
+            levels[0] -= levels[0] / 6;
+        }
+        "SIGMA SD10" | "SD10" => {
+            levels = levels.map(|v| v - v / 64);
+            levels[0] -= levels[0] / 8;
+            levels[0] = levels[0].min(levels[1] - levels[1] / 16);
+            levels[2] = levels[2].min(levels[1] + levels[1] / 16);
+        }
+        _ => {}
+    }
+    levels.map(|v| (f64::from(v) * factor + 0.5) as i32)
+}
+
+#[cfg(test)]
+#[test]
+fn legacy_thresholds_adjust_channels_before_scaling() {
+    assert_eq!(
+        adjusted_saturation("SIGMA SD9", [6400, 3200, 9600], 1.2),
+        [6200, 3720, 11160]
+    );
+    assert_eq!(
+        adjusted_saturation("SIGMA SD10", [6400, 3200, 9600], 1.2),
+        [3545, 3780, 4015]
+    );
+    assert_eq!(
+        adjusted_saturation("SIGMA SD14", [6400, 3200, 9600], 1.),
+        [6400, 3200, 9600]
+    );
 }
 
 #[cfg(test)]
@@ -161,4 +200,42 @@ fn selected_sd15_metadata_reproduces_native_threshold_triples() {
     .unwrap()
     .unwrap();
     assert_eq!(p, fallback);
+}
+
+#[cfg(test)]
+#[test]
+fn early_cameras_keep_capture_shutter_in_seconds() {
+    use crate::source::{Matrix, MatrixEncoding};
+    let metadata = Metadata {
+        width: 2304,
+        height: 1531,
+        rotation: 0,
+        properties: [
+            ("CAMMODEL".into(), "SIGMA SD10".into()),
+            ("ISO".into(), "100".into()),
+        ]
+        .into(),
+        lists: Default::default(),
+        matrices: [
+            ("CaptureShutter", vec![4.]),
+            ("SaturationLevel", vec![6400., 3200., 9600.]),
+        ]
+        .into_iter()
+        .map(|(name, values)| {
+            (
+                name.into(),
+                Matrix {
+                    encoding: MatrixEncoding::Float32,
+                    representation: "native",
+                    dimensions: vec![values.len()],
+                    values,
+                },
+            )
+        })
+        .collect(),
+    };
+    let actual = prepare(&metadata, [1.; 3]).unwrap().unwrap();
+    let expected = Prepared::new([2304, 1531], [1.; 3], [3545, 3780, 4015], 4., 1., false).unwrap();
+    assert_eq!(actual.fix, expected.fix);
+    assert_eq!(actual.apriori, expected.apriori);
 }

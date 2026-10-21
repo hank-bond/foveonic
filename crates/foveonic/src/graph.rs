@@ -22,6 +22,9 @@ pub enum DataType {
     Histogram,
     RowTable,
     CalibratedLayers,
+    /// Linear codes awaiting the reconstruction finalizer's required gain.
+    NormalizedCodeRgb,
+    /// Linear codes with the required gain applied, ready for root/detail.
     LinearCodeRgb,
     SignedCodeRgb,
     LinearRgb(ColorSpace),
@@ -40,6 +43,7 @@ impl From<crate::image::Space> for DataType {
             Space::LuminanceRatio => Self::LuminanceRatio,
             Space::SignedDetail => Self::SignedDetail,
             Space::CalibratedLayers => Self::CalibratedLayers,
+            Space::NormalizedCodeRgb => Self::NormalizedCodeRgb,
             Space::LinearCodeRgb => Self::LinearCodeRgb,
             Space::SignedCodeRgb => Self::SignedCodeRgb,
             Space::LinearRgb(space) => Self::LinearRgb(space),

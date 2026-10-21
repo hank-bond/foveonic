@@ -42,10 +42,18 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "White balance" => {
             "Corrects the color cast of the light so whites and grays look neutral. Choose a preset close to the lighting, then judge skin tones and neutral objects. It also affects how color noise is treated."
         }
-        "Rendering" => "Color reconstructs a color photograph. Monochrome mixes the original sensor layers before dedicated filtering and detail processing. Each mode retains its settings. Switching does not discard source color.",
-        "Color Mix" => "Mixes overlapping color-sensitive sensor layers before monochrome reconstruction. Drag within the triangle or select a pure R, G, or B corner. Blue-only can give cleaner high-ISO monochrome. Reset restores equal proportions. DNG bakes this selection. Retain the X3F and sidecar to change it.",
-        "Mono noise" => "Reduces grain in the mixed sensor signal. 0 skips this filter and 4 gives the strongest smoothing. Strong smoothing can soften fine texture. Column and speckle corrections remain separate.",
-        "Mono banding" => "Reduces sensor-column stripes in the mixed signal. Choose 0 to 4. 0 still applies correction. It also influences Speckles independently of the color noise controls.",
+        "Rendering" => {
+            "Color reconstructs a color photograph. Monochrome mixes the original sensor layers before dedicated filtering and detail processing. Each mode retains its settings. Switching does not discard source color."
+        }
+        "Color Mix" => {
+            "Mixes overlapping color-sensitive sensor layers before monochrome reconstruction. Drag within the triangle or select a pure R, G, or B corner. Blue-only can give cleaner high-ISO monochrome. Reset restores equal proportions. DNG bakes this selection. Retain the X3F and sidecar to change it."
+        }
+        "Mono noise" => {
+            "Reduces grain in the mixed sensor signal. 0 skips this filter and 4 gives the strongest smoothing. Strong smoothing can soften fine texture. Column and speckle corrections remain separate."
+        }
+        "Mono banding" => {
+            "Reduces sensor-column stripes in the mixed signal. Choose 0 to 4. 0 still applies correction. It also influences Speckles independently of the color noise controls."
+        }
         "Color mode" => {
             "Chooses the camera's color and contrast look, such as a more natural or vivid rendering. This is a starting look, not just a saturation adjustment. It can also change the tone curve."
         }
@@ -85,12 +93,18 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Sharpen" => {
             "Emphasizes edges to make the finished photo look crisper. 0 turns it off. A chooses the amount from the camera and current noise settings. Higher amounts can exaggerate grain and create light or dark outlines around edges. It cannot restore detail that was never recorded."
         }
-        "TIFF space" => "Chooses the color space written into TIFF pixels and its matching embedded profile. Camera preserves the stored sRGB or Adobe RGB space. sRGB is convenient for sharing. Adobe RGB and ProPhoto RGB retain wider color ranges for color-managed editing. This does not change the preview or DNG.",
+        "TIFF space" => {
+            "Chooses the color space written into TIFF pixels and its matching embedded profile. Camera preserves the stored sRGB or Adobe RGB space. sRGB is convenient for sharing. Adobe RGB and ProPhoto RGB retain wider color ranges for color-managed editing. This does not change the preview or DNG."
+        }
         "Bad pixels" => crate::help_examples::text("bad-pixels"),
         "Row banding" => crate::help_examples::text("row-banding"),
         "Highlight correction" => crate::help_examples::text("highlight-correction"),
-        "Highlight method" => "Classic uses the existing highlight correction and its camera-relative threshold. Color Field: Local uses 64 local brightness sweeps. Color Field: Global solves the full brightness system for smoother gradients at higher cost. Both share the same color reconstruction and tuning. Both use full-sensor recovery and the supported 8px color grid. Your Classic threshold and shared color-field selectivity strength are retained. The Highlights row below edits the selected method's parameter.",
-        "Color-field highlights" => "Controls which mixed color evidence can steer highlight reconstruction. The default, 0, keeps the original behavior. Increase the strength toward 1 to reject more inconsistent evidence and reduce color bleeding. Strong settings can also discard real color variation in flowers, fabric or skin. This does not add a neutral tint or change brightness reconstruction. Local and Global share the strength. Double-click resets to 0.",
+        "Highlight method" => {
+            "Classic uses the existing highlight correction and its camera-relative threshold. Color Field: Local uses 64 local brightness sweeps. Color Field: Global solves the full brightness system for smoother gradients at higher cost. Both share the same color reconstruction and tuning. Both use full-sensor recovery and the supported 8px color grid. Your Classic threshold and shared color-field selectivity strength are retained. The Highlights row below edits the selected method's parameter."
+        }
+        "Color-field highlights" => {
+            "Controls which mixed color evidence can steer highlight reconstruction. The default, 0, keeps the original behavior. Increase the strength toward 1 to reject more inconsistent evidence and reduce color bleeding. Strong settings can also discard real color variation in flowers, fabric or skin. This does not add a neutral tint or change brightness reconstruction. Local and Global share the strength. Double-click resets to 0."
+        }
         "Advanced corrections" => {
             "Speckles, Bad pixels, and Row banding default on for new edits. Expand to toggle them individually. Collapsing preserves your settings."
         }
@@ -126,12 +140,46 @@ pub fn scope(mode: Scope) -> &'static str {
 
 pub fn inspection(name: &str) -> Option<&'static str> {
     Some(match name {
-        "mono.mix" => "WB-normalized sensor-layer mixing before monochrome filtering or any color matrix. Single linear brightness component.",
-        "mono.directional" => "Horizontal range-weighted monochrome means for column correction and zero-noise neighborhood processing.",
-        "mono.column" => "Mixed monochrome after gated column-offset correction in fixed row blocks.",
-        "mono.filtered" => "Dedicated 19-square histogram-weighted monochrome noise filtering. No color denoising is applied.",
+        "red-detail.layers" => {
+            "Sensor layers after red-channel detail recovery, before highlight restoration. Only the red sensor layer changes."
+        }
+        "chroma.small-layers" => {
+            "Sensor layers after narrow chroma smoothing. Components remain sensor readings rather than finished RGB."
+        }
+        "chroma.layers" => {
+            "Sensor layers after broader chroma smoothing, before camera color conversion."
+        }
+        "color.corrected-layers" => {
+            "Sensor layers after the nonlinear color-noise correction, retained as reconstruction guidance."
+        }
+        "color.codes" => {
+            "Linear working RGB in camera processing code units, before reconstruction and photographic tone."
+        }
+        "reconstruction.codes" => {
+            "Linear working RGB after detail and noise reconstruction. The camera's ISO selects the reconstruction method."
+        }
+        "chroma.rgb-codes" => {
+            "Linear working RGB after broad recursive chroma smoothing, following detail reconstruction."
+        }
+        "root.rgb" => {
+            "Nonlinear working RGB used for detail and tone processing. Its code values are not linear brightness."
+        }
+        "mono.mix" => {
+            "WB-normalized sensor-layer mixing before monochrome filtering or any color matrix. Single linear brightness component."
+        }
+        "mono.directional" => {
+            "Horizontal range-weighted monochrome means for column correction and zero-noise neighborhood processing."
+        }
+        "mono.column" => {
+            "Mixed monochrome after gated column-offset correction in fixed row blocks."
+        }
+        "mono.filtered" => {
+            "Dedicated 19-square histogram-weighted monochrome noise filtering. No color denoising is applied."
+        }
         "mono.despeckle" => "Monochrome speckle correction using its dedicated neighborhood plane.",
-        "monochrome.rgb" => "Linear monochrome after processing gain, replicated into equal neutral channels. No color matrix or residual color reconstruction is applied.",
+        "monochrome.rgb" => {
+            "Linear monochrome after processing gain, replicated into equal neutral channels. No color matrix or residual color reconstruction is applied."
+        }
         "final" => {
             "The finished photo with all enabled edits. This is the result used for export. Choose RGB to see the normal color image."
         }
@@ -187,7 +235,7 @@ pub fn inspection(name: &str) -> Option<&'static str> {
             "A diagnostic view of fine brightness variation used by the detail processing. Middle gray means no variation. Lighter and darker marks show bright and dark detail. It can contain grain as well as real texture, and is not the finished photo or an exact preview of the Detail slider."
         }
         "tone.rgb" => {
-            "The photo after Exposure and the selected rendering mode's tone curve, including Contrast, Shadows, and Highlights. Color saturation comes later. Optional high-pass sharpening has already been applied before Exposure and tone."
+            "The photo after Exposure and the selected rendering mode's tone curve, including Contrast, Shadows, and Highlights. Classic also includes its saturation adjustment here. Merrill exposes saturation as a later stage. Sharpening is already included."
         }
         "saturation.rgb" => {
             "The photo after the Saturation adjustment. Compare it with tone.rgb to judge the change in color intensity."
@@ -232,7 +280,7 @@ mod tests {
         settings.saturation = 1.2;
         settings.sharpen_amount = Some(1.);
         settings.reconstruction = Some(Default::default());
-        for output in foveonic::inspection::image_outputs(&settings) {
+        for output in foveonic::inspection::image_outputs(&settings, None) {
             assert!(inspection(output.name).is_some(), "{}", output.name);
         }
     }
@@ -265,6 +313,43 @@ mod tests {
             .contains("checkbox"));
         for mode in [Scope::Histogram, Scope::Parade, Scope::Waveform] {
             assert!(!scope(mode).is_empty());
+        }
+    }
+}
+
+#[test]
+fn classic_inspection_stages_have_help_and_layer_components() {
+    use foveonic::source::{Matrix, MatrixEncoding, Metadata};
+    let mut metadata = Metadata {
+        width: 2304,
+        height: 1531,
+        rotation: 0,
+        properties: [
+            ("CAMMODEL".into(), "SIGMA SD10".into()),
+            ("ISO".into(), "100".into()),
+        ]
+        .into(),
+        matrices: [(
+            "ChromaBlur".into(),
+            Matrix {
+                encoding: MatrixEncoding::Float32,
+                representation: "native",
+                dimensions: vec![1],
+                values: vec![128.],
+            },
+        )]
+        .into(),
+        lists: Default::default(),
+    };
+    let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    for iso in ["100", "400"] {
+        metadata.properties.insert("ISO".into(), iso.into());
+        for output in foveonic::inspection::image_outputs(&settings, Some(&metadata)) {
+            assert!(inspection(output.name).is_some(), "{}", output.name);
+            if output.name.ends_with("layers") {
+                assert_eq!(output.channels, foveonic::inspection::Channels::Layers);
+            }
         }
     }
 }

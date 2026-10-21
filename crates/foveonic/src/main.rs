@@ -15,13 +15,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: foveonic inspect INPUT.x3f
-       foveonic render INPUT.x3f OUTPUT.tiff --wb NAME [--mode NAME] [OPTIONS]
-       foveonic export-dng INPUT.x3f OUTPUT.dng --wb NAME [--mode NAME] [OPTIONS]
-       foveonic batch OUTPUT_DIR INPUT_OR_DIR... --wb NAME [--mode NAME] [OPTIONS]
+       foveonic render INPUT.x3f OUTPUT.tiff [--wb NAME] [--mode NAME] [OPTIONS]
+       foveonic export-dng INPUT.x3f OUTPUT.dng [--wb NAME] [--mode NAME] [OPTIONS]
+       foveonic batch OUTPUT_DIR INPUT_OR_DIR... [--wb NAME] [--mode NAME] [OPTIONS]
 
 Batch directories are scanned nonrecursively for .x3f files. Outputs use each input's
 stem with a .tiff extension. Existing outputs and duplicate output names are rejected.
-Color requires --mode. Any --mono-* option selects monochrome automatically.
+Color requires --wb and --mode. Merrill monochrome requires --wb.
+Classic monochrome requires --mode and ignores --wb. Merrill --mono-* options
+select monochrome automatically. Classic uses its camera mixture and rejects overrides.
 
 Options (also available for batch):
   --exposure STOPS           Default 0
@@ -40,7 +42,7 @@ Options (also available for batch):
   --no-despeckle            Disable dynamic speckle correction
   --highlight-restoration   Restore original clipped-layer color (default on)
   --no-highlight-restoration Disable clipped-layer restoration and neutralization
-  --highlight-threshold EV  Classic-only: -2..2 relative to camera threshold, or auto
+  --highlight-threshold EV  Merrill classic method: -2..2 relative to camera threshold, or auto
   --highlight-mode MODE     classic (default), color-field-local, or color-field-global
   --color-field-selectivity N 0..1 selection strength (default 0: original behavior)
                             Higher rejects more inconsistent evidence

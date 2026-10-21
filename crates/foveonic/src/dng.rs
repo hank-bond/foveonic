@@ -16,7 +16,9 @@ use crate::{
 /// Start from the original source so an earlier display render cannot bake in tone
 /// or color edits. WB-dependent calibration, repair, highlight recovery, noise and
 /// detail, ColorDQ, and sharpening stay baked. Mode, exposure, tone, and saturation
-/// stay separate so the exported samples retain editing room.
+/// stay separate so the exported samples retain editing room. Classic monochrome
+/// also bakes the selected color-mode mixture because it collapses the sensor
+/// channels before reconstruction. Its tone and exposure remain editable.
 ///
 /// The result is still linear working RGB, not stored DNG camera samples. Its
 /// settings retain the whole requested recipe, including the later appearance.
@@ -26,7 +28,7 @@ pub fn prepare_base(
     settings: &Settings,
     profile: &mut Profile,
 ) -> Result<RenderedImage> {
-    settings.validate()?;
+    settings.validate_for_camera(&source.metadata)?;
     // Reject an unknown look before spending time on the technical render.
     if !settings.is_monochrome()
         && source.metadata.processing_family()? == crate::source::ProcessingFamily::Merrill
@@ -71,9 +73,10 @@ pub fn write_source(
     {
         return Err("DNG destination must end in .dng".into());
     }
-    settings.validate()?;
+    settings.validate_for_camera(&source.metadata)?;
+    let white_balance = crate::render::estimated_white_balance(engine, source, settings, profile)?;
     let prepared = profile.measure("DNG presentation preparation", || {
-        appearance::Prepared::new(&source.metadata, settings)
+        appearance::Prepared::with_white_balance(&source.metadata, settings, white_balance)
     })?;
     let base = prepare_base(engine, source, settings, profile)?;
     let size = base.view().extent;

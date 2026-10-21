@@ -13,7 +13,12 @@ pub enum Content {
 }
 
 /// Named outputs available for the selected recipe, independent of transient graph indexes.
-pub fn output_names(settings: &Settings) -> Vec<&'static str> {
+pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'static str> {
+    if let Some(metadata) = metadata
+        .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Classic))
+    {
+        return crate::render::classic_inspection_outputs(metadata, settings);
+    }
     let mut names = vec![
         "final",
         "sensor.layers",
@@ -91,16 +96,24 @@ pub struct ImageOutput {
 }
 
 /// Visual buffers and their component meanings. Components remain views of one retained image.
-pub fn image_outputs(settings: &Settings) -> Vec<ImageOutput> {
-    output_names(settings)
+pub fn image_outputs(settings: &Settings, metadata: Option<&Metadata>) -> Vec<ImageOutput> {
+    output_names(settings, metadata)
         .into_iter()
         .filter_map(|name| {
             let channels = match name {
                 "black.levels" | "black.histogram" | "banding.rows" => return None,
-                "sensor.layers" | "calibration.layers" | "repair.layers" | "despeckle.layers"
-                | "highlight.layers" | "banding.layers" | "noise.layers" | "column.layers" => {
-                    Channels::Layers
-                }
+                "sensor.layers"
+                | "calibration.layers"
+                | "repair.layers"
+                | "despeckle.layers"
+                | "highlight.layers"
+                | "banding.layers"
+                | "noise.layers"
+                | "column.layers"
+                | "red-detail.layers"
+                | "chroma.small-layers"
+                | "chroma.layers"
+                | "color.corrected-layers" => Channels::Layers,
                 "noise.edges" | "detail.ratio" | "detail.raw-ratio" | "pattern.mask"
                 | "detail.signal" | "highlight.density" | "mono.mix" | "mono.directional"
                 | "mono.column" | "mono.filtered" | "mono.despeckle" => Channels::Scalar,
@@ -115,7 +128,16 @@ pub fn image_outputs(settings: &Settings) -> Vec<ImageOutput> {
 /// The graph branches, so neighboring list entries may not be related. Keep both
 /// sides in the same units. A tone or color-space change would otherwise look
 /// like correction detail rather than a change in how values are represented.
-pub fn comparison_input(settings: &Settings, output: &str) -> Option<&'static str> {
+pub fn comparison_input(
+    settings: &Settings,
+    output: &str,
+    metadata: Option<&Metadata>,
+) -> Option<&'static str> {
+    if let Some(metadata) = metadata
+        .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Classic))
+    {
+        return crate::render::classic_inspection_comparison(metadata, settings, output);
+    }
     let mut input = "sensor.layers";
     for (name, enabled) in [
         ("calibration.layers", true),
@@ -183,7 +205,7 @@ mod tests {
         s.reconstruction = Some(Default::default());
         s.sharpen_amount = Some(0.5);
         s.saturation = 0.;
-        let names = super::output_names(&s);
+        let names = super::output_names(&s, None);
         for name in [
             "mono.mix",
             "mono.directional",
@@ -209,20 +231,20 @@ mod tests {
             assert!(!names.contains(&name));
         }
         assert_eq!(
-            super::comparison_input(&s, "sharpen.rgb"),
+            super::comparison_input(&s, "sharpen.rgb", None),
             Some("monochrome.rgb")
         );
         assert_eq!(
-            super::comparison_input(&s, "mono.despeckle"),
+            super::comparison_input(&s, "mono.despeckle", None),
             Some("mono.filtered")
         );
         s.monochrome.noise = 0;
-        assert!(!super::output_names(&s).contains(&"mono.filtered"));
+        assert!(!super::output_names(&s, None).contains(&"mono.filtered"));
         assert_eq!(
-            super::comparison_input(&s, "mono.despeckle"),
+            super::comparison_input(&s, "mono.despeckle", None),
             Some("mono.column")
         );
-        assert!(super::image_outputs(&s)
+        assert!(super::image_outputs(&s, None)
             .iter()
             .filter(|o| o.name.starts_with("mono."))
             .all(|o| o.channels == super::Channels::Scalar));
@@ -232,11 +254,11 @@ mod tests {
     fn comparison_inputs_follow_enabled_stages_and_branches() {
         let mut s = crate::render::Settings::new("Sunlight", "Standard");
         assert_eq!(
-            super::comparison_input(&s, "repair.layers"),
+            super::comparison_input(&s, "repair.layers", None),
             Some("calibration.layers")
         );
         assert_eq!(
-            super::comparison_input(&s, "banding.layers"),
+            super::comparison_input(&s, "banding.layers", None),
             Some("despeckle.layers")
         );
         s.repair = None;
@@ -246,27 +268,27 @@ mod tests {
         s.reconstruction = Some(Default::default());
         for output in ["noise.layers", "column.layers"] {
             assert_eq!(
-                super::comparison_input(&s, output),
+                super::comparison_input(&s, output, None),
                 Some("calibration.layers")
             );
         }
         assert_eq!(
-            super::comparison_input(&s, "reconstruction.rgb"),
+            super::comparison_input(&s, "reconstruction.rgb", None),
             Some("color-dq.rgb")
         );
         s.color_dq_gain = Some(0.);
         assert_eq!(
-            super::comparison_input(&s, "reconstruction.rgb"),
+            super::comparison_input(&s, "reconstruction.rgb", None),
             Some("color.rgb")
         );
         s.sharpen_amount = Some(0.75);
         assert_eq!(
-            super::comparison_input(&s, "sharpen.rgb"),
+            super::comparison_input(&s, "sharpen.rgb", None),
             Some("reconstruction.rgb")
         );
         s.reconstruction = None;
         assert_eq!(
-            super::comparison_input(&s, "sharpen.rgb"),
+            super::comparison_input(&s, "sharpen.rgb", None),
             Some("color.rgb")
         );
         for output in [
@@ -278,16 +300,16 @@ mod tests {
             "detail.ratio",
             "repair.layers",
         ] {
-            assert_eq!(super::comparison_input(&s, output), None, "{output}");
+            assert_eq!(super::comparison_input(&s, output, None), None, "{output}");
         }
         s.saturation = 1.2;
         assert_eq!(
-            super::comparison_input(&s, "saturation.rgb"),
+            super::comparison_input(&s, "saturation.rgb", None),
             Some("tone.rgb")
         );
-        let images = super::image_outputs(&s);
+        let images = super::image_outputs(&s, None);
         for output in &images {
-            if let Some(input) = super::comparison_input(&s, output.name) {
+            if let Some(input) = super::comparison_input(&s, output.name, None) {
                 assert!(images.iter().any(|i| i.name == input), "{input}");
             }
         }
@@ -297,7 +319,7 @@ mod tests {
     fn visual_catalog_excludes_tables_and_keeps_enabled_image_stages() {
         let mut settings = crate::render::Settings::new("Sunlight", "Standard");
         assert_eq!(
-            super::image_outputs(&settings)
+            super::image_outputs(&settings, None)
                 .iter()
                 .map(|o| o.name)
                 .collect::<Vec<_>>(),
@@ -318,7 +340,7 @@ mod tests {
         settings.color_dq_gain = Some(1.);
         settings.saturation = 1.1;
         settings.sharpen_amount = Some(0.5);
-        let images: Vec<_> = super::image_outputs(&settings)
+        let images: Vec<_> = super::image_outputs(&settings, None)
             .iter()
             .map(|o| o.name)
             .collect();
@@ -332,9 +354,9 @@ mod tests {
             assert!(images.contains(&name));
         }
         assert!(!images.contains(&"black.levels") && !images.contains(&"black.histogram"));
-        assert!(super::output_names(&settings).contains(&"black.histogram")); // still available to engine consumers
+        assert!(super::output_names(&settings, None).contains(&"black.histogram")); // still available to engine consumers
         settings.reconstruction = Some(Default::default());
-        let images = super::image_outputs(&settings);
+        let images = super::image_outputs(&settings, None);
         for (name, kind) in [
             ("noise.layers", super::Channels::Layers),
             ("column.layers", super::Channels::Layers),

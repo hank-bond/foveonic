@@ -54,6 +54,7 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
     reader.read_exact(&mut entries)?;
     let index = Bytes(&entries);
     let mut properties = None;
+    let mut images = Vec::new();
     let mut ranges = Vec::with_capacity(count);
     for i in 0..count {
         let entry = i * DIRECTORY_ENTRY_BYTES;
@@ -64,6 +65,9 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
             return Err("X3F section outside data area".into());
         }
         ranges.push((start, stop));
+        if matches!(index.range(entry + 8, 4)?, b"IMAG" | b"IMA2") && size >= 28 {
+            images.push((start, size));
+        }
         if index.range(entry + 8, 4)? == b"PROP" {
             if size > MAXIMUM_PROPERTY_BYTES {
                 return Err("X3F capture properties too large".into());
@@ -81,7 +85,29 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
     reader.seek(SeekFrom::Start(start))?;
     let mut section = vec![0; size];
     reader.read_exact(&mut section)?;
-    read_properties(&section)
+    let mut properties = read_properties(&section)?;
+    if properties.get("CAMMODEL").is_some_and(|m| {
+        m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
+    }) {
+        for (start, size) in images {
+            reader.seek(SeekFrom::Start(start))?;
+            let mut header = [0; 28];
+            reader.read_exact(&mut header)?;
+            let image = Bytes(&header);
+            if image.range(0, 4)? != b"SECi" || image.u32(8)? != 2 || image.u32(12)? != 18 {
+                continue;
+            }
+            reader.seek(SeekFrom::Start(start + 28))?;
+            let mut jpeg = vec![0; (size - 28).min(128 * 1024)];
+            reader.read_exact(&mut jpeg)?;
+            let values = super::exif::properties(&jpeg);
+            if !values.is_empty() {
+                properties.extend(values);
+                break;
+            }
+        }
+    }
+    Ok(properties)
 }
 
 #[cfg(test)]

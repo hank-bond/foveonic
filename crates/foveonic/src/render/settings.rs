@@ -116,11 +116,18 @@ impl Settings {
         self.sharpen_amount.is_none_or(|amount| amount > 0.)
     }
 
-    /// Resolve Auto from camera coefficients only. Output size and residual
-    /// Detail do not change this amount, including when reconstruction is off.
+    /// Resolve Auto to the authored recipe's sharpening default. Output size
+    /// and residual Detail do not change it, including when reconstruction is off.
     pub fn effective_sharpen_amount(&self, metadata: &crate::source::Metadata) -> Result<f32> {
         match self.sharpen_amount {
             Some(amount) => Ok(amount),
+            // Classic's reference detail default is unit strength; its recipe
+            // does not use the Merrill noise descriptors to select sharpening.
+            None if metadata.processing_family().ok()
+                == Some(crate::source::ProcessingFamily::Classic) =>
+            {
+                Ok(1.)
+            }
             None => Ok(crate::noise::couplings(
                 metadata,
                 &self.white_balance,
@@ -149,9 +156,23 @@ impl Settings {
         self.validate_values()
     }
 
+    /// Validate the complete request using only this camera's active controls.
+    pub fn validate_for_camera(&self, metadata: &crate::source::Metadata) -> Result<()> {
+        let capabilities = super::ControlCapabilities::from_metadata(metadata)?;
+        self.validate_values()?;
+        capabilities.validate(self)?;
+        if capabilities.white_balance_active(self) && self.white_balance.is_empty() {
+            return Err("white balance is required for this rendering".into());
+        }
+        if capabilities.color_mode_active(self) && self.color_mode.is_empty() {
+            return Err("color mode is required for this rendering".into());
+        }
+        Ok(())
+    }
+
     /// Inspection can show sensor data before WB or mode is known. Check numbers
     /// here and let stages that use those camera choices resolve them later.
-    pub(crate) fn validate_values(&self) -> Result<()> {
+    pub fn validate_values(&self) -> Result<()> {
         self.monochrome.validate()?;
         self.color_field.validate()?;
         if !self.exposure.is_finite()

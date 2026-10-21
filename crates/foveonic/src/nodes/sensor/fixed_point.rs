@@ -2,8 +2,13 @@
 
 use crate::source::Result;
 
+pub(crate) const EXTRA_DRIFT: u32 = 1;
+pub(crate) const ROW_OFFSETS: u32 = 2;
+pub(crate) const COLOR_AVERAGE: u32 = 4;
+pub(crate) const POST_POLYNOMIAL: u32 = 8;
+
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CorrectionParams {
     /// Width, height, gain-knot count, Q14 input multiplier (zero means unchanged).
     pub source: [u32; 4],
@@ -19,8 +24,22 @@ pub struct CorrectionParams {
     pub segment_scale: [i32; 4],
     /// Additive segment-boundary offsets in sample-code units multiplied by 2^14.
     pub segment_bias: [i32; 4],
-    /// Segment period in columns (zero or one disables correction), then reserved.
+    /// Segment period (zero or one disables it), extra-control flags, reserved,
+    /// and statistics phase (zero for flare, one for drift, two for row offsets).
     pub controls: [u32; 4],
+    /// Top and bottom drift, each slope RGB then mean RGB. Two Float32 words
+    /// retain each metadata double because truncation happens after interpolation.
+    pub drift: [[f32; 4]; 6],
+    /// Exclusive top and bottom shield rectangles in stored-image coordinates.
+    pub shields: [[u32; 4]; 2],
+    /// Inclusive left and right shield-column spans.
+    pub row_spans: [u32; 4],
+    /// Active top/bottom rows, estimate-drift flag, preserve-slope flag.
+    pub drift_controls: [u32; 4],
+    /// Row scale and smoothing alpha, each represented by two Float32 words.
+    pub row_filter: [f32; 4],
+    /// Nine polynomial terms per output channel, in Q14. Padding is unused.
+    pub polynomial: [[i32; 4]; 9],
 }
 
 pub struct Correction {
@@ -44,14 +63,27 @@ pub struct TransformParams {
     /// Signed output lower and upper bounds.
     pub bounds: [i32; 4],
 }
+/// Whether a transform still needs the reconstruction finalizer's signal gain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeScale {
+    /// Matrix response was divided out and must be restored before root/detail.
+    Normalized,
+    /// Required gain is present, or the caller explicitly selected no finalizer gain.
+    Ready,
+}
+
 pub struct Transform {
+    /// Declares the sample scale produced by the supplied matrix coefficients.
+    pub output_scale: CodeScale,
     pub params: TransformParams,
     /// Three channel-major signed-code correction tables, each source[2] entries.
     pub tables: Vec<i32>,
 }
 impl Transform {
     pub(crate) fn key(&self) -> crate::recipe::Key {
-        crate::recipe::Key::pod(&self.params).slice(&self.tables)
+        crate::recipe::Key::pod(&self.params)
+            .slice(&self.tables)
+            .with(&(self.output_scale as u32))
     }
 }
 
@@ -81,10 +113,40 @@ pub(crate) fn apply_correction(
     let uniform = gpu.uniform(&prepared.params);
     let knots = gpu.upload("Correction gain knots", &prepared.knots)?;
     let scaling = prepared.params.source[3] != 0;
-    let mut offsets = gpu.storage("Sparse sampled flare", 12)?;
+    let extra = prepared.params.controls[1] & EXTRA_DRIFT != 0;
+    // Match the documented scratch layout beside scratch_index in WGSL.
+    const OFFSET_PREFIX_WORDS: u64 = 40;
+    const OFFSET_ROW_WORDS: u64 = 21;
+    let mut offsets = gpu.storage(
+        "Sparse sampled flare and shield corrections",
+        if extra {
+            4 * (OFFSET_PREFIX_WORDS + u64::from(height) * OFFSET_ROW_WORDS)
+        } else {
+            12
+        },
+    )?;
     let mut output = gpu.storage("Fixed-point corrected layers", bytes)?;
     let groups = [width.div_ceil(8), height.div_ceil(8)];
-    let mut trace = gpu.trace(profile.mode.gpu(), if scaling { 3 } else { 2 });
+    let row_estimation = prepared.params.controls[1] & ROW_OFFSETS != 0;
+    let mut trace = gpu.trace(
+        profile.mode.gpu(),
+        u32::from(scaling) + u32::from(extra) + u32::from(row_estimation) + 2,
+    );
+    if extra {
+        let mut measuring = prepared.params;
+        measuring.controls[3] = 1;
+        let measuring = gpu.uniform(&measuring);
+        gpu.dispatch(
+            Kernel::FixedPointStatistics,
+            &mut [
+                (0, Read(input)),
+                (3, Read(&measuring)),
+                (5, Write(offsets.write())),
+            ],
+            [3, 1],
+            &mut trace,
+        );
+    }
     // Original sensor samples are integral codes. A disabled input multiplier
     // leaves them unchanged, so preserve the immutable input rather than copy it.
     let scaled = if scaling {
@@ -93,6 +155,7 @@ pub(crate) fn apply_correction(
             Kernel::FixedPointScale,
             &mut [
                 (0, Read(input)),
+                (1, Read(&offsets)),
                 (3, Read(&uniform)),
                 (4, Write(scaled.write())),
             ],
@@ -113,6 +176,21 @@ pub(crate) fn apply_correction(
         [3, 1],
         &mut trace,
     );
+    if row_estimation {
+        let mut measuring = prepared.params;
+        measuring.controls[3] = 2;
+        let measuring = gpu.uniform(&measuring);
+        gpu.dispatch(
+            Kernel::FixedPointStatistics,
+            &mut [
+                (0, Read(&scaled)),
+                (3, Read(&measuring)),
+                (5, Write(offsets.write())),
+            ],
+            [1, 1],
+            &mut trace,
+        );
+    }
     gpu.dispatch(
         Kernel::FixedPointCorrection,
         &mut [

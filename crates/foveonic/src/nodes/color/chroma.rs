@@ -14,13 +14,21 @@ use crate::{
 pub(crate) enum Support {
     Binomial3,
     Box5,
+    /// Quarter-resolution recursive support with a five-pixel decay in both axes.
+    Recursive,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Params {
+    /// Width, height, support selector, per-channel lookup length.
     pub shape: [u32; 4],
+    /// Brightness regularizer, common-channel right shift, then reserved words.
     pub correction: [u32; 4],
+    /// Horizontal alpha/beta and vertical alpha/beta in Q8.
+    pub decay: [i32; 4],
+    /// Coarse vertical alpha/beta in Q8, then reserved words.
+    pub coarse_decay: [i32; 4],
 }
 #[derive(Clone)]
 pub struct Prepared {
@@ -86,10 +94,29 @@ impl Prepared {
                     match support {
                         Support::Binomial3 => 0,
                         Support::Box5 => 1,
+                        Support::Recursive => 2,
                     },
                     length as u32,
                 ],
                 correction: [regularizer, shift, 0, 0],
+                // Each recurrence coefficient is independently rounded to Q8.
+                decay: {
+                    const DECAY_LENGTH: f64 = 5.;
+                    let beta = (-1. / DECAY_LENGTH).exp();
+                    let a = ((1. - beta) * 256. + 0.5) as i32;
+                    let b = (beta * 256. + 0.5) as i32;
+                    [a, 256 - a, a, b]
+                },
+                coarse_decay: {
+                    const DECAY_LENGTH: f64 = 5.;
+                    let beta = (-4. / DECAY_LENGTH).exp();
+                    [
+                        ((1. - beta) * 256. + 0.5) as i32,
+                        (beta * 256. + 0.5) as i32,
+                        0,
+                        0,
+                    ]
+                },
             },
             tables,
         })
@@ -105,7 +132,10 @@ pub(crate) fn apply(
     p: &Prepared,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    let [w, h, _, _] = p.params.shape;
+    let [w, h, support, _] = p.params.shape;
+    if support == 2 {
+        return apply_recursive(gpu, input, p, profile);
+    }
     let size = u64::from(w) * u64::from(h) * 12;
     let mut horizontal = gpu.storage("Signed chroma horizontal", size)?;
     let mut output = gpu.storage("Signed chroma output", size)?;
@@ -132,6 +162,66 @@ pub(crate) fn apply(
             (4, Write(output.write())),
         ],
         [w.div_ceil(8), h.div_ceil(8)],
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, profile)?;
+    Ok(output)
+}
+
+fn apply_recursive(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    p: &Prepared,
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    let [width, height, _, _] = p.params.shape;
+    let coarse_width = width.div_ceil(4);
+    let coarse_height = height.div_ceil(4);
+    let mut coarse = gpu.storage(
+        "Recursive chroma coarse",
+        u64::from(coarse_width) * u64::from(coarse_height) * 12,
+    )?;
+    let mut horizontal = gpu.storage(
+        "Recursive chroma horizontal",
+        u64::from(width) * u64::from(coarse_height) * 12,
+    )?;
+    let mut output = gpu.storage(
+        "Recursive chroma output",
+        u64::from(width) * u64::from(height) * 12,
+    )?;
+    let uniform = gpu.uniform(&p.params);
+    let tables = gpu.upload("Recursive chroma lookup", &p.tables)?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 3);
+    gpu.dispatch(
+        Kernel::ChromaRecursiveInit,
+        &mut [
+            (0, Read(input)),
+            (1, Read(&uniform)),
+            (2, Write(coarse.write())),
+        ],
+        [coarse_width.div_ceil(64), 1],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::ChromaRecursiveHorizontal,
+        &mut [
+            (1, Read(&uniform)),
+            (2, Read(&coarse)),
+            (5, Write(horizontal.write())),
+        ],
+        [coarse_height.div_ceil(64), 1],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::ChromaRecursiveApply,
+        &mut [
+            (0, Read(input)),
+            (1, Read(&uniform)),
+            (3, Read(&tables)),
+            (4, Write(output.write())),
+            (5, Read(&horizontal)),
+        ],
+        [width.div_ceil(64), 1],
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;

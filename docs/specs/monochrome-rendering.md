@@ -1,11 +1,13 @@
 ---
-summary: "Monochrome rendering mixes calibrated sensor layers before dedicated GPU filtering and exports editable linear monochrome DNG samples."
+summary: "Merrill monochrome rendering mixes calibrated sensor layers before dedicated GPU filtering and exports editable linear monochrome DNG samples."
 kind: reference
 status: accepted
 implementation: conforming
 ---
 
 # Monochrome rendering
+
+This specification describes the Merrill monochrome recipe. Classic uses its [reference-derived monochrome route](./classic-rendering.md#monochrome-rendering).
 
 ## Processing
 

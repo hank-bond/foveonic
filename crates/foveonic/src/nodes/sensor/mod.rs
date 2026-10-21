@@ -11,3 +11,5 @@ pub(crate) mod highlight;
 pub(crate) mod repair;
 pub(crate) mod signed_repair;
 pub(crate) mod spatial_tables;
+
+pub(crate) mod red_detail;

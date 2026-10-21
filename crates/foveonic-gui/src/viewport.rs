@@ -1099,10 +1099,12 @@ mod tests {
                             }
                         }
                         assert_eq!(
-                        viewport.scale,
-                        initial_zoom.is_none().then_some(zoom_snap.multiple() / pixels_per_point),
-                        "navigator={navigator}, density={pixels_per_point}, initial={initial_zoom:?}"
-                    );
+                            viewport.scale,
+                            initial_zoom
+                                .is_none()
+                                .then_some(zoom_snap.multiple() / pixels_per_point),
+                            "navigator={navigator}, density={pixels_per_point}, initial={initial_zoom:?}"
+                        );
                         if initial_zoom.is_some() {
                             assert_eq!(viewport.pan, egui::Vec2::ZERO);
                         } else if !navigator {
@@ -1110,9 +1112,9 @@ mod tests {
                             let before_uv = (point - before.min) / before.size();
                             let after_uv = (point - after.min) / after.size();
                             assert!(
-                            (after_uv - before_uv).length() < 1e-6,
-                            "density={pixels_per_point}, before_uv={before_uv:?}, after_uv={after_uv:?}"
-                        );
+                                (after_uv - before_uv).length() < 1e-6,
+                                "density={pixels_per_point}, before_uv={before_uv:?}, after_uv={after_uv:?}"
+                            );
                             assert_ne!(viewport.pan, egui::Vec2::ZERO);
                         }
                         assert!(!viewport.one_to_one);

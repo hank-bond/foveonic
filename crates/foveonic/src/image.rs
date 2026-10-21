@@ -29,7 +29,9 @@ pub enum Space {
     /// Signed reconstruction detail in camera code units. The display range is −1000..1000.
     SignedDetail,
     CalibratedLayers,
-    /// Signed linear RGB in the calibrated color basis, stored as integral code values.
+    /// Signed linear codes awaiting the reconstruction finalizer's required gain.
+    NormalizedCodeRgb,
+    /// Signed linear RGB with required gain applied, stored as integral code values.
     LinearCodeRgb,
     /// Signed root-domain RGB in the calibrated color basis, stored as integral code values.
     SignedCodeRgb,
@@ -104,6 +106,7 @@ impl RenderedImage {
             Space::LinearRgb(space) | Space::ToneMappedRgb(space) => space as u32,
             Space::EncodedRgb16(space) => space as u32,
             Space::SensorLayers
+            | Space::NormalizedCodeRgb
             | Space::LinearCodeRgb
             | Space::SignedCodeRgb
             | Space::CalibratedLayers

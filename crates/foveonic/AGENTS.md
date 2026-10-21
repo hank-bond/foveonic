@@ -1,5 +1,5 @@
 ---
-summary: "The processor crate decodes Merrill X3Fs and renders RGB16 TIFFs through a shared GPU graph."
+summary: "The processor crate decodes equal-resolution X3Fs and renders photographs and editable DNGs through a shared GPU graph."
 ---
 
 # Processor crate

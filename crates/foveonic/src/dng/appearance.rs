@@ -113,6 +113,8 @@ pub(crate) struct Prepared {
     after_tone: Matrix,
     tone: Vec<f32>,
     pub calibration_exposure: f64,
+    /// Mode selection has already collapsed the sensor mixture in the samples.
+    pub baked_color_mode: bool,
     exposure: f64,
     signed_response: Option<crate::nodes::finish::signed_response::Prepared>,
     range_compensation: RangeCompensation,
@@ -133,9 +135,22 @@ pub(crate) struct ProfileData {
 }
 
 impl Prepared {
+    #[cfg(test)]
     pub fn new(m: &Metadata, settings: &Settings) -> Result<Self> {
+        Self::with_white_balance(m, settings, Default::default())
+    }
+
+    pub(crate) fn with_white_balance(
+        m: &Metadata,
+        settings: &Settings,
+        statistics: crate::render::WhiteBalanceStats,
+    ) -> Result<Self> {
         if m.processing_family()? == crate::source::ProcessingFamily::Classic {
-            return Self::classic(crate::render::classic_dng_appearance(m, settings)?);
+            let mut prepared = Self::classic(crate::render::classic_dng_appearance(
+                m, settings, statistics,
+            )?)?;
+            prepared.baked_color_mode = settings.is_monochrome();
+            return Ok(prepared);
         }
         if settings.is_monochrome() {
             return Self::monochrome(m, settings);
@@ -215,6 +230,7 @@ impl Prepared {
             camera_to_native,
             after_tone,
             tone: tone::prepare(m, &mode, settings.tone)?,
+            baked_color_mode: false,
             calibration_exposure: (f64::from(iso) / maximum).log2(),
             exposure: f64::from(settings.exposure),
             signed_response: None,
@@ -242,8 +258,18 @@ impl Prepared {
         let camera_to_romm = Matrix::diagonal(neutral.map(|v| 1. / v))
             .then(reader)
             .then(romm.inverse()?);
-        // Validate the storage transform here, before dispatching any samples.
-        mapping.inverse()?;
+        // Storage may collapse a monochrome signal to neutral RGB. Only the
+        // reader's interpretation must remain invertible for profile fitting.
+        if mapping.0.iter().any(|v| !v.is_finite())
+            || mapping
+                .0
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .any(|row| row.iter().all(|v| *v == 0.))
+        {
+            return Err("invalid Classic DNG storage transform".into());
+        }
         selected.inverse()?;
         Ok(Self {
             mapping,
@@ -254,6 +280,7 @@ impl Prepared {
             camera_to_native: base.then(selected),
             after_tone: Matrix::diagonal([1.; 3]),
             tone: Vec::new(),
+            baked_color_mode: false,
             calibration_exposure: 0.,
             exposure: 0.,
             signed_response: Some(input.response),
@@ -278,6 +305,7 @@ impl Prepared {
             camera_to_native: identity,
             after_tone: identity,
             tone: tone::prepare_monochrome(m, settings.tone)?,
+            baked_color_mode: false,
             calibration_exposure: 0.,
             exposure: f64::from(settings.exposure),
             signed_response: None,

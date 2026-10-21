@@ -41,11 +41,13 @@ mod tests {
             .any(|p| p[3] == 255 && p[..3].iter().all(|v| *v < 80)));
         // Icon Composer dithers its sRGB raster export by about one code value.
         for expected in [[39_u8, 103, 219], [115, 200, 66]] {
-            assert!(icon.rgba.as_chunks::<4>().0.iter().any(|p| p[3] == 255
-                && p[..3]
-                    .iter()
-                    .zip(expected)
-                    .all(|(&a, b)| a.abs_diff(b) <= 2)));
+            assert!(icon.rgba.as_chunks::<4>().0.iter().any(|p| {
+                p[3] == 255
+                    && p[..3]
+                        .iter()
+                        .zip(expected)
+                        .all(|(&a, b)| a.abs_diff(b) <= 2)
+            }));
         }
         assert!(icon
             .rgba

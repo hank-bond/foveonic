@@ -11,18 +11,20 @@ TIFF exports bake all processing into the pixel data, trading maximum compatibil
 
 DNG separates out the base linear image data—only baking in some corrections and detail enhancement—and compresses all tone and color changes into a curve and matrix in the DNG metadata.  Your DNG editor will then take this metadata and apply it on top of the linear pixel data as part of its rendering pipeline.  This makes it a more flexible format for editing further, but does mean that not every editor will render it exactly as it looked in Foveon upon export.
 
-The Classic experiment also renders low-ISO SD15, DP2 and DP1s format-30 originals to TIFF and editable color DNG. Use `--reconstruction --sharpen 1 --wb Sunlight --mode Standard` for the validated reference baseline. Classic retains linear ROMM working output and uses shared display and TIFF color conversion. Earlier encodings, high-ISO reconstruction, Classic monochrome and custom noise controls remain unsupported. Classic DNG embeds an approximate photographic appearance. See the [experiment requirements](docs/specs/classic-rendering.md).
+Classic rendering covers the pre-Merrill SD9, SD10, SD14, SD15, DP1/DP1s/DP1x and DP2/DP2s/DP2x family through shared display, TIFF and editable DNG output. Decoding supports both older interleaved originals and format30. Low- and high-ISO recipes share calibration, detail, presentation and export machinery. Classic monochrome uses the reference-derived camera mixture. Color modes remain available, while ordinary WB is inactive. Custom noise sliders remain unavailable. DNG embeds an approximate photographic appearance.
+
+Original-file validation currently covers eight models, including a DP2x ISO50–3200 ladder. DP1x and DP2s use recovered processing contracts but still need genuine originals for validation. See [Classic rendering](docs/specs/classic-rendering.md) and the [coverage evidence](plans/classic-coverage.md).
 
 ## Rendering Techniques
 All correction and enhancement metadata that exists in the X3F file is made use of.  Effort has been made to align with the Sigma's intended processing of the files wherever possible.  Additional controls are made wherever available to alter the processing approaches on a per-image basis.
 
 The processing pipeline has been largely developed using WebGPU shaders, in order to provide a significantly improved editing experience.  This also benefits batch CLI render times.
 
-Choose **Color** or **Monochrome** in the editor. Monochrome mixes the original sensor layers with a triangular R/G/B selector before dedicated filtering steps.  This is different from using a monochrome mode in your editor becuase it operates on the sensor layers *before* they are converted into RGB space.  The primary benefit is that you can use just Layer 3 (B) which has a much better signal-to-noise ratio than the others.
+Choose **Color** or **Monochrome** in the editor. Merrill monochrome mixes the original sensor layers with a triangular R/G/B selector before dedicated filtering steps.  This is different from using a monochrome mode in your editor becuase it operates on the sensor layers *before* they are converted into RGB space.  The primary benefit is that you can use just Layer 3 (B) which has a much better signal-to-noise ratio than the others.
 
 Monochrome DNG bakes the mix into linear neutral samples while keeping exposure and tone in metadata.
 
-Highlights offers **Classic** (default), **Color Field: Local**, and **Color Field: Global**. Classic retains its threshold control. Local uses 64 local brightness sweeps, while Global solves globally for finer gradients at higher cost. Method comes first, followed by a shared Highlights slider and enable checkbox. Classic retains A. Both Color Field methods default to 0, preserving the original reconstruction, without a redundant A button. Increasing selectivity from 0 toward 1 rejects more inconsistent evidence without increasing the original neutral weights. See the [comparison workflow](docs/color-field-evaluation.md).
+Merrill highlight correction offers **Classic** (default), **Color Field: Local**, and **Color Field: Global**. Classic retains its threshold control. Local uses 64 local brightness sweeps, while Global solves globally for finer gradients at higher cost. Method comes first, followed by a shared Highlights slider and enable checkbox. Classic retains A. Both Color Field methods default to 0, preserving the original reconstruction, without a redundant A button. Increasing selectivity from 0 toward 1 rejects more inconsistent evidence without increasing the original neutral weights. See the [comparison workflow](docs/color-field-evaluation.md).
 
 ## Requirements
 Development is currently done on a modest Apple M1 Pro with 14 GPU Cores.  The current focus is targeting MacOS.  The tooling chosen should be multi-platform compatible, but focus is not currently on delivering that.  On a machine of that caliber, you may expect full pipeline render times around 900-1600ms, with partial re-renders closer to 200-400ms using cached pipeline partials.
@@ -51,14 +53,20 @@ Render a color TIFF:
 cargo run --release -p foveonic -- render path/to/photo.x3f output.tiff --wb Sunlight --mode Standard
 ```
 
-Render blue-layer monochrome, or export its linear DNG:
+Render Merrill blue-layer monochrome, or export its linear DNG:
 
 ```sh
 cargo run --release -p foveonic -- render path/to/photo.x3f mono.tiff --wb Sunlight --mono-mix 0,0,1
 cargo run --release -p foveonic -- export-dng path/to/photo.x3f mono.dng --wb Sunlight --mono-mix 0,0,1
 ```
 
-`--rendering monochrome` selects the equal-layer mix. `--mono-noise` and `--mono-banding` select presets 0–4. Estimated ISO above 6400 is currently unsupported for monochrome column correction.
+For Merrill, `--rendering monochrome` selects the equal-layer mix. `--mono-noise` and `--mono-banding` select presets 0–4. Estimated ISO above 6400 is currently unsupported for monochrome column correction.
+
+For Classic monochrome, select the rendering mode and desired color mode:
+
+```sh
+cargo run --release -p foveonic -- render path/to/classic.x3f mono.tiff --rendering monochrome --mode Standard --reconstruction
+```
 
 TIFF exports accept `--tiff-color-space srgb`, `adobe-rgb`, or `prophoto-rgb`. Omit it to preserve the camera's stored space, falling back to sRGB when none is recorded. Use `--sharpen auto` for camera-derived sharpening or a numeric amount for manual sharpening. Sharpening defaults to Off.
 

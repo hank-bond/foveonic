@@ -50,3 +50,47 @@ fn gpu_signed_chroma_matches_native_composed_rows() {
         bytemuck::cast_slice::<f32, u8>(&input)
     );
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_recursive_chroma_matches_native_callbacks() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/data/chroma-recursive-reference.json"
+    ))
+    .unwrap();
+    let gpu = Gpu::new().unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let width = case["width"].as_u64().unwrap() as u32;
+        let height = case["height"].as_u64().unwrap() as u32;
+        let input: Vec<f32> = case["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap() as f32)
+            .collect();
+        let source = gpu.upload("Recursive chroma reference", &input).unwrap();
+        let prepared = Prepared::new(
+            [width, height],
+            [16., 32., 64.],
+            [0.8; 3],
+            128,
+            3,
+            Support::Recursive,
+        )
+        .unwrap();
+        let output = apply(&gpu, &source, &prepared, &mut Default::default()).unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
+        for (index, value) in actual.iter().enumerate() {
+            assert_eq!(
+                *value,
+                case["expected"][index].as_i64().unwrap() as f32,
+                "{width}x{height} sample{index}"
+            );
+        }
+        assert_eq!(
+            gpu.readback(&source).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&input)
+        );
+    }
+}

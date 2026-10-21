@@ -164,7 +164,18 @@ fn decode_original_merrill_files() {
 
 #[test]
 fn classic_selection_stays_at_input_boundary() {
-    for model in ["SIGMA SD15", "SIGMA DP2", "SIGMA DP1S"] {
+    for model in [
+        "SIGMA SD9",
+        "SIGMA SD10",
+        "SIGMA SD14",
+        "SIGMA SD15",
+        "SIGMA DP1",
+        "SIGMA DP1s",
+        "SIGMA DP1x",
+        "SIGMA DP2",
+        "SIGMA DP2s",
+        "SIGMA DP2x",
+    ] {
         assert_eq!(family(Some(model)), Some(ProcessingFamily::Classic));
     }
     assert_eq!(
@@ -197,4 +208,55 @@ fn classic_selection_stays_at_input_boundary() {
         PropertyList::new(vec![("Vivid ".into(), "VividMatrix".into())]).unwrap(),
     );
     assert_eq!(metadata.recorded_color_mode().unwrap(), "Vivid ");
+}
+
+#[test]
+fn legacy_white_balance_catalogue_resolves_recorded_preset() {
+    let metadata = Metadata {
+        width: 2304,
+        height: 1531,
+        rotation: 0,
+        properties: [
+            ("CAMMODEL".into(), "SIGMA SD9".into()),
+            ("WB_DESC".into(), "Daylight".into()),
+        ]
+        .into(),
+        matrices: Default::default(),
+        lists: [(
+            "WhiteBalanceCorrections".into(),
+            PropertyList::new(vec![("Sunlight".into(), "CorrectionDaylight".into())]).unwrap(),
+        )]
+        .into(),
+    };
+    assert_eq!(metadata.white_balance_presets(), ["Sunlight"]);
+    assert_eq!(metadata.recorded_white_balance().unwrap(), "Sunlight");
+}
+
+#[test]
+fn classic_white_balance_choices_exclude_monochrome_rendering() {
+    let mut metadata = Metadata {
+        width: 1,
+        height: 1,
+        rotation: 0,
+        properties: [("CAMMODEL".into(), "SIGMA DP2".into())].into(),
+        matrices: Default::default(),
+        lists: [(
+            "WhiteBalanceGains".into(),
+            PropertyList::new(vec![
+                ("Sunlight".into(), "sun".into()),
+                ("Monochrome".into(), "mono".into()),
+                ("Shade".into(), "shade".into()),
+            ])
+            .unwrap(),
+        )]
+        .into(),
+    };
+    assert_eq!(metadata.white_balance_presets(), ["Sunlight", "Shade"]);
+    metadata
+        .properties
+        .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
+    assert_eq!(
+        metadata.white_balance_presets(),
+        ["Sunlight", "Monochrome", "Shade"]
+    );
 }

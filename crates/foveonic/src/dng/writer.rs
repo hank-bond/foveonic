@@ -180,14 +180,13 @@ pub(super) fn write<W: Write + Seek>(
         50964,
         signed_rationals(&prepared.forward.0)?.as_slice(),
     )?;
-    let name = format!(
-        "Foveonic {}",
-        if settings.is_monochrome() {
-            "Monochrome"
-        } else {
-            &settings.color_mode
-        }
-    );
+    let name = if prepared.baked_color_mode {
+        format!("Foveonic Monochrome {}", settings.color_mode)
+    } else if settings.is_monochrome() {
+        "Foveonic Monochrome".to_string()
+    } else {
+        format!("Foveonic {}", settings.color_mode)
+    };
     tag(&mut directory, 50936, name.as_str())?; // ProfileName.
     tag(&mut directory, 50934, name.as_str())?; // AsShotProfileName.
     tag(&mut directory, 50940, presentation.curve.as_slice())?;
@@ -198,7 +197,20 @@ pub(super) fn write<W: Write + Seek>(
 
     // These samples already include technical corrections. To resume edits,
     // use the X3F and sidecar rather than treating this history as a recipe to replay.
-    let (baked_controls, metadata_controls): (&[&str], &[&str]) = if settings.is_monochrome() {
+    let (baked_controls, metadata_controls): (&[&str], &[&str]) = if prepared.baked_color_mode {
+        (
+            &[
+                "calibration",
+                "repair",
+                "despeckle",
+                "row_correction",
+                "noise_and_detail",
+                "color_mode",
+                "sharpening",
+            ],
+            &["exposure", "tone"],
+        )
+    } else if settings.is_monochrome() {
         (
             &[
                 "calibration",

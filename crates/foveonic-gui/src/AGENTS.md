@@ -14,18 +14,22 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 <!-- Generated from source summaries and document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+### Directories
+
+- **[controls/](./controls/AGENTS.md)** Family panels compose shared editing widgets while the processor defines supported controls.
+
 ### Source files
 
 - **[advanced.rs](./advanced.rs)** Displays advanced reconstruction controls with automatic ColorDQ and preset-linked parameter overrides.
 - **[browser.rs](./browser.rs)** Browses X3F paths with focused keyboard selection and bounded lazy embedded-JPEG thumbnails.
 - **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
-- **[controls.rs](./controls.rs)** Builds aligned sensor/tone editing rows with reset, focused value nudges, and sample-based rerender signals.
+- **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
 - **[help_examples.rs](./help_examples.rs)** Presents embedded photographic comparisons through one image-switching popover template.
 - **[icon.rs](./icon.rs)** Loads the window icon while leaving macOS Dock appearances to the app bundle.
 - **[information.rs](./information.rs)** Shows selectable capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
 - **[inspect.rs](./inspect.rs)** Groups pipeline views and controls display-only Input/Output and Difference comparisons.
-- **[main.rs](./main.rs)** Runs a three-pane Merrill workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
+- **[main.rs](./main.rs)** Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
 - **[mixer.rs](./mixer.rs)** Edits actual sensor-layer proportions with a triangular barycentric monochrome mixer.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.

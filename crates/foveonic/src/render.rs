@@ -12,11 +12,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 mod artifacts;
+mod capabilities;
 #[path = "dng/gpu.rs"]
 mod dng_gpu;
 mod execute;
 mod recipes;
 mod settings;
+
+pub use capabilities::ControlCapabilities;
 
 use execute::Input;
 pub(crate) use execute::Value;
@@ -26,9 +29,32 @@ pub use settings::{
     RepairThreshold, Settings, TiffColorSpace, ToneControls,
 };
 
+/// Small image-derived statistics used while preparing calibration.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct WhiteBalanceStats {
+    pub neutral: Option<[f64; 3]>,
+    pub mean: Option<[f64; 3]>,
+}
+
 pub struct Engine {
     gpu: Gpu,
     owner: Arc<()>,
+    // Keep the latest photo's calibration statistics with the engine. Metadata lifetime
+    // and the original sample allocation identify the immutable source.
+    calibration_statistics: std::sync::Mutex<Vec<CalibrationEstimate>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatisticKind {
+    Neutral,
+    ChannelMean,
+}
+
+struct CalibrationEstimate {
+    metadata: std::sync::Weak<crate::source::Metadata>,
+    samples: usize,
+    kind: StatisticKind,
+    values: [f64; 3],
 }
 
 impl Engine {
@@ -36,6 +62,7 @@ impl Engine {
         Ok(Self {
             gpu: Gpu::new()?,
             owner: Arc::new(()),
+            calibration_statistics: Default::default(),
         })
     }
 
@@ -50,8 +77,56 @@ impl Engine {
         Ok(Self {
             gpu: Gpu::from_device(device, queue, adapter_name)?,
             owner: Arc::new(()),
+            calibration_statistics: Default::default(),
         })
     }
+    pub(crate) fn cached_neutral(
+        &self,
+        source: &Source,
+        calculate: impl FnOnce() -> Result<[f64; 3]>,
+    ) -> Result<[f64; 3]> {
+        self.cached_statistic(source, StatisticKind::Neutral, calculate)
+    }
+
+    pub(crate) fn cached_channel_mean(
+        &self,
+        source: &Source,
+        calculate: impl FnOnce() -> Result<[f64; 3]>,
+    ) -> Result<[f64; 3]> {
+        self.cached_statistic(source, StatisticKind::ChannelMean, calculate)
+    }
+
+    fn cached_statistic(
+        &self,
+        source: &Source,
+        kind: StatisticKind,
+        calculate: impl FnOnce() -> Result<[f64; 3]>,
+    ) -> Result<[f64; 3]> {
+        let mut cache = self
+            .calibration_statistics
+            .lock()
+            .map_err(|_| "calibration statistics cache poisoned")?;
+        let samples = source.pixels.as_ptr() as usize;
+        cache.retain(|cached| {
+            cached.samples == samples
+                && cached
+                    .metadata
+                    .upgrade()
+                    .is_some_and(|metadata| Arc::ptr_eq(&metadata, &source.metadata))
+        });
+        if let Some(cached) = cache.iter().find(|cached| cached.kind == kind) {
+            return Ok(cached.values);
+        }
+        let values = calculate()?;
+        cache.push(CalibrationEstimate {
+            metadata: Arc::downgrade(&source.metadata),
+            samples,
+            kind,
+            values,
+        });
+        Ok(values)
+    }
+
     pub fn device(&self) -> &wgpu::Device {
         &self.gpu.device
     }
@@ -100,7 +175,7 @@ impl Engine {
         settings: &Settings,
         profile: &mut Profile,
     ) -> Result<RenderedImage> {
-        settings.validate()?;
+        settings.validate_for_camera(&source.metadata)?;
         let artifact = self
             .render_artifacts(source, settings, &["final"], profile)?
             .pop()
@@ -347,6 +422,37 @@ mod classic_tests;
 pub(crate) fn classic_dng_appearance(
     metadata: &crate::source::Metadata,
     settings: &Settings,
+    statistics: WhiteBalanceStats,
 ) -> Result<crate::dng::appearance::ClassicAppearance> {
-    recipes::classic::prepare_dng_appearance(metadata, settings)
+    recipes::classic::prepare_dng_appearance(metadata, settings, statistics)
+}
+
+/// Resolve image-derived calibration before fitting an editable appearance.
+pub(crate) fn estimated_white_balance(
+    engine: &Engine,
+    source: &Source,
+    settings: &Settings,
+    profile: &mut Profile,
+) -> Result<WhiteBalanceStats> {
+    if source.metadata.processing_family()? == crate::source::ProcessingFamily::Classic
+        && !settings.is_monochrome()
+    {
+        recipes::classic::estimate_white_balance(engine, source, &settings.white_balance, profile)
+    } else {
+        Ok(WhiteBalanceStats::default())
+    }
+}
+
+pub(crate) fn classic_inspection_outputs(
+    metadata: &crate::source::Metadata,
+    settings: &Settings,
+) -> Vec<&'static str> {
+    recipes::classic::inspection_outputs(metadata, settings)
+}
+pub(crate) fn classic_inspection_comparison(
+    metadata: &crate::source::Metadata,
+    settings: &Settings,
+    output: &str,
+) -> Option<&'static str> {
+    recipes::classic::inspection_comparison(metadata, settings, output)
 }

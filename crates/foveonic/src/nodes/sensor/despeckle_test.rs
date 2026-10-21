@@ -136,9 +136,9 @@ fn corrections_are_independent_and_enabled_by_default() {
     assert!(s.despeckle && matches!(s.repair, Some(crate::render::RepairThreshold::Camera)));
     s.repair = None;
     assert!(s.despeckle);
-    assert!(crate::inspection::output_names(&s).contains(&"despeckle.layers"));
+    assert!(crate::inspection::output_names(&s, None).contains(&"despeckle.layers"));
     s.despeckle = false;
-    assert!(!crate::inspection::output_names(&s).contains(&"despeckle.layers"));
+    assert!(!crate::inspection::output_names(&s, None).contains(&"despeckle.layers"));
 }
 #[test]
 #[ignore = "requires a GPU"]

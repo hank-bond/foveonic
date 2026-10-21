@@ -112,8 +112,10 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
                     );
                     let bytes = pixels(&rs, &target);
                     for value in &bytes[..3] {
-                        assert!(value.abs_diff(expected) <= 1,
-                            "{space:?} baseline={baseline} gain={gain} delta={delta}: {value} != {expected}");
+                        assert!(
+                            value.abs_diff(expected) <= 1,
+                            "{space:?} baseline={baseline} gain={gain} delta={delta}: {value} != {expected}"
+                        );
                     }
                     assert_eq!(bytes[3], 255);
                 }
@@ -363,6 +365,9 @@ fn ordinary_navigator_drawing_cost() {
     }
     old_ms.sort_by(f64::total_cmp);
     new_ms.sort_by(f64::total_cmp);
-    eprintln!("NAVIGATOR-DRAW old_completed_median_ms={:.3} ordinary_completed_median_ms={:.3} old_rounds={old_ms:?} ordinary_rounds={new_ms:?}",old_ms[2],new_ms[2]);
+    eprintln!(
+        "NAVIGATOR-DRAW old_completed_median_ms={:.3} ordinary_completed_median_ms={:.3} old_rounds={old_ms:?} ordinary_rounds={new_ms:?}",
+        old_ms[2], new_ms[2]
+    );
     rs.renderer.write().free_texture(&id);
 }

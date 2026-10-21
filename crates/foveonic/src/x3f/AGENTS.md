@@ -1,5 +1,5 @@
 ---
-summary: "The X3F reader decodes Merrill sensor samples and camera metadata from original files."
+summary: "The X3F reader decodes equal-resolution sensor samples and camera metadata from original files."
 ---
 
 # X3F input
@@ -17,7 +17,9 @@ Keep decoding independent of photographic adjustments and orientation. Preserve 
 - **[bytes.rs](./bytes.rs)** Read bounded little-endian values and terminated strings from owned file sections.
 - **[camf.rs](./camf.rs)** Decode camera metadata while preserving matrix encodings and property-list order.
 - **[capture.rs](./capture.rs)** Seeks directly to X3F capture properties without reading sensor or calibration payloads.
+- **[exif.rs](./exif.rs)** Reads preferred exposure metadata from an embedded JPEG's optional Exif header.
+- **[format6.rs](./format6.rs)** Decode row-local Huffman differences into signed interleaved sensor codes.
 - **[huffman.rs](./huffman.rs)** Decode category-coded differences with two-column and two-row sensor predictors.
-- **[mod.rs](./mod.rs)** Reads owned X3F sections and decodes equal-resolution format-30 samples and camera metadata.
+- **[mod.rs](./mod.rs)** Reads owned X3F sections and decodes equal-resolution sensor samples and camera metadata.
 
 <!-- INDEX:END -->

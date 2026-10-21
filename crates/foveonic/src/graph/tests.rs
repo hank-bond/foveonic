@@ -258,3 +258,65 @@ fn named_outputs_are_producer_local_and_keep_port_types() {
     assert!(graph.named_output(second, "missing").is_err());
     assert!(graph.named_output(usize::MAX, "detail.signal").is_err());
 }
+
+#[test]
+fn code_scale_requires_finalization_once_before_root_detail() {
+    use crate::nodes::{color::code_gain, sensor::fixed_point};
+    let mut graph = Graph::default();
+    let layers = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::CalibratedLayers,
+            },
+            &[],
+        )
+        .unwrap();
+    let color = |output_scale| {
+        Operation::FixedPointColor(std::sync::Arc::new(fixed_point::Transform {
+            output_scale,
+            params: fixed_point::TransformParams {
+                source: [1, 1, 2, 14],
+                matrix: [[0; 4]; 3],
+                bounds: [-500, 24000, 0, 0],
+            },
+            tables: vec![0; 6],
+        }))
+    };
+    let normalized = graph
+        .add(color(fixed_point::CodeScale::Normalized), &[layers])
+        .unwrap();
+    let ready = graph
+        .add(color(fixed_point::CodeScale::Ready), &[layers])
+        .unwrap();
+    assert_eq!(graph.outputs[normalized].data, DataType::NormalizedCodeRgb);
+    assert_eq!(graph.outputs[ready].data, DataType::LinearCodeRgb);
+    let gain = || Operation::CodeGain(code_gain::Prepared::new([1, 1], 1.675).unwrap());
+    let root = || {
+        Operation::RootDetail(
+            crate::nodes::finish::root_detail::Prepared::new([1, 1], [0, 0, 1, 1], 0.5, 1000, 1.)
+                .unwrap(),
+        )
+    };
+    assert!(graph.add(root(), &[normalized]).is_err());
+    assert!(graph.add(gain(), &[ready]).is_err());
+    let log = || {
+        Operation::LogReconstruct(
+            crate::nodes::color::log_reconstruction::Prepared::new([4, 4], [1.; 10]).unwrap(),
+        )
+    };
+    assert!(graph.add(log(), &[ready, layers]).is_err());
+    let reconstructed = graph.add(log(), &[normalized, layers]).unwrap();
+    assert!(graph.add(root(), &[reconstructed]).is_ok());
+    let finalized = graph.add(gain(), &[normalized]).unwrap();
+    assert!(graph.add(gain(), &[finalized]).is_err());
+    assert!(graph.add(root(), &[finalized]).is_ok());
+    assert!(graph.add(root(), &[ready]).is_ok());
+    assert_eq!(
+        DataType::from(crate::image::Space::NormalizedCodeRgb),
+        DataType::NormalizedCodeRgb
+    );
+    assert!(
+        color(fixed_point::CodeScale::Normalized).key("color.codes")
+            != color(fixed_point::CodeScale::Ready).key("color.codes")
+    );
+}

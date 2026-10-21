@@ -40,6 +40,53 @@ fn classic_sample_basis_round_trips_and_keeps_tone_in_profile() {
     assert!(profile.look.iter().all(|v| v.is_finite()));
 }
 
+#[test]
+fn classic_neutral_storage_retains_editable_linear_signal() {
+    use crate::{color_space::TransferFunction, nodes::finish::signed_response};
+    let identity = Matrix::diagonal([1.; 3]);
+    let response = signed_response::prepare(
+        signed_response::Controls {
+            exposure: 0.5,
+            contrast: 0.2,
+            ..Default::default()
+        },
+        [1.; 3],
+        signed_response::ToneAdjustments::default(),
+        TransferFunction::Power(461. / 256.),
+    )
+    .unwrap();
+    let expected = response.evaluate_linear([0.18; 3]);
+    let prepared = Prepared::classic(ClassicAppearance {
+        // A rank-one storage transform is valid when the samples already
+        // contain a monochrome mixture. Reader coordinates remain invertible.
+        mapping: [0., 1. / 4096., 0., 0., 1. / 4096., 0., 0., 1. / 4096., 0.],
+        neutral: [1.; 3],
+        camera_to_linear: identity.0,
+        selected_from_base: identity.0,
+        response,
+    })
+    .unwrap();
+    assert_eq!(prepared.mapping.apply([700., 737.28, 800.]), [0.18; 3]);
+    let reader_signal = prepared.camera_to_romm.apply([0.18; 3]);
+    for value in reader_signal {
+        assert!((value - 0.18).abs() < 1e-6);
+    }
+    let profile = prepared.finish(1.).unwrap();
+    let rendered = render_profile(&profile, reader_signal, true);
+    for (actual, expected) in rendered.into_iter().zip(expected) {
+        assert!((actual - expected).abs() < 0.003, "{actual} vs {expected}");
+    }
+    let profile = prepared.finish(2.).unwrap();
+    let reader_signal = prepared.camera_to_romm.apply([0.09; 3]);
+    let rendered = render_profile(&profile, reader_signal, true);
+    for (actual, expected) in rendered.into_iter().zip(expected) {
+        assert!(
+            (actual - expected).abs() < 0.003,
+            "range compensation: {actual} vs {expected}"
+        );
+    }
+}
+
 // Independent CPU application of the stored trilinear HSV look and the
 // reader's hue-preserving common tone. This checks the packaged profile,
 // rather than evaluating the fitting closure a second time.

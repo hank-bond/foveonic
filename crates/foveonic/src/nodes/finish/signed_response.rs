@@ -146,7 +146,7 @@ pub(crate) fn prepare(
 
 // Inverse root mapping: cubic above the join and the reference linear extension
 // below it. The join codes and signed clamps are recovered rendering boundaries.
-fn exponential() -> Vec<i32> {
+pub(crate) fn exponential() -> Vec<i32> {
     static TABLE: std::sync::OnceLock<Vec<i32>> = std::sync::OnceLock::new();
     TABLE.get_or_init(build_exponential).clone()
 }
@@ -196,6 +196,10 @@ fn build_root() -> Vec<i32> {
         out[(i & LUT_MASK) as usize] = (x * x / 819.2 + 0.5) as i32;
     }
     out
+}
+
+pub(crate) fn prepare_tone_table(c: Controls, gains: [f64; 3]) -> Vec<i32> {
+    tone(c, gains, ToneAdjustments::default(), &exponential())
 }
 
 fn tone(c: Controls, gains: [f64; 3], a: ToneAdjustments, exp: &[i32]) -> Vec<i32> {

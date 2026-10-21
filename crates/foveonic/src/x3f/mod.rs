@@ -1,10 +1,12 @@
-//! Reads owned X3F sections and decodes equal-resolution format-30 samples and camera metadata.
+//! Reads owned X3F sections and decodes equal-resolution sensor samples and camera metadata.
 //!
 //! Imported from Foveonic's X3F reader.
 
 mod bytes;
 pub(crate) mod camf;
 pub(crate) mod capture;
+mod exif;
+mod format6;
 mod huffman;
 
 use crate::profile::Timing;
@@ -87,6 +89,7 @@ fn decode(data: &[u8]) -> Result<Source> {
         DIRECTORY_HEADER_BYTES,
         product(count, DIRECTORY_ENTRY_BYTES)?,
     )?;
+    let mut preview_properties = BTreeMap::new();
     let mut raw = None;
     let mut properties = None;
     let mut camera = None;
@@ -108,6 +111,10 @@ fn decode(data: &[u8]) -> Result<Source> {
                 if image.range(0, 4)? != b"SECi" {
                     return Err("invalid image section signature".into());
                 }
+                if image.u32(8)? == 2 && image.u32(12)? == 18 && preview_properties.is_empty() {
+                    preview_properties =
+                        exif::properties(image.range(28, section.len().saturating_sub(28))?);
+                }
                 if SENSOR_IMAGE_TYPES.contains(&image.u32(8)?) {
                     insert(&mut raw, section)?;
                 }
@@ -121,7 +128,12 @@ fn decode(data: &[u8]) -> Result<Source> {
     if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
         return Err("overlapping X3F sections".into());
     }
-    let properties = read_properties(properties.ok_or("missing X3F properties")?)?;
+    let mut properties = read_properties(properties.ok_or("missing X3F properties")?)?;
+    if properties.get("CAMMODEL").is_some_and(|m| {
+        m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
+    }) {
+        properties.extend(preview_properties);
+    }
     let (width, height, pixels, mut timings) = read_pixels(raw.ok_or("missing X3F sensor image")?)?;
     let start = Instant::now();
     let camf = camf::decompress(camera.ok_or("missing X3F camera metadata")?)?;
@@ -191,13 +203,11 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     if bytes.range(0, 4)? != b"SECi"
         || bytes.u32(4)? != SECTION_VERSION
         || !SENSOR_IMAGE_TYPES.contains(&bytes.u32(8)?)
-        || bytes.u32(12)? != SENSOR_HUFFMAN_FORMAT
+        || ![6, SENSOR_HUFFMAN_FORMAT].contains(&bytes.u32(12)?)
     {
         return Err("unsupported sensor compression".into());
     }
-    // Image offsets: type/format 8/12, width/height 16/20, predictor seeds 28,
-    // thirteen packed code/length words 36..62, terminator 62,
-    // three compressed plane lengths 64..76, and plane data 76.
+    // Both encodings store image dimensions at offsets 16 and 20.
     let width = bytes.offset(16)?;
     let height = bytes.offset(20)?;
     let count = product(width, height)?;
@@ -209,6 +219,18 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     {
         return Err("unsupported sensor geometry".into());
     }
+    if bytes.u32(12)? == 6 {
+        let start = Instant::now();
+        let pixels = format6::decode(section, width, height)?;
+        return Ok((
+            width,
+            height,
+            pixels,
+            vec![Timing::elapsed("sensor interleaved Huffman", start)],
+        ));
+    }
+    // Format 30 stores predictor seeds at 28, thirteen packed code/length words
+    // at 36..62, a terminator at 62, and three plane lengths at 64..76.
     let mut codes = Vec::with_capacity(13);
     for i in 0..13 {
         let packed = bytes.u16(36 + i * 2)?;

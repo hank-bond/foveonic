@@ -1,4 +1,4 @@
-//! Runs a three-pane Merrill workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
+//! Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
 mod advanced;
 mod browser;
@@ -168,6 +168,8 @@ impl App {
         self.busy = false;
         self.status = "Loading editing recipe…".into();
         self.metadata = None;
+        self.output = "final".into();
+        self.channel = -1;
         self.frame = None;
         self.scope_images = None;
         self.viewport.reset();
@@ -198,8 +200,12 @@ impl App {
                 settings: self.settings.clone(),
                 output: self.output.clone(),
                 comparison: self.comparison.requested()
-                    && foveonic::inspection::comparison_input(&self.settings, &self.output)
-                        .is_some(),
+                    && foveonic::inspection::comparison_input(
+                        &self.settings,
+                        &self.output,
+                        self.metadata.as_deref(),
+                    )
+                    .is_some(),
                 export,
             });
         }
@@ -350,7 +356,10 @@ impl App {
             ui.horizontal(|ui| {
                 let export_ready = self.sidecars.ready()
                     && self.selected.is_some()
-                    && self.settings.validate().is_ok();
+                    && self
+                        .metadata
+                        .as_deref()
+                        .is_some_and(|m| self.settings.validate_for_camera(m).is_ok());
                 let actions = toolbar::show(
                     ui,
                     !self.exporting,
@@ -455,8 +464,12 @@ impl App {
             Section::Editing => {
                 let mut changed = false;
                 ui.add_enabled_ui(!self.exporting && self.sidecars.ready(), |ui| {
-                    changed =
-                        controls::processing(ui, &mut self.settings, self.metadata.as_deref());
+                    changed = controls::processing(
+                        ui,
+                        &mut self.settings,
+                        self.metadata.as_deref(),
+                        self.capture.properties.as_ref(),
+                    );
                 });
                 changed
             }
@@ -521,10 +534,20 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.weak("Inspect");
             ui.add_enabled_ui(!self.exporting, |ui| {
-                changed |= inspect::show(ui, &self.settings, &mut self.output, &mut self.channel);
-                let requested =
-                    self.comparison
-                        .show(ui, &self.settings, &self.output, self.channel);
+                changed |= inspect::show(
+                    ui,
+                    &self.settings,
+                    &mut self.output,
+                    &mut self.channel,
+                    self.metadata.as_deref(),
+                );
+                let requested = self.comparison.show(
+                    ui,
+                    &self.settings,
+                    &self.output,
+                    self.channel,
+                    self.metadata.as_deref(),
+                );
                 let has_pair = self
                     .frame
                     .as_ref()
@@ -574,8 +597,12 @@ impl App {
                     format!("Input pending. Showing {name}.")
                 })
             } else if self.frame.as_ref().is_some_and(|frame| {
-                foveonic::inspection::comparison_input(&frame.artifact.settings, &frame.output)
-                    .is_some()
+                foveonic::inspection::comparison_input(
+                    &frame.artifact.settings,
+                    &frame.output,
+                    Some(&frame.artifact.metadata),
+                )
+                .is_some()
             }) {
                 Some(format!("Output · {name} · scopes: output"))
             } else {
@@ -657,7 +684,12 @@ impl eframe::App for App {
         if let Some(saved) = self.sidecars.receive() {
             if self.selected.is_some() {
                 self.settings = sidecars::selection_settings(saved, &self.camera_overrides);
-                inspect::normalize(&self.settings, &mut self.output, &mut self.channel);
+                inspect::normalize(
+                    &self.settings,
+                    &mut self.output,
+                    &mut self.channel,
+                    self.metadata.as_deref(),
+                );
                 self.submit(None);
             }
         }
@@ -671,8 +703,11 @@ impl eframe::App for App {
             self.receive(ctx);
         }
         self.smoke_tick(ctx);
-        let normalized =
-            controls::normalize_incompatible(&mut self.settings, self.metadata.as_deref());
+        let normalized = controls::normalize_with_capture(
+            &mut self.settings,
+            self.metadata.as_deref(),
+            self.capture.properties.as_ref(),
+        );
         self.sidecars.refresh(&self.settings);
         let previous_settings = self.settings.clone();
         let previous_selection = self.selected.clone();
@@ -769,7 +804,9 @@ fn main() -> eframe::Result {
             "--wb" => settings.white_balance = args.next().unwrap_or_default(),
             "--mode" => settings.color_mode = args.next().unwrap_or_default(),
             "--help" => {
-                println!("foveonic-gui [X3F_OR_FOLDER] [--wb NAME --mode NAME]\nWB and color mode default to the loaded X3F's recorded settings; --wb/--mode override them.");
+                println!(
+                    "foveonic-gui [X3F_OR_FOLDER] [--wb NAME --mode NAME]\nWB and color mode default to the loaded X3F's recorded settings; --wb/--mode override them."
+                );
                 return Ok(());
             }
             _ => {
@@ -823,11 +860,11 @@ mod tests {
         let settings = foveonic::render::Settings::new("Sunlight", "Standard");
         let mut output = "noise.layers".to_owned();
         let mut channel = 2;
-        super::inspect::normalize(&settings, &mut output, &mut channel);
+        super::inspect::normalize(&settings, &mut output, &mut channel, None);
         assert_eq!((&*output, channel), ("final", -1));
         output = "calibration.layers".into();
         channel = 1;
-        super::inspect::normalize(&settings, &mut output, &mut channel);
+        super::inspect::normalize(&settings, &mut output, &mut channel, None);
         assert_eq!((&*output, channel), ("calibration.layers", 1));
     }
     #[test]
