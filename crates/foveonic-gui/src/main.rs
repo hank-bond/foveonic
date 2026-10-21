@@ -671,6 +671,8 @@ impl eframe::App for App {
             self.receive(ctx);
         }
         self.smoke_tick(ctx);
+        let normalized =
+            controls::normalize_incompatible(&mut self.settings, self.metadata.as_deref());
         self.sidecars.refresh(&self.settings);
         let previous_settings = self.settings.clone();
         let previous_selection = self.selected.clone();
@@ -716,7 +718,7 @@ impl eframe::App for App {
                     );
                 });
             });
-        let mut changed = false;
+        let mut changed = normalized;
         let tools_limit = (ctx.available_rect().width() - 240.).clamp(300., 600.);
         egui::SidePanel::right("settings")
             .default_width(
@@ -732,7 +734,8 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             changed |= self.central(ui);
         });
-        if previous_selection == self.selected && previous_settings != self.settings {
+        if previous_selection == self.selected && (normalized || previous_settings != self.settings)
+        {
             self.sidecars.edited(&self.settings);
         }
         if let Some(path) = select {

@@ -236,7 +236,45 @@ fn select_highlight(settings: &mut Settings, choice: (HighlightMode, ColorFieldA
     before != (settings.highlight_mode, settings.color_field)
 }
 
+fn is_classic(metadata: Option<&Metadata>) -> bool {
+    matches!(
+        metadata.and_then(|m| m.processing_family().ok()),
+        Some(foveonic::source::ProcessingFamily::Classic)
+    )
+}
+
+/// Reset unsupported adjustments when the selected camera's metadata arrives.
+pub fn normalize_incompatible(settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
+    if !is_classic(metadata) {
+        return false;
+    }
+    let before = (
+        settings.rendering,
+        settings.reconstruction,
+        settings.color_dq_gain,
+        settings.highlight_mode,
+        settings.highlight_threshold_ev,
+        settings.color_field,
+    );
+    settings.rendering = Rendering::Color;
+    settings.reconstruction = settings.reconstruction.map(|_| Default::default());
+    settings.color_dq_gain = None;
+    settings.highlight_mode = HighlightMode::Classic;
+    settings.highlight_threshold_ev = None;
+    settings.color_field = Default::default();
+    before
+        != (
+            settings.rendering,
+            settings.reconstruction,
+            settings.color_dq_gain,
+            settings.highlight_mode,
+            settings.highlight_threshold_ev,
+            settings.color_field,
+        )
+}
+
 pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
+    let classic = is_classic(metadata);
     let mut changed = false;
     ui.horizontal(|ui| {
         help::control(
@@ -247,16 +285,21 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
             (Rendering::Color, "Color"),
             (Rendering::Monochrome, "Monochrome"),
         ] {
-            if help::control(
-                crate::widgets::button(
-                    ui,
-                    label,
-                    settings.rendering == value,
-                    egui::vec2(if value == Rendering::Color { 55. } else { 100. }, 22.),
-                ),
-                "Rendering",
-            )
-            .clicked()
+            if ui
+                .add_enabled_ui(!classic || value == Rendering::Color, |ui| {
+                    help::control(
+                        crate::widgets::button(
+                            ui,
+                            label,
+                            settings.rendering == value,
+                            egui::vec2(if value == Rendering::Color { 55. } else { 100. }, 22.),
+                        ),
+                        "Rendering",
+                    )
+                    .on_disabled_hover_text("Monochrome is unavailable for this camera.")
+                })
+                .inner
+                .clicked()
             {
                 changed |= settings.rendering != value;
                 settings.rendering = value;
@@ -356,17 +399,21 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
             changed = true;
         }
         if let Some(controls) = &mut settings.reconstruction {
-            changed |= adjustment(ui, "Chroma noise", &mut controls.chroma, 0..=4, 2);
-            changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
-            changed |= adjustment(ui, "Banding noise", &mut controls.banding, 0..=4, 2);
-            changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
-            changed |= crate::advanced::show(
-                ui,
-                controls,
-                &mut settings.color_dq_gain,
-                metadata,
-                &settings.white_balance,
-            );
+            ui.add_enabled_ui(!classic, |ui| {
+                changed |= adjustment(ui, "Chroma noise", &mut controls.chroma, 0..=4, 2);
+                changed |= adjustment(ui, "Luma noise", &mut controls.luminance, 0..=4, 2);
+                changed |= adjustment(ui, "Banding noise", &mut controls.banding, 0..=4, 2);
+                changed |= adjustment(ui, "Detail", &mut controls.detail, 0. ..=2., 1.);
+                changed |= crate::advanced::show(
+                    ui,
+                    controls,
+                    &mut settings.color_dq_gain,
+                    metadata,
+                    &settings.white_balance,
+                );
+            })
+            .response
+            .on_disabled_hover_text("This camera uses its built-in noise and detail settings.");
         }
     } else {
         changed |= adjustment(ui, "Mono noise", &mut settings.monochrome.noise, 0..=4, 2);
@@ -396,31 +443,38 @@ pub fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&
     );
     ui.separator();
     ui.weak("Corrections");
-    ui.horizontal(|ui| {
-        help::control(
-            ui.add_sized([92., 20.], egui::Label::new("Method")),
-            "Highlight method",
-        );
-        let mut choice = highlight_choice(settings);
-        let label = HIGHLIGHT_METHODS
-            .iter()
-            .find(|(value, _)| *value == choice)
-            .unwrap()
-            .1;
-        let combo = egui::ComboBox::from_id_salt("highlight-method")
-            .width(ui.available_width() - 8.)
-            .selected_text(label);
-        let response = crate::widgets::dropdown(ui, combo, |ui| {
-            for (value, label) in HIGHLIGHT_METHODS {
-                if crate::widgets::menu_value(ui, &mut choice, value, label).clicked() {
-                    changed |= select_highlight(settings, choice);
+    ui.add_enabled_ui(!classic, |ui| {
+        ui.horizontal(|ui| {
+            help::control(
+                ui.add_sized([92., 20.], egui::Label::new("Method")),
+                "Highlight method",
+            );
+            let mut choice = highlight_choice(settings);
+            let label = HIGHLIGHT_METHODS
+                .iter()
+                .find(|(value, _)| *value == choice)
+                .unwrap()
+                .1;
+            let combo = egui::ComboBox::from_id_salt("highlight-method")
+                .width(ui.available_width() - 8.)
+                .selected_text(label);
+            let response = crate::widgets::dropdown(ui, combo, |ui| {
+                for (value, label) in HIGHLIGHT_METHODS {
+                    if crate::widgets::menu_value(ui, &mut choice, value, label).clicked() {
+                        changed |= select_highlight(settings, choice);
+                    }
                 }
-            }
-        })
-        .response;
-        help::control(response, "Highlight method");
-    });
-    if settings.highlight_mode == HighlightMode::Classic {
+            })
+            .response;
+            help::control(response, "Highlight method");
+        });
+    })
+    .response
+    .on_disabled_hover_text("This camera uses its built-in highlight correction.");
+    if classic {
+        changed |= crate::widgets::checkbox(ui, &mut settings.highlight_restoration, "Highlights")
+            .changed();
+    } else if settings.highlight_mode == HighlightMode::Classic {
         changed |= automatic_adjustment(
             ui,
             "Highlight correction",
