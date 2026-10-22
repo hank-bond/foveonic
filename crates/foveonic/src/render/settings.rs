@@ -27,6 +27,8 @@ pub enum Rendering {
 pub struct Settings {
     pub rendering: Rendering,
     pub monochrome: MonochromeControls,
+    /// Monochrome Smooth/Crisp selection. None follows the file or recipe default.
+    pub monochrome_smoothness: Option<f32>,
     pub white_balance: String,
     pub color_mode: String,
     /// Stops applied to linear RGB before the selected rendering mode's tone curve.
@@ -44,15 +46,19 @@ pub struct Settings {
     pub despeckle: bool,
     /// Restore clipped-layer color from original camera saturation maps, independently of tone highlights.
     pub highlight_restoration: bool,
+    /// Normalized bright-color correction amount. None follows the file or recipe default.
+    pub highlight_amount: Option<f32>,
     /// Camera threshold offset in stops. None selects Auto. Positive values delay neutralization.
     pub highlight_threshold_ev: Option<f32>,
     pub highlight_mode: HighlightMode,
     pub color_field: ColorFieldControls,
     /// Estimate and subtract native additive per-row layer bias before reconstruction.
     pub row_correction: bool,
-    /// Color noise and detail settings. None leaves color reconstruction off.
+    /// Optional color noise and detail settings. None selects the recipe baseline.
+    /// Mandatory sensor reconstruction still runs when these adjustments are off.
     pub reconstruction: Option<crate::noise::Controls>,
-    /// None selects the camera/noise base. Some(0) is Off, positive is manual.
+    /// None selects the recipe base. Some is a manual amount. Zero skips final
+    /// sharpening in Classic/Merrill and retains baseline proportional detail in Quattro.
     pub sharpen_amount: Option<f32>,
     /// TIFF-only destination. None preserves the camera's working space.
     pub tiff_color_space: Option<TiffColorSpace>,
@@ -65,6 +71,7 @@ impl Default for Settings {
         Self {
             rendering: Rendering::Color,
             monochrome: MonochromeControls::default(),
+            monochrome_smoothness: None,
             // Camera choices are resolved from the selected X3F, not a global preset.
             white_balance: String::new(),
             color_mode: String::new(),
@@ -75,6 +82,7 @@ impl Default for Settings {
             repair: Some(RepairThreshold::Camera),
             despeckle: true,
             highlight_restoration: true,
+            highlight_amount: None,
             highlight_threshold_ev: None,
             highlight_mode: HighlightMode::Classic,
             color_field: ColorFieldControls::default(),
@@ -121,19 +129,7 @@ impl Settings {
     pub fn effective_sharpen_amount(&self, metadata: &crate::source::Metadata) -> Result<f32> {
         match self.sharpen_amount {
             Some(amount) => Ok(amount),
-            // Classic's reference detail default is unit strength; its recipe
-            // does not use the Merrill noise descriptors to select sharpening.
-            None if metadata.processing_family().ok()
-                == Some(crate::source::ProcessingFamily::Classic) =>
-            {
-                Ok(1.)
-            }
-            None => Ok(crate::noise::couplings(
-                metadata,
-                &self.white_balance,
-                self.sensor_noise_controls(),
-            )?
-            .sharpen_base),
+            None => super::recipes::default_sharpen_amount(self, metadata),
         }
     }
 
@@ -173,6 +169,12 @@ impl Settings {
     /// Inspection can show sensor data before WB or mode is known. Check numbers
     /// here and let stages that use those camera choices resolve them later.
     pub fn validate_values(&self) -> Result<()> {
+        if self
+            .monochrome_smoothness
+            .is_some_and(|v| !v.is_finite() || !(0. ..=1.).contains(&v))
+        {
+            return Err("monochrome Smooth/Crisp must be between zero and one".into());
+        }
         self.monochrome.validate()?;
         self.color_field.validate()?;
         if !self.exposure.is_finite()
@@ -189,11 +191,15 @@ impl Settings {
         }
         if !self.saturation.is_finite()
             || self.saturation < 0.
-            || self
-                .sharpen_amount
-                .is_some_and(|v| !v.is_finite() || v < 0.)
+            || self.sharpen_amount.is_some_and(|v| !v.is_finite())
         {
-            return Err("saturation and sharpening must be finite and nonnegative".into());
+            return Err("saturation must be nonnegative and sharpening must be finite".into());
+        }
+        if self
+            .highlight_amount
+            .is_some_and(|v| !(0. ..=1.).contains(&v))
+        {
+            return Err("highlight correction amount must be in 0..1".into());
         }
         if self.color_dq_gain.is_some_and(|v| !v.is_finite() || v < 0.) {
             return Err("ColorDQ gain must be finite and nonnegative".into());

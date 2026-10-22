@@ -1,4 +1,4 @@
-//! Edits actual sensor-layer proportions with a triangular barycentric monochrome mixer.
+//! Edits three-channel proportions with a triangular barycentric monochrome mixer.
 
 use eframe::egui::{self, Color32, Pos2, Vec2};
 
@@ -44,16 +44,25 @@ fn mix_at(corners: [Pos2; 3], point: Pos2) -> [f32; 3] {
 }
 
 pub fn show(ui: &mut egui::Ui, mix: &mut [f32; 3]) -> bool {
+    show_with_help(ui, mix, [1. / 3.; 3], "Color Mix")
+}
+
+pub fn show_with_help(
+    ui: &mut egui::Ui,
+    mix: &mut [f32; 3],
+    default: [f32; 3],
+    help: &str,
+) -> bool {
     let before = *mix;
     ui.horizontal(|ui| {
-        crate::help::control(ui.label("Color Mix"), "Color Mix");
+        crate::help::control(ui.label("Color Mix"), help);
         if crate::help::control(
             crate::widgets::button(ui, "Reset", false, egui::vec2(52., 20.)),
-            "Color Mix",
+            help,
         )
         .clicked()
         {
-            *mix = [1. / 3.; 3];
+            *mix = default;
         }
     });
     let width = ui.available_width().min(280.);
@@ -74,7 +83,7 @@ pub fn show(ui: &mut egui::Ui, mix: &mut [f32; 3]) -> bool {
         }
     }
     if response.double_clicked() {
-        *mix = [1. / 3.; 3];
+        *mix = default;
     }
     if response.has_focus() {
         let step = ui.input(|i| {

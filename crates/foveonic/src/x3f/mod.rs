@@ -2,6 +2,7 @@
 //!
 //! Imported from Foveonic's X3F reader.
 
+pub(crate) mod adjustments;
 mod bytes;
 pub(crate) mod camf;
 pub(crate) mod capture;
@@ -69,8 +70,7 @@ fn decode(data: &[u8]) -> Result<Source> {
     if bytes.range(0, 4)? != b"FOVb" || !SUPPORTED_FILE_VERSIONS.contains(&bytes.u32(4)?) {
         return Err("unsupported X3F header".into());
     }
-    // Header byte offsets: signature 0, version 4, stored orientation 36.
-    let rotation = bytes.u32(36)?;
+    let rotation = rotation(data)?;
     let processing_version = processing_version(data)?;
     let end = data
         .len()
@@ -154,6 +154,8 @@ fn decode(data: &[u8]) -> Result<Source> {
     {
         merge_preview_properties(&mut properties, preview_properties);
     }
+    properties.extend(adjustments::read(&data[..ranges[0].0])?);
+    properties.insert("X3F_MARK_BITS".into(), mark_bits(data)?.to_string());
     let raw = raw.ok_or("missing X3F sensor image")?;
     let storage = if [35, 37, 39].contains(&Bytes(raw).u32(12)?) {
         SourceStorage::PackedRgbBluePhases
@@ -196,6 +198,19 @@ fn merge_preview_properties(
             .into_iter()
             .filter(|(name, _)| fallback || name.starts_with("EXIF_")),
     );
+}
+
+/// Clockwise presentation degrees. Version 4 moves image geometry twelve bytes
+/// later to make room for processing-version and camera identity fields.
+pub(crate) fn rotation(header: &[u8]) -> Result<u32> {
+    let bytes = Bytes(header);
+    bytes.u32(if bytes.u32(4)? >= 0x40000 { 48 } else { 36 })
+}
+
+/// File marks include the saved color/monochrome presentation choice.
+pub(super) fn mark_bits(header: &[u8]) -> Result<u32> {
+    let bytes = Bytes(header);
+    bytes.u32(if bytes.u32(4)? >= 0x40000 { 36 } else { 24 })
 }
 
 pub(super) fn processing_version(header: &[u8]) -> Result<Option<[u16; 4]>> {
@@ -372,6 +387,22 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotation_uses_the_file_version_geometry_offset() {
+        for version in SUPPORTED_FILE_VERSIONS {
+            for degrees in [0_u32, 90, 180, 270] {
+                let mut header = [0_u8; 52];
+                header[4..8].copy_from_slice(&version.to_le_bytes());
+                let offset = if version >= 0x40000 { 48 } else { 36 };
+                let other_offset = if offset == 48 { 36 } else { 48 };
+                header[other_offset..other_offset + 4].copy_from_slice(&123_u32.to_le_bytes());
+                header[offset..offset + 4].copy_from_slice(&degrees.to_le_bytes());
+                assert_eq!(rotation(&header).unwrap(), degrees);
+                assert!(rotation(&header[..offset + 3]).is_err());
+            }
+        }
+    }
 
     #[test]
     fn processing_version_is_header_version_gated_and_keeps_word_order() {

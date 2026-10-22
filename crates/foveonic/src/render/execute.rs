@@ -137,10 +137,33 @@ impl Engine {
                     Input::Rendered(image) => image.description.extent,
                 });
             let extent = match &node.operation {
+                Operation::PackedLab(p) => p.extent(),
+                Operation::CodeCrop(p) => p.extent(),
+                Operation::WaveletContrast(p) => p.extent(),
+                Operation::CodeChannelMap(p) => p.extent(),
+                Operation::ChannelNoise(p) => p.extent(),
+                Operation::ColorSharpen(p) => p.extent(),
+                Operation::ProportionalSharpen(p) => p.extent(),
                 Operation::Encode { params, .. } => [params.output[0], params.output[1]],
+                Operation::BlueGuidedReconstruct(_) => inherited.map(|v| v * 2),
                 _ => inherited,
             };
-            let desc = graph.outputs[index].data.image_description(extent);
+            let view_baked = matches!(
+                node.operation,
+                Operation::CodeCrop(_) | Operation::Encode { .. }
+            ) || reads[node_index].iter().any(|id| {
+                values[*id]
+                    .as_ref()
+                    .and_then(|v| v.description)
+                    .is_some_and(|d| d.view_baked)
+            }) || matches!((&node.operation, &context), (Operation::RenderedInput { .. }, Input::Rendered(image)) if image.description.view_baked);
+            let desc = graph.outputs[index]
+                .data
+                .image_description(extent)
+                .map(|mut d| {
+                    d.view_baked = view_baked;
+                    d
+                });
             let groups = [inherited[0].div_ceil(8), inherited[1].div_ceil(8)];
             let dimensions = [inherited[0], inherited[1], 0, 0];
             let bytes = u64::from(inherited[0]) * u64::from(inherited[1]) * 12;
@@ -148,6 +171,28 @@ impl Engine {
                 gpu.dispatch(kernel, buffers, groups, &mut trace)
             };
             let output = match &node.operation {
+                Operation::CodeCrop(prepared) => {
+                    if inherited != prepared.input_extent() {
+                        return Err("code crop input extent mismatch".into());
+                    }
+                    Some(crate::nodes::finish::code_crop::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::EmptyDefectFlags([width, height]) => {
+                    if *width == 0 || *height == 0 {
+                        return Err("empty defect flags require nonzero geometry".into());
+                    }
+                    // Fresh WebGPU buffers are zero initialized. These flags
+                    // belong to factory repair, independently of sparse-grid flags.
+                    Some(gpu.storage(
+                        "empty factory defect flags",
+                        u64::from(*width) * u64::from(*height) * 4,
+                    )?)
+                }
                 Operation::Source | Operation::SourcePhaseCells => {
                     let Input::Source(source) = &context else {
                         return Err("sensor input context required".into());
@@ -161,6 +206,462 @@ impl Engine {
                         return Err("source storage does not match graph input".into());
                     }
                     Some(gpu.upload("Original sensor layers", &source.pixels)?)
+                }
+                Operation::BlueRefresh(prepared) => {
+                    if inherited != prepared.extent()
+                        || input(1).description.map(|d| d.extent) != Some(inherited.map(|v| v * 2))
+                    {
+                        return Err(
+                            "blue refresh requires RGB cells and a doubled blue plane".into()
+                        );
+                    }
+                    Some(crate::nodes::sensor::blue_refresh::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::OrderedBlueRepair(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("ordered blue repair extent does not match its input".into());
+                    }
+                    let prior = if prepared.stage()
+                        == crate::nodes::sensor::ordered_blue_repair::Stage::General
+                    {
+                        Some(&input(1).buffer)
+                    } else {
+                        None
+                    };
+                    let output = crate::nodes::sensor::ordered_blue_repair::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prior,
+                        prepared,
+                        profile,
+                    )?;
+                    if let Some(&side) = node.outputs.get(1) {
+                        if required[side] {
+                            values[side] = Some(Value {
+                                buffer: output.mask,
+                                description: None,
+                            });
+                        }
+                    }
+                    required[index].then_some(output.blue)
+                }
+                Operation::BlueDespeckle(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("blue despeckle extent does not match its input".into());
+                    }
+                    Some(crate::nodes::sensor::blue_despeckle::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::PackedLab(prepared) => Some(crate::nodes::color::packed_lab::apply(
+                    gpu,
+                    &input(0).buffer,
+                    prepared,
+                    profile,
+                )?),
+                Operation::WaveletContrast(prepared) => {
+                    Some(crate::nodes::finish::wavelet_contrast::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::CodeChannelMap(p) => {
+                    Some(crate::nodes::finish::code_channel_map::apply(
+                        gpu,
+                        &input(0).buffer,
+                        p,
+                        profile,
+                    )?)
+                }
+                Operation::ColorSharpen(params) => {
+                    Some(crate::nodes::finish::color_sharpen::apply(
+                        gpu,
+                        &input(0).buffer,
+                        params,
+                        profile,
+                    )?)
+                }
+                Operation::ProportionalSharpen(prepared) => {
+                    Some(crate::nodes::finish::proportional_sharpen::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::BlueMismatch(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("blue mismatch extent does not match its input".into());
+                    }
+                    Some(crate::nodes::sensor::blue_mismatch::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::CellGain(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("phase-cell gain extent mismatch".into());
+                    }
+                    Some(crate::nodes::color::cell_gain::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::SpatialColorGain { prepared, .. } => {
+                    if inherited != prepared.extent() {
+                        return Err("spatial color-gain extent mismatch".into());
+                    }
+                    Some(crate::nodes::color::spatial_color_gain::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::BoxContrast(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("box contrast extent mismatch".into());
+                    }
+                    Some(crate::nodes::finish::box_contrast::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::ColumnGain(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("column-gain extent mismatch".into());
+                    }
+                    Some(crate::nodes::sensor::column_gain::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::BluePattern(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("blue-pattern extent mismatch".into());
+                    }
+                    Some(crate::nodes::sensor::blue_pattern::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::Fppd(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("phase-detection extent mismatch".into());
+                    }
+                    Some(crate::nodes::sensor::fppd::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::PurpleFringe(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("purple-fringe extent mismatch".into());
+                    }
+                    Some(crate::nodes::color::purple_fringe::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::SectorColor(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("chroma-sector extent mismatch".into());
+                    }
+                    Some(crate::nodes::color::sector_color::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::RawColorBlend(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("raw-color extent mismatch".into());
+                    }
+                    let output = crate::nodes::color::raw_color_blend::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    for (slot, buffer) in [(1, output.neutralized), (2, output.raw_color)] {
+                        if let Some(&side) = node.outputs.get(slot) {
+                            if required[side] {
+                                values[side] = Some(Value {
+                                    buffer,
+                                    description: Some(Description::new(
+                                        inherited,
+                                        crate::image::Space::CorrectedSensorRgb,
+                                    )),
+                                });
+                            }
+                        }
+                    }
+                    Some(output.rgb)
+                }
+                Operation::ChannelNoise(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("channel noise filter extent mismatch".into());
+                    }
+                    let output = crate::nodes::color::channel_noise::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    if let Some(&side) = node.outputs.get(1) {
+                        if required[side] {
+                            values[side] = Some(Value {
+                                buffer: output.source_after,
+                                description: Some(Description::new(
+                                    inherited,
+                                    crate::image::Space::CorrectedSensorRgb,
+                                )),
+                            });
+                        }
+                    }
+                    Some(output.rgb)
+                }
+                Operation::TwoScaleNoise(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("two-scale RGB filter extent mismatch".into());
+                    }
+                    let output = crate::nodes::color::two_scale_noise::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    if let Some(&side) = node.outputs.get(1) {
+                        if required[side] {
+                            values[side] = Some(Value {
+                                buffer: output.source_after,
+                                description: Some(Description::new(
+                                    inherited,
+                                    crate::image::Space::CorrectedSensorRgb,
+                                )),
+                            });
+                        }
+                    }
+                    Some(output.rgb)
+                }
+                Operation::HighlightRestoration(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("highlight restoration extent does not match its input".into());
+                    }
+                    let output = crate::nodes::sensor::highlight_restoration::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    if let Some(&side) = node.outputs.get(1) {
+                        if required[side] {
+                            values[side] = Some(Value {
+                                buffer: output.mask,
+                                description: None,
+                            });
+                        }
+                    }
+                    Some(output.rgb)
+                }
+                Operation::LumaClusters(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("blue cluster extent does not match its input".into());
+                    }
+                    Some(crate::nodes::sensor::luma_cluster::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::ByteMaskDouble(params) => {
+                    Some(crate::nodes::color::byte_mask_double::apply(
+                        gpu,
+                        &input(0).buffer,
+                        params,
+                        profile,
+                    )?)
+                }
+                Operation::BlueGuidedReconstruct(prepared) => {
+                    if inherited != prepared.extent()
+                        || input(1).description.map(|d| d.extent) != Some(inherited)
+                        || input(2).description.map(|d| d.extent) != Some(inherited)
+                        || input(3).description.map(|d| d.extent) != Some(inherited.map(|v| v * 2))
+                    {
+                        return Err("blue-guided reconstruction requires three matching RGB cells and a doubled blue plane".into());
+                    }
+                    let output = crate::nodes::color::blue_guided_reconstruct::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        &input(2).buffer,
+                        &input(3).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    let extent = inherited.map(|v| v * 2);
+                    if required[node.outputs[1]] {
+                        values[node.outputs[1]] = Some(Value {
+                            buffer: output.residual,
+                            description: Some(Description::new(
+                                extent,
+                                crate::image::Space::LuminanceRatio,
+                            )),
+                        });
+                    }
+                    required[index].then_some(output.rgb)
+                }
+                Operation::ResidualFinish { params, with_mask } => {
+                    if inherited != params.extent()
+                        || input(1).description.map(|d| d.extent) != Some(inherited)
+                    {
+                        return Err(
+                            "residual finishing requires matching RGB and gain extents".into()
+                        );
+                    }
+                    let output = crate::nodes::color::residual_finish::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        if *with_mask {
+                            Some(&input(2).buffer)
+                        } else {
+                            None
+                        },
+                        params,
+                        profile,
+                    )?;
+                    if required[node.outputs[1]] {
+                        values[node.outputs[1]] = Some(Value {
+                            buffer: output.detail,
+                            description: Some(Description::new(
+                                inherited,
+                                crate::image::Space::SignedDetail,
+                            )),
+                        });
+                    }
+                    required[index].then_some(output.rgb)
+                }
+                Operation::RgbDespeckle(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("RGB despeckle extent does not match its input".into());
+                    }
+                    Some(crate::nodes::sensor::rgb_despeckle::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::ChromaClusters(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("RGB cluster extent does not match its input".into());
+                    }
+                    Some(crate::nodes::sensor::chroma_clusters::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::ChromaRepair { prepared, stage } => {
+                    if inherited != prepared.extent() {
+                        return Err("chroma repair extent does not match its input".into());
+                    }
+                    Some(crate::nodes::sensor::chroma_repair::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        *stage,
+                        profile,
+                    )?)
+                }
+                Operation::SparseRepair(prepared) => {
+                    if inherited != prepared.extent()
+                        || input(1).description.map(|d| d.extent) != Some(inherited.map(|v| v * 2))
+                    {
+                        return Err(
+                            "sparse repair requires RGB cells and a doubled blue plane".into()
+                        );
+                    }
+                    let output = crate::nodes::sensor::sparse_repair::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    for (side, buffer, extent) in [
+                        (node.outputs[1], output.blue, inherited.map(|v| v * 2)),
+                        (node.outputs[2], output.defects, inherited),
+                    ] {
+                        if required[side] {
+                            values[side] = Some(Value {
+                                buffer,
+                                description: graph.outputs[side].data.image_description(extent),
+                            });
+                        }
+                    }
+                    required[index].then_some(output.rgb)
+                }
+                Operation::HlpCalibration(prepared) => {
+                    if inherited != prepared.extent()
+                        || input(1).description.map(|d| d.extent) != Some(inherited.map(|v| v * 2))
+                    {
+                        return Err(
+                            "sparse calibration requires RGB cells and a doubled blue plane".into(),
+                        );
+                    }
+                    let output = crate::nodes::sensor::hlp_calibration::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    for (side, buffer, extent) in [
+                        (node.outputs[1], output.blue, inherited.map(|v| v * 2)),
+                        (node.outputs[2], output.scratch, prepared.scratch_extent()),
+                    ] {
+                        if required[side] {
+                            values[side] = Some(Value {
+                                buffer,
+                                description: graph.outputs[side].data.image_description(extent),
+                            });
+                        }
+                    }
+                    required[index].then_some(output.rgb)
                 }
                 Operation::PhaseGain(prepared) => {
                     if inherited != prepared.extent() {
@@ -198,7 +699,13 @@ impl Engine {
                     let Input::Rendered(image) = &context else {
                         return Err("rendered input context required".into());
                     };
-                    if data.image_description(image.description.extent) != Some(image.description)
+                    if data
+                        .image_description(image.description.extent)
+                        .map(|mut d| {
+                            d.view_baked = image.description.view_baked;
+                            d
+                        })
+                        != Some(image.description)
                         || image.buffer.size() < image.description.byte_len()
                     {
                         return Err(
@@ -298,6 +805,16 @@ impl Engine {
                         gpu,
                         &input(0).buffer,
                         &input(1).buffer,
+                        inherited,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::LinearCodeBase => Some(input(0).buffer.clone()),
+                Operation::CodeResponse { prepared, .. } => {
+                    Some(crate::nodes::finish::code_response::apply(
+                        gpu,
+                        &input(0).buffer,
                         inherited,
                         prepared,
                         profile,

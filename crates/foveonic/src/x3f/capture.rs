@@ -28,6 +28,7 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
         return Err("unsupported X3F header".into());
     }
     let file_version = bytes.u32(4)?;
+    let mark_bits = super::mark_bits(&header)?;
     super::processing_version(&header)?;
     reader.seek(SeekFrom::End(-4))?;
     let mut pointer = [0; 4];
@@ -124,6 +125,18 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
         }
         super::merge_preview_properties(&mut properties, preview_properties);
     }
+    if file_version >= 0x40000 && ranges[0].0 >= 56 {
+        let header_bytes = (ranges[0].0 as usize).min(super::adjustments::MAXIMUM_HEADER_BYTES);
+        reader.seek(SeekFrom::Start(0))?;
+        let mut header = vec![0; header_bytes];
+        reader.read_exact(&mut header)?;
+        // Browsing can retain capture information even if saved adjustments
+        // are malformed. Full RAW decoding reports that header error.
+        if let Ok(adjustments) = super::adjustments::read(&header) {
+            properties.extend(adjustments);
+        }
+    }
+    properties.insert("X3F_MARK_BITS".into(), mark_bits.to_string());
     Ok(properties)
 }
 

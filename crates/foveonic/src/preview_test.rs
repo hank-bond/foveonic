@@ -24,10 +24,22 @@ fn bitmap_preserves_rgb_and_omits_row_padding() {
 }
 
 fn fixture(images: &[(u32, [u32; 2], u32, Vec<u8>)]) -> Vec<u8> {
-    let mut data = vec![0; 40];
+    fixture_with_rotation(images, 0x20000, 90)
+}
+
+fn fixture_with_rotation(
+    images: &[(u32, [u32; 2], u32, Vec<u8>)],
+    version: u32,
+    rotation: u32,
+) -> Vec<u8> {
+    let mut data = vec![0; if version >= 0x40000 { 52 } else { 40 }];
     data[..4].copy_from_slice(b"FOVb");
-    data[4..8].copy_from_slice(&0x20000_u32.to_le_bytes());
-    data[36..40].copy_from_slice(&90_u32.to_le_bytes());
+    data[4..8].copy_from_slice(&version.to_le_bytes());
+    if version >= 0x40000 {
+        data[8..12].copy_from_slice(&1_u32.to_le_bytes());
+    }
+    let offset = if version >= 0x40000 { 48 } else { 36 };
+    data[offset..offset + 4].copy_from_slice(&rotation.to_le_bytes());
     let mut entries = Vec::new();
     for (format, extent, stride, payload) in images {
         let offset = data.len() as u32;
@@ -181,5 +193,49 @@ fn original_bitmap_channels_match_same_file_jpeg() {
             direct * 10 < swapped * 9,
             "{name}: embedded RGB should match its JPEG substantially better than swapped channels"
         );
+    }
+}
+
+#[test]
+fn previews_share_versioned_rotation_with_sensor_metadata() {
+    let path = std::env::temp_dir().join(format!(
+        "foveonic-preview-orientation-{}.x3f",
+        std::process::id()
+    ));
+    for version in [0x20000, 0x30000, 0x40001, 0x40002] {
+        for degrees in [0, 90, 180, 270] {
+            let bytes = fixture_with_rotation(&[(3, [2, 1], 6, vec![1; 6])], version, degrees);
+            std::fs::write(&path, bytes).unwrap();
+            let preview = read(&path).unwrap();
+            assert_eq!(preview.rotation, degrees);
+            assert_eq!(preview.extent, [2, 1]);
+            assert_eq!(preview.rgb, [1; 6]);
+        }
+    }
+    let mut bytes = fixture_with_rotation(&[(3, [2, 1], 6, vec![1; 6])], 0x40001, 270);
+    bytes[8..12].copy_from_slice(&2_u32.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+    assert!(read(&path)
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("byte order"));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires QUATTRO_SAMPLE_DIR"]
+fn original_quattro_preview_rotation_matches_camera_orientation() {
+    let directory = std::path::PathBuf::from(std::env::var_os("QUATTRO_SAMPLE_DIR").unwrap());
+    for (name, expected) in [
+        ("dp0-quattro", 0),
+        ("dp1-quattro-pblog", 0),
+        ("dp2-quattro", 0),
+        ("dp3-quattro", 270),
+        ("dp3-quattro-iso800", 270),
+        ("sd-quattro", 0),
+    ] {
+        let preview = read(&directory.join(format!("{name}.x3f"))).unwrap();
+        assert_eq!(preview.rotation, expected, "{name}");
     }
 }

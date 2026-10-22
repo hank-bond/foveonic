@@ -27,8 +27,8 @@ pub fn read(path: &Path) -> Result<Preview> {
     if !(44..=1024 * 1024 * 1024).contains(&length) {
         return Err("unsupported X3F size".into());
     }
-    let mut header = [0; 40];
-    file.read_exact(&mut header)?;
+    let mut header = [0; 52];
+    file.read_exact(&mut header[..40])?;
     if &header[..4] != b"FOVb"
         || ![
             0x20000, 0x20001, 0x20002, 0x20003, 0x30000, 0x40001, 0x40002,
@@ -37,6 +37,11 @@ pub fn read(path: &Path) -> Result<Preview> {
     {
         return Err("unsupported X3F header".into());
     }
+    if u32_at(&header, 4) >= 0x40000 {
+        file.read_exact(&mut header[40..])?;
+    }
+    crate::x3f::processing_version(&header)?;
+    let rotation = crate::x3f::rotation(&header)?;
     file.seek(SeekFrom::End(-4))?;
     let mut pointer = [0; 4];
     file.read_exact(&mut pointer)?;
@@ -111,7 +116,7 @@ pub fn read(path: &Path) -> Result<Preview> {
     Ok(Preview {
         rgb,
         extent: selected.extent,
-        rotation: u32_at(&header, 36),
+        rotation,
         native_extent,
     })
 }

@@ -227,6 +227,8 @@ pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Optio
                 Space::SensorLayers | Space::CalibratedLayers | Space::LinearRgb(_)
             ) {
                 "4095"
+            } else if data.space == Space::UnsignedCodeRgb {
+                "65535"
             } else if data.space == Space::LuminanceRatio {
                 "2"
             } else if data.space == Space::SignedDetail {

@@ -1,7 +1,7 @@
 //! Decodes unsigned mixed-resolution sensor planes into RGB/blue-phase cells.
 
 use super::bytes::{product, Bytes};
-use super::huffman::Table;
+use super::huffman::{Table, MAXIMUM_PLANE_SAMPLES};
 use crate::source::Result;
 
 /// Returns R, G, B00, B01, B10, B11 for each half-resolution cell.
@@ -40,17 +40,23 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
         .map(|i| bytes.u16(48 + i * 2))
         .collect::<Result<Vec<_>>>()?;
     let table = Table::packed(&words)?;
+    // Check every compressed slice and allocation bound before starting workers.
     let mut offset = 96usize;
-    let mut planes = Vec::with_capacity(3);
-    for channel in 0..3 {
+    let mut inputs = [(&[][..], 0usize, 0usize, 0u16); 3];
+    for (channel, input) in inputs.iter_mut().enumerate() {
         let length = bytes.offset(84 + channel * 4)?;
-        planes.push(table.decode_bounded(
+        let plane_width = dimensions[channel * 2];
+        let plane_height = dimensions[channel * 2 + 1];
+        let seed = bytes.u16(40 + channel * 2)?;
+        if product(plane_width, plane_height)? > MAXIMUM_PLANE_SAMPLES || seed > 16383 {
+            return Err("unsupported compressed plane geometry or seed".into());
+        }
+        *input = (
             bytes.range(offset, length)?,
-            dimensions[channel * 2],
-            dimensions[channel * 2 + 1],
-            bytes.u16(40 + channel * 2)?,
-            16383,
-        )?);
+            plane_width,
+            plane_height,
+            seed,
+        );
         offset = offset
             .checked_add(
                 length
@@ -60,6 +66,22 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
             )
             .ok_or("compressed plane offset overflow")?;
     }
+    let planes = std::thread::scope(|scope| -> Result<Vec<_>> {
+        let workers = inputs.map(|(input, width, height, seed)| {
+            let table = &table;
+            scope.spawn(move || table.decode_bounded(input, width, height, seed, 16383))
+        });
+        // Join all three before returning an error so scoped panics remain errors.
+        workers
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| "sensor decoder worker panicked".into())
+                    .and_then(|result| result)
+            })
+            .into_iter()
+            .collect()
+    })?;
     let cells = product(low_width, low_height)?;
     let mut output = Vec::with_capacity(product(cells, 6)?);
     for y in 0..low_height {

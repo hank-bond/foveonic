@@ -55,7 +55,7 @@ pub fn processing(
     match capabilities(metadata, capture).map(|c| c.family) {
         Some(ProcessingFamily::Classic) => classic::show(ui, settings, metadata),
         Some(ProcessingFamily::Merrill) => merrill::show(ui, settings, metadata),
-        Some(ProcessingFamily::Quattro) => quattro::show(ui),
+        Some(ProcessingFamily::Quattro) => quattro::show(ui, settings, metadata, capture),
         None => {
             let mut changed = common::presets(
                 ui,

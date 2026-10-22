@@ -17,6 +17,6 @@ Camera metadata supplies white-balance and color-mode choices. Normalize unsuppo
 - **[classic.rs](./classic.rs)** Composes Classic controls using the camera's built-in reconstruction and corrections.
 - **[common.rs](./common.rs)** Shares editing rows and photographic controls used by family panels.
 - **[merrill.rs](./merrill.rs)** Composes Merrill color, monochrome, reconstruction and correction controls.
-- **[quattro.rs](./quattro.rs)** Describes the decoded-plane inspection available before Quattro rendering.
+- **[quattro.rs](./quattro.rs)** Composes Quattro color and monochrome controls using file-derived defaults.
 
 <!-- INDEX:END -->

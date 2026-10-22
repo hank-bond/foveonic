@@ -165,10 +165,10 @@ pub fn comparison_input(
     output: &str,
     metadata: Option<&Metadata>,
 ) -> Option<&'static str> {
-    if metadata.is_some_and(|m| {
-        m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro)
-    }) {
-        return (output == "phase-gain.blue").then_some("extraction.blue");
+    if let Some(metadata) = metadata
+        .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro))
+    {
+        return crate::render::quattro_inspection_comparison(metadata, output);
     }
     if let Some(metadata) = metadata
         .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Classic))

@@ -56,6 +56,10 @@ impl Settings {
         changed!(self.monochrome.mix != next.monochrome.mix, "mono-mix");
         changed!(self.monochrome.noise != next.monochrome.noise, "mono-noise");
         changed!(
+            self.monochrome_smoothness != next.monochrome_smoothness,
+            "mono-smoothness"
+        );
+        changed!(
             self.monochrome.banding != next.monochrome.banding,
             "mono-banding"
         );
@@ -72,6 +76,10 @@ impl Settings {
             "highlight-threshold"
         );
         changed!(self.highlight_mode != next.highlight_mode, "highlight-mode");
+        changed!(
+            self.highlight_amount != next.highlight_amount,
+            "highlight-amount"
+        );
         changed!(self.color_field != next.color_field, "color-field");
         changed!(self.despeckle != next.despeckle, "despeckle");
         changed!(self.row_correction != next.row_correction, "row-correction");
@@ -221,21 +229,25 @@ impl Cache {
                 .insert(output.name, Version { recipe, generation });
         }
         if initial {
-            // Detail is the usual first edit when reconstruction is on. Keeping its
-            // inputs ready avoids a full rerender on that first slider movement.
+            // Keep the inputs of adjustable reconstruction ready for its first edit.
+            // Guided reconstruction also owns the luminance filter selection.
             let node = graph
                 .nodes
                 .iter()
                 .find(|node| {
-                    matches!(node.operation, crate::graph::Operation::Detail(_))
-                        && required[node.outputs[0]]
+                    matches!(
+                        node.operation,
+                        crate::graph::Operation::Detail(_)
+                            | crate::graph::Operation::BlueGuidedReconstruct(_)
+                    ) && required[node.outputs[0]]
                 })
                 .unwrap_or(&graph.nodes[graph.outputs[targets[0]].producer]);
-            let pivot = node.outputs[0];
-            // Detail needs both color and signal inputs. Keeping only one branch
-            // would still force the other branch to rerun on every edit.
+            let pivot_producer = graph.outputs[node.outputs[0]].producer;
+            // Preserve all input branches, including those consumed after the pivot.
+            // Mark its side outputs dirty too: they must share the restart boundary.
             for (id, output) in graph.outputs.iter().enumerate() {
-                dirty[id] = id == pivot || output.dependencies.iter().any(|input| dirty[*input]);
+                dirty[id] = output.producer == pivot_producer
+                    || output.dependencies.iter().any(|input| dirty[*input]);
             }
         }
         if initial || !local_changes.is_empty() {
@@ -252,6 +264,27 @@ impl Cache {
                         && !frontier.contains(&graph.outputs[input].name)
                     {
                         frontier.push(graph.outputs[input].name);
+                    }
+                }
+            }
+            if initial {
+                // Exposure and tone usually change before reconstruction controls.
+                // Also retain their linear input so that first edit needs no warm-up.
+                // The ordinary bounded cache admission still applies to both boundaries.
+                for node in &graph.nodes {
+                    if matches!(
+                        node.operation,
+                        crate::graph::Operation::Tone { .. }
+                            | crate::graph::Operation::SignedPhotographic(_)
+                            | crate::graph::Operation::CodeResponse { .. }
+                    ) && required[node.outputs[0]]
+                    {
+                        for &input in &node.inputs {
+                            let name = graph.outputs[input].name;
+                            if !frontier.contains(&name) {
+                                frontier.push(name);
+                            }
+                        }
                     }
                 }
             }
@@ -443,9 +476,20 @@ mod tests {
                 &[rgb, rgb + 1],
             )
             .unwrap();
+        let final_id = graph
+            .add(
+                O::Tone {
+                    curve: vec![0., 1.],
+                    exposure: 0.,
+                    space: C::Srgb,
+                },
+                &[root],
+            )
+            .unwrap();
         let mut cache = Cache::default();
-        let frontier = cache.plan(&graph, &[root]).unwrap();
-        assert_eq!(frontier.len(), 5);
+        let frontier = cache.plan(&graph, &[final_id]).unwrap();
+        assert_eq!(frontier.len(), 6);
+        assert!(frontier.contains(&root));
         assert!(frontier.contains(&colour));
         assert!(frontier.contains(&(rgb + 1)));
         let signal_version = cache.versions[graph.outputs[rgb + 1].name].generation;
@@ -453,7 +497,9 @@ mod tests {
         let mut changed = params;
         changed.residual[3] = 1.4;
         graph.nodes[detail_node].operation = O::Detail(changed);
-        assert_eq!(frontier, cache.plan(&graph, &[root]).unwrap());
+        let reconstruction_frontier = cache.plan(&graph, &[final_id]).unwrap();
+        assert_eq!(reconstruction_frontier.len(), 5);
+        assert!(!reconstruction_frontier.contains(&root));
         assert_eq!(
             signal_version,
             cache.versions[graph.outputs[rgb + 1].name].generation
@@ -462,7 +508,90 @@ mod tests {
             rgb_version,
             cache.versions[graph.outputs[rgb].name].generation
         );
+        let mut first_edit = Cache::default();
+        first_edit.plan(&graph, &[final_id]).unwrap();
+        graph.nodes[graph.outputs[final_id].producer].operation = O::Tone {
+            curve: vec![0., 1.],
+            exposure: 0.5,
+            space: C::Srgb,
+        };
+        assert_eq!(first_edit.plan(&graph, &[final_id]).unwrap(), vec![root]);
     }
+    #[test]
+    fn guided_reconstruction_keeps_both_planes_and_the_later_mask_branch() {
+        use crate::{
+            graph::Operation as O,
+            nodes::color::{blue_guided_reconstruct, byte_mask_double, residual_finish},
+        };
+        let mut graph = Graph::default();
+        let rgb = graph
+            .add(
+                O::RenderedInput {
+                    data: DataType::CorrectedSensorRgb,
+                },
+                &[],
+            )
+            .unwrap();
+        graph.outputs[rgb].name = "test.rgb";
+        let blue = graph
+            .add(
+                O::RenderedInput {
+                    data: DataType::CorrectedSensorBlue,
+                },
+                &[],
+            )
+            .unwrap();
+        graph.outputs[blue].name = "test.blue";
+        let original_mask = graph
+            .add(
+                O::RenderedInput {
+                    data: DataType::HighlightMask,
+                },
+                &[],
+            )
+            .unwrap();
+        graph.outputs[original_mask].name = "test.mask";
+        let reconstructed = graph
+            .add(
+                O::BlueGuidedReconstruct(Arc::new(
+                    blue_guided_reconstruct::Prepared::new([8, 8], 0., [0.; 3], None).unwrap(),
+                )),
+                &[rgb, rgb, rgb, blue],
+            )
+            .unwrap();
+        let residual = graph
+            .named_output(reconstructed, "reconstruction.residual")
+            .unwrap();
+        let mask = graph
+            .add(
+                O::ByteMaskDouble(byte_mask_double::Params::new([8, 8]).unwrap()),
+                &[original_mask],
+            )
+            .unwrap();
+        let finish = |detail| O::ResidualFinish {
+            params: residual_finish::Params::new([16, 16], detail, 0., 0, 0., 0.).unwrap(),
+            with_mask: true,
+        };
+        let root = graph
+            .add(finish(1.), &[reconstructed, residual, mask])
+            .unwrap();
+        let mut cache = Cache::default();
+        let frontier = cache.plan(&graph, &[root]).unwrap();
+        assert_eq!(frontier, vec![rgb, blue, mask]);
+        let previous = cache.versions["residual.rgb"].generation;
+        graph.nodes[graph.outputs[root].producer].operation = finish(1.2);
+        // A detail edit can use the initial checkpoints before reconstruction.
+        assert_eq!(
+            cache.plan(&graph, &[root]).unwrap(),
+            vec![reconstructed, residual, mask]
+        );
+        assert_ne!(cache.versions["residual.rgb"].generation, previous);
+        graph.nodes[graph.outputs[reconstructed].producer].operation = O::BlueGuidedReconstruct(
+            Arc::new(blue_guided_reconstruct::Prepared::new([8, 8], 0.5, [0.; 3], None).unwrap()),
+        );
+        assert_eq!(cache.plan(&graph, &[root]).unwrap(), frontier);
+    }
+
     #[test]
     fn shared_uniform_fields_have_stage_specific_keys() {
         use crate::noise::{Parameters, RecipeStage as S};

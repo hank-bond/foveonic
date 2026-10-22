@@ -2,7 +2,18 @@
 
 use crate::{help, widgets, worker::ExportFormat};
 use eframe::egui;
-use foveonic::render::TiffColorSpace;
+use foveonic::{
+    render::{Settings, TiffColorSpace},
+    source::Metadata,
+};
+
+/// Export requires a photographic recipe, rather than an inspection-only source.
+pub fn can_export(settings: &Settings, metadata: Option<&Metadata>) -> bool {
+    metadata.is_some_and(|metadata| {
+        settings.validate_for_camera(metadata).is_ok()
+            && foveonic::inspection::output_names(settings, Some(metadata)).contains(&"final")
+    })
+}
 
 #[derive(Default)]
 pub struct Actions {
@@ -87,6 +98,45 @@ pub fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_requires_a_supported_photographic_output() {
+        use foveonic::source::{Matrix, MatrixEncoding};
+        let settings = Settings::new("Sunlight", "Standard");
+        let mut metadata = Metadata {
+            width: 5888,
+            height: 3776,
+            rotation: 0,
+            processing_version: Some([3, 1, 2, 0]),
+            properties: [("CAMMODEL".into(), "SIGMA sd Quattro".into())].into(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        };
+        for (name, value) in [("CAMERAID", 40.), ("CaptureISO", 100.)] {
+            metadata.matrices.insert(
+                name.into(),
+                Matrix {
+                    encoding: MatrixEncoding::Float32,
+                    representation: "test",
+                    dimensions: vec![1],
+                    values: vec![value],
+                },
+            );
+        }
+        assert!(!can_export(&settings, None));
+        assert!(can_export(&settings, Some(&metadata)));
+        let mut mono = settings.clone();
+        mono.rendering = foveonic::render::Rendering::Monochrome;
+        assert!(can_export(&mono, Some(&metadata)));
+        metadata.width /= 2;
+        assert!(!can_export(&settings, Some(&metadata)), "reduced input");
+        metadata.width *= 2;
+        metadata.processing_version = Some([4, 0, 1, 0]);
+        metadata
+            .properties
+            .insert("CAMMODEL".into(), "SIGMA sd Quattro H".into());
+        assert!(!can_export(&settings, Some(&metadata)), "Tiger inspection");
+    }
 
     fn text_center(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
         output

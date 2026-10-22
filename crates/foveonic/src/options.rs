@@ -13,13 +13,67 @@ use std::{ffi::OsString, path::PathBuf};
 pub(crate) fn parse_settings(
     args: impl Iterator<Item = OsString>,
 ) -> Result<(Settings, Vec<PathBuf>, Mode)> {
-    let mut settings = Settings::new("", "");
+    parse_settings_with_noise_defaults(args, Default::default(), Settings::new("", ""))
+}
+
+/// Seed only unspecified noise fields from the selected camera's recipe.
+/// Parsing each batch input separately preserves defaults in mixed-family jobs.
+pub(crate) fn parse_settings_for_camera(
+    args: impl Iterator<Item = OsString>,
+    metadata: &foveonic::source::Metadata,
+) -> Result<(Settings, Vec<PathBuf>, Mode)> {
+    let args: Vec<_> = args.collect();
+    let capabilities = foveonic::render::ControlCapabilities::from_metadata(metadata)?;
+    let defaults = capabilities.default_noise_controls_for_metadata(metadata)?;
+    let mut initial = Settings::new("", "");
+    initial.rendering = capabilities.default_rendering(metadata)?;
+    // Select the initial rendering before reading its saved tonal defaults.
+    // The ordinary parser still validates and applies every explicit value.
+    for (index, flag) in args.iter().enumerate() {
+        match flag.to_str() {
+            Some("--rendering") => match args.get(index + 1).and_then(|v| v.to_str()) {
+                Some("color") => initial.rendering = Rendering::Color,
+                Some("monochrome") => initial.rendering = Rendering::Monochrome,
+                _ => {}
+            },
+            Some("--mono-mix" | "--mono-noise" | "--mono-banding" | "--mono-smoothness") => {
+                initial.rendering = Rendering::Monochrome
+            }
+            _ => {}
+        }
+    }
+    capabilities.apply_capture_defaults(&mut initial, metadata)?;
+    let (mut settings, paths, profiling) =
+        if capabilities.family == foveonic::source::ProcessingFamily::Quattro {
+            parse_settings_with_noise_defaults(args.into_iter(), defaults, initial)?
+        } else {
+            parse_settings(args.into_iter())?
+        };
+    if metadata.processing_family()? == foveonic::source::ProcessingFamily::Quattro {
+        if capabilities.white_balance_active(&settings) && settings.white_balance.is_empty() {
+            settings.white_balance =
+                foveonic::render::ControlCapabilities::from_metadata(metadata)?
+                    .default_white_balance(metadata)?;
+        }
+        if capabilities.color_mode_active(&settings) && settings.color_mode.is_empty() {
+            settings.color_mode = foveonic::render::ControlCapabilities::from_metadata(metadata)?
+                .default_color_mode(metadata)?;
+        }
+    }
+    Ok((settings, paths, profiling))
+}
+
+fn parse_settings_with_noise_defaults(
+    args: impl Iterator<Item = OsString>,
+    noise_defaults: foveonic::noise::Controls,
+    mut settings: Settings,
+) -> Result<(Settings, Vec<PathBuf>, Mode)> {
     let mut paths = Vec::new();
     let mut profiling = Mode::Off;
     let mut args = args;
     while let Some(arg) = args.next() {
         if arg == "--reconstruction" {
-            settings.reconstruction.get_or_insert_with(Default::default);
+            settings.reconstruction.get_or_insert(noise_defaults);
             continue;
         }
         if arg == "--repair" {
@@ -85,6 +139,7 @@ pub(crate) fn parse_settings(
             "--contrast" => settings.tone.contrast = value.parse()?,
             "--shadows" => settings.tone.shadows = value.parse()?,
             "--highlights" => settings.tone.highlights = value.parse()?,
+            "--highlight-amount" => settings.highlight_amount = Some(value.parse()?),
             "--highlight-threshold" => {
                 settings.highlight_threshold_ev = if value == "auto" {
                     None
@@ -123,33 +178,31 @@ pub(crate) fn parse_settings(
                     .ok_or("unknown noise override parameter")?;
                 settings
                     .reconstruction
-                    .get_or_insert_with(Default::default)
+                    .get_or_insert(noise_defaults)
                     .overrides
                     .set(parameter, Some(value.parse()?));
             }
             "--chroma-noise" => {
-                settings
-                    .reconstruction
-                    .get_or_insert_with(Default::default)
-                    .chroma = value.parse()?
+                settings.reconstruction.get_or_insert(noise_defaults).chroma = value.parse()?
             }
             "--luma-noise" => {
                 settings
                     .reconstruction
-                    .get_or_insert_with(Default::default)
+                    .get_or_insert(noise_defaults)
                     .luminance = value.parse()?
             }
             "--banding-noise" => {
                 settings
                     .reconstruction
-                    .get_or_insert_with(Default::default)
+                    .get_or_insert(noise_defaults)
                     .banding = value.parse()?
             }
+            "--mono-smoothness" => {
+                settings.monochrome_smoothness = Some(value.parse()?);
+                settings.rendering = Rendering::Monochrome;
+            }
             "--detail" => {
-                settings
-                    .reconstruction
-                    .get_or_insert_with(Default::default)
-                    .detail = value.parse()?
+                settings.reconstruction.get_or_insert(noise_defaults).detail = value.parse()?
             }
             "--sharpen" => {
                 settings.sharpen_amount = match value.as_str() {

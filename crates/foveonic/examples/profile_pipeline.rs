@@ -40,11 +40,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             controls.push(arg);
         }
     }
-    let (settings, paths, mode) = options::parse_settings(controls.into_iter())?;
+    let source = Source::open(&input)?;
+    let (settings, paths, mode) =
+        options::parse_settings_for_camera(controls.into_iter(), &source.metadata)?;
     if !paths.is_empty() {
         return Err("unexpected extra input paths".into());
     }
-    let source = Source::open(&input)?;
     let engine = Engine::new()?;
     mode.check_gpu_features(engine.device().features())?;
     std::fs::create_dir(&output)?;

@@ -75,15 +75,15 @@ pub(crate) fn prepare_dng_appearance(
     metadata: &Metadata,
     settings: &Settings,
     statistics: crate::render::WhiteBalanceStats,
-) -> Result<crate::dng::appearance::ClassicAppearance> {
-    use crate::dng::appearance::{ClassicAppearance, Matrix};
+) -> Result<crate::dng::appearance::SignedAppearance> {
+    use crate::dng::appearance::{Matrix, SignedAppearance};
     validate_request(metadata, settings)?;
     if settings.is_monochrome() {
         let identity = Matrix::diagonal([1.; 3]);
         // The selected monochrome mixture is singular and already baked into
         // the technical base. Replicate its green signal for exactly neutral
         // stored RGB and defer only its response.
-        return Ok(ClassicAppearance {
+        return Ok(SignedAppearance {
             mapping: [0., 1. / 4096., 0., 0., 1. / 4096., 0., 0., 1. / 4096., 0.],
             neutral: [1.; 3],
             camera_to_linear: identity.0,
@@ -127,7 +127,7 @@ pub(crate) fn prepare_dng_appearance(
     if white.iter().any(|v| !v.is_finite() || *v <= 0.) || maximum <= 0. {
         return Err("invalid Classic DNG camera white".into());
     }
-    Ok(ClassicAppearance {
+    Ok(SignedAppearance {
         mapping: unbalance.gain(1. / (4096. * maximum)).0,
         neutral: white.map(|v| v / maximum),
         camera_to_linear: unbalance.inverse()?.gain(maximum).0,

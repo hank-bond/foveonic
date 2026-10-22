@@ -212,7 +212,7 @@ impl App {
         if target.starts_with("viewport-") && target != "viewport-sensor" {
             // Check immediately after scheduling, before the UI can receive a reply.
             assert!(
-                self.frame.as_ref().unwrap().scopes.is_some(),
+                self.scope_snapshot.is_some(),
                 "scope refresh blanked the counts"
             );
             assert!(
@@ -259,7 +259,7 @@ impl App {
             .unwrap();
             if smoke.targets == VIEWPORT_SCOPE_TARGETS && !smoke.preview_pending() {
                 let frame = self.frame.as_ref().unwrap();
-                let snapshot = frame.scopes.as_ref().unwrap();
+                let snapshot = self.scope_snapshot.as_ref().unwrap();
                 let key = snapshot.key;
                 assert_eq!(self.scope_key, Some(key));
                 let data = &snapshot.data;
@@ -562,8 +562,7 @@ impl App {
             } else {
                 !self.busy
                     && self.frame.as_ref().is_some_and(|frame| {
-                        frame
-                            .scopes
+                        self.scope_snapshot
                             .as_ref()
                             .is_some_and(|snapshot| Some(snapshot.key) == self.scope_key)
                             && self.navigator.ready(frame, mapping)

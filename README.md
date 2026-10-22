@@ -15,9 +15,9 @@ Classic rendering covers the pre-Merrill SD9, SD10, SD14, SD15, DP1/DP1s/DP1x an
 
 Original-file validation currently covers eight models, including a DP2x ISO50–3200 ladder. DP1x and DP2s use recovered processing contracts but still need genuine originals for validation. See [Classic rendering](docs/specs/classic-rendering.md) and the [coverage evidence](plans/classic-coverage.md).
 
-Quattro decoding and sensor-plane inspection are available for acquired DP0/DP1/DP2 Quattro, sd Quattro and sd Quattro H originals. Inspect exposes low-resolution RGB and full-resolution blue separately. Selected Quattro routes also expose offset/scale correction. Photographic rendering and DNG are still in progress. See the [integration plan](plans/quattro-integration.md).
+Quattro decoding and sensor-plane inspection expose low-resolution RGB and full-resolution blue separately. Ordinary full-size DP0, DP1, DP2, DP3 and sd Quattro recipes support display, TIFF and editable DNG with ten camera color modes, editable white balance, exposure, contrast, shadows, highlights, saturation, chroma and luminance noise, native Smooth/Crisp detail, signed sharpness and highlight recovery. Saved file adjustments provide initial settings. ISO100 originals pass complete native comparisons across all five models, with additional ISO800 coverage for the high-ISO route. Dedicated monochrome adds channel mixing, its own reconstruction and response, and independent noise and Smooth/Crisp controls. Banding adjustments remain disabled. Quattro DNG bakes a canonical Standard technical base and embeds an approximate selected appearance through shared export machinery. See the [DNG validation](plans/quattro-dng.md). The sd Quattro H uses the separate Tiger route and retains sensor-plane inspection. See the [integration plan](plans/quattro-integration.md).
 
-For blue-map inspection, explicitly set `FOVEONIC_CALIBRATION_RESOURCES` to a directory containing the camera's six `C{camera-id}_{1..6}` maps before launching the GUI. Resources are loaded into an immutable engine snapshot. They are not bundled or discovered through an installed application. Without these files, the other sensor-plane inspection outputs remain available.
+Quattro rendering and blue-map inspection use bundled calibration maps with [recorded provenance and file hashes](crates/foveonic/assets/quattro/README.md). The GUI and CLI need no calibration setup or installed reference application. An explicitly supplied calibration directory can override the bundled maps. Each engine retains an immutable resource snapshot.
 
 ## Rendering Techniques
 All correction and enhancement metadata that exists in the X3F file is made use of.  Effort has been made to align with the Sigma's intended processing of the files wherever possible.  Additional controls are made wherever available to alter the processing approaches on a per-image basis.
@@ -31,7 +31,7 @@ Monochrome DNG bakes the mix into linear neutral samples while keeping exposure 
 Merrill highlight correction offers **Classic** (default), **Color Field: Local**, and **Color Field: Global**. Classic retains its threshold control. Local uses 64 local brightness sweeps, while Global solves globally for finer gradients at higher cost. Method comes first, followed by a shared Highlights slider and enable checkbox. Classic retains A. Both Color Field methods default to 0, preserving the original reconstruction, without a redundant A button. Increasing selectivity from 0 toward 1 rejects more inconsistent evidence without increasing the original neutral weights. See the [comparison workflow](docs/color-field-evaluation.md).
 
 ## Requirements
-Development is currently done on a modest Apple M1 Pro with 14 GPU Cores.  The current focus is targeting MacOS.  The tooling chosen should be multi-platform compatible, but focus is not currently on delivering that.  On a machine of that caliber, you may expect full pipeline render times around 900-1600ms, with partial re-renders closer to 200-400ms using cached pipeline partials.
+Development is currently done on a modest Apple M1 Pro with 14 GPU Cores.  The current focus is targeting MacOS.  The tooling chosen should be multi-platform compatible, but focus is not currently on delivering that.  On a machine of that caliber, you may expect Merrill full pipeline render times around 900-1600ms, with partial re-renders closer to 200-400ms using cached pipeline partials.
 
 Expect application memory to average around 2GB, with transient operations peaking under 4GB.  Configuration to reduce memory requirements at the cost of increased processing speed will be made available at a later time.
 
@@ -72,7 +72,7 @@ For Classic monochrome, select the rendering mode and desired color mode:
 cargo run --release -p foveonic -- render path/to/classic.x3f mono.tiff --rendering monochrome --mode Standard --reconstruction
 ```
 
-TIFF exports accept `--tiff-color-space srgb`, `adobe-rgb`, or `prophoto-rgb`. Omit it to preserve the camera's stored space, falling back to sRGB when none is recorded. Use `--sharpen auto` for camera-derived sharpening or a numeric amount for manual sharpening. Sharpening defaults to Off.
+TIFF exports accept `--tiff-color-space srgb`, `adobe-rgb`, or `prophoto-rgb`. Omit it to preserve the camera's stored space, falling back to sRGB when none is recorded. Use `--sharpen auto` for camera-derived sharpening or a numeric amount for manual sharpening. Classic and Merrill sharpening defaults to Off. Quattro uses the saved sharpness value or zero, which retains its baseline proportional detail.
 
 Add `--size 600x400` to resize a TIFF export to exact dimensions using reference photographic resampling. This also works for TIFF batches. Omit it for native dimensions.
 

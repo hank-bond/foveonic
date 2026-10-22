@@ -134,7 +134,7 @@ pub(super) fn write<W: Write + Seek>(
         .get("CAMMODEL")
         .ok_or("missing DNG camera model")?;
     if settings.is_monochrome() {
-        tag(&mut directory, 270, "Linear monochrome. Sensor-layer mixing and technical reconstruction are baked into equal neutral RGB samples. Exposure and tone remain presentation metadata. Retain the original X3F and sidecar to change the mix or restore color.")?;
+        tag(&mut directory, 270, "Linear monochrome. Channel mixing and technical reconstruction are baked into equal neutral RGB samples. Exposure and tone remain presentation metadata. Retain the original X3F and sidecar to change the mix or restore color.")?;
     }
     tag(&mut directory, 271, "SIGMA")?;
     tag(&mut directory, 272, model.as_str())?;
@@ -241,13 +241,16 @@ pub(super) fn write<W: Write + Seek>(
             &["color_mode", "exposure", "tone", "saturation"],
         )
     };
-    let history = serde_json::json!({
+    let mut history = serde_json::json!({
         "format": "foveonic-dng-history", "version": 1, "settings": settings,
         "baked_controls": baked_controls,
         "metadata_controls": metadata_controls,
         "levels": {"black": 0, "white": 65535, "negative_samples": "clamped", "common_scale": scale},
         "calibration_exposure": prepared.calibration_exposure
     });
+    if let Some(notes) = prepared.sample_notes {
+        history["sample_notes"] = serde_json::json!(notes);
+    }
     let mut private = b"Foveonic\0".to_vec();
     private.extend(serde_json::to_vec(&history)?);
     tag(&mut directory, 50740, private.as_slice())?;

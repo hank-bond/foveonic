@@ -17,6 +17,12 @@ pub(in crate::render::recipes) fn build(
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
+    // Reject an unknown selected look before running the unselected technical recipe.
+    if !settings.is_monochrome() {
+        profile.measure("prepare DNG presentation mode", || {
+            color_mode::prepare(&source.metadata, &settings.color_mode)
+        })?;
+    }
     match technical::build(
         engine,
         source,

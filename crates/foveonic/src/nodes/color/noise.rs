@@ -8,7 +8,8 @@ mod tests;
 
 use crate::source::{MatrixEncoding, Metadata, Result};
 
-/// Five presets for chroma, luminance, and column banding, with a residual-detail multiplier.
+/// Five noise presets and a family-defined detail control.
+/// Merrill uses a residual multiplier. Quattro uses normalized Smooth/Crisp (0..1).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Controls {

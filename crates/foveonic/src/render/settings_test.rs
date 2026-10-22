@@ -136,7 +136,7 @@ fn automatic_sharpening_uses_iso_interpolation_and_luminance_not_detail_or_expor
 
 #[test]
 fn automatic_manual_and_export_choices_round_trip_without_changing_numeric_recipes() {
-    for amount in [None, Some(0.), Some(0.75)] {
+    for amount in [None, Some(-1.), Some(0.), Some(0.75)] {
         for destination in [
             None,
             Some(TiffColorSpace::Srgb),
@@ -164,7 +164,7 @@ fn automatic_manual_and_export_choices_round_trip_without_changing_numeric_recip
             .sharpen_amount,
         None
     );
-    for invalid in ["-1", "\"auto\"", "[]"] {
+    for invalid in ["\"auto\"", "[]"] {
         let json = format!(
             r#"{{"format":"foveonic-editing","version":1,"settings":{{"sharpen_amount":{invalid}}}}}"#
         );

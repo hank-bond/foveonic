@@ -120,7 +120,118 @@ pub struct Metadata {
     pub lists: BTreeMap<String, PropertyList>,
 }
 
+/// Optional photographic choices recorded in the version-4 file header.
+/// Noise and smoothness values retain the normalized reference control scale.
+#[derive(Clone, Debug, Default)]
+pub struct CaptureAdjustments {
+    pub white_balance: Option<u16>,
+    pub color_mode: Option<u16>,
+    pub exposure: Option<f32>,
+    pub contrast: Option<f32>,
+    pub shadows: Option<f32>,
+    pub highlights: Option<f32>,
+    pub saturation: Option<f32>,
+    pub sharpness: Option<f32>,
+    pub fill_light: Option<f32>,
+    pub highlight_correction: Option<f32>,
+    pub chroma_noise: Option<f32>,
+    pub luminance_noise: Option<f32>,
+    pub banding_noise: Option<f32>,
+    pub smoothness: Option<f32>,
+    pub mono_exposure: Option<f32>,
+    pub mono_contrast: Option<f32>,
+    pub mono_shadows: Option<f32>,
+    pub mono_highlights: Option<f32>,
+    pub mono_sharpness: Option<f32>,
+    pub mono_fill_light: Option<f32>,
+    pub mono_luminance_noise: Option<f32>,
+    pub mono_banding_noise: Option<f32>,
+    pub mono_smoothness: Option<f32>,
+    /// Nonnegative RGB proportions, normalized from the saved UInt16 weights.
+    pub mono_mix: Option<[f32; 3]>,
+}
+
+// The header stores unit monochrome channel gain as this UInt16 code.
+const MONO_MIX_UNITY_CODE: f32 = 32768.;
+
+impl CaptureAdjustments {
+    /// The property-only capture path can resolve controls before RAW decoding.
+    pub fn from_properties(properties: &BTreeMap<String, String>) -> Result<Self> {
+        let number = |name: &str| -> Result<Option<f32>> {
+            properties
+                .get(&format!(
+                    "{}{name}",
+                    crate::x3f::adjustments::PROPERTY_PREFIX
+                ))
+                .map(|value| {
+                    let value: f32 = value.parse()?;
+                    if !value.is_finite() {
+                        return Err("nonfinite recorded X3F adjustment".into());
+                    }
+                    Ok(value)
+                })
+                .transpose()
+        };
+        let preset = |name: &str| -> Result<Option<u16>> {
+            properties
+                .get(&format!(
+                    "{}{name}",
+                    crate::x3f::adjustments::PROPERTY_PREFIX
+                ))
+                .map(|value| value.parse().map_err(Into::into))
+                .transpose()
+        };
+        let mix = [
+            preset("MONO_MIX_RED")?,
+            preset("MONO_MIX_GREEN")?,
+            preset("MONO_MIX_BLUE")?,
+        ];
+        let mono_mix = if mix.iter().any(Option::is_some) {
+            let values = mix.map(|v| v.map(f32::from).unwrap_or(MONO_MIX_UNITY_CODE / 3.));
+            let sum: f32 = values.iter().sum();
+            Some(if sum > 0. {
+                values.map(|v| v / sum)
+            } else {
+                [1. / 3.; 3]
+            })
+        } else {
+            None
+        };
+        Ok(Self {
+            white_balance: preset("WHITE_BALANCE")?,
+            color_mode: preset("COLOR_MODE")?,
+            exposure: number("EXPOSURE")?,
+            contrast: number("CONTRAST")?,
+            shadows: number("SHADOWS")?,
+            highlights: number("HIGHLIGHTS")?,
+            saturation: number("SATURATION")?,
+            sharpness: number("SHARPNESS")?,
+            fill_light: number("FILL_LIGHT")?,
+            highlight_correction: number("HIGHLIGHT_CORRECTION")?,
+            chroma_noise: number("CHROMA_NOISE")?,
+            luminance_noise: number("LUMINANCE_NOISE")?,
+            banding_noise: number("BANDING_NOISE")?,
+            smoothness: number("SMOOTHNESS")?,
+            mono_exposure: number("MONO_EXPOSURE")?,
+            mono_contrast: number("MONO_CONTRAST")?,
+            mono_shadows: number("MONO_SHADOWS")?,
+            mono_highlights: number("MONO_HIGHLIGHTS")?,
+            mono_sharpness: number("MONO_SHARPNESS")?,
+            mono_fill_light: number("MONO_FILL_LIGHT")?,
+            mono_luminance_noise: number("MONO_LUMINANCE_NOISE")?,
+            mono_banding_noise: number("MONO_BANDING_NOISE")?,
+            mono_smoothness: number("MONO_SMOOTHNESS")?,
+            mono_mix,
+        })
+    }
+}
+
 impl Metadata {
+    /// Read saved numeric choices without substituting family defaults.
+    pub fn capture_adjustments(&self) -> Result<CaptureAdjustments> {
+        CaptureAdjustments::from_properties(&self.properties)
+    }
+
     pub fn processing_family(&self) -> Result<ProcessingFamily> {
         family(self.properties.get("CAMMODEL").map(String::as_str))
             .ok_or_else(|| "unsupported camera family".into())

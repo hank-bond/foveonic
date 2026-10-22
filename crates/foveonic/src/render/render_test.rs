@@ -1,6 +1,6 @@
 //! Checks control preparation, retained GPU image lifetimes, scratch branches, and texture/export consumers.
 
-use super::recipes::merrill::saturation;
+use super::recipes::saturation;
 use super::*;
 use crate::color_space::ColorSpace;
 use crate::{graph::DataType, image::View, nodes::sensor::calibration, source::Metadata};
@@ -548,6 +548,7 @@ fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
     RenderedImage {
         buffer: engine.gpu.upload("Retained fixture", pixels).unwrap(),
         description: Description {
+            view_baked: false,
             extent: [3, 2],
             layout: Layout::Rgb32Float,
             space: Space::ToneMappedRgb(ColorSpace::Srgb),

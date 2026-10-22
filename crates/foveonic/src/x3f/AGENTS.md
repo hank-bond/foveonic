@@ -14,6 +14,7 @@ Keep decoding independent of photographic adjustments and orientation. Preserve 
 
 ### Source files
 
+- **[adjustments.rs](./adjustments.rs)** Reads scalar version-4 header adjustments into retained capture properties.
 - **[bytes.rs](./bytes.rs)** Read bounded little-endian values and terminated strings from owned file sections.
 - **[camf.rs](./camf.rs)** Decode camera metadata while preserving matrix encodings and property-list order.
 - **[capture.rs](./capture.rs)** Seeks directly to X3F capture properties without reading sensor or calibration payloads.

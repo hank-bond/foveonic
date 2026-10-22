@@ -170,3 +170,28 @@ fn supplied_maps_and_blends_match_all_reference_words() {
         }
     }
 }
+
+#[test]
+fn bundled_catalogue_covers_all_dp_cameras_with_original_map_samples() {
+    let resources = ResourceDirectory::bundled().unwrap();
+    assert_eq!(resources.maps.len(), 4);
+    // Exact source samples also guard the camera-to-resource association.
+    for (camera, first_sample) in [
+        (80, 0x3f808709),
+        (81, 0x3f807bb5),
+        (82, 0x3f80ad66),
+        (83, 0x3f8089c3),
+    ] {
+        let maps = &resources.maps[&camera];
+        assert_eq!(maps.len(), 6);
+        for map in maps {
+            assert_eq!(map.extent, [184, 116]);
+            assert_eq!(map.values.len(), 184 * 116);
+        }
+        assert_eq!(maps[0].values[0].to_bits(), first_sample);
+        assert_eq!(
+            resources.selected(camera, 2.8, 0).unwrap().unwrap().values,
+            maps[0].values
+        );
+    }
+}

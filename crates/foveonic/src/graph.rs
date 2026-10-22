@@ -8,6 +8,9 @@ pub use operation::Operation;
 pub enum DataType {
     /// Six original codes per cell: R, G and four spatial blue phases.
     PhaseCells,
+    /// Integer defect flags retained for later repair operations, not display samples.
+    DefectFlags,
+    HighlightMask,
     SensorRgb,
     SensorBlue,
     CorrectedSensorRgb,
@@ -30,9 +33,13 @@ pub enum DataType {
     CalibratedLayers,
     /// Linear codes awaiting the reconstruction finalizer's required gain.
     NormalizedCodeRgb,
-    /// Linear codes with the required gain applied, ready for root/detail.
+    /// Linear-light RGB code values. The recipe supplies their nominal white.
     LinearCodeRgb,
     SignedCodeRgb,
+    /// Unsigned16 integral RGB codes carried exactly in Float32 storage.
+    UnsignedCodeRgb,
+    /// Unsigned16 L/a/b component codes carried in three Float32 samples.
+    PackedLabCodes,
     LinearRgb(ColorSpace),
     ToneMappedRgb(ColorSpace),
     EncodedRgb16(crate::render::TiffColorSpace),
@@ -45,7 +52,9 @@ impl DataType {
     pub(crate) fn image_description(self, extent: [u32; 2]) -> Option<crate::image::Description> {
         use crate::image::{Description, Space};
         let space = match self {
-            Self::PhaseCells => return None,
+            Self::PhaseCells | Self::DefectFlags | Self::HighlightMask | Self::PackedLabCodes => {
+                return None
+            }
             Self::CorrectedSensorRgb => Space::CorrectedSensorRgb,
             Self::CorrectedSensorBlue => Space::CorrectedSensorBlue,
             Self::SensorRgb => Space::SensorRgb,
@@ -59,6 +68,7 @@ impl DataType {
             Self::NormalizedCodeRgb => Space::NormalizedCodeRgb,
             Self::LinearCodeRgb => Space::LinearCodeRgb,
             Self::SignedCodeRgb => Space::SignedCodeRgb,
+            Self::UnsignedCodeRgb => Space::UnsignedCodeRgb,
             Self::LinearRgb(space) => Space::LinearRgb(space),
             Self::ToneMappedRgb(space) => Space::ToneMappedRgb(space),
             Self::EncodedRgb16(space) => Space::EncodedRgb16(space),
@@ -95,6 +105,7 @@ impl From<crate::image::Space> for DataType {
             Space::NormalizedCodeRgb => Self::NormalizedCodeRgb,
             Space::LinearCodeRgb => Self::LinearCodeRgb,
             Space::SignedCodeRgb => Self::SignedCodeRgb,
+            Space::UnsignedCodeRgb => Self::UnsignedCodeRgb,
             Space::LinearRgb(space) => Self::LinearRgb(space),
             Space::ToneMappedRgb(space) => Self::ToneMappedRgb(space),
             Space::EncodedRgb16(space) => Self::EncodedRgb16(space),

@@ -1,6 +1,7 @@
 //! Checks DNG appearance fitting, highlight headroom and original-photo approximations.
 
 use super::*;
+use crate::render::Settings;
 #[test]
 fn classic_sample_basis_round_trips_and_keeps_tone_in_profile() {
     use crate::{color_space::TransferFunction, nodes::finish::signed_response};
@@ -14,7 +15,7 @@ fn classic_sample_basis_round_trips_and_keeps_tone_in_profile() {
     )
     .unwrap();
     let expected = response.evaluate_linear([0.18; 3]);
-    let prepared = Prepared::classic(ClassicAppearance {
+    let prepared = Prepared::signed(SignedAppearance {
         mapping: mapping.0,
         neutral: [0.5, 1., 1.],
         camera_to_linear: base.0,
@@ -56,7 +57,7 @@ fn classic_neutral_storage_retains_editable_linear_signal() {
     )
     .unwrap();
     let expected = response.evaluate_linear([0.18; 3]);
-    let prepared = Prepared::classic(ClassicAppearance {
+    let prepared = Prepared::signed(SignedAppearance {
         // A rank-one storage transform is valid when the samples already
         // contain a monochrome mixture. Reader coordinates remain invertible.
         mapping: [0., 1. / 4096., 0., 0., 1. / 4096., 0., 0., 1. / 4096., 0.],
@@ -285,7 +286,9 @@ fn classic_original_profile_appearance_residuals() {
         let view = photo.view();
         let width = photo.description().extent[0];
         let crop_size = [view.crop[2] - view.crop[0], view.crop[3] - view.crop[1]];
-        let response = prepared.signed_response.as_ref().unwrap();
+        let Some(Response::Signed(response)) = &prepared.response else {
+            panic!("expected signed response");
+        };
         let storage_inverse = prepared.mapping.inverse().unwrap();
         let mut sums = [0.; 4];
         let mut maxima = [0_f64; 4];
@@ -456,6 +459,45 @@ fn negative_exposure_inverse_and_hsv_coordinates_round_trip() {
             for i in 0..3 {
                 assert!((r[i] - hsv[i]).abs() < 1e-12);
             }
+        }
+    }
+}
+
+#[test]
+fn sampled_unsigned_appearance_preserves_response_matrix_order() {
+    let identity = Matrix::diagonal([1.; 3]);
+    let white = 16384.;
+    let after = Matrix([0.75, 0.25, 0., 0.1, 0.9, 0., 0., 0., 1.]);
+    let tables: Vec<f32> = (0..3 * 65536)
+        .map(|i| ((i % 65536) as f64 / white).powi(2).min(1.) as f32)
+        .collect();
+    let response = crate::nodes::finish::code_response::Prepared::new(tables).unwrap();
+    assert_eq!(
+        response.evaluate_codes([-1., 2.9, 100000.]),
+        [0., (2. / white).powi(2), 1.]
+    );
+    let prepared = Prepared::sampled(SampledAppearance {
+        basis: ProfileBasis {
+            mapping: identity.gain(1. / white).0,
+            neutral: [1.; 3],
+            camera_to_linear: identity.0,
+            selected_from_base: identity.0,
+            linear_to_pcs: ROMM.white_normalized().unwrap().0,
+        },
+        response,
+        code_white: white,
+        after_response: after.0,
+        notes: None,
+    })
+    .unwrap();
+    let profile = prepared.finish(1.).unwrap();
+    assert_eq!(profile.baseline, 0.);
+    for rgb in [[0.1, 0.4, 0.6], [0.7, 0.2, 0.3], [0.18; 3]] {
+        let codes = rgb.map(|v| (v * white).floor());
+        let expected = after.apply(codes.map(|v| (v / white).powi(2)));
+        let actual = render_profile(&profile, rgb, true);
+        for (a, b) in actual.into_iter().zip(expected) {
+            assert!((a - b).abs() < 0.015, "{actual:?} versus {expected:?}");
         }
     }
 }

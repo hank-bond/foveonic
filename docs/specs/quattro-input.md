@@ -19,9 +19,11 @@ The graph must preserve the distinction between original sensor codes and offset
 
 The recipe must separate graph composition from metadata and resource preparation. Its inspection catalogue owns names and channel meanings. Image layout and coordinate-view semantics belong to the image contract and must be shared by execution and presentation consumers. Keep these contracts specific to demonstrated operations. A broader rendering-capability framework is not required for completing Quattro support.
 
-## External blue maps
+## Blue calibration maps
 
-Camera maps must be supplied explicitly. The engine owns an immutable snapshot for its lifetime. Loading must not depend on an installed application or the process working directory. Each supported camera needs a complete six-map set. Missing maps for a known mapped camera must report an error. A camera with no map in the recovered catalogue is a separate supported absence.
+The default engine must use the bundled exact map data for camera identifiers 80 through 83. These are 24 files, with six `C{camera-id}_{1..6}` maps per camera. Keep their [source provenance and file hashes](../../crates/foveonic/assets/quattro/README.md) with the bundled data. Rendering and blue-map inspection must work without an installed reference application, environment configuration or a working-directory convention.
+
+An explicitly supplied calibration directory may override the bundled resources through the existing resource API. Each engine owns an immutable resource snapshot for its lifetime. A requested mapped camera needs a complete six-map set. Missing maps in a supplied override must report an error rather than falling back silently. A camera with no map in the recovered catalogue is a separate supported absence.
 
 Map selection derives from camera identifier, aperture and focus metadata. Host preparation may blend the small camera tables. Image resizing and correction belong on the GPU. Preserve the reference's parity geometry, zero-support triangular sampling, threshold equality, signed values and odd trailing rows or columns.
 
@@ -29,4 +31,4 @@ Map selection derives from camera identifier, aperture and focus metadata. Host 
 
 Compare all acquired decoded sensor components and CAMF bytes with independent native captures. Validate raw and corrected GPU extraction, map blends and complete blue-map correction independently. Exercise selective graph requests, sibling retention, physical dimensions and display scaling. Preserve existing Classic and Merrill behavior.
 
-Photographic reconstruction, final TIFF rendering and editable DNG remain later boundaries in the [integration plan](../../plans/quattro-integration.md). Sensor-plane inspection must not silently substitute a photograph or a DNG technical base. The initial GUI must expose its unavailable rendering state honestly.
+Photographic reconstruction and TIFF output have a separate [initial color-rendering specification](./quattro-rendering.md). Editable DNG remains a later technical boundary. Sensor-plane inspection must remain available independently of photographic support. Cameras without a completed rendering recipe must retain an honest unavailable Final state.

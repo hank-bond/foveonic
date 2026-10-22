@@ -1,10 +1,5 @@
 //! Keeps the selected DNG appearance separate from its editable camera samples.
-use crate::color_space::ColorSpace;
-use crate::{
-    nodes::{color::color_mode, finish::tone, sensor::calibration},
-    render::Settings,
-    source::{Metadata, Result},
-};
+use crate::source::Result;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Matrix(pub [f64; 9]);
@@ -67,7 +62,7 @@ impl Matrix {
         }
         Ok(result)
     }
-    fn white_normalized(self) -> Result<Self> {
+    pub(crate) fn white_normalized(self) -> Result<Self> {
         let white = self.apply([1.; 3]);
         if white.iter().any(|x| !x.is_finite() || *x <= 0.) {
             return Err("invalid DNG profile white".into());
@@ -115,19 +110,72 @@ pub(crate) struct Prepared {
     pub calibration_exposure: f64,
     /// Mode selection has already collapsed the sensor mixture in the samples.
     pub baked_color_mode: bool,
+    pub sample_notes: Option<&'static str>,
     exposure: f64,
-    signed_response: Option<crate::nodes::finish::signed_response::Prepared>,
+    response: Option<Response>,
     range_compensation: RangeCompensation,
 }
-/// Classic's calibrated sample coordinates and its pointwise selected appearance.
+/// Numerical linear coordinates and a channel tone curve for matrix-profile fitting.
+pub(crate) struct MatrixAppearance {
+    pub mapping: Matrix,
+    pub neutral: [f64; 3],
+    pub camera_to_linear: Matrix,
+    pub linear_to_pcs: Matrix,
+    pub after_response: Matrix,
+    pub tone: Vec<f32>,
+    pub calibration_exposure: f64,
+    pub exposure: f64,
+}
+/// Calibrated sample coordinates and a signed-code photographic response.
 /// The linear basis is a profile approximation, not a claim about sensor spectra.
-pub(crate) struct ClassicAppearance {
+pub(crate) struct SignedAppearance {
     pub mapping: [f64; 9],
     pub neutral: [f64; 3],
     pub camera_to_linear: [f64; 9],
     pub selected_from_base: [f64; 9],
     pub response: crate::nodes::finish::signed_response::Prepared,
 }
+/// Numerical sample coordinates and the selected linear mapping, independent of
+/// camera family. Nonlinear content corrections can remain baked in the base.
+pub(crate) struct ProfileBasis {
+    pub mapping: [f64; 9],
+    pub neutral: [f64; 3],
+    pub camera_to_linear: [f64; 9],
+    pub selected_from_base: [f64; 9],
+    pub linear_to_pcs: [f64; 9],
+}
+
+/// An integral-code photographic response and the transform applied after it.
+pub(crate) struct SampledAppearance {
+    pub basis: ProfileBasis,
+    pub response: crate::nodes::finish::code_response::Prepared,
+    pub code_white: f64,
+    pub after_response: [f64; 9],
+    pub notes: Option<&'static str>,
+}
+
+enum Response {
+    Signed(crate::nodes::finish::signed_response::Prepared),
+    Unsigned {
+        table: crate::nodes::finish::code_response::Prepared,
+        code_white: f64,
+    },
+}
+
+/// Linear sRGB primaries adapted to the D50 profile connection white.
+const SRGB_D50: Matrix = Matrix([
+    0.4360747, 0.3850649, 0.1430804, 0.2225045, 0.7168786, 0.0606169, 0.0139322, 0.0971045,
+    0.7141733,
+]);
+pub(crate) fn srgb_to_pcs() -> Result<Matrix> {
+    SRGB_D50.white_normalized()
+}
+pub(crate) fn srgb_to_romm() -> Result<Matrix> {
+    Ok(SRGB_D50
+        .white_normalized()?
+        .then(ROMM.white_normalized()?.inverse()?))
+}
+
 pub(crate) struct ProfileData {
     pub curve: Vec<f32>,
     pub look: Vec<f32>,
@@ -136,71 +184,16 @@ pub(crate) struct ProfileData {
 
 impl Prepared {
     #[cfg(test)]
-    pub fn new(m: &Metadata, settings: &Settings) -> Result<Self> {
-        Self::with_white_balance(m, settings, Default::default())
+    pub fn new(m: &crate::source::Metadata, settings: &crate::render::Settings) -> Result<Self> {
+        crate::render::dng_appearance(m, settings, Default::default())
     }
 
-    pub(crate) fn with_white_balance(
-        m: &Metadata,
-        settings: &Settings,
-        statistics: crate::render::WhiteBalanceStats,
-    ) -> Result<Self> {
-        if m.processing_family()? == crate::source::ProcessingFamily::Classic {
-            let mut prepared = Self::classic(crate::render::classic_dng_appearance(
-                m, settings, statistics,
-            )?)?;
-            prepared.baked_color_mode = settings.is_monochrome();
-            return Ok(prepared);
-        }
-        if settings.is_monochrome() {
-            return Self::monochrome(m, settings);
-        }
-        let key = m
-            .lists
-            .get("WhiteBalanceGains")
-            .and_then(|x| x.get(&settings.white_balance))
-            .ok_or("missing DNG WB gains")?;
-        let gains = m.fixed::<3>(key)?;
-        if gains.iter().any(|v| !v.is_finite() || *v <= 0.) {
-            return Err("invalid DNG WB gains".into());
-        }
-        let n = gains.map(|v| 1. / v);
-        let maximum = n.into_iter().fold(0., f64::max);
-        // Readers see rounded rationals, not our full-precision WB values.
-        // Use those same values here so the fitted look matches their input.
-        let neutral = n.map(|v| (v / maximum * 1_000_000.).round() / 1_000_000.);
-        if neutral.iter().any(|v| *v <= 0.) {
-            return Err("unrepresentable DNG neutral".into());
-        }
-        let unselected = color_mode::Settings {
-            tone_index: 0,
-            contrast: 0.,
-            compensation: None,
-        };
-        let rows = calibration::color(m, &settings.white_balance, &unselected)?.matrix;
-        let base = Matrix(std::array::from_fn(|i| f64::from(rows[i / 3][i % 3])));
-        let mode = color_mode::prepare(m, &settings.color_mode)?;
-        let selected = Matrix(mode.camera_matrix(base.0));
-        let mapping = base
-            .inverse()?
-            .then(Matrix::diagonal(gains.map(|v| 1. / v / 4095.)));
-        let space = ColorSpace::from_metadata(m)?;
-        let pcs = match space {
-            ColorSpace::ProPhotoRgb => {
-                return Err("ROMM is not a camera metadata color space".into())
-            }
-            ColorSpace::Srgb => Matrix([
-                0.4360747, 0.3850649, 0.1430804, 0.2225045, 0.7168786, 0.0606169, 0.0139322,
-                0.0971045, 0.7141733,
-            ]),
-            ColorSpace::AdobeRgb => Matrix([
-                0.6097559, 0.2052401, 0.1492240, 0.3111242, 0.6256560, 0.0632197, 0.0194811,
-                0.0608902, 0.7448387,
-            ]),
-        }
-        .white_normalized()?;
+    pub(crate) fn matrix(input: MatrixAppearance) -> Result<Self> {
         let romm = ROMM.white_normalized()?;
-        let camera_to_native = Matrix::diagonal(gains).then(selected);
+        let mapping = input.mapping;
+        let neutral = input.neutral;
+        let pcs = input.linear_to_pcs;
+        let camera_to_native = input.camera_to_linear;
         let forward = Matrix::diagonal(neutral)
             .then(camera_to_native)
             .then(pcs)
@@ -213,14 +206,8 @@ impl Prepared {
         let camera_to_romm = Matrix::diagonal(neutral.map(|v| 1. / v))
             .then(reader_forward)
             .then(romm.inverse()?);
-        let sat = f64::from(settings.saturation);
-        let saturation = Matrix(std::array::from_fn(|i| {
-            [0.299, 0.587, 0.114][i % 3] * (1. - sat) + if i / 3 == i % 3 { sat } else { 0. }
-        }));
-        // Moving saturation before channel tone changes the look. Combine it
-        // only with the color-space conversion that follows it.
-        let after_tone = saturation.then(pcs).then(romm.inverse()?);
-        let (_, iso) = crate::noise::processing_gain(m)?;
+        // Saturation follows channel tone and precedes conversion to PCS.
+        let after_tone = input.after_response.then(pcs).then(romm.inverse()?);
         Ok(Self {
             mapping,
             neutral,
@@ -229,28 +216,60 @@ impl Prepared {
             camera_to_romm,
             camera_to_native,
             after_tone,
-            tone: tone::prepare(m, &mode, settings.tone)?,
+            tone: input.tone,
             baked_color_mode: false,
-            calibration_exposure: (f64::from(iso) / maximum).log2(),
-            exposure: f64::from(settings.exposure),
-            signed_response: None,
+            sample_notes: None,
+            calibration_exposure: input.calibration_exposure,
+            exposure: input.exposure,
+            response: None,
             range_compensation: RangeCompensation::BaselineExposure,
         })
     }
-    pub(crate) fn classic(input: ClassicAppearance) -> Result<Self> {
+    pub(crate) fn signed(input: SignedAppearance) -> Result<Self> {
+        Self::linear(
+            ProfileBasis {
+                mapping: input.mapping,
+                neutral: input.neutral,
+                camera_to_linear: input.camera_to_linear,
+                selected_from_base: input.selected_from_base,
+                linear_to_pcs: ROMM.white_normalized()?.0,
+            },
+            Response::Signed(input.response),
+            Matrix::diagonal([1.; 3]),
+        )
+    }
+    pub(crate) fn sampled(input: SampledAppearance) -> Result<Self> {
+        if !input.code_white.is_finite()
+            || input.code_white <= 0.
+            || input.after_response.iter().any(|value| !value.is_finite())
+        {
+            return Err("invalid sampled DNG appearance".into());
+        }
+        let mut prepared = Self::linear(
+            input.basis,
+            Response::Unsigned {
+                table: input.response,
+                code_white: input.code_white,
+            },
+            Matrix(input.after_response),
+        )?;
+        prepared.sample_notes = input.notes;
+        Ok(prepared)
+    }
+    fn linear(input: ProfileBasis, response: Response, after_response: Matrix) -> Result<Self> {
         let neutral = input.neutral.map(|v| (v * 1_000_000.).round() / 1_000_000.);
         if neutral.iter().any(|v| !v.is_finite() || *v <= 0.) {
-            return Err("invalid Classic DNG neutral".into());
+            return Err("invalid DNG profile neutral".into());
         }
         let mapping = Matrix(input.mapping);
         let base = Matrix(input.camera_to_linear);
         let selected = Matrix(input.selected_from_base);
-        // Use the final ROMM interpretation as a provisional linear basis. The
+        // Publish the recipe's linear basis in the D50 connection space. The
         // selected nonlinear photographic response remains in the profile look.
         let romm = ROMM.white_normalized()?;
         let forward = Matrix::diagonal(neutral)
             .then(base)
-            .then(romm)
+            .then(Matrix(input.linear_to_pcs))
             .white_normalized()?;
         let forward = Matrix(forward.0.map(|v| (v * 1_000_000.).round() / 1_000_000.));
         let reader = forward.white_normalized()?;
@@ -268,7 +287,7 @@ impl Prepared {
                 .iter()
                 .any(|row| row.iter().all(|v| *v == 0.))
         {
-            return Err("invalid Classic DNG storage transform".into());
+            return Err("invalid DNG storage transform".into());
         }
         selected.inverse()?;
         Ok(Self {
@@ -278,18 +297,19 @@ impl Prepared {
             color,
             camera_to_romm,
             camera_to_native: base.then(selected),
-            after_tone: Matrix::diagonal([1.; 3]),
+            after_tone: after_response,
             tone: Vec::new(),
             baked_color_mode: false,
+            sample_notes: None,
             calibration_exposure: 0.,
             exposure: 0.,
-            signed_response: Some(input.response),
+            response: Some(response),
             // Restore the storage range inside photographic tone, rather than
             // clipping bright linear colors before the reader applies its look.
             range_compensation: RangeCompensation::ProfileCurve,
         })
     }
-    fn monochrome(m: &Metadata, settings: &Settings) -> Result<Self> {
+    pub(crate) fn monochrome(tone: Vec<f32>, exposure: f64, code_white: f64) -> Result<Self> {
         let identity = Matrix::diagonal([1.; 3]);
         // Equal linear samples are already WB-normalized and include technical ISO gain.
         // Define neutral RGB in a standard D50 basis without inverting the source color matrix.
@@ -297,18 +317,19 @@ impl Prepared {
         let forward = Matrix(romm.0.map(|v| (v * 1_000_000.).round() / 1_000_000.));
         let reader = forward.white_normalized()?;
         Ok(Self {
-            mapping: identity.gain(1. / 4095.),
+            mapping: identity.gain(1. / code_white),
             neutral: [1.; 3],
             forward,
             color: reader.inverse()?,
             camera_to_romm: reader.then(romm.inverse()?),
             camera_to_native: identity,
             after_tone: identity,
-            tone: tone::prepare_monochrome(m, settings.tone)?,
+            tone,
             baked_color_mode: false,
+            sample_notes: None,
             calibration_exposure: 0.,
-            exposure: f64::from(settings.exposure),
-            signed_response: None,
+            exposure,
+            response: None,
             range_compensation: RangeCompensation::BaselineExposure,
         })
     }
@@ -330,8 +351,13 @@ impl Prepared {
             .gain(f64::from(scale) / ramp * self.exposure.exp2());
         let target = |rgb: [f64; 3]| {
             let native = before.apply(rgb);
-            let result = if let Some(response) = &self.signed_response {
-                response.evaluate_linear(native)
+            let result = if let Some(response) = &self.response {
+                match response {
+                    Response::Signed(response) => response.evaluate_linear(native),
+                    Response::Unsigned { table, code_white } => self
+                        .after_tone
+                        .apply(table.evaluate_codes(native.map(|value| value * code_white))),
+                }
             } else {
                 self.after_tone
                     .apply(native.map(|v| native_tone(&self.tone, v)))

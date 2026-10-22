@@ -45,6 +45,7 @@ struct App {
     comparison: inspect::Comparison,
     frame: Option<worker::Frame>,
     scope_images: Option<scopes::Images>,
+    scope_snapshot: Option<worker::ScopeSnapshot>,
     scope_key: Option<worker::ScopeKey>,
     viewport: viewport::Viewport,
     navigator: navigator::Navigator,
@@ -108,6 +109,7 @@ impl App {
             comparison: Default::default(),
             frame: None,
             scope_images: None,
+            scope_snapshot: None,
             scope_key: None,
             viewport: Default::default(),
             navigator: navigator::Navigator::new(rs.clone(), cc.egui_ctx.clone()),
@@ -153,6 +155,7 @@ impl App {
                     self.metadata = None;
                     self.frame = None;
                     self.scope_images = None;
+                    self.scope_snapshot = None;
                     self.busy = false;
                     self.worker.clear();
                     self.viewport.reset();
@@ -176,7 +179,7 @@ impl App {
         self.output = "final".into();
         self.channel = -1;
         self.frame = None;
-        self.scope_images = None;
+        self.scope_key = None;
         self.viewport.reset();
         viewport::clear(&self.render_state);
     }
@@ -221,13 +224,13 @@ impl App {
             let reply = match update {
                 worker::Update::Image(reply) => *reply,
                 worker::Update::Scopes { key, result } => {
-                    if let Some(frame) = self.frame.as_mut().filter(|frame| {
+                    if self.frame.as_ref().is_some_and(|frame| {
                         frame.revision == key.revision && self.scope_key == Some(key)
                     }) {
                         match result {
                             Ok(data) => {
                                 self.scope_images = Some(scopes::Images::new(&data));
-                                frame.scopes = Some(worker::ScopeSnapshot { key, data });
+                                self.scope_snapshot = Some(worker::ScopeSnapshot { key, data });
                                 timing::event(key.revision, "scopes_received");
                             }
                             Err(error) => {
@@ -303,7 +306,7 @@ impl App {
                         frame.queued_at,
                         frame.milliseconds,
                     );
-                    self.scope_images = None;
+                    // Keep the last completed scopes until this frame has replacements.
                     self.scope_key = None;
                     viewport::clear(&self.render_state);
                     self.frame = Some(frame);
@@ -361,10 +364,7 @@ impl App {
             ui.horizontal(|ui| {
                 let export_ready = self.sidecars.ready()
                     && self.selected.is_some()
-                    && self
-                        .metadata
-                        .as_deref()
-                        .is_some_and(|m| self.settings.validate_for_camera(m).is_ok());
+                    && toolbar::can_export(&self.settings, self.metadata.as_deref());
                 let actions = toolbar::show(
                     ui,
                     !self.exporting,
@@ -458,10 +458,7 @@ impl App {
                 scopes::show(
                     ui,
                     self.preferences.scope,
-                    self.frame
-                        .as_ref()
-                        .and_then(|f| f.scopes.as_ref())
-                        .map(|snapshot| &snapshot.data),
+                    self.scope_snapshot.as_ref().map(|snapshot| &snapshot.data),
                     self.scope_images.as_mut(),
                 );
                 false

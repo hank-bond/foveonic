@@ -1,4 +1,4 @@
-//! Checks source-derived fixed-WB Stage1 controls without requiring image processing.
+//! Checks source-derived Stage1 noise controls and selected white balance without image processing.
 
 use super::*;
 use crate::source::{Matrix, PropertyList, Source};
@@ -46,15 +46,7 @@ fn metadata() -> Metadata {
 
 #[test]
 fn explicit_midpoint_selects_two_pass_strengths_and_source_white_balance() {
-    let controls = prepare(
-        &metadata(),
-        NoiseSteps {
-            chroma: 2,
-            luma: 2,
-            residual: 2,
-        },
-    )
-    .unwrap();
+    let controls = prepare(&metadata(), 2).unwrap();
     assert_eq!(controls.extent, [2944, 1836]);
     assert_eq!(
         controls.white_balance,
@@ -67,40 +59,29 @@ fn explicit_midpoint_selects_two_pass_strengths_and_source_white_balance() {
 }
 
 #[test]
-fn inactive_descriptor_sliders_do_not_change_selected_helper() {
-    for chroma in 0..=4 {
-        for residual in 0..=4 {
-            let controls = prepare(
-                &metadata(),
-                NoiseSteps {
-                    chroma,
-                    luma: 0,
-                    residual,
-                },
-            )
-            .unwrap();
-            assert_eq!(controls.bilateral_strengths, [1., 1.5]);
-        }
+fn chroma_steps_select_each_reference_strength_pair() {
+    for (step, expected) in [[1., 1.5], [0.5, 1.], [0.1, 0.5], [0.05, 0.1], [0.02, 0.06]]
+        .into_iter()
+        .enumerate()
+    {
+        let controls = prepare(&metadata(), step as u8).unwrap();
+        assert_eq!(controls.bilateral_strengths, expected);
     }
 }
 
 #[test]
 fn rejects_unproved_routes_and_missing_photographic_inputs() {
-    let steps = NoiseSteps {
-        chroma: 2,
-        luma: 2,
-        residual: 2,
-    };
+    let chroma_step = 2;
     let mut m = metadata();
     m.processing_version = Some([4, 0, 1, 0]);
-    assert!(prepare(&m, steps).is_err());
+    assert!(prepare(&m, chroma_step).is_err());
     let mut m = metadata();
     m.properties.remove("SHUTTER");
-    assert!(prepare(&m, steps).is_err());
-    assert!(prepare(&metadata(), NoiseSteps { chroma: 5, ..steps }).is_err());
+    assert!(prepare(&m, chroma_step).is_err());
+    assert!(prepare(&metadata(), 5).is_err());
     let mut m = metadata();
     m.matrices.get_mut("CaptureShutter").unwrap().values[0] = 1e9;
-    let controls = prepare(&m, steps).unwrap();
+    let controls = prepare(&m, chroma_step).unwrap();
     assert!(controls.long_exposure);
     assert_eq!(controls.bilateral_strengths, [0.05, 0.007]);
     assert_eq!(controls.minimum_blend, 1.);
@@ -110,19 +91,97 @@ fn rejects_unproved_routes_and_missing_photographic_inputs() {
 #[ignore = "requires QUATTRO_X3F pointing to a DP2 Quattro original"]
 fn prepares_original_dp2_controls_without_captured_request_fields() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").expect("set QUATTRO_X3F")).unwrap();
-    let controls = prepare(
-        &source.metadata,
-        NoiseSteps {
-            chroma: 2,
-            luma: 2,
-            residual: 2,
-        },
-    )
-    .unwrap();
+    let controls = prepare(&source.metadata, 2).unwrap();
     assert_eq!(
         controls.white_balance,
         [1.2925424955483322, 1., 1.2778694712615106]
     );
     assert_eq!(controls.estimated_iso, 100);
     assert_eq!(controls.bilateral_strengths, [0.1, 0.5]);
+}
+
+#[test]
+fn complete_numerical_preparation_tracks_the_selected_chroma_control() {
+    let metadata = metadata();
+    let chroma_step = 2;
+    let first = prepare_filter(&metadata, chroma_step).unwrap();
+    assert_eq!(first.extent(), [2944, 1836]);
+    let second = prepare_filter(&metadata, 3).unwrap();
+    assert!(first.key() != second.key());
+}
+
+#[test]
+fn ordinary_dp_models_use_their_own_white_balance_with_shared_noise_controls() {
+    let chroma_step = 2;
+    for camera in 80..=83 {
+        let mut metadata = metadata();
+        metadata.matrices.get_mut("CAMERAID").unwrap().values[0] = f64::from(camera);
+        metadata.matrices.get_mut("SunlightWBGain").unwrap().values[0] = f64::from(camera) / 40.;
+        let controls = prepare(&metadata, chroma_step).unwrap();
+        assert_eq!(controls.extent, [2944, 1836]);
+        assert_eq!(
+            controls.white_balance[0],
+            f64::from(camera) / 40. * 1.0379999876022339
+        );
+        assert_eq!(controls.bilateral_strengths, [0.1, 0.5]);
+    }
+}
+
+#[test]
+fn sd_ambient_map_uses_integer_sample_positions_and_versioned_sources() {
+    let mut metadata = metadata();
+    metadata.matrices.get_mut("CAMERAID").unwrap().values[0] = 40.;
+    metadata.matrices.get_mut("CamsysVersion").unwrap().values = vec![1., 0., 1.];
+    metadata.matrices.insert(
+        "AESensorValueAmbient256".into(),
+        Matrix {
+            encoding: MatrixEncoding::Uint8,
+            representation: "u8",
+            dimensions: vec![16, 16],
+            values: (0..256).map(f64::from).collect(),
+        },
+    );
+    // Independent native fixed-map probe uses this ramp to exercise every row.
+    assert_eq!(ambient_mean(&metadata).unwrap(), 2495. / 77.);
+    metadata.matrices.get_mut("CamsysVersion").unwrap().values = vec![0., 9., 9.];
+    assert_eq!(ambient_mean(&metadata).unwrap(), 120.);
+    metadata.matrices.get_mut("CamsysVersion").unwrap().values = vec![1., 0., 0.];
+    metadata.matrices.insert(
+        "AESensorValueAmbient".into(),
+        Matrix {
+            encoding: MatrixEncoding::Int16,
+            representation: "i16",
+            dimensions: vec![77],
+            values: vec![80.; 77],
+        },
+    );
+    assert_eq!(ambient_mean(&metadata).unwrap(), 80.);
+}
+
+#[test]
+fn selected_balance_adjusts_gains_without_changing_recorded_balance() {
+    let mut metadata = metadata();
+    let mut shade = metadata.matrices["SunlightWBGain"].clone();
+    shade.values = vec![2., 2., 4.];
+    metadata.matrices.insert("ShadeWBGain".into(), shade);
+    metadata.lists.insert(
+        "WhiteBalanceGains".into(),
+        PropertyList::new(vec![
+            ("Sunlight".into(), "SunlightWBGain".into()),
+            ("Shade".into(), "ShadeWBGain".into()),
+        ])
+        .unwrap(),
+    );
+    let recorded = super::super::hlp::recorded_balance(&metadata).unwrap();
+    let sunlight = super::super::calibration::white_balance(&metadata, "Sunlight").unwrap();
+    let alias = super::super::calibration::white_balance(&metadata, "daylight").unwrap();
+    let shade = super::super::calibration::white_balance(&metadata, "shade").unwrap();
+    assert_eq!(sunlight, alias);
+    assert_eq!(shade, [1.0379999876022339, 1., 1.9316000938415527]);
+    assert_ne!(sunlight, shade);
+    assert_eq!(
+        super::super::hlp::recorded_balance(&metadata).unwrap(),
+        recorded
+    );
+    assert!(super::super::calibration::white_balance(&metadata, "missing-preset").is_err());
 }

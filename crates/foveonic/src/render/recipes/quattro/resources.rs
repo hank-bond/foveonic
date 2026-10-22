@@ -1,4 +1,4 @@
-//! Loads explicitly supplied blue calibration maps and prepares aperture/focus blends.
+//! Loads bundled or explicitly overridden blue calibration maps and prepares aperture/focus blends.
 //!
 //! Equations and arithmetic order follow the reference implementation's
 //! LoadBSpatialGainTable and distinct two-map/four-map BlendSPGMaps overloads.
@@ -38,13 +38,70 @@ pub(crate) struct GainMap {
     pub(crate) values: Vec<f32>,
 }
 
-/// An owned snapshot of caller-supplied resources. No application path or
+/// An owned snapshot of bundled or caller-supplied resources. No application path or
 /// process working directory participates in loading or recipe construction.
 pub(crate) struct ResourceDirectory {
     maps: BTreeMap<u16, Vec<GainMap>>,
 }
 
 impl ResourceDirectory {
+    /// Exact imported map bytes travel with the processor on every platform.
+    pub(crate) fn bundled() -> Result<Self> {
+        macro_rules! camera {
+            ($id:literal) => {
+                (
+                    $id,
+                    [
+                        include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/assets/quattro/C",
+                            stringify!($id),
+                            "_1"
+                        )) as &[u8],
+                        include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/assets/quattro/C",
+                            stringify!($id),
+                            "_2"
+                        )) as &[u8],
+                        include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/assets/quattro/C",
+                            stringify!($id),
+                            "_3"
+                        )) as &[u8],
+                        include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/assets/quattro/C",
+                            stringify!($id),
+                            "_4"
+                        )) as &[u8],
+                        include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/assets/quattro/C",
+                            stringify!($id),
+                            "_5"
+                        )) as &[u8],
+                        include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/assets/quattro/C",
+                            stringify!($id),
+                            "_6"
+                        )) as &[u8],
+                    ],
+                )
+            };
+        }
+        let mut maps = BTreeMap::new();
+        for (camera, files) in [camera!(80), camera!(81), camera!(82), camera!(83)] {
+            maps.insert(
+                camera,
+                files.into_iter().map(decode).collect::<Result<Vec<_>>>()?,
+            );
+        }
+        Ok(Self { maps })
+    }
+
     pub(crate) fn new(directory: &Path) -> Result<Self> {
         if !directory.is_dir() {
             return Err("blue calibration resource directory does not exist".into());
@@ -151,6 +208,11 @@ fn load(path: &Path) -> Result<GainMap> {
     std::fs::File::open(path)?
         .take((maximum + 1) as u64)
         .read_to_end(&mut data)?;
+    decode(&data)
+}
+
+fn decode(data: &[u8]) -> Result<GainMap> {
+    let maximum = MAXIMUM_MAP_SAMPLES * 4 + 4;
     if !(8..=maximum).contains(&data.len()) {
         return Err("invalid calibration map length".into());
     }

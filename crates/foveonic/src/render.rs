@@ -64,7 +64,9 @@ impl Engine {
             gpu: Gpu::new()?,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
-            calibration_resources: None,
+            calibration_resources: Some(Arc::new(
+                recipes::quattro::resources::ResourceDirectory::bundled()?,
+            )),
         })
     }
 
@@ -80,10 +82,12 @@ impl Engine {
             gpu: Gpu::from_device(device, queue, adapter_name)?,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
-            calibration_resources: None,
+            calibration_resources: Some(Arc::new(
+                recipes::quattro::resources::ResourceDirectory::bundled()?,
+            )),
         })
     }
-    /// Attach an immutable snapshot of explicitly supplied camera calibration maps.
+    /// Override bundled calibration maps with an immutable snapshot of supplied maps.
     /// Resources are loaded once and never resolved through the process directory.
     pub fn with_calibration_resources(mut self, directory: impl AsRef<Path>) -> Result<Self> {
         self.calibration_resources = Some(Arc::new(
@@ -385,6 +389,7 @@ impl Engine {
         Ok(ImageTexture {
             texture,
             description: Description {
+                view_baked: true,
                 extent: size,
                 layout: Layout::Rgba32FloatTexture,
                 space: image.description.space,
@@ -430,13 +435,17 @@ mod tests;
 #[path = "render/classic_test.rs"]
 mod classic_tests;
 
-/// Resolve Classic metadata at the recipe boundary, before shared DNG fitting.
-pub(crate) fn classic_dng_appearance(
+#[cfg(test)]
+#[path = "render/quattro_dng_test.rs"]
+mod quattro_dng_tests;
+
+/// Resolve camera interpretation at the recipe boundary before shared DNG fitting.
+pub(crate) fn dng_appearance(
     metadata: &crate::source::Metadata,
     settings: &Settings,
     statistics: WhiteBalanceStats,
-) -> Result<crate::dng::appearance::ClassicAppearance> {
-    recipes::classic::prepare_dng_appearance(metadata, settings, statistics)
+) -> Result<crate::dng::appearance::Prepared> {
+    recipes::prepare_dng_appearance(metadata, settings, statistics)
 }
 
 /// Resolve image-derived calibration before fitting an editable appearance.
@@ -446,13 +455,7 @@ pub(crate) fn estimated_white_balance(
     settings: &Settings,
     profile: &mut Profile,
 ) -> Result<WhiteBalanceStats> {
-    if source.metadata.processing_family()? == crate::source::ProcessingFamily::Classic
-        && !settings.is_monochrome()
-    {
-        recipes::classic::estimate_white_balance(engine, source, &settings.white_balance, profile)
-    } else {
-        Ok(WhiteBalanceStats::default())
-    }
+    recipes::estimated_white_balance(engine, source, settings, profile)
 }
 
 pub(crate) fn classic_inspection_outputs(
@@ -473,6 +476,13 @@ pub(crate) fn quattro_inspection_outputs(
     metadata: Option<&crate::source::Metadata>,
 ) -> Vec<crate::inspection::ImageOutput> {
     recipes::quattro::outputs(metadata)
+}
+
+pub(crate) fn quattro_inspection_comparison(
+    metadata: &crate::source::Metadata,
+    output: &str,
+) -> Option<&'static str> {
+    recipes::quattro::comparison_input(metadata, output)
 }
 
 #[cfg(test)]

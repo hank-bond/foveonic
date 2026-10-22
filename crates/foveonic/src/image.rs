@@ -39,10 +39,12 @@ pub enum Space {
     CalibratedLayers,
     /// Signed linear codes awaiting the reconstruction finalizer's required gain.
     NormalizedCodeRgb,
-    /// Signed linear RGB with required gain applied, stored as integral code values.
+    /// Linear-light RGB stored as integral codes, with a recipe-defined nominal white.
     LinearCodeRgb,
     /// Signed root-domain RGB in the calibrated color basis, stored as integral code values.
     SignedCodeRgb,
+    /// Unsigned16 RGB codes, represented as integral Float32 values.
+    UnsignedCodeRgb,
     /// Camera-color RGB in code units, with a nominal inspection range of 0..4095.
     LinearRgb(ColorSpace),
     /// Tone-mapped components in linear working primaries.
@@ -68,6 +70,7 @@ impl Space {
             | Self::NormalizedCodeRgb
             | Self::LinearCodeRgb
             | Self::SignedCodeRgb
+            | Self::UnsignedCodeRgb
             | Self::LinearRgb(_)
             | Self::ToneMappedRgb(_) => Layout::Rgb32Float,
         }
@@ -91,6 +94,8 @@ pub struct Description {
     pub extent: [u32; 2],
     pub layout: Layout,
     pub space: Space,
+    /// Crop, rotation and output sizing have already been applied to these pixels.
+    pub view_baked: bool,
 }
 
 impl Description {
@@ -99,6 +104,7 @@ impl Description {
             extent,
             layout: space.buffer_layout(),
             space,
+            view_baked: false,
         }
     }
 
@@ -164,6 +170,7 @@ impl RenderedImage {
             | Space::NormalizedCodeRgb
             | Space::LinearCodeRgb
             | Space::SignedCodeRgb
+            | Space::UnsignedCodeRgb
             | Space::CalibratedLayers
             | Space::ScalarField
             | Space::Monochrome

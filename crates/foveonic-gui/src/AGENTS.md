@@ -31,7 +31,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[inspect.rs](./inspect.rs)** Groups pipeline views and controls display-only Input/Output and Difference comparisons.
 - **[main.rs](./main.rs)** Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
-- **[mixer.rs](./mixer.rs)** Edits actual sensor-layer proportions with a triangular barycentric monochrome mixer.
+- **[mixer.rs](./mixer.rs)** Edits three-channel proportions with a triangular barycentric monochrome mixer.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
 - **[preferences.rs](./preferences.rs)** Persists organizer, scope, zoom snap, and tool-section preferences separately from image edits.
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.

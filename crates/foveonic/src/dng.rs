@@ -19,6 +19,9 @@ use crate::{
 /// stay separate so the exported samples retain editing room. Classic monochrome
 /// also bakes the selected color-mode mixture because it collapses the sensor
 /// channels before reconstruction. Its tone and exposure remain editable.
+/// Quattro uses a canonical Standard technical color recipe. Its adaptive color
+/// and spatial corrections stay baked, while the embedded selected mode is an
+/// approximation. Existing reconstruction clamps cannot be undone by export.
 ///
 /// The result is still linear working RGB, not stored DNG camera samples. Its
 /// settings retain the whole requested recipe, including the later appearance.
@@ -29,14 +32,6 @@ pub fn prepare_base(
     profile: &mut Profile,
 ) -> Result<RenderedImage> {
     settings.validate_for_camera(&source.metadata)?;
-    // Reject an unknown look before spending time on the technical render.
-    if !settings.is_monochrome()
-        && source.metadata.processing_family()? == crate::source::ProcessingFamily::Merrill
-    {
-        profile.measure("prepare DNG presentation mode", || {
-            crate::nodes::color::color_mode::prepare(&source.metadata, &settings.color_mode)
-        })?;
-    }
     engine.render_dng_base(source, settings, profile)
 }
 
@@ -76,7 +71,7 @@ pub fn write_source(
     settings.validate_for_camera(&source.metadata)?;
     let white_balance = crate::render::estimated_white_balance(engine, source, settings, profile)?;
     let prepared = profile.measure("DNG presentation preparation", || {
-        appearance::Prepared::with_white_balance(&source.metadata, settings, white_balance)
+        crate::render::dng_appearance(&source.metadata, settings, white_balance)
     })?;
     let base = prepare_base(engine, source, settings, profile)?;
     let size = base.view().extent;

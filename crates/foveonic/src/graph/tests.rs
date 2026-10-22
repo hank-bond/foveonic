@@ -339,6 +339,7 @@ fn image_signals_round_trip_with_their_canonical_layout_and_extent() {
         (Space::NormalizedCodeRgb, Layout::Rgb32Float),
         (Space::LinearCodeRgb, Layout::Rgb32Float),
         (Space::SignedCodeRgb, Layout::Rgb32Float),
+        (Space::UnsignedCodeRgb, Layout::Rgb32Float),
         (Space::LinearRgb(ColorSpace::Srgb), Layout::Rgb32Float),
         (
             Space::ToneMappedRgb(ColorSpace::ProPhotoRgb),
@@ -370,4 +371,29 @@ fn image_signals_round_trip_with_their_canonical_layout_and_extent() {
     ] {
         assert!(data.image_description(extent).is_none(), "{data:?}");
     }
+}
+
+#[test]
+fn linear_code_base_requires_an_explicit_unsigned_code_input() {
+    let mut graph = Graph::default();
+    let codes = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::UnsignedCodeRgb,
+            },
+            &[],
+        )
+        .unwrap();
+    let linear = graph.add(Operation::LinearCodeBase, &[codes]).unwrap();
+    assert_eq!(graph.outputs[linear].data, DataType::LinearCodeRgb);
+    assert_eq!(graph.required(&[linear]).unwrap(), vec![true, true]);
+    let display = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::ToneMappedRgb(ColorSpace::Srgb),
+            },
+            &[],
+        )
+        .unwrap();
+    assert!(graph.add(Operation::LinearCodeBase, &[display]).is_err());
 }

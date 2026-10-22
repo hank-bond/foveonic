@@ -45,6 +45,29 @@ pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
     )
 }
 
+/// Snap the slider and value box to the same discrete parameter positions.
+pub fn stepped_adjustment(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: RangeInclusive<f32>,
+    default: f32,
+    step: f64,
+) -> bool {
+    adjustment_row(
+        ui,
+        label,
+        value,
+        range,
+        default,
+        step,
+        RowControls {
+            step: Some(step),
+            ..Default::default()
+        },
+    )
+}
+
 pub(super) struct Automatic<'a> {
     active: &'a mut bool,
     resolved: bool,
@@ -54,6 +77,7 @@ pub(super) struct Automatic<'a> {
 pub(super) struct RowControls<'a> {
     pub(super) automatic: Option<Automatic<'a>>,
     pub(super) enabled: Option<&'a mut bool>,
+    pub(super) step: Option<f64>,
 }
 
 /// Keep automatic selection on the value row rather than in a separate checkbox.
@@ -82,6 +106,7 @@ pub fn automatic_adjustment<T: egui::emath::Numeric>(
                 resolved: calculated.is_some(),
             }),
             enabled,
+            step: None,
         },
     );
     *manual = (!automatic).then_some(value);
@@ -100,6 +125,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
     let RowControls {
         mut automatic,
         enabled,
+        step,
     } = controls;
     // The two Highlights rows need separate help and widget IDs.
     let display_label = match label {
@@ -135,9 +161,11 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 };
                 ui.spacing_mut().slider_width = (ui.available_width() - 62. - auto_width).max(35.);
                 ui.add_enabled_ui(!automatic.as_ref().is_some_and(|a| *a.active), |ui| {
-                    let response = ui
-                        .add(egui::Slider::new(value, range.clone()).show_value(false))
-                        .interact(egui::Sense::click_and_drag());
+                    let mut slider = egui::Slider::new(value, range.clone()).show_value(false);
+                    if let Some(step) = step {
+                        slider = slider.step_by(step);
+                    }
+                    let response = ui.add(slider).interact(egui::Sense::click_and_drag());
                     if response.double_clicked() {
                         *value = default;
                     }
@@ -184,11 +212,14 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                     .inner;
                 // Refresh the cached text after clamping so the value box does not show
                 // the overshoot even though the stored setting is already in range.
-                let accepted = value
-                    .to_f64()
-                    .clamp(range.start().to_f64(), range.end().to_f64());
-                if !active && value.to_f64() != accepted {
-                    *value = T::from_f64(accepted);
+                let mut accepted = value.to_f64();
+                if let Some(step) = step {
+                    accepted = (accepted / step).round() * step;
+                }
+                let accepted = accepted.clamp(range.start().to_f64(), range.end().to_f64());
+                let accepted = T::from_f64(accepted);
+                if !active && value.to_f64() != accepted.to_f64() {
+                    *value = accepted;
                     ui.data_mut(|data| data.remove::<String>(response.id));
                     ui.ctx().request_repaint();
                 }
@@ -264,7 +295,10 @@ pub(super) fn presets(
             if key == "WhiteBalanceGains" {
                 metadata.white_balance_presets()
             } else {
-                metadata.color_mode_presets()
+                foveonic::render::ControlCapabilities::from_metadata(metadata).map_or_else(
+                    |_| metadata.color_mode_presets(),
+                    |c| c.color_mode_presets(metadata),
+                )
             }
         });
         // Keep the same rows while metadata is loading so later controls do not
@@ -308,10 +342,19 @@ pub(super) fn presets(
 }
 
 pub(super) fn tone(ui: &mut egui::Ui, settings: &mut Settings, mono: bool) -> bool {
+    tone_with_exposure_range(ui, settings, mono, -4. ..=4.)
+}
+
+pub(super) fn tone_with_exposure_range(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    mono: bool,
+    exposure_range: RangeInclusive<f32>,
+) -> bool {
     let mut changed = false;
     ui.weak(if mono { "Tone" } else { "Tone and Color" });
     for (label, value, range, default) in [
-        ("Exposure", &mut settings.exposure, -4. ..=4., 0.),
+        ("Exposure", &mut settings.exposure, exposure_range, 0.),
         ("Saturation", &mut settings.saturation, 0. ..=2., 1.),
     ] {
         if !mono || label != "Saturation" {

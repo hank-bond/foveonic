@@ -6,7 +6,7 @@ use crate::color_space::ColorSpace;
 use crate::{
     graph::Operation,
     interactive::Execution,
-    nodes::{finish::tone, sensor::calibration},
+    nodes::finish::tone,
     profile::Profile,
     render::{Engine, Settings},
     source::{Result, Source},
@@ -61,7 +61,7 @@ pub(in crate::render::recipes) fn build(
         ];
         recipe.final_id = recipe.graph.add(
             Operation::Saturation {
-                params: saturation(dimensions, settings.saturation),
+                params: super::super::saturation(dimensions, settings.saturation),
                 space,
             },
             &[recipe.final_id],
@@ -69,21 +69,4 @@ pub(in crate::render::recipes) fn build(
         execution.check()?;
     }
     Ok(recipe)
-}
-
-pub(in crate::render) fn saturation(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
-    // Fixed reference saturation weights are independent of the working primaries.
-    let saturation_weights = [0.299, 0.587, 0.114];
-    calibration::ColorParams {
-        source: dimensions,
-        matrix: std::array::from_fn(|row| {
-            std::array::from_fn(|col| {
-                if col == 3 {
-                    0.
-                } else {
-                    (1. - factor) * saturation_weights[col] + if row == col { factor } else { 0. }
-                }
-            })
-        }),
-    }
 }

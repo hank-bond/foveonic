@@ -101,6 +101,8 @@ impl Params {
                     1. / 16383.
                 } else if sensor || matches!(space, Space::LinearRgb(_) | Space::Monochrome) {
                     1. / 4095.
+                } else if space == Space::UnsignedCodeRgb {
+                    1. / 65535.
                 } else if space == Space::LuminanceRatio {
                     0.5
                 } else if space == Space::SignedDetail {
@@ -884,6 +886,7 @@ mod tests {
             (Space::CorrectedSensorBlue, -1, [-1., 1. / 16383., -1., 1.]),
             (Space::CalibratedLayers, 2, [2., 1. / 4095., 0., 1.]),
             (Space::ScalarField, -1, [-1., 1., -1., 1.]),
+            (Space::UnsignedCodeRgb, -1, [-1., 1. / 65535., 0., 1.]),
             (Space::LuminanceRatio, -1, [-1., 0.5, -1., 1.]),
             (Space::SignedDetail, -1, [-1., 1. / 2000., -2., 1.]),
             (

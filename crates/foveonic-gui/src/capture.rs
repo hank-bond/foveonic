@@ -105,6 +105,19 @@ impl Drop for Loader {
     }
 }
 
+/// Adapt early capture properties to processing-owned defaults without decoding pixels.
+pub(crate) fn processing_metadata(properties: Properties) -> foveonic::source::Metadata {
+    foveonic::source::Metadata {
+        processing_version: None,
+        width: 0,
+        height: 0,
+        rotation: 0,
+        properties,
+        matrices: Default::default(),
+        lists: Default::default(),
+    }
+}
+
 #[cfg(test)]
 #[path = "capture_test.rs"]
 mod tests;

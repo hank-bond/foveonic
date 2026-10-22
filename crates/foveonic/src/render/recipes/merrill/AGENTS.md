@@ -14,6 +14,7 @@ Monochrome branches after the same sensor corrections, then uses its dedicated m
 
 ### Source files
 
+- **[appearance.rs](./appearance.rs)** Resolves Merrill camera coordinates and selected photographic appearance for DNG.
 - **[dng_base.rs](./dng_base.rs)** Builds a fresh linear technical base while leaving selected appearance to DNG metadata.
 - **[monochrome.rs](./monochrome.rs)** Authors sensor-layer monochrome filtering and finishing without the color reconstruction path.
 - **[photographic.rs](./photographic.rs)** Completes photographic RGB with selected camera appearance, exposure, tone, and saturation.

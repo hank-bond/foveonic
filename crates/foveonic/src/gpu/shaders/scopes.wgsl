@@ -40,6 +40,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var rgb = sample_region(id.xy);
     if params.output_size.z == 1u { rgb /= 4095.; }
     if params.output_size.z == 4u { rgb /= 16383.; }
+    if params.output_size.z == 5u { rgb /= 65535.; }
     // Shift before scaling so the signed range's endpoints remain exact.
     if params.output_size.z == 2u { rgb = (rgb + 1000.) / 2000.; }
     if params.output_size.z == 3u { rgb /= 2.; }

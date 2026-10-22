@@ -64,7 +64,13 @@ impl Engine {
                     Content::Image(Box::new(RenderedImage {
                         buffer: value.buffer,
                         description,
-                        view: if description.space.uses_full_sensor_view() {
+                        view: if description.view_baked {
+                            View {
+                                crop: [0, 0, description.extent[0], description.extent[1]],
+                                rotation: 0,
+                                extent: description.extent,
+                            }
+                        } else if description.space.uses_full_sensor_view() {
                             let extent = description.extent;
                             View {
                                 crop: [0, 0, extent[0], extent[1]],

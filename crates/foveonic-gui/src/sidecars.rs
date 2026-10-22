@@ -20,7 +20,12 @@ struct Pending {
     stop: bool,
 }
 enum Reply {
-    Loaded(u64, PathBuf, Result<Option<Settings>, String>),
+    Loaded(
+        u64,
+        PathBuf,
+        Result<Option<Settings>, String>,
+        Box<Settings>,
+    ),
     Saved(PathBuf, Settings, Result<(), String>),
 }
 struct Store {
@@ -62,7 +67,17 @@ impl Store {
                     } else {
                         Ok(None)
                     };
-                    Reply::Loaded(generation, path, result)
+                    // Only a missing recipe gets source defaults. Saved recipes,
+                    // including explicit neutral values, are complete edits.
+                    let fresh = if matches!(&result, Ok(Some(_))) {
+                        Settings::default()
+                    } else {
+                        foveonic::source::read_capture_properties(&path)
+                            .ok()
+                            .and_then(|properties| capture_defaults(properties).ok())
+                            .unwrap_or_default()
+                    };
+                    Reply::Loaded(generation, path, result, Box::new(fresh))
                 }
                 Job::Save(path, settings) => {
                     let result = sidecar::save(&path, &settings).map_err(|e| e.to_string());
@@ -162,7 +177,7 @@ impl Session {
         let mut loaded = None;
         while let Ok(reply) = self.store.replies.try_recv() {
             match reply {
-                Reply::Loaded(generation, path, result)
+                Reply::Loaded(generation, path, result, fresh)
                     if generation == self.generation && self.selected.as_ref() == Some(&path) =>
                 {
                     self.ready = true;
@@ -172,13 +187,8 @@ impl Session {
                             if !self.unsaved.contains_key(&path) {
                                 self.errors.remove(&path);
                             }
-                            loaded = Some(
-                                self.unsaved
-                                    .get(&path)
-                                    .cloned()
-                                    .or(saved)
-                                    .unwrap_or_else(|| Settings::new("", "")),
-                            );
+                            loaded =
+                                Some(self.unsaved.get(&path).cloned().or(saved).unwrap_or(*fresh));
                         }
                         Err(error) => {
                             self.writable = false;
@@ -188,7 +198,7 @@ impl Session {
                                     "Cannot restore edits; automatic saving is disabled: {error}"
                                 ),
                             );
-                            loaded = Some(Settings::new("", ""));
+                            loaded = Some(*fresh);
                         }
                     }
                 }
@@ -256,6 +266,18 @@ impl Session {
             }
         }
     }
+}
+
+/// Resolve scalar source defaults off the UI thread, before launch choices and
+/// edits are applied. CAMF preset catalogues arrive separately with full metadata.
+fn capture_defaults(properties: BTreeMap<String, String>) -> foveonic::source::Result<Settings> {
+    let metadata = crate::capture::processing_metadata(properties);
+    let mut settings = Settings::default();
+    if let Ok(capabilities) = foveonic::render::ControlCapabilities::from_metadata(&metadata) {
+        settings.rendering = capabilities.default_rendering(&metadata)?;
+        capabilities.apply_capture_defaults(&mut settings, &metadata)?;
+    }
+    Ok(settings)
 }
 
 /// Restored edits must not be replaced by per-photo defaults. Only explicit

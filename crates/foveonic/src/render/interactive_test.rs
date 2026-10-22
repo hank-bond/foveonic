@@ -491,3 +491,46 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
         &second.gpu.readback(&fresh.buffer).unwrap(),
     );
 }
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_CACHE_X3F"]
+fn first_exposure_edit_reuses_finishing_input_and_matches_fresh() {
+    let source = Source::open(std::env::var_os("FOVEONIC_CACHE_X3F").unwrap()).unwrap();
+    let engine = Engine::new().unwrap();
+    let mut session = RenderSession::new(source);
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    let retained = session_image(&engine, &mut session, &settings);
+    let retained_pixels = engine.readback_image(&retained).unwrap();
+    let initial_bytes = session.cached_bytes();
+    assert!(initial_bytes <= 1024 * 1024 * 1024);
+    for exposure in [0.5, 0.75] {
+        settings.exposure = exposure;
+        let mut profile = Profile::new(crate::profile::Mode::Gpu);
+        let results = engine
+            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+            .unwrap()
+            .unwrap();
+        let crate::inspection::Content::Image(cached) = &results[0].content else {
+            panic!("expected image")
+        };
+        engine.device().poll(wgpu::Maintain::Wait);
+        assert_eq!(
+            profile.gpu.len(),
+            1,
+            "exposure should dispatch only its photographic response: {:?}",
+            profile.gpu
+        );
+        let actual = engine.readback_image(cached).unwrap();
+        let fresh = engine
+            .render(&session.source, &settings, &mut Profile::default())
+            .unwrap();
+        assert_same_pixels(
+            "first/repeated exposure cached/fresh",
+            &actual,
+            &engine.readback_image(&fresh).unwrap(),
+        );
+        assert_eq!(engine.readback_image(&retained).unwrap(), retained_pixels);
+        eprintln!("EXPOSURE exposure={exposure} initial_cache_bytes={initial_bytes} active_cache_bytes={} gpu={:?} host={:?}", session.cached_bytes(), profile.gpu, profile.host);
+    }
+}

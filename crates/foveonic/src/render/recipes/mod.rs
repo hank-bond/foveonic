@@ -58,7 +58,10 @@ impl Engine {
                 crate::source::ProcessingFamily::Classic => {
                     classic::build(self, source, settings, names, profile, execution)?
                 }
-                crate::source::ProcessingFamily::Quattro => quattro::build(self, source, names)?,
+                crate::source::ProcessingFamily::Quattro => profile
+                    .measure("prepare recipe", || {
+                        quattro::build(self, source, settings, names, execution)
+                    })?,
             },
             Recipe::DngBase => match source.metadata.processing_family()? {
                 crate::source::ProcessingFamily::Merrill => {
@@ -67,9 +70,10 @@ impl Engine {
                 crate::source::ProcessingFamily::Classic => {
                     classic::build_dng(self, source, settings, profile, execution)?
                 }
-                crate::source::ProcessingFamily::Quattro => {
-                    return Err("Quattro DNG rendering is not available yet".into())
-                }
+                crate::source::ProcessingFamily::Quattro => profile
+                    .measure("prepare Quattro DNG recipe", || {
+                        quattro::build_dng(self, source, settings, execution)
+                    })?,
             },
         };
         self.collect_artifacts(
@@ -82,5 +86,79 @@ impl Engine {
             profile,
             execution,
         )
+    }
+}
+
+pub(in crate::render) fn saturation(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
+    // Fixed reference saturation weights are independent of the working primaries.
+    let saturation_weights = [0.299, 0.587, 0.114];
+    calibration::ColorParams {
+        source: dimensions,
+        matrix: std::array::from_fn(|row| {
+            std::array::from_fn(|col| {
+                if col == 3 {
+                    0.
+                } else {
+                    (1. - factor) * saturation_weights[col] + if row == col { factor } else { 0. }
+                }
+            })
+        }),
+    }
+}
+
+/// Resolve camera interpretation once before the numerical DNG fitter.
+pub(super) fn prepare_dng_appearance(
+    metadata: &crate::source::Metadata,
+    settings: &Settings,
+    statistics: super::WhiteBalanceStats,
+) -> Result<crate::dng::appearance::Prepared> {
+    use crate::{dng::appearance::Prepared, source::ProcessingFamily};
+    let family = metadata.processing_family()?;
+    let mut prepared = match family {
+        ProcessingFamily::Merrill => merrill::prepare_dng_appearance(metadata, settings)?,
+        ProcessingFamily::Classic => Prepared::signed(classic::prepare_dng_appearance(
+            metadata, settings, statistics,
+        )?)?,
+        ProcessingFamily::Quattro => {
+            Prepared::sampled(quattro::prepare_dng_appearance(metadata, settings)?)?
+        }
+    };
+    if family != ProcessingFamily::Merrill {
+        prepared.baked_color_mode = settings.is_monochrome();
+    }
+    Ok(prepared)
+}
+
+/// Keep source-derived sharpening policy beside each family's recipe.
+pub(super) fn default_sharpen_amount(
+    settings: &Settings,
+    metadata: &crate::source::Metadata,
+) -> Result<f32> {
+    use crate::source::ProcessingFamily;
+    match metadata.processing_family().ok() {
+        Some(ProcessingFamily::Classic) => Ok(1.),
+        Some(ProcessingFamily::Quattro) => quattro::default_sharpen_amount(settings, metadata),
+        _ => Ok(crate::noise::couplings(
+            metadata,
+            &settings.white_balance,
+            settings.sensor_noise_controls(),
+        )?
+        .sharpen_base),
+    }
+}
+
+/// Select source-derived statistics only for recipes that require them.
+pub(super) fn estimated_white_balance(
+    engine: &Engine,
+    source: &Source,
+    settings: &Settings,
+    profile: &mut Profile,
+) -> Result<super::WhiteBalanceStats> {
+    if source.metadata.processing_family()? == crate::source::ProcessingFamily::Classic
+        && !settings.is_monochrome()
+    {
+        classic::estimate_white_balance(engine, source, &settings.white_balance, profile)
+    } else {
+        Ok(super::WhiteBalanceStats::default())
     }
 }

@@ -43,13 +43,16 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Corrects the color cast of the light so whites and grays look neutral. Choose a preset close to the lighting, then judge skin tones and neutral objects. It also affects how color noise is treated."
         }
         "Rendering" => {
-            "Color reconstructs a color photograph. Monochrome mixes the original sensor layers before dedicated filtering and detail processing. Each mode retains its settings. Switching does not discard source color."
+            "Color reconstructs a color photograph. Monochrome uses the camera family’s dedicated mixing, filtering and detail processing. Switching does not discard source color."
+        }
+        "RGB Mix" => {
+            "Mixes reconstructed red, green and blue channels before monochrome contrast and detail. Drag inside the triangle or select a channel corner. Reset restores the file's initial proportions."
         }
         "Color Mix" => {
             "Mixes overlapping color-sensitive sensor layers before monochrome reconstruction. Drag within the triangle or select a pure R, G, or B corner. Blue-only can give cleaner high-ISO monochrome. Reset restores equal proportions. DNG bakes this selection. Retain the X3F and sidecar to change it."
         }
         "Mono noise" => {
-            "Reduces grain in the mixed sensor signal. 0 skips this filter and 4 gives the strongest smoothing. Strong smoothing can soften fine texture. Column and speckle corrections remain separate."
+            "Reduces monochrome grain. Choose 0 for the least smoothing and 4 for the strongest. Strong smoothing can soften fine texture."
         }
         "Mono banding" => {
             "Reduces sensor-column stripes in the mixed signal. Choose 0 to 4. 0 still applies correction. It also influences Speckles independently of the color noise controls."
@@ -84,11 +87,20 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Banding noise" => {
             "Reduces sensor-column stripes independently of Row banding in Corrections. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger filter to estimate column offsets, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
         }
+        "Smooth / Crisp" => {
+            "Balances smoother rendering against crisper texture. It selects the camera's linked detail-restoration, local-contrast and sharpening settings. The middle position is the normal starting point. Color and luminance noise remain separate controls."
+        }
         "Detail" => {
             "Controls how much fine texture is kept after noise reduction. At 0 the image is smoother. 1 is the normal starting point. Higher values bring back more texture, but can also bring back grain and colored speckles. This is separate from sharpening."
         }
         "ColorDQ gain" => {
             "Tames fine color speckles using camera information. Too much can also weaken real color detail. 0 turns it off. This is different from Saturation. Compare a shadow crop before increasing it. A chooses the amount automatically while noise reduction is on."
+        }
+        "Highlight recovery" => {
+            "Controls the camera's transition toward neutral color in very bright areas. This is separate from the Highlights brightness adjustment. It cannot recover information that all sensor layers lost."
+        }
+        "Sharpness" => {
+            "Adds edge definition to Quattro reconstruction. 0 keeps the camera's baseline detail processing. Higher values strengthen proportional detail and add sharpening to each color channel."
         }
         "Sharpen" => {
             "Emphasizes edges to make the finished photo look crisper. 0 turns it off. A chooses the amount from the camera and current noise settings. Higher amounts can exaggerate grain and create light or dark outlines around edges. It cannot restore detail that was never recorded."

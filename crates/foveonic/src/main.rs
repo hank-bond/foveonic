@@ -24,6 +24,8 @@ stem with a .tiff extension. Existing outputs and duplicate output names are rej
 Color requires --wb and --mode. Merrill monochrome requires --wb.
 Classic monochrome requires --mode and ignores --wb. Merrill --mono-* options
 select monochrome automatically. Classic uses its camera mixture and rejects overrides.
+Quattro supports white balance, camera color modes, tone, saturation,
+chroma and luminance noise, native Smooth/Crisp detail and sharpening, with camera-derived ISO controls.
 
 Options (also available for batch):
   --exposure STOPS           Default 0
@@ -56,8 +58,10 @@ Options (also available for batch):
   --chroma-noise CHOICE      Camera noise-table choice 0..4, default 2. Enables reconstruction
   --luma-noise CHOICE        Camera noise-table choice 0..4, default 2. Enables reconstruction
   --banding-noise CHOICE     Column-noise preset 0..4, default 2. Enables reconstruction
-  --detail FACTOR           Residual detail multiplier, default 1. Enables reconstruction
-  --sharpen AMOUNT           auto, off (default), or nonnegative manual high-pass amount
+  --mono-smoothness VALUE    Quattro monochrome Smooth/Crisp 0..1, default from file or 0.5
+  --detail FACTOR           Merrill residual multiplier (default 1), Quattro Smooth/Crisp 0..1 (default 0.5)
+  --sharpen AMOUNT           auto, off, or manual amount (Quattro -2..2, default from file)
+  --highlight-amount VALUE  Quattro highlight recovery 0..1, default from file or 1
   --tiff-color-space SPACE   camera (default), srgb, adobe-rgb, or prophoto-rgb
   --size WIDTHxHEIGHT       Exact final oriented TIFF dimensions, reference photographic resampling
   --profile MODE            off (default), wall, or synchronized gpu diagnostics
@@ -166,6 +170,15 @@ fn convert(
     Ok(size)
 }
 
+fn configured_engine() -> Result<Engine> {
+    let engine = Engine::new()?;
+    if let Some(directory) = std::env::var_os("FOVEONIC_CALIBRATION_RESOURCES") {
+        engine.with_calibration_resources(directory)
+    } else {
+        Ok(engine)
+    }
+}
+
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--help") {
@@ -187,7 +200,8 @@ fn run() -> Result<()> {
         }
         Some("render") | Some("export-dng") => {
             let destination = PathBuf::from(args.next().ok_or(USAGE)?);
-            let (settings, extra, profiling) = parse_settings(args)?;
+            let control_args = args.clone();
+            let (_settings, extra, profiling) = parse_settings(args)?;
             if !extra.is_empty() {
                 return Err(USAGE.into());
             }
@@ -195,8 +209,10 @@ fn run() -> Result<()> {
                 return Err(format!("output already exists: {}", destination.display()).into());
             }
             let source = Source::open(&path)?;
+            let (settings, _, _) =
+                options::parse_settings_for_camera(control_args, &source.metadata)?;
             let mut setup = Profile::new(profiling);
-            let engine = setup.measure("GPU init", Engine::new)?;
+            let engine = setup.measure("GPU init", configured_engine)?;
             if profiling.enabled() {
                 eprintln!(
                     "{}",
@@ -251,12 +267,13 @@ fn run() -> Result<()> {
         }
         Some("batch") => {
             let destination = PathBuf::from(path);
-            let (settings, inputs, profiling) = parse_settings(args)?;
+            let control_args = args.clone();
+            let (_settings, inputs, profiling) = parse_settings(args)?;
             if inputs.is_empty() {
                 return Err(USAGE.into());
             }
             let jobs = batch_jobs(&inputs, &destination)?;
-            let engine = Engine::new()?;
+            let engine = configured_engine()?;
             if profiling.enabled() {
                 eprintln!(
                     "{}",
@@ -273,6 +290,8 @@ fn run() -> Result<()> {
                 // grow with the number of files.
                 let source =
                     Source::open(input).map_err(|error| format!("{}: {error}", input.display()))?;
+                let (settings, _, _) =
+                    options::parse_settings_for_camera(control_args.clone(), &source.metadata)?;
                 let size = convert(&engine, &source, input, &settings, output, profiling)
                     .map_err(|error| format!("{}: {error}", input.display()))?;
                 eprintln!(
@@ -547,7 +566,6 @@ mod tests {
             "--noise-override unknown=1",
             "--noise-override mean-decay:1",
             "--sharpen-radius 1.5", // retired Gaussian control
-            "--sharpen -1",
             "--sharpen NaN",
             "--size 0x400",
             "--chroma-noise 5",

@@ -174,3 +174,79 @@ fn smoke_sessions_neither_read_nor_write_fixture_recipes() {
     drop(session);
     assert_eq!(fs::read(sidecar::path(&input)).unwrap(), b"fixture recipe");
 }
+
+#[test]
+fn fresh_capture_defaults_precede_launch_choices_and_early_edits() {
+    let properties = [
+        ("CAMMODEL".into(), "SIGMA dp2 Quattro".into()),
+        ("X3F_ADJUSTMENT_EXPOSURE".into(), "0.75".into()),
+        ("X3F_ADJUSTMENT_CONTRAST".into(), "-0.5".into()),
+        ("X3F_ADJUSTMENT_SATURATION".into(), "1".into()),
+        ("X3F_ADJUSTMENT_SHARPNESS".into(), "-1".into()),
+    ]
+    .into();
+    let fresh = capture_defaults(properties).unwrap();
+    let mut selected = selection_settings(fresh, &["Shade".into(), "Vivid".into()]);
+    assert_eq!(selected.white_balance, "Shade");
+    assert_eq!(selected.color_mode, "Vivid");
+    assert_eq!(selected.exposure, 0.75);
+    assert_eq!(selected.tone.contrast, -0.5);
+    assert_eq!(selected.saturation, 1.5);
+    assert_eq!(selected.sharpen_amount, None);
+    selected.exposure = 0.;
+    // Selection does not interpret explicit neutral edits as missing defaults.
+    let restored = selection_settings(selected.clone(), &[String::new(), String::new()]);
+    assert_eq!(restored, selected);
+}
+
+#[test]
+fn neutral_saved_recipe_is_not_reinitialized_from_capture() {
+    let directory = Directory::new();
+    let path = directory.input("neutral.x3f");
+    let saved = Settings::default();
+    sidecar::save(&path, &saved).unwrap();
+    let mut session = Session::new(egui::Context::default(), true);
+    session.select(path);
+    assert_eq!(receive(&mut session), saved);
+}
+
+#[test]
+fn fresh_monochrome_marks_select_monochrome_saved_tones() {
+    let settings = capture_defaults(
+        [
+            ("CAMMODEL".into(), "SIGMA sd Quattro".into()),
+            ("X3F_MARK_BITS".into(), "2".into()),
+            ("X3F_ADJUSTMENT_EXPOSURE".into(), "0.75".into()),
+            ("X3F_ADJUSTMENT_MONO_EXPOSURE".into(), "-0.5".into()),
+        ]
+        .into(),
+    )
+    .unwrap();
+    assert!(settings.is_monochrome());
+    assert_eq!(settings.exposure, -0.5);
+}
+
+#[test]
+fn saved_mixer_edits_override_fresh_capture_mixture() {
+    let mut fresh = capture_defaults(
+        [
+            ("CAMMODEL".into(), "SIGMA sd Quattro".into()),
+            ("X3F_ADJUSTMENT_MONO_MIX_RED".into(), "10813".into()),
+            ("X3F_ADJUSTMENT_MONO_MIX_GREEN".into(), "10813".into()),
+            ("X3F_ADJUSTMENT_MONO_MIX_BLUE".into(), "11142".into()),
+        ]
+        .into(),
+    )
+    .unwrap();
+    assert_eq!(
+        fresh.monochrome.mix,
+        [10813. / 32768., 10813. / 32768., 11142. / 32768.]
+    );
+    fresh.monochrome.mix = [1., 0., 0.];
+    assert_eq!(
+        selection_settings(fresh, &[String::new(), String::new()])
+            .monochrome
+            .mix,
+        [1., 0., 0.]
+    );
+}

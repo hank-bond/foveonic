@@ -141,7 +141,12 @@ fn decode_original_merrill_files() {
             .find(|timing| timing.stage == "sensor planes wall")
             .unwrap();
         assert!(planes.milliseconds <= timings[1].milliseconds);
-        eprintln!("SOURCE-LOAD file_read_ms={:.3} decode_ms={:.3} source_open_ms={opened_ms:.3} cache_state=uncontrolled path={}",timings[0].milliseconds,timings[1].milliseconds,path.display());
+        eprintln!(
+            "SOURCE-LOAD file_read_ms={:.3} decode_ms={:.3} source_open_ms={opened_ms:.3} cache_state=uncontrolled path={}",
+            timings[0].milliseconds,
+            timings[1].milliseconds,
+            path.display()
+        );
         assert_eq!(source.pixels.len(), SENSOR_WIDTH * SENSOR_HEIGHT * 3);
         assert!(source
             .pixels

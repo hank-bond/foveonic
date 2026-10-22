@@ -139,8 +139,7 @@ fn classic_dng_defers_appearance_and_preserves_editable_samples() {
         )
         .unwrap();
         let appearance =
-            appearance::Prepared::with_white_balance(&source.metadata, settings, statistics)
-                .unwrap();
+            crate::render::dng_appearance(&source.metadata, settings, statistics).unwrap();
         let base = prepare_base(&engine, &source, settings, &mut Profile::default()).unwrap();
         assert_eq!(base.description().space, Space::LinearCodeRgb);
         let bytes = engine.readback_image(&base).unwrap();
@@ -317,8 +316,7 @@ fn classic_monochrome_dng_bakes_mixture_and_defers_response() {
         )
         .unwrap();
         let appearance =
-            appearance::Prepared::with_white_balance(&source.metadata, settings, statistics)
-                .unwrap();
+            crate::render::dng_appearance(&source.metadata, settings, statistics).unwrap();
         assert_eq!(appearance.neutral, [1.; 3]);
         assert!(appearance.baked_color_mode);
         let base = prepare_base(&engine, &source, settings, &mut Profile::default()).unwrap();

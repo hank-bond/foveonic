@@ -152,3 +152,21 @@ fn rejects_truncated_headers_invalid_directories_and_bad_properties() {
         assert!(read(&mut reader).is_err(), "case {case}");
     }
 }
+
+#[test]
+fn capture_reads_marks_from_version_specific_header_position() {
+    for (version, offset) in [(0x20003, 24), (0x40001, 36)] {
+        for marks in [0, 2, 3] {
+            let mut reader = fixture();
+            put(reader.bytes.get_mut(), 4, version);
+            if version >= 0x40000 {
+                put(reader.bytes.get_mut(), 8, 1);
+            }
+            put(reader.bytes.get_mut(), offset, marks);
+            assert_eq!(
+                read(&mut reader).unwrap()["X3F_MARK_BITS"],
+                marks.to_string()
+            );
+        }
+    }
+}

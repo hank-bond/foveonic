@@ -2536,11 +2536,11 @@ fn classic_monochrome_keeps_color_modes_and_preserves_disabled_preferences() {
 }
 
 #[test]
-fn quattro_panel_exposes_no_unimplemented_photographic_controls() {
+fn unsupported_tiger_panel_keeps_inspection_without_photographic_controls() {
     let ctx = egui::Context::default();
     let mut settings = Settings::new("Sunlight", "Standard");
     let expected = settings.clone();
-    let capture = [("CAMMODEL".into(), "SIGMA dp2 Quattro".into())].into();
+    let capture = [("CAMMODEL".into(), "SIGMA sd Quattro H".into())].into();
     let output = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             assert!(!super::processing(ui, &mut settings, None, Some(&capture)));
@@ -2548,7 +2548,7 @@ fn quattro_panel_exposes_no_unimplemented_photographic_controls() {
     });
     assert_eq!(settings, expected);
     assert_eq!(
-        text_centers(&output, "Quattro rendering is not available yet.").len(),
+        text_centers(&output, "Rendering for this camera is not available yet.").len(),
         1
     );
     for label in [
@@ -2559,5 +2559,230 @@ fn quattro_panel_exposes_no_unimplemented_photographic_controls() {
         "Monochrome",
     ] {
         assert!(text_centers(&output, label).is_empty());
+    }
+}
+
+#[test]
+fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
+    for model in [
+        "SIGMA dp0 Quattro",
+        "SIGMA dp1 Quattro",
+        "SIGMA dp2 Quattro",
+        "SIGMA dp3 Quattro",
+        "SIGMA sd Quattro",
+    ] {
+        for rendering in [Rendering::Color, Rendering::Monochrome] {
+            let ctx = egui::Context::default();
+            let capture = [("CAMMODEL".into(), model.into())].into();
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.rendering = rendering;
+            let before = settings.clone();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400., 1800.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(!super::processing(ui, &mut settings, None, Some(&capture)));
+                    });
+                },
+            );
+            assert_eq!(settings, before);
+            for label in [
+                "Color",
+                "Monochrome",
+                "Exposure",
+                "Smooth / Crisp",
+                "Sharpness",
+                "Highlight recovery",
+            ] {
+                assert_eq!(text_centers(&output, label).len(), 1, "{model}: {label}");
+            }
+            assert!(
+                text_centers(&output, "Rendering for this camera is not available yet.").is_empty()
+            );
+            let labels: &[&str] = if rendering == Rendering::Monochrome {
+                &["Color Mix", "Mono noise"]
+            } else {
+                &["Chroma noise", "Luma noise"]
+            };
+            for label in labels {
+                assert_eq!(text_centers(&output, label).len(), 1, "{model}: {label}");
+            }
+        }
+    }
+}
+
+#[test]
+fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
+    use foveonic::source::{Matrix, MatrixEncoding, PropertyList};
+    let mut metadata = family_metadata("SIGMA sd Quattro");
+    metadata.processing_version = Some([3, 1, 2, 0]);
+    metadata.width = 5888;
+    metadata.height = 3776;
+    for (name, value) in [("CAMERAID", 40.), ("CaptureISO", 100.)] {
+        metadata.matrices.insert(
+            name.into(),
+            Matrix {
+                encoding: MatrixEncoding::Float32,
+                representation: "test",
+                dimensions: vec![1],
+                values: vec![value],
+            },
+        );
+    }
+    metadata.lists.insert(
+        "WhiteBalanceGains".into(),
+        PropertyList::new(vec![
+            ("Sunlight".into(), "sun".into()),
+            ("Shade".into(), "shade".into()),
+        ])
+        .unwrap(),
+    );
+    let ctx = egui::Context::default();
+    let mut settings = Settings::new("Shade", "Standard");
+    settings.exposure = 0.7;
+    settings.tone.shadows = -0.4;
+    let before = settings.clone();
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400., 1600.),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!super::processing(ui, &mut settings, Some(&metadata), None));
+            });
+        },
+    );
+    assert_eq!(settings, before);
+    for label in [
+        "White balance",
+        "Color mode",
+        "Exposure",
+        "Contrast",
+        "Shadows",
+        "Highlights",
+        "Saturation",
+        "Noise and Detail",
+        "Chroma noise",
+        "Luma noise",
+        "Smooth / Crisp",
+        "Sharpness",
+        "Highlight recovery",
+        "Monochrome",
+    ] {
+        assert_eq!(text_centers(&output, label).len(), 1, "{label}");
+    }
+    assert!(text_centers(&output, "Banding noise").is_empty());
+
+    settings.rendering = Rendering::Monochrome;
+    settings.monochrome_smoothness = Some(1. / 6.);
+    settings.reconstruction = Some(foveonic::noise::Controls {
+        chroma: 4,
+        detail: 1.,
+        ..Default::default()
+    });
+    let before = settings.clone();
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400., 1600.),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!super::processing(ui, &mut settings, Some(&metadata), None));
+            });
+        },
+    );
+    assert_eq!(settings, before);
+    for label in ["Color Mix", "Mono noise", "Smooth / Crisp", "Sharpness"] {
+        assert_eq!(text_centers(&output, label).len(), 1, "{label}");
+    }
+    for label in ["Saturation", "Chroma noise", "Luma noise", "Mono banding"] {
+        assert!(text_centers(&output, label).is_empty(), "{label}");
+    }
+}
+
+#[test]
+fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
+    use foveonic::source::{Matrix, MatrixEncoding};
+    let capture: std::collections::BTreeMap<String, String> = [
+        ("CAMMODEL", "SIGMA sd Quattro"),
+        ("X3F_ADJUSTMENT_CHROMA_NOISE", "0.75"),
+        ("X3F_ADJUSTMENT_LUMINANCE_NOISE", "0.25"),
+        ("X3F_ADJUSTMENT_SMOOTHNESS", "0.6666667"),
+        ("X3F_ADJUSTMENT_MONO_SMOOTHNESS", "0.16666667"),
+        ("X3F_ADJUSTMENT_SHARPNESS", "-1"),
+        ("X3F_ADJUSTMENT_MONO_SHARPNESS", "0.8"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.into(), value.into()))
+    .collect();
+    let mut metadata = crate::capture::processing_metadata(capture.clone());
+    metadata.processing_version = Some([3, 1, 2, 0]);
+    metadata.width = 5888;
+    metadata.height = 3776;
+    for (name, value) in [("CAMERAID", 40.), ("CaptureISO", 100.)] {
+        metadata.matrices.insert(
+            name.into(),
+            Matrix {
+                encoding: MatrixEncoding::Float32,
+                representation: "test",
+                dimensions: vec![1],
+                values: vec![value],
+            },
+        );
+    }
+    for rendering in [Rendering::Color, Rendering::Monochrome] {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.rendering = rendering;
+        settings.sharpen_amount = None;
+        let before = settings.clone();
+        let mut values = Vec::new();
+        for full in [None, Some(&metadata)] {
+            let ctx = egui::Context::default();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400., 1800.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(!super::processing(ui, &mut settings, full, Some(&capture)));
+                    });
+                },
+            );
+            values.push(
+                output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape {
+                            let label = &text.galley.job.text;
+                            label.parse::<f64>().ok().map(|_| label.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(settings, before);
+        }
+        assert!(!values[0].is_empty());
+        assert_eq!(values[0], values[1], "{rendering:?}");
     }
 }

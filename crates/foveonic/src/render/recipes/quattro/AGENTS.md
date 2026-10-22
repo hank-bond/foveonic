@@ -4,9 +4,9 @@ summary: "Quattro preparation owns camera resources and source-derived controls 
 
 # Quattro preparation
 
-Keep camera version and calibration selection here. Operations receive numerical parameters and immutable tables. Raw extraction, offset correction and phase gain are separate inspection boundaries. They do not establish complete preprocessing or photographic rendering.
+Keep camera version and calibration selection here. Operations receive numerical parameters and immutable tables. Raw extraction, preprocessing, color reconstruction and photographic response have separate inspection boundaries. A decoded camera does not imply a completed rendering recipe.
 
-The parent recipe wires stages and stops once the requested outputs exist. Calibration preparation resolves metadata into operation parameters. The inspection catalogue owns output names and channel meanings. Add later reconstruction preparation here when its numerical stages are implemented. Reuse a signal type across stages when its units and channel meaning remain the same.
+The parent recipe wires stages and stops once the requested outputs exist. Calibration preparation resolves metadata into operation parameters. The inspection catalogue owns output names and channel meanings. Stage1, Stage2, fusion and Stage3 preparation live in their stage modules. Preserve source histories explicitly when the reference implementation reuses buffers. Reuse a signal type across stages when its units and channel meaning remain the same.
 
 <!-- INDEX:START -->
 
@@ -14,9 +14,25 @@ The parent recipe wires stages and stops once the requested outputs exist. Calib
 
 ### Source files
 
-- **[calibration.rs](./calibration.rs)** Resolves Quattro camera calibration into numerical extraction and phase-gain parameters.
+- **[appearance.rs](./appearance.rs)** Prepares supported color-mode responses from exposure and tone controls.
+- **[calibration.rs](./calibration.rs)** Resolves Quattro extraction, phase gain and selected rendering color calibration.
+- **[color_shading.rs](./color_shading.rs)** Decodes and combines ordinary metadata shading grids for explicit channels and white balance.
+- **[controls.rs](./controls.rs)** Resolves saved Quattro adjustments, preset choices and supported control domains.
+- **[defects.rs](./defects.rs)** Expands camera defect records and prepares ordinary DP chroma repair controls.
+- **[dng.rs](./dng.rs)** Prepares camera-like Quattro DNG coordinates and a deferred sampled appearance.
+- **[highlights.rs](./highlights.rs)** Prepares ordinary enabled highlight restoration and odd-phase blue mismatch controls.
+- **[hlp.rs](./hlp.rs)** Prepares the selected ordinary DP sparse blue LUT and ordered ordinary/HP shading gains.
 - **[inspection.rs](./inspection.rs)** Describes Quattro inspection outputs and their sensor component meanings.
-- **[resources.rs](./resources.rs)** Loads explicitly supplied blue calibration maps and prepares aperture/focus blends.
-- **[stage1.rs](./stage1.rs)** Prepares the ordinary full-size two-pass noise controls from DP2 Quattro metadata.
+- **[luma_repair.rs](./luma_repair.rs)** Prepares bounded luma defect catalogues and ordinary high-plane repair controls.
+- **[mcc.rs](./mcc.rs)** Prepares color-mode chroma sectors from the selected ordinary DP metadata table.
+- **[monochrome.rs](./monochrome.rs)** Prepares monochrome channel filtering, reconstruction and finishing controls.
+- **[optical.rs](./optical.rs)** Prepares the DP1 optical color correction independently of graph construction.
+- **[repair.rs](./repair.rs)** Prepares the ordinary DP sparse-repair noise model and correction switch.
+- **[resources.rs](./resources.rs)** Loads bundled or explicitly overridden blue calibration maps and prepares aperture/focus blends.
+- **[sd.rs](./sd.rs)** Prepares interchangeable-lens Quattro sparse phase-detection correction tables.
+- **[stage1.rs](./stage1.rs)** Prepares ordinary full-size Quattro two-pass noise controls and exposure-guided filtering.
+- **[stage2.rs](./stage2.rs)** Prepares and composes ordinary DP color shading, raw response and chroma sectors.
+- **[stage2b.rs](./stage2b.rs)** Prepares ordinary HI reconstruction, luminance filtering and independent residual detail.
+- **[stage3.rs](./stage3.rs)** Prepares ordinary HI local contrast and adaptive proportional sharpening.
 
 <!-- INDEX:END -->

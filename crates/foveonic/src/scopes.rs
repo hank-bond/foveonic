@@ -91,6 +91,7 @@ pub(crate) fn analyze(
             | Space::CalibratedLayers
             | Space::Monochrome
             | Space::LinearRgb(_) => 1,
+            Space::UnsignedCodeRgb => 5,
             Space::SignedDetail => 2,
             Space::LuminanceRatio => 3,
             _ => 0,

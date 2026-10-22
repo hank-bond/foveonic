@@ -52,7 +52,6 @@ pub struct Frame {
     pub artifact: Artifact,
     pub texture: Arc<ImageTexture>,
     pub comparison: Option<Comparison>,
-    pub scopes: Option<ScopeSnapshot>,
     pub milliseconds: f64,
     pub revision: u64,
     pub queued_at: std::time::Instant,
@@ -265,7 +264,6 @@ impl Worker {
                         artifact,
                         texture,
                         comparison,
-                        scopes:None,
                         milliseconds: started.elapsed().as_secs_f64() * 1000.,
                         revision:request.revision,
                         queued_at,
@@ -393,12 +391,18 @@ fn resolve_camera_settings(settings: &mut Settings, metadata: &Metadata) -> Vec<
     for (value, recorded, required) in [
         (
             &mut settings.white_balance,
-            metadata.recorded_white_balance(),
+            capabilities.map_or_else(
+                || metadata.recorded_white_balance(),
+                |c| c.default_white_balance(metadata),
+            ),
             wb_required,
         ),
         (
             &mut settings.color_mode,
-            metadata.recorded_color_mode(),
+            capabilities.map_or_else(
+                || metadata.recorded_color_mode(),
+                |c| c.default_color_mode(metadata),
+            ),
             color_required,
         ),
     ] {
@@ -426,6 +430,95 @@ mod tests {
             }
         }
     }
+    #[test]
+    #[ignore = "requires a GPU and QUATTRO_X3F ordinary full-resolution sample"]
+    fn quattro_dng_export_uses_original_source_from_any_inspection_view() {
+        use foveonic::{
+            render::{ControlCapabilities, Rendering, Settings},
+            source::Source,
+        };
+        let path = std::path::PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
+        let source = Source::open(&path).unwrap();
+        let capabilities = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+        assert_eq!(
+            capabilities.family,
+            foveonic::source::ProcessingFamily::Quattro
+        );
+        let expected_model = source.metadata.properties["CAMMODEL"].clone();
+        let mut selections = Vec::new();
+        for rendering in [Rendering::Color, Rendering::Monochrome] {
+            let mut settings = Settings::new("", "");
+            settings.rendering = rendering;
+            capabilities
+                .apply_capture_defaults(&mut settings, &source.metadata)
+                .unwrap();
+            // Exercise a non-default presentation without baking it into a GUI frame.
+            if rendering == Rendering::Color {
+                settings.color_mode = "Vivid".into();
+            }
+            settings.exposure = 0.4;
+            settings.tone.shadows = 0.2;
+            selections.push(settings);
+        }
+        drop(source);
+        let directory = std::env::temp_dir().join(format!(
+            "foveonic-quattro-gui-dng-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let worker = super::Worker::new(
+            foveonic::render::Engine::new().unwrap(),
+            eframe::egui::Context::default(),
+        );
+        for (index, settings) in selections.into_iter().enumerate() {
+            let destination = directory.join(format!("{index}.dng"));
+            worker.submit(super::Request {
+                revision: index as u64 + 1,
+                path: path.clone(),
+                settings: settings.clone(),
+                output: "sensor.blue".into(),
+                comparison: true,
+                export: Some(super::Export {
+                    path: destination.clone(),
+                    format: super::ExportFormat::Dng,
+                }),
+            });
+            let reply = loop {
+                if let super::Update::Image(reply) = worker
+                    .replies
+                    .recv_timeout(std::time::Duration::from_secs(60))
+                    .unwrap()
+                {
+                    break *reply;
+                }
+            };
+            assert_eq!(reply.revision, index as u64 + 1);
+            assert_eq!(reply.exported, Some(super::ExportFormat::Dng));
+            assert!(reply.result.expect("Quattro DNG export").is_none());
+            assert_eq!(reply.settings.rendering, settings.rendering);
+            assert_eq!(reply.settings.exposure, settings.exposure);
+            assert_eq!(reply.settings.tone, settings.tone);
+            assert_eq!(reply.settings.monochrome, settings.monochrome);
+            if !settings.is_monochrome() {
+                assert_eq!(reply.settings.color_mode, settings.color_mode);
+            }
+            assert_eq!(
+                reply.metadata.unwrap().properties["CAMMODEL"],
+                expected_model
+            );
+            let bytes = std::fs::read(&destination).unwrap();
+            assert!(bytes.len() > 1024);
+            assert_eq!(&bytes[..4], b"II\x2a\0");
+            std::fs::remove_file(destination).unwrap();
+        }
+        drop(worker);
+        std::fs::remove_dir(directory).unwrap();
+    }
+
     #[test]
     #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
     fn worker_keeps_latest_image_request_and_rejects_table_inspection() {
@@ -539,7 +632,6 @@ mod tests {
             let frame = reply.result.unwrap().unwrap();
             assert_eq!(frame.output, output);
             assert_eq!(frame.artifact.settings, settings);
-            assert!(frame.scopes.is_none()); // image-first publication remains intact
             let comparison = frame.comparison.as_ref().unwrap();
             assert_eq!(comparison.input, input);
             for _ in 0..4 {
@@ -589,6 +681,51 @@ mod tests {
     }
 
     #[test]
+    fn quattro_defaults_wait_for_recorded_white_balance_and_preserve_edits() {
+        use foveonic::source::{Metadata, PropertyList};
+        let mut metadata = Metadata {
+            processing_version: Some([3, 1, 2, 0]),
+            width: 5888,
+            height: 3672,
+            rotation: 0,
+            properties: [
+                ("CAMMODEL".into(), "SIGMA dp2 Quattro".into()),
+                ("WB_DESC".into(), "Auto".into()),
+                ("CM_DESC".into(), "Standard".into()),
+            ]
+            .into(),
+            matrices: Default::default(),
+            lists: [(
+                "ColorModeCompensations".into(),
+                PropertyList::new(vec![("Standard".into(), "standard".into())]).unwrap(),
+            )]
+            .into(),
+        };
+        let capabilities = foveonic::render::ControlCapabilities::from_metadata(&metadata).unwrap();
+        let mut settings = foveonic::render::Settings::new("", "");
+        capabilities.normalize(&mut settings);
+        assert!(settings.white_balance.is_empty());
+        assert_eq!(
+            super::resolve_camera_settings(&mut settings, &metadata).len(),
+            1
+        );
+        assert!(settings.white_balance.is_empty());
+        assert_eq!(settings.color_mode, "Standard");
+        metadata.lists.insert(
+            "WhiteBalanceGains".into(),
+            PropertyList::new(vec![("Auto".into(), "auto_gain".into())]).unwrap(),
+        );
+        assert!(super::resolve_camera_settings(&mut settings, &metadata).is_empty());
+        assert_eq!(settings.white_balance, "Auto");
+        settings.white_balance = "Shade".into();
+        settings.color_mode = "Vivid".into();
+        capabilities.normalize(&mut settings);
+        assert!(super::resolve_camera_settings(&mut settings, &metadata).is_empty());
+        assert_eq!(settings.white_balance, "Shade");
+        assert_eq!(settings.color_mode, "Vivid");
+    }
+
+    #[test]
     fn defaults_resolve_independently_without_replacing_explicit_choices() {
         let metadata = foveonic::source::Metadata {
             processing_version: None,
@@ -624,8 +761,12 @@ mod tests {
     #[test]
     #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; prints completed slider feedback timings"]
     fn slider_feedback_benchmark() {
-        let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
-            .join("blue-parking-sign.x3f");
+        let path = std::env::var_os("FOVEONIC_SLIDER_X3F")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+                    .join("blue-parking-sign.x3f")
+            });
         let worker = super::Worker::new(
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
@@ -750,7 +891,6 @@ mod tests {
                             expected.sharpen_amount = Some(0.75);
                             edit(&mut expected, control, reply.revision);
                             assert_eq!(frame.artifact.settings, expected);
-                            assert!(frame.scopes.is_none());
                             progress.push(reply.revision);
                             settled |= reply.revision == last;
                             if reply.revision == last {
@@ -881,8 +1021,8 @@ mod tests {
             pending: std::sync::Arc::new((
                 std::sync::Mutex::new(super::Pending {
                     request: None,
-                    scopes: None,
                     queued_at: None,
+                    scopes: None,
                     stop: false,
                     clear: false,
                 }),
