@@ -32,7 +32,7 @@ The parent recipe wires stages and stops once the requested outputs exist. Calib
 - **[sd.rs](./sd.rs)** Prepares interchangeable-lens Quattro sparse phase-detection correction tables.
 - **[stage1.rs](./stage1.rs)** Prepares ordinary full-size Quattro two-pass noise controls and exposure-guided filtering.
 - **[stage2.rs](./stage2.rs)** Prepares and composes ordinary DP color shading, raw response and chroma sectors.
-- **[stage2b.rs](./stage2b.rs)** Prepares ordinary HI reconstruction, luminance filtering and independent residual detail.
-- **[stage3.rs](./stage3.rs)** Prepares ordinary HI local contrast and adaptive proportional sharpening.
+- **[stage2b.rs](./stage2b.rs)** Prepares Full and reduced preview reconstruction, luminance filtering and residual detail.
+- **[stage3.rs](./stage3.rs)** Prepares local contrast and adaptive sharpening for Full and reduced preview grids.
 
 <!-- INDEX:END -->

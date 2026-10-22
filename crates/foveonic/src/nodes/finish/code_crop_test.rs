@@ -138,3 +138,37 @@ fn actual_fullsize_mapping_and_patch_samples_match() {
         assert_eq!(actual, expected, "sample{x},{y}");
     }
 }
+
+#[test]
+fn half_grid_mapping_preserves_physical_crop_for_every_orientation() {
+    for angle in [0, 90, 180, 270] {
+        let full = Prepared::new([100, 80], [4, 6, 95, 75], [42, 32], angle, true).unwrap();
+        let half = full.clone().on_half_grid().unwrap();
+        assert_eq!(half.input_extent(), [50, 40]);
+        assert_eq!(half.extent(), full.extent());
+        for (x, y) in [(0_u32, 0_u32), (12, 10), (40, 30)] {
+            for c in 0..2 {
+                let coordinate = |p: &Prepared| {
+                    (p.params.column[c] as i32 as i64)
+                        + i64::from(x) * i64::from(p.params.column[c + 2] as i32)
+                        + i64::from(y) * i64::from(p.params.row[c] as i32)
+                };
+                // Half-grid centers are at physical (2*x+.5,2*y+.5).
+                // Integer step division can accumulate at most one Q16 unit per output step.
+                assert!(
+                    (coordinate(&half) * 2 + 32768 - coordinate(&full)).abs() <= i64::from(x + y)
+                );
+            }
+        }
+    }
+    // A full physical crop legitimately maps just before the first cell center.
+    let origin = Prepared::new([16, 16], [0, 0, 16, 16], [8, 8], 0, true)
+        .unwrap()
+        .on_half_grid()
+        .unwrap();
+    assert_eq!(origin.params.column[0] as i32, -16384);
+    assert!(Prepared::new([15, 16], [0, 0, 15, 16], [8, 8], 0, true)
+        .unwrap()
+        .on_half_grid()
+        .is_err());
+}

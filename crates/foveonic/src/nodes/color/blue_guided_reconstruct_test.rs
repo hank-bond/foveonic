@@ -4,6 +4,26 @@ use super::*;
 #[allow(clippy::approx_constant)]
 const BLUE_VARIANCE: [f64; 3] = [20.843, 0.4342, 8e-7];
 
+#[test]
+fn same_size_output_has_a_distinct_key_and_checks_filter_geometry() {
+    let full = Prepared::new([8, 8], 0., BLUE_VARIANCE, None).unwrap();
+    let same = Prepared::same_size([8, 8], BLUE_VARIANCE, None).unwrap();
+    assert_eq!(full.output_extent(), [16, 16]);
+    assert_eq!(same.output_extent(), [8, 8]);
+    assert!(full.key() != same.key());
+    let high_filter = super::super::histogram_bilateral::Prepared::new(
+        [16, 16],
+        7,
+        BLUE_VARIANCE,
+        0.1,
+        0.25,
+        vec![1.; 16384],
+        13000.,
+    )
+    .unwrap();
+    assert!(Prepared::same_size([8, 8], BLUE_VARIANCE, Some(high_filter)).is_err());
+}
+
 fn level_two_blend() -> Vec<f32> {
     let positions = [
         0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
@@ -290,4 +310,64 @@ fn selected_full_native_stage2b_rgb_matches() {
         profile.gpu
     );
     assert!(maximum <= 1., "unexpected full-stage discrepancy");
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn same_size_averages_each_cell_and_preserves_rgb_packing() {
+    let gpu = Gpu::new().unwrap();
+    let [w, h] = [8_u32, 8_u32];
+    let mut source = vec![0_f32; (w * h * 3) as usize];
+    let mut color = source.clone();
+    let mut blue = vec![0_f32; (w * h * 4) as usize];
+    let samples = [-10., 0., 100., 10999., 11000., 12500., 14000., 16000.];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            let center = samples[i % samples.len()];
+            source[i * 3 + 2] = center;
+            color[i * 3] = -2.5;
+            color[i * 3 + 1] = 1234.75;
+            color[i * 3 + 2] = 70000.;
+            let j = ((y * 2) * (w * 2) + x * 2) as usize;
+            for (offset, value) in [
+                (0, center - 12.),
+                (1, center - 4.),
+                ((w * 2) as usize, center + 4.),
+                ((w * 2 + 1) as usize, center + 12.),
+            ] {
+                blue[j + offset] = value * 0.8;
+            }
+        }
+    }
+    let p = Prepared::same_size([w, h], BLUE_VARIANCE, None).unwrap();
+    let output = apply(
+        &gpu,
+        &gpu.upload("Guide", &source).unwrap(),
+        &gpu.upload("Original", &source).unwrap(),
+        &gpu.upload("Color", &color).unwrap(),
+        &gpu.upload("Blue", &blue).unwrap(),
+        &p,
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let bytes = gpu.readback(&output.rgb).unwrap();
+    let rgb: &[f32] = bytemuck::cast_slice(&bytes);
+    for c in rgb.as_chunks::<3>().0 {
+        assert_eq!(*c, [0., 1234., 65535.]);
+    }
+    let bytes = gpu.readback(&output.residual).unwrap();
+    let residual: &[f32] = bytemuck::cast_slice(&bytes);
+    for (i, &actual) in residual.iter().enumerate() {
+        let b = samples[i % samples.len()];
+        let mut ratio = if b > 0. {
+            (b * 0.8 + 5.) / (b + 5.)
+        } else {
+            1.
+        };
+        if b >= 11000. && ratio < 1. {
+            ratio = (ratio - 1.).mul_add(1. - ((b - 11000.) / 3000.).clamp(0., 1.), 1.);
+        }
+        assert!((actual - ratio).abs() < 1e-6, "{i} {actual} {ratio}");
+    }
 }

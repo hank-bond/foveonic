@@ -571,16 +571,18 @@ impl Viewport {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         texture: Arc<ImageTexture>,
+        display_extent: [u32; 2],
         input: Option<Arc<ImageTexture>>,
         mapping: Mapping,
         srgb_target: bool,
         revision: u64,
     ) {
-        let (rect, image) = self.layout(ui, texture.description().extent);
+        let (rect, image) = self.layout(ui, display_extent);
         let Some((visible, params)) = Params::clipped(
             rect,
             image,
@@ -625,6 +627,10 @@ impl Viewport {
     /// Bounds are inclusive and use the cropped, oriented image grid.
     pub fn visible_pixels(&self) -> Option<PixelRegion> {
         let (_, extent) = self.last_canvas?;
+        self.visible_pixels_for(extent)
+    }
+    /// Scope sampling uses the actual rendered grid while the readout keeps native coordinates.
+    pub fn visible_pixels_for(&self, extent: [u32; 2]) -> Option<PixelRegion> {
         let uv = self.visible_uv();
         if !uv.is_positive() || !uv.min.is_finite() || !uv.max.is_finite() {
             return None;
@@ -1768,6 +1774,35 @@ mod tests {
                     assert_eq!(viewport.layout(ui, extent).1, resized_bounds);
                 });
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod preview_quality_tests {
+    use super::*;
+    #[test]
+    fn scopes_use_fast_pixels_without_changing_native_zoom_and_pan() {
+        for native in [[5424, 3616], [3616, 5424]] {
+            let mut viewport = Viewport {
+                scale: Some(0.5),
+                pan: egui::vec2(75., -40.),
+                last_canvas: Some((egui::vec2(900., 600.), native)),
+                ..Default::default()
+            };
+            let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900., 600.));
+            let before = viewport.image_rect(canvas, native);
+            let native_pixels = viewport.visible_pixels().unwrap();
+            let fast_pixels = viewport.visible_pixels_for(native.map(|v| v / 2)).unwrap();
+            for c in 0..2 {
+                assert_eq!(fast_pixels.top_left[c], native_pixels.top_left[c] / 2);
+                assert_eq!(
+                    fast_pixels.bottom_right[c],
+                    native_pixels.bottom_right[c] / 2
+                );
+            }
+            viewport.reframe(canvas.size(), native);
+            assert_eq!(viewport.image_rect(canvas, native), before);
         }
     }
 }

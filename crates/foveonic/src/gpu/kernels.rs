@@ -57,6 +57,8 @@ pub enum Kernel {
     BlueGuideHorizontal,
     BlueOutliers,
     BlueGuidedRestore,
+    ReducedBlue,
+    ReducedRestore,
     PackedLab,
     ResidualSharp,
     ResidualFinish,
@@ -299,6 +301,8 @@ impl Kernel {
             Self::BlueGuideHorizontal => "resize signed guide horizontally",
             Self::BlueOutliers => "repair isolated blue extrema",
             Self::BlueGuidedRestore => "reconstruct color from blue guidance",
+            Self::ReducedBlue => "average calibrated blue to RGB cells",
+            Self::ReducedRestore => "pack same-resolution RGB and residual",
             Self::PackedLab => "convert packed RGB and Lab codes",
             Self::ResidualSharp => "derive signed luma detail",
             Self::ResidualFinish => "apply reconstruction residual",
@@ -688,6 +692,14 @@ impl Gpu {
             (
                 include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
                 "blue_guided_restore",
+            ),
+            (
+                include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
+                "reduced_blue",
+            ),
+            (
+                include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
+                "reduced_restore",
             ),
             (include_str!("../nodes/color/packed_lab.wgsl"), "packed_lab"),
             (

@@ -34,15 +34,6 @@ pub fn container<R>(
     container_frame().show(ui, contents)
 }
 
-fn group<R>(
-    ui: &mut egui::Ui,
-    contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::InnerResponse<R> {
-    container_frame()
-        .fill(widgets::MENU_BACKGROUND)
-        .show(ui, contents)
-}
-
 /// Draw inside the toolbar's horizontal layout. Actions are handled by the app
 /// so tests can exercise the controls without opening native file dialogs.
 pub fn show(
@@ -55,7 +46,7 @@ pub fn show(
     ui.add_enabled_ui(enabled, |ui| {
         // Top-aligned inner rows keep intrinsic control heights from shifting
         // later controls. The outer row centers groups and the ungrouped DNG button.
-        group(ui, |ui| {
+        widgets::button_group(ui, |ui| {
             ui.horizontal_top(|ui| {
                 actions.open_folder =
                     widgets::button(ui, "Open folder", false, egui::Vec2::ZERO).clicked();
@@ -64,7 +55,7 @@ pub fn show(
             });
         });
         ui.add_enabled_ui(export_ready, |ui| {
-            group(ui, |ui| {
+            widgets::button_group(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     if widgets::button(ui, "Export TIFF", false, egui::Vec2::ZERO).clicked() {
                         actions.export = Some(ExportFormat::Tiff);
@@ -389,7 +380,7 @@ mod tests {
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 outer = container(ui, |ui| {
-                    inner = group(ui, |ui| {
+                    inner = widgets::button_group(ui, |ui| {
                         button = widgets::button(ui, "Padding", false, egui::Vec2::ZERO).rect;
                     })
                     .response

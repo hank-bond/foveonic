@@ -1,6 +1,6 @@
-//! Groups pipeline views and controls display-only Input/Output and Difference comparisons.
+//! Groups viewport preview quality, pipeline views, and display-only Input/Output and Difference comparisons.
 
-use crate::{help, sections};
+use crate::{help, sections, widgets};
 use eframe::egui;
 use foveonic::{
     inspection::{self, Channels},
@@ -272,6 +272,47 @@ impl Comparison {
         }
         !before && self.requested()
     }
+}
+
+/// Preview quality is a workspace choice, independent of photo edits and export.
+pub fn preview_quality(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    available: bool,
+    selected: &mut foveonic::render::PreviewQuality,
+) -> bool {
+    use foveonic::render::PreviewQuality;
+    let mut changed = false;
+    let effective = if available {
+        *selected
+    } else {
+        PreviewQuality::Full
+    };
+    let explanation = if available {
+        "Fast gives a smaller Quattro color preview for quicker browsing and edits. Exports use Full."
+    } else {
+        "Fast preview is available for Quattro color photographs."
+    };
+    widgets::button_group(ui, |ui| {
+        widgets::centered_control_row(ui, |ui| {
+            ui.label("Preview");
+            ui.add_enabled_ui(enabled && available, |ui| {
+                for (quality, label) in [
+                    (PreviewQuality::Full, "Full"),
+                    (PreviewQuality::Fast, "Fast"),
+                ] {
+                    let response =
+                        widgets::button(ui, label, effective == quality, egui::Vec2::ZERO)
+                            .on_hover_text(explanation);
+                    if response.clicked() && *selected != quality {
+                        *selected = quality;
+                        changed = true;
+                    }
+                }
+            });
+        });
+    });
+    changed
 }
 
 #[cfg(test)]
@@ -858,4 +899,59 @@ fn early_quattro_hint_keeps_final_unavailable_without_merrill_menu_choices() {
     );
     assert_eq!(output, "sensor.blue");
     assert_eq!(channel, -1);
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    #[test]
+    fn fast_button_changes_workspace_quality_and_unavailable_choices_stay_disabled() {
+        use foveonic::render::PreviewQuality;
+        let ctx = egui::Context::default();
+        widgets::install_style(&ctx);
+        let mut quality = PreviewQuality::Full;
+        let mut draw = |events, available| {
+            let mut changed = false;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 200.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        changed = preview_quality(ui, true, available, &mut quality);
+                    });
+                },
+            );
+            (changed, output)
+        };
+        draw(vec![], true);
+        let (_, output) = draw(vec![], true);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|s| {
+                if let egui::Shape::Text(t) = &s.shape {
+                    (t.galley.job.text == "Fast").then(|| t.pos + t.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        draw(vec![egui::Event::PointerMoved(point), button(true)], true);
+        assert!(draw(vec![button(false)], true).0);
+        assert!(!draw(vec![egui::Event::PointerMoved(point), button(true)], false).0);
+        assert!(!draw(vec![button(false)], false).0);
+        assert_eq!(quality, PreviewQuality::Fast);
+    }
 }

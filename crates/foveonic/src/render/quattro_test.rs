@@ -1208,3 +1208,176 @@ fn preparation_can_stop_before_later_calibration() {
     assert_eq!(checks.get(), 2);
     assert_eq!(engine.gpu_activity().since(before).dispatches, 0);
 }
+
+#[test]
+#[ignore = "requires GPU, FOVEONIC_FIXTURE_DIR and optional QUATTRO_FULL_GOLDENS"]
+fn original_fast_previews_match_fresh_renders_through_quality_and_edit_changes() {
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let engine = Engine::new().unwrap();
+    for name in [
+        "dp0-quattro",
+        "dp1-quattro-pblog",
+        "dp2-quattro",
+        "dp3-quattro",
+        "sd-quattro",
+        "dp3-quattro-iso800",
+    ] {
+        let mut session =
+            RenderSession::new(Source::open(root.join(format!("{name}.x3f"))).unwrap());
+        let mut full = Settings::new("Sunlight", "Standard");
+        // Full must still match the committed complete image on every source.
+        let reference = engine
+            .render(session.source(), &full, &mut Profile::default())
+            .unwrap();
+        let full_bytes = engine.readback_image(&reference).unwrap();
+        if let Some(goldens) = std::env::var_os("QUATTRO_FULL_GOLDENS") {
+            let path = std::path::PathBuf::from(goldens)
+                .join(format!("{name}-color-baseline-floats/{name}.f32"));
+            assert!(
+                full_bytes == std::fs::read(path).unwrap(),
+                "Full baseline {name}"
+            );
+        }
+        let native = reference.view().extent;
+        drop(reference);
+        let mut retained = None;
+        let mut retained_bytes = Vec::new();
+        for step in 0..6 {
+            full.preview_quality = if step == 0 || step == 4 {
+                PreviewQuality::Full
+            } else {
+                PreviewQuality::Fast
+            };
+            full.exposure = if step == 2 || step == 4 { 0.5 } else { 0. };
+            full.reconstruction = if step == 3 {
+                Some(crate::noise::Controls {
+                    chroma: 1,
+                    luminance: 4,
+                    detail: 0.25,
+                    ..recipes::quattro::default_noise_controls()
+                })
+            } else {
+                None
+            };
+            let cached = engine
+                .render_session(
+                    &mut session,
+                    &full,
+                    &["final"],
+                    || false,
+                    &mut Profile::default(),
+                )
+                .unwrap()
+                .unwrap()
+                .pop()
+                .unwrap();
+            let Content::Image(cached) = cached.content else {
+                panic!("image required")
+            };
+            let fresh = engine
+                .render(session.source(), &full, &mut Profile::default())
+                .unwrap();
+            assert!(
+                engine.readback_image(&cached).unwrap() == engine.readback_image(&fresh).unwrap(),
+                "cached {name} step {step}"
+            );
+            assert_eq!(
+                cached.view().extent,
+                if full.preview_quality == PreviewQuality::Fast {
+                    native.map(|v| v / 2)
+                } else {
+                    native
+                }
+            );
+            if step == 1 {
+                retained_bytes = engine.readback_image(&cached).unwrap();
+                retained = Some(cached.clone());
+            }
+            if let Some(retained) = &retained {
+                assert!(
+                    engine.readback_image(retained).unwrap() == retained_bytes,
+                    "retained {name}"
+                );
+            }
+        }
+        eprintln!(
+            "{name}: Full golden, Fast cached edits, quality switches and immutable image passed"
+        );
+    }
+}
+
+#[test]
+fn supported_preview_policy_survives_photographic_control_normalization() {
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.preview_quality = PreviewQuality::Fast;
+    assert!(!recipes::quattro::normalize_photographic(&mut settings));
+    assert!(recipes::quattro::validate_photographic(&settings).is_ok());
+}
+
+#[test]
+#[ignore = "requires GPU and QUATTRO_X3F"]
+fn progress_observers_report_real_load_and_render_boundaries_without_changing_pixels() {
+    use std::cell::RefCell;
+    let loads = RefCell::new(Vec::new());
+    let source = Source::open_with_progress(std::env::var_os("QUATTRO_X3F").unwrap(), |stage| {
+        loads.borrow_mut().push(stage)
+    })
+    .unwrap();
+    assert_eq!(
+        *loads.borrow(),
+        [
+            crate::source::LoadStage::FileRead,
+            crate::source::LoadStage::Decoded
+        ]
+    );
+    let mut session = RenderSession::new(source);
+    let engine = Engine::new().unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    for (quality, exposure) in [
+        (PreviewQuality::Full, 0.),
+        (PreviewQuality::Fast, 0.),
+        (PreviewQuality::Fast, 0.5),
+    ] {
+        settings.preview_quality = quality;
+        settings.exposure = exposure;
+        let stages = RefCell::new(Vec::new());
+        let mut artifacts = engine
+            .render_session_with_progress(
+                &mut session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+                |stage| stages.borrow_mut().push(stage),
+            )
+            .unwrap()
+            .unwrap();
+        let Content::Image(observed) = artifacts.pop().unwrap().content else {
+            panic!("image required")
+        };
+        let fresh = engine
+            .render(session.source(), &settings, &mut Profile::default())
+            .unwrap();
+        assert!(
+            engine.readback_image(&observed).unwrap() == engine.readback_image(&fresh).unwrap()
+        );
+        let stages = stages.into_inner();
+        assert_eq!(stages[0], RenderProgress::Prepared);
+        let counts: Vec<_> = stages[1..]
+            .iter()
+            .map(|stage| {
+                let RenderProgress::Stage { completed, total } = stage else {
+                    panic!("unexpected preparation event")
+                };
+                (*completed, *total)
+            })
+            .collect();
+        let total = counts.last().unwrap().1;
+        if total == 0 {
+            assert_eq!(counts, [(0, 0)]);
+        } else {
+            assert_eq!(counts, (1..=total).map(|i| (i, total)).collect::<Vec<_>>());
+        }
+        eprintln!("{quality:?} exposure={exposure}: {total} completed stages, pixels unchanged");
+    }
+}

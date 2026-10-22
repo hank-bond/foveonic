@@ -52,6 +52,10 @@ impl Settings {
                 }
             };
         }
+        changed!(
+            self.preview_quality != next.preview_quality,
+            "preview-quality"
+        );
         changed!(self.rendering != next.rendering, "rendering");
         changed!(self.monochrome.mix != next.monochrome.mix, "mono-mix");
         changed!(self.monochrome.noise != next.monochrome.noise, "mono-noise");
@@ -352,6 +356,7 @@ pub(crate) struct Execution<'a> {
     pub cache: Option<&'a mut Cache>,
     pub cancel: Option<&'a dyn Fn() -> bool>,
     pub checkpoints: Vec<usize>,
+    pub progress: Option<&'a dyn Fn(crate::render::RenderProgress)>,
 }
 impl Execution<'_> {
     pub fn check(&self) -> crate::source::Result<()> {

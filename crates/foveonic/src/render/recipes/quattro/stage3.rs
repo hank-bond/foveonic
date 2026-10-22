@@ -1,4 +1,5 @@
-//! Prepares ordinary HI local contrast and adaptive proportional sharpening.
+//! Prepares local contrast and adaptive sharpening for Full and reduced preview grids.
+use super::WorkingGrid;
 use crate::{
     nodes::finish::{proportional_sharpen, wavelet_contrast},
     source::{Metadata, Result},
@@ -7,6 +8,13 @@ const LCE_PADDING_ALIGNMENT: u32 = 128;
 const LCE_RELATIVE_BOUND: f32 = 0.35;
 const LOWEST_UNSHARP_BASE: f32 = 0.15;
 const LOWEST_UNSHARP_MIX: f32 = 0.3;
+// LOW-inspired finishing controls used by the reviewed reduced HIGH preview.
+// The wavelet base becomes 0.12 instead of 0.15, and sharpening loses sqrt(2).
+const HALF_GRID_LOWEST_UNSHARP_SCALE: f32 = 0.8;
+pub(super) const HALF_GRID_SHARPEN_SCALE: f32 = std::f32::consts::FRAC_1_SQRT_2;
+const FULL_BOX_RADII: [u32; 2] = [7, 3];
+const HALF_BOX_RADII: [u32; 2] = [3, 2];
+const BOX_STRENGTHS: [f32; 2] = [0.2, 0.1];
 const LOWEST_GAUSSIAN_VARIANCE: f64 = 9.;
 const SHARPEN_DETAIL_LIMIT: f32 = 2000.;
 const SHARPEN_LUMA_LIMIT: f32 = 0.35;
@@ -85,17 +93,20 @@ const SHARPEN_TAILS: [[f64; 4]; 7] = [
 const KNOT_POSITIONS: [usize; 15] = [
     0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
 ];
-fn extent(metadata: &Metadata) -> Result<[u32; 2]> {
+fn extent(metadata: &Metadata, grid: WorkingGrid) -> Result<[u32; 2]> {
     if !super::defects::supported(metadata) {
         return Err("Stage3 requires ordinary full-size Quattro controls".into());
     }
-    Ok([
+    Ok(grid.extent([
         u32::try_from(metadata.width)?,
         u32::try_from(metadata.height)?,
-    ])
+    ]))
 }
-fn lce_crop(metadata: &Metadata) -> Result<[u32; 4]> {
-    let area = metadata.fixed::<4>("ActiveImageArea")?;
+fn lce_crop(metadata: &Metadata, grid: WorkingGrid) -> Result<[u32; 4]> {
+    let mut area = metadata.fixed::<4>("ActiveImageArea")?;
+    if grid.is_half() {
+        area = area.map(|v| (v / f64::from(grid.divisor())).floor());
+    }
     if area
         .iter()
         .any(|v| !v.is_finite() || *v < 0. || *v >= u32::MAX as f64 || v.fract() != 0.)
@@ -116,8 +127,9 @@ pub(super) fn prepare_lce(
     level: usize,
     mode: &str,
     lowest_factor: Option<f32>,
+    grid: WorkingGrid,
 ) -> Result<wavelet_contrast::Prepared> {
-    let extent = extent(metadata)?;
+    let extent = extent(metadata, grid)?;
     let polynomial = *LEVEL_POLYNOMIALS
         .get(level)
         .ok_or("unsupported local contrast level")?;
@@ -138,17 +150,22 @@ pub(super) fn prepare_lce(
     wavelet_contrast::Prepared::new(
         extent,
         extent.map(|v| v.div_ceil(LCE_PADDING_ALIGNMENT) * LCE_PADDING_ALIGNMENT),
-        lce_crop(metadata)?,
+        lce_crop(metadata, grid)?,
         std::array::from_fn(|i| wavelet_contrast::BandControl {
             gain: gains[i],
             limit: DETAIL_LIMITS[i],
             slope: DETAIL_SLOPES[i],
         }),
-        lowest_kernel(level, mode == "Portrait", lowest_factor)?,
+        lowest_kernel(level, mode == "Portrait", lowest_factor, grid)?,
         LCE_RELATIVE_BOUND,
     )
 }
-fn lowest_kernel(level: usize, portrait: bool, supplied_factor: Option<f32>) -> Result<[f32; 9]> {
+fn lowest_kernel(
+    level: usize,
+    portrait: bool,
+    supplied_factor: Option<f32>,
+    grid: WorkingGrid,
+) -> Result<[f32; 9]> {
     let factor = supplied_factor.unwrap_or(
         *LEVEL_FACTORS
             .get(level)
@@ -161,6 +178,11 @@ fn lowest_kernel(level: usize, portrait: bool, supplied_factor: Option<f32>) -> 
         LOWEST_UNSHARP_BASE * 0.8
     } else {
         LOWEST_UNSHARP_BASE
+    };
+    let base = if grid.is_half() {
+        base * HALF_GRID_LOWEST_UNSHARP_SCALE
+    } else {
+        base
     };
     let amount = (base * LOWEST_UNSHARP_MIX) * factor;
     let gaussian: [f32; 9] = std::array::from_fn(|i| {
@@ -217,12 +239,13 @@ pub(super) fn prepare_sharpen(
     level: usize,
     base: f32,
     preserve_dark: bool,
+    grid: WorkingGrid,
 ) -> Result<proportional_sharpen::Prepared> {
     let iso_gain = capture_iso_gain(metadata)?;
     let log_iso = iso_gain.log2();
     let absolute_limit = ((log_iso * log_iso) * 8000.) / 36. + SHARPEN_DETAIL_LIMIT;
     proportional_sharpen::Prepared::new(
-        extent(metadata)?,
+        extent(metadata, grid)?,
         // The ordinary wrapper leaves SharpData's mode string empty. Its
         // standalone initializer supports Portrait, but this caller does not
         // select that branch. Portrait still changes LCE and reconstruction.
@@ -230,7 +253,11 @@ pub(super) fn prepare_sharpen(
         iso_gain,
         absolute_limit,
         SHARPEN_LUMA_LIMIT,
-        1.,
+        if grid.is_half() {
+            HALF_GRID_SHARPEN_SCALE
+        } else {
+            1.
+        },
         preserve_dark,
     )
 }
@@ -262,14 +289,20 @@ pub(super) fn uses_box_contrast(metadata: &Metadata) -> Result<bool> {
 pub(super) fn prepare_box_contrast(
     metadata: &Metadata,
     level: usize,
+    grid: WorkingGrid,
 ) -> Result<crate::nodes::finish::box_contrast::Prepared> {
     if level > 6 {
         return Err("unsupported local contrast level".into());
     }
     let control = level as f32 / 3.;
+    let radii = if grid.is_half() {
+        HALF_BOX_RADII
+    } else {
+        FULL_BOX_RADII
+    };
     crate::nodes::finish::box_contrast::Prepared::new(
-        extent(metadata)?,
-        [(7, control * 0.2), (3, control * 0.1)],
+        extent(metadata, grid)?,
+        std::array::from_fn(|i| (radii[i], control * BOX_STRENGTHS[i])),
         capture_iso_gain(metadata)?,
     )
 }
@@ -298,6 +331,7 @@ pub(super) struct Controls {
     pub sharpen_base: f32,
     pub lowest_band_factor: Option<f32>,
     pub preserve_dark_detail: bool,
+    pub grid: WorkingGrid,
 }
 
 /// Retain full physical planes here. Generic finishing owns the active crop.
@@ -318,6 +352,7 @@ pub(super) fn build(
             controls.sharpen_level,
             controls.sharpen_base,
             controls.preserve_dark_detail,
+            controls.grid,
         )?)),
         &[converted, detail],
     )
@@ -335,12 +370,13 @@ pub(super) fn build_contrast(
         graph::Operation,
         nodes::color::packed_lab::{Direction, Prepared},
     };
-    let extent = extent(metadata)?;
+    let extent = extent(metadata, controls.grid)?;
     let converted = if uses_box_contrast(metadata)? {
         graph.add(
             Operation::BoxContrast(std::sync::Arc::new(prepare_box_contrast(
                 metadata,
                 controls.contrast_level,
+                controls.grid,
             )?)),
             &[rgb],
         )?
@@ -355,6 +391,7 @@ pub(super) fn build_contrast(
                 controls.contrast_level,
                 mode,
                 controls.lowest_band_factor,
+                controls.grid,
             )?)),
             &[lab],
         )?;
@@ -468,10 +505,13 @@ mod tests {
         let captured_crop = std::array::from_fn(|i| {
             u32::from_le_bytes(header[16 + i * 4..20 + i * 4].try_into().unwrap())
         });
-        assert_eq!(lce_crop(&source.metadata).unwrap(), captured_crop);
+        assert_eq!(
+            lce_crop(&source.metadata, WorkingGrid::Full).unwrap(),
+            captured_crop
+        );
         let original = read("main-input-rgb.u16");
         let input = gpu.upload("Original pre-LCE RGB", &original).unwrap();
-        let size = extent(&source.metadata).unwrap();
+        let size = extent(&source.metadata, WorkingGrid::Full).unwrap();
         let start = std::time::Instant::now();
         let lab = crate::nodes::color::packed_lab::apply(
             &gpu,
@@ -488,7 +528,7 @@ mod tests {
         let adjusted = wavelet_contrast::apply(
             &gpu,
             &lab,
-            &prepare_lce(&source.metadata, 6, "Standard", None).unwrap(),
+            &prepare_lce(&source.metadata, 6, "Standard", None, WorkingGrid::Full).unwrap(),
             &mut Default::default(),
         )
         .unwrap();
@@ -559,7 +599,7 @@ mod tests {
             .collect();
         let gpu = Gpu::new().unwrap();
         let mut profile = Default::default();
-        let extent = extent(&source.metadata).unwrap();
+        let extent = extent(&source.metadata, WorkingGrid::Full).unwrap();
         let image = gpu
             .upload("Native monochrome Stage3 mixed RGB", &input)
             .unwrap();
@@ -576,7 +616,14 @@ mod tests {
         let adjusted = wavelet_contrast::apply(
             &gpu,
             &lab,
-            &prepare_lce(&source.metadata, 6, "Standard", Some(1.6)).unwrap(),
+            &prepare_lce(
+                &source.metadata,
+                6,
+                "Standard",
+                Some(1.6),
+                WorkingGrid::Full,
+            )
+            .unwrap(),
             &mut profile,
         )
         .unwrap();

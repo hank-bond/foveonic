@@ -22,9 +22,20 @@ pub enum Rendering {
     Monochrome,
 }
 
+/// Workspace rendering quality. Exports and inspection select Full.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PreviewQuality {
+    #[default]
+    Full,
+    Fast,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// Transient preview policy, excluded from per-photo editing sidecars.
+    #[serde(skip)]
+    pub preview_quality: PreviewQuality,
     pub rendering: Rendering,
     pub monochrome: MonochromeControls,
     /// Monochrome Smooth/Crisp selection. None follows the file or recipe default.
@@ -69,6 +80,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            preview_quality: PreviewQuality::Full,
             rendering: Rendering::Color,
             monochrome: MonochromeControls::default(),
             monochrome_smoothness: None,
@@ -102,6 +114,11 @@ impl Settings {
             color_mode: color_mode.into(),
             ..Self::default()
         }
+    }
+
+    /// The reduced recipe is available only for demonstrated Quattro color input.
+    pub fn fast_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
+        !self.is_monochrome() && super::recipes::quattro::fast_available(metadata)
     }
 
     pub fn is_monochrome(&self) -> bool {

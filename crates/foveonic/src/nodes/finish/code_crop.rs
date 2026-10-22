@@ -15,6 +15,8 @@ const KERNEL_PI: f64 = 3.14159;
 const PHASES: usize = 16;
 const TAPS: usize = 16;
 const FIXED_ONE: f64 = 65536.;
+// A 2×2 mean is centered at physical +0.5, or +0.25 on the half grid (Q16).
+const HALF_GRID_CENTER_OFFSET: i64 = 16384;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -92,6 +94,32 @@ impl Prepared {
                 interpolation_kernel(sx, sy)
             },
         })
+    }
+    /// Map physical crop coordinates onto 2×2 cell centers without rounding crop endpoints.
+    /// The half-cell offset also applies at rotated origins and physical image edges.
+    pub(crate) fn on_half_grid(mut self) -> Result<Self> {
+        if !self.params.shape[0].is_multiple_of(2) || !self.params.shape[1].is_multiple_of(2) {
+            return Err("half-grid crop requires even physical source dimensions".into());
+        }
+        self.params.shape[0] /= 2;
+        self.params.shape[1] /= 2;
+        self.params.column[0] =
+            (i64::from(self.params.column[0]) / 2 - HALF_GRID_CENTER_OFFSET) as u32;
+        self.params.column[1] =
+            (i64::from(self.params.column[1]) / 2 - HALF_GRID_CENTER_OFFSET) as u32;
+        for value in &mut self.params.column[2..] {
+            *value = ((*value as i32) / 2) as u32;
+        }
+        for value in &mut self.params.row[..2] {
+            *value = ((*value as i32) / 2) as u32;
+        }
+        self.params.row[2] = 0; // Half-cell centers always require interpolation.
+        let dx = (self.params.column[2] as i32).unsigned_abs()
+            + (self.params.row[0] as i32).unsigned_abs();
+        let dy = (self.params.column[3] as i32).unsigned_abs()
+            + (self.params.row[1] as i32).unsigned_abs();
+        self.kernel = interpolation_kernel(FIXED_ONE / f64::from(dx), FIXED_ONE / f64::from(dy));
+        Ok(self)
     }
     pub(crate) fn input_extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]

@@ -263,7 +263,7 @@ Color and monochrome Smooth/Crisp selections are stored independently. Source-de
 
 The complete native-input monochrome Stage3 comparison has maximum four camera codes and mean 0.187, from quantization through shared packed Lab and wavelet processing. Neutral mixing remains within one native code. These bounds are explicit and separate from the existing color checks. Complete monochrome comparisons pass dedicated measured bounds for minimum/Crisp and reference-default settings. Negative and positive exposure and combined monochrome tone edits each match every one of the 196,608 native response-table words. Positive monochrome exposure preserves the full curve domain and its response normalization.
 
-All eight retained Classic/Merrill TIFF regressions remain byte-identical after this integration. The [performance plan](./quattro-performance.md) records accepted shader changes, rejected experiments and reproducible measurement conditions.
+All eight retained Classic/Merrill TIFF regressions remain byte-identical after this integration. The [performance plan](./archived/quattro-performance-and-fast-preview.md) records accepted shader changes, rejected experiments and reproducible measurement conditions.
 
 
 ### Saved monochrome mixer

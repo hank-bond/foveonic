@@ -76,6 +76,9 @@ impl Engine {
                     })?,
             },
         };
+        if let Some(progress) = execution.progress {
+            progress(super::RenderProgress::Prepared);
+        }
         self.collect_artifacts(
             source,
             settings,

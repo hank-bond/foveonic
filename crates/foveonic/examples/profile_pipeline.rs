@@ -23,9 +23,16 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     let mut warm = 2usize;
     let mut goldens = None;
+    let mut preview_quality = foveonic::render::PreviewQuality::Full;
     let mut controls = Vec::<OsString>::new();
     while let Some(arg) = args.next() {
-        if arg == "--warm" {
+        if arg == "--preview-quality" {
+            preview_quality = match args.next().and_then(|v| v.into_string().ok()).as_deref() {
+                Some("full") => foveonic::render::PreviewQuality::Full,
+                Some("fast") => foveonic::render::PreviewQuality::Fast,
+                _ => return Err("preview quality requires full or fast".into()),
+            };
+        } else if arg == "--warm" {
             warm = args
                 .next()
                 .ok_or("missing warm count")?
@@ -41,8 +48,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     let source = Source::open(&input)?;
-    let (settings, paths, mode) =
+    let (mut settings, paths, mode) =
         options::parse_settings_for_camera(controls.into_iter(), &source.metadata)?;
+    settings.preview_quality = preview_quality;
     if !paths.is_empty() {
         return Err("unexpected extra input paths".into());
     }
@@ -58,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         profile::report(
             "session",
             mode,
-            serde_json::json!({"frontend":"completed_processing","source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
+            serde_json::json!({"frontend":"completed_processing","preview_quality":format!("{preview_quality:?}"),"source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
         )
     );
     println!(

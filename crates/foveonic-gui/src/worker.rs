@@ -5,7 +5,7 @@ use foveonic::{
     image::{ImageTexture, RenderedImage},
     inspection::{Artifact, Content},
     profile::Profile,
-    render::{Engine, RenderSession, Settings},
+    render::{Engine, PreviewQuality, RenderSession, Settings},
     source::{Metadata, Source},
 };
 use std::{
@@ -42,10 +42,27 @@ pub struct Request {
     pub revision: u64,
     pub path: PathBuf,
     pub settings: Settings,
+    pub preview_quality: PreviewQuality,
     pub output: String,
     pub comparison: bool,
     pub export: Option<Export>,
 }
+fn effective_preview_quality(
+    request: &Request,
+    settings: &Settings,
+    metadata: &Metadata,
+) -> PreviewQuality {
+    if request.export.is_none()
+        && request.output == "final"
+        && !request.comparison
+        && settings.fast_preview_available(metadata)
+    {
+        request.preview_quality
+    } else {
+        PreviewQuality::Full
+    }
+}
+
 pub struct Frame {
     pub path: PathBuf,
     pub output: String,
@@ -57,6 +74,23 @@ pub struct Frame {
     pub queued_at: std::time::Instant,
 }
 impl Frame {
+    /// Keep zoom coordinates on the native photograph while Fast stores fewer pixels.
+    pub fn display_extent(&self, input: bool) -> [u32; 2] {
+        let extent = self.view(input).description().extent;
+        if self.artifact.settings.preview_quality == PreviewQuality::Fast
+            && self.artifact.settings.output_size.is_none()
+        {
+            extent.map(|v| v * 2)
+        } else {
+            extent
+        }
+    }
+    pub fn quality_label(&self) -> &'static str {
+        match self.artifact.settings.preview_quality {
+            PreviewQuality::Full => "Full",
+            PreviewQuality::Fast => "Fast",
+        }
+    }
     /// Keep the output visible until its matching input is ready.
     pub fn view(&self, input: bool) -> &Arc<ImageTexture> {
         if input {
@@ -111,6 +145,8 @@ struct Pending {
 pub struct Worker {
     pending: Arc<(Mutex<Pending>, Condvar)>,
     pub replies: mpsc::Receiver<Update>,
+    pub progress: crate::progress::Tracker,
+    context: egui::Context,
 }
 impl Worker {
     pub fn new(engine: Engine, context: egui::Context) -> Self {
@@ -124,6 +160,9 @@ impl Worker {
             }),
             Condvar::new(),
         ));
+        let progress = crate::progress::Tracker::default();
+        let progress_updates = progress.clone();
+        let repaint = context.clone();
         let (tx, replies) = mpsc::sync_channel(2);
         let slot = pending.clone();
         thread::spawn(move || {
@@ -160,6 +199,8 @@ impl Worker {
                         state.queued_at.take().unwrap(),
                     )
                 };
+                let reporter =
+                    crate::progress::Reporter::new(progress_updates.clone(), request.revision);
                 let started = std::time::Instant::now();
                 crate::timing::worker_started(request.revision, queued_at, started);
                 let mut metadata = None;
@@ -169,20 +210,24 @@ impl Worker {
                     if source.as_ref().is_none_or(|(p, _)| p != &request.path) {
                         source = None; // Avoid keeping two decoded photos in memory during a switch.
                         let _span = crate::timing::Span::new(request.revision, "source_open");
-                        let loaded = Source::open(&request.path)?;
+                        let loaded = Source::open_with_progress(&request.path, |stage| reporter.loaded(stage))?;
                         if crate::timing::enabled() {
                             crate::timing::emit("source_load", serde_json::json!({"revision":request.revision,"source":request.path,"timings":loaded.load_timings(),"read_cache_state":"uncontrolled","extent":[loaded.metadata.width,loaded.metadata.height]}));
                         }
                         source = Some((request.path.clone(), RenderSession::new(loaded)));
                     }
+                    // Cached sources have already completed both loading sections.
+                    reporter.loaded(foveonic::source::LoadStage::Decoded);
                     let session = &mut source.as_mut().unwrap().1;
                     metadata = Some(session.metadata().clone());
                     defaults_errors = resolve_camera_settings(&mut settings, session.metadata());
+                    settings.preview_quality = effective_preview_quality(&request, &settings, session.metadata());
                     if let Some(export) = request.export.as_ref().filter(|e| e.format == ExportFormat::Dng) {
                         let mut profile=Profile::new(crate::timing::mode());
                         let before=crate::timing::enabled().then(||engine.gpu_activity());
                         foveonic::dng::write_source(&engine,session.source(),&settings,&export.path,&mut profile)?;
                         if let Some(before)=before {crate::timing::emit("export",serde_json::json!({"revision":request.revision,"source":request.path,"destination":export.path,"format":"dng","settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
+                        reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
                         return Ok(None);
                     }
                     let edit=session.changed_parameters(&settings);
@@ -192,7 +237,8 @@ impl Worker {
                         state.clear||state.stop||state.request.as_ref().is_some_and(|pending|{
                             let mut next=pending.settings.clone();
                             resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
-                            pending.path!=request.path||pending.output!=request.output||pending.comparison!=request.comparison||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
+                            next.preview_quality = effective_preview_quality(pending, &next, metadata.as_ref().unwrap());
+                            pending.path!=request.path||pending.output!=request.output||pending.comparison!=request.comparison||settings.preview_quality!=next.preview_quality||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
                         })
                     };
                     let mut profile = Profile::new(crate::timing::mode());
@@ -211,7 +257,7 @@ impl Worker {
                         // Timing a host span must not add a GPU wait and change the
                         // responsiveness we are trying to measure.
                         let _span = crate::timing::Span::new(request.revision, "processing");
-                        engine.render_session(session, &settings, &roots, cancel, &mut profile)?
+                        engine.render_session_with_progress(session, &settings, &roots, cancel, &mut profile, |stage| reporter.rendered(stage))?
                     };
                     if let Some(before) = before {
                         crate::timing::emit("processing", serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"outputs":roots,"settings":settings,"execution":"session","status":if rendered.is_some(){"complete"}else{"superseded"},"cache_before_bytes":cache_before,"cache_after_bytes":session.cached_bytes(),"profile":profile,"activity":engine.gpu_activity().since(before)}));
@@ -279,6 +325,8 @@ impl Worker {
                         )
                     }
                 });
+                // Reply settings populate photo edits. Preview policy stays in UI preferences.
+                settings.preview_quality = PreviewQuality::Full;
                 let publication = crate::timing::Span::new(request.revision, "reply_publication");
                 crate::timing::event(request.revision, "reply_ready");
                 if tx
@@ -298,9 +346,15 @@ impl Worker {
                 context.request_repaint();
             }
         });
-        Self { pending, replies }
+        Self {
+            pending,
+            replies,
+            progress,
+            context: repaint,
+        }
     }
     pub fn clear(&self) {
+        self.progress.clear();
         let (lock, wake) = &*self.pending;
         let mut state = lock.lock().unwrap();
         state.clear = true;
@@ -315,11 +369,15 @@ impl Worker {
         wake.notify_one();
     }
     pub fn submit(&self, request: Request) {
+        let queued_at = std::time::Instant::now();
+        self.progress.begin(request.revision, queued_at);
         let (lock, wake) = &*self.pending;
         let mut state = lock.lock().unwrap();
         state.request = Some(request);
-        state.queued_at = Some(std::time::Instant::now());
+        state.queued_at = Some(queued_at);
         wake.notify_one();
+        drop(state);
+        self.context.request_repaint();
     }
 }
 impl Drop for Worker {
@@ -419,6 +477,7 @@ fn resolve_camera_settings(settings: &mut Settings, metadata: &Metadata) -> Vec<
 
 #[cfg(test)]
 mod tests {
+    use foveonic::render::PreviewQuality;
     fn receive(worker: &super::Worker) -> super::Reply {
         loop {
             if let super::Update::Image(reply) = worker
@@ -477,6 +536,7 @@ mod tests {
         for (index, settings) in selections.into_iter().enumerate() {
             let destination = directory.join(format!("{index}.dng"));
             worker.submit(super::Request {
+                preview_quality: PreviewQuality::Full,
                 revision: index as u64 + 1,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -530,6 +590,7 @@ mod tests {
         );
         for revision in 1..=20 {
             worker.submit(super::Request {
+                preview_quality: PreviewQuality::Full,
                 revision,
                 path: path.clone(),
                 settings: foveonic::render::Settings::new("", ""),
@@ -557,6 +618,7 @@ mod tests {
             break;
         }
         worker.submit(super::Request {
+            preview_quality: PreviewQuality::Full,
             revision: 21,
             path: path.clone(),
             settings: foveonic::render::Settings::new("", ""),
@@ -575,6 +637,7 @@ mod tests {
         assert_eq!(frame.artifact.settings.white_balance, "Sunlight");
         assert_eq!(frame.artifact.settings.color_mode, "Standard");
         worker.submit(super::Request {
+            preview_quality: PreviewQuality::Full,
             revision: 22,
             path,
             settings: foveonic::render::Settings::new("", ""),
@@ -620,6 +683,7 @@ mod tests {
         {
             let revision = index as u64 + 1;
             worker.submit(super::Request {
+                preview_quality: PreviewQuality::Full,
                 revision,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -651,6 +715,7 @@ mod tests {
             );
         }
         worker.submit(super::Request {
+            preview_quality: PreviewQuality::Full,
             revision: 9,
             path: path.clone(),
             settings: settings.clone(),
@@ -666,6 +731,7 @@ mod tests {
         assert_eq!(frame.texture.description().space, Space::CalibratedLayers);
         drop(frame);
         worker.submit(super::Request {
+            preview_quality: PreviewQuality::Full,
             revision: 10,
             path,
             settings,
@@ -787,6 +853,7 @@ mod tests {
             };
             let start = std::time::Instant::now();
             worker.submit(super::Request {
+                preview_quality: PreviewQuality::Full,
                 revision,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -864,6 +931,7 @@ mod tests {
             settings.sharpen_amount = Some(0.75);
             let submit = |revision, settings: foveonic::render::Settings| {
                 worker.submit(super::Request {
+                    preview_quality: PreviewQuality::Full,
                     revision,
                     path: path.clone(),
                     settings,
@@ -971,6 +1039,7 @@ mod tests {
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
         worker.submit(super::Request {
+            preview_quality: PreviewQuality::Full,
             revision: 1,
             path,
             settings: foveonic::render::Settings::new("Sunlight", "Standard"),
@@ -1029,9 +1098,12 @@ mod tests {
                 std::sync::Condvar::new(),
             )),
             replies,
+            progress: Default::default(),
+            context: eframe::egui::Context::default(),
         };
         for revision in 1..100 {
             worker.submit(super::Request {
+                preview_quality: PreviewQuality::Full,
                 revision,
                 path: "test.x3f".into(),
                 settings: foveonic::render::Settings::new("Sunlight", "Standard"),
@@ -1056,5 +1128,178 @@ mod tests {
         let state = worker.pending.0.lock().unwrap();
         assert!(state.request.is_none());
         assert!(state.clear);
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    fn metadata() -> Metadata {
+        use foveonic::source::{Matrix, MatrixEncoding};
+        Metadata {
+            width: 5888,
+            height: 3776,
+            rotation: 0,
+            processing_version: Some([3, 1, 2, 0]),
+            properties: [("CAMMODEL".into(), "SIGMA sd Quattro".into())].into(),
+            matrices: [("CAMERAID", 40.), ("CaptureISO", 100.)]
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k.into(),
+                        Matrix {
+                            encoding: MatrixEncoding::Float32,
+                            representation: "test",
+                            dimensions: vec![1],
+                            values: vec![v],
+                        },
+                    )
+                })
+                .collect(),
+            lists: Default::default(),
+        }
+    }
+    #[test]
+    fn fast_policy_keeps_inspection_monochrome_comparisons_and_exports_full() {
+        let mut m = metadata();
+        let mut r = Request {
+            revision: 1,
+            path: "test.x3f".into(),
+            settings: Settings::new("Sunlight", "Standard"),
+            preview_quality: PreviewQuality::Fast,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        };
+        assert_eq!(
+            effective_preview_quality(&r, &r.settings, &m),
+            PreviewQuality::Fast
+        );
+        r.output = "sensor.rgb".into();
+        assert_eq!(
+            effective_preview_quality(&r, &r.settings, &m),
+            PreviewQuality::Full
+        );
+        r.output = "final".into();
+        r.comparison = true;
+        assert_eq!(
+            effective_preview_quality(&r, &r.settings, &m),
+            PreviewQuality::Full
+        );
+        r.comparison = false;
+        for format in [ExportFormat::Tiff, ExportFormat::Dng] {
+            r.export = Some(Export {
+                path: "test.output".into(),
+                format,
+            });
+            assert_eq!(
+                effective_preview_quality(&r, &r.settings, &m),
+                PreviewQuality::Full
+            );
+        }
+        r.export = None;
+        r.settings.rendering = foveonic::render::Rendering::Monochrome;
+        assert_eq!(
+            effective_preview_quality(&r, &r.settings, &m),
+            PreviewQuality::Full
+        );
+        r.settings.rendering = foveonic::render::Rendering::Color;
+        m.processing_version = Some([4, 0, 1, 0]);
+        assert_eq!(
+            effective_preview_quality(&r, &r.settings, &m),
+            PreviewQuality::Full
+        );
+    }
+
+    #[test]
+    #[ignore = "requires GPU and QUATTRO_X3F"]
+    fn fast_preference_exports_full_files_and_returns_to_fast_preview() {
+        let path = PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
+        let source = Source::open(&path).unwrap();
+        let engine = Engine::new().unwrap();
+        let directory =
+            std::env::temp_dir().join(format!("foveonic-fast-export-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.exposure = 0.5;
+        settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::Srgb);
+        let expected = engine
+            .render(&source, &settings, &mut Profile::default())
+            .unwrap();
+        let native = expected.view().extent;
+        engine
+            .write_tiff(
+                &expected,
+                &directory.join("expected.tiff"),
+                &mut Profile::default(),
+            )
+            .unwrap();
+        drop(expected);
+        foveonic::dng::write_source(
+            &engine,
+            &source,
+            &settings,
+            &directory.join("expected.dng"),
+            &mut Profile::default(),
+        )
+        .unwrap();
+        drop(source);
+        let worker = Worker::new(engine, egui::Context::default());
+        let receive = || loop {
+            if let Update::Image(reply) = worker
+                .replies
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap()
+            {
+                break *reply;
+            }
+        };
+        for (index, format) in [ExportFormat::Tiff, ExportFormat::Dng]
+            .into_iter()
+            .enumerate()
+        {
+            let extension = format.extension();
+            let destination = directory.join(format!("export.{extension}"));
+            worker.submit(Request {
+                revision: index as u64 + 1,
+                path: path.clone(),
+                settings: settings.clone(),
+                preview_quality: PreviewQuality::Fast,
+                output: "sensor.rgb".into(),
+                comparison: false,
+                export: Some(Export {
+                    path: destination.clone(),
+                    format,
+                }),
+            });
+            let exported = receive();
+            assert!(exported.result.unwrap().is_none());
+            assert_eq!(exported.exported, Some(format));
+            assert!(
+                std::fs::read(directory.join(format!("expected.{extension}"))).unwrap()
+                    == std::fs::read(destination).unwrap(),
+                "{extension} export differs from independent Full output"
+            );
+        }
+        worker.submit(Request {
+            revision: 3,
+            path,
+            settings,
+            preview_quality: PreviewQuality::Fast,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        });
+        let reply = receive();
+        assert_eq!(reply.settings.preview_quality, PreviewQuality::Full);
+        let frame = reply.result.unwrap().unwrap();
+        assert_eq!(
+            frame.artifact.settings.preview_quality,
+            PreviewQuality::Fast
+        );
+        assert_eq!(frame.texture.description().extent, native.map(|v| v / 2));
+        assert_eq!(frame.display_extent(false), native);
+        drop(worker);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

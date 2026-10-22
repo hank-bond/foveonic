@@ -43,6 +43,7 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
     if settings.color_mode.is_empty() || appearance::MODES.contains(&settings.color_mode.as_str()) {
         supported.color_mode.clone_from(&settings.color_mode);
     }
+    supported.preview_quality = settings.preview_quality;
     supported.rendering = settings.rendering;
     supported.monochrome.noise = settings.monochrome.noise;
     supported.monochrome.mix = settings.monochrome.mix;

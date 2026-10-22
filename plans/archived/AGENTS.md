@@ -45,8 +45,11 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[profiling-consolidation](./profiling-consolidation.md)** _(archived)._ Consolidate retained core, GUI and native profiling into explicit modes and reusable structured reports.
 - **[quattro-organization](./quattro-organization.md)** _(archived)._ Review Quattro consistency across family controls, recipe preparation, numerical nodes and shared execution.
 - **[quattro-performance](./quattro-performance.md)** _(archived)._ Completed output-equivalent repair and cache optimizations cut Quattro render latency roughly threefold.
+- **[quattro-performance-and-fast-preview](./quattro-performance-and-fast-preview.md)** _(archived)._ Measure Quattro latency and retain simple optimizations that preserve demonstrated photographic output.
+- **[quattro-review](./quattro-review.md)** _(archived)._ Review Quattro Fast integration for recipe ownership, named numerical controls, clear geometry and preserved output.
 - **[release-0.1.1](./release-0.1.1.md)** _(archived)._ Release v0.1.1 passed local and hosted checks and was published as GitHub's Latest application release.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** _(archived)._ Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
+- **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** _(archived)._ Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.

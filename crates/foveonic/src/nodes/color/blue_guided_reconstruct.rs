@@ -1,10 +1,10 @@
-//! Reconstructs full-resolution code RGB from low-resolution color and a blue guide.
+//! Reconstructs code RGB from color histories and blue at matching or doubled output resolution.
 //!
 //! Signed guide values retain the reference signed16 wrap in Float32 storage.
 //! GPU chroma-gate exponentiation can differ from native expf by one gain ULP;
 //! whole-frame comparisons measure the resulting integer-code error explicitly.
-//! Physical margins outside the recovered worker region use the nonnegative
-//! resized guide and unit residual, independently of native allocation aliases.
+//! The doubled route's physical margins use the nonnegative resized guide and
+//! unit residual, independently of native allocation aliases.
 use crate::{
     gpu::{
         Binding::{Read, Write},
@@ -14,10 +14,15 @@ use crate::{
     recipe::Key,
     source::Result,
 };
+// Kept in the parameter key so same-size and doubled reconstruction never alias.
+// Shader entry points are selected on the host. The flag is not a camera mode.
+const SAME_SIZE_OUTPUT: f32 = 1.;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
     shape: [u32; 4],
+    /// Chroma suppression, reserved, reserved, same-size-output flag.
     controls: [f32; 4],
     noise: [f32; 4],
     noise_low: [f32; 4],
@@ -77,8 +82,36 @@ impl Prepared {
             blue_filter,
         })
     }
+    /// Average the doubled blue plane onto the color grid, then derive its
+    /// residual against the guide and pack the existing color without upsampling.
+    pub(crate) fn same_size(
+        extent: [u32; 2],
+        noise: [f64; 3],
+        filter: Option<super::histogram_bilateral::Prepared>,
+    ) -> Result<Self> {
+        if filter
+            .as_ref()
+            .is_some_and(|filter| filter.extent() != extent)
+        {
+            return Err("same-size reconstruction filter geometry mismatch".into());
+        }
+        let mut value = Self::new(extent, 0., noise, None)?;
+        value.params.controls[3] = SAME_SIZE_OUTPUT;
+        value.blue_filter = filter;
+        Ok(value)
+    }
+    pub(crate) fn output_extent(&self) -> [u32; 2] {
+        if self.is_same_size() {
+            self.extent()
+        } else {
+            self.extent().map(|v| v * 2)
+        }
+    }
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
+    }
+    fn is_same_size(&self) -> bool {
+        self.params.controls[3] == SAME_SIZE_OUTPUT
     }
     pub(crate) fn key(&self) -> Key {
         let key = Key::pod(&self.params).slice(&self.spatial);
@@ -110,6 +143,9 @@ pub(crate) fn apply(
         || blue.size() != high * 4
     {
         return Err("blue-guided reconstruction input geometry mismatch".into());
+    }
+    if prepared.is_same_size() {
+        return apply_same_size(gpu, guide, color, blue, prepared, profile);
     }
     let uniform = gpu.uniform(&prepared.params);
     let spatial = gpu.upload("Quarter-cell spatial weights", &prepared.spatial)?;
@@ -182,6 +218,55 @@ pub(crate) fn apply(
     gpu.finish_trace(&trace, profile)?;
     Ok(Output { rgb, residual })
 }
+fn apply_same_size(
+    gpu: &Gpu,
+    guide: &ReadGuard,
+    color: &ReadGuard,
+    blue: &ReadGuard,
+    prepared: &Prepared,
+    profile: &mut Profile,
+) -> Result<Output> {
+    let [w, h] = prepared.extent();
+    let n = u64::from(w) * u64::from(h);
+    let uniform = gpu.uniform(&prepared.params);
+    let mut mean = gpu.storage("Averaged calibrated blue", n * 4)?;
+    let mut rgb = gpu.storage("Same-resolution code RGB", n * 12)?;
+    let mut residual = gpu.storage("Same-resolution detail residual", n * 4)?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 1);
+    gpu.dispatch(
+        Kernel::ReducedBlue,
+        &mut [
+            (0, Read(&uniform)),
+            (4, Read(blue)),
+            (7, Write(mean.write())),
+        ],
+        [w.div_ceil(8), h.div_ceil(8)],
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, profile)?;
+    let filtered = prepared
+        .blue_filter
+        .as_ref()
+        .map(|f| super::histogram_bilateral::apply(gpu, &mean, f, profile))
+        .transpose()?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 1);
+    gpu.dispatch(
+        Kernel::ReducedRestore,
+        &mut [
+            (0, Read(&uniform)),
+            (1, Read(guide)),
+            (2, Read(color)),
+            (4, Read(filtered.as_ref().unwrap_or(&mean))),
+            (8, Write(rgb.write())),
+            (9, Write(residual.write())),
+        ],
+        [w.div_ceil(8), h.div_ceil(8)],
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, profile)?;
+    Ok(Output { rgb, residual })
+}
+
 #[cfg(test)]
 #[path = "blue_guided_reconstruct_test.rs"]
 mod tests;

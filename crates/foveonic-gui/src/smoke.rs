@@ -7,6 +7,16 @@ use crate::{
 use eframe::egui;
 use std::path::PathBuf;
 
+const FAST_PREVIEW_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "fast",
+    "fast-zoom",
+    "fast-edit",
+    "full-again",
+    "fast-again",
+];
+
 const SCREENSHOT_TARGETS: &[&str] = &["preview", "readme"];
 
 #[derive(serde::Deserialize)]
@@ -164,12 +174,15 @@ pub struct Smoke {
     awaiting: bool,
     close_at: Option<std::time::Instant>,
     settled_frames: u8,
+    fast_region: Option<crate::viewport::PixelRegion>,
 }
 impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if screenshot_active() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_FAST").is_some() {
+                FAST_PREVIEW_TARGETS
+            } else if screenshot_active() {
                 SCREENSHOT_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_SCOPES").is_some() {
                 VIEWPORT_SCOPE_TARGETS
@@ -192,6 +205,7 @@ impl Smoke {
             awaiting: false,
             close_at: None,
             settled_frames: 0,
+            fast_region: None,
         })
     }
     /// Hold processing replies until the embedded preview has been captured.
@@ -292,6 +306,59 @@ impl App {
                 )
                 .unwrap();
             }
+            if smoke.targets == FAST_PREVIEW_TARGETS && !smoke.preview_pending() {
+                let frame = self.frame.as_ref().unwrap();
+                let target = smoke.targets[smoke.index];
+                let fast = target.starts_with("fast");
+                assert_eq!(
+                    frame.artifact.settings.preview_quality,
+                    if fast {
+                        foveonic::render::PreviewQuality::Fast
+                    } else {
+                        foveonic::render::PreviewQuality::Full
+                    }
+                );
+                let native = frame.display_extent(false);
+                assert_eq!(
+                    frame.texture.description().extent,
+                    if fast { native.map(|v| v / 2) } else { native }
+                );
+                let visible = self.viewport.visible_pixels().unwrap();
+                if target == "fast-edit" {
+                    smoke.fast_region = Some(visible);
+                }
+                if target == "full-again" || target == "fast-again" {
+                    assert_eq!(
+                        Some(visible),
+                        smoke.fast_region,
+                        "quality switch moved the viewport"
+                    );
+                }
+                let actual = self
+                    .viewport
+                    .visible_pixels_for(frame.texture.description().extent)
+                    .unwrap();
+                let expected_scope = [
+                    actual.top_left[0],
+                    actual.top_left[1],
+                    actual.bottom_right[0] + 1,
+                    actual.bottom_right[1] + 1,
+                ];
+                if target != "final" {
+                    assert_eq!(self.scope_key.unwrap().region, Some(expected_scope));
+                }
+                let progress = self.worker.progress.snapshot().unwrap();
+                assert_eq!(progress.revision, frame.revision);
+                assert_eq!(progress.fraction, 1.);
+                assert!(!progress.running());
+                assert!(progress.milliseconds() >= frame.milliseconds);
+                let report = serde_json::json!({"total_ms":progress.milliseconds(),"progress":progress.fraction,"target":target,"quality":frame.quality_label(),"rendered_extent":frame.texture.description().extent,"native_extent":native,"visible_native":[visible.top_left,visible.bottom_right],"scope_region":self.scope_key.unwrap().region,"processing_ms":frame.milliseconds});
+                std::fs::write(
+                    smoke.directory.join(format!("{target}.json")),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                )
+                .unwrap();
+            }
             smoke.index += 1;
             smoke.awaiting = false;
             if smoke.index == smoke.targets.len() {
@@ -337,6 +404,23 @@ impl App {
                     self.submit(None);
                 }
                 "final" => {}
+                "fast" | "fast-again" => {
+                    self.preferences.preview_quality = foveonic::render::PreviewQuality::Fast;
+                    self.preferences.scope_viewport = true;
+                    self.submit(None);
+                }
+                "full-again" => {
+                    self.preferences.preview_quality = foveonic::render::PreviewQuality::Full;
+                    self.submit(None);
+                }
+                "fast-zoom" => {
+                    self.viewport.zoom_by(3.);
+                    self.viewport.pan_to(egui::vec2(0.6, 0.4));
+                }
+                "fast-edit" => {
+                    self.settings.exposure = 0.5;
+                    self.submit(None);
+                }
                 "viewport-fit" => self.preferences.scope_viewport = true,
                 "viewport-zoom" => self.viewport.zoom_by(4.),
                 "viewport-pan" => self.viewport.pan_to(egui::vec2(0.7, 0.3)),

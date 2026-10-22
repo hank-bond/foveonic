@@ -42,7 +42,7 @@ const SENSOR_HUFFMAN_FORMAT: u32 = 30;
 const PROPERTY_HEADER_BYTES: usize = 24;
 const PROPERTY_ENTRY_BYTES: usize = 8;
 
-pub(crate) fn read(path: &Path) -> Result<Source> {
+pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> {
     let start = Instant::now();
     let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
@@ -56,6 +56,7 @@ pub(crate) fn read(path: &Path) -> Result<Source> {
         return Err("X3F file changes during reading".into());
     }
     let read = Timing::elapsed("file read", start);
+    read_complete();
     let start = Instant::now();
     let mut source = decode(&data)?;
     // Parallel-plane timings overlap this total, so adding them would count

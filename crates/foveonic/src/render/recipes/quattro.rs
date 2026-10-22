@@ -32,10 +32,6 @@ mod stage2b;
 mod stage3;
 
 use super::{requested, BuiltRecipe};
-
-// The reference color route leaves optional sparse HP correction disabled.
-// Photographic highlight reconstruction remains a separate operation.
-const COLOR_HP_CORRECTION: bool = false;
 use crate::{
     graph::{Graph, Operation},
     interactive::Execution,
@@ -43,6 +39,35 @@ use crate::{
     render::{Engine, Settings},
     source::{Result, Source, SourceStorage},
 };
+
+// The reference color route leaves optional sparse HP correction disabled.
+// Photographic highlight reconstruction remains a separate operation.
+const COLOR_HP_CORRECTION: bool = false;
+/// Full source metadata remains authoritative for camera calibration.
+/// Working geometry is selected separately for the preview recipe.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum WorkingGrid {
+    #[default]
+    Full,
+    Half,
+}
+impl WorkingGrid {
+    fn is_half(self) -> bool {
+        self == Self::Half
+    }
+    fn divisor(self) -> u32 {
+        match self {
+            Self::Full => 1,
+            Self::Half => 2,
+        }
+    }
+    fn extent(self, native: [u32; 2]) -> [u32; 2] {
+        native.map(|v| v / self.divisor())
+    }
+}
+pub(in crate::render) fn fast_available(metadata: &crate::source::Metadata) -> bool {
+    calibration::is_ordinary_dp(metadata) || calibration::is_ordinary_sd(metadata)
+}
 
 pub(super) fn build(
     engine: &Engine,
@@ -74,6 +99,16 @@ fn compose(
     if source.storage() != SourceStorage::PackedRgbBluePhases {
         return Err("sensor plane inspection requires six-sample cells".into());
     }
+    let fast = settings.preview_quality == crate::render::PreviewQuality::Fast
+        && !dng
+        && !settings.is_monochrome()
+        && names == ["final"]
+        && fast_available(&source.metadata);
+    let grid = if fast {
+        WorkingGrid::Half
+    } else {
+        WorkingGrid::Full
+    };
     let available = outputs(Some(&source.metadata));
     if names
         .iter()
@@ -196,83 +231,87 @@ fn compose(
     use crate::nodes::sensor::{
         blue_despeckle::Stage as Filter, ordered_blue_repair::Stage as Repair,
     };
-    let blue = if is_sd {
-        let corrected = graph.add(
-            Operation::Fppd(std::sync::Arc::new(sd::luma(&source.metadata)?)),
-            &[sparse_blue],
-        )?;
-        finish!(corrected);
-        if let Some(prepared) = sd::pattern(&source.metadata)? {
+    let mismatch = if fast {
+        sparse_blue
+    } else {
+        let blue = if is_sd {
             let corrected = graph.add(
-                Operation::BluePattern(std::sync::Arc::new(prepared)),
-                &[corrected],
+                Operation::Fppd(std::sync::Arc::new(sd::luma(&source.metadata)?)),
+                &[sparse_blue],
             )?;
             finish!(corrected);
-            corrected
+            if let Some(prepared) = sd::pattern(&source.metadata)? {
+                let corrected = graph.add(
+                    Operation::BluePattern(std::sync::Arc::new(prepared)),
+                    &[corrected],
+                )?;
+                finish!(corrected);
+                corrected
+            } else {
+                corrected
+            }
         } else {
-            corrected
-        }
-    } else {
-        sparse_blue
-    };
-    let directional = graph.add(
-        Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
-            &source.metadata,
-            Repair::Directional,
-        )?)),
-        &[blue],
-    )?;
-    finish!(directional);
-    let directional_mask = graph.named_output(directional, "luma-repair.defects")?;
-    // The selected reference SuperBlue worker has no reachable pixel writes.
-    let offsets = graph.add(
-        Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
-            &source.metadata,
-            Repair::DarkOffsets,
-        )?)),
-        &[directional],
-    )?;
-    finish!(offsets);
-    let dark_filtered = graph.add(
-        Operation::BlueDespeckle(std::sync::Arc::new(luma_repair::prepare_despeckle(
-            &source.metadata,
-            Filter::DarkPairs,
-        )?)),
-        &[offsets],
-    )?;
-    finish!(dark_filtered);
-    let repaired = graph.add(
-        Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
-            &source.metadata,
-            Repair::General,
-        )?)),
-        &[dark_filtered, directional_mask],
-    )?;
-    finish!(repaired);
-    let filtered = graph.add(
-        Operation::BlueDespeckle(std::sync::Arc::new(luma_repair::prepare_despeckle(
-            &source.metadata,
-            Filter::General,
-        )?)),
-        &[repaired],
-    )?;
-    finish!(filtered);
-    let clusters = graph.add(
-        Operation::LumaClusters(std::sync::Arc::new(luma_repair::prepare_clusters(
-            &source.metadata,
-        )?)),
-        &[filtered],
-    )?;
-    finish!(clusters);
-    let mismatch = if (calibration::normalization(&source.metadata)? - 1.).abs() < f32::EPSILON {
-        graph.add(
-            Operation::BlueMismatch(std::sync::Arc::new(highlights::prepare_blue(
+            sparse_blue
+        };
+        let directional = graph.add(
+            Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
+                &source.metadata,
+                Repair::Directional,
+            )?)),
+            &[blue],
+        )?;
+        finish!(directional);
+        let directional_mask = graph.named_output(directional, "luma-repair.defects")?;
+        // The selected reference SuperBlue worker has no reachable pixel writes.
+        let offsets = graph.add(
+            Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
+                &source.metadata,
+                Repair::DarkOffsets,
+            )?)),
+            &[directional],
+        )?;
+        finish!(offsets);
+        let dark_filtered = graph.add(
+            Operation::BlueDespeckle(std::sync::Arc::new(luma_repair::prepare_despeckle(
+                &source.metadata,
+                Filter::DarkPairs,
+            )?)),
+            &[offsets],
+        )?;
+        finish!(dark_filtered);
+        let repaired = graph.add(
+            Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
+                &source.metadata,
+                Repair::General,
+            )?)),
+            &[dark_filtered, directional_mask],
+        )?;
+        finish!(repaired);
+        let filtered = graph.add(
+            Operation::BlueDespeckle(std::sync::Arc::new(luma_repair::prepare_despeckle(
+                &source.metadata,
+                Filter::General,
+            )?)),
+            &[repaired],
+        )?;
+        finish!(filtered);
+        let clusters = graph.add(
+            Operation::LumaClusters(std::sync::Arc::new(luma_repair::prepare_clusters(
                 &source.metadata,
             )?)),
-            &[clusters],
-        )?
-    } else {
-        clusters
+            &[filtered],
+        )?;
+        finish!(clusters);
+        if (calibration::normalization(&source.metadata)? - 1.).abs() < f32::EPSILON {
+            graph.add(
+                Operation::BlueMismatch(std::sync::Arc::new(highlights::prepare_blue(
+                    &source.metadata,
+                )?)),
+                &[clusters],
+            )?
+        } else {
+            clusters
+        }
     };
     finish!(mismatch);
     // The DP1 optical correction belongs after factory repairs and before
@@ -378,6 +417,10 @@ fn compose(
         &source.metadata,
         crate::color_space::ColorSpace::Srgb,
     )?;
+    let physical_extent = [params.source[0], params.source[1]];
+    params.source[..2].copy_from_slice(&grid.extent(physical_extent));
+    let output_extent = grid.extent([params.output[0], params.output[1]]);
+    params.output[..2].copy_from_slice(&output_extent);
     if let Some(size) = settings.output_size {
         params.output[..2].copy_from_slice(&size);
     }
@@ -387,6 +430,7 @@ fn compose(
         luma: controls.luminance as u8,
         detail: 1.,
         residual_level,
+        grid,
     };
     let reconstruction = if settings.is_monochrome() {
         monochrome::prepare_stage2b(&source.metadata, reconstruction_controls, color_mode)?
@@ -432,6 +476,7 @@ fn compose(
             sharpen_base: settings.effective_sharpen_amount(&source.metadata)?,
             lowest_band_factor: None,
             preserve_dark_detail: true,
+            grid,
         }
     };
     let sharpened = if settings.is_monochrome() {
@@ -461,6 +506,11 @@ fn compose(
         color_mode,
         settings.effective_sharpen_amount(&source.metadata)?,
     )?;
+    let amount = if fast {
+        amount * stage3::HALF_GRID_SHARPEN_SCALE
+    } else {
+        amount
+    };
     let sharpened = if amount > 0. && !settings.is_monochrome() {
         graph.add(
             Operation::ColorSharpen(crate::nodes::finish::color_sharpen::Params::new(
@@ -493,18 +543,19 @@ fn compose(
         .map(|v| v as u32);
     // This crop's raw right/bottom are exclusive in the reference operation.
     // Nominal output dimensions still include that final recorded pixel.
-    let cropped = graph.add(
-        Operation::CodeCrop(std::sync::Arc::new(
-            crate::nodes::finish::code_crop::Prepared::new(
-                [params.source[0], params.source[1]],
-                crop,
-                [params.output[0], params.output[1]],
-                source.metadata.rotation,
-                true,
-            )?,
-        )),
-        &[sharpened],
+    let crop = crate::nodes::finish::code_crop::Prepared::new(
+        physical_extent,
+        crop,
+        [params.output[0], params.output[1]],
+        source.metadata.rotation,
+        true,
     )?;
+    let crop = if grid.is_half() {
+        crop.on_half_grid()?
+    } else {
+        crop
+    };
+    let cropped = graph.add(Operation::CodeCrop(std::sync::Arc::new(crop)), &[sharpened])?;
     finish!(cropped);
     validate_photographic(settings)?;
     let response_input = if settings.is_monochrome() {

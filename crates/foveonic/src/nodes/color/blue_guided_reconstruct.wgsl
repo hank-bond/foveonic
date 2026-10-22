@@ -1,6 +1,14 @@
 struct Params {
     shape: vec4<u32>, controls: vec4<f32>, noise: vec4<f32>, noise_low: vec4<f32>
 }
+// Reference reconstruction bounds, shared by the doubled and same-size routes.
+const BLUE_RATIO_OFFSET: f32 = 5.;
+const HIGHLIGHT_FADE_START: f32 = 11000.;
+const HIGHLIGHT_FADE_SPAN: f32 = 3000.;
+const MIN_RESIDUAL_GAIN: f32 = .001;
+const MAX_RESIDUAL_GAIN: f32 = 1000.;
+const RGB_CODE_MAX: f32 = 65535.;
+const CELL_MEAN_WEIGHT: f32 = .25;
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> source: array<f32>;
 @group(0) @binding(2) var<storage, read> color: array<f32>;
@@ -106,7 +114,7 @@ fn blue_guide_horizontal(@builtin(global_invocation_id) id: vec3<u32>) {
         channels[c] = value;
     }
     let i = id.y*params.shape.z+id.x;
-    let gain = divide(plus(max(0., blue[i]), 5.), plus(max(0., channels.z), 5.));
+    let gain = divide(plus(max(0., blue[i]), BLUE_RATIO_OFFSET), plus(max(0., channels.z), BLUE_RATIO_OFFSET));
     for (var c = 0u;c<3u;c++) {
         signed_guide[i*3u+c] = signed16(plus(times(gain, channels[c]), .5));
     }
@@ -191,9 +199,9 @@ fn blue_guided_restore(@builtin(global_invocation_id) id: vec3<u32>) {
     var ratio = 1.;
     let b = blue[i];
     if mean_blue>0. {
-        ratio = divide(plus(max(0., b), 5.), plus(mean_blue, 5.));
-        if b >= 11000. && ratio<1. {
-            let fade = clamp(divide(plus(b, -11000.), 3000.), 0., 1.);
+        ratio = divide(plus(max(0., b), BLUE_RATIO_OFFSET), plus(mean_blue, BLUE_RATIO_OFFSET));
+        if b >= HIGHLIGHT_FADE_START && ratio<1. {
+            let fade = clamp(divide(plus(b, -HIGHLIGHT_FADE_START), HIGHLIGHT_FADE_SPAN), 0., 1.);
             ratio = fma(plus(ratio, -1.), plus(1., -fade), 1.);
         }
     }
@@ -209,8 +217,39 @@ fn blue_guided_restore(@builtin(global_invocation_id) id: vec3<u32>) {
     else {
         ratio = divide(1., fma(gate, plus(divide(1., ratio), -1.), 1.));
     }
-    residual[i] = clamp(ratio, .001, 1000.);
+    residual[i] = clamp(ratio, MIN_RESIDUAL_GAIN, MAX_RESIDUAL_GAIN);
     for (var c = 0u;c<3u;c++) {
-        rgb[i*3u+c] = trunc(clamp(plus(divide(channels[c], total), .5), 0., 65535.));
+        rgb[i*3u+c] = trunc(clamp(plus(divide(channels[c], total), .5), 0., RGB_CODE_MAX));
+    }
+}
+
+@compute @workgroup_size(8, 8)
+fn reduced_blue(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.shape.x || id.y >= params.shape.y {
+        return;
+    }
+    let p = (id.y * 2u) * params.shape.z + id.x * 2u;
+    repaired[id.y * params.shape.x + id.x] =
+        (blue[p] + blue[p + 1u] + blue[p + params.shape.z] + blue[p + params.shape.z + 1u]) * CELL_MEAN_WEIGHT;
+}
+
+@compute @workgroup_size(8, 8)
+fn reduced_restore(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.shape.x || id.y >= params.shape.y {
+        return;
+    }
+    let i = id.y * params.shape.x + id.x;
+    let guide_blue = source[i * 3u + 2u];
+    var ratio = 1.;
+    if guide_blue > 0. {
+        ratio = (max(blue[i], 0.) + BLUE_RATIO_OFFSET) / (guide_blue + BLUE_RATIO_OFFSET);
+        // The same-size route fades against the source guide, as in the LOW helper.
+        if guide_blue >= HIGHLIGHT_FADE_START && ratio < 1. {
+            ratio = fma(ratio - 1., 1. - clamp((guide_blue - HIGHLIGHT_FADE_START) / HIGHLIGHT_FADE_SPAN, 0., 1.), 1.);
+        }
+    }
+    residual[i] = clamp(ratio, MIN_RESIDUAL_GAIN, MAX_RESIDUAL_GAIN);
+    for (var c = 0u; c < 3u; c++) {
+        rgb[i * 3u + c] = trunc(clamp(color[i * 3u + c], 0., RGB_CODE_MAX));
     }
 }

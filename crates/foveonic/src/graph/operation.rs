@@ -296,7 +296,13 @@ impl Operation {
             Self::BlueRefresh(_) => "refresh RGB blue from spatial phases",
             Self::HlpCalibration(_) => "calibrate sparse highlight pixels",
             Self::ByteMaskDouble(_) => "double highlight byte mask",
-            Self::BlueGuidedReconstruct(_) => "reconstruct full-resolution color",
+            Self::BlueGuidedReconstruct(p) => {
+                if p.output_extent() == p.extent() {
+                    "reconstruct same-resolution color"
+                } else {
+                    "reconstruct full-resolution color"
+                }
+            }
             Self::ResidualFinish { .. } => "finish reconstruction residual",
             Self::OrderedBlueRepair(_) => "repair ordered blue defects",
             Self::BlueMismatch(_) => "repair highlight blue mismatch",

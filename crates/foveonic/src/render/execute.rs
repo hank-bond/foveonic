@@ -108,6 +108,20 @@ impl Engine {
         for &target in targets {
             consumers[target] += 1;
         }
+        let stage_total = graph
+            .nodes
+            .iter()
+            .filter(|node| node.outputs.iter().any(|id| required[*id] && !cached[*id]))
+            .count();
+        let mut stage_completed = 0;
+        if stage_total == 0 {
+            if let Some(progress) = execution.progress {
+                progress(super::RenderProgress::Stage {
+                    completed: 0,
+                    total: 0,
+                });
+            }
+        }
         for (node_index, node) in graph.nodes.iter().enumerate() {
             execution.check()?;
             if !node.outputs.iter().any(|id| required[*id] && !cached[*id]) {
@@ -145,7 +159,7 @@ impl Engine {
                 Operation::ColorSharpen(p) => p.extent(),
                 Operation::ProportionalSharpen(p) => p.extent(),
                 Operation::Encode { params, .. } => [params.output[0], params.output[1]],
-                Operation::BlueGuidedReconstruct(_) => inherited.map(|v| v * 2),
+                Operation::BlueGuidedReconstruct(p) => p.output_extent(),
                 _ => inherited,
             };
             let view_baked = matches!(
@@ -527,7 +541,7 @@ impl Engine {
                         prepared,
                         profile,
                     )?;
-                    let extent = inherited.map(|v| v * 2);
+                    let extent = prepared.output_extent();
                     if required[node.outputs[1]] {
                         values[node.outputs[1]] = Some(Value {
                             buffer: output.residual,
@@ -1303,6 +1317,13 @@ impl Engine {
             // Batch rendering has no interactive queue to protect and can stay asynchronous.
             if execution.cancel.is_some() {
                 gpu.device.poll(wgpu::Maintain::Wait);
+            }
+            stage_completed += 1;
+            if let Some(progress) = execution.progress {
+                progress(super::RenderProgress::Stage {
+                    completed: stage_completed,
+                    total: stage_total,
+                });
             }
             for &id in &reads[node_index] {
                 consumers[id] -= 1;

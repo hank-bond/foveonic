@@ -6,6 +6,13 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// Completed source-load boundaries, observed without changing decoded samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadStage {
+    FileRead,
+    Decoded,
+}
+
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 const SENSOR_WIDTH: usize = 4928;
@@ -415,7 +422,15 @@ impl Source {
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let source = crate::x3f::read(path.as_ref())?;
+        Self::open_with_progress(path, |_| {})
+    }
+
+    /// Observe file reading and complete decoding, including metadata and geometry checks.
+    pub fn open_with_progress(
+        path: impl AsRef<Path>,
+        progress: impl Fn(LoadStage),
+    ) -> Result<Self> {
+        let source = crate::x3f::read(path.as_ref(), || progress(LoadStage::FileRead))?;
         match source.metadata.processing_family()? {
             ProcessingFamily::Merrill => {
                 if source.metadata.width != SENSOR_WIDTH || source.metadata.height != SENSOR_HEIGHT
@@ -444,6 +459,7 @@ impl Source {
                 }
             }
         }
+        progress(LoadStage::Decoded);
         Ok(source)
     }
 }

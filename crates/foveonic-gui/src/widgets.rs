@@ -3,7 +3,23 @@
 use eframe::egui;
 
 const RADIUS: u8 = 4;
+const BUTTON_GROUP_MARGIN: i8 = 4;
 pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);
+
+/// Give related controls a shared padded background without changing their spacing.
+pub fn button_group<R>(
+    ui: &mut egui::Ui,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    egui::Frame::new()
+        .inner_margin(BUTTON_GROUP_MARGIN)
+        .corner_radius(6)
+        .fill(MENU_BACKGROUND)
+        .show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), contents)
+                .inner
+        })
+}
 
 pub fn install_style(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
@@ -106,20 +122,37 @@ pub fn control_row<R>(
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     ui.add_space(ui.spacing().item_spacing.y);
+    centered_control_row(ui, contents)
+}
+
+/// Center labels with padded controls, leaving outer spacing to the container.
+pub fn centered_control_row<R>(
+    ui: &mut egui::Ui,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let height = control_height(ui);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), height),
+        egui::Layout::left_to_right(egui::Align::Center),
+        contents,
+    )
+}
+
+/// Reserve padded control height before placing centered labels or groups.
+pub fn control_height(ui: &egui::Ui) -> f32 {
     let text_height = |style| {
         egui::WidgetText::from("M")
             .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style)
             .size()
             .y
     };
-    let height = (text_height(egui::TextStyle::Button) + 2. * button_padding(ui).y)
+    (text_height(egui::TextStyle::Button) + 2. * button_padding(ui).y)
         .max(text_height(egui::TextStyle::Body))
-        .max(ui.spacing().interact_size.y);
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        contents,
-    )
+        .max(ui.spacing().interact_size.y)
+}
+
+pub fn button_group_height(ui: &egui::Ui) -> f32 {
+    control_height(ui) + 2. * f32::from(BUTTON_GROUP_MARGIN)
 }
 
 /// Fit the longest label plus the dropdown arrow and normal control padding.

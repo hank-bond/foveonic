@@ -84,6 +84,7 @@ pub(super) fn stage3_controls(
         sharpen_base,
         lowest_band_factor: Some(factor),
         preserve_dark_detail: false,
+        grid: super::WorkingGrid::Full,
     })
 }
 
@@ -487,6 +488,7 @@ mod tests {
             luma: 2,
             detail: 1.,
             residual_level: 3,
+            grid: super::super::WorkingGrid::Full,
         };
         let low = residual_controls(1., controls, false).unwrap();
         assert_eq!(low.0, 16. * 1.2);

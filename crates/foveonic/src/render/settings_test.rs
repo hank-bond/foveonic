@@ -214,3 +214,21 @@ fn camera_validation_requires_only_active_photographic_choices() {
         "Merrill mono color mode is inactive"
     );
 }
+
+#[test]
+fn preview_quality_is_transient_and_invalidates_active_rendering() {
+    let full = Settings::new("Sunlight", "Standard");
+    let mut fast = full.clone();
+    fast.preview_quality = PreviewQuality::Fast;
+    assert_eq!(full.changed_parameters(&fast), ["preview-quality"]);
+    assert_eq!(
+        crate::sidecar::encode(&full).unwrap(),
+        crate::sidecar::encode(&fast).unwrap()
+    );
+    assert_eq!(
+        crate::sidecar::decode(&crate::sidecar::encode(&fast).unwrap())
+            .unwrap()
+            .preview_quality,
+        PreviewQuality::Full
+    );
+}

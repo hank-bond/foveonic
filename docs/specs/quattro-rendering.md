@@ -19,6 +19,8 @@ Color and monochrome must retain independent Smooth/Crisp selections. Adjusting 
 
 The GUI must present the supported rendering choices honestly. Each camera retains its available inspection outputs independently of later preparation. Unsupported photographic adjustments must fail explicitly rather than silently selecting another recipe. The default recipe must use the bundled calibration maps under the [input specification's resource contract](./quattro-input.md). Rendering must not require an installed reference application or environment setup. Explicit calibration-directory overrides retain the same immutable resource contract.
 
+The optional [Fast preview](./quattro-fast-preview.md) derives a reduced working image from supported HIGH input. Its separate workspace policy preserves the Full recipe for exports. Native LOW input remains outside this scope.
+
 ## Composition
 
 Camera selection and metadata interpretation belong to family recipes. Numerical operations receive functional controls and immutable tables. Their switches must describe numerical behavior rather than camera identity. Share an operation only when its units, arithmetic, rounding and borders agree.

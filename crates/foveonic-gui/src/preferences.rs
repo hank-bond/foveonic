@@ -1,4 +1,4 @@
-//! Persists organizer, scope, zoom snap, and tool-section preferences separately from image edits.
+//! Persists organizer, scope, preview quality, zoom and tool preferences separately from image edits.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -71,6 +71,7 @@ pub struct Preferences {
     pub scope: Scope,
     pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
+    pub preview_quality: foveonic::render::PreviewQuality,
     pub sections: Vec<Section>,
     pub collapsed: BTreeSet<Section>,
 }
@@ -82,6 +83,7 @@ impl Default for Preferences {
             scope: Scope::Histogram,
             scope_viewport: false,
             zoom_snap: ZoomPreset::default(),
+            preview_quality: foveonic::render::PreviewQuality::Full,
             sections: Section::ALL.to_vec(),
             collapsed: BTreeSet::new(),
         }
@@ -235,6 +237,27 @@ mod tests {
                 Section::Scopes,
                 Section::Editing
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    #[test]
+    fn preview_quality_defaults_full_and_round_trips_as_workspace_state() {
+        assert_eq!(
+            Preferences::default().preview_quality,
+            foveonic::render::PreviewQuality::Full
+        );
+        let prefs = Preferences {
+            preview_quality: foveonic::render::PreviewQuality::Fast,
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec(&prefs).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Preferences>(&bytes).unwrap(),
+            prefs
         );
     }
 }

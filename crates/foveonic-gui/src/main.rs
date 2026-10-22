@@ -13,6 +13,7 @@ mod metadata;
 mod mixer;
 mod navigator;
 mod preferences;
+mod progress;
 mod scopes;
 mod sections;
 mod sidecars;
@@ -54,6 +55,7 @@ struct App {
     exporting: bool,
     preferences: preferences::Preferences,
     status: String,
+    status_error: bool,
     srgb_target: bool,
     render_state: egui_wgpu::RenderState,
     smoke: Option<smoke::Smoke>,
@@ -118,6 +120,7 @@ impl App {
             exporting: false,
             preferences,
             status: "Open a folder or Merrill X3F".into(),
+            status_error: false,
             srgb_target: rs.target_format.is_srgb(),
             render_state: rs.clone(),
             smoke: smoke::Smoke::from_env(),
@@ -130,6 +133,7 @@ impl App {
         Ok(app)
     }
     fn open(&mut self, path: PathBuf) {
+        self.status_error = false;
         match self.browser.open(&path) {
             Ok(()) => {
                 let folder = if path.is_dir() {
@@ -161,9 +165,13 @@ impl App {
                     self.viewport.reset();
                     viewport::clear(&self.render_state);
                     self.status = "No X3F files in this folder".into();
+                    self.status_error = true;
                 }
             }
-            Err(e) => self.status = format!("Cannot open {}: {e}", path.display()),
+            Err(e) => {
+                self.status = format!("Cannot open {}: {e}", path.display());
+                self.status_error = true;
+            }
         }
     }
     fn select(&mut self, path: PathBuf) {
@@ -189,14 +197,17 @@ impl App {
         }
         if let Some(path) = &self.selected {
             self.revision += 1;
+            self.status_error = false;
             self.busy = true;
             self.exporting = export.is_some();
             self.status = if let Some(export) = &export {
                 format!("Exporting {}…", export.format.label())
             } else if let Some(frame) = &self.frame {
                 format!(
-                    "Updating {}; displaying {}",
-                    self.output, frame.artifact.name
+                    "Updating {}; displaying {} · {}",
+                    self.output,
+                    frame.quality_label(),
+                    frame.artifact.name
                 )
             } else {
                 format!("Loading {}…", self.output)
@@ -206,6 +217,7 @@ impl App {
                 revision: self.revision,
                 path: path.clone(),
                 settings: self.settings.clone(),
+                preview_quality: self.preferences.preview_quality,
                 output: self.output.clone(),
                 comparison: self.comparison.requested()
                     && foveonic::inspection::comparison_input(
@@ -236,6 +248,7 @@ impl App {
                             Err(error) => {
                                 if !self.busy {
                                     self.status = format!("Scope analysis: {error}");
+                                    self.status_error = true;
                                 }
                             }
                         }
@@ -264,6 +277,9 @@ impl App {
                 continue;
             }
             if current {
+                self.worker
+                    .progress
+                    .finish(reply.revision, reply.result.is_err());
                 self.busy = false;
                 self.exporting = false;
             }
@@ -287,8 +303,10 @@ impl App {
                         format!("Displaying {}", frame.artifact.name)
                     } else {
                         format!(
-                            "Displaying {} · {:.0} ms",
-                            frame.artifact.name, frame.milliseconds
+                            "Displaying {} · {} · {:.0} ms",
+                            frame.quality_label(),
+                            frame.artifact.name,
+                            frame.milliseconds
                         )
                     };
                     if self.smoke.is_some() {
@@ -296,8 +314,10 @@ impl App {
                     }
                     if !current {
                         self.status = format!(
-                            "Updating {}; displaying {}",
-                            self.output, frame.artifact.name
+                            "Updating {}; displaying {} · {}",
+                            self.output,
+                            frame.quality_label(),
+                            frame.artifact.name
                         );
                     }
                     timing::image_received(
@@ -320,7 +340,10 @@ impl App {
                         self.submit(None);
                     }
                 }
-                Err(e) => self.status = e,
+                Err(e) => {
+                    self.status = e;
+                    self.status_error = true;
+                }
             }
         }
     }
@@ -330,7 +353,10 @@ impl App {
             return;
         };
         let region = if self.preferences.scope_viewport {
-            let Some(pixels) = self.viewport.visible_pixels() else {
+            let Some(pixels) = self
+                .viewport
+                .visible_pixels_for(frame.texture.description().extent)
+            else {
                 return;
             };
             Some([
@@ -399,11 +425,21 @@ impl App {
                         self.submit(Some(worker::Export { path, format }));
                     }
                 }
-                if self.busy {
-                    ui.spinner();
-                }
-                ui.add(egui::Label::new(&self.status).truncate())
+                progress::show(
+                    ui,
+                    self.worker.progress.snapshot(),
+                    !smoke::screenshot_active(),
+                )
+                .on_hover_text(&self.status);
+                if self.status_error {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.status).color(ui.visuals().error_fg_color),
+                        )
+                        .truncate(),
+                    )
                     .on_hover_text(&self.status);
+                }
             });
         });
         if let Some(warning) = self.sidecars.warning() {
@@ -533,37 +569,57 @@ impl App {
     }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.weak("Inspect");
-            ui.add_enabled_ui(!self.exporting, |ui| {
-                changed |= inspect::show(
+        // Reserve both groups before drawing so later dropdowns cannot shift Preview vertically.
+        let group_height = widgets::button_group_height(ui);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), group_height),
+            egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+            |ui| {
+                changed |= inspect::preview_quality(
                     ui,
-                    &self.settings,
-                    &mut self.output,
-                    &mut self.channel,
-                    self.metadata.as_deref(),
-                    self.capture
-                        .properties
-                        .as_ref()
-                        .and_then(|p| p.get("CAMMODEL"))
-                        .and_then(|model| {
-                            foveonic::source::ProcessingFamily::from_camera_model(model)
-                        }),
+                    !self.exporting,
+                    self.output == "final"
+                        && !self.comparison.requested()
+                        && self
+                            .metadata
+                            .as_deref()
+                            .is_some_and(|m| self.settings.fast_preview_available(m)),
+                    &mut self.preferences.preview_quality,
                 );
-                let requested = self.comparison.show(
-                    ui,
-                    &self.settings,
-                    &self.output,
-                    self.channel,
-                    self.metadata.as_deref(),
-                );
-                let has_pair = self
-                    .frame
-                    .as_ref()
-                    .is_some_and(|frame| frame.output == self.output && frame.comparison.is_some());
-                changed |= requested && (self.busy || !has_pair);
-            });
-        });
+                widgets::button_group(ui, |ui| {
+                    widgets::centered_control_row(ui, |ui| {
+                        ui.weak("Inspect");
+                        ui.add_enabled_ui(!self.exporting, |ui| {
+                            changed |= inspect::show(
+                                ui,
+                                &self.settings,
+                                &mut self.output,
+                                &mut self.channel,
+                                self.metadata.as_deref(),
+                                self.capture
+                                    .properties
+                                    .as_ref()
+                                    .and_then(|p| p.get("CAMMODEL"))
+                                    .and_then(|model| {
+                                        foveonic::source::ProcessingFamily::from_camera_model(model)
+                                    }),
+                            );
+                            let requested = self.comparison.show(
+                                ui,
+                                &self.settings,
+                                &self.output,
+                                self.channel,
+                                self.metadata.as_deref(),
+                            );
+                            let has_pair = self.frame.as_ref().is_some_and(|frame| {
+                                frame.output == self.output && frame.comparison.is_some()
+                            });
+                            changed |= requested && (self.busy || !has_pair);
+                        });
+                    });
+                });
+            },
+        );
         let mapping = self.displayed_mapping();
         if mapping.difference_gain > 0. {
             let frame = self.frame.as_ref().unwrap();
@@ -642,6 +698,7 @@ impl App {
                     self.viewport.show(
                         ui,
                         frame.view(mapping.input).clone(),
+                        frame.display_extent(mapping.input),
                         frame.comparison.as_ref().map(|c| c.texture.clone()),
                         mapping,
                         self.srgb_target,

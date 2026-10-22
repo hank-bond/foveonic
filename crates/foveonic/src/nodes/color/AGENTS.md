@@ -12,7 +12,7 @@ Keep tiled sample meanings and side-output dependencies explicit. Noise controls
 
 ### Source files
 
-- **[blue_guided_reconstruct.rs](./blue_guided_reconstruct.rs)** Reconstructs full-resolution code RGB from low-resolution color and a blue guide.
+- **[blue_guided_reconstruct.rs](./blue_guided_reconstruct.rs)** Reconstructs code RGB from color histories and blue at matching or doubled output resolution.
 - **[byte_mask_double.rs](./byte_mask_double.rs)** Doubles byte-valued masks with the selected cubic phases and exact integer accumulation.
 - **[cell_gain.rs](./cell_gain.rs)** Applies a spatial gain to each two-by-two cell with Float32 horizontal recurrence.
 - **[channel_noise.rs](./channel_noise.rs)** Composes blue-speckle repair, channel-ratio correction and neighborhood filtering without changing its source.

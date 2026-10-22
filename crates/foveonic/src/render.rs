@@ -25,9 +25,16 @@ use execute::Input;
 pub(crate) use execute::Value;
 use recipes::Recipe;
 pub use settings::{
-    ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls, Rendering,
-    RepairThreshold, Settings, TiffColorSpace, ToneControls,
+    ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls, PreviewQuality,
+    Rendering, RepairThreshold, Settings, TiffColorSpace, ToneControls,
 };
+
+/// Completed recipe preparation and execution boundaries for an interactive render.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderProgress {
+    Prepared,
+    Stage { completed: usize, total: usize },
+}
 
 /// Small image-derived statistics used while preparing calibration.
 #[derive(Clone, Copy, Default)]
@@ -231,12 +238,40 @@ impl Engine {
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
     ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
+        self.render_session_observed(session, settings, names, cancel, profile, None)
+    }
+
+    /// Report completed graph stages after the interactive executor's existing GPU waits.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_session_with_progress(
+        &self,
+        session: &mut RenderSession,
+        settings: &Settings,
+        names: &[&str],
+        cancel: impl Fn() -> bool,
+        profile: &mut Profile,
+        progress: impl Fn(RenderProgress),
+    ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
+        self.render_session_observed(session, settings, names, cancel, profile, Some(&progress))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_session_observed(
+        &self,
+        session: &mut RenderSession,
+        settings: &Settings,
+        names: &[&str],
+        cancel: impl Fn() -> bool,
+        profile: &mut Profile,
+        progress: Option<&dyn Fn(RenderProgress)>,
+    ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
         session.cache.bind(&self.owner);
         session.last_settings = Some(settings.clone());
         let mut execution = Execution {
             cache: Some(&mut session.cache),
             cancel: Some(&cancel),
             checkpoints: Vec::new(),
+            progress,
         };
         let result = self.render_recipe(
             &session.source,
