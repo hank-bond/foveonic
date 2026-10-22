@@ -118,3 +118,39 @@ Scope presentation now retains its last completed snapshot separately from the a
 The worker slider benchmark accepts an optional `FOVEONIC_SLIDER_X3F` path for repeating this measurement on any supported source. Duplicate timing TIFFs were removed after retaining timing receipts, reclaiming approximately 449 MiB.
 
 Follow-up validation passes: 439 ordinary workspace tests, strict all-target Clippy, formatting and generated-document checks. Independent cache GPU tests cover Quattro and Merrill, decoder comparison covers seven fixtures, and the native viewport-scope sequence passes.
+
+## Second optimization round
+
+The owner approved another measured optimization pass, including small photographic differences if they buy substantial latency reductions. This round first targets output-equivalent changes. The owner approved committing the validated output-equivalent optimizations before starting approximate algorithm experiments. Preserve original files and sidecars. Do not install.
+
+The supplied DP0 original compresses 5,405,184 red samples, the same number of green samples, and 23,030,784 blue samples including special columns. Its total is 33,841,152 samples. Ordinary Merrill geometry has 16,084,992 samples per plane, or 48,254,976 total. With one decoder worker per plane, DP0's largest serial stream contains 43% more samples despite the smaller total. The sd Quattro original has 22,233,088 blue samples, 38% more than one Merrill plane. These counts explain the concurrency imbalance. They do not establish a measured Merrill decode-time ratio, because bit lengths and decoder work also matter.
+
+Temporary preparation diagnostics isolated approximately 100 ms of the sd Quattro recipe in directional blue-repair preparation and another 29 ms in dark-offset preparation. Directional preparation selected 161,995 jobs. Most of its time scheduled dependencies through nine spatial hash lookups per job. Replace that hash table with a dense table of linked-list heads, retaining every prior record and the same maximum dependency level. Stable job ordering within each level remains unchanged. The table is temporary CPU preparation storage, requires no cache or invalidation rules, and is omitted when no jobs are selected. Dark-offset preparation has the largest head table, approximately 21 MiB for these sensor dimensions.
+
+The luma cluster shader now prepares all six oriented target terms once per repaired point rather than repeating transforms and mask arithmetic for every candidate. It retains the original Float32 score accumulation, candidate order, tie rules and sequential point writes. Shared target storage increases from 100 to 1,200 bytes per workgroup.
+
+Loading each candidate's 25 samples into a local array before its six orientations was rejected. It preserved complete outputs but increased the DP0 cluster diagnostic from approximately 170 to 227 ms and DP2 from 134 to 182 ms. Remove that array and retain direct candidate reads. No approximate processing change is selected.
+
+- [x] Compare dense-grid job batches against an independent all-prior-record dependency oracle across all three repair stages, cell boundaries, duplicates and reversed input order.
+- [x] Run ordinary workspace tests and strict all-target Clippy.
+- [x] Complete quiet paired full-render measurements across five camera models, the ISO800 route and dedicated monochrome, with complete Float32 baseline comparisons.
+- [x] Finish documentation checks and record final measurements.
+
+### Quiet comparison
+
+Freeze both release executables and alternate their execution order by case. Each runs one initial render, five warm complete renders and one separate synchronized GPU diagnostic, using Sunlight, Standard and otherwise recorded controls. Monochrome selects its dedicated recipe. Decode and TIFF export are outside the processing interval. First-render complete Float32 comparisons match in all eight cases, covering six color sources and two monochrome sources. The profiler performs this readback outside timing on the initial render, rather than validating every warm iteration. These are local Apple M1 Pro measurements, not application-startup or screen-feedback measurements.
+
+| Source | Warm full render before → after (ms) | Reduction | Recipe preparation before → after (ms) |
+| --- | --- | --- | --- |
+| DP0 | 998 → 928 | 7.0% | 116 → 51 |
+| DP1 | 891 → 853 | 4.3% | 102 → 49 |
+| DP2 | 958 → 904 | 5.6% | 115 → 52 |
+| DP3 | 963 → 881 | 8.4% | 137 → 61 |
+| sd Quattro | 887 → 812 | 8.4% | 151 → 69 |
+| DP3 ISO800 | 989 → 920 | 6.9% | 116 → 57 |
+| DP0 monochrome | 966 → 901 | 6.8% | 116 → 52 |
+| sd Quattro monochrome | 840 → 759 | 9.6% | 151 → 69 |
+
+Separate synchronized cluster GPU totals fall from 165 to 152 ms for DP0 and 133 to 123 ms for DP2. The larger wall-time benefit comes from repair-job preparation. Cached edits rebuild this preparation too, but this round does not measure pointer-to-display latency. Dense indexing reduces preparation work without retaining additional per-engine resources. Remaining expensive stages include RGB range neighborhoods, full-resolution blue filtering and ordered candidate matching. Approximate denoising and splitting candidate scoring across workgroups remain separate experiments.
+
+Final validation also passes the original-file cached photographic-edit regression on sd Quattro, the scheduling oracle, formatting, generated indexes and diff checks. No recipe controls, output defaults or decoder algorithms changed.

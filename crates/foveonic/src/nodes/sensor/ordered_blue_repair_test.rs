@@ -16,6 +16,49 @@ fn dependencies_separate_overlapping_searches_and_keep_distant_jobs_parallel() {
     );
 }
 #[test]
+fn spatial_batches_match_serial_dependency_oracle() {
+    for (stage, flags, radius) in [
+        (Stage::Directional, 0x03ff, 11_u32),
+        (Stage::DarkOffsets, 0x4001, 1),
+        (Stage::General, 0x0301, 11),
+    ] {
+        // Cross cell boundaries, revisit coordinates, and reverse traversal.
+        let mut records: Vec<_> = (0..400_u32)
+            .map(|i| [12 + (i * 17) % 55, 12 + (i * 29) % 55, flags])
+            .collect();
+        records.extend([[23, 23, flags], [23, 24, flags], [23, 23, flags]]);
+        for reverse in [false, true] {
+            if reverse {
+                records.reverse();
+            }
+            let mut prior: Vec<([u32; 3], usize)> = Vec::new();
+            let mut levels: Vec<Vec<[u32; 4]>> = Vec::new();
+            for &record in &records {
+                let level = prior
+                    .iter()
+                    .filter(|(r, _)| {
+                        r[0].abs_diff(record[0]) <= radius && r[1].abs_diff(record[1]) <= radius
+                    })
+                    .map(|(_, level)| level + 1)
+                    .max()
+                    .unwrap_or(0);
+                levels.resize_with(levels.len().max(level + 1), Vec::new);
+                levels[level].push([record[0], record[1], record[2], 0]);
+                prior.push((record, level));
+            }
+            let p = Prepared::new([80, 80], records.clone(), 0, 1., stage).unwrap();
+            let mut jobs = Vec::new();
+            let mut batches = Vec::new();
+            for level in levels {
+                batches.push([jobs.len() as u32, level.len() as u32]);
+                jobs.extend(level);
+            }
+            assert_eq!(p.jobs, jobs, "{stage:?} reverse={reverse}");
+            assert_eq!(p.batches, batches, "{stage:?} reverse={reverse}");
+        }
+    }
+}
+#[test]
 #[ignore = "requires a GPU and ORDERED_BLUE_REFERENCE"]
 fn record_stages_match_independent_native_fixtures() {
     let dir = std::path::PathBuf::from(std::env::var("ORDERED_BLUE_REFERENCE").unwrap());

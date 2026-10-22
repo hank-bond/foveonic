@@ -9,7 +9,7 @@ use crate::{
     recipe::Key,
     source::Result,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -103,26 +103,38 @@ impl Prepared {
             11
         };
         let cell_size = radius + 1;
-        // Stored points are (row, column, dependency level).
-        type ScheduledPoints = Vec<(u32, u32, usize)>;
-        let mut grid: HashMap<_, ScheduledPoints> = HashMap::new();
+        // A dense head table avoids nine hash lookups per record. Linked points
+        // retain every earlier job, including duplicate sensor coordinates.
+        let columns = width.div_ceil(cell_size);
+        let rows = height.div_ceil(cell_size);
+        let mut heads = if selected.is_empty() {
+            Vec::new()
+        } else {
+            vec![u32::MAX; (columns * rows) as usize]
+        };
+        let mut prior_points: Vec<(u32, u32, u32, usize)> = Vec::with_capacity(selected.len());
         let mut levels: Vec<Vec<[u32; 4]>> = Vec::new();
         for job in selected {
             let [y, x, _, _] = job;
-            let cell = (y / cell_size, x / cell_size);
+            let cy = y / cell_size;
+            let cx = x / cell_size;
             let mut level = 0;
-            for cy in cell.0.saturating_sub(1)..=cell.0 + 1 {
-                for cx in cell.1.saturating_sub(1)..=cell.1 + 1 {
-                    if let Some(prior) = grid.get(&(cy, cx)) {
-                        for &(py, px, pl) in prior {
-                            if py.abs_diff(y) <= radius && px.abs_diff(x) <= radius {
-                                level = level.max(pl + 1);
-                            }
+            for gy in cy.saturating_sub(1)..=(cy + 1).min(rows - 1) {
+                for gx in cx.saturating_sub(1)..=(cx + 1).min(columns - 1) {
+                    let mut prior = heads[(gy * columns + gx) as usize];
+                    while prior != u32::MAX {
+                        let (py, px, next, pl) = prior_points[prior as usize];
+                        if py.abs_diff(y) <= radius && px.abs_diff(x) <= radius {
+                            level = level.max(pl + 1);
                         }
+                        prior = next;
                     }
                 }
             }
-            grid.entry(cell).or_default().push((y, x, level));
+            let head = &mut heads[(cy * columns + cx) as usize];
+            let index = u32::try_from(prior_points.len())?;
+            prior_points.push((y, x, *head, level));
+            *head = index;
             if levels.len() <= level {
                 levels.resize_with(level + 1, Vec::new);
             }
