@@ -1,6 +1,7 @@
 //! Prepares tone and resampling with shaders for sharpening and final encoding.
 
 pub(crate) mod code_response;
+pub(crate) mod image_region;
 
 pub(crate) mod resample;
 pub(crate) mod resize;

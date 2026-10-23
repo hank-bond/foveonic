@@ -69,6 +69,16 @@ pub(super) struct Prepared {
     pub finish: residual_finish::Params,
     grid: super::WorkingGrid,
 }
+impl Prepared {
+    pub(super) fn with_extent(mut self, extent: [u32; 2]) -> Result<Self> {
+        if self.grid.is_half() || extent.iter().any(|v| !v.is_multiple_of(2)) {
+            return Err("regional reconstruction requires a full, even working grid".into());
+        }
+        self.reconstruct = self.reconstruct.with_extent(extent.map(|v| v / 2))?;
+        self.finish = self.finish.with_extent(extent)?;
+        Ok(self)
+    }
+}
 
 /// Detail follows capture ISO independently of sensor scaling. Zero luminance
 /// skips blue filtering for ordinary non-Portrait modes. Portrait retains its
@@ -259,11 +269,11 @@ fn detail_controls(iso_gain: f32, controls: Controls, portrait: bool) -> Result<
 /// which earlier cached image happens to own their storage.
 pub(super) fn build(
     graph: &mut Graph,
-    metadata: &Metadata,
     signals: &super::stage2::Signals,
     highlight_mask: usize,
     prepared: Prepared,
 ) -> Result<usize> {
+    let color_extent = prepared.reconstruct.extent();
     let reconstructed = graph.add(
         Operation::BlueGuidedReconstruct(std::sync::Arc::new(prepared.reconstruct)),
         &[
@@ -278,10 +288,9 @@ pub(super) fn build(
         highlight_mask
     } else {
         graph.add(
-            Operation::ByteMaskDouble(crate::nodes::color::byte_mask_double::Params::new([
-                (metadata.width / 2) as u32,
-                (metadata.height / 2) as u32,
-            ])?),
+            Operation::ByteMaskDouble(crate::nodes::color::byte_mask_double::Params::new(
+                color_extent,
+            )?),
             &[highlight_mask],
         )?
     };

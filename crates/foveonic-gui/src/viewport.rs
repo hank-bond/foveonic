@@ -228,10 +228,9 @@ pub fn clear(rs: &egui_wgpu::RenderState) {
         .clear();
 }
 
-/// Reuse the main viewport's mapping so the navigator shows the same image.
-/// Prepare the small tile only when content or mapping changes. Pan and zoom
-/// should not put another preview conversion ahead of the next photo edit.
-pub(crate) fn prepare_navigator(
+/// Reuse viewport display mapping for bounded navigator and photographic previews.
+/// Callers own scheduling and choose whether diagnostic mapping is appropriate.
+pub(crate) fn prepare_preview(
     rs: &egui_wgpu::RenderState,
     source: &wgpu::Texture,
     space: Space,
@@ -245,7 +244,7 @@ pub(crate) fn prepare_navigator(
     let uniform = rs
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Navigator mapping"),
+            label: Some("Display preview mapping"),
             contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM,
         });
@@ -255,7 +254,7 @@ pub(crate) fn prepare_navigator(
     let renderer = rs.renderer.write();
     let resources = renderer.callback_resources.get::<Resources>().unwrap();
     let bind = rs.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Navigator source"),
+        label: Some("Display preview source"),
         layout: &resources.layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -382,6 +381,7 @@ pub struct Viewport {
     pub one_to_one: bool,
     pub zoom_snap: ZoomPreset,
     last_canvas: Option<(egui::Vec2, [u32; 2])>,
+    last_image: Option<(egui::Rect, egui::Rect)>,
     navigator_offset: egui::Vec2,
 }
 impl Default for Viewport {
@@ -392,6 +392,7 @@ impl Default for Viewport {
             one_to_one: false,
             zoom_snap: ZoomPreset::default(),
             last_canvas: None,
+            last_image: None,
             navigator_offset: egui::Vec2::ZERO,
         }
     }
@@ -402,6 +403,7 @@ impl Viewport {
         self.pan = egui::Vec2::ZERO;
         self.one_to_one = false;
         self.last_canvas = None;
+        self.last_image = None;
     }
     fn fit_scale(size: egui::Vec2, extent: [u32; 2]) -> f32 {
         (size.x / extent[0] as f32).min(size.y / extent[1] as f32)
@@ -437,7 +439,7 @@ impl Viewport {
         }
     }
 
-    fn zoom_percent(&self, pixels_per_point: f32) -> Option<f32> {
+    pub fn zoom_percent(&self, pixels_per_point: f32) -> Option<f32> {
         if self.one_to_one {
             return Some(100.);
         }
@@ -583,6 +585,7 @@ impl Viewport {
         revision: u64,
     ) {
         let (rect, image) = self.layout(ui, display_extent);
+        self.last_image = Some((rect, image));
         let Some((visible, params)) = Params::clipped(
             rect,
             image,
@@ -622,6 +625,53 @@ impl Viewport {
                 (visible.bottom() - image.top()) / image.height(),
             ),
         )
+    }
+    /// Paint a native-coordinate detail rectangle over the immediate overview.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_region(
+        &self,
+        ui: &mut egui::Ui,
+        texture: Arc<ImageTexture>,
+        region: [u32; 4],
+        native: [u32; 2],
+        mapping: Mapping,
+        srgb_target: bool,
+        revision: u64,
+    ) {
+        let Some((canvas, image)) = self.last_image else {
+            return;
+        };
+        let position = |x, y| {
+            image.min
+                + egui::vec2(
+                    x as f32 / native[0] as f32 * image.width(),
+                    y as f32 / native[1] as f32 * image.height(),
+                )
+        };
+        let tile = egui::Rect::from_min_max(
+            position(region[0], region[1]),
+            position(region[2], region[3]),
+        );
+        let Some((visible, params)) = Params::clipped(
+            canvas.intersect(tile),
+            tile,
+            ui.clip_rect().intersect(ui.ctx().screen_rect()),
+            texture.description().space,
+            mapping.channel,
+            srgb_target,
+        ) else {
+            return;
+        };
+        ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+            visible,
+            Draw {
+                key: "smart-detail",
+                texture,
+                input: None,
+                params: mapping.apply(params),
+                probe: crate::timing::DrawProbe::new(revision),
+            },
+        ));
     }
     /// Include partly visible pixels so the readout describes everything on screen.
     /// Bounds are inclusive and use the cropped, oriented image grid.

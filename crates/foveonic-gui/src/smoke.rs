@@ -16,6 +16,20 @@ const FAST_PREVIEW_TARGETS: &[&str] = &[
     "full-again",
     "fast-again",
 ];
+const SMART_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "smart-overview",
+    "smart-100",
+    "smart-detail",
+    "smart-full",
+    "smart-pan",
+    "smart-edit",
+    "smart-fit",
+    "cache-settings",
+    "cache-list",
+    "cache-reopen",
+];
 
 const SCREENSHOT_TARGETS: &[&str] = &["preview", "readme"];
 
@@ -175,12 +189,15 @@ pub struct Smoke {
     close_at: Option<std::time::Instant>,
     settled_frames: u8,
     fast_region: Option<crate::viewport::PixelRegion>,
+    smart_full_revision: Option<u64>,
 }
 impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_FAST").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
+                SMART_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_FAST").is_some() {
                 FAST_PREVIEW_TARGETS
             } else if screenshot_active() {
                 SCREENSHOT_TARGETS
@@ -206,6 +223,7 @@ impl Smoke {
             close_at: None,
             settled_frames: 0,
             fast_region: None,
+            smart_full_revision: None,
         })
     }
     /// Hold processing replies until the embedded preview has been captured.
@@ -249,6 +267,11 @@ impl App {
             }
             return;
         }
+        // A background repaint may arrive before the window handles Close.
+        if smoke.index >= smoke.targets.len() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         let screenshot = ctx.input(|i| {
             i.events.iter().find_map(|e| {
                 if let egui::Event::Screenshot { image, .. } = e {
@@ -271,6 +294,28 @@ impl App {
                 image::ColorType::Rgba8,
             )
             .unwrap();
+            if smoke.targets == SMART_TARGETS && smoke.preview_pending() {
+                assert_eq!(
+                    self.preferences.preview_quality,
+                    crate::preferences::PreviewMode::Smart
+                );
+                let support = crate::inspect::preview_support(
+                    &self.settings,
+                    self.metadata.as_deref(),
+                    self.capture.properties.as_ref(),
+                );
+                assert_ne!(support, Some(false));
+                let preview = self
+                    .browser
+                    .thumbnail(self.selected.as_ref().unwrap())
+                    .unwrap();
+                let report = serde_json::json!({"preview_choice":"Smart", "render_received":self.frame.is_some(), "support":support,"native_extent":preview.native_extent,"thumbnail_extent":preview.texture.size()});
+                std::fs::write(
+                    smoke.directory.join("preview.json"),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                )
+                .unwrap();
+            }
             if smoke.targets == VIEWPORT_SCOPE_TARGETS && !smoke.preview_pending() {
                 let frame = self.frame.as_ref().unwrap();
                 let snapshot = self.scope_snapshot.as_ref().unwrap();
@@ -352,7 +397,78 @@ impl App {
                 assert_eq!(progress.fraction, 1.);
                 assert!(!progress.running());
                 assert!(progress.milliseconds() >= frame.milliseconds);
-                let report = serde_json::json!({"total_ms":progress.milliseconds(),"progress":progress.fraction,"target":target,"quality":frame.quality_label(),"rendered_extent":frame.texture.description().extent,"native_extent":native,"visible_native":[visible.top_left,visible.bottom_right],"scope_region":self.scope_key.unwrap().region,"processing_ms":frame.milliseconds});
+                let report = serde_json::json!({"total_ms":progress.milliseconds(),"progress":progress.fraction,"target":target,"quality":frame.quality_label(),"rendered_extent":frame.texture.description().extent,"native_extent":native,"visible_native":[visible.top_left,visible.bottom_right],"scope_region":self.scope_key.unwrap().region,"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds});
+                std::fs::write(
+                    smoke.directory.join(format!("{target}.json")),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                )
+                .unwrap();
+            }
+            if smoke.targets == SMART_TARGETS && !smoke.preview_pending() {
+                let target = smoke.targets[smoke.index];
+                let regional = target == "smart-detail";
+                let frame = if regional {
+                    self.detail.as_ref().unwrap()
+                } else {
+                    self.frame.as_ref().unwrap()
+                };
+                let visible = self.viewport.visible_pixels().unwrap();
+                let region = frame.artifact.settings.preview_region;
+                if regional {
+                    let rect = region.unwrap();
+                    assert!(crate::smart::contains(
+                        rect,
+                        [
+                            visible.top_left[0],
+                            visible.top_left[1],
+                            visible.bottom_right[0] + 1,
+                            visible.bottom_right[1] + 1
+                        ]
+                    ));
+                    assert_eq!(
+                        frame.texture.description().extent,
+                        [rect[2] - rect[0], rect[3] - rect[1]]
+                    );
+                    assert_eq!(
+                        frame.artifact.settings.preview_quality,
+                        foveonic::render::PreviewQuality::Full
+                    );
+                } else {
+                    let full = matches!(
+                        target,
+                        "final"
+                            | "smart-full"
+                            | "smart-pan"
+                            | "smart-edit"
+                            | "smart-fit"
+                            | "cache-settings"
+                            | "cache-list"
+                    );
+                    assert_eq!(
+                        frame.artifact.settings.preview_quality,
+                        if full {
+                            foveonic::render::PreviewQuality::Full
+                        } else {
+                            foveonic::render::PreviewQuality::Fast
+                        }
+                    );
+                    assert_eq!(frame.artifact.settings.preview_region, None);
+                    if target == "smart-pan" {
+                        assert_eq!(
+                            smoke.smart_full_revision,
+                            Some(frame.revision),
+                            "panning submitted more render work"
+                        );
+                    }
+                }
+                if target == "smart-full" {
+                    smoke.smart_full_revision = Some(frame.revision);
+                }
+                if target == "cache-reopen" {
+                    assert!(self.worker.cache.status().hits > 0);
+                }
+                let report = serde_json::json!({"target":target,"quality":frame.quality_label(),"region":region,"native_extent":self.frame.as_ref().unwrap().display_extent(false),"rendered_extent":frame.texture.description().extent,
+                    "zoom_percent":self.viewport.zoom_percent(ctx.pixels_per_point()),"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds,"scope_revision":self.scope_key.map(|k|k.revision),"image_revision":frame.revision,"cache_hits":self.worker.cache.status().hits,"cache_ready":self.worker.cache.status().ready.len(),"continuation_running":self.busy});
                 std::fs::write(
                     smoke.directory.join(format!("{target}.json")),
                     serde_json::to_vec_pretty(&report).unwrap(),
@@ -403,14 +519,41 @@ impl App {
                         .pan_to(egui::vec2(recipe.pan[0], recipe.pan[1]));
                     self.submit(None);
                 }
+                "final" if smoke.targets == SMART_TARGETS => {
+                    self.preferences.preview_quality = crate::preferences::PreviewMode::Full;
+                    self.submit(None);
+                }
                 "final" => {}
+                "smart-overview" => {
+                    self.preferences.preview_quality = crate::preferences::PreviewMode::Smart;
+                    self.preferences.scope_viewport = true;
+                    self.submit(None);
+                }
+                "smart-100" => self.viewport.one_to_one = true,
+                "smart-detail" => self.viewport.zoom_by(2.),
+                "smart-full" => {}
+                "smart-pan" => self.viewport.pan_to(egui::vec2(0.8, 0.7)),
+                "smart-edit" => {
+                    self.settings.exposure = 0.5;
+                    self.submit(None);
+                }
+                "smart-fit" => self.viewport.reset(),
+                "cache-settings" => self.settings_open = true,
+                "cache-list" => {
+                    self.settings_open = false;
+                    self.preferences.organizer = Organizer::List;
+                }
+                "cache-reopen" => {
+                    self.settings_open = false;
+                    self.select(self.selected.clone().unwrap());
+                }
                 "fast" | "fast-again" => {
-                    self.preferences.preview_quality = foveonic::render::PreviewQuality::Fast;
+                    self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;
                     self.preferences.scope_viewport = true;
                     self.submit(None);
                 }
                 "full-again" => {
-                    self.preferences.preview_quality = foveonic::render::PreviewQuality::Full;
+                    self.preferences.preview_quality = crate::preferences::PreviewMode::Full;
                     self.submit(None);
                 }
                 "fast-zoom" => {
@@ -643,6 +786,9 @@ impl App {
                 self.selected
                     .as_ref()
                     .is_some_and(|p| self.browser.thumbnail(p).is_some())
+            } else if smoke.targets == SMART_TARGETS && smoke.targets[smoke.index] == "smart-detail"
+            {
+                self.detail.is_some()
             } else {
                 !self.busy
                     && self.frame.as_ref().is_some_and(|frame| {
@@ -650,11 +796,39 @@ impl App {
                             .as_ref()
                             .is_some_and(|snapshot| Some(snapshot.key) == self.scope_key)
                             && self.navigator.ready(frame, mapping)
+                            && (frame.output != "final"
+                                || self.browser.rendered_revision(&frame.path)
+                                    == Some(frame.revision))
                     })
             };
             let ready =
                 ready && (smoke.targets != SCREENSHOT_TARGETS || self.browser.thumbnails_ready());
+            let ready = ready
+                && (smoke.targets != SMART_TARGETS
+                    || match smoke.targets[smoke.index] {
+                        "smart-detail" => self.detail.is_some(),
+                        "smart-full" | "smart-edit" => self.frame.as_ref().is_some_and(|f| {
+                            f.artifact.settings.preview_quality
+                                == foveonic::render::PreviewQuality::Full
+                        }),
+                        "cache-settings" => self
+                            .worker
+                            .cache
+                            .status()
+                            .ready
+                            .iter()
+                            .any(|p| Some(p) != self.selected.as_ref()),
+                        _ => true,
+                    });
             if ready {
+                if smoke.targets == SMART_TARGETS && smoke.targets[smoke.index] == "cache-settings"
+                {
+                    smoke.settled_frames += 1;
+                    if smoke.settled_frames < 8 {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(25));
+                        return;
+                    }
+                }
                 if smoke.targets == SCREENSHOT_TARGETS && !smoke.preview_pending() {
                     // Let the selected organizer row and its newly visible thumbnails settle.
                     smoke.settled_frames += 1;

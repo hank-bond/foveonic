@@ -42,6 +42,9 @@ const SENSOR_HUFFMAN_FORMAT: u32 = 30;
 const PROPERTY_HEADER_BYTES: usize = 24;
 const PROPERTY_ENTRY_BYTES: usize = 8;
 
+pub(crate) use camf::parse as cached_camera_metadata;
+pub(crate) use exif::thumbnail as jpeg_thumbnail;
+
 pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> {
     let start = Instant::now();
     let mut file = std::fs::File::open(path)?;
@@ -51,7 +54,20 @@ pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> 
     }
     let mut data = Vec::with_capacity(length as usize);
     use std::io::Read;
-    (&mut file).take(length + 1).read_to_end(&mut data)?;
+    // Yield background I/O between bounded reads instead of issuing the whole
+    // original at once when the next selected photo needs the storage device.
+    let mut limited = (&mut file).take(length + 1);
+    loop {
+        crate::background::checkpoint();
+        let before = data.len();
+        limited
+            .by_ref()
+            .take(crate::background::IO_CHUNK_BYTES as u64)
+            .read_to_end(&mut data)?;
+        if data.len() == before {
+            break;
+        }
+    }
     if data.len() as u64 != length {
         return Err("X3F file changes during reading".into());
     }
@@ -344,16 +360,19 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
         let workers: [_; 3] = std::array::from_fn(|channel| {
             let table = &table;
             let (input, seed) = inputs[channel];
-            scope.spawn(move || -> Result<_> {
-                let start = Instant::now();
-                let pixels = table.decode(input, width, height, seed)?;
-                Ok((
-                    pixels,
-                    Timing::elapsed(
-                        ["sensor plane R", "sensor plane G", "sensor plane B"][channel],
-                        start,
-                    ),
-                ))
+            let scheduling = crate::background::context();
+            scope.spawn(move || {
+                crate::background::run(scheduling, || -> Result<_> {
+                    let start = Instant::now();
+                    let pixels = table.decode(input, width, height, seed)?;
+                    Ok((
+                        pixels,
+                        Timing::elapsed(
+                            ["sensor plane R", "sensor plane G", "sensor plane B"][channel],
+                            start,
+                        ),
+                    ))
+                })
             })
         });
         workers

@@ -27,6 +27,7 @@ The parent recipe wires stages and stops once the requested outputs exist. Calib
 - **[mcc.rs](./mcc.rs)** Prepares color-mode chroma sectors from the selected ordinary DP metadata table.
 - **[monochrome.rs](./monochrome.rs)** Prepares monochrome channel filtering, reconstruction and finishing controls.
 - **[optical.rs](./optical.rs)** Prepares the DP1 optical color correction independently of graph construction.
+- **[region.rs](./region.rs)** Plans aligned regional reconstruction after full-frame Quattro calibration and color preparation.
 - **[repair.rs](./repair.rs)** Prepares the ordinary DP sparse-repair noise model and correction switch.
 - **[resources.rs](./resources.rs)** Loads bundled or explicitly overridden blue calibration maps and prepares aperture/focus blends.
 - **[sd.rs](./sd.rs)** Prepares interchangeable-lens Quattro sparse phase-detection correction tables.

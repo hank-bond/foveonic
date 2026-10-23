@@ -18,7 +18,7 @@ Keep decoding independent of photographic adjustments and orientation. Preserve 
 - **[bytes.rs](./bytes.rs)** Read bounded little-endian values and terminated strings from owned file sections.
 - **[camf.rs](./camf.rs)** Decode camera metadata while preserving matrix encodings and property-list order.
 - **[capture.rs](./capture.rs)** Seeks directly to X3F capture properties without reading sensor or calibration payloads.
-- **[exif.rs](./exif.rs)** Reads preferred exposure metadata from an embedded JPEG's optional Exif header.
+- **[exif.rs](./exif.rs)** Reads capture properties and bounded thumbnails from optional JPEG Exif headers.
 - **[format31.rs](./format31.rs)** Decodes unsigned mixed-resolution sensor planes into RGB/blue-phase cells.
 - **[format6.rs](./format6.rs)** Decode row-local Huffman differences into signed interleaved sensor codes.
 - **[huffman.rs](./huffman.rs)** Decode category-coded differences with two-column and two-row sensor predictors.

@@ -11,11 +11,11 @@ The owner reviewed the six-image Full/Fast comparison, found both appearances go
 
 ## Requirements
 
-- The viewport header must show two separate button groups, with Preview to the left of Inspect. The Preview label must be vertically centered with its Full/Fast buttons. The app must offer Full and Fast preview choices. Full is the initial default. The choice is a persistent workspace preference, separate from per-photo editing sidecars.
+- The viewport header must show two separate button groups, with Preview to the left of Inspect. The Preview label must be vertically centered with its Full/Fast buttons. The app must offer Full and Fast preview choices. [Smart preview](./smart-preview.md) adds a separate progressive policy. Full is the initial default. The choice is a persistent workspace preference, separate from per-photo editing sidecars.
 - Fast must retain HIGH calibration identity, average calibrated blue 2×2 onto the existing R/G grid, use same-resolution reconstruction and adjust spatial finishing to that grid. It may omit the high-resolution blue repairs as demonstrated in the reviewed experiment. RGB repairs remain enabled.
 - Fast normally produces half the full width and height. Full and Fast must preserve photographic framing and orientation. Switching quality must preserve the viewport's native-image zoom and pan, including the focused region after double-click zoom. The information bar must continue to use native photograph coordinates. Viewport scopes must sample the corresponding region of the actual rendered image.
 - Editing controls must operate in either preview quality. Active-edit caches must distinguish quality-dependent parameters, geometry and dependencies. Retained images must stay immutable through quality switches.
-- Fast applies to supported Quattro color final previews. Inspection, input comparisons, monochrome and unsupported families use Full. The UI must communicate this availability and identify the displayed quality.
+- Fast applies to supported Quattro color final previews. Inspection, input comparisons, monochrome and unsupported families use Full. The UI must communicate this availability and identify the displayed quality. Preserve the application-wide choice during loading and resolve unsupported architectures from capture metadata without overwriting that preference.
 - GUI TIFF and DNG exports must use Full and current requested photographic edits, independently of the preview preference. Completing export must restore the requested preview quality.
 - Source decoding and rendering must remain on the bounded background worker. Existing image-first publication, cancellation, scope pairing and navigator behavior remain applicable.
 

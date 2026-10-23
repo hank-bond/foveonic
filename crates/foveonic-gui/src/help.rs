@@ -157,6 +157,40 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "sensor.blue" => "Original blue sensor readings at full sensor resolution, before calibration. This plane has twice the width and height of sensor.rgb.",
         "extraction.rgb" => "Low-resolution sensor layers after offset and channel-gain extraction. These remain camera codes before later calibration and reconstruction.",
         "extraction.blue" => "Full-resolution blue after offset and channel-gain extraction, before later calibration and reconstruction.",
+        "blue-refresh.rgb" => "Low-resolution sensor layers with their blue component refreshed from the full-resolution blue readings. This is preparation for calibration, not finished RGB.",
+        "hlp.rgb" => "Sensor layers after sparse blue calibration and camera shading gains. Compare with blue-refresh.rgb to inspect those calibration changes.",
+        "hlp.blue" => "Full-resolution blue after sparse-pixel calibration and camera shading gains, before sparse-pixel repair.",
+        "hlp.scratch" => "Intermediate sensor samples retained before color-dependent calibration gains. This small diagnostic buffer supports sparse-pixel calibration and is not a complete photograph.",
+        "hlp-repair.rgb" => "Calibrated sensor layers after repairing sparse blue sample locations. Compare with hlp.rgb to see that repair.",
+        "hlp-repair.blue" => "The full-resolution blue plane after repairing sparse sample locations. Compare with hlp.blue before general defect correction.",
+        "phase-detection.rgb" => "Sensor layers after camera-recorded phase-detection pixel correction. These grayscale layer views remain unprocessed camera readings.",
+        "phase-detection.blue" => "Full-resolution blue after camera-recorded phase-detection pixel correction, before further blue-plane cleanup.",
+        "blue-pattern.blue" => "The blue plane after correcting the camera's aperture-dependent sensor pattern. Compare with phase-detection.blue to inspect the change.",
+        "chroma-repair.single" => "Sensor layers after the first camera-recorded color-defect repair pass, before the combined repair pass.",
+        "chroma-repair.rgb" => "Sensor layers after the combined camera-recorded color-defect repair. Compare with chroma-repair.single before speckle and cluster correction.",
+        "chroma-despeckle.rgb" => "Sensor layers after isolated color-speckle correction. This targets individual outliers before clustered defects are repaired.",
+        "chroma-clusters.rgb" => "Sensor layers after camera-recorded groups of color defects have been repaired. These are grayscale sensor layers, not finished color channels.",
+        "purple-fringe.rgb" => "Sensor layers after the supported camera's optical purple-fringe correction, before highlight restoration.",
+        "luma-repair.directional" => "Directional estimates used to repair defects in the full-resolution blue plane. This is an intermediate guide, not a finished brightness image.",
+        "luma-repair.dark-offsets" => "Estimated dark-reference offsets used by blue-plane defect correction. Values describe correction offsets rather than scene brightness.",
+        "luma-despeckle.dark-pairs" => "Dark-reference estimates after paired speckle correction, before those estimates are used to repair the blue plane.",
+        "luma-repair.blue" => "Full-resolution blue after camera-recorded brightness-defect repair, before isolated speckle correction.",
+        "luma-despeckle.blue" => "Full-resolution blue after isolated brightness-speckle correction, before clustered defects are repaired.",
+        "luma-clusters.blue" => "Full-resolution blue after camera-recorded brightness-defect clusters have been repaired.",
+        "blue-mismatch.blue" => "Full-resolution blue after correcting differences between sensor sample phases. Compare with luma-clusters.blue to inspect the change before reconstruction.",
+        "highlight-restoration.rgb" => "Sensor layers after reconstructing bright clipped areas from the remaining layer information. This is separate from the Highlights tone adjustment and cannot recreate all lost detail.",
+        "noise.rgb" => "Noise-filtered low-resolution sensor layers used as the base for Quattro reconstruction. The full-resolution blue detail is combined later.",
+        "noise.source-after" => "The companion sensor-layer history retained after noise processing. Reconstruction compares this source information with the filtered base.",
+        "shading.rgb" => "The filtered sensor-layer base after spatial color-shading compensation for the selected white balance.",
+        "shading.source-after" => "The retained sensor-layer source history after the same spatial color-shading compensation as the filtered base.",
+        "shading.blue" => "Full-resolution blue after spatial color-shading compensation for the selected white balance, before reconstruction.",
+        "raw-color.rgb" => "Low-resolution sensor-derived color after camera color-response processing. These components are still reconstruction guidance rather than the finished displayed RGB.",
+        "sector-color.rgb" => "Color-response guidance after the selected color mode's hue and saturation corrections, before full-resolution reconstruction.",
+        "reconstruction.residual" => "Brightness-detail guidance extracted while combining the color base with blue sensor detail. It is a reconstruction diagnostic, not a finished photograph.",
+        "residual.rgb" => "Reconstructed RGB after residual-detail filtering and highlight-guided finishing, before local contrast and sharpening.",
+        "reconstruction.detail" => "The brightness-detail signal retained for final adaptive sharpening. It can include both real texture and sensor noise.",
+        "local-contrast.rgb" => "Reconstructed RGB after local contrast processing, before adaptive sharpening and the final photographic tone response.",
+        "crop.rgb" => "The finished photo after its active image crop and orientation have been applied. The surrounding sensor margins are excluded.",
         "red-detail.layers" => {
             "Sensor layers after red-channel detail recovery, before highlight restoration. Only the red sensor layer changes."
         }
@@ -267,6 +301,67 @@ pub fn inspection(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quattro_inspection_catalogues_have_help_before_and_after_metadata_loads() {
+        use foveonic::source::{Matrix, MatrixEncoding, Metadata, ProcessingFamily};
+        let settings = foveonic::render::Settings::default();
+        for output in foveonic::inspection::image_outputs_with_family(
+            &settings,
+            None,
+            Some(ProcessingFamily::Quattro),
+        ) {
+            assert!(inspection(output.name).is_some(), "{}", output.name);
+        }
+        let mut seen = std::collections::HashSet::new();
+        for camera in [80., 81., 82., 83., 40.] {
+            let metadata = Metadata {
+                width: 5888,
+                height: if camera == 40. { 3776 } else { 3672 },
+                rotation: 0,
+                processing_version: Some([3, 1, 2, 0]),
+                properties: [("CAMMODEL".into(), "SIGMA dp2 Quattro".into())].into(),
+                matrices: [
+                    ("CAMERAID", vec![camera]),
+                    ("CamsysVersion", vec![0., 3., 2.]),
+                    ("CaptureISO", vec![100.]),
+                    ("CaptureAperture", vec![4.]),
+                ]
+                .into_iter()
+                .map(|(name, values)| {
+                    (
+                        name.into(),
+                        Matrix {
+                            encoding: MatrixEncoding::Float32,
+                            representation: "native",
+                            dimensions: vec![values.len()],
+                            values,
+                        },
+                    )
+                })
+                .collect(),
+                lists: [("ColorShadingGainRatio".into(), Default::default())].into(),
+            };
+            for output in foveonic::inspection::image_outputs(&settings, Some(&metadata)) {
+                assert!(
+                    inspection(output.name).is_some(),
+                    "camera {camera}: {}",
+                    output.name
+                );
+                seen.insert(output.name);
+            }
+        }
+        for stage in [
+            "hlp.scratch",
+            "luma-repair.dark-offsets",
+            "shading.source-after",
+            "sector-color.rgb",
+            "purple-fringe.rgb",
+            "blue-pattern.blue",
+            "final",
+        ] {
+            assert!(seen.contains(stage), "coverage omitted {stage}");
+        }
+    }
 
     #[test]
     fn navigator_help_explains_snap_selection_and_platform_modifier() {

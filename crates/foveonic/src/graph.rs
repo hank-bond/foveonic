@@ -130,9 +130,19 @@ pub struct Output {
 pub struct Graph {
     pub nodes: Vec<Node>,
     pub outputs: Vec<Output>,
+    pub(crate) session_outputs: Vec<usize>,
 }
 
 impl Graph {
+    /// Recipe-owned restart boundaries supplement the generic editing frontier.
+    /// The session's normal byte budget and input-version checks still apply.
+    pub(crate) fn retain_for_session(&mut self, output: usize) {
+        assert!(output < self.outputs.len());
+        if !self.session_outputs.contains(&output) {
+            self.session_outputs.push(output);
+        }
+    }
+
     /// Requiring existing inputs prevents cycles and keeps execution order clear.
     pub fn add(&mut self, operation: Operation, inputs: &[usize]) -> Result<usize> {
         let (expected, output) = operation.types();

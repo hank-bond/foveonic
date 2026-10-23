@@ -12,6 +12,7 @@ impl Directory {
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
+        fs::create_dir(path.join("foveonic")).unwrap();
         Self(path)
     }
     fn input(&self) -> PathBuf {
@@ -424,6 +425,41 @@ fn missing_parent_or_unreadable_destination_cannot_create_a_recipe() {
     assert!(save(&directory.input(), &edited()).is_err());
 }
 
+#[test]
+fn adjacent_recipes_move_to_visible_folder_only_on_save() {
+    let directory = Directory::new();
+    let input = directory.input();
+    fs::remove_dir(directory.0.join("foveonic")).unwrap();
+    fs::write(legacy_path(&input), encode(&edited()).unwrap()).unwrap();
+    assert_eq!(load(&input).unwrap(), Some(edited()));
+    assert!(!path(&input).exists());
+    assert!(legacy_path(&input).exists());
+    save(&input, &edited()).unwrap();
+    assert_eq!(
+        path(&input),
+        directory.0.join("foveonic/photo.X3F.foveonic.json")
+    );
+    assert_eq!(load(&input).unwrap(), Some(edited()));
+    assert!(!legacy_path(&input).exists());
+}
+
+#[test]
+fn corrupt_legacy_recipes_are_protected_and_new_location_has_precedence() {
+    let directory = Directory::new();
+    let input = directory.input();
+    fs::write(legacy_path(&input), b"recover me").unwrap();
+    assert!(load(&input).is_err());
+    assert!(save(&input, &edited()).is_err());
+    fs::write(path(&input), encode(&edited()).unwrap()).unwrap();
+    assert_eq!(load(&input).unwrap(), Some(edited()));
+    save(&input, &Settings::default()).unwrap();
+    assert_eq!(fs::read(legacy_path(&input)).unwrap(), b"recover me");
+    fs::write(path(&input), b"invalid new recipe").unwrap();
+    fs::write(legacy_path(&input), encode(&edited()).unwrap()).unwrap();
+    assert!(load(&input).is_err());
+    assert!(save(&input, &edited()).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn sidecar_paths_preserve_non_utf8_filenames() {
@@ -431,7 +467,7 @@ fn sidecar_paths_preserve_non_utf8_filenames() {
     let input = PathBuf::from(std::ffi::OsString::from_vec(b"photo-\xff.X3F".to_vec()));
     assert_eq!(
         path(&input).as_os_str().as_bytes(),
-        b"photo-\xff.X3F.foveonic.json"
+        b"foveonic/photo-\xff.X3F.foveonic.json"
     );
 }
 

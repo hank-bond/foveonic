@@ -147,6 +147,7 @@ impl Table {
         let mut vertical = [[seed; 2]; 2];
         let mut horizontal = [seed; 2];
         for y in 0..height {
+            crate::background::checkpoint();
             for x in 0..width {
                 let predictor = if x < 2 {
                     if y < 2 {

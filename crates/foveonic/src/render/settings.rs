@@ -36,6 +36,9 @@ pub struct Settings {
     /// Transient preview policy, excluded from per-photo editing sidecars.
     #[serde(skip)]
     pub preview_quality: PreviewQuality,
+    /// Transient oriented native-pixel rectangle for regional preview processing.
+    #[serde(skip)]
+    pub preview_region: Option<[u32; 4]>,
     pub rendering: Rendering,
     pub monochrome: MonochromeControls,
     /// Monochrome Smooth/Crisp selection. None follows the file or recipe default.
@@ -81,6 +84,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             preview_quality: PreviewQuality::Full,
+            preview_region: None,
             rendering: Rendering::Color,
             monochrome: MonochromeControls::default(),
             monochrome_smoothness: None,

@@ -1,5 +1,5 @@
 ---
-summary: "Original X3Fs and adjacent editing sidecars are authoritative; rendered exports can be regenerated from them."
+summary: "Original X3Fs and editing recipes in a visible source-folder subdirectory are authoritative."
 kind: reference
 status: accepted
 implementation: conforming
@@ -9,10 +9,10 @@ implementation: conforming
 
 ## Requirements
 
-- The application **must** preserve per-photograph editing recipes in sidecars beside their original X3Fs. The X3F and its sidecar **must** remain the authoritative inputs for re-editing and regenerating exports.
+- The application **must** preserve per-photograph editing recipes in sidecars in a visible `foveonic` subdirectory of their original X3Fs' folder. The X3F and its sidecar **must** remain the authoritative inputs for re-editing and regenerating exports.
 - Saving edits **must not** modify the original X3F.
 - Sidecars **must** preserve photographic editing choices and advanced override linkage separately from workspace preferences and display-only inspection settings. Rendering mode and [monochrome mixing/noise settings](./monochrome-rendering.md) must persist alongside inactive color controls. Older recipes missing these fields must select Color and the shared default mono controls without a version bump.
-- Recipes **must** use versioned JSON beside the input, named by appending `.foveonic.json` to the complete X3F filename.
+- Recipes **must** use versioned JSON in that subdirectory, named by appending `.foveonic.json` to the complete X3F filename. Existing adjacent recipes **must** remain readable and move into the subdirectory on the next successful save. The subdirectory recipe takes precedence when both exist. Invalid older copies remain available for manual recovery.
 - Omitted image-edit fields **must** use the shared Rust `Default` values, including nested tone/noise controls and linked overrides. Supplied values **must** remain authoritative; explicit null **must** retain its optional-setting meaning. Invalid supplied values, duplicate/unknown fields, and unsupported versions **must** remain errors. Adding a field with unchanged default behavior **must not** require migration or a version bump.
 - Neutral defaults **must** leave camera-dependent WB/mode unresolved for the existing per-photograph selection path. Application preferences **must** remain separate from image-edit settings and sidecars.
 - The GUI **must** automatically restore saved recipes and save changes with atomic replacement. Saving **must** preserve the latest requested edits even when rendering is superseded or the user selects another photograph.
@@ -25,7 +25,7 @@ Use the shared processing settings as the version-1 recipe, preserving automatic
 
 ## Conformance
 
-Sensor gain was removed before external use. Existing local sidecars were migrated directly by deleting only that field, as recorded in the [removal plan](../../plans/archived/remove-sensor-gain.md). The application has no legacy reader.
+Sensor gain was removed before external use. Existing local sidecars were migrated directly by deleting only that field, as recorded in the [removal plan](../../plans/archived/remove-sensor-gain.md). This field has no legacy reader. The adjacent-path reader supports the later sidecar-directory move without changing recipe contents.
 
 An edited X3F can be reopened with its saved recipe and used to regenerate an export without reading an earlier DNG. Workspace preferences and inspection amplification do not change the recipe, and the original X3F remains unchanged.
 

@@ -1,40 +1,84 @@
-//! Reads preferred exposure metadata from an embedded JPEG's optional Exif header.
+//! Reads capture properties and bounded thumbnails from optional JPEG Exif headers.
 
 use std::collections::BTreeMap;
 
+const TIFF_MAGIC: u16 = 42;
+const TIFF_LONG: u16 = 4;
+const MAX_IFD_ENTRIES: usize = 4096;
+const IFD_COUNT_BYTES: usize = 2;
+const IFD_ENTRY_BYTES: usize = 12;
+const JPEG_OFFSET_TAG: u16 = 0x0201;
+const JPEG_LENGTH_TAG: u16 = 0x0202;
+const JPEG_MARKER_PREFIX: u8 = 0xff;
+const JPEG_START: u8 = 0xd8;
+const JPEG_SCAN: u8 = 0xda;
+const JPEG_END: u8 = 0xd9;
+const JPEG_APP1: u8 = 0xe1;
+const EXIF_SIGNATURE: &[u8; 6] = b"Exif\0\0";
+
 /// Optional preview metadata must not prevent decoding the original sensor data.
 pub(super) fn properties(jpeg: &[u8]) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-    if !jpeg.starts_with(&[0xff, 0xd8]) {
-        return result;
+    exif_payload(jpeg)
+        .and_then(tiff_properties)
+        .unwrap_or_default()
+}
+
+/// Only IFD1's declared JPEG range is accepted. Bad optional metadata falls
+/// back to the ordinary preview without touching sensor decoding.
+pub(crate) fn thumbnail(jpeg: &[u8]) -> Option<&[u8]> {
+    let bytes = exif_payload(jpeg)?;
+    let big = match bytes.get(..2)? {
+        b"II" => false,
+        b"MM" => true,
+        _ => return None,
+    };
+    let t = Tiff { bytes, big };
+    if t.u16(2)? != TIFF_MAGIC {
+        return None;
+    }
+    let first = t.u32(4)? as usize;
+    let count = usize::from(t.u16(first)?);
+    if count > MAX_IFD_ENTRIES {
+        return None;
+    }
+    let second = t.u32(first.checked_add(IFD_COUNT_BYTES + count * IFD_ENTRY_BYTES)?)? as usize;
+    if second == 0 {
+        return None;
+    }
+    let (TIFF_LONG, 1, offset) = t.find(second, JPEG_OFFSET_TAG)? else {
+        return None;
+    };
+    let (TIFF_LONG, 1, size) = t.find(second, JPEG_LENGTH_TAG)? else {
+        return None;
+    };
+    let start = t.u32(offset)? as usize;
+    let length = t.u32(size)? as usize;
+    bytes.get(start..start.checked_add(length)?)
+}
+
+fn exif_payload(jpeg: &[u8]) -> Option<&[u8]> {
+    if !jpeg.starts_with(&[JPEG_MARKER_PREFIX, JPEG_START]) {
+        return None;
     }
     let mut position = 2;
-    while jpeg.get(position) == Some(&0xff) {
-        let Some(&marker) = jpeg.get(position + 1) else {
-            break;
-        };
-        if marker == 0xda || marker == 0xd9 {
-            break;
+    while jpeg.get(position) == Some(&JPEG_MARKER_PREFIX) {
+        let marker = *jpeg.get(position + 1)?;
+        if marker == JPEG_SCAN || marker == JPEG_END {
+            return None;
         }
-        let Some(length) = jpeg.get(position + 2..position + 4) else {
-            break;
-        };
-        let length = usize::from(u16::from_be_bytes(length.try_into().unwrap()));
+        let length = usize::from(u16::from_be_bytes(
+            jpeg.get(position + 2..position + 4)?.try_into().ok()?,
+        ));
         if length < 2 {
-            break;
+            return None;
         }
-        let Some(payload) = jpeg.get(position + 4..position + 2 + length) else {
-            break;
-        };
-        if marker == 0xe1 && payload.starts_with(b"Exif\0\0") {
-            if let Some(values) = tiff_properties(&payload[6..]) {
-                result.extend(values);
-            }
-            break;
+        let payload = jpeg.get(position + 4..position + 2 + length)?;
+        if marker == JPEG_APP1 && payload.starts_with(EXIF_SIGNATURE) {
+            return payload.get(EXIF_SIGNATURE.len()..);
         }
         position += 2 + length;
     }
-    result
+    None
 }
 
 struct Tiff<'a> {
@@ -61,12 +105,13 @@ impl<'a> Tiff<'a> {
     }
     fn find(&self, dir: usize, tag: u16) -> Option<(u16, usize, usize)> {
         let count = usize::from(self.u16(dir)?);
-        if count > 4096 {
+        if count > MAX_IFD_ENTRIES {
             return None;
         }
-        self.bytes.get(dir..dir.checked_add(2 + count * 12)?)?;
+        self.bytes
+            .get(dir..dir.checked_add(IFD_COUNT_BYTES + count * IFD_ENTRY_BYTES)?)?;
         for i in 0..count {
-            let p = dir + 2 + i * 12;
+            let p = dir + IFD_COUNT_BYTES + i * IFD_ENTRY_BYTES;
             if self.u16(p)? == tag {
                 let kind = self.u16(p + 2)?;
                 let count = self.u32(p + 4)? as usize;
@@ -133,7 +178,7 @@ fn tiff_properties(bytes: &[u8]) -> Option<BTreeMap<String, String>> {
         _ => return None,
     };
     let t = Tiff { bytes, big };
-    if t.u16(2)? != 42 {
+    if t.u16(2)? != TIFF_MAGIC {
         return None;
     }
     let first = t.u32(4)? as usize;
@@ -286,5 +331,58 @@ mod capture_tests {
         put32(&mut bytes, 112, u32::MAX);
         let values = tiff_properties(&bytes).unwrap();
         assert!(!values.contains_key("CM_DESC"));
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_tests {
+    use super::*;
+    #[test]
+    fn thumbnail_offsets_are_bounded_in_both_byte_orders() {
+        for big in [false, true] {
+            let word = |v: u16| {
+                if big {
+                    v.to_be_bytes()
+                } else {
+                    v.to_le_bytes()
+                }
+            };
+            let long = |v: u32| {
+                if big {
+                    v.to_be_bytes()
+                } else {
+                    v.to_le_bytes()
+                }
+            };
+            let mut tiff = Vec::new();
+            tiff.extend(if big { b"MM" } else { b"II" });
+            tiff.extend(word(42));
+            tiff.extend(long(8));
+            tiff.extend(word(0));
+            tiff.extend(long(14));
+            tiff.extend(word(2));
+            for (tag, value) in [(0x201, 44), (0x202, 4)] {
+                tiff.extend(word(tag));
+                tiff.extend(word(4));
+                tiff.extend(long(1));
+                tiff.extend(long(value));
+            }
+            tiff.extend(long(0));
+            tiff.extend([0xff, 0xd8, 0xff, 0xd9]);
+            let wrap = |tiff: &[u8]| {
+                let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+                jpeg.extend(((tiff.len() + 8) as u16).to_be_bytes());
+                jpeg.extend(b"Exif\0\0");
+                jpeg.extend(tiff);
+                jpeg
+            };
+            let jpeg = wrap(&tiff);
+            assert_eq!(thumbnail(&jpeg), Some(&[0xff, 0xd8, 0xff, 0xd9][..]));
+            for end in 0..jpeg.len() {
+                assert!(thumbnail(&jpeg[..end]).is_none());
+            }
+            tiff[24..28].copy_from_slice(&long(u32::MAX));
+            assert!(thumbnail(&wrap(&tiff)).is_none());
+        }
     }
 }

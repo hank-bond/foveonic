@@ -7,102 +7,203 @@ use std::{
     path::Path,
 };
 
+// X3F on-disk layout. Preview reads seek directly to image sections without sensor decoding.
+const BASE_HEADER_BYTES: usize = 40;
+const V4_HEADER_BYTES: usize = 52;
+const DIRECTORY_POINTER_BYTES: u64 = 4;
+const DIRECTORY_HEADER_BYTES: usize = 12;
+const DIRECTORY_ENTRY_BYTES: usize = 12;
+const IMAGE_HEADER_BYTES: usize = 28;
+const VERSION_OFFSET: usize = 4;
+const V4_EXTENT_OFFSET: usize = 40;
+const DIRECTORY_COUNT_OFFSET: usize = 8;
+const ENTRY_TAG_OFFSET: usize = 8;
+const IMAGE_TYPE_OFFSET: usize = 8;
+const IMAGE_FORMAT_OFFSET: usize = 12;
+const IMAGE_EXTENT_OFFSET: usize = 16;
+const IMAGE_STRIDE_OFFSET: usize = 24;
+const WORD_BYTES: usize = std::mem::size_of::<u32>();
+const V4_VERSION: u32 = 0x40000;
+const DIRECTORY_VERSION: u32 = 0x20000;
+const PREVIEW_IMAGE_TYPE: u32 = 2;
+const MAX_DIRECTORY_ENTRIES: usize = 1024;
+const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum Selection {
+    Smallest,
+    Largest,
+}
+
 pub struct Preview {
     /// Tightly packed, unrotated RGB8 samples.
     pub rgb: Vec<u8>,
     pub extent: [u32; 2],
     pub rotation: u32,
-    /// Unrotated dimensions of the largest embedded preview, read from section headers only.
+    /// Unrotated photograph dimensions from the version-4 header or largest older preview.
     pub native_extent: [u32; 2],
 }
 
 fn u32_at(data: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+    u32::from_le_bytes(data[offset..offset + WORD_BYTES].try_into().unwrap())
 }
 
 /// Decode the smallest supported embedded preview by pixel area.
 pub fn read(path: &Path) -> Result<Preview> {
+    read_selected(path, Selection::Smallest)
+}
+
+/// Decode the largest supported embedded image. It may have a different camera
+/// crop from the Raw, so its own extent describes its photographic framing.
+pub fn read_full(path: &Path) -> Result<Preview> {
+    read_selected(path, Selection::Largest)
+}
+
+fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
     let mut file = File::open(path)?;
     let length = file.metadata()?.len();
-    if !(44..=1024 * 1024 * 1024).contains(&length) {
+    if !((BASE_HEADER_BYTES as u64 + DIRECTORY_POINTER_BYTES)..=MAX_FILE_BYTES).contains(&length) {
         return Err("unsupported X3F size".into());
     }
-    let mut header = [0; 52];
-    file.read_exact(&mut header[..40])?;
+    let mut header = [0; V4_HEADER_BYTES];
+    file.read_exact(&mut header[..BASE_HEADER_BYTES])?;
     if &header[..4] != b"FOVb"
         || ![
             0x20000, 0x20001, 0x20002, 0x20003, 0x30000, 0x40001, 0x40002,
         ]
-        .contains(&u32_at(&header, 4))
+        .contains(&u32_at(&header, VERSION_OFFSET))
     {
         return Err("unsupported X3F header".into());
     }
-    if u32_at(&header, 4) >= 0x40000 {
-        file.read_exact(&mut header[40..])?;
+    if u32_at(&header, VERSION_OFFSET) >= V4_VERSION {
+        file.read_exact(&mut header[BASE_HEADER_BYTES..])?;
     }
     crate::x3f::processing_version(&header)?;
     let rotation = crate::x3f::rotation(&header)?;
-    file.seek(SeekFrom::End(-4))?;
-    let mut pointer = [0; 4];
+    file.seek(SeekFrom::End(-(DIRECTORY_POINTER_BYTES as i64)))?;
+    let mut pointer = [0; DIRECTORY_POINTER_BYTES as usize];
     file.read_exact(&mut pointer)?;
     let directory = u64::from(u32_at(&pointer, 0));
-    if directory < 40 || directory + 12 > length - 4 {
-        return Err("invalid X3F directory".into());
-    }
-    file.seek(SeekFrom::Start(directory))?;
-    let mut index = [0; 12];
-    file.read_exact(&mut index)?;
-    let count = u32_at(&index, 8) as usize;
-    if &index[..4] != b"SECd"
-        || u32_at(&index, 4) != 0x20000
-        || count == 0
-        || count > 1024
-        || directory + 12 + count as u64 * 12 > length - 4
+    if directory < BASE_HEADER_BYTES as u64
+        || directory + DIRECTORY_HEADER_BYTES as u64 > length - DIRECTORY_POINTER_BYTES
     {
         return Err("invalid X3F directory".into());
     }
-    let mut entries = vec![0; count * 12];
+    file.seek(SeekFrom::Start(directory))?;
+    let mut index = [0; DIRECTORY_HEADER_BYTES];
+    file.read_exact(&mut index)?;
+    let count = u32_at(&index, DIRECTORY_COUNT_OFFSET) as usize;
+    if &index[..4] != b"SECd"
+        || u32_at(&index, VERSION_OFFSET) != DIRECTORY_VERSION
+        || count == 0
+        || count > MAX_DIRECTORY_ENTRIES
+        || directory + DIRECTORY_HEADER_BYTES as u64 + count as u64 * DIRECTORY_ENTRY_BYTES as u64
+            > length - DIRECTORY_POINTER_BYTES
+    {
+        return Err("invalid X3F directory".into());
+    }
+    let mut entries = vec![0; count * DIRECTORY_ENTRY_BYTES];
     file.read_exact(&mut entries)?;
     let mut selected: Option<Embedded> = None;
-    let mut native_extent = [0_u32; 2];
-    for entry in entries.as_chunks::<12>().0 {
-        if &entry[8..] != b"IMAG" && &entry[8..] != b"IMA2" {
+    let mut exif_preview: Option<(Vec<u8>, [u32; 2])> = None;
+    let header_extent = (u32_at(&header, VERSION_OFFSET) >= V4_VERSION)
+        .then(|| {
+            [
+                u32_at(&header, V4_EXTENT_OFFSET),
+                u32_at(&header, V4_EXTENT_OFFSET + WORD_BYTES),
+            ]
+        })
+        .filter(|e| e.iter().all(|v| *v > 0) && u64::from(e[0]) * u64::from(e[1]) <= MAX_PIXELS);
+    let mut native_extent = header_extent.unwrap_or([0_u32; 2]);
+    for entry in entries.as_chunks::<DIRECTORY_ENTRY_BYTES>().0 {
+        if &entry[ENTRY_TAG_OFFSET..] != b"IMAG" && &entry[ENTRY_TAG_OFFSET..] != b"IMA2" {
             continue;
         }
         let offset = u64::from(u32_at(entry, 0));
         let size = u32_at(entry, 4) as usize;
-        if offset < 40 || size < 28 || offset + size as u64 > directory {
+        if offset < BASE_HEADER_BYTES as u64
+            || size < IMAGE_HEADER_BYTES
+            || offset + size as u64 > directory
+        {
             return Err("invalid X3F image section".into());
         }
         file.seek(SeekFrom::Start(offset))?;
-        let mut image = [0; 28];
+        let mut image = [0; IMAGE_HEADER_BYTES];
         file.read_exact(&mut image)?;
         if &image[..4] != b"SECi" {
             return Err("invalid X3F image".into());
         }
-        if u32_at(&image, 8) != 2 {
+        if u32_at(&image, IMAGE_TYPE_OFFSET) != PREVIEW_IMAGE_TYPE {
             continue;
         }
-        let extent = [u32_at(&image, 16), u32_at(&image, 20)];
+        let extent = [
+            u32_at(&image, IMAGE_EXTENT_OFFSET),
+            u32_at(&image, IMAGE_EXTENT_OFFSET + WORD_BYTES),
+        ];
         let pixels = u64::from(extent[0]) * u64::from(extent[1]);
         if pixels == 0 || pixels > MAX_PIXELS {
             return Err("invalid embedded preview dimensions".into());
         }
-        if pixels > u64::from(native_extent[0]) * u64::from(native_extent[1]) {
+        if header_extent.is_none()
+            && pixels > u64::from(native_extent[0]) * u64::from(native_extent[1])
+        {
             native_extent = extent;
         }
-        let format = u32_at(&image, 12);
-        if [BITMAP_RGB, JPEG].contains(&format)
-            && selected.as_ref().is_none_or(|old| pixels < old.pixels())
+        let format = u32_at(&image, IMAGE_FORMAT_OFFSET);
+        if let Some(native) =
+            header_extent.filter(|_| matches!(selection, Selection::Smallest) && format == JPEG)
+        {
+            // The thumbnail lives near the JPEG header. Never read the complete
+            // large JPEG to find it. A differently cropped JPEG (DP0) cannot
+            // supply missing Raw borders, so use its full-frame section instead.
+            if (f64::from(extent[0]) / f64::from(extent[1])
+                - f64::from(native[0]) / f64::from(native[1]))
+            .abs()
+                < PREVIEW_ASPECT_TOLERANCE
+            {
+                let mut prefix = vec![0; (size - IMAGE_HEADER_BYTES).min(EXIF_PREFIX_BYTES)];
+                file.read_exact(&mut prefix)?;
+                if let Some(preview) = crate::x3f::jpeg_thumbnail(&prefix)
+                    .and_then(|jpeg| decode_exif_thumbnail(jpeg, extent).ok())
+                {
+                    if exif_preview
+                        .as_ref()
+                        .is_none_or(|old| preview.1[0] * preview.1[1] < old.1[0] * old.1[1])
+                    {
+                        exif_preview = Some(preview);
+                    }
+                }
+            }
+        }
+        if [BITMAP_RGB, JPEG, JPEG_THUMBNAIL].contains(&format)
+            && selected.as_ref().is_none_or(|old| {
+                if matches!(selection, Selection::Largest) {
+                    pixels > old.pixels()
+                } else {
+                    pixels < old.pixels()
+                }
+            })
         {
             selected = Some(Embedded {
-                offset: offset + 28,
-                size: size - 28,
+                offset: offset + IMAGE_HEADER_BYTES as u64,
+                size: size - IMAGE_HEADER_BYTES,
                 format,
                 extent,
-                stride: u32_at(&image, 24) as usize,
+                stride: u32_at(&image, IMAGE_STRIDE_OFFSET) as usize,
             });
         }
+    }
+    if let Some((rgb, extent)) = exif_preview.filter(|preview| {
+        selected
+            .as_ref()
+            .is_none_or(|s| u64::from(preview.1[0]) * u64::from(preview.1[1]) < s.pixels())
+    }) {
+        return Ok(Preview {
+            rgb,
+            extent,
+            rotation,
+            native_extent,
+        });
     }
     let selected = selected.ok_or("no supported embedded preview")?;
     if selected.size > MAX_BYTES {
@@ -121,10 +222,61 @@ pub fn read(path: &Path) -> Result<Preview> {
     })
 }
 
+fn decode_exif_thumbnail(encoded: &[u8], photograph: [u32; 2]) -> Result<(Vec<u8>, [u32; 2])> {
+    use image::ImageDecoder;
+    let mut decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(encoded))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_EXIF_THUMBNAIL_SIDE);
+    limits.max_image_height = Some(MAX_EXIF_THUMBNAIL_SIDE);
+    limits.max_alloc = Some(u64::from(MAX_EXIF_THUMBNAIL_SIDE).pow(2) * 4);
+    decoder.set_limits(limits)?;
+    let image = image::DynamicImage::from_decoder(decoder)?.into_rgb8();
+    // Exif thumbnails often have black padding to a 4:3 canvas. Remove only
+    // confirmed dark padding around the rectangle implied by the JPEG frame.
+    let (width, height) = if u64::from(image.width()) * u64::from(photograph[1])
+        <= u64::from(image.height()) * u64::from(photograph[0])
+    {
+        (
+            image.width(),
+            (u64::from(image.width()) * u64::from(photograph[1]) / u64::from(photograph[0])).max(1)
+                as u32,
+        )
+    } else {
+        (
+            (u64::from(image.height()) * u64::from(photograph[0]) / u64::from(photograph[1])).max(1)
+                as u32,
+            image.height(),
+        )
+    };
+    let x = (image.width() - width) / 2;
+    let y = (image.height() - height) / 2;
+    // JPEG ringing in the reviewed black bars reaches 30/255. A 32-code
+    // allowance keeps that padding removable while rejecting image content.
+    const PADDING_BLACK_LIMIT: u8 = 32;
+    if image.enumerate_pixels().any(|(px, py, rgb)| {
+        (px < x || py < y || px >= x + width || py >= y + height)
+            && rgb.0.iter().any(|c| *c > PADDING_BLACK_LIMIT)
+    }) {
+        return Err("Exif thumbnail has no matching photograph padding".into());
+    }
+    Ok((
+        image::imageops::crop_imm(&image, x, y, width, height)
+            .to_image()
+            .into_raw(),
+        [width, height],
+    ))
+}
+
 const BITMAP_RGB: u32 = 3;
 const JPEG: u32 = 18;
+// Version-4 files carry an additional JPEG thumbnail with the full Raw framing.
+const JPEG_THUMBNAIL: u32 = 25;
 const MAX_PIXELS: u64 = 64 * 1024 * 1024;
 const MAX_BYTES: usize = 256 * 1024 * 1024;
+const EXIF_PREFIX_BYTES: usize = 128 * 1024;
+const MAX_EXIF_THUMBNAIL_SIDE: u32 = 512;
+// Rounded thumbnail dimensions may differ slightly from the nominal Raw ratio.
+pub(crate) const PREVIEW_ASPECT_TOLERANCE: f64 = 0.02;
 
 struct Embedded {
     offset: u64,
@@ -154,7 +306,7 @@ impl Embedded {
                 rgb.extend_from_slice(&row[..row_bytes]);
             }
             Ok(rgb)
-        } else if self.format == JPEG {
+        } else if matches!(self.format, JPEG | JPEG_THUMBNAIL) {
             use image::ImageDecoder;
             let mut decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(encoded))?;
             let mut limits = image::Limits::default();

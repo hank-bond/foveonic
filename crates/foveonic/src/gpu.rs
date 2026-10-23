@@ -147,6 +147,29 @@ impl Gpu {
         target.submitted("copy");
     }
 
+    /// Copy already validated byte ranges without exposing unguarded buffers.
+    pub fn copy_ranges(
+        &self,
+        source: &ReadGuard,
+        mut target: WriteGuard<'_>,
+        ranges: impl IntoIterator<Item = [u64; 3]>,
+    ) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let mut total = 0;
+        for [from, to, bytes] in ranges {
+            encoder.copy_buffer_to_buffer(source.raw(), from, target.raw(), to, bytes);
+            total += bytes;
+        }
+        self.activity
+            .lock()
+            .expect("GPU activity counter")
+            .device_copy_bytes += total;
+        self.submit(encoder);
+        target.submitted("copy region");
+    }
+
     fn check_size(&self, size: u64) -> Result<()> {
         let limits = self.device.limits();
         if size == 0

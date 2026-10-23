@@ -98,7 +98,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
                     upload(&input, [baseline, baseline, baseline, 1.]);
                     // Change only channel 1 to catch accidental use of another channel.
                     upload(&output, [baseline, baseline + delta, baseline, 1.]);
-                    viewport::prepare_navigator(
+                    viewport::prepare_preview(
                         &rs,
                         &output,
                         space,
@@ -125,7 +125,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
     // The normal output mapping must ignore a retained reference when Difference is off.
     upload(&output, [0.25; 4]);
     upload(&input, [0.9; 4]);
-    viewport::prepare_navigator(
+    viewport::prepare_preview(
         &rs,
         &output,
         Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb),
@@ -134,7 +134,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
         Some(&input),
     );
     assert!(pixels(&rs, &target)[0].abs_diff(137) <= 1);
-    viewport::prepare_navigator(
+    viewport::prepare_preview(
         &rs,
         &input,
         Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb),
@@ -186,7 +186,7 @@ fn romm_presentation_converts_and_clips_without_changing_float_source() {
             source.size(),
         );
         let before = pixels(&rs, &source);
-        viewport::prepare_navigator(
+        viewport::prepare_preview(
             &rs,
             &source,
             Space::ToneMappedRgb(foveonic::image::ColorSpace::ProPhotoRgb),
@@ -262,7 +262,7 @@ fn ordinary_navigator_drawing_cost() {
     }
     rs.queue.submit(Some(encoder.finish()));
     let space = Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb);
-    viewport::prepare_navigator(
+    viewport::prepare_preview(
         &rs,
         &source,
         space,
@@ -320,7 +320,7 @@ fn ordinary_navigator_drawing_cost() {
         rs.queue.submit(Some(encoder.finish()));
     };
     let draw_old = || {
-        viewport::prepare_navigator(
+        viewport::prepare_preview(
             &rs,
             &source,
             space,

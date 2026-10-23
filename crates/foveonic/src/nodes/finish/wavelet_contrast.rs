@@ -91,6 +91,46 @@ impl Prepared {
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[2], self.params.shape[3]]
     }
+    /// Preserve global lifting phase and physical-edge padding in a cropped plane.
+    pub(crate) fn on_region(mut self, rect: [u32; 4]) -> Result<Self> {
+        let [left, top, right, bottom] = rect;
+        let [pw, ph, w, h] = self.params.shape;
+        if left >= right
+            || top >= bottom
+            || right > w
+            || bottom > h
+            || left % TRANSFORM_DIVISOR != 0
+            || top % TRANSFORM_DIVISOR != 0
+        {
+            return Err("unaligned wavelet preview region".into());
+        }
+        let extent = [right - left, bottom - top];
+        self.params.shape = [
+            if right == w {
+                pw - left
+            } else {
+                right.div_ceil(TRANSFORM_DIVISOR) * TRANSFORM_DIVISOR - left
+            },
+            if bottom == h {
+                ph - top
+            } else {
+                bottom.div_ceil(TRANSFORM_DIVISOR) * TRANSFORM_DIVISOR - top
+            },
+            extent[0],
+            extent[1],
+        ];
+        self.params.crop = [
+            self.params.crop[0].saturating_sub(left).min(extent[0]),
+            self.params.crop[1].saturating_sub(top).min(extent[1]),
+            self.params.crop[2].saturating_sub(left).min(extent[0]),
+            self.params.crop[3].saturating_sub(top).min(extent[1]),
+        ];
+        if self.params.crop[0] >= self.params.crop[2] || self.params.crop[1] >= self.params.crop[3]
+        {
+            return Err("regional wavelet crop misses active image".into());
+        }
+        Ok(self)
+    }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params)
             .slice(&self.gains)

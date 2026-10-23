@@ -13,6 +13,8 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
+- **[cache-and-smart-cleanup](./cache-and-smart-cleanup.md)** _(archived)._ Organize cache and Smart preview responsibilities and explain constants while preserving processing behavior.
+- **[cache-status-dots](./cache-status-dots.md)** _(archived)._ Replace the provisional cache checkmark with muted caption dots backed by explicit queue and disk states.
 - **[camera-repair-default](./camera-repair-default.md)** _(archived)._ Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
 - **[cargo-releases](./cargo-releases.md)** _(archived)._ Replace Python app packaging with Cargo tasks and prepare an unsigned v0.1.0 draft-release workflow.
 - **[classic-auto-performance](./classic-auto-performance.md)** _(archived)._ Parallelize the measured serial reductions in Classic automatic white balance.
@@ -24,6 +26,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[classic-monochrome](./classic-monochrome.md)** _(archived)._ Support reference-derived Classic monochrome rendering and editable DNG with independent color-mode controls.
 - **[classic-pipeline](./classic-pipeline.md)** _(archived)._ Build and validate an isolated end-to-end Classic GPU recipe to evaluate functional operations and shared engine machinery.
 - **[clickable-states](./clickable-states.md)** _(archived)._ Group editing corrections and share rounded clickable states without changing processing defaults.
+- **[decode-cache-and-smart-preview](./decode-cache-and-smart-preview.md)** _(archived)._ Implement bounded decoded-source disk reuse, app settings and Quattro regional Smart refinement.
 - **[despeckle](./despeckle.md)** _(archived)._ GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
 - **[detail-and-noise](./detail-and-noise.md)** _(archived)._ The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner.
@@ -37,6 +40,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[highlight-threshold](./highlight-threshold.md)** _(archived)._ Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** _(archived)._ A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
 - **[inspection-differences](./inspection-differences.md)** _(archived)._ Inspect operation inputs and outputs alongside amplified signed layer/channel differences.
+- **[inspection-popup-help](./inspection-popup-help.md)** _(archived)._ Prevent Quattro inspection menus from crashing when a stage lacks explanatory help.
 - **[metadata-first-loading](./metadata-first-loading.md)** _(archived)._ Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.
 - **[monochrome-performance](./monochrome-performance.md)** _(archived)._ Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output.
 - **[monochrome-rendering](./monochrome-rendering.md)** _(archived)._ GPU monochrome rendering, a triangular layer mixer, mode-specific editing, and linear monochrome DNG export are implemented and checked.
@@ -52,6 +56,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
+- **[thumbnail-and-preview-cache](./thumbnail-and-preview-cache.md)** _(archived)._ Refresh rendered thumbnails, cache sharper asynchronous previews, and collect recipes in a visible source-folder directory.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** _(archived)._ Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
 - **[viewport-scopes](./viewport-scopes.md)** _(archived)._ Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
 

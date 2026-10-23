@@ -21,7 +21,8 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 ### Source files
 
 - **[advanced.rs](./advanced.rs)** Displays advanced reconstruction controls with automatic ColorDQ and preset-linked parameter overrides.
-- **[browser.rs](./browser.rs)** Browses X3F paths with focused keyboard selection and bounded lazy embedded previews.
+- **[application_settings.rs](./application_settings.rs)** Configures temporary source and preview disk reuse independently of photographic edits.
+- **[browser.rs](./browser.rs)** Browses X3F paths with focused keyboard selection and bounded embedded and rendered previews.
 - **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
@@ -33,11 +34,14 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
 - **[mixer.rs](./mixer.rs)** Edits three-channel proportions with a triangular barycentric monochrome mixer.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
-- **[preferences.rs](./preferences.rs)** Persists organizer, scope, preview quality, zoom and tool preferences separately from image edits.
+- **[preferences.rs](./preferences.rs)** Persists cache, organizer, scope, preview, zoom and tool preferences separately from image edits.
+- **[preview_image.rs](./preview_image.rs)** Prepares oriented display thumbnails and larger previews away from the UI thread.
+- **[previews.rs](./previews.rs)** Refreshes browser previews from complete photographic frames after foreground work yields.
 - **[progress.rs](./progress.rs)** Shows request-to-image time and discrete completed loading and rendering stages.
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
 - **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
+- **[smart.rs](./smart.rs)** Refines the first Quattro detail viewport once before completing the whole Full frame.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
 - **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
 - **[toolbar.rs](./toolbar.rs)** Groups Open/Export actions in nested padded containers outside the editor.

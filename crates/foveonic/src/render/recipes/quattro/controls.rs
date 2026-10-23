@@ -44,6 +44,7 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
         supported.color_mode.clone_from(&settings.color_mode);
     }
     supported.preview_quality = settings.preview_quality;
+    supported.preview_region = settings.preview_region;
     supported.rendering = settings.rendering;
     supported.monochrome.noise = settings.monochrome.noise;
     supported.monochrome.mix = settings.monochrome.mix;

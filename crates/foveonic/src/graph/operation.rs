@@ -12,6 +12,11 @@ use crate::render::TiffColorSpace;
 use std::path::PathBuf;
 
 pub enum Operation {
+    ImageRegion {
+        prepared: crate::nodes::finish::image_region::Prepared,
+        data: DataType,
+        output: &'static str,
+    },
     /// Publish a recipe-established linear-light interpretation without changing its codes.
     LinearCodeBase,
     CodeChannelMap(std::sync::Arc<crate::nodes::finish::code_channel_map::Prepared>),
@@ -161,6 +166,14 @@ impl Operation {
     pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {
         use crate::{noise::RecipeStage as N, recipe::Key};
         match self {
+            Self::ImageRegion {
+                prepared,
+                data,
+                output,
+            } => prepared
+                .key()
+                .slice(format!("{data:?}").as_bytes())
+                .slice(output.as_bytes()),
             Self::LinearCodeBase => Key::default(),
             Self::BoxContrast(p) => p.key(),
             Self::ColumnGain(p) => p.key(),
@@ -290,6 +303,7 @@ impl Operation {
             Self::Source => "upload sensor",
             Self::SourcePhaseCells => "upload sensor phase cells",
             Self::EmptyDefectFlags(_) => "initialize empty defect flags",
+            Self::ImageRegion { .. } => "copy numerical viewport region",
             Self::CodeCrop(_) => "crop and resample unsigned RGB codes",
             Self::PhaseExtraction(_) => "extract sensor phases",
             Self::PhaseGain(_) => "apply sensor phase gain maps",
@@ -361,6 +375,7 @@ impl Operation {
     pub(super) fn types(&self) -> (Vec<DataType>, DataType) {
         use DataType::*;
         match self {
+            Self::ImageRegion { data, .. } => (vec![*data], *data),
             Self::PackedLab(p) => match p.direction() {
                 crate::nodes::color::packed_lab::Direction::Forward => {
                     (vec![UnsignedCodeRgb], PackedLabCodes)
@@ -609,6 +624,7 @@ impl Operation {
 
     pub fn output_name(&self) -> &'static str {
         match self {
+            Self::ImageRegion { output, .. } => output,
             Self::PackedLab(p) => match p.direction() {
                 crate::nodes::color::packed_lab::Direction::Forward => "local-contrast.lab",
                 crate::nodes::color::packed_lab::Direction::Inverse => "local-contrast.rgb",

@@ -17,6 +17,10 @@ use crate::{
 // Kept in the parameter key so same-size and doubled reconstruction never alias.
 // Shader entry points are selected on the host. The flag is not a camera mode.
 const SAME_SIZE_OUTPUT: f32 = 1.;
+// Minimum accepted low-resolution side for the 5×5 reconstruction neighborhood.
+const MIN_SIDE: u32 = 6;
+// Four output pixels per input cell, with three Float32 components per output.
+const OUTPUT_COMPONENTS_PER_CELL: u32 = 4 * 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -41,9 +45,10 @@ impl Prepared {
         blue_filter: Option<super::histogram_bilateral::Prepared>,
     ) -> Result<Self> {
         let [w, h] = extent;
-        if w < 6
-            || h < 6
-            || u64::from(w) * u64::from(h) > u64::from(u32::MAX) / 12
+        if w < MIN_SIDE
+            || h < MIN_SIDE
+            || u64::from(w) * u64::from(h)
+                > u64::from(u32::MAX) / u64::from(OUTPUT_COMPONENTS_PER_CELL)
             || !suppression.is_finite()
             || !(0. ..=1.).contains(&suppression)
             || blue_filter
@@ -112,6 +117,21 @@ impl Prepared {
     }
     fn is_same_size(&self) -> bool {
         self.params.controls[3] == SAME_SIZE_OUTPUT
+    }
+    pub(crate) fn with_extent(mut self, extent: [u32; 2]) -> Result<Self> {
+        if extent.iter().any(|&v| v < MIN_SIDE)
+            || u64::from(extent[0]) * u64::from(extent[1])
+                > u64::from(u32::MAX) / u64::from(OUTPUT_COMPONENTS_PER_CELL)
+        {
+            return Err("invalid regional reconstruction extent".into());
+        }
+        self.params.shape = [extent[0], extent[1], extent[0] * 2, extent[1] * 2];
+        let output_extent = self.output_extent();
+        self.blue_filter = self
+            .blue_filter
+            .map(|f| f.with_extent(output_extent))
+            .transpose()?;
+        Ok(self)
     }
     pub(crate) fn key(&self) -> Key {
         let key = Key::pod(&self.params).slice(&self.spatial);

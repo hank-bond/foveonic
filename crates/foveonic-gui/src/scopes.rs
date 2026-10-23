@@ -1,6 +1,6 @@
 //! Draws histograms, waveforms, and parades for the selected image buffer.
 
-use crate::preferences::Scope;
+use crate::{help, preferences::Scope, widgets};
 use eframe::egui::{self, emath::GuiRounding};
 use foveonic::{
     image::Space,
@@ -12,6 +12,48 @@ const COLORS: [egui::Color32; 3] = [
     egui::Color32::from_rgb(80, 140, 240),
 ];
 const VIEWPORT_HEIGHT: f32 = 170.;
+
+// Leave breathing room between the dropdown frame and the viewport checkbox.
+const CONTROL_PADDING: f32 = 8.;
+
+pub fn controls(ui: &mut egui::Ui, scope: &mut Scope, viewport: &mut bool) {
+    ui.horizontal(|ui| {
+        let viewport_label = egui::WidgetText::from("Viewport").into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Body,
+        );
+        let viewport_width =
+            viewport_label.size().x + ui.spacing().icon_width + ui.spacing().icon_spacing;
+        let dropdown_width =
+            (ui.available_width() - viewport_width - ui.spacing().item_spacing.x - CONTROL_PADDING)
+                .max(0.);
+        let combo = egui::ComboBox::from_id_salt("scope mode")
+            .width(dropdown_width)
+            .selected_text(match *scope {
+                Scope::Histogram => "Histogram",
+                Scope::Parade => "RGB / layer parade",
+                Scope::Waveform => "Combined waveform",
+            });
+        widgets::dropdown(ui, combo, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.;
+            for (value, name) in [
+                (Scope::Histogram, "Histogram"),
+                (Scope::Parade, "RGB / layer parade"),
+                (Scope::Waveform, "Combined waveform"),
+            ] {
+                widgets::menu_value(ui, scope, value, name).on_hover_text(help::scope(value));
+            }
+        })
+        .response
+        .on_hover_text(help::scope(*scope));
+        widgets::checkbox(ui, viewport, "Viewport").on_hover_text(concat!(
+            "Show scopes for the visible part of the image. Updates as you pan or zoom. ",
+            "Channel, Input/Output, and Difference views do not change scope values.",
+        ));
+    });
+}
 
 pub struct Images {
     parade: PlotImage,

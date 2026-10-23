@@ -1,4 +1,4 @@
-//! Persists organizer, scope, preview quality, zoom and tool preferences separately from image edits.
+//! Persists cache, organizer, scope, preview, zoom and tool preferences separately from image edits.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -10,6 +10,14 @@ pub enum Organizer {
     #[default]
     Icons,
     List,
+}
+/// Workspace policy. The worker resolves Smart into Fast or regional Full work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PreviewMode {
+    #[default]
+    Full,
+    Fast,
+    Smart,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Scope {
@@ -71,7 +79,8 @@ pub struct Preferences {
     pub scope: Scope,
     pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
-    pub preview_quality: foveonic::render::PreviewQuality,
+    pub preview_quality: PreviewMode,
+    pub decode_cache: foveonic::decode_cache::Settings,
     pub sections: Vec<Section>,
     pub collapsed: BTreeSet<Section>,
 }
@@ -81,9 +90,10 @@ impl Default for Preferences {
             last_folder: None,
             organizer: Organizer::Icons,
             scope: Scope::Histogram,
-            scope_viewport: false,
+            scope_viewport: true,
             zoom_snap: ZoomPreset::default(),
-            preview_quality: foveonic::render::PreviewQuality::Full,
+            preview_quality: PreviewMode::Full,
+            decode_cache: Default::default(),
             sections: Section::ALL.to_vec(),
             collapsed: BTreeSet::new(),
         }
@@ -181,14 +191,14 @@ mod tests {
     }
 
     #[test]
-    fn scope_viewport_defaults_off_and_survives_restart() {
+    fn scope_viewport_defaults_on_and_explicit_off_survives_restart() {
         let mut store = Storage::default();
         store
             .0
             .insert(STORAGE_KEY.into(), "(scope:Waveform)".into());
-        assert!(!Preferences::load(Some(&store)).scope_viewport);
+        assert!(Preferences::load(Some(&store)).scope_viewport);
         let prefs = Preferences {
-            scope_viewport: true,
+            scope_viewport: false,
             ..Default::default()
         };
         prefs.save(&mut store);
@@ -246,18 +256,40 @@ mod preview_tests {
     use super::*;
     #[test]
     fn preview_quality_defaults_full_and_round_trips_as_workspace_state() {
-        assert_eq!(
-            Preferences::default().preview_quality,
-            foveonic::render::PreviewQuality::Full
-        );
+        assert_eq!(Preferences::default().preview_quality, PreviewMode::Full);
         let prefs = Preferences {
-            preview_quality: foveonic::render::PreviewQuality::Fast,
+            preview_quality: PreviewMode::Fast,
             ..Default::default()
         };
         let bytes = serde_json::to_vec(&prefs).unwrap();
         assert_eq!(
             serde_json::from_slice::<Preferences>(&bytes).unwrap(),
             prefs
+        );
+    }
+    #[test]
+    fn smart_and_cache_configuration_roundtrip_without_changing_photo_settings() {
+        let prefs = Preferences {
+            preview_quality: PreviewMode::Smart,
+            decode_cache: foveonic::decode_cache::Settings {
+                enabled: false,
+                max_bytes: 5_000_000_000,
+                classic: true,
+                merrill: false,
+                quattro: true,
+            },
+            ..Default::default()
+        };
+        let encoded = serde_json::to_vec(&prefs).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Preferences>(&encoded).unwrap(),
+            prefs
+        );
+        let settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        assert!(
+            !String::from_utf8(foveonic::sidecar::encode(&settings).unwrap())
+                .unwrap()
+                .contains("decode_cache")
         );
     }
 }

@@ -137,6 +137,7 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize) -> Result<Vec<
     let row_samples = product(width, 3)?;
     let mut output = vec![0.; product(row_samples, height)?];
     for (bounds, row) in rows.windows(2).zip(output.chunks_exact_mut(row_samples)) {
+        crate::background::checkpoint();
         table.row(&data[bounds[0]..bounds[1]], row)?;
     }
     Ok(output)

@@ -332,6 +332,7 @@ pub(super) struct Controls {
     pub lowest_band_factor: Option<f32>,
     pub preserve_dark_detail: bool,
     pub grid: WorkingGrid,
+    pub region: Option<[u32; 4]>,
 }
 
 /// Retain full physical planes here. Generic finishing owns the active crop.
@@ -346,14 +347,20 @@ pub(super) fn build(
 ) -> Result<usize> {
     use crate::graph::Operation;
     let converted = build_contrast(graph, metadata, rgb, mode, controls)?;
+    let prepared = prepare_sharpen(
+        metadata,
+        controls.sharpen_level,
+        controls.sharpen_base,
+        controls.preserve_dark_detail,
+        controls.grid,
+    )?;
+    let prepared = if let Some(rect) = controls.region {
+        prepared.with_extent([rect[2] - rect[0], rect[3] - rect[1]])?
+    } else {
+        prepared
+    };
     graph.add(
-        Operation::ProportionalSharpen(std::sync::Arc::new(prepare_sharpen(
-            metadata,
-            controls.sharpen_level,
-            controls.sharpen_base,
-            controls.preserve_dark_detail,
-            controls.grid,
-        )?)),
+        Operation::ProportionalSharpen(std::sync::Arc::new(prepared)),
         &[converted, detail],
     )
 }
@@ -370,14 +377,20 @@ pub(super) fn build_contrast(
         graph::Operation,
         nodes::color::packed_lab::{Direction, Prepared},
     };
-    let extent = extent(metadata, controls.grid)?;
+    let extent = if let Some(rect) = controls.region {
+        [rect[2] - rect[0], rect[3] - rect[1]]
+    } else {
+        extent(metadata, controls.grid)?
+    };
     let converted = if uses_box_contrast(metadata)? {
+        let prepared = prepare_box_contrast(metadata, controls.contrast_level, controls.grid)?;
+        let prepared = if controls.region.is_some() {
+            prepared.with_extent(extent)?
+        } else {
+            prepared
+        };
         graph.add(
-            Operation::BoxContrast(std::sync::Arc::new(prepare_box_contrast(
-                metadata,
-                controls.contrast_level,
-                controls.grid,
-            )?)),
+            Operation::BoxContrast(std::sync::Arc::new(prepared)),
             &[rgb],
         )?
     } else {
@@ -385,14 +398,20 @@ pub(super) fn build_contrast(
             Operation::PackedLab(Prepared::new(extent, Direction::Forward, RGB_TO_XYZ)?),
             &[rgb],
         )?;
+        let prepared = prepare_lce(
+            metadata,
+            controls.contrast_level,
+            mode,
+            controls.lowest_band_factor,
+            controls.grid,
+        )?;
+        let prepared = if let Some(rect) = controls.region {
+            prepared.on_region(rect)?
+        } else {
+            prepared
+        };
         let adjusted = graph.add(
-            Operation::WaveletContrast(std::sync::Arc::new(prepare_lce(
-                metadata,
-                controls.contrast_level,
-                mode,
-                controls.lowest_band_factor,
-                controls.grid,
-            )?)),
+            Operation::WaveletContrast(std::sync::Arc::new(prepared)),
             &[lab],
         )?;
         graph.add(

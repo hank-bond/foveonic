@@ -11,14 +11,14 @@ use std::{collections::HashMap, sync::Arc};
 /// Keep the original photo and the inputs needed to restart the active edit.
 /// Retaining every stage would spend memory without helping that edit.
 pub struct RenderSession {
-    pub(crate) source: Source,
+    pub(crate) source: Arc<Source>,
     pub(crate) cache: Cache,
     pub(crate) last_settings: Option<Settings>,
 }
 impl RenderSession {
-    pub fn new(source: Source) -> Self {
+    pub fn new(source: impl Into<Arc<Source>>) -> Self {
         Self {
-            source,
+            source: source.into(),
             cache: Cache::default(),
             last_settings: None,
         }
@@ -56,6 +56,7 @@ impl Settings {
             self.preview_quality != next.preview_quality,
             "preview-quality"
         );
+        changed!(self.preview_region != next.preview_region, "preview-region");
         changed!(self.rendering != next.rendering, "rendering");
         changed!(self.monochrome.mix != next.monochrome.mix, "mono-mix");
         changed!(self.monochrome.noise != next.monochrome.noise, "mono-noise");
@@ -294,6 +295,12 @@ impl Cache {
             }
             self.selected = frontier;
         }
+        for &id in &graph.session_outputs {
+            let name = graph.outputs[id].name;
+            if required[id] && !self.selected.contains(&name) {
+                self.selected.push(name);
+            }
+        }
         self.entries.retain(|entry| {
             self.versions
                 .get(entry.name)
@@ -417,6 +424,20 @@ mod tests {
             .unwrap();
         let detail = graph.add(O::Detail(p), &[raw, base, pattern]).unwrap();
         (graph, detail)
+    }
+    #[test]
+    fn recipe_restart_boundaries_supplement_the_adjustable_frontier() {
+        let (mut graph, root) = graph_for_detail(1.);
+        let original = graph.nodes[0].outputs[0];
+        let mut cache = Cache::default();
+        assert!(!cache.plan(&graph, &[root]).unwrap().contains(&original));
+        graph.retain_for_session(original);
+        let frontier = cache.plan(&graph, &[root]).unwrap();
+        assert!(frontier.contains(&original));
+        assert!(
+            frontier.len() > 1,
+            "recipe hints must retain the editing frontier too"
+        );
     }
     #[test]
     fn detail_changes_only_its_own_recipe_and_keeps_three_input_versions() {

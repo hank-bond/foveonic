@@ -85,6 +85,7 @@ pub(super) fn stage3_controls(
         lowest_band_factor: Some(factor),
         preserve_dark_detail: false,
         grid: super::WorkingGrid::Full,
+        region: None,
     })
 }
 

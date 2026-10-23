@@ -232,3 +232,15 @@ fn preview_quality_is_transient_and_invalidates_active_rendering() {
         PreviewQuality::Full
     );
 }
+
+#[test]
+fn preview_region_is_transient_and_invalidates_only_regional_work() {
+    let full = Settings::new("Sunlight", "Standard");
+    let mut region = full.clone();
+    region.preview_region = Some([100, 200, 500, 600]);
+    assert_eq!(full.changed_parameters(&region), ["preview-region"]);
+    assert_eq!(
+        crate::sidecar::encode(&full).unwrap(),
+        crate::sidecar::encode(&region).unwrap()
+    );
+}

@@ -71,7 +71,10 @@ fn selection_uses_pixel_area_and_keeps_largest_preview_geometry() {
     let path = std::env::temp_dir().join(format!("foveonic-preview-{}.x3f", std::process::id()));
     std::fs::write(&path, bytes).unwrap();
     let preview = read(&path).unwrap();
+    let full = read_full(&path).unwrap();
     std::fs::remove_file(path).unwrap();
+    assert_eq!(full.extent, [2, 1]);
+    assert_eq!(full.rotation, 90);
     assert_eq!(preview.extent, [1, 1]);
     assert_eq!(preview.native_extent, [20, 10]);
     assert_eq!(preview.rotation, 90);
@@ -238,4 +241,84 @@ fn original_quattro_preview_rotation_matches_camera_orientation() {
         let preview = read(&directory.join(format!("{name}.x3f"))).unwrap();
         assert_eq!(preview.rotation, expected, "{name}");
     }
+}
+
+#[test]
+fn version_four_thumbnail_uses_raw_header_geometry_before_rendering() {
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+        .encode(&[70; 18], 3, 2, image::ExtendedColorType::Rgb8)
+        .unwrap();
+    let mut bytes = fixture_with_rotation(
+        &[(25, [3, 2], 0, jpeg), (11, [4, 3], 0, vec![])],
+        0x40001,
+        270,
+    );
+    bytes[40..44].copy_from_slice(&5424_u32.to_le_bytes());
+    bytes[44..48].copy_from_slice(&3616_u32.to_le_bytes());
+    let path = std::env::temp_dir().join(format!(
+        "foveonic-quattro-thumbnail-{}.x3f",
+        std::process::id()
+    ));
+    std::fs::write(&path, bytes).unwrap();
+    let preview = read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(preview.extent, [3, 2]);
+    assert_eq!(preview.native_extent, [5424, 3616]);
+    assert_eq!(preview.rotation, 270);
+}
+
+#[test]
+#[ignore = "requires FOVEONIC_FIXTURE_DIR with Quattro originals"]
+fn original_quattro_thumbnails_preserve_raw_framing_and_orientation() {
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    for name in [
+        "dp0-quattro",
+        "dp1-quattro-pblog",
+        "dp2-quattro",
+        "dp3-quattro",
+        "sd-quattro",
+        "sd-quattro-h",
+    ] {
+        let preview = read(&root.join(format!("{name}.x3f"))).unwrap();
+        assert!(
+            preview.extent[0] <= 320 && preview.extent[1] <= 320,
+            "{name}: {:?}",
+            preview.extent
+        );
+        let expected = if name == "sd-quattro-h" {
+            [6192, 4128]
+        } else {
+            [5424, 3616]
+        };
+        assert_eq!(preview.native_extent, expected, "{name}");
+        let aspect = preview.extent[0] as f64 / preview.extent[1] as f64;
+        assert!(
+            (aspect - 1.5).abs() < 0.02,
+            "{name}: thumbnail framing changed"
+        );
+    }
+}
+
+#[test]
+fn exif_padding_is_removed_only_when_it_matches_the_photo_frame() {
+    let mut pixels = image::RgbImage::from_pixel(160, 120, image::Rgb([0, 0, 0]));
+    for y in 7..113 {
+        for x in 0..160 {
+            pixels.put_pixel(x, y, image::Rgb([80, 120, 160]));
+        }
+    }
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+        .encode_image(&pixels)
+        .unwrap();
+    let (rgb, extent) = decode_exif_thumbnail(&jpeg, [5424, 3616]).unwrap();
+    assert_eq!(extent, [160, 106]);
+    assert_eq!(rgb.len(), 160 * 106 * 3);
+    let pixels = image::RgbImage::from_pixel(160, 120, image::Rgb([80, 120, 160]));
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+        .encode_image(&pixels)
+        .unwrap();
+    assert!(decode_exif_thumbnail(&jpeg, [5424, 3616]).is_err());
 }

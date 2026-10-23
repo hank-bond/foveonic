@@ -1315,6 +1315,111 @@ fn supported_preview_policy_survives_photographic_control_normalization() {
 }
 
 #[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
+fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_panning() {
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let engine = Engine::new().unwrap();
+    for name in [
+        "dp0-quattro",
+        "dp1-quattro-pblog",
+        "dp2-quattro",
+        "dp3-quattro",
+        "sd-quattro",
+        "dp3-quattro-iso800",
+    ] {
+        let source = std::sync::Arc::new(Source::open(root.join(format!("{name}.x3f"))).unwrap());
+        let mut settings = Settings::new("Sunlight", "Standard");
+        let full = engine
+            .render(&source, &settings, &mut Profile::default())
+            .unwrap();
+        let [width, height] = full.view().extent;
+        let bytes = engine.readback_image(&full).unwrap();
+        let mut session = RenderSession::new(source);
+        settings.preview_quality = PreviewQuality::Fast;
+        engine
+            .render_session(
+                &mut session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap();
+        settings.preview_quality = PreviewQuality::Full;
+        for (index, [x, y]) in [[0, 0], [width / 2, height / 2], [width - 480, height - 320]]
+            .into_iter()
+            .enumerate()
+        {
+            settings.preview_region = Some([x, y, x + 480, y + 320]);
+            let before = engine.gpu_activity();
+            let mut result = engine
+                .render_session(
+                    &mut session,
+                    &settings,
+                    &["final"],
+                    || false,
+                    &mut Profile::default(),
+                )
+                .unwrap()
+                .unwrap();
+            let activity = engine.gpu_activity().since(before);
+            if index > 0 {
+                assert!(
+                    activity.upload_bytes < session.source().samples().len() as u64 * 4,
+                    "pan uploaded the complete original again: {name}"
+                );
+            }
+            let Content::Image(regional) = result.pop().unwrap().content else {
+                panic!("image expected")
+            };
+            assert_eq!(regional.view().extent, [480, 320]);
+            let actual = engine.readback_image(&regional).unwrap();
+            let mut expected = Vec::with_capacity(actual.len());
+            for row in y..y + 320 {
+                let start = ((row * width + x) * 12) as usize;
+                expected.extend_from_slice(&bytes[start..start + 480 * 12]);
+            }
+            let actual_float: &[f32] = bytemuck::cast_slice(&actual);
+            let expected_float: &[f32] = bytemuck::cast_slice(&expected);
+            let changed = actual_float
+                .iter()
+                .zip(expected_float)
+                .filter(|(a, b)| a.to_bits() != b.to_bits())
+                .count();
+            let max = actual_float
+                .iter()
+                .zip(expected_float)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0_f32, f32::max);
+            eprintln!("{name} {x},{y}: {changed} changed components, maximum {max}");
+            assert!(
+                actual == expected,
+                "regional Full mismatch {name} at {x},{y}, maximum {max}"
+            );
+        }
+        settings.preview_region = None;
+        let mut completed = engine
+            .render_session(
+                &mut session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let Content::Image(completed) = completed.pop().unwrap().content else {
+            panic!("image expected");
+        };
+        assert_eq!(completed.view().extent, [width, height]);
+        assert!(
+            engine.readback_image(&completed).unwrap() == bytes,
+            "whole-frame continuation changed Full samples: {name}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires GPU and QUATTRO_X3F"]
 fn progress_observers_report_real_load_and_render_boundaries_without_changing_pixels() {
     use std::cell::RefCell;

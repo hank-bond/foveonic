@@ -47,7 +47,9 @@ Build and launch with an X3F file or folder:
 cargo xtask run -- path/to/photo.x3f
 ```
 
-This creates `target/release/Foveonic.app` without installing it. Use `cargo xtask bundle` to build without launching, or add `--debug` before `--` for a debug build. Custom Cargo target directories are respected. Omit the input to reopen the last folder. Select a photograph, adjust its settings, and use **Export TIFF** or the experimental **Export DNG**. Edits save automatically to a sidecar beside the X3F.
+This creates `target/release/Foveonic.app` without installing it. Use `cargo xtask bundle` to build without launching, or add `--debug` before `--` for a debug build. Custom Cargo target directories are respected. Omit the input to reopen the last folder. Select a photograph, adjust its settings, and use **Export TIFF** or the experimental **Export DNG**. Edits save automatically in a visible `foveonic` subfolder beside the originals. Existing adjacent sidecars move there on their next save. Thumbnails follow completed renders, and larger previews are prepared asynchronously in the temporary image cache.
+
+Quattro color photographs offer **Full**, **Fast** and **Smart** preview choices. Smart shows Fast first, refines the clicked detail viewport above 100%, then completes the whole Full frame for panning. **Settings** configures a temporary decoded-source disk cache, enabled by default with a 10 GB budget for Quattro and Merrill. Classic caching defaults off. The open folder decodes ahead while photo work is idle. Muted dots beside filenames show disabled, queued, ready and uncached sources.
 
 ### CLI
 

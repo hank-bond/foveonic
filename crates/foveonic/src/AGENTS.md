@@ -23,7 +23,11 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 ### Source files
 
+- **[background.rs](./background.rs)** Pauses optional decode work at bounded checkpoints while foreground requests run.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
+- **[decode_cache.rs](./decode_cache.rs)** Reuses exact decoded sources and display previews in a bounded temporary disk LRU.
+- **[decode_cache_preview.rs](./decode_cache_preview.rs)** Stores bounded display previews under the decoded cache's identity, recipe, and shared LRU budget.
+- **[decode_cache_worker.rs](./decode_cache_worker.rs)** Schedules bounded cache writes, folder prefetch, and readiness scans behind foreground work.
 - **[dng.rs](./dng.rs)** Starts DNG exports from the original photo so display edits never become baked samples.
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
 - **[graph.rs](./graph.rs)** Builds typed dependency-ordered graphs and validates connections between operation ports.
@@ -39,7 +43,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[recipe.rs](./recipe.rs)** Encodes exact effective operation parameters for graph versioning without hashing photographic samples.
 - **[render.rs](./render.rs)** Shares GPU engine entry points for photographic rendering, inspection, display, and export.
 - **[scopes.rs](./scopes.rs)** Builds histograms and smooth waveform traces from GPU image regions.
-- **[sidecar.rs](./sidecar.rs)** Reads and atomically replaces bounded versioned JSON editing recipes beside immutable X3F inputs.
+- **[sidecar.rs](./sidecar.rs)** Keeps bounded editing recipes in a visible source-folder subdirectory with atomic replacement.
 - **[source.rs](./source.rs)** Owns original sensor storage layouts and typed camera metadata.
 
 <!-- INDEX:END -->

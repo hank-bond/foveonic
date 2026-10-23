@@ -172,3 +172,34 @@ fn half_grid_mapping_preserves_physical_crop_for_every_orientation() {
         .on_half_grid()
         .is_err());
 }
+
+#[test]
+fn regions_preserve_fixed_point_positions_and_kernel_for_every_orientation() {
+    for angle in [0, 90, 180, 270] {
+        let output = if angle == 90 || angle == 270 {
+            [790, 992]
+        } else {
+            [992, 790]
+        };
+        let full = Prepared::new([1000, 800], [4, 6, 995, 795], output, angle, true).unwrap();
+        let requested = [100, 100, 300, 250];
+        let (region, bounds) = full.clone().region(requested, 64, 64).unwrap();
+        assert_eq!(bounds[0] % 64, 0);
+        assert_eq!(bounds[1] % 64, 0);
+        assert_eq!(region.extent(), [200, 150]);
+        assert_eq!(region.kernel, full.kernel);
+        for [x, y] in [[0, 0], [100, 75], [199, 149]] {
+            for (c, origin) in bounds[..2].iter().enumerate() {
+                let coordinate = |p: &Prepared, x, y| {
+                    i64::from(p.params.column[c] as i32)
+                        + i64::from(x) * i64::from(p.params.column[c + 2] as i32)
+                        + i64::from(y) * i64::from(p.params.row[c] as i32)
+                };
+                assert_eq!(
+                    coordinate(&region, x, y) + i64::from(*origin) * FIXED_ONE as i64,
+                    coordinate(&full, x + 100, y + 100)
+                );
+            }
+        }
+    }
+}

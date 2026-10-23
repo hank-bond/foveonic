@@ -10,6 +10,7 @@ implementation: conforming
 ## Requirements
 
 - Editing controls, advanced controls and their link buttons, inspection choices, and scope choices **must** have explanations written for people familiar with photo editing, without assuming programming or Foveon sensor knowledge.
+- Missing inspection help **must not** prevent opening the menu or selecting a supported processing output. Coverage checks **must** include the Quattro DP and SD stage catalogues as well as Classic and Merrill.
 - Noise preset and Detail zero/default explanations **must** live in hover popovers, not as a persistent note below the controls. Use simple photographic language; professional photography knowledge **may** be assumed, but Merrill architecture expertise **must not** be assumed.
 - Help **should** explain what changes, when it is useful, and the important tradeoff. It **must** describe the implemented behavior, including neutral/off settings and relevant dependencies. Technical names alone are not explanations.
 - Highlights under Corrections **must** have help explaining Auto, the relative threshold offset, its neutralization/color tradeoff, and the distinction between manual 0 and the enable checkbox. It **must** remain distinct from tone Highlights and avoid promising recovery of lost capture detail.

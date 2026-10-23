@@ -19,7 +19,7 @@ const SENSOR_WIDTH: usize = 4928;
 const SENSOR_HEIGHT: usize = 3264;
 
 /// Processing selection belongs to input and recipes, never pixel operations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProcessingFamily {
     Merrill,
     Classic,
@@ -431,15 +431,20 @@ impl Source {
         progress: impl Fn(LoadStage),
     ) -> Result<Self> {
         let source = crate::x3f::read(path.as_ref(), || progress(LoadStage::FileRead))?;
-        match source.metadata.processing_family()? {
+        source.validate()?;
+        progress(LoadStage::Decoded);
+        Ok(source)
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        match self.metadata.processing_family()? {
             ProcessingFamily::Merrill => {
-                if source.metadata.width != SENSOR_WIDTH || source.metadata.height != SENSOR_HEIGHT
-                {
+                if self.metadata.width != SENSOR_WIDTH || self.metadata.height != SENSOR_HEIGHT {
                     return Err("unsupported Merrill full-sensor geometry".into());
                 }
             }
             ProcessingFamily::Classic => {
-                let model = source
+                let model = self
                     .metadata
                     .properties
                     .get("CAMMODEL")
@@ -449,18 +454,26 @@ impl Source {
                 } else {
                     [2688, 1792]
                 };
-                if [source.metadata.width, source.metadata.height] != expected {
+                if [self.metadata.width, self.metadata.height] != expected {
                     return Err("unsupported Classic full-sensor geometry".into());
                 }
             }
             ProcessingFamily::Quattro => {
-                if source.storage != SourceStorage::PackedRgbBluePhases {
+                if self.storage != SourceStorage::PackedRgbBluePhases {
                     return Err("unsupported Quattro sensor layout".into());
                 }
             }
         }
-        progress(LoadStage::Decoded);
-        Ok(source)
+        let [w, h] = self.storage_extent();
+        let components = if self.storage == SourceStorage::PackedRgbBluePhases {
+            6
+        } else {
+            3
+        };
+        if w.checked_mul(h).and_then(|v| v.checked_mul(components)) != Some(self.pixels.len()) {
+            return Err("source sample geometry mismatch".into());
+        }
+        Ok(())
     }
 }
 

@@ -69,7 +69,12 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
     let planes = std::thread::scope(|scope| -> Result<Vec<_>> {
         let workers = inputs.map(|(input, width, height, seed)| {
             let table = &table;
-            scope.spawn(move || table.decode_bounded(input, width, height, seed, 16383))
+            let scheduling = crate::background::context();
+            scope.spawn(move || {
+                crate::background::run(scheduling, || {
+                    table.decode_bounded(input, width, height, seed, 16383)
+                })
+            })
         });
         // Join all three before returning an error so scoped panics remain errors.
         workers
@@ -85,6 +90,7 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
     let cells = product(low_width, low_height)?;
     let mut output = Vec::with_capacity(product(cells, 6)?);
     for y in 0..low_height {
+        crate::background::checkpoint();
         for x in 0..low_width {
             let index = y * low_width + x;
             output.push(f32::from(planes[0][index]));

@@ -1,6 +1,8 @@
 //! Shares X3F decoding and GPU photo processing between TIFF and DNG exports.
 
+mod background;
 pub mod color_space;
+pub mod decode_cache;
 pub mod dng;
 mod gpu;
 mod graph;

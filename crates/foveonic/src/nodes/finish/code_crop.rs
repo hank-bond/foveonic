@@ -17,6 +17,8 @@ const TAPS: usize = 16;
 const FIXED_ONE: f64 = 65536.;
 // A 2×2 mean is centered at physical +0.5, or +0.25 on the half grid (Q16).
 const HALF_GRID_CENTER_OFFSET: i64 = 16384;
+// An exclusive source bound must include floor(coordinate) and its bilinear neighbor.
+const BILINEAR_EXCLUSIVE_SUPPORT: u32 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -123,6 +125,69 @@ impl Prepared {
     }
     pub(crate) fn input_extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
+    }
+    /// Preserve the original Q16 mapping while processing only an aligned source
+    /// rectangle around the selected oriented output. Margins belong to the recipe.
+    pub(crate) fn region(
+        mut self,
+        output: [u32; 4],
+        margin: u32,
+        alignment: u32,
+    ) -> Result<(Self, [u32; 4])> {
+        let [left, top, right, bottom] = output;
+        if left >= right
+            || top >= bottom
+            || right > self.params.shape[2]
+            || bottom > self.params.shape[3]
+            || alignment == 0
+        {
+            return Err("invalid oriented preview region".into());
+        }
+        let coordinate = |x: u32, y: u32, c: usize| {
+            i64::from(self.params.column[c])
+                + i64::from(x) * i64::from(self.params.column[c + 2] as i32)
+                + i64::from(y) * i64::from(self.params.row[c] as i32)
+        };
+        let corners = [
+            (left, top),
+            (right - 1, top),
+            (left, bottom - 1),
+            (right - 1, bottom - 1),
+        ];
+        let mut rect = [0; 4];
+        for c in 0..2 {
+            let min = corners
+                .iter()
+                .map(|&(x, y)| coordinate(x, y, c))
+                .min()
+                .unwrap()
+                .div_euclid(FIXED_ONE as i64)
+                .max(0) as u32;
+            let max = corners
+                .iter()
+                .map(|&(x, y)| coordinate(x, y, c))
+                .max()
+                .unwrap()
+                .div_euclid(FIXED_ONE as i64)
+                .max(0) as u32
+                + BILINEAR_EXCLUSIVE_SUPPORT;
+            rect[c] = min.saturating_sub(margin) / alignment * alignment;
+            rect[c + 2] = max
+                .saturating_add(margin)
+                .div_ceil(alignment)
+                .saturating_mul(alignment)
+                .min(self.params.shape[c]);
+        }
+        let origin = [coordinate(left, top, 0), coordinate(left, top, 1)];
+        self.params.column[0] = (origin[0] - i64::from(rect[0]) * FIXED_ONE as i64) as u32;
+        self.params.column[1] = (origin[1] - i64::from(rect[1]) * FIXED_ONE as i64) as u32;
+        self.params.shape = [
+            rect[2] - rect[0],
+            rect[3] - rect[1],
+            right - left,
+            bottom - top,
+        ];
+        Ok((self, rect))
     }
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[2], self.params.shape[3]]

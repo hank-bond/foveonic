@@ -72,6 +72,15 @@ impl Prepared {
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }
+    pub(crate) fn with_extent(mut self, extent: [u32; 2]) -> Result<Self> {
+        if extent.contains(&0)
+            || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / 3
+        {
+            return Err("invalid regional sharpen extent".into());
+        }
+        self.params.shape[..2].copy_from_slice(&extent);
+        Ok(self)
+    }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params).slice(&self.table)
     }

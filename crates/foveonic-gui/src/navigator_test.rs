@@ -1,7 +1,7 @@
 //! Checks GPU navigator transfer mapping and completed preparation cost using synthetic floating textures.
 
 use super::*;
-pub(super) fn state() -> egui_wgpu::RenderState {
+pub(crate) fn state() -> egui_wgpu::RenderState {
     let instance = wgpu::Instance::default();
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -29,7 +29,7 @@ pub(super) fn state() -> egui_wgpu::RenderState {
     viewport::install(&rs);
     rs
 }
-pub(super) fn texture(
+pub(crate) fn texture(
     rs: &egui_wgpu::RenderState,
     size: [u32; 2],
     format: wgpu::TextureFormat,
@@ -105,7 +105,7 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
             },
             source.size(),
         );
-        viewport::prepare_navigator(
+        viewport::prepare_preview(
             &rs,
             &source,
             space,
@@ -164,7 +164,7 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
         wgpu::TextureFormat::Rgba8UnormSrgb,
         wgpu::TextureUsages::RENDER_ATTACHMENT,
     );
-    viewport::prepare_navigator(
+    viewport::prepare_preview(
         &rs,
         &source,
         Space::ScalarField,
@@ -175,7 +175,7 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
     rs.device.poll(wgpu::Maintain::Wait);
     let start = Instant::now();
     for _ in 0..25 {
-        viewport::prepare_navigator(
+        viewport::prepare_preview(
             &rs,
             &source,
             Space::ScalarField,

@@ -3,6 +3,11 @@
 use crate::{viewport, worker::Frame};
 use eframe::{egui, egui_wgpu, wgpu};
 use foveonic::image::{ImageTexture, Space};
+use std::{
+    path::PathBuf,
+    sync::{mpsc, Arc, Condvar, Mutex},
+    time::{Duration, Instant},
+};
 #[derive(Clone)]
 struct SourceId(Arc<foveonic::source::Metadata>);
 impl PartialEq for SourceId {
@@ -11,11 +16,9 @@ impl PartialEq for SourceId {
     }
 }
 impl Eq for SourceId {}
-use std::{
-    path::PathBuf,
-    sync::{mpsc, Arc, Condvar, Mutex},
-    time::{Duration, Instant},
-};
+
+// Let the main image reach the screen before preparing another display texture.
+const PRESENT_FIRST: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy)]
 pub struct Image {
@@ -112,7 +115,7 @@ impl Navigator {
                     | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            viewport::prepare_navigator(
+            viewport::prepare_preview(
                 &gpu,
                 job.source.texture(),
                 job.key.space,
@@ -214,7 +217,7 @@ impl Navigator {
                         None
                     },
                 },
-                Instant::now() + Duration::from_millis(16),
+                Instant::now() + PRESENT_FIRST,
             ));
         }
         if busy {
@@ -267,7 +270,7 @@ fn tile_extent(extent: [u32; 2]) -> [u32; 2] {
 mod draw_tests;
 #[cfg(test)]
 #[path = "navigator_test.rs"]
-mod gpu_tests;
+pub(crate) mod gpu_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

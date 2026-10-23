@@ -16,6 +16,7 @@ impl Directory {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
+        fs::create_dir(path.join("foveonic")).unwrap();
         Self(path)
     }
     fn input(&self, name: &str) -> PathBuf {

@@ -13,12 +13,14 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
 - **[application-workflows](./application-workflows.md)** _(accepted, incomplete, reference)._ A personal Merrill X3F app shares processing settings and one image engine between its GUI and batch CLI.
+- **[browser-previews](./browser-previews.md)** _(accepted, conforming, reference)._ Small embedded thumbnails appear immediately and asynchronous cached previews follow the latest photographic render.
 - **[classic-rendering](./classic-rendering.md)** _(accepted, incomplete, reference)._ Classic photographic rendering uses format-selected decoding and family-authored recipes with functional GPU operations and shared engine resources.
 - **[color-field](./color-field.md)** _(accepted, incomplete, reference)._ Color-field highlight reconstruction separates brightness and color in GPU passes with immutable source reliability and optional local color-evidence selection.
 - **[column-conditioning](./column-conditioning.md)** _(accepted, conforming, reference)._ GPU column conditioning corrects raw processing tiles after base filtering and before luminance/detail estimation, retaining native windows, cuts, ordered means, strict eligibility, and clipping.
+- **[decode-cache](./decode-cache.md)** _(accepted, conforming, reference)._ A bounded temporary disk LRU reuses immutable decoded sources and display previews with per-family workspace controls.
 - **[despeckle](./despeckle.md)** _(accepted, conforming, reference)._ Full-image GPU despeckling detects channel extrema and corrects them in deterministic reference order, independently of camera-record repair.
 - **[detail-and-noise](./detail-and-noise.md)** _(accepted, conforming, reference)._ Reference-style GPU noise filtering and detail reconstruction provide an inspectable photographic baseline.
-- **[editing-sidecars](./editing-sidecars.md)** _(accepted, conforming, reference)._ Original X3Fs and adjacent editing sidecars are authoritative; rendered exports can be regenerated from them.
+- **[editing-sidecars](./editing-sidecars.md)** _(accepted, conforming, reference)._ Original X3Fs and editing recipes in a visible source-folder subdirectory are authoritative.
 - **[family-controls](./family-controls.md)** _(accepted, conforming, reference)._ Family-authored editing panels share widgets and use processing-owned capabilities and defaults.
 - **[gui-screenshot](./gui-screenshot.md)** _(accepted, conforming, reference)._ An explicit Cargo task refreshes a lossless WebP README screenshot using the shared local example-photograph cache.
 - **[gui-workspace](./gui-workspace.md)** _(accepted, conforming, reference)._ The GUI uses a persistent three-pane workspace with a reflowing organizer, current-buffer scopes, and reorderable editor sections.
@@ -40,5 +42,6 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[releases](./releases.md)** _(accepted, conforming, reference)._ Cargo packages unsigned macOS apps and release tags build draft GitHub Releases without publishing them.
 - **[render-resources](./render-resources.md)** _(accepted, conforming, reference)._ Owned GPU render results separate image processing from display and export, with explicit pixel meaning and geometry.
 - **[row-banding](./row-banding.md)** _(accepted, conforming, reference)._ GPU row-banding correction fits the native geometric patch banks, rejects scene-correlated residuals, and subtracts bounded additive per-row sensor bias before reconstruction.
+- **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Quattro Smart preview shows Fast, refines the first detail viewport, then completes Full for unrestricted panning.
 
 <!-- INDEX:END -->

@@ -1,6 +1,7 @@
 //! Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
 mod advanced;
+mod application_settings;
 mod browser;
 mod capture;
 mod controls;
@@ -13,10 +14,13 @@ mod metadata;
 mod mixer;
 mod navigator;
 mod preferences;
+mod preview_image;
+mod previews;
 mod progress;
 mod scopes;
 mod sections;
 mod sidecars;
+mod smart;
 mod smoke;
 mod timing;
 mod toolbar;
@@ -29,10 +33,16 @@ use foveonic::{
     render::{Engine, Settings},
     source::Metadata,
 };
-use preferences::{Organizer, Scope, Section};
+use preferences::{Organizer, Section};
 use std::{path::PathBuf, sync::Arc};
 
+// Keep folder readiness responsive during prefetch without polling idle folders at frame rate.
+const CACHE_ACTIVE_POLL: std::time::Duration = std::time::Duration::from_millis(150);
+const CACHE_IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
 struct App {
+    settings_open: bool,
+    selection_activity: Option<foveonic::decode_cache::Activity>,
     browser: browser::Browser,
     worker: worker::Worker,
     capture: capture::Loader,
@@ -45,11 +55,14 @@ struct App {
     channel: i32,
     comparison: inspect::Comparison,
     frame: Option<worker::Frame>,
+    detail: Option<worker::Frame>,
+    smart: smart::Controller,
     scope_images: Option<scopes::Images>,
     scope_snapshot: Option<worker::ScopeSnapshot>,
     scope_key: Option<worker::ScopeKey>,
     viewport: viewport::Viewport,
     navigator: navigator::Navigator,
+    previews: previews::Previews,
     revision: u64,
     busy: bool,
     exporting: bool,
@@ -92,11 +105,21 @@ impl App {
             engine
         };
         let overrides = [settings.white_balance.clone(), settings.color_mode.clone()];
-        let preferences = preferences::Preferences::load(cc.storage);
+        let mut preferences = preferences::Preferences::load(cc.storage);
+        if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
+            preferences.preview_quality = preferences::PreviewMode::Smart;
+        }
         let path = preferences.startup_path(path);
+        let worker = worker::Worker::new(engine, cc.egui_ctx.clone());
+        let previews =
+            previews::Previews::new(rs.clone(), cc.egui_ctx.clone(), worker.cache.clone());
+        let browser = browser::Browser::with_cache(cc.egui_ctx.clone(), Some(worker.cache.clone()));
         let mut app = Self {
-            browser: browser::Browser::new(cc.egui_ctx.clone()),
-            worker: worker::Worker::new(engine, cc.egui_ctx.clone()),
+            settings_open: false,
+            selection_activity: None,
+            browser,
+            worker,
+            previews,
             capture: capture::Loader::new(cc.egui_ctx.clone()),
             sidecars: sidecars::Session::new(
                 cc.egui_ctx.clone(),
@@ -110,6 +133,8 @@ impl App {
             channel: -1,
             comparison: Default::default(),
             frame: None,
+            detail: None,
+            smart: Default::default(),
             scope_images: None,
             scope_snapshot: None,
             scope_key: None,
@@ -126,6 +151,9 @@ impl App {
             smoke: smoke::Smoke::from_env(),
             last_frame: None,
         };
+        app.worker
+            .cache
+            .configure(app.preferences.decode_cache.clone());
         app.viewport.zoom_snap = app.preferences.zoom_snap;
         if let Some(path) = path {
             app.open(path);
@@ -158,6 +186,8 @@ impl App {
                     self.capture.select(None);
                     self.metadata = None;
                     self.frame = None;
+                    self.detail = None;
+                    self.smart.reset();
                     self.scope_images = None;
                     self.scope_snapshot = None;
                     self.busy = false;
@@ -167,6 +197,12 @@ impl App {
                     self.status = "No X3F files in this folder".into();
                     self.status_error = true;
                 }
+                self.worker
+                    .cache
+                    .prefetch_folder(self.browser.files.clone());
+                if let Some(selected) = &self.selected {
+                    self.worker.cache.prioritize(selected);
+                }
             }
             Err(e) => {
                 self.status = format!("Cannot open {}: {e}", path.display());
@@ -175,6 +211,8 @@ impl App {
         }
     }
     fn select(&mut self, path: PathBuf) {
+        self.selection_activity = Some(self.worker.cache.foreground());
+        self.worker.cache.prioritize(&path);
         self.capture.select(Some(path.clone()));
         self.sidecars.select(path.clone());
         self.selected = Some(path);
@@ -187,11 +225,26 @@ impl App {
         self.output = "final".into();
         self.channel = -1;
         self.frame = None;
+        self.detail = None;
+        self.smart.reset();
         self.scope_key = None;
         self.viewport.reset();
         viewport::clear(&self.render_state);
     }
     fn submit(&mut self, export: Option<worker::Export>) {
+        self.detail = None;
+        self.smart.reset();
+        self.submit_request(export, None);
+    }
+    fn submit_request(&mut self, export: Option<worker::Export>, region: Option<[u32; 4]>) {
+        self.submit_with_quality(export, region, self.preferences.preview_quality);
+    }
+    fn submit_with_quality(
+        &mut self,
+        export: Option<worker::Export>,
+        region: Option<[u32; 4]>,
+        quality: preferences::PreviewMode,
+    ) {
         if !self.sidecars.ready() {
             return;
         }
@@ -213,11 +266,13 @@ impl App {
                 format!("Loading {}…", self.output)
             };
             timing::requested(self.revision, path, &self.output, &self.settings);
+            let mut requested = self.settings.clone();
+            requested.preview_region = region;
             self.worker.submit(worker::Request {
                 revision: self.revision,
                 path: path.clone(),
-                settings: self.settings.clone(),
-                preview_quality: self.preferences.preview_quality,
+                settings: requested,
+                preview_quality: quality,
                 output: self.output.clone(),
                 comparison: self.comparison.requested()
                     && foveonic::inspection::comparison_input(
@@ -228,17 +283,31 @@ impl App {
                     .is_some(),
                 export,
             });
+            self.selection_activity = None;
         }
     }
     fn receive(&mut self, ctx: &egui::Context) {
         self.browser.receive(ctx);
+        while let Ok(preview) = self.previews.replies.try_recv() {
+            if self.frame.as_ref().is_some_and(|frame| {
+                frame.path == preview.path && frame.revision == preview.revision
+            }) {
+                self.browser
+                    .rendered(ctx, preview.path, preview.revision, preview.image);
+            }
+        }
         while let Ok(update) = self.worker.replies.try_recv() {
             let reply = match update {
                 worker::Update::Image(reply) => *reply,
                 worker::Update::Scopes { key, result } => {
-                    if self.frame.as_ref().is_some_and(|frame| {
-                        frame.revision == key.revision && self.scope_key == Some(key)
-                    }) {
+                    if self
+                        .frame
+                        .as_ref()
+                        .into_iter()
+                        .chain(self.detail.as_ref())
+                        .any(|frame| frame.revision == key.revision)
+                        && self.scope_key == Some(key)
+                    {
                         match result {
                             Ok(data) => {
                                 self.scope_images = Some(scopes::Images::new(&data));
@@ -257,6 +326,16 @@ impl App {
                 }
             };
             let current = reply.revision == self.revision;
+            if !current
+                && reply
+                    .result
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .is_some_and(|frame| frame.artifact.settings.preview_region.is_some())
+            {
+                continue;
+            }
             if !current
                 && !reply
                     .result
@@ -328,8 +407,18 @@ impl App {
                     );
                     // Keep the last completed scopes until this frame has replacements.
                     self.scope_key = None;
-                    viewport::clear(&self.render_state);
-                    self.frame = Some(frame);
+                    if frame.artifact.settings.preview_region.is_some() {
+                        self.detail = Some(frame);
+                    } else {
+                        viewport::clear(&self.render_state);
+                        if self.preferences.preview_quality != preferences::PreviewMode::Smart
+                            || frame.artifact.settings.preview_quality
+                                != foveonic::render::PreviewQuality::Full
+                        {
+                            self.detail = None;
+                        }
+                        self.frame = Some(frame);
+                    }
                 }
                 Ok(None) => {
                     self.status = match reply.exported {
@@ -347,24 +436,48 @@ impl App {
             }
         }
     }
-    fn update_scopes(&mut self) {
-        let Some(frame) = &self.frame else {
+    fn update_scopes(&mut self, ctx: &egui::Context) {
+        let visible = self.viewport.visible_pixels().map(|p| {
+            [
+                p.top_left[0],
+                p.top_left[1],
+                p.bottom_right[0] + 1,
+                p.bottom_right[1] + 1,
+            ]
+        });
+        let detail = self.smart_detail(ctx.pixels_per_point()).filter(|detail| {
+            self.preferences.scope_viewport
+                && visible.is_some_and(|visible| {
+                    smart::contains(detail.artifact.settings.preview_region.unwrap(), visible)
+                })
+        });
+        let Some(frame) = detail.or(self.frame.as_ref()) else {
             self.scope_key = None;
             return;
         };
         let region = if self.preferences.scope_viewport {
-            let Some(pixels) = self
-                .viewport
-                .visible_pixels_for(frame.texture.description().extent)
-            else {
-                return;
-            };
-            Some([
-                pixels.top_left[0],
-                pixels.top_left[1],
-                pixels.bottom_right[0] + 1,
-                pixels.bottom_right[1] + 1,
-            ])
+            if let Some(rect) = frame.artifact.settings.preview_region {
+                let visible = visible.unwrap();
+                Some([
+                    visible[0] - rect[0],
+                    visible[1] - rect[1],
+                    visible[2] - rect[0],
+                    visible[3] - rect[1],
+                ])
+            } else {
+                let Some(pixels) = self
+                    .viewport
+                    .visible_pixels_for(frame.texture.description().extent)
+                else {
+                    return;
+                };
+                Some([
+                    pixels.top_left[0],
+                    pixels.top_left[1],
+                    pixels.bottom_right[0] + 1,
+                    pixels.bottom_right[1] + 1,
+                ])
+            }
         } else {
             None
         };
@@ -431,6 +544,9 @@ impl App {
                     !smoke::screenshot_active(),
                 )
                 .on_hover_text(&self.status);
+                if widgets::button(ui, "Settings", self.settings_open, egui::Vec2::ZERO).clicked() {
+                    self.settings_open = !self.settings_open;
+                }
                 if self.status_error {
                     ui.add(
                         egui::Label::new(
@@ -469,28 +585,11 @@ impl App {
                 false
             }
             Section::Scopes => {
-                let combo = egui::ComboBox::from_id_salt("scope mode")
-                    .width(ui.available_width() - 8.)
-                    .selected_text(match self.preferences.scope {
-                        Scope::Histogram => "Histogram",
-                        Scope::Parade => "RGB / layer parade",
-                        Scope::Waveform => "Combined waveform",
-                    });
-                widgets::dropdown(ui, combo, |ui| {
-                    ui.spacing_mut().item_spacing.y = 0.;
-                    for (value, name) in [
-                        (Scope::Histogram, "Histogram"),
-                        (Scope::Parade, "RGB / layer parade"),
-                        (Scope::Waveform, "Combined waveform"),
-                    ] {
-                        widgets::menu_value(ui, &mut self.preferences.scope, value, name)
-                            .on_hover_text(help::scope(value));
-                    }
-                })
-                .response
-                .on_hover_text(help::scope(self.preferences.scope));
-                widgets::checkbox(ui, &mut self.preferences.scope_viewport, "Viewport only")
-                    .on_hover_text("Show scopes for the visible part of the image. Updates as you pan or zoom. Channel, Input/Output, and Difference views do not change scope values.");
+                scopes::controls(
+                    ui,
+                    &mut self.preferences.scope,
+                    &mut self.preferences.scope_viewport,
+                );
                 scopes::show(
                     ui,
                     self.preferences.scope,
@@ -578,12 +677,15 @@ impl App {
                 changed |= inspect::preview_quality(
                     ui,
                     !self.exporting,
-                    self.output == "final"
-                        && !self.comparison.requested()
-                        && self
-                            .metadata
-                            .as_deref()
-                            .is_some_and(|m| self.settings.fast_preview_available(m)),
+                    if self.output != "final" || self.comparison.requested() {
+                        Some(false)
+                    } else {
+                        inspect::preview_support(
+                            &self.settings,
+                            self.metadata.as_deref(),
+                            self.capture.properties.as_ref(),
+                        )
+                    },
                     &mut self.preferences.preview_quality,
                 );
                 widgets::button_group(ui, |ui| {
@@ -704,8 +806,19 @@ impl App {
                         self.srgb_target,
                         frame.revision,
                     );
+                    if let Some(detail) = self.smart_detail(ui.ctx().pixels_per_point()) {
+                        self.viewport.show_region(
+                            ui,
+                            detail.texture.clone(),
+                            detail.artifact.settings.preview_region.unwrap(),
+                            frame.display_extent(false),
+                            mapping,
+                            self.srgb_target,
+                            detail.revision,
+                        );
+                    }
                 } else if let Some(path) = &self.selected {
-                    if let Some(preview) = self.browser.thumbnail(path) {
+                    if let Some(preview) = self.browser.preview(path) {
                         self.viewport
                             .show_preview(ui, &preview.texture, preview.native_extent);
                     }
@@ -755,6 +868,17 @@ impl eframe::App for App {
             );
         }
         self.capture.receive();
+        let cache_status = self.worker.cache.status();
+        self.browser.decode_states = cache_status.files;
+        self.browser.cache_enabled =
+            self.preferences.decode_cache.enabled && self.preferences.decode_cache.max_bytes > 0;
+        if self.preferences.decode_cache.enabled && !self.browser.files.is_empty() {
+            ctx.request_repaint_after(if cache_status.prefetching.is_some() {
+                CACHE_ACTIVE_POLL
+            } else {
+                CACHE_IDLE_POLL
+            });
+        }
         if let Some(saved) = self.sidecars.receive() {
             if self.selected.is_some() {
                 self.settings = sidecars::selection_settings(saved, &self.camera_overrides);
@@ -793,16 +917,23 @@ impl eframe::App for App {
         let previous_settings = self.settings.clone();
         let previous_selection = self.selected.clone();
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui));
+        application_settings::show(
+            ctx,
+            &mut self.settings_open,
+            &mut self.preferences.decode_cache,
+            &self.worker.cache,
+        );
         let mut select = None;
         let screenshot = smoke::screenshot_active().then(smoke::screenshot_recipe);
-        let organizer_limit = (ctx.available_rect().width() - 540.).clamp(160., 650.);
+        let organizer_minimum = browser::minimum_panel_width(&ctx.style());
+        let organizer_limit = (ctx.available_rect().width() - 540.).clamp(organizer_minimum, 650.);
         egui::SidePanel::left("organizer")
             .default_width(
                 screenshot
                     .as_ref()
                     .map_or(230., |recipe| recipe.organizer_width),
             )
-            .width_range(160. ..=organizer_limit)
+            .width_range(organizer_minimum..=organizer_limit)
             .resizable(true)
             .show(ctx, |ui| {
                 widgets::control_row(ui, |ui| {
@@ -859,8 +990,10 @@ impl eframe::App for App {
         } else if changed && !self.exporting {
             self.submit(None);
         }
-        self.update_scopes();
+        self.update_smart(ctx);
+        self.update_scopes(ctx);
         self.smoke_check_scope_retention();
+        self.previews.update(self.frame.as_ref(), self.busy, ctx);
         self.navigator.update(
             self.frame.as_ref(),
             self.displayed_mapping(),

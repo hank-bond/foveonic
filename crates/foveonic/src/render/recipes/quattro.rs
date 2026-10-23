@@ -21,6 +21,7 @@ mod luma_repair;
 mod mcc;
 mod monochrome;
 mod optical;
+mod region;
 mod repair;
 pub(crate) mod resources;
 mod sd;
@@ -103,6 +104,7 @@ fn compose(
         && !dng
         && !settings.is_monochrome()
         && names == ["final"]
+        && settings.preview_region.is_none()
         && fast_available(&source.metadata);
     let grid = if fast {
         WorkingGrid::Half
@@ -119,6 +121,11 @@ fn compose(
     let [width, height] = source.storage_extent().map(|v| v as u32);
     let mut graph = Graph::default();
     let input = graph.add(Operation::SourcePhaseCells, &[])?;
+    // Fast skips high-blue repairs. A later Full request needs the original
+    // cells, even when its reconstruction inputs differ from the Fast graph.
+    if names == ["final"] && fast_available(&source.metadata) {
+        graph.retain_for_session(input);
+    }
     let raw = graph.add(
         Operation::PhaseExtraction(phase_extraction::Params::new(width, height)?),
         &[input],
@@ -424,6 +431,24 @@ fn compose(
     if let Some(size) = settings.output_size {
         params.output[..2].copy_from_slice(&size);
     }
+    let region = settings
+        .preview_region
+        .filter(|_| {
+            !dng && !settings.is_monochrome()
+                && names == ["final"]
+                && fast_available(&source.metadata)
+        })
+        .map(|rect| {
+            region::Prepared::new(&source.metadata, [params.output[0], params.output[1]], rect)
+        })
+        .transpose()?;
+    let (signals, highlight_mask) = if let Some(region) = &region {
+        params.source[..2].copy_from_slice(&region.extent());
+        params.output[..2].copy_from_slice(&region.crop.extent());
+        region.build(&mut graph, &source.metadata, &signals, highlight_mask)?
+    } else {
+        (signals, highlight_mask)
+    };
     engine.check_extent([params.output[0], params.output[1]])?;
     let residual_level = smooth_crisp_level(controls.detail)?;
     let reconstruction_controls = stage2b::Controls {
@@ -437,13 +462,12 @@ fn compose(
     } else {
         stage2b::prepare(&source.metadata, reconstruction_controls, color_mode)?
     };
-    let reconstructed = stage2b::build(
-        &mut graph,
-        &source.metadata,
-        &signals,
-        highlight_mask,
-        reconstruction,
-    )?;
+    let reconstruction = if let Some(region) = &region {
+        reconstruction.with_extent(region.extent())?
+    } else {
+        reconstruction
+    };
+    let reconstructed = stage2b::build(&mut graph, &signals, highlight_mask, reconstruction)?;
     finish!(reconstructed);
     let detail = graph.named_output(reconstructed, "reconstruction.detail")?;
     let spatial_input = if settings.is_monochrome() {
@@ -477,6 +501,7 @@ fn compose(
             lowest_band_factor: None,
             preserve_dark_detail: true,
             grid,
+            region: region.as_ref().map(|r| r.physical),
         }
     };
     let sharpened = if settings.is_monochrome() {
@@ -543,17 +568,21 @@ fn compose(
         .map(|v| v as u32);
     // This crop's raw right/bottom are exclusive in the reference operation.
     // Nominal output dimensions still include that final recorded pixel.
-    let crop = crate::nodes::finish::code_crop::Prepared::new(
-        physical_extent,
-        crop,
-        [params.output[0], params.output[1]],
-        source.metadata.rotation,
-        true,
-    )?;
-    let crop = if grid.is_half() {
-        crop.on_half_grid()?
+    let crop = if let Some(region) = region {
+        region.crop
     } else {
-        crop
+        let crop = crate::nodes::finish::code_crop::Prepared::new(
+            physical_extent,
+            crop,
+            [params.output[0], params.output[1]],
+            source.metadata.rotation,
+            true,
+        )?;
+        if grid.is_half() {
+            crop.on_half_grid()?
+        } else {
+            crop
+        }
     };
     let cropped = graph.add(Operation::CodeCrop(std::sync::Arc::new(crop)), &[sharpened])?;
     finish!(cropped);

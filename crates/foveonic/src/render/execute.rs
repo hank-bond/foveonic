@@ -151,6 +151,7 @@ impl Engine {
                     Input::Rendered(image) => image.description.extent,
                 });
             let extent = match &node.operation {
+                Operation::ImageRegion { prepared, .. } => prepared.extent(),
                 Operation::PackedLab(p) => p.extent(),
                 Operation::CodeCrop(p) => p.extent(),
                 Operation::WaveletContrast(p) => p.extent(),
@@ -196,6 +197,9 @@ impl Engine {
                         profile,
                     )?)
                 }
+                Operation::ImageRegion { prepared, .. } => Some(
+                    crate::nodes::finish::image_region::apply(gpu, &input(0).buffer, prepared)?,
+                ),
                 Operation::EmptyDefectFlags([width, height]) => {
                     if *width == 0 || *height == 0 {
                         return Err("empty defect flags require nonzero geometry".into());

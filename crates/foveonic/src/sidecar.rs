@@ -1,4 +1,4 @@
-//! Reads and atomically replaces bounded versioned JSON editing recipes beside immutable X3F inputs.
+//! Keeps bounded editing recipes in a visible source-folder subdirectory with atomic replacement.
 
 use crate::{render::Settings, source::Result};
 use serde::{Deserialize, Serialize};
@@ -26,8 +26,18 @@ struct Recipe {
     settings: Settings,
 }
 
-/// Append to the complete filename, preserving its extension and non-UTF-8 bytes.
+/// Keep the complete filename and its non-UTF-8 bytes inside a visible folder.
 pub fn path(input: &Path) -> PathBuf {
+    let mut name = input.file_name().unwrap_or_default().to_os_string();
+    name.push(".foveonic.json");
+    input
+        .parent()
+        .unwrap_or(Path::new(""))
+        .join("foveonic")
+        .join(name)
+}
+
+fn legacy_path(input: &Path) -> PathBuf {
     let mut name = input.as_os_str().to_os_string();
     name.push(".foveonic.json");
     PathBuf::from(name)
@@ -71,8 +81,14 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
 /// A missing sidecar means start with defaults. Other errors need to reach the
 /// caller so an unreadable or newer recipe is not silently replaced.
 pub fn load(input: &Path) -> Result<Option<Settings>> {
-    let destination = path(input);
-    let file = match File::open(&destination) {
+    match load_at(&path(input))? {
+        Some(settings) => Ok(Some(settings)),
+        None => load_at(&legacy_path(input)),
+    }
+}
+
+fn load_at(destination: &Path) -> Result<Option<Settings>> {
+    let file = match File::open(destination) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{}: {error}", destination.display()).into()),
@@ -91,6 +107,12 @@ pub fn save(input: &Path, settings: &Settings) -> Result<()> {
     let bytes = encode(settings)?;
     load(input)?;
     let destination = path(input);
+    // Create only our direct child. A missing source folder remains an error.
+    match fs::create_dir(destination.parent().unwrap()) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error.into()),
+    }
     let mut temporary = destination.as_os_str().to_os_string();
     temporary.push(format!(
         ".{}.{}.tmp",
@@ -111,6 +133,12 @@ pub fn save(input: &Path, settings: &Settings) -> Result<()> {
         file.sync_all()?;
         drop(file);
         fs::rename(&temporary, &destination)?;
+        // The new recipe is durable before retiring an older adjacent copy.
+        // A malformed older file remains available for manual recovery.
+        let legacy = legacy_path(input);
+        if load_at(&legacy).is_ok_and(|s| s.is_some()) {
+            fs::remove_file(legacy)?;
+        }
         Ok(())
     })();
     if result.is_err() {

@@ -10,6 +10,10 @@ use crate::{
     source::Result,
 };
 
+// Largest supported radius is seven. Keep both edges and a nonempty interior.
+const MAX_RADIUS: u32 = 7;
+const MIN_SIDE: u32 = 2 * MAX_RADIUS + 2;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
@@ -26,13 +30,13 @@ pub struct Prepared {
 
 impl Prepared {
     pub(crate) fn new(extent: [u32; 2], passes: [(u32, f32); 2], iso_gain: f32) -> Result<Self> {
-        if extent.iter().any(|&v| v < 16)
+        if extent.iter().any(|&v| v < MIN_SIDE)
             || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / 3
             || !iso_gain.is_finite()
             || iso_gain <= 0.
             || passes
                 .iter()
-                .any(|(radius, amount)| !(1..=7).contains(radius) || !amount.is_finite())
+                .any(|(radius, amount)| !(1..=MAX_RADIUS).contains(radius) || !amount.is_finite())
         {
             return Err("invalid box local-contrast controls".into());
         }
@@ -51,6 +55,17 @@ impl Prepared {
     }
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.passes[0].shape[0], self.passes[0].shape[1]]
+    }
+    pub(crate) fn with_extent(mut self, extent: [u32; 2]) -> Result<Self> {
+        if extent.iter().any(|&v| v < MIN_SIDE)
+            || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / 3
+        {
+            return Err("invalid regional local contrast extent".into());
+        }
+        for pass in &mut self.passes {
+            pass.shape[..2].copy_from_slice(&extent);
+        }
+        Ok(self)
     }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.passes)

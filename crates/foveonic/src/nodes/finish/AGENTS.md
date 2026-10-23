@@ -17,6 +17,7 @@ Preserve signed samples and headroom until the selected operation requires encod
 - **[code_crop.rs](./code_crop.rs)** Crops, rotates and resizes integral RGB codes with fixed-point mapping and source-derived interpolation phases.
 - **[code_response.rs](./code_response.rs)** Maps unsigned integral RGB codes through supplied linear photographic response tables.
 - **[color_sharpen.rs](./color_sharpen.rs)** Sharpens integral RGB channels with wrapped neighborhood sums and signal-dependent thresholds.
+- **[image_region.rs](./image_region.rs)** Copies a rectangular numerical signal on the GPU while preserving every component bit.
 - **[mod.rs](./mod.rs)** Prepares tone and resampling with shaders for sharpening and final encoding.
 - **[proportional_sharpen.rs](./proportional_sharpen.rs)** Sharpens integral RGB codes from signed quarter-code detail and an adaptive amount table.
 - **[resample.rs](./resample.rs)** Prepares camera resampling weights and leaves image calculations on the GPU.
