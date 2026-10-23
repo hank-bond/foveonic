@@ -14,9 +14,9 @@ concurrency:
 
 jobs:
   macos:
-    name: Unsigned macOS Apple Silicon app
+    name: Signed macOS Apple Silicon app
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       MACOSX_DEPLOYMENT_TARGET: '26.0'
@@ -52,7 +52,73 @@ jobs:
       - name: Build native app bundle
         run: cargo xtask bundle --tag "$RELEASE_TAG"
 
-      - name: Archive unsigned app
+      - name: Import certificate and sign app
+        env:
+          SIGNING_TEMP_DIR: ${{ runner.temp }}/foveonic-signing
+          SIGNING_KEYCHAIN: ${{ runner.temp }}/foveonic-signing.keychain-db
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_CERTIFICATE_P12_BASE64:?Missing certificate secret}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Missing certificate password secret}"
+          : "${APPLE_TEAM_ID:?Missing Team ID variable}"
+          [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          umask 077
+          mkdir -m 700 "$SIGNING_TEMP_DIR"
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$SIGNING_TEMP_DIR/certificate.p12"
+          keychain_password="$(openssl rand -base64 32)"
+          echo "::add-mask::$keychain_password"
+          security create-keychain -p "$keychain_password" "$SIGNING_KEYCHAIN"
+          security set-keychain-settings -lut 7200 "$SIGNING_KEYCHAIN"
+          security unlock-keychain -p "$keychain_password" "$SIGNING_KEYCHAIN"
+          security import "$SIGNING_TEMP_DIR/certificate.p12" -k "$SIGNING_KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$SIGNING_TEMP_DIR/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$SIGNING_KEYCHAIN" > /dev/null
+          identity="$(security find-identity -v -p codesigning "$SIGNING_KEYCHAIN" | \
+            awk -v team="$APPLE_TEAM_ID" '/"Developer ID Application:/ && index($0, "(" team ")\"") { print $2 }')"
+          if [[ ! "$identity" =~ ^[[:xdigit:]]{40}$ ]]; then
+            echo "::error::Expected exactly one valid Developer ID Application identity for the configured team."
+            exit 1
+          fi
+          codesign --force --sign "$identity" --keychain "$SIGNING_KEYCHAIN" \
+            --options runtime --timestamp target/release/Foveonic.app
+          codesign --verify --deep --strict --verbose=2 target/release/Foveonic.app
+
+      - name: Notarize, staple and verify app
+        env:
+          SIGNING_TEMP_DIR: ${{ runner.temp }}/foveonic-signing
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_ID:?Missing Apple Account secret}"
+          : "${APPLE_APP_SPECIFIC_PASSWORD:?Missing app-specific password secret}"
+          : "${APPLE_TEAM_ID:?Missing Team ID variable}"
+          submission="$SIGNING_TEMP_DIR/submission.zip"
+          result="$SIGNING_TEMP_DIR/notarization.json"
+          ditto -c -k --sequesterRsrc --keepParent target/release/Foveonic.app "$submission"
+          if ! xcrun notarytool submit "$submission" --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 20m --output-format json > "$result"; then
+            if [ -s "$result" ]; then
+              jq . "$result"
+            fi
+            echo "::error::Notarization failed or timed out. No release assets will be uploaded."
+            exit 1
+          fi
+          jq . "$result"
+          jq -e '.status == "Accepted"' "$result" > /dev/null
+          xcrun stapler staple target/release/Foveonic.app
+          xcrun stapler validate target/release/Foveonic.app
+          codesign --verify --deep --strict --verbose=2 target/release/Foveonic.app
+          spctl --assess --type execute --verbose=2 target/release/Foveonic.app
+
+      - name: Archive signed and notarized app
         run: |
           cd target/release
           archive="Foveonic-${RELEASE_TAG}-macos-arm64.zip"
@@ -76,3 +142,16 @@ jobs:
           gh release upload "$RELEASE_TAG" \
             "target/release/Foveonic-${RELEASE_TAG}-macos-arm64.zip" \
             target/release/SHA256SUMS --clobber
+
+      - name: Remove signing credentials and temporary files
+        if: ${{ always() }}
+        env:
+          SIGNING_TEMP_DIR: ${{ runner.temp }}/foveonic-signing
+          SIGNING_KEYCHAIN: ${{ runner.temp }}/foveonic-signing.keychain-db
+        run: |
+          status=0
+          if [ -f "$SIGNING_KEYCHAIN" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN" || status=$?
+          fi
+          rm -rf "$SIGNING_TEMP_DIR"
+          exit "$status"

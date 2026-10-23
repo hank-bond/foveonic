@@ -84,7 +84,7 @@ Sample X3Fs are available in the [Example photographs release](https://github.co
 
 ## Releases
 
-Release-tag pushes build an unsigned Apple Silicon app for macOS 26+ and attach it to a draft GitHub Release. See the [changelog](CHANGELOG.md) and [release checklist](docs/releases.md). Publication remains manual.
+Release-tag pushes build a Developer ID signed and notarized Apple Silicon app for macOS 26+ and attach it to a draft GitHub Release. See the [changelog](CHANGELOG.md) and [release checklist](docs/releases.md). Publication remains manual.
 
 ## Checks
 

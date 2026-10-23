@@ -39,7 +39,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[quattro-input](./quattro-input.md)** _(accepted, conforming, reference)._ Quattro input preserves mixed-resolution sensor codes and exposes independently sized inspection planes.
 - **[quattro-rendering](./quattro-rendering.md)** _(accepted, conforming, reference)._ Quattro recipes share numerical reconstruction and finishing while preserving camera-specific calibration.
 - **[reduced-reconstruction](./reduced-reconstruction.md)** _(accepted, conforming, reference)._ Metadata-selected eighth-step reconstruction uses native polyphase reduced local or whole-image fixed filtering, restores full tile geometry, and preserves explicit transposed pattern scratch provenance.
-- **[releases](./releases.md)** _(accepted, conforming, reference)._ Cargo packages unsigned macOS apps and release tags build draft GitHub Releases without publishing them.
+- **[releases](./releases.md)** _(accepted, incomplete, reference)._ Cargo packages macOS apps and release tags build signed, notarized draft GitHub Releases without publishing them.
 - **[render-resources](./render-resources.md)** _(accepted, conforming, reference)._ Owned GPU render results separate image processing from display and export, with explicit pixel meaning and geometry.
 - **[row-banding](./row-banding.md)** _(accepted, conforming, reference)._ GPU row-banding correction fits the native geometric patch banks, rejects scene-correlated residuals, and subtracts bounded additive per-row sensor bias before reconstruction.
 - **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Quattro Smart preview shows Fast, refines the first detail viewport, then completes Full for unrestricted panning.
