@@ -4,7 +4,7 @@ summary: "The Rust documentation tool generates directory indexes and checks doc
 
 # Documentation tool
 
-Imported from the reference implementation at commit `d4cfa2d`. Root routing includes indexed crates and skips absent directories. Read the [source index](./src/AGENTS.md) for implementation guidance and [CLI tests](./tests/cli.rs) for repository-fixture checks. Use the commands in [`README.md`](../../README.md). Tests pass `--root {PATH}` to operate on isolated repository copies.
+Imported from the reference implementation at commit `d4cfa2d`. Root routing includes indexed crates and skips absent directories. Read the [source index](./src/AGENTS.md) for implementation guidance and [CLI tests](./tests/cli.rs) for repository-fixture checks. Use the [contributor checks](../../docs/contributing.md#run-checks). Tests pass `--root {PATH}` to operate on isolated repository copies.
 
 <!-- INDEX:START -->
 

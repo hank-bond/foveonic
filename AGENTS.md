@@ -32,7 +32,7 @@ Follow [`docs/contributing.md`](./docs/contributing.md) when writing comments, d
 
 Record agreed requirements in `docs/specs/`. Use small plans to track implementation progress, discoveries, and corrected assumptions. Capture project-specific knowledge from owner discussions and implementation experience.
 
-After changing indexed documents or source summaries, regenerate indexes and run the checks in [`README.md`](./README.md). Keep handwritten guidance outside generated markers.
+After changing indexed documents or source summaries, regenerate indexes and run the checks in [`docs/contributing.md`](./docs/contributing.md#run-checks). Keep handwritten guidance outside generated markers.
 
 <!-- INDEX:START -->
 

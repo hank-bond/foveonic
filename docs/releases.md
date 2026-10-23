@@ -1,11 +1,11 @@
 ---
-summary: "Configure Apple credentials, review versioned changes, and manually publish the signed, notarized macOS app from its draft GitHub Release."
+summary: "Configure Developer ID signing, review versioned changes, and manually publish the unnotarized macOS app from its draft GitHub Release."
 kind: how-to
 ---
 
 # Prepare an application release
 
-[Requirements](specs/releases.md) define the signed Apple Silicon release scope. The [signed-release plan](../plans/signed-releases.md) tracks validation. Release CI signs and notarizes the app. Ordinary local builds need no Apple credentials.
+[Requirements](specs/releases.md) define the signed Apple Silicon release scope. The [signed-release plan](../plans/signed-releases.md) tracks validation. Release CI signs the app but does not submit it for notarization. Ordinary local builds need no Apple credentials.
 
 ## Configure Apple credentials
 
@@ -17,8 +17,6 @@ In the GitHub repository's **Settings → Secrets and variables → Actions**, c
 | --- | --- |
 | `APPLE_CERTIFICATE_P12_BASE64` | Base64-encoded `.p12` containing the certificate and private key. |
 | `APPLE_CERTIFICATE_PASSWORD` | The `.p12` export password. |
-| `APPLE_ID` | The Apple Account email with access to the developer team. |
-| `APPLE_APP_SPECIFIC_PASSWORD` | An app-specific password created for notarization at [account.apple.com](https://account.apple.com/), not the account's normal password. |
 
 Copy the encoded export directly to the clipboard on macOS, then paste it into the secret field:
 
@@ -28,13 +26,13 @@ base64 -i "/path/to/DeveloperID.p12" | pbcopy
 
 Under the **Variables** tab, add `APPLE_TEAM_ID` using the ten-character Team ID from Apple Developer membership details. The export must contain exactly one valid Developer ID Application identity for that team.
 
-CI imports the identity into a temporary keychain and removes it and temporary certificate/submission files even on failure or cancellation. It temporarily adds the signing keychain to the runner's search list, preserves the original entries and restores them during cleanup. The default keychain stays unchanged. Keep credentials out of source files and release assets. Replace the secrets when renewing the certificate or rotating the app-specific password.
+CI imports the identity into a temporary keychain and removes it and temporary certificate files even on failure or cancellation. It temporarily adds the signing keychain to the runner's search list, preserves the original entries and restores them during cleanup. The default keychain stays unchanged. Keep credentials out of source files and release assets. Replace the secrets when renewing the certificate or changing its export password. Apple Account and app-specific-password secrets are not used.
 
 ## Review locally
 
 1. Set the application version in `[workspace.package]` in `Cargo.toml`. Both application crates inherit it. The examples below use `0.2.0`.
 2. Review the matching `## 0.2.0` section in [CHANGELOG.md](../CHANGELOG.md). Replace its introductory placeholder with your own prose, or add the introduction to the GitHub draft later. Keep the change list below it.
-3. Run the [workspace checks](../README.md#checks), then validate the notes and build the bundle:
+3. Run the [workspace checks](contributing.md#run-checks), then validate the notes and build the bundle:
 
    ```sh
    cargo xtask release-notes --tag v0.2.0
@@ -54,20 +52,22 @@ git tag -a v0.2.0 -m "Foveonic v0.2.0"
 git push origin v0.2.0
 ```
 
-The [release workflow](../.github/workflows/release.yml) runs checks on an Apple Silicon `macos-26` runner and builds with Xcode. It signs the app with Developer ID, hardened runtime and a secure timestamp, then submits a temporary ZIP to Apple's notary service. After acceptance, it staples and validates the ticket, verifies the signature and checks Gatekeeper acceptance. Only then does it create the final ZIP and checksum and upload them to a draft GitHub Release:
+The [release workflow](../.github/workflows/release.yml) runs checks on an Apple Silicon `macos-26` runner and builds with Xcode. It signs the app with Developer ID, hardened runtime and a secure timestamp, then verifies the signature before creating the ZIP and checksum and uploading them to a draft GitHub Release:
 
 - `Foveonic-v0.2.0-macos-arm64.zip`, containing `Foveonic.app`.
 - `SHA256SUMS`, for verifying the downloaded archive with `shasum -a 256 -c SHA256SUMS`.
 
-Signing, notarization or verification failures stop uploads, without an unsigned fallback. Notarization waits up to 20 minutes. A timeout fails the build even if Apple continues processing the submission. Review the Actions log for Apple's submission ID and status before deciding whether to rerun.
+Signing or signature-verification failures stop uploads, without an unsigned fallback. There is no notarization submission, ticket stapling or Gatekeeper-acceptance gate.
 
 A new draft receives only the tagged changelog section. An existing draft keeps its title and notes, including your prose. Rerunning the workflow replaces its build assets. An already published release rejects uploads. Tags unrelated to application versions, such as `example-photographs`, do not trigger this workflow.
 
 ## Publish manually
 
-Review the draft notes and download the archive through a browser so macOS applies its normal download checks. Extract and test the app on macOS 26 or later before publishing. Confirm it opens without an unidentified-developer or malware-verification block. A normal first-launch confirmation for an internet download is expected. If verification fails, investigate rather than bypassing Gatekeeper to approve the release.
+Review the draft notes and download the archive through a browser so macOS applies its normal download checks. Extract and test the app on macOS 26 or later before publishing. Downloads are Developer ID signed but not notarized, so Gatekeeper may block the first launch.
 
-Previously published unsigned releases remain unchanged. The first signed hosted build and downloaded-app review are still pending as recorded in the [plan](../plans/signed-releases.md).
+For a build you trust, attempt to open the app, then use **System Settings → Privacy & Security → Open Anyway** for that app and confirm the prompt. Subsequent launches normally retain that approval. A newly downloaded version may be checked again. Do not disable Gatekeeper globally.
+
+Previously published unsigned releases remain unchanged. The first signing-only draft build and downloaded-app review are still pending as recorded in the [plan](../plans/signed-releases.md).
 
 Add your introduction above the changelog in the draft if it is not already present. Publish only after review. CI never publishes the release automatically.
 

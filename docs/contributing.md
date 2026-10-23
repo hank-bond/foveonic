@@ -8,13 +8,13 @@ read_when: "Read before writing documentation or source summaries."
 
 ## Place knowledge
 
-- `README.md` introduces the project and its goals to humans.
+- `README.md` introduces the app to end users in friendly, nontechnical language. Advertise capabilities and keep a small Mac build section at the end. Keep implementation details, validation reports and contributor checks in developer documentation.
 - `AGENTS.md` gives operating instructions and routes readers to relevant files.
 - `docs/specs/` records required behavior agreed with the owner.
 - `plans/` tracks steps, progress, checks, discoveries, and corrected assumptions for an implementation attempt.
 - Comments beside code explain local intent and constraints. Separate documents capture knowledge that code does not explain.
 
-Create additional document categories when work needs them. Give each fact one home and link instead of duplicating it. Keep documentation lean, plain, and grounded in actual discussions and work.
+Create additional document categories when work needs them. Give each fact one home and link instead of duplicating it. Keep documentation lean, plain, and grounded in actual discussions and work. User-facing copy uses camera names such as **Quattro H**. **Tiger** is an internal architecture name for code and developer documentation.
 
 ## Keep documentation portable
 
@@ -54,4 +54,25 @@ Use short, plain sentences in prose, including comments and user-facing copy. Do
 
 The Rust tool generates index blocks between `<!-- INDEX:START -->` and `<!-- INDEX:END -->`. Edit summaries and regenerate rather than editing generated content. Source indexes omit adjacent test files.
 
-Run generation, read-only checks, and tool tests using the commands in [`README.md`](../README.md). Checks cover metadata, titles, relative file links, and stale indexes. Review prose and requirement meaning separately.
+## Run checks
+
+Run from the repository root:
+
+```sh
+cargo test --offline --workspace
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo run --offline -p docs-index -- --root "$PWD"
+cargo run --offline -p docs-index -- --root "$PWD" --check
+python3 -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
+```
+
+Documentation checks cover metadata, titles, relative file links and stale indexes. Review prose and requirement meaning separately. Artwork tests need Python. Ordinary app builds do not.
+
+Run GPU and original-file tests serially with local fixtures:
+
+```sh
+FOVEONIC_FIXTURE_DIR=path/to/x3f cargo test --offline --release --workspace -- --ignored --test-threads=1
+```
+
+Camera-specific tests may need additional reference inputs. Their specifications and implementation plans describe those local research requirements. Do not assume access to private originals or reference captures.

@@ -16,7 +16,7 @@ jobs:
   macos:
     name: Signed macOS Apple Silicon app
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       MACOSX_DEPLOYMENT_TARGET: '26.0'
@@ -98,37 +98,7 @@ jobs:
             --options runtime --timestamp target/release/Foveonic.app
           codesign --verify --deep --strict --verbose=2 target/release/Foveonic.app
 
-      - name: Notarize, staple and verify app
-        env:
-          SIGNING_TEMP_DIR: ${{ runner.temp }}/foveonic-signing
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          : "${APPLE_ID:?Missing Apple Account secret}"
-          : "${APPLE_APP_SPECIFIC_PASSWORD:?Missing app-specific password secret}"
-          : "${APPLE_TEAM_ID:?Missing Team ID variable}"
-          submission="$SIGNING_TEMP_DIR/submission.zip"
-          result="$SIGNING_TEMP_DIR/notarization.json"
-          ditto -c -k --sequesterRsrc --keepParent target/release/Foveonic.app "$submission"
-          if ! xcrun notarytool submit "$submission" --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 20m --output-format json > "$result"; then
-            if [ -s "$result" ]; then
-              jq . "$result"
-            fi
-            echo "::error::Notarization failed or timed out. No release assets will be uploaded."
-            exit 1
-          fi
-          jq . "$result"
-          jq -e '.status == "Accepted"' "$result" > /dev/null
-          xcrun stapler staple target/release/Foveonic.app
-          xcrun stapler validate target/release/Foveonic.app
-          codesign --verify --deep --strict --verbose=2 target/release/Foveonic.app
-          spctl --assess --type execute --verbose=2 target/release/Foveonic.app
-
-      - name: Archive signed and notarized app
+      - name: Archive signed app
         run: |
           cd target/release
           archive="Foveonic-${RELEASE_TAG}-macos-arm64.zip"

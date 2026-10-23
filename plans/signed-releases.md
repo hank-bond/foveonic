@@ -1,5 +1,5 @@
 ---
-summary: "Sign and notarize macOS release builds before uploading stapled archives to draft GitHub Releases."
+summary: "Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases."
 ---
 
 # Sign application releases
@@ -8,38 +8,44 @@ Requirements: [application releases](../docs/specs/releases.md).
 
 ## Steps
 
-- [x] Add temporary-keychain import, Developer ID signing, notarization, stapling and verification to release CI.
-- [x] Create final archives and checksums only after verification. Keep existing draft-only publication behavior.
-- [x] Update credential setup and release guidance. Keep local packaging credential-free.
-- [x] Validate workflow syntax, mock success and failure paths, and run repository checks.
-- [x] Owner reviewed the changes and approved committing, pushing and building a signed draft release.
-- [x] Owner selected version 0.2.0.
-- [x] Owner added the 0.2.0 introduction and approved the release notes and version bump.
-- [x] Commit and push release preparation `b626b38` and tag `v0.2.0`.
-- [x] Correct the Team ID Actions variable and rerun the first signed draft build.
-- [x] Add the temporary keychain to the signing search list and restore the original list during cleanup.
-- [ ] Commit the tested fix and retag unpublished v0.2.0 with owner approval.
-- [ ] Complete the first signed hosted draft build.
-- [ ] Verify the downloaded archive and review the app before publication.
+- [x] Add temporary-keychain import, Developer ID signing and signature verification to release CI.
+- [x] Preserve and restore the runner's keychain search list during signing and cleanup.
+- [x] Owner reviewed and approved the signing migration, selected 0.2.0, added release prose and approved committing and tagging.
+- [x] Push release preparation and the approved keychain fix. Confirm real hosted signing succeeds.
+- [x] Owner selected signing-only distribution without notarization.
+- [x] Remove notarization and its credential requirements, update release guidance, and validate the signing-only workflow.
+- [x] Include the merged Quattro H rendering and Smart preview support in the 0.2.0 release notes.
+- [x] Rewrite the README for end users, keep a small Mac build section at the end, and move contributor checks to their developer guide.
+- [x] Refresh the screenshot from the current app using the existing capture recipe.
+- [x] Owner reviewed and approved pushing the release preparation, including the README, screenshot, CLI examples and Quattro H support, and releasing 0.2.0.
+- [ ] Commit the release preparation and move the still-unpublished v0.2.0 tag under the owner's approval.
+- [ ] Complete the signing-only hosted draft build.
+- [ ] Verify the downloaded archive and smoke-test the app, then publish 0.2.0 as Latest under the owner's approval.
 
 ## Decisions
 
-The owner configured the certificate export and its password as GitHub Actions secrets, along with the Apple Account and app-specific password for notarization. The Team ID is an Actions variable. Select exactly one valid Developer ID Application identity for that team from the temporary keychain. Sign the existing single-executable app with hardened runtime and a secure timestamp, without additional entitlements. Reject missing credentials, ambiguous identities and signing or notarization failures rather than uploading unsigned assets.
+Use the certificate export and its password from GitHub Actions secrets, with the Team ID in an Actions variable. Select exactly one valid Developer ID Application identity for that team. Sign the single-executable app with hardened runtime and a secure timestamp, without additional entitlements. Verify the signature before archiving. Missing credentials, ambiguous identities, signing failures and invalid signatures must block uploads without an unsigned fallback.
 
-Keep signing in the release workflow, separate from ordinary Cargo packaging. The temporary keychain is selected explicitly for signing and added to the runner's search list alongside its original entries. Cleanup restores the original search list. The default keychain stays unchanged. Always remove it and temporary certificate/submission files. Existing published releases remain unchanged.
+Keep signing in release CI, separate from ordinary Cargo packaging. Snapshot the original keychain search list before creating the signing keychain, add the temporary keychain alongside those entries and restore the original list during cleanup. Keep the default keychain unchanged. Always remove temporary keys, certificates and search-list snapshots.
 
-## Validation
+The owner chose unnotarized distribution for this niche app and accepts a per-app Gatekeeper override on first launch. Remove notarization, stapling, Gatekeeper-acceptance gating and Apple Account credential requirements rather than maintaining optional paths. Document **Open Anyway** without recommending that users disable Gatekeeper globally. Releases stay draft-only until owner review and publication approval. Previously published releases remain unchanged.
 
-Workflow YAML and all shell blocks parse successfully. Temporary local mocks replace Apple security/signing tools and GitHub CLI without accessing real credentials or making service requests. They cover new and existing drafts, published-release rejection, API failure, missing or malformed credentials, missing/wrong/ambiguous identities, certificate import, signing and verification failures, notarization rejection or incomplete status, malformed responses, stapling and Gatekeeper failures, and cleanup after failures. Synthetic archives use real `ditto` and `shasum` commands. Their extracted ticket marker and SHA-256 establish that the final ZIP follows stapling. These mocks are local validation, not checked-in tests.
+## Validation and discoveries
 
-Workspace tests, strict all-target Clippy, formatting, five artwork tests, documentation generation/read-only checks and whitespace checks pass. Initial documentation-tool failures came from cached binaries containing the path of a removed checkout. With owner approval, clearing only the `docs-index` build artifacts and rebuilding resolved those failures without source changes. The existing upstream `block` future-incompatibility warning remains.
+The initial migration passed workspace tests, strict all-target Clippy, formatting, five artwork tests, documentation generation/read-only checks and workflow YAML/shell parsing. Temporary local mocks covered signing, notarization, archive creation, draft-only uploads and failure cleanup. These mocks were local validation, not checked-in tests. Stale `docs-index` and `xtask` binaries retained old checkout paths. Clearing those packages' build artifacts under owner approval resolved their failures without source changes. The upstream `block` future-incompatibility warning remains.
 
-The owner approved committing and pushing the signing migration, then building and testing a signed draft release. The owner selected version 0.2.0. The owner added the release introduction and approved pushing the reviewed release notes and version bump. The 0.2.0 version bump and changelog pass workspace tests, strict Clippy, formatting and documentation checks. The local release bundle builds with version 0.2.0 and an arm64 executable whose help command runs successfully. A stale `xtask` binary also retained an old checkout path. Clearing that package's cached artifacts under the owner's existing approval restored correct version checks.
+The local 0.2.0 release bundle builds with the correct plist version and an arm64 executable whose help command runs. The owner supplied the changelog introduction. Release preparation was pushed as `b626b38` with tag v0.2.0.
 
-The [first v0.2.0 hosted run](https://github.com/hank-bond/foveonic/actions/runs/39901620770) passed workspace checks and native packaging, then stopped before certificate import because `APPLE_TEAM_ID` was missing from repository variables. The Team ID had been entered as a secret instead. The owner corrected the variable, and the second attempt imported the identity successfully but `codesign` reported `no identity found`. The `codesign` manual requires the identity's keychain to be on the user's search list even when selected with `--keychain`. The workflow had omitted that membership. Cleanup passed on both failed attempts and no release assets were uploaded.
+The [first hosted run](https://github.com/hank-bond/foveonic/actions/runs/39901620770) passed checks and native packaging, then stopped because the Team ID had been entered as a secret rather than a variable. After the owner corrected that setting, certificate import succeeded, but signing reported `no identity found`. The `codesign` manual requires the identity's keychain to be on the user's search list even when selected with `--keychain`.
 
-The fix snapshots the original search list before creating the signing keychain, adds the signing keychain alongside those entries, then restores the saved list before deleting credentials. Parsing preserves paths containing spaces. Local mocks now require search-list membership for signing and verify restoration after success and failures, including an empty original list, snapshot/add failures and credential removal after restoration failure. Workflow syntax, workspace tests, Clippy, formatting and documentation checks pass.
+The owner approved preserving/restoring that list and moving the still-unpublished tag to fix commit `c6a68b0`. Local mocks were extended to require search-list membership and verify restoration with paths containing spaces, an empty original list, snapshot/add failures and cleanup after restoration failure. Retagging this unpublished release was an explicit exception, not ordinary release practice.
 
-The owner approved preserving and restoring the runner's search list around signing and moving the still-unpublished v0.2.0 tag to the corrected commit. Published version tags remain unchanged. Retagging this unpublished release is an explicit exception, not ordinary release practice.
+The [corrected hosted run](https://github.com/hank-bond/foveonic/actions/runs/39966655130) passed real Developer ID signing and signature verification, then waited on Apple's notary service. The owner chose signing-only distribution and the GitHub wait was canceled. The app had already been uploaded to Apple. Canceling CI does not retract that upload or stop Apple's processing.
 
-Real signing, Apple notarization, Gatekeeper assessment and downloaded-app review remain pending. Local mocks cannot establish those results.
+Signing-only workflow YAML and shell syntax, workspace tests, strict Clippy, formatting, five artwork tests and documentation checks pass. Updated local mocks verify the signed marker and SHA-256 in the final archive, draft-only uploads, signature-failure gating, search-list restoration and cleanup. They also reject any calls to notarization or Gatekeeper tools and confirm that Apple Account secrets are absent from the workflow. These remain local mocks, not checked-in tests.
+
+The canceled hosted run completed credential cleanup successfully. The owner subsequently merged Quattro H rendering and Smart preview support into main and requested that both ship in 0.2.0. User-facing copy uses **Quattro H**, not the internal **Tiger** architecture name. The updated notes preserve the owner's introduction and replace the old inspection-only limitation.
+
+The owner requested a friendly, capability-focused README for end users with only a small Mac build section at the end. Implementation and validation details were removed, and contributor checks moved to the contribution guide with existing links migrated. The fixed flowers/stroller screenshot recipe was rerun against the merged app. Online sync found seven cached examples, the capture produced a 2650×2194 lossless WebP, and all fourteen original/sidecar hashes remained unchanged. The owner also requested two concise CLI examples before the final build section. Both TIFF and DNG commands were checked against the cached stroller original and produced native-size outputs. Explicit Sunlight/Standard options avoid depending on camera-family-specific CLI defaults. Image and prose await owner review. Combined validation passes all 484 workspace tests, strict all-target Clippy, formatting, five artwork tests, signing-only workflow mocks, documentation generation/read-only checks and whitespace checks. GPU/original-file tests remain opt-in and were not rerun as part of this presentation update.
+
+The owner approved pushing the reviewed release preparation and getting 0.2.0 released. This includes the local Quattro H merge, the signing-only workflow and the new README/screenshot. Commit and move the still-unpublished tag under that approval, verify the hosted download, and publish as Latest if checks succeed. No existing published tag or release is to be modified.
