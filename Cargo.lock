@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "crc32fast",
@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic-gui"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "eframe",

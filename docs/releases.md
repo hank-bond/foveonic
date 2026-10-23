@@ -32,13 +32,13 @@ CI imports the identity into a temporary keychain and removes it and temporary c
 
 ## Review locally
 
-1. Set the application version in `[workspace.package]` in `Cargo.toml`. Both application crates inherit it. The examples below use `0.1.1`.
-2. Review the matching `## 0.1.1` section in [CHANGELOG.md](../CHANGELOG.md). Replace its introductory placeholder with your own prose, or add the introduction to the GitHub draft later. Keep the change list below it.
+1. Set the application version in `[workspace.package]` in `Cargo.toml`. Both application crates inherit it. The examples below use `0.2.0`.
+2. Review the matching `## 0.2.0` section in [CHANGELOG.md](../CHANGELOG.md). Replace its introductory placeholder with your own prose, or add the introduction to the GitHub draft later. Keep the change list below it.
 3. Run the [workspace checks](../README.md#checks), then validate the notes and build the bundle:
 
    ```sh
-   cargo xtask release-notes --tag v0.1.1
-   cargo xtask bundle --tag v0.1.1
+   cargo xtask release-notes --tag v0.2.0
+   cargo xtask bundle --tag v0.2.0
    ```
 
    Packaging does not install or launch the app. `cargo xtask run -- path/to/photo.x3f` builds and launches it for interactive review. Both build commands accept `--offline` after dependencies are cached. Local debug builds use `--debug` instead of `--tag`.
@@ -50,13 +50,13 @@ CI imports the identity into a temporary keychain and removes it and temporary c
 When ready to start CI, create and push the matching tag:
 
 ```sh
-git tag -a v0.1.1 -m "Foveonic v0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.0 -m "Foveonic v0.2.0"
+git push origin v0.2.0
 ```
 
 The [release workflow](../.github/workflows/release.yml) runs checks on an Apple Silicon `macos-26` runner and builds with Xcode. It signs the app with Developer ID, hardened runtime and a secure timestamp, then submits a temporary ZIP to Apple's notary service. After acceptance, it staples and validates the ticket, verifies the signature and checks Gatekeeper acceptance. Only then does it create the final ZIP and checksum and upload them to a draft GitHub Release:
 
-- `Foveonic-v0.1.1-macos-arm64.zip`, containing `Foveonic.app`.
+- `Foveonic-v0.2.0-macos-arm64.zip`, containing `Foveonic.app`.
 - `SHA256SUMS`, for verifying the downloaded archive with `shasum -a 256 -c SHA256SUMS`.
 
 Signing, notarization or verification failures stop uploads, without an unsigned fallback. Notarization waits up to 20 minutes. A timeout fails the build even if Apple continues processing the submission. Review the Actions log for Apple's submission ID and status before deciding whether to rerun.
@@ -73,12 +73,12 @@ Add your introduction above the changelog in the draft if it is not already pres
 
 ## Manage Latest
 
-Version tags such as `v0.1.1` identify fixed release commits. GitHub's **Latest** designation is separate from Git tags. Drafts do not replace the published Latest release, and no moving Git tag named `latest` is needed.
+Version tags such as `v0.2.0` identify fixed release commits. GitHub's **Latest** designation is separate from Git tags. Drafts do not replace the published Latest release, and no moving Git tag named `latest` is needed.
 
 After reviewing the draft and app, publishing with an explicit Latest selection is available in GitHub's release editor or through:
 
 ```sh
-gh release edit v0.1.1 --draft=false --latest
+gh release edit v0.2.0 --draft=false --latest
 ```
 
 Run this only with owner publication approval. The stable [latest application release link](https://github.com/hank-bond/foveonic/releases/latest) follows that designation. Photograph collections are not application releases and should not be marked Latest.

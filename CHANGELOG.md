@@ -5,6 +5,19 @@ kind: reference
 
 # Changelog
 
+## 0.2.0
+
+The big change here is support for more sensor architectures.  I'm trying out a bunch of optimization techniques to get latency down as much as possible.  The common approach is that we are progressively rendering and caching.  A new smart rendering mode will open the image in a 1/4 downscale, a double click will then render the full size for the viewport only, and then immediately render the full size for the whole sensor.  This makes interacting with quattro files really snappy.  We also decode the files to the cache ahead of time, which shaves off about 400-600ms (on an M1 Pro) at the cost of using temporary directory space.  This gets cleared by your system when you restart, so you don't have to worry about clearing it out.
+
+### Changes
+
+- Classic camera support with color and monochrome rendering, TIFF export, and experimental editable DNG export.
+- Quattro color and dedicated monochrome rendering, TIFF export, and experimental editable DNG export. The sd Quattro H remains inspection-only.
+- Fast and progressive Smart previews for Quattro, clearer rendering progress, and a configurable decoded-photo disk cache.
+- Local and Global Color Field highlight recovery for Merrill, with deterministic GPU processing and a shared Highlights control.
+- Embedded X3F thumbnails, faster Classic Auto white balance, and faster Quattro repair preparation.
+- Developer ID signing and Apple notarization for Apple Silicon downloads on macOS 26 or later.
+
 ## 0.1.1
 
 Small changes here.  Added the color space export UI element if you wanted to export in a space different from what you selected in camera.  Spacing around buttons has also been improved.

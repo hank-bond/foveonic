@@ -13,7 +13,10 @@ Requirements: [application releases](../docs/specs/releases.md).
 - [x] Update credential setup and release guidance. Keep local packaging credential-free.
 - [x] Validate workflow syntax, mock success and failure paths, and run repository checks.
 - [x] Owner reviewed the changes and approved committing, pushing and building a signed draft release.
-- [ ] Choose the next version, build the first signed hosted release and review the downloaded app before publication.
+- [x] Owner selected version 0.2.0.
+- [x] Owner added the 0.2.0 introduction and approved the release notes and version bump.
+- [ ] Commit and tag the release preparation, then build the signed draft.
+- [ ] Verify the downloaded archive and review the app before publication.
 
 ## Decisions
 
@@ -27,4 +30,6 @@ Workflow YAML and all shell blocks parse successfully. Temporary local mocks rep
 
 Workspace tests, strict all-target Clippy, formatting, five artwork tests, documentation generation/read-only checks and whitespace checks pass. Initial documentation-tool failures came from cached binaries containing the path of a removed checkout. With owner approval, clearing only the `docs-index` build artifacts and rebuilding resolved those failures without source changes. The existing upstream `block` future-incompatibility warning remains.
 
-The owner approved committing and pushing the signing migration, then building and testing a signed draft release. The current package version, 0.1.1, is already published, so the next version must be selected before tagging. Real certificate import, Apple notarization, Gatekeeper assessment and downloaded-app review remain pending. Local mocks cannot establish those results.
+The owner approved committing and pushing the signing migration, then building and testing a signed draft release. The owner selected version 0.2.0. The owner added the release introduction and approved pushing the reviewed release notes and version bump. The 0.2.0 version bump and changelog pass workspace tests, strict Clippy, formatting and documentation checks. The local release bundle builds with version 0.2.0 and an arm64 executable whose help command runs successfully. A stale `xtask` binary also retained an old checkout path. Clearing that package's cached artifacts under the owner's existing approval restored correct version checks.
+
+Real certificate import, Apple notarization, Gatekeeper assessment and downloaded-app review remain pending. Local mocks cannot establish those results.
