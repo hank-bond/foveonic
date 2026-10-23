@@ -23,7 +23,7 @@ const NEIGHBORHOOD_INTENSITY_LAST: f32 = f32::from_bits(0x3f7ffaa6);
 const RANGE_RADIUS: u32 = 7;
 
 pub(super) fn prepare_stage1(metadata: &Metadata) -> Result<channel_noise::Prepared> {
-    let extent = super::calibration::ordinary_extent(metadata)?;
+    let extent = super::calibration::full_extent(metadata)?;
     let despeckle = blue_despeckle::Prepared::new(
         extent,
         BLUE_SPECKLE_MODEL,
@@ -401,7 +401,7 @@ mod tests {
     fn original_decorrelation_and_range_boundaries_match_native() {
         let root = std::path::PathBuf::from(std::env::var_os("QUATTRO_MONO_IMAGES").unwrap());
         let source = crate::source::Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
-        let extent = super::super::calibration::ordinary_extent(&source.metadata).unwrap();
+        let extent = super::super::calibration::full_extent(&source.metadata).unwrap();
         let gpu = crate::gpu::Gpu::new().unwrap();
         let (_, range) = super::super::stage1::conditioning(0., false);
         let decorrelate = neighborhood_decorrelate::Prepared::new(
@@ -542,6 +542,7 @@ mod tests {
         let raw = raw_color_blend::apply(
             &gpu,
             &shaded,
+            None,
             &prepare_stage2(&source.metadata, 1., "Standard").unwrap(),
             &mut profile,
         )

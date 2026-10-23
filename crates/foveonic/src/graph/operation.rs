@@ -38,6 +38,10 @@ pub enum Operation {
     RawColorBlend(std::sync::Arc<crate::nodes::color::raw_color_blend::Prepared>),
     SectorColor(std::sync::Arc<crate::nodes::color::sector_color::Prepared>),
     ByteMaskDouble(crate::nodes::color::byte_mask_double::Params),
+    MaskImage {
+        params: crate::nodes::finish::mask_image::Params,
+        output: &'static str,
+    },
     BlueGuidedReconstruct(std::sync::Arc<crate::nodes::color::blue_guided_reconstruct::Prepared>),
     ResidualFinish {
         params: crate::nodes::color::residual_finish::Params,
@@ -197,6 +201,7 @@ impl Operation {
             | Self::RenderedInput { .. }
             | Self::SharpSignal { .. } => Key::default(),
             Self::ByteMaskDouble(p) => p.key(),
+            Self::MaskImage { params, .. } => params.key(),
             Self::BlueGuidedReconstruct(p) => p.key(),
             Self::ResidualFinish { params, with_mask } => params.key().with(&u32::from(*with_mask)),
             Self::PhaseExtraction(p) => p.key(),
@@ -310,6 +315,7 @@ impl Operation {
             Self::BlueRefresh(_) => "refresh RGB blue from spatial phases",
             Self::HlpCalibration(_) => "calibrate sparse highlight pixels",
             Self::ByteMaskDouble(_) => "double highlight byte mask",
+            Self::MaskImage { .. } => "display integer mask",
             Self::BlueGuidedReconstruct(p) => {
                 if p.output_extent() == p.extent() {
                     "reconstruct same-resolution color"
@@ -401,11 +407,19 @@ impl Operation {
             Self::BluePattern(_) | Self::CellGain(_) => {
                 (vec![CorrectedSensorBlue], CorrectedSensorBlue)
             }
-            Self::PurpleFringe(_)
-            | Self::SpatialColorGain { .. }
-            | Self::RawColorBlend(_)
-            | Self::SectorColor(_) => (vec![CorrectedSensorRgb], CorrectedSensorRgb),
+            Self::PurpleFringe(_) | Self::SpatialColorGain { .. } | Self::SectorColor(_) => {
+                (vec![CorrectedSensorRgb], CorrectedSensorRgb)
+            }
+            Self::RawColorBlend(p) => (
+                if p.requires_highlight_mask() {
+                    vec![CorrectedSensorRgb, HighlightMask]
+                } else {
+                    vec![CorrectedSensorRgb]
+                },
+                CorrectedSensorRgb,
+            ),
             Self::ByteMaskDouble(_) => (vec![HighlightMask], HighlightMask),
+            Self::MaskImage { .. } => (vec![HighlightMask], SensorMask),
             Self::BlueGuidedReconstruct(_) => (
                 vec![
                     CorrectedSensorRgb,
@@ -552,10 +566,21 @@ impl Operation {
     pub(super) fn side_outputs(&self) -> Vec<(&'static str, DataType, Vec<usize>)> {
         use DataType::*;
         match self {
-            Self::RawColorBlend(_) => vec![
-                ("raw-color.neutralized", CorrectedSensorRgb, vec![0]),
-                ("raw-color.response", CorrectedSensorRgb, vec![0]),
-            ],
+            Self::RawColorBlend(p) => {
+                let dependencies = if p.requires_highlight_mask() {
+                    vec![0, 1]
+                } else {
+                    vec![0]
+                };
+                vec![
+                    (
+                        "raw-color.neutralized",
+                        CorrectedSensorRgb,
+                        dependencies.clone(),
+                    ),
+                    ("raw-color.response", CorrectedSensorRgb, dependencies),
+                ]
+            }
             Self::BlueGuidedReconstruct(_) => {
                 vec![("reconstruction.residual", LuminanceRatio, vec![0, 1, 2, 3])]
             }
@@ -571,8 +596,16 @@ impl Operation {
             Self::TwoScaleNoise(_) | Self::ChannelNoise(_) => {
                 vec![("noise.source-after", CorrectedSensorRgb, vec![0])]
             }
-            Self::HighlightRestoration(_) => {
-                vec![("highlight-restoration.mask", HighlightMask, vec![0])]
+            Self::HighlightRestoration(p) => {
+                let mut outputs = vec![("highlight-restoration.mask", HighlightMask, vec![0])];
+                if p.has_recovery_mask() {
+                    outputs.push((
+                        "highlight-restoration.recovery-flags",
+                        HighlightMask,
+                        vec![0],
+                    ));
+                }
+                outputs
             }
             Self::OrderedBlueRepair(p)
                 if p.stage() == crate::nodes::sensor::ordered_blue_repair::Stage::Directional =>
@@ -657,6 +690,7 @@ impl Operation {
             Self::BlueRefresh(_) => "blue-refresh.rgb",
             Self::HlpCalibration(_) => "hlp.rgb",
             Self::ByteMaskDouble(_) => "reconstruction.mask",
+            Self::MaskImage { output, .. } => output,
             Self::BlueGuidedReconstruct(_) => "reconstruction.rgb",
             Self::ResidualFinish { .. } => "residual.rgb",
             Self::OrderedBlueRepair(p) => match p.stage() {

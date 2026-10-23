@@ -2536,14 +2536,29 @@ fn classic_monochrome_keeps_color_modes_and_preserves_disabled_preferences() {
 }
 
 #[test]
-fn unsupported_tiger_panel_keeps_inspection_without_photographic_controls() {
+fn unsupported_tiger_geometry_keeps_inspection_without_photographic_controls() {
     let ctx = egui::Context::default();
     let mut settings = Settings::new("Sunlight", "Standard");
     let expected = settings.clone();
-    let capture = [("CAMMODEL".into(), "SIGMA sd Quattro H".into())].into();
+    let capture: std::collections::BTreeMap<String, String> =
+        [("CAMMODEL".into(), "SIGMA sd Quattro H".into())].into();
+    let metadata = Metadata {
+        processing_version: Some([4, 0, 1, 0]),
+        width: 0,
+        height: 0,
+        rotation: 0,
+        properties: capture.clone(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
     let output = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            assert!(!super::processing(ui, &mut settings, None, Some(&capture)));
+            assert!(!super::processing(
+                ui,
+                &mut settings,
+                Some(&metadata),
+                Some(&capture)
+            ));
         });
     });
     assert_eq!(settings, expected);
@@ -2570,6 +2585,7 @@ fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
         "SIGMA dp2 Quattro",
         "SIGMA dp3 Quattro",
         "SIGMA sd Quattro",
+        "SIGMA sd Quattro H",
     ] {
         for rendering in [Rendering::Color, Rendering::Monochrome] {
             let ctx = egui::Context::default();

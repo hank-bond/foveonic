@@ -1,4 +1,4 @@
-//! Prepares ordinary enabled highlight restoration and odd-phase blue mismatch controls.
+//! Prepares shared highlight restoration, Tiger channel limits and ordinary blue mismatch controls.
 use crate::{
     nodes::sensor::{blue_mismatch, highlight_restoration},
     source::{Metadata, Result},
@@ -19,7 +19,7 @@ fn rectangle(metadata: &Metadata) -> Result<[u32; 4]> {
     ])
 }
 pub(super) fn prepare_blue(metadata: &Metadata) -> Result<blue_mismatch::Prepared> {
-    if !super::defects::supported(metadata) {
+    if !super::defects::supported(metadata) || super::tiger::supported(metadata) {
         return Err("blue mismatch requires the ordinary Quattro route".into());
     }
     if (super::calibration::normalization(metadata)? - 1.).abs() >= f32::EPSILON {
@@ -42,9 +42,9 @@ pub(super) fn prepare_blue(metadata: &Metadata) -> Result<blue_mismatch::Prepare
 }
 pub(super) fn prepare_restoration(metadata: &Metadata) -> Result<highlight_restoration::Prepared> {
     if !super::defects::supported(metadata) {
-        return Err("highlight restoration requires the ordinary Quattro enabled route".into());
+        return Err("highlight restoration requires a supported full-size Quattro route".into());
     }
-    highlight_restoration::Prepared::new(
+    let prepared = highlight_restoration::Prepared::new(
         [
             u32::try_from(metadata.width / 2)?,
             u32::try_from(metadata.height / 2)?,
@@ -53,7 +53,12 @@ pub(super) fn prepare_restoration(metadata: &Metadata) -> Result<highlight_resto
         super::calibration::normalization(metadata)?,
         metadata.fixed::<3>("AutoWBGain")?.map(|v| v as f32),
         metadata.fixed::<9>("AutoCCMatrix")?,
-    )
+    )?;
+    if super::tiger::supported(metadata) {
+        super::tiger::highlight_limits(metadata, prepared)
+    } else {
+        Ok(prepared)
+    }
 }
 #[cfg(test)]
 mod tests {

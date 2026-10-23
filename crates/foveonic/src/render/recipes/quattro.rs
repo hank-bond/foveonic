@@ -25,6 +25,11 @@ mod region;
 mod repair;
 pub(crate) mod resources;
 mod sd;
+mod tiger;
+
+#[cfg(test)]
+#[path = "quattro/portability_test.rs"]
+mod portability_tests;
 
 pub(crate) use inspection::{comparison_input, outputs};
 mod stage1;
@@ -67,7 +72,7 @@ impl WorkingGrid {
     }
 }
 pub(in crate::render) fn fast_available(metadata: &crate::source::Metadata) -> bool {
-    calibration::is_ordinary_dp(metadata) || calibration::is_ordinary_sd(metadata)
+    calibration::is_ordinary_dp(metadata) || calibration::is_interchangeable(metadata)
 }
 
 pub(super) fn build(
@@ -121,7 +126,7 @@ fn compose(
     let [width, height] = source.storage_extent().map(|v| v as u32);
     let mut graph = Graph::default();
     let input = graph.add(Operation::SourcePhaseCells, &[])?;
-    // Fast skips high-blue repairs. A later Full request needs the original
+    // Fast skips general high-blue repairs. A later Full request needs the original
     // cells, even when its reconstruction inputs differ from the Fast graph.
     if names == ["final"] && fast_available(&source.metadata) {
         graph.retain_for_session(input);
@@ -163,10 +168,15 @@ fn compose(
     )?;
     finish!(extracted);
 
-    let is_sd = calibration::is_ordinary_sd(&source.metadata);
-    let (sparse, sparse_blue) = if is_sd {
+    let is_tiger = tiger::supported(&source.metadata);
+    let is_interchangeable = calibration::is_interchangeable(&source.metadata);
+    let (sparse, sparse_blue) = if is_interchangeable {
         let rgb = graph.add(
-            Operation::Fppd(std::sync::Arc::new(sd::chroma(&source.metadata)?)),
+            Operation::Fppd(std::sync::Arc::new(if is_tiger {
+                tiger::chroma(&source.metadata)?
+            } else {
+                sd::chroma(&source.metadata)?
+            })),
             &[extracted],
         )?;
         finish!(rgb);
@@ -238,27 +248,39 @@ fn compose(
     use crate::nodes::sensor::{
         blue_despeckle::Stage as Filter, ordered_blue_repair::Stage as Repair,
     };
-    let mismatch = if fast {
-        sparse_blue
+    // Tiger's phase-detection pairs remain visible after a 2x2 mean. Correct
+    // those sensor sites before reducing blue, even when general repairs wait
+    // for Full. Preserve the reviewed ordinary Quattro Fast path.
+    let phase_corrected_blue = if is_interchangeable && (!fast || is_tiger) {
+        let corrected = graph.add(
+            Operation::Fppd(std::sync::Arc::new(if is_tiger {
+                tiger::luma(&source.metadata)?
+            } else {
+                sd::luma(&source.metadata)?
+            })),
+            &[sparse_blue],
+        )?;
+        finish!(corrected);
+        corrected
     } else {
-        let blue = if is_sd {
-            let corrected = graph.add(
-                Operation::Fppd(std::sync::Arc::new(sd::luma(&source.metadata)?)),
-                &[sparse_blue],
-            )?;
-            finish!(corrected);
+        sparse_blue
+    };
+    let mismatch = if fast {
+        phase_corrected_blue
+    } else {
+        let blue = if is_interchangeable {
             if let Some(prepared) = sd::pattern(&source.metadata)? {
                 let corrected = graph.add(
                     Operation::BluePattern(std::sync::Arc::new(prepared)),
-                    &[corrected],
+                    &[phase_corrected_blue],
                 )?;
                 finish!(corrected);
                 corrected
             } else {
-                corrected
+                phase_corrected_blue
             }
         } else {
-            sparse_blue
+            phase_corrected_blue
         };
         let directional = graph.add(
             Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
@@ -309,7 +331,7 @@ fn compose(
             &[filtered],
         )?;
         finish!(clusters);
-        if (calibration::normalization(&source.metadata)? - 1.).abs() < f32::EPSILON {
+        if !is_tiger && (calibration::normalization(&source.metadata)? - 1.).abs() < f32::EPSILON {
             graph.add(
                 Operation::BlueMismatch(std::sync::Arc::new(highlights::prepare_blue(
                     &source.metadata,
@@ -338,6 +360,17 @@ fn compose(
         )?)),
         &[chroma],
     )?;
+    if is_tiger && names.contains(&"highlight-restoration.recovery-mask") {
+        let flags = graph.named_output(restored, "highlight-restoration.recovery-flags")?;
+        let mask = graph.add(
+            Operation::MaskImage {
+                params: crate::nodes::finish::mask_image::Params::new([width, height])?,
+                output: "highlight-restoration.recovery-mask",
+            },
+            &[flags],
+        )?;
+        finish!(mask);
+    }
     finish!(restored);
     let recorded_color_mode;
     let color_mode = if settings.is_monochrome() || dng {
@@ -406,6 +439,11 @@ fn compose(
             color_mode,
         )?
     };
+    let recovery_mask = if is_tiger {
+        Some(graph.named_output(restored, "highlight-restoration.recovery-flags")?)
+    } else {
+        None
+    };
     let signals = stage2::build_signals(
         &mut graph,
         &source.metadata,
@@ -416,10 +454,27 @@ fn compose(
             white_balance,
             color_mode,
             response,
+            recovery_mask,
         },
     )?;
     finish!(signals.processed);
     let highlight_mask = graph.named_output(restored, "highlight-restoration.mask")?;
+    if fast && is_tiger {
+        // Smart detail shares these whole-frame color histories with Fast.
+        // Retain both masks so a changed WB or recovery control can reuse them too.
+        // Admission remains subject to the existing active-photo cache budget.
+        for input in [
+            signals.filtered,
+            signals.calibrated,
+            signals.processed,
+            highlight_mask,
+        ]
+        .into_iter()
+        .chain(recovery_mask)
+        {
+            graph.retain_for_session(input);
+        }
+    }
     params = crate::nodes::sensor::calibration::encode(
         &source.metadata,
         crate::color_space::ColorSpace::Srgb,

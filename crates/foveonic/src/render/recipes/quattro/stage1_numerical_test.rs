@@ -9,6 +9,7 @@ fn high_iso_and_long_exposure_have_distinct_prepared_behavior() {
         white_balance: [1.; 3],
         estimated_iso: 400,
         bilateral_strengths: [1., 1.5],
+        highlight_preservation: [1.; 3],
         long_exposure: false,
         minimum_blend: 0.,
     };

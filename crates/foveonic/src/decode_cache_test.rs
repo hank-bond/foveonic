@@ -231,7 +231,13 @@ fn original_families_roundtrip_exact_samples_metadata_and_camera_order() {
         classic: true,
         ..Settings::default()
     });
-    for name in ["dp0-quattro.x3f", "merrill", "sd9.x3f", "sd15.x3f"] {
+    for name in [
+        "dp0-quattro.x3f",
+        "sd-quattro-h.x3f",
+        "merrill",
+        "sd9.x3f",
+        "sd15.x3f",
+    ] {
         let path = if name == "merrill" {
             PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap())
         } else {
@@ -260,7 +266,7 @@ fn original_families_roundtrip_exact_samples_metadata_and_camera_order() {
         assert_eq!(original.camf, restored.camf);
         assert_eq!(original.storage(), restored.storage());
     }
-    assert_eq!(cache.status().hits, 4);
+    assert_eq!(cache.status().hits, 5);
 }
 
 #[test]

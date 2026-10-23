@@ -38,6 +38,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[quattro-integration](./quattro-integration.md)** Implement Quattro input, calibration and reconstruction through family-owned multiresolution recipes.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
+- **[tiger-integration](./tiger-integration.md)** Complete Tiger's native full-resolution rendering before consolidating and evaluating portable methods on ordinary Quattro.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.
 - **[unified-highlight-control](./unified-highlight-control.md)** Replace neutral restraint with a bounded color-consistency cutoff and share one Highlights/A row across Classic, Local and Global.
 

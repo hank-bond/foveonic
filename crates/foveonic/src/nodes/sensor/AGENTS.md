@@ -24,6 +24,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[color_field.rs](./color_field.rs)** Owns original evidence, GPU brightness/color solves, and native highlight application.
 - **[column_gain.rs](./column_gain.rs)** Applies six-channel per-column affine gains while preserving packed sensor cells.
 - **[despeckle.rs](./despeckle.rs)** Prepares camera thresholds for GPU speckle repair without changing detection order.
+- **[dynamic_range.rs](./dynamic_range.rs)** Reconstructs near-saturated channels from GPU cell colors and ordered global color-ratio fits.
 - **[estimated_iso.rs](./estimated_iso.rs)** Estimates processing ISO from camera histograms and reference metadata.
 - **[fixed_point.rs](./fixed_point.rs)** Executes signed fixed-point layer correction and nonlinear matrix transforms with explicit numerical contracts.
 - **[fppd.rs](./fppd.rs)** Corrects sparse RGB gains and paired mono defects with explicit numerical grids.
@@ -33,7 +34,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[luma_cluster.rs](./luma_cluster.rs)** Repairs ordered mono clusters with parallel candidate scoring and stable source-order ties.
 - **[mod.rs](./mod.rs)** Prepares and corrects original camera layers before rendering-specific reconstruction.
 - **[ordered_blue_repair.rs](./ordered_blue_repair.rs)** Groups ordered mono defect records into independent GPU batches without changing their dependencies.
-- **[phase_extraction.rs](./phase_extraction.rs)** Separates six-sample cells into RGB and spatial blue codes with optional affine calibration.
+- **[phase_extraction.rs](./phase_extraction.rs)** Separates six-sample cells into RGB and spatial blue codes with affine or channel-gain calibration.
 - **[phase_gain.rs](./phase_gain.rs)** Resizes interleaved phase gain maps and corrects blue samples below a supplied threshold.
 - **[red_detail.rs](./red_detail.rs)** Adds signed red-channel detail using a separable five-row binomial support.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.

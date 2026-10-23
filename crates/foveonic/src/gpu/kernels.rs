@@ -44,6 +44,10 @@ pub enum Kernel {
     RgbDespeckle,
     ChromaClusters,
     LumaCluster,
+    DynamicRangePrepare,
+    DynamicRangeCells,
+    DynamicRangeFit,
+    DynamicRangeApply,
     HighlightPrepare,
     HighlightClassify,
     HighlightHorizontal,
@@ -71,6 +75,7 @@ pub enum Kernel {
     DwtInverse,
     DwtCopyback,
     ByteMaskDouble,
+    MaskImage,
     CellGain,
     CodeCrop,
     Histogram,
@@ -277,6 +282,10 @@ impl Kernel {
             Self::RgbDespeckle => "filter camera RGB speckles",
             Self::ChromaClusters => "repair ordered RGB defect clusters",
             Self::LumaCluster => "repair ordered mono defect clusters",
+            Self::DynamicRangePrepare => "prepare channel highlight limits",
+            Self::DynamicRangeCells => "measure highlight color cells",
+            Self::DynamicRangeFit => "fit and propagate highlight colors",
+            Self::DynamicRangeApply => "reconstruct highlight channel colors",
             Self::HighlightPrepare => "highlight prepare",
             Self::HighlightClassify => "highlight classify",
             Self::HighlightHorizontal => "highlight horizontal",
@@ -315,6 +324,7 @@ impl Kernel {
             Self::DwtInverse => "reconstruct contrast wavelets",
             Self::DwtCopyback => "restore bounded contrast lightness",
             Self::ByteMaskDouble => "double a byte mask with cubic weights",
+            Self::MaskImage => "display integer mask",
             Self::CellGain => "apply per-cell spatial gain",
             Self::CodeCrop => "crop and resample unsigned RGB codes",
             Self::Histogram => "black histogram",
@@ -642,6 +652,22 @@ impl Gpu {
                 "luma_cluster",
             ),
             (
+                include_str!("../nodes/sensor/dynamic_range.wgsl"),
+                "dynamic_range_prepare",
+            ),
+            (
+                include_str!("../nodes/sensor/dynamic_range.wgsl"),
+                "dynamic_range_cells",
+            ),
+            (
+                include_str!("../nodes/sensor/dynamic_range.wgsl"),
+                "dynamic_range_fit",
+            ),
+            (
+                include_str!("../nodes/sensor/dynamic_range.wgsl"),
+                "dynamic_range_apply",
+            ),
+            (
                 include_str!("../nodes/sensor/highlight_restoration.wgsl"),
                 "highlight_prepare",
             ),
@@ -745,6 +771,10 @@ impl Gpu {
             (
                 include_str!("../nodes/color/byte_mask_double.wgsl"),
                 "byte_mask_double",
+            ),
+            (
+                include_str!("../nodes/finish/mask_image.wgsl"),
+                "mask_image",
             ),
             (include_str!("../nodes/color/cell_gain.wgsl"), "cell_gain"),
             (include_str!("../nodes/finish/code_crop.wgsl"), "code_crop"),
@@ -1039,6 +1069,14 @@ impl Gpu {
                     format!(
                         "{}\n{code}",
                         include_str!("../nodes/color/noise_common.wgsl")
+                    )
+                    .into()
+                } else if (Kernel::DynamicRangePrepare as usize..=Kernel::HighlightFinish as usize)
+                    .contains(&index)
+                {
+                    format!(
+                        "{}\n{code}",
+                        include_str!("../nodes/sensor/highlight_common.wgsl")
                     )
                     .into()
                 } else if [

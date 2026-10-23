@@ -546,12 +546,12 @@ fn quattro_editing_defaults_resolve_saved_controls_for_each_rendering() {
 }
 
 #[test]
-fn quattro_capture_panel_support_includes_camera_aliases_but_not_tiger() {
+fn quattro_capture_panel_support_includes_tiger_and_still_checks_full_geometry() {
     for (model, expected) in [
         ("SIGMA dp2 Quattro", true),
         ("SD QUATTRO", true),
-        ("SIGMA sd Quattro H", false),
-        ("SD QUATTRO H", false),
+        ("SIGMA sd Quattro H", true),
+        ("SD QUATTRO H", true),
     ] {
         let mut metadata = quattro_capture_metadata(&[]);
         metadata.width = 0;

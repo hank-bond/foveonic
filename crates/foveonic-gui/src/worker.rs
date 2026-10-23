@@ -1244,6 +1244,21 @@ mod preview_tests {
             effective_preview_quality(&r, &r.settings, &m),
             PreviewQuality::Full
         );
+        m.width = 6656;
+        m.height = 4480;
+        m.matrices.get_mut("CAMERAID").unwrap().values[0] = 41.;
+        for quality in [PreviewMode::Fast, PreviewMode::Smart] {
+            r.preview_quality = quality;
+            assert_eq!(
+                effective_preview_quality(&r, &r.settings, &m),
+                PreviewQuality::Fast
+            );
+        }
+        r.settings.preview_region = Some([100, 100, 400, 300]);
+        assert_eq!(
+            effective_preview_quality(&r, &r.settings, &m),
+            PreviewQuality::Full
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-struct Params { shape: vec4<u32>, neutral: vec4<f32>, gains: vec4<f32>, appearance: vec4<f32>, response: vec4<f32>, hue_first: vec4<f32>, hue_last: vec4<f32> }
+struct Params { shape: vec4<u32>, neutral: vec4<f32>, gains: vec4<f32>, appearance: vec4<f32>, response: vec4<f32>, hue_first: vec4<f32>, hue_last: vec4<f32>, knees: vec4<f32> }
 @group(0) @binding(0) var<storage, read> source: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read> matrix: array<vec2<f32>>;

@@ -332,6 +332,7 @@ fn image_signals_round_trip_with_their_canonical_layout_and_extent() {
         (Space::CorrectedSensorBlue, Layout::Scalar32Float),
         (Space::SensorLayers, Layout::Rgb32Float),
         (Space::ScalarField, Layout::Scalar32Float),
+        (Space::SensorMask, Layout::Scalar32Float),
         (Space::Monochrome, Layout::Scalar32Float),
         (Space::LuminanceRatio, Layout::Scalar32Float),
         (Space::SignedDetail, Layout::Scalar32Float),

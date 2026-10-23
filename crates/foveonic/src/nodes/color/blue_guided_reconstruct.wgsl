@@ -1,3 +1,8 @@
+// The alternate range fit transitions from ordinary 5×5 support to stronger spatial selectivity.
+const ADAPTIVE_RANGE_LOW = 1000.;
+const ADAPTIVE_RANGE_HIGH = 10000.;
+const ADAPTIVE_SPATIAL_MAX = 3.;
+const ADAPTIVE_RANGE_MAX = 1000.;
 struct Params {
     shape: vec4<u32>, controls: vec4<f32>, noise: vec4<f32>, noise_low: vec4<f32>
 }
@@ -176,6 +181,13 @@ fn blue_guided_restore(@builtin(global_invocation_id) id: vec3<u32>) {
     if maximum>1000. {
         range_scale = divide(times(maximum, 25.), 1000.);
     }
+    var spatial_scale = 1.;
+    if params.controls.y != 0. {
+        let amount = clamp(divide(plus(maximum, -ADAPTIVE_RANGE_LOW), ADAPTIVE_RANGE_HIGH - ADAPTIVE_RANGE_LOW), 0., 1.);
+        let other = plus(1., -amount);
+        spatial_scale = fma(amount, ADAPTIVE_SPATIAL_MAX, other);
+        range_scale = fma(amount, ADAPTIVE_RANGE_MAX, times(other, 25.));
+    }
     let x0 = i32(id.x/2u)-2;
     let y0 = i32(id.y/2u)-2;
     let parity = (id.y%2u)*25u+(id.x%2u)*50u;
@@ -188,7 +200,9 @@ fn blue_guided_restore(@builtin(global_invocation_id) id: vec3<u32>) {
             let p = (u32(y0+dy)*params.shape.x+u32(x0+dx))*3u;
             let g = vec3(source[p], source[p+1u], source[p+2u]);
             let distance = plus(plus(abs(plus(g.x, -center.x)), abs(plus(g.y, -center.y))), abs(plus(g.z, -center.z)));
-            let weight = times(divide(1., plus(divide(distance, range_scale), 1.)), spatial[parity+j].y);
+            var spatial_weight = spatial[parity+j].y;
+            if params.controls.y != 0. { spatial_weight = exp(-times(spatial[parity+j].x, spatial_scale)); }
+            let weight = times(divide(1., plus(divide(distance, range_scale), 1.)), spatial_weight);
             total = plus(total, weight);
             weighted_blue = fma(g.z, weight, weighted_blue);
             channels = vec3(plus(channels.x, times(color[p], weight)), plus(channels.y, times(color[p+1u], weight)), plus(channels.z, times(color[p+2u], weight)));

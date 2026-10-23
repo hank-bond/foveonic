@@ -15,16 +15,20 @@ const MINIMUM_CAMERA_LEVEL: f32 = 5000.;
 const DIRECTIONAL_GREEN_DIFFERENCE: f32 = 9000.;
 const NEUTRALIZATION_START: f32 = 11000.;
 const NEUTRALIZATION_SPAN: f32 = 3500.;
-const UNSET_ANCHOR_COORDINATE: u32 = 3000;
 const WORK_FLOATS_PER_PIXEL: u64 = 13;
+// These tags are shared by the directional and channel-extension shaders.
+const DIRECTIONAL_ONLY: u32 = 0;
+const CHANNEL_EXTENSION: u32 = 1;
+const CHANNEL_LIMITS_ONLY: u32 = 2;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Params {
+pub(super) struct Params {
     shape: [u32; 4],
     rectangle: [u32; 4],
     gains: [f32; 4],
     thresholds: [f32; 4],
     neutralization: [f32; 4],
+    ceilings: [f32; 4],
 }
 #[derive(Clone, Debug)]
 pub struct Prepared {
@@ -41,12 +45,8 @@ impl Prepared {
     ) -> Result<Self> {
         let [w, h] = extent;
         let [left, top, right, bottom] = rectangle;
-        // Native directional interpolation uses coordinate3000 as an unset anchor.
-        // This first contract stays below it on both axes.
         if w < 5
             || h < 5
-            || w >= UNSET_ANCHOR_COORDINATE
-            || h >= UNSET_ANCHOR_COORDINATE
             || left < 1
             || top < 1
             || right >= w
@@ -71,7 +71,7 @@ impl Prepared {
             .collect();
         Ok(Self {
             params: Params {
-                shape: [w, h, w * h, 0],
+                shape: [w, h, w * h, DIRECTIONAL_ONLY],
                 rectangle,
                 gains: [gains[0], gains[1], gains[2], normalization],
                 thresholds: [
@@ -80,6 +80,7 @@ impl Prepared {
                     MINIMUM_CAMERA_LEVEL / normalization,
                     DIRECTIONAL_GREEN_DIFFERENCE / normalization,
                 ],
+                ceilings: [CLIPPING_CEILING / normalization; 4],
                 neutralization: [
                     NEUTRALIZATION_START / normalization,
                     NEUTRALIZATION_SPAN / normalization,
@@ -90,6 +91,33 @@ impl Prepared {
             matrix: coefficients,
         })
     }
+    /// Select channel-specific clipping and its optional spatial color inference.
+    /// The flag describes numerical behavior rather than a camera family.
+    pub(crate) fn with_channel_limits(
+        mut self,
+        ceilings: [f32; 3],
+        green_level: f32,
+        extend: bool,
+    ) -> Result<Self> {
+        if ceilings.iter().any(|v| !v.is_finite() || *v <= 0.)
+            || !green_level.is_finite()
+            || green_level <= 0.
+        {
+            return Err("invalid channel highlight limits".into());
+        }
+        self.params.shape[3] = if extend {
+            CHANNEL_EXTENSION
+        } else {
+            CHANNEL_LIMITS_ONLY
+        };
+        self.params.ceilings[..3].copy_from_slice(&ceilings);
+        self.params.thresholds[1] = green_level * self.params.gains[1];
+        Ok(self)
+    }
+    pub(crate) fn has_recovery_mask(&self) -> bool {
+        self.params.shape[3] != DIRECTIONAL_ONLY
+    }
+
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }
@@ -133,6 +161,7 @@ fn reference_inverse(matrix: [f64; 9]) -> Result<[f32; 9]> {
 pub(crate) struct Output {
     pub rgb: ReadGuard,
     pub mask: ReadGuard,
+    pub recovery_mask: Option<ReadGuard>,
 }
 pub(crate) fn apply(
     gpu: &Gpu,
@@ -155,18 +184,33 @@ pub(crate) fn apply(
     let mut rgb = gpu.storage("Restored RGB", cells * 12)?;
     let mut mask = gpu.storage("Highlight green mask", cells * 4)?;
     let mut trace = gpu.trace(profile.mode.gpu(), 5);
-    gpu.dispatch(
-        Kernel::HighlightPrepare,
-        &mut [
-            (0, Read(input)),
-            (1, Read(&params)),
-            (2, Read(&matrix)),
-            (3, Write(work.write())),
-            (5, Write(mask.write())),
-        ],
-        [w.div_ceil(8), h.div_ceil(8)],
-        &mut trace,
-    );
+    let recovery_mask = if prepared.has_recovery_mask() {
+        Some(super::dynamic_range::prepare(
+            gpu,
+            input,
+            &params,
+            &matrix,
+            &mut work,
+            &mut mask,
+            prepared.extent(),
+            prepared.params.shape[3] == CHANNEL_EXTENSION,
+            profile,
+        )?)
+    } else {
+        gpu.dispatch(
+            Kernel::HighlightPrepare,
+            &mut [
+                (0, Read(input)),
+                (1, Read(&params)),
+                (2, Read(&matrix)),
+                (3, Write(work.write())),
+                (5, Write(mask.write())),
+            ],
+            [w.div_ceil(8), h.div_ceil(8)],
+            &mut trace,
+        );
+        None
+    };
     gpu.dispatch(
         Kernel::HighlightClassify,
         &mut [(1, Read(&params)), (3, Write(work.write()))],
@@ -197,7 +241,11 @@ pub(crate) fn apply(
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
-    Ok(Output { rgb, mask })
+    Ok(Output {
+        rgb,
+        mask,
+        recovery_mask,
+    })
 }
 #[cfg(test)]
 #[path = "highlight_restoration_test.rs"]

@@ -425,6 +425,7 @@ impl Engine {
                     let output = crate::nodes::color::raw_color_blend::apply(
                         gpu,
                         &input(0).buffer,
+                        prepared.requires_highlight_mask().then(|| &input(1).buffer),
                         prepared,
                         profile,
                     )?;
@@ -507,6 +508,16 @@ impl Engine {
                             });
                         }
                     }
+                    if let Some(&side) = node.outputs.get(2) {
+                        if required[side] {
+                            values[side] = Some(Value {
+                                buffer: output
+                                    .recovery_mask
+                                    .ok_or("missing highlight recovery mask")?,
+                                description: None,
+                            });
+                        }
+                    }
                     Some(output.rgb)
                 }
                 Operation::LumaClusters(prepared) => {
@@ -522,6 +533,17 @@ impl Engine {
                 }
                 Operation::ByteMaskDouble(params) => {
                     Some(crate::nodes::color::byte_mask_double::apply(
+                        gpu,
+                        &input(0).buffer,
+                        params,
+                        profile,
+                    )?)
+                }
+                Operation::MaskImage { params, .. } => {
+                    if inherited != params.extent() {
+                        return Err("mask inspection extent mismatch".into());
+                    }
+                    Some(crate::nodes::finish::mask_image::apply(
                         gpu,
                         &input(0).buffer,
                         params,

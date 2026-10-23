@@ -523,3 +523,7 @@ pub(crate) fn quattro_inspection_comparison(
 #[cfg(test)]
 #[path = "render/quattro_test.rs"]
 mod quattro_tests;
+
+#[cfg(test)]
+#[path = "render/tiger_test.rs"]
+mod tiger_tests;

@@ -1,4 +1,4 @@
-//! Prepares ordinary full-size Quattro two-pass noise controls and exposure-guided filtering.
+//! Prepares full-size Quattro and Tiger two-pass noise controls and exposure-guided filtering.
 
 use crate::source::{MatrixEncoding, Metadata, Result};
 
@@ -35,6 +35,7 @@ pub(super) struct Stage1Controls {
     pub bilateral_strengths: [f32; 2],
     pub long_exposure: bool,
     pub minimum_blend: f32,
+    pub highlight_preservation: [f32; 3],
 }
 
 /// Prepare the demonstrated single-input HI color route. This does not perform filtering.
@@ -46,7 +47,7 @@ pub(super) fn prepare(metadata: &Metadata, chroma_step: u8) -> Result<Stage1Cont
     if chroma_step > MAXIMUM_NOISE_STEP {
         return Err("chroma noise step must be between zero and four".into());
     }
-    let extent = super::calibration::ordinary_extent(metadata)?;
+    let extent = super::calibration::full_extent(metadata)?;
     let version = metadata.fixed::<3>("CamsysVersion")?;
     if version[0] * 1_000_000. + version[1] * 1000. + version[2] < FIRST_SUPPORTED_GAIN_VERSION
         || optional(metadata, "ISOrange", 0.)? != 0.
@@ -97,6 +98,11 @@ pub(super) fn prepare(metadata: &Metadata, chroma_step: u8) -> Result<Stage1Cont
         bilateral_strengths: [first[index], second[index]],
         long_exposure,
         minimum_blend,
+        highlight_preservation: if super::tiger::supported(metadata) {
+            super::tiger::stage1_preservation(metadata)?
+        } else {
+            [1.; 3]
+        },
     })
 }
 
@@ -249,9 +255,13 @@ fn numerical(controls: &Stage1Controls) -> Result<crate::nodes::color::two_scale
             if index == 0 { 5 } else { 15 },
         )
     };
-    // The selected outer caller supplies three unit highlight-preservation gains.
-    let prepared =
-        two_scale_noise::Prepared::new(iteration(0)?, iteration(1)?, brightness(), [1.; 3])?;
+    // The recipe supplies the selected caller's highlight-preservation gains.
+    let prepared = two_scale_noise::Prepared::new(
+        iteration(0)?,
+        iteration(1)?,
+        brightness(),
+        controls.highlight_preservation,
+    )?;
     if controls.estimated_iso < 400 {
         return Ok(prepared);
     }

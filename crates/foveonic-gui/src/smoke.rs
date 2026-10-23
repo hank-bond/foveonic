@@ -68,6 +68,14 @@ const TARGETS: [&str; 10] = [
     "calibration.layers",
 ];
 
+const TIGER_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "highlight-restoration.recovery-mask",
+    "raw-color.rgb",
+    "reconstruction.rgb",
+];
+
 const VIEWPORT_SCOPE_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -199,6 +207,8 @@ impl Smoke {
                 SMART_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_FAST").is_some() {
                 FAST_PREVIEW_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_TIGER").is_some() {
+                TIGER_TARGETS
             } else if screenshot_active() {
                 SCREENSHOT_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_SCOPES").is_some() {

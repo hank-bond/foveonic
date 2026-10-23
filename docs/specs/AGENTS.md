@@ -43,5 +43,6 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[render-resources](./render-resources.md)** _(accepted, conforming, reference)._ Owned GPU render results separate image processing from display and export, with explicit pixel meaning and geometry.
 - **[row-banding](./row-banding.md)** _(accepted, conforming, reference)._ GPU row-banding correction fits the native geometric patch banks, rejects scene-correlated residuals, and subtracts bounded additive per-row sensor bias before reconstruction.
 - **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Quattro Smart preview shows Fast, refines the first detail viewport, then completes Full for unrestricted panning.
+- **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
 
 <!-- INDEX:END -->

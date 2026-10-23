@@ -26,7 +26,7 @@ const OUTPUT_COMPONENTS_PER_CELL: u32 = 4 * 3;
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
     shape: [u32; 4],
-    /// Chroma suppression, reserved, reserved, same-size-output flag.
+    /// Chroma suppression, adaptive range flag, reserved, same-size-output flag.
     controls: [f32; 4],
     noise: [f32; 4],
     noise_low: [f32; 4],
@@ -104,6 +104,10 @@ impl Prepared {
         value.params.controls[3] = SAME_SIZE_OUTPUT;
         value.blue_filter = filter;
         Ok(value)
+    }
+    pub(crate) fn with_adaptive_range(mut self, enabled: bool) -> Self {
+        self.params.controls[1] = f32::from(u8::from(enabled));
+        self
     }
     pub(crate) fn output_extent(&self) -> [u32; 2] {
         if self.is_same_size() {

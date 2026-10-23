@@ -58,6 +58,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
 - **[thumbnail-and-preview-cache](./thumbnail-and-preview-cache.md)** _(archived)._ Refresh rendered thumbnails, cache sharper asynchronous previews, and collect recipes in a visible source-folder directory.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** _(archived)._ Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
+- **[tiger-smart-preview](./tiger-smart-preview.md)** _(archived)._ Enable Tiger Fast and Smart previews through the shared overview, regional refinement and whole-frame continuation.
 - **[viewport-scopes](./viewport-scopes.md)** _(archived)._ Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
 
 <!-- INDEX:END -->

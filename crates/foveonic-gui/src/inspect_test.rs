@@ -680,7 +680,8 @@ mod preview_tests {
         for (model, supported) in [
             ("SIGMA dp0 Quattro", true),
             ("SIGMA sd Quattro", true),
-            ("SIGMA sd Quattro H", false),
+            ("SIGMA sd Quattro H", true),
+            ("sd Quattro H", true),
             ("SIGMA DP1 Merrill", false),
             ("SIGMA SD15", false),
         ] {

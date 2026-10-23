@@ -1,4 +1,4 @@
-//! Prepares bounded luma defect catalogues and ordinary high-plane repair controls.
+//! Prepares bounded luma defect catalogues and full-size Quattro blue-plane repair controls.
 
 use crate::{
     nodes::sensor::{blue_despeckle, luma_cluster, ordered_blue_repair},
@@ -21,7 +21,9 @@ pub(super) fn prepare_records(
 ) -> Result<ordered_blue_repair::Prepared> {
     let extent = extent(metadata)?;
     let gain = if stage == ordered_blue_repair::Stage::DarkOffsets {
-        let name = if super::calibration::is_ordinary_sd(metadata) {
+        let name = if super::tiger::supported(metadata) {
+            "SensorAdjustmentGainFact_BR_3COL_HI_RGBave"
+        } else if super::calibration::is_ordinary_sd(metadata) {
             "SensorAdjustmentGainFact_HI"
         } else {
             "SensorAdjustmentGainFact"
