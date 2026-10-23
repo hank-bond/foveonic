@@ -67,12 +67,22 @@ jobs:
           [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
           umask 077
           mkdir -m 700 "$SIGNING_TEMP_DIR"
+          security list-keychains -d user > "$SIGNING_TEMP_DIR/keychains.txt.tmp"
+          mv "$SIGNING_TEMP_DIR/keychains.txt.tmp" "$SIGNING_TEMP_DIR/keychains.txt"
           printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$SIGNING_TEMP_DIR/certificate.p12"
           keychain_password="$(openssl rand -base64 32)"
           echo "::add-mask::$keychain_password"
           security create-keychain -p "$keychain_password" "$SIGNING_KEYCHAIN"
           security set-keychain-settings -lut 7200 "$SIGNING_KEYCHAIN"
           security unlock-keychain -p "$keychain_password" "$SIGNING_KEYCHAIN"
+          # codesign requires search-list membership even with --keychain.
+          python3 - "$SIGNING_TEMP_DIR/keychains.txt" "$SIGNING_KEYCHAIN" <<'PY'
+          import pathlib, shlex, subprocess, sys
+          original = shlex.split(pathlib.Path(sys.argv[1]).read_text())
+          subprocess.run([
+              "security", "list-keychains", "-d", "user", "-s", sys.argv[2], *original,
+          ], check=True)
+          PY
           security import "$SIGNING_TEMP_DIR/certificate.p12" -k "$SIGNING_KEYCHAIN" \
             -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           rm "$SIGNING_TEMP_DIR/certificate.p12"
@@ -150,6 +160,15 @@ jobs:
           SIGNING_KEYCHAIN: ${{ runner.temp }}/foveonic-signing.keychain-db
         run: |
           status=0
+          if [ -f "$SIGNING_TEMP_DIR/keychains.txt" ]; then
+            python3 - "$SIGNING_TEMP_DIR/keychains.txt" <<'PY' || status=$?
+          import pathlib, shlex, subprocess, sys
+          original = shlex.split(pathlib.Path(sys.argv[1]).read_text())
+          subprocess.run([
+              "security", "list-keychains", "-d", "user", "-s", *original,
+          ], check=True)
+          PY
+          fi
           if [ -f "$SIGNING_KEYCHAIN" ]; then
             security delete-keychain "$SIGNING_KEYCHAIN" || status=$?
           fi

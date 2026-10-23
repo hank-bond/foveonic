@@ -28,7 +28,7 @@ base64 -i "/path/to/DeveloperID.p12" | pbcopy
 
 Under the **Variables** tab, add `APPLE_TEAM_ID` using the ten-character Team ID from Apple Developer membership details. The export must contain exactly one valid Developer ID Application identity for that team.
 
-CI imports the identity into a temporary keychain and removes it and temporary certificate/submission files even on failure or cancellation. It does not change the runner's default keychain or search list. Keep credentials out of source files and release assets. Replace the secrets when renewing the certificate or rotating the app-specific password.
+CI imports the identity into a temporary keychain and removes it and temporary certificate/submission files even on failure or cancellation. It temporarily adds the signing keychain to the runner's search list, preserves the original entries and restores them during cleanup. The default keychain stays unchanged. Keep credentials out of source files and release assets. Replace the secrets when renewing the certificate or rotating the app-specific password.
 
 ## Review locally
 
