@@ -2,6 +2,7 @@
 
 pub(crate) mod code_response;
 pub(crate) mod image_region;
+pub(crate) mod mask_image;
 
 pub(crate) mod resample;
 pub(crate) mod resize;

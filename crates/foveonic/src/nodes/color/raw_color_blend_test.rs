@@ -24,7 +24,7 @@ fn complete_native_raw_color_helper() {
             let bytes = std::fs::read(directory.join(case[name].as_str().unwrap())).unwrap();
             bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()
         };
-        let prepared = Prepared::new(
+        let mut prepared = Prepared::new(
             Controls {
                 extent: [
                     case["extent"][0].as_u64().unwrap() as u32,
@@ -59,10 +59,30 @@ fn complete_native_raw_color_helper() {
             floats("adaptive"),
         )
         .unwrap();
+        let mask = case.get("mask").and_then(|v| v.as_str()).map(|name| {
+            let bytes = std::fs::read(directory.join(name)).unwrap();
+            gpu.upload(
+                "Recovered channel flags",
+                bytemuck::cast_slice::<u8, u32>(&bytes),
+            )
+            .unwrap()
+        });
+        if case["masked_highlights"].as_bool().unwrap_or(false) {
+            prepared = prepared
+                .with_masked_highlights([22000., 24000., 14000.], scalar("highlight_strength"))
+                .unwrap();
+        }
         let input = gpu
             .upload("Native raw-color helper input", &floats("input"))
             .unwrap();
-        let output = apply(&gpu, &input, &prepared, &mut Default::default()).unwrap();
+        let output = apply(
+            &gpu,
+            &input,
+            mask.as_ref(),
+            &prepared,
+            &mut Default::default(),
+        )
+        .unwrap();
         for (name, buffer) in [
             ("neutralized", &output.neutralized),
             ("raw_color", &output.raw_color),
@@ -75,7 +95,19 @@ fn complete_native_raw_color_helper() {
             let mut maximum = 0_f32;
             let mut sum = 0_f64;
             let mut changed = 0;
-            for (&a, &b) in actual.iter().zip(&expected) {
+            for (index, (&a, &b)) in actual.iter().zip(&expected).enumerate() {
+                let margin = if name == "output" {
+                    case["margin"].as_u64().unwrap_or(0) as usize
+                } else {
+                    0
+                };
+                let width = prepared.extent()[0] as usize;
+                let height = prepared.extent()[1] as usize;
+                let x = (index / 3) % width;
+                let y = (index / 3) / width;
+                if x < margin || y < margin || x + margin >= width || y + margin >= height {
+                    continue;
+                }
                 assert!(a.is_finite() && b.is_finite());
                 maximum = maximum.max((a - b).abs());
                 sum += f64::from((a - b).abs());

@@ -1,4 +1,4 @@
-//! Expands camera defect records and prepares ordinary DP chroma repair controls.
+//! Expands camera defect records and prepares full-size Quattro chroma repair controls.
 
 use crate::{
     nodes::sensor::chroma_repair::Prepared,
@@ -25,14 +25,18 @@ pub(super) struct Severity {
 }
 
 pub(super) fn supported(metadata: &Metadata) -> bool {
-    (super::calibration::is_ordinary_dp(metadata) || super::calibration::is_ordinary_sd(metadata))
+    (super::calibration::is_ordinary_dp(metadata)
+        || super::calibration::is_ordinary_sd(metadata)
+        || super::tiger::supported(metadata))
         && super::calibration::normalization(metadata).is_ok()
         && optional(metadata, "CaptureISO", REFERENCE_SENSOR_ISO)
             .is_ok_and(|v| v.is_finite() && v > 0.)
 }
 pub(super) fn prepare(metadata: &Metadata) -> Result<Prepared> {
     if !supported(metadata) {
-        return Err("chroma repair requires the ordinary Quattro factory-calibration route".into());
+        return Err(
+            "chroma repair requires the full-size Quattro factory-calibration route".into(),
+        );
     }
     let severity = severity(metadata)?;
     let records = expand_records(metadata, "BadPixelsChromaF23")?;
@@ -47,7 +51,7 @@ pub(super) fn prepare(metadata: &Metadata) -> Result<Prepared> {
         super::repair::RGB_NOISE,
         matrix,
         false,
-        super::calibration::is_ordinary_sd(metadata),
+        super::calibration::is_ordinary_sd(metadata) || super::tiger::supported(metadata),
     )
 }
 /// Ordinary factory despeckling uses immutable neighborhoods and unit strength.
@@ -56,7 +60,7 @@ pub(super) fn prepare_despeckle(
 ) -> Result<crate::nodes::sensor::rgb_despeckle::Prepared> {
     if !supported(metadata) {
         return Err(
-            "RGB despeckling requires the ordinary Quattro factory-calibration route".into(),
+            "RGB despeckling requires the full-size Quattro factory-calibration route".into(),
         );
     }
     const SECOND_EXTREMA_EXPOSURE_SCORE: f32 = 64000.;
@@ -79,7 +83,7 @@ pub(super) fn prepare_clusters(
 ) -> Result<crate::nodes::sensor::chroma_clusters::Prepared> {
     if !supported(metadata) {
         return Err(
-            "chroma clusters require the ordinary Quattro factory-calibration route".into(),
+            "chroma clusters require the full-size Quattro factory-calibration route".into(),
         );
     }
     let severity = severity(metadata)?;

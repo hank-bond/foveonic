@@ -1,4 +1,4 @@
-//! Separates six-sample cells into RGB and spatial blue codes with optional affine calibration.
+//! Separates six-sample cells into RGB and spatial blue codes with affine or channel-gain calibration.
 
 use crate::{
     gpu::{
@@ -12,11 +12,18 @@ use crate::{
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Params {
-    /// Cell width and height, affine-calibration flag, reserved.
+    /// Cell width and height, calibration mode, reserved.
     shape: [u32; 4],
-    /// Offset, scale, mono upper bound, reserved.
+    /// Offset, scale, calibrated upper bound, reserved.
     calibration: [f32; 4],
+    /// Split Double channel gains. The fourth component is reserved.
+    gain_high: [f32; 4],
+    gain_low: [f32; 4],
 }
+
+const AFFINE_CALIBRATION: u32 = 1;
+const CHANNEL_GAIN_CALIBRATION: u32 = 2;
+const CHANNEL_CODE_CEILING: f32 = u16::MAX as f32;
 
 impl Params {
     /// Each cell contains R, G, B00, B01, B10, B11 in row-major order.
@@ -35,6 +42,8 @@ impl Params {
         Ok(Self {
             shape: [width, height, 0, 0],
             calibration: [0., 1., f32::MAX, 0.],
+            gain_high: [1., 1., 1., 0.],
+            gain_low: [0.; 4],
         })
     }
 
@@ -56,8 +65,33 @@ impl Params {
         {
             return Err("invalid six-sample calibration".into());
         }
-        result.shape[2] = 1;
+        result.shape[2] = AFFINE_CALIBRATION;
         result.calibration = [offset as f32, scale, mono_cap, 0.];
+        Ok(result)
+    }
+
+    /// Round offset removal and scale to Float32 before multiplying each channel
+    /// by its Double gain. Cap RGB and all blue phases after that multiplication.
+    pub(crate) fn channel_calibrated(
+        width: u32,
+        height: u32,
+        offset: u32,
+        scale: f32,
+        gains: [f64; 3],
+    ) -> Result<Self> {
+        let mut result = Self::calibrated(width, height, offset, scale, CHANNEL_CODE_CEILING)?;
+        if gains
+            .iter()
+            .any(|&g| !g.is_finite() || g <= 0. || !(g as f32).is_finite())
+        {
+            return Err("invalid extraction channel gains".into());
+        }
+        result.shape[2] = CHANNEL_GAIN_CALIBRATION;
+        for (channel, gain) in gains.into_iter().enumerate() {
+            let high = gain as f32;
+            result.gain_high[channel] = high;
+            result.gain_low[channel] = (gain - f64::from(high)) as f32;
+        }
         Ok(result)
     }
 

@@ -150,7 +150,9 @@ fn bounded_native_reconstruction_matches() {
             &upload("pre"),
             &upload("color"),
             &upload("blue"),
-            &Prepared::new(extent, 0.3, BLUE_VARIANCE, None).unwrap(),
+            &Prepared::new(extent, 0.3, BLUE_VARIANCE, None)
+                .unwrap()
+                .with_adaptive_range(case["adaptive_range"].as_bool().unwrap_or(false)),
             &mut Profile::default(),
         )
         .unwrap();
@@ -174,8 +176,22 @@ fn bounded_native_reconstruction_matches() {
                 differences.len(),
                 &differences[..differences.len().min(8)]
             );
-            // Float32 device exp can move the residual by one ULP without changing RGB.
-            assert!(max <= if key == "rgb" { 0. } else { 0.00000023841858 });
+            // Adaptive support evaluates exp on the GPU rather than using the
+            // host-prepared ordinary table. Its accumulated gain can differ by
+            // a few Float32 ULPs and move an integral rounding boundary by one code.
+            let adaptive = case["adaptive_range"].as_bool().unwrap_or(false);
+            let tolerance = if key == "rgb" {
+                if adaptive {
+                    1.
+                } else {
+                    0.
+                }
+            } else if adaptive {
+                f32::EPSILON * 8.
+            } else {
+                f32::EPSILON * 2.
+            };
+            assert!(max <= tolerance);
         }
     }
 }

@@ -29,6 +29,8 @@ pub enum Space {
     /// High-resolution blue after offset, code-scale correction and upper cap.
     CorrectedSensorBlue,
     SensorLayers,
+    /// Binary diagnostic mask on the complete physical sensor grid.
+    SensorMask,
     ScalarField,
     /// Single-channel monochrome brightness in linear camera-code units.
     Monochrome,
@@ -59,6 +61,7 @@ impl Space {
             Self::SensorBlue
             | Self::CorrectedSensorBlue
             | Self::ScalarField
+            | Self::SensorMask
             | Self::Monochrome
             | Self::LuminanceRatio
             | Self::SignedDetail => Layout::Scalar32Float,
@@ -84,6 +87,7 @@ impl Space {
                 | Self::SensorBlue
                 | Self::CorrectedSensorRgb
                 | Self::CorrectedSensorBlue
+                | Self::SensorMask
         )
     }
 }
@@ -173,6 +177,7 @@ impl RenderedImage {
             | Space::UnsignedCodeRgb
             | Space::CalibratedLayers
             | Space::ScalarField
+            | Space::SensorMask
             | Space::Monochrome
             | Space::LuminanceRatio
             | Space::SignedDetail => 0,

@@ -149,3 +149,82 @@ fn calibrated_signed_values_and_mono_cap_match_scalar_equations() {
         }
     }
 }
+
+#[test]
+fn channel_gains_require_finite_positive_values() {
+    for gains in [
+        [0., 1., 1.],
+        [-1., 1., 1.],
+        [f64::NAN; 3],
+        [f64::INFINITY; 3],
+        [f64::MAX; 3],
+    ] {
+        assert!(Params::channel_calibrated(3, 5, 2048, 1., gains).is_err());
+    }
+    let params = Params::channel_calibrated(3, 5, 2048, 1., [4., 4., 2.]).unwrap();
+    assert!(params.is_calibrated());
+    assert_eq!(params.gain_high, [4., 4., 2., 0.]);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn channel_calibration_preserves_native_rounding_gain_caps_and_source_samples() {
+    let gpu = Gpu::new().unwrap();
+    for [width, height] in [[3, 5], [18, 9]] {
+        let values = (0..width * height * 6)
+            .map(|i| (((i * 71 + i * i * 3) % 12007) as f32) * 19.25 - 1000.)
+            .collect::<Vec<_>>();
+        let input = gpu.upload("Channel calibration fixture", &values).unwrap();
+        for gains in [
+            [1.; 3],
+            [4., 4., 2.],
+            [1.1000000001, 0.7993000149726868, 0.5666800141334534],
+        ] {
+            for scale in [0.25_f32, 0.77, 1.] {
+                let params = Params::channel_calibrated(width, height, 2048, scale, gains).unwrap();
+                let (rgb, blue) = apply(&gpu, &input, &params, &mut Default::default()).unwrap();
+                let actual_rgb = gpu.readback(&rgb).unwrap();
+                let actual_rgb = bytemuck::cast_slice::<u8, f32>(&actual_rgb);
+                let actual_blue = gpu.readback(&blue).unwrap();
+                let actual_blue = bytemuck::cast_slice::<u8, f32>(&actual_blue);
+                let corrected = |v: f32, channel: usize| {
+                    (f64::from((v - 2048.) * scale) * gains[channel]).min(65535.) as f32
+                };
+                for y in 0..height {
+                    for x in 0..width {
+                        let cell = (y * width + x) as usize;
+                        let source = &values[cell * 6..cell * 6 + 6];
+                        let mean = ((source[2] * 0.25 + source[3] * 0.25) + source[4] * 0.25)
+                            + source[5] * 0.25;
+                        for (channel, expected) in [
+                            corrected(source[0], 0),
+                            corrected(source[1], 1),
+                            corrected(mean, 2),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            assert_eq!(
+                                actual_rgb[cell * 3 + channel].to_bits(),
+                                expected.to_bits(),
+                                "cell={cell} channel={channel} gains={gains:?} scale={scale}"
+                            );
+                        }
+                        for phase in 0..4 {
+                            let index =
+                                ((y * 2 + phase / 2) * width * 2 + x * 2 + phase % 2) as usize;
+                            assert_eq!(
+                                actual_blue[index].to_bits(),
+                                corrected(source[phase as usize + 2], 2).to_bits()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            gpu.readback(&input).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&values)
+        );
+    }
+}

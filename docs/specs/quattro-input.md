@@ -13,7 +13,7 @@ The input reader must decode the acquired unsigned format35, format37 and format
 
 Source storage must distinguish equal-resolution interleaved RGB from packed six-sample cells. The latter contain R, G, B00, B01, B10 and B11. Keep samples immutable and expose their storage layout and physical cell extent. A shared encoding must not imply a shared rendering or calibration route.
 
-A functional GPU extraction operation must publish low-resolution RGB and full-resolution blue with their own image descriptions. Its optional numerical calibration applies offset and scale, retains negative values, and caps only the high-resolution blue. Camera-version selection belongs to recipe preparation. Unsupported column-correction or Tiger calibration routes must fail explicitly while raw plane inspection remains available.
+A functional GPU extraction operation must publish low-resolution RGB and full-resolution blue with their own image descriptions. Ordinary numerical calibration applies offset and scale, retains negative values, and caps only the high-resolution blue. The separate [Tiger contract](./tiger-rendering.md) adds per-channel digital gains and a calibrated upper cap on both planes. Camera-version selection belongs to recipe preparation. Unsupported calibration variants must fail explicitly while raw plane inspection remains available.
 
 The graph must preserve the distinction between original sensor codes and offset/scale-corrected codes. Blue has twice the cell width and height. Requested planes, retained siblings, view crop and rotation must respect those physical dimensions. Inspection must not require unrelated later metadata, and numerical nodes must remain camera unaware.
 
@@ -31,4 +31,4 @@ Map selection derives from camera identifier, aperture and focus metadata. Host 
 
 Compare all acquired decoded sensor components and CAMF bytes with independent native captures. Validate raw and corrected GPU extraction, map blends and complete blue-map correction independently. Exercise selective graph requests, sibling retention, physical dimensions and display scaling. Preserve existing Classic and Merrill behavior.
 
-Photographic reconstruction and TIFF output have a separate [initial color-rendering specification](./quattro-rendering.md). Editable DNG remains a later technical boundary. Sensor-plane inspection must remain available independently of photographic support. Cameras without a completed rendering recipe must retain an honest unavailable Final state.
+Photographic reconstruction and TIFF output have a separate [initial color-rendering specification](./quattro-rendering.md). Editable DNG follows the [output contract](./output-strategies.md). Sensor-plane inspection must remain available independently of photographic support. Cameras without a completed rendering recipe must retain an honest unavailable Final state.

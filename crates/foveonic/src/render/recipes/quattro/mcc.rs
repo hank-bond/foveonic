@@ -1,4 +1,4 @@
-//! Prepares color-mode chroma sectors from the selected ordinary DP metadata table.
+//! Prepares color-mode chroma sectors from the selected Quattro or Tiger metadata table.
 
 use crate::{
     nodes::color::sector_color::{Prepared, Sector},
@@ -31,11 +31,11 @@ const SECTOR_DEGREES: f32 = 18.;
 pub(super) fn enabled(metadata: &Metadata) -> bool {
     metadata
         .processing_version
-        .is_some_and(|v| v >= [3, 0, 4, 0] && v[0] == 3)
+        .is_some_and(|v| v >= [3, 0, 4, 0] && (v[0] == 3 || super::tiger::supported(metadata)))
 }
 
 pub(super) fn prepare(metadata: &Metadata, mode: &str) -> Result<Prepared> {
-    let extent = super::calibration::ordinary_extent(metadata)?;
+    let extent = super::calibration::full_extent(metadata)?;
     let sectors = sectors(metadata, mode)?;
     Prepared::new(extent, RGB_TO_CHROMA, CHROMA_BIN_BOUNDARIES, sectors)
 }

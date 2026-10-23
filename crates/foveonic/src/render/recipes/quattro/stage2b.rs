@@ -84,9 +84,8 @@ impl Prepared {
 /// skips blue filtering for ordinary non-Portrait modes. Portrait retains its
 /// separate adaptive blend even at zero.
 pub(super) fn prepare(metadata: &Metadata, controls: Controls, mode: &str) -> Result<Prepared> {
-    if !super::defects::supported(metadata) || metadata.processing_version.is_none_or(|v| v[0] != 3)
-    {
-        return Err("reconstruction preparation requires ordinary full-size Quattro input".into());
+    if !super::defects::supported(metadata) {
+        return Err("reconstruction preparation requires supported full-size Quattro input".into());
     }
     let output_extent = controls
         .grid
@@ -158,7 +157,7 @@ fn prepare_reconstruction_on_grid(
                 BLUE_FILTER_STRENGTHS[usize::from(step)],
                 BLUE_FILTER_RANGE_CUTOFF,
                 table,
-                if super::calibration::is_ordinary_sd(metadata) {
+                if super::calibration::is_interchangeable(metadata) {
                     SD_BLUE_CODE_WHITE
                 } else {
                     DP_BLUE_CODE_WHITE
@@ -175,6 +174,7 @@ fn prepare_reconstruction_on_grid(
             BLUE_VARIANCE,
             filter,
         )
+        .map(|prepared| prepared.with_adaptive_range(super::tiger::supported(metadata)))
     }
 }
 

@@ -256,6 +256,8 @@ pub(in crate::render) fn editing_available(
                 | "SIGMA DP3 QUATTRO"
                 | "SIGMA SD QUATTRO"
                 | "SD QUATTRO"
+                | "SIGMA SD QUATTRO H"
+                | "SD QUATTRO H"
         )
     })
 }

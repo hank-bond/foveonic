@@ -304,7 +304,12 @@ pub fn preview_support(
         !settings.is_monochrome()
             && matches!(
                 model.strip_prefix("sigma ").unwrap_or(&model),
-                "dp0 quattro" | "dp1 quattro" | "dp2 quattro" | "dp3 quattro" | "sd quattro"
+                "dp0 quattro"
+                    | "dp1 quattro"
+                    | "dp2 quattro"
+                    | "dp3 quattro"
+                    | "sd quattro"
+                    | "sd quattro h"
             ),
     )
 }

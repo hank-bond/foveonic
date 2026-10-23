@@ -1,4 +1,4 @@
-//! Prepares and composes ordinary DP color shading, raw response and chroma sectors.
+//! Prepares Quattro and Tiger color shading, masked raw response and chroma sectors.
 
 use crate::{
     nodes::color::raw_color_blend::{Controls, Prepared},
@@ -18,7 +18,7 @@ pub(super) fn prepare(
     selected: &str,
     mode: &str,
 ) -> Result<Prepared> {
-    let extent = super::calibration::ordinary_extent(metadata)?;
+    let extent = super::calibration::full_extent(metadata)?;
     if !highlight_amount.is_finite() || !(0. ..=1.).contains(&highlight_amount) {
         return Err("invalid highlight-neutralization amount".into());
     }
@@ -51,12 +51,12 @@ pub(super) fn prepare(
         matrix,
         input_divisor: 1.,
         output_gain: iso_gain,
-        brightness_factor: if super::calibration::is_ordinary_sd(metadata) {
+        brightness_factor: if super::calibration::is_interchangeable(metadata) {
             1.
         } else {
             4.
         },
-        brightness_offset: if super::calibration::is_ordinary_sd(metadata) {
+        brightness_offset: if super::calibration::is_interchangeable(metadata) {
             150.
         } else {
             200.
@@ -68,13 +68,22 @@ pub(super) fn prepare(
     };
     // Ordinary DP and interchangeable-lens requests select different
     // brightness attenuation fits in the same raw-color worker.
-    let exponent = if super::calibration::is_ordinary_sd(metadata) {
+    let exponent = if super::calibration::is_interchangeable(metadata) {
         8.
     } else {
         4.
     };
     let (brightness, signed_response, adaptive) = tables(exponent);
-    Prepared::new(controls, brightness, signed_response, adaptive)
+    let prepared = Prepared::new(controls, brightness, signed_response, adaptive)?;
+    if super::tiger::supported(metadata)
+        && super::tiger::digital_gains(metadata)?
+            .iter()
+            .any(|&v| v > 1.)
+    {
+        super::tiger::masked_highlights(prepared, highlight_amount)
+    } else {
+        Ok(prepared)
+    }
 }
 
 /// Replaces the recorded ordinary shading with the selected rendering shading.
@@ -84,10 +93,10 @@ pub(super) fn prepare_shading(
     selected: &str,
 ) -> Result<Option<crate::nodes::color::spatial_color_gain::Prepared>> {
     use crate::nodes::color::spatial_color_gain::Prepared;
-    let extent = super::calibration::ordinary_extent(metadata)?;
+    let extent = super::calibration::full_extent(metadata)?;
     // The ordinary sd catalogue has no legacy color-shading tables. The native
     // table generator returns no correction for this catalogue.
-    if super::calibration::is_ordinary_sd(metadata)
+    if super::calibration::is_interchangeable(metadata)
         && !metadata.lists.contains_key("ColorShadingGainRatio")
     {
         return Ok(None);
@@ -145,6 +154,7 @@ pub(super) struct Rendering<'a> {
     pub white_balance: &'a str,
     pub color_mode: &'a str,
     pub response: Prepared,
+    pub recovery_mask: Option<usize>,
 }
 
 /// Preserves the shaded source history separately from the processed color image.
@@ -187,9 +197,19 @@ pub(super) fn build_signals(
     } else {
         (filtered, calibrated, blue)
     };
+    let inputs = if rendering.response.requires_highlight_mask() {
+        vec![
+            filtered,
+            rendering
+                .recovery_mask
+                .ok_or("missing recovered-channel mask")?,
+        ]
+    } else {
+        vec![filtered]
+    };
     let response = graph.add(
         Operation::RawColorBlend(Arc::new(rendering.response)),
-        &[filtered],
+        &inputs,
     )?;
     let processed = if super::mcc::enabled(metadata) {
         graph.add(

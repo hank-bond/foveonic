@@ -11,6 +11,10 @@ use crate::{
     source::Result,
 };
 
+// Channel-relative neutralization knees interpolate with the recovery-strength control.
+const MASKED_NEUTRAL_LOW: [f32; 2] = [0.58, 0.4];
+const MASKED_NEUTRAL_HIGH: [f32; 2] = [0.8, 0.2];
+
 #[derive(Clone)]
 pub(crate) struct Controls {
     pub extent: [u32; 2],
@@ -39,6 +43,7 @@ struct Params {
     response: [f32; 4],
     hue_first: [f32; 4],
     hue_last: [f32; 4],
+    knees: [f32; 4],
 }
 
 pub(crate) struct Prepared {
@@ -136,6 +141,7 @@ impl Prepared {
                     c.hue_strength[3],
                 ],
                 hue_last: [c.hue_strength[4], c.hue_strength[5], c.hue_strength[6], 0.],
+                knees: [0.; 4],
             },
             matrix: c.matrix.map(|v| {
                 let high = v as f32;
@@ -143,6 +149,33 @@ impl Prepared {
             }),
             tables,
         })
+    }
+    /// Use a channel-relative median score and a recovered-pixel mask floor.
+    pub(crate) fn with_masked_highlights(
+        mut self,
+        ceilings: [f32; 3],
+        strength: f32,
+    ) -> Result<Self> {
+        if ceilings.iter().any(|v| !v.is_finite() || *v <= 0.)
+            || !strength.is_finite()
+            || !(0. ..=1.).contains(&strength)
+        {
+            return Err("invalid mask-aware highlight controls".into());
+        }
+        self.params.shape[2] = 1;
+        let low = strength.mul_add(MASKED_NEUTRAL_LOW[1], MASKED_NEUTRAL_LOW[0]);
+        self.params.neutral[1] = low;
+        self.params.neutral[2] =
+            strength.mul_add(MASKED_NEUTRAL_HIGH[1], MASKED_NEUTRAL_HIGH[0]) - low;
+        for (channel, ceiling) in ceilings.into_iter().enumerate() {
+            self.params.knees[channel] =
+                (ceiling / self.params.neutral[0]) * self.params.gains[channel];
+        }
+        self.params.knees[3] = strength;
+        Ok(self)
+    }
+    pub(crate) fn requires_highlight_mask(&self) -> bool {
+        self.params.shape[2] != 0
     }
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
@@ -157,12 +190,16 @@ impl Prepared {
 pub(crate) fn apply(
     gpu: &Gpu,
     input: &ReadGuard,
+    mask: Option<&ReadGuard>,
     prepared: &Prepared,
     profile: &mut Profile,
 ) -> Result<Output> {
     let extent = prepared.extent();
     if input.size() != u64::from(extent[0]) * u64::from(extent[1]) * 12 {
         return Err("raw-color input does not match its extent".into());
+    }
+    if prepared.requires_highlight_mask() && mask.is_none_or(|m| m.size() != input.size() / 3) {
+        return Err("mask-aware raw color requires a matching recovery mask".into());
     }
     let uniform = gpu.uniform(&prepared.params);
     let matrix = gpu.upload("Adaptive camera-color matrix", &prepared.matrix)?;
@@ -177,6 +214,7 @@ pub(crate) fn apply(
             (0, Read(input)),
             (1, Read(&uniform)),
             (2, Write(neutralized.write())),
+            (3, Read(mask.unwrap_or(input))),
         ],
         groups,
         &mut trace,

@@ -430,6 +430,7 @@ impl App {
                     }
                 }
                 Err(e) => {
+                    assert!(self.smoke.is_none(), "native smoke processing failed: {e}");
                     self.status = e;
                     self.status_error = true;
                 }

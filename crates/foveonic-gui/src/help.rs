@@ -178,6 +178,7 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "luma-despeckle.blue" => "Full-resolution blue after isolated brightness-speckle correction, before clustered defects are repaired.",
         "luma-clusters.blue" => "Full-resolution blue after camera-recorded brightness-defect clusters have been repaired.",
         "blue-mismatch.blue" => "Full-resolution blue after correcting differences between sensor sample phases. Compare with luma-clusters.blue to inspect the change before reconstruction.",
+        "highlight-restoration.recovery-mask" => "White marks pixels with a channel reconstructed near saturation using color relationships elsewhere in the photograph. This is separate from the tone Highlights adjustment.",
         "highlight-restoration.rgb" => "Sensor layers after reconstructing bright clipped areas from the remaining layer information. This is separate from the Highlights tone adjustment and cannot recreate all lost detail.",
         "noise.rgb" => "Noise-filtered low-resolution sensor layers used as the base for Quattro reconstruction. The full-resolution blue detail is combined later.",
         "noise.source-after" => "The companion sensor-layer history retained after noise processing. Reconstruction compares this source information with the filtered base.",
@@ -313,12 +314,22 @@ mod tests {
             assert!(inspection(output.name).is_some(), "{}", output.name);
         }
         let mut seen = std::collections::HashSet::new();
-        for camera in [80., 81., 82., 83., 40.] {
+        for camera in [80., 81., 82., 83., 40., 41.] {
             let metadata = Metadata {
-                width: 5888,
-                height: if camera == 40. { 3776 } else { 3672 },
+                width: if camera == 41. { 6656 } else { 5888 },
+                height: if camera == 41. {
+                    4480
+                } else if camera == 40. {
+                    3776
+                } else {
+                    3672
+                },
                 rotation: 0,
-                processing_version: Some([3, 1, 2, 0]),
+                processing_version: Some(if camera == 41. {
+                    [4, 0, 1, 0]
+                } else {
+                    [3, 1, 2, 0]
+                }),
                 properties: [("CAMMODEL".into(), "SIGMA dp2 Quattro".into())].into(),
                 matrices: [
                     ("CAMERAID", vec![camera]),

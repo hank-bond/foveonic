@@ -181,7 +181,7 @@ pub(crate) fn outputs(metadata: Option<&Metadata>) -> Vec<ImageOutput> {
     }
     outputs.extend(EXTRACTED);
     let is_dp = super::calibration::is_ordinary_dp(metadata);
-    let is_sd = super::calibration::is_ordinary_sd(metadata);
+    let is_sd = super::calibration::is_ordinary_sd(metadata) || super::tiger::supported(metadata);
     if is_dp {
         outputs.push(PHASE_GAIN);
         outputs.push(ImageOutput {
@@ -213,14 +213,21 @@ pub(crate) fn outputs(metadata: Option<&Metadata>) -> Vec<ImageOutput> {
     let calibrated = is_sd || (is_dp && super::hlp::supported(metadata));
     if calibrated && super::defects::supported(metadata) {
         outputs.extend(FACTORY_REPAIRED.into_iter().filter(|output| {
-            output.name != "blue-mismatch.blue"
-                || super::calibration::normalization(metadata)
-                    .is_ok_and(|v| (v - 1.).abs() < f32::EPSILON)
+            (output.name != "blue-mismatch.blue" || !super::tiger::supported(metadata))
+                && (output.name != "blue-mismatch.blue"
+                    || super::calibration::normalization(metadata)
+                        .is_ok_and(|v| (v - 1.).abs() < f32::EPSILON))
         }));
         if metadata.scalar("CAMERAID").is_ok_and(|id| id == 80.) {
             outputs.push(ImageOutput {
                 name: "purple-fringe.rgb",
                 channels: Channels::Layers,
+            });
+        }
+        if super::tiger::supported(metadata) {
+            outputs.push(ImageOutput {
+                name: "highlight-restoration.recovery-mask",
+                channels: Channels::Scalar,
             });
         }
         if metadata
@@ -245,7 +252,7 @@ fn has_shading(metadata: &Metadata) -> bool {
 }
 
 pub(crate) fn comparison_input(metadata: &Metadata, output: &str) -> Option<&'static str> {
-    let is_sd = super::calibration::is_ordinary_sd(metadata);
+    let is_sd = super::calibration::is_ordinary_sd(metadata) || super::tiger::supported(metadata);
     let blue = if is_sd {
         if metadata.scalar("CaptureAperture").is_ok_and(|v| v < 6.) {
             "blue-pattern.blue"

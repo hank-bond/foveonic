@@ -185,3 +185,57 @@ fn selected_balance_adjusts_gains_without_changing_recorded_balance() {
     );
     assert!(super::super::calibration::white_balance(&metadata, "missing-preset").is_err());
 }
+
+#[test]
+#[ignore = "requires GPU, TIGER_X3F and TIGER_STAGE1_REFERENCE"]
+fn original_tiger_stage1_preparation_and_two_pass_boundary_match() {
+    let source = crate::source::Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
+    let root = std::path::PathBuf::from(std::env::var_os("TIGER_STAGE1_REFERENCE").unwrap());
+    let parameters = std::fs::read(root.join("parameters.bin")).unwrap();
+    let float = |offset| f32::from_le_bytes(parameters[offset..offset + 4].try_into().unwrap());
+    let double = |offset| f64::from_le_bytes(parameters[offset..offset + 8].try_into().unwrap());
+    let mut controls = prepare(&source.metadata, 0).unwrap();
+    assert_eq!(
+        controls.estimated_iso,
+        u32::from_le_bytes(parameters[..4].try_into().unwrap())
+    );
+    assert_eq!(controls.bilateral_strengths, [float(0x214), float(0x218)]);
+    assert_eq!(
+        controls.white_balance,
+        std::array::from_fn(|i| double(0x240 + i * 8))
+    );
+    assert_eq!(
+        controls.highlight_preservation,
+        std::array::from_fn(|i| float(0x258 + i * 4))
+    );
+    let bytes = std::fs::read(root.join("input.f32")).unwrap();
+    controls.extent = [160, 160];
+    assert_eq!(bytes.len(), 160 * 160 * 3 * 4);
+    let gpu = crate::gpu::Gpu::new().unwrap();
+    let input = gpu
+        .upload(
+            "Native Tiger Stage1 original-data crop",
+            bytemuck::cast_slice::<u8, f32>(&bytes),
+        )
+        .unwrap();
+    let output = crate::nodes::color::two_scale_noise::apply(
+        &gpu,
+        &input,
+        &numerical(&controls).unwrap(),
+        &mut Default::default(),
+    )
+    .unwrap();
+    let actual = gpu.readback(&output.rgb).unwrap();
+    let expected = std::fs::read(root.join("output.native.f32")).unwrap();
+    assert_eq!(actual.len(), expected.len());
+    let mut maximum = 0_f32;
+    for (&a, &b) in bytemuck::cast_slice::<u8, f32>(&actual)[..160 * 158 * 3]
+        .iter()
+        .zip(bytemuck::cast_slice::<u8, f32>(&expected))
+    {
+        assert!(a.is_finite() && b.is_finite());
+        maximum = maximum.max((a - b).abs());
+    }
+    eprintln!("Native Tiger two-pass Stage1 max error {maximum}");
+    assert_eq!(maximum, 0.);
+}

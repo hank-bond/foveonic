@@ -39,16 +39,21 @@ pub(super) fn is_ordinary_sd(metadata: &Metadata) -> bool {
         && [metadata.width, metadata.height] == [5888, 3776]
 }
 
-pub(super) fn ordinary_extent(metadata: &Metadata) -> Result<[u32; 2]> {
-    if !is_ordinary_dp(metadata) && !is_ordinary_sd(metadata) {
-        return Err("this operation requires ordinary full-size Quattro input".into());
+pub(super) fn is_interchangeable(metadata: &Metadata) -> bool {
+    is_ordinary_sd(metadata) || super::tiger::supported(metadata)
+}
+
+pub(super) fn full_extent(metadata: &Metadata) -> Result<[u32; 2]> {
+    if !is_ordinary_dp(metadata) && !is_ordinary_sd(metadata) && !super::tiger::supported(metadata)
+    {
+        return Err("this operation requires supported full-size Quattro input".into());
     }
     Ok([(metadata.width / 2) as u32, (metadata.height / 2) as u32])
 }
 
-/// The processing-major contract excludes the separate gain-bearing family.
+/// Version-three extraction and the calibrated Tiger variant have explicit contracts.
 pub(super) fn supports_extraction(metadata: &Metadata) -> bool {
-    metadata.processing_version.is_some_and(|v| v[0] == 3)
+    metadata.processing_version.is_some_and(|v| v[0] == 3) || super::tiger::supported(metadata)
 }
 
 pub(super) fn extraction(metadata: &Metadata) -> Result<phase_extraction::Params> {
@@ -61,6 +66,15 @@ pub(super) fn extraction(metadata: &Metadata) -> Result<phase_extraction::Params
     }
     let normalization = normalization(metadata)?;
     let scale = 1. / normalization;
+    if super::tiger::supported(metadata) {
+        return phase_extraction::Params::channel_calibrated(
+            (metadata.width / 2) as u32,
+            (metadata.height / 2) as u32,
+            offset as u32,
+            scale,
+            super::tiger::digital_gains(metadata)?,
+        );
+    }
     phase_extraction::Params::calibrated(
         (metadata.width / 2) as u32,
         (metadata.height / 2) as u32,

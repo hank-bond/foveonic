@@ -21,6 +21,58 @@ fn response_tables_have_the_selected_finite_domain() {
 }
 
 #[test]
+#[ignore = "requires TIGER_X3F and RAW_COLOR_BLEND_REFERENCE original Tiger helper fixture"]
+fn tiger_metadata_preparation_matches_original_native_helper() {
+    let source = crate::source::Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
+    let root = std::path::PathBuf::from(std::env::var_os("RAW_COLOR_BLEND_REFERENCE").unwrap());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
+    let case = &manifest["cases"][0];
+    assert_eq!(case["name"], "original-tiger");
+    let scalar = |name: &str| case[name].as_f64().unwrap() as f32;
+    let floats = |name: &str| -> Vec<f32> {
+        let bytes = std::fs::read(root.join(case[name].as_str().unwrap())).unwrap();
+        bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()
+    };
+    let controls = Controls {
+        extent: super::super::calibration::full_extent(&source.metadata).unwrap(),
+        white_balance: std::array::from_fn(|i| case["white_balance"][i].as_f64().unwrap() as f32),
+        normalization: scalar("normalization"),
+        neutral_low: scalar("neutral_low"),
+        neutral_high: scalar("neutral_high"),
+        matrix: std::array::from_fn(|i| case["matrix"][i].as_f64().unwrap()),
+        input_divisor: scalar("input_divisor"),
+        output_gain: scalar("output_gain"),
+        brightness_factor: scalar("brightness_factor"),
+        brightness_offset: scalar("brightness_offset"),
+        brightness_gain: scalar("brightness_gain"),
+        second_exponent: scalar("second_exponent"),
+        residual_scale: scalar("residual_scale"),
+        hue_strength: std::array::from_fn(|i| case["hue_strength"][i].as_f64().unwrap() as f32),
+    };
+    let expected = Prepared::new(
+        controls,
+        floats("brightness"),
+        floats("signed_response"),
+        floats("adaptive"),
+    )
+    .unwrap()
+    .with_masked_highlights([22000., 24000., 14000.], scalar("highlight_strength"))
+    .unwrap();
+    let actual = prepare(
+        &source.metadata,
+        scalar("highlight_strength"),
+        "Sunlight",
+        "Standard",
+    )
+    .unwrap();
+    assert!(
+        actual.key() == expected.key(),
+        "metadata-derived controls differ from native helper"
+    );
+}
+
+#[test]
 #[ignore = "requires RAW_COLOR_BLEND_REFERENCE native table fixtures and QUATTRO_X3F metadata"]
 fn generated_raw_color_tables_match_reference_bytes() {
     let directory =
@@ -75,6 +127,7 @@ fn complete_native_outer_stage2_from_stage1_return() {
     let raw = raw_color_blend::apply(
         &gpu,
         &shaded,
+        None,
         &prepare(&source.metadata, 1., "Sunlight", "Standard").unwrap(),
         &mut profile,
     )

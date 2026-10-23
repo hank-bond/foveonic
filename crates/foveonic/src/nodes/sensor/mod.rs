@@ -33,3 +33,5 @@ pub(crate) mod fppd;
 pub(crate) mod blue_pattern;
 
 pub(crate) mod column_gain;
+
+pub(crate) mod dynamic_range;
