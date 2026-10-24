@@ -57,6 +57,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[monochrome-rendering](./monochrome-rendering.md)** _(archived)._ GPU monochrome rendering, a triangular layer mixer, mode-specific editing, and linear monochrome DNG export are implemented and checked.
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** _(archived)._ Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
 - **[pipeline-performance](./pipeline-performance.md)** _(archived)._ Completed full-pipeline profiling and output-equivalent optimization reduced six-photo render latency roughly five to seven times.
+- **[preview-color-management](./preview-color-management.md)** _(archived)._ Normalize embedded camera previews using their declared color space across all camera architectures.
 - **[profiling-consolidation](./profiling-consolidation.md)** _(archived)._ Consolidate retained core, GUI and native profiling into explicit modes and reusable structured reports.
 - **[quattro-dng](./quattro-dng.md)** _(archived)._ Add ordinary Quattro color and monochrome DNG export with a canonical technical base and one approximate embedded appearance.
 - **[quattro-integration](./quattro-integration.md)** _(archived)._ Implement Quattro input, calibration and reconstruction through family-owned multiresolution recipes.

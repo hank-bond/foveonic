@@ -1,6 +1,8 @@
-//! Decodes embedded bitmap and JPEG previews independently of sensor processing.
+//! Decodes embedded bitmap and JPEG previews into color-managed sRGB display pixels.
 
 use crate::source::Result;
+#[path = "preview_color.rs"]
+mod color;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -35,8 +37,9 @@ enum Selection {
     Largest,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Preview {
-    /// Tightly packed, unrotated RGB8 samples.
+    /// Tightly packed, unrotated sRGB-encoded RGB8 display samples.
     pub rgb: Vec<u8>,
     pub extent: [u32; 2],
     pub rotation: u32,
@@ -61,7 +64,27 @@ pub fn read_full(path: &Path) -> Result<Preview> {
 
 fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
     let mut file = File::open(path)?;
-    let length = file.metadata()?.len();
+    read_reader(&mut file, selection)
+}
+
+#[cfg(test)]
+pub(crate) fn from_original(bytes: &[u8], full: bool) -> Result<Preview> {
+    read_reader(
+        &mut std::io::Cursor::new(bytes),
+        if full {
+            Selection::Largest
+        } else {
+            Selection::Smallest
+        },
+    )
+}
+
+fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Preview> {
+    // Reuse the open reader. During pre-cache this seeks only within the original
+    // memory buffer, including metadata stored in version-4 JPEG MakerNotes.
+    let encoding = color::Encoding::camera(&crate::x3f::capture::read(file).unwrap_or_default());
+    let length = file.seek(SeekFrom::End(0))?;
+    file.seek(SeekFrom::Start(0))?;
     if !((BASE_HEADER_BYTES as u64 + DIRECTORY_POINTER_BYTES)..=MAX_FILE_BYTES).contains(&length) {
         return Err("unsupported X3F size".into());
     }
@@ -163,9 +186,9 @@ fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
             {
                 let mut prefix = vec![0; (size - IMAGE_HEADER_BYTES).min(EXIF_PREFIX_BYTES)];
                 file.read_exact(&mut prefix)?;
-                if let Some(preview) = crate::x3f::jpeg_thumbnail(&prefix)
-                    .and_then(|jpeg| decode_exif_thumbnail(jpeg, extent).ok())
-                {
+                if let Some(preview) = crate::x3f::jpeg_thumbnail(&prefix).and_then(|jpeg| {
+                    decode_exif_thumbnail(jpeg, extent, &encoding.jpeg(&prefix)).ok()
+                }) {
                     if exif_preview
                         .as_ref()
                         .is_none_or(|old| preview.1[0] * preview.1[1] < old.1[0] * old.1[1])
@@ -216,7 +239,7 @@ fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
         file.read_exact(chunk)?;
     }
     crate::background::checkpoint_or_cancel()?;
-    let rgb = selected.decode(&encoded)?;
+    let rgb = selected.decode(&encoded, &encoding)?;
     crate::background::checkpoint_or_cancel()?;
 
     Ok(Preview {
@@ -227,7 +250,11 @@ fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
     })
 }
 
-fn decode_exif_thumbnail(encoded: &[u8], photograph: [u32; 2]) -> Result<(Vec<u8>, [u32; 2])> {
+fn decode_exif_thumbnail(
+    encoded: &[u8],
+    photograph: [u32; 2],
+    encoding: &color::Encoding,
+) -> Result<(Vec<u8>, [u32; 2])> {
     use image::ImageDecoder;
     let mut decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(encoded))?;
     let mut limits = image::Limits::default();
@@ -264,12 +291,11 @@ fn decode_exif_thumbnail(encoded: &[u8], photograph: [u32; 2]) -> Result<(Vec<u8
     }) {
         return Err("Exif thumbnail has no matching photograph padding".into());
     }
-    Ok((
-        image::imageops::crop_imm(&image, x, y, width, height)
-            .to_image()
-            .into_raw(),
-        [width, height],
-    ))
+    let mut rgb = image::imageops::crop_imm(&image, x, y, width, height)
+        .to_image()
+        .into_raw();
+    encoding.jpeg(encoded).to_srgb(&mut rgb)?;
+    Ok((rgb, [width, height]))
 }
 
 const BITMAP_RGB: u32 = 3;
@@ -296,7 +322,7 @@ impl Embedded {
         u64::from(self.extent[0]) * u64::from(self.extent[1])
     }
 
-    fn decode(&self, encoded: &[u8]) -> Result<Vec<u8>> {
+    fn decode(&self, encoded: &[u8], encoding: &color::Encoding) -> Result<Vec<u8>> {
         if self.format == BITMAP_RGB {
             let row_bytes = self.extent[0] as usize * 3;
             let required = self
@@ -311,6 +337,7 @@ impl Embedded {
                 crate::background::checkpoint_or_cancel()?;
                 rgb.extend_from_slice(&row[..row_bytes]);
             }
+            encoding.to_srgb(&mut rgb)?;
             Ok(rgb)
         } else if matches!(self.format, JPEG | JPEG_THUMBNAIL) {
             use image::ImageDecoder;
@@ -323,9 +350,11 @@ impl Embedded {
             if decoder.dimensions() != (self.extent[0], self.extent[1]) {
                 return Err("embedded JPEG dimensions disagree with section header".into());
             }
-            Ok(image::DynamicImage::from_decoder(decoder)?
+            let mut rgb = image::DynamicImage::from_decoder(decoder)?
                 .into_rgb8()
-                .into_raw())
+                .into_raw();
+            encoding.jpeg(encoded).to_srgb(&mut rgb)?;
+            Ok(rgb)
         } else {
             Err("unsupported embedded preview encoding".into())
         }

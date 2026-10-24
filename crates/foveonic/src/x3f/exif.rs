@@ -1,4 +1,4 @@
-//! Reads capture properties and bounded thumbnails from optional JPEG Exif headers.
+//! Reads capture properties, color declarations and bounded thumbnails from optional JPEG Exif headers.
 
 use std::collections::BTreeMap;
 
@@ -15,6 +15,39 @@ const JPEG_SCAN: u8 = 0xda;
 const JPEG_END: u8 = 0xd9;
 const JPEG_APP1: u8 = 0xe1;
 const EXIF_SIGNATURE: &[u8; 6] = b"Exif\0\0";
+const EXIF_IFD_TAG: u16 = 0x8769;
+const COLOR_SPACE_TAG: u16 = 0xa001;
+const INTEROPERABILITY_IFD_TAG: u16 = 0xa005;
+const INTEROPERABILITY_INDEX_TAG: u16 = 0x0001;
+
+/// Standard JPEG color tags apply to preview pixels independently of RAW settings.
+pub(crate) fn color_space(jpeg: &[u8]) -> Option<crate::color_space::ColorSpace> {
+    use crate::color_space::ColorSpace;
+    let bytes = exif_payload(jpeg)?;
+    let big = match bytes.get(..2)? {
+        b"II" => false,
+        b"MM" => true,
+        _ => return None,
+    };
+    let t = Tiff { bytes, big };
+    if t.u16(2)? != TIFF_MAGIC {
+        return None;
+    }
+    let first = t.u32(4)? as usize;
+    let exif = t.number(first, EXIF_IFD_TAG)? as usize;
+    if t.number(exif, COLOR_SPACE_TAG) == Some(1.) {
+        return Some(ColorSpace::Srgb);
+    }
+    let interoperability = t.number(exif, INTEROPERABILITY_IFD_TAG)? as usize;
+    match t
+        .text(interoperability, INTEROPERABILITY_INDEX_TAG)?
+        .as_str()
+    {
+        "R03" => Some(ColorSpace::AdobeRgb),
+        "R98" => Some(ColorSpace::Srgb),
+        _ => None,
+    }
+}
 
 /// Optional preview metadata must not prevent decoding the original sensor data.
 pub(super) fn properties(jpeg: &[u8]) -> BTreeMap<String, String> {
@@ -238,6 +271,69 @@ fn tiff_properties(bytes: &[u8]) -> Option<BTreeMap<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jpeg_color_tags_identify_srgb_and_adobe_in_both_byte_orders() {
+        use crate::color_space::ColorSpace;
+        for big in [false, true] {
+            let word = |v: u16| {
+                if big {
+                    v.to_be_bytes()
+                } else {
+                    v.to_le_bytes()
+                }
+            };
+            let long = |v: u32| {
+                if big {
+                    v.to_be_bytes()
+                } else {
+                    v.to_le_bytes()
+                }
+            };
+            for (space, interoperability, expected) in [
+                (1, *b"R98\0", Some(ColorSpace::Srgb)),
+                (65535, *b"R03\0", Some(ColorSpace::AdobeRgb)),
+                (65535, *b"R98\0", Some(ColorSpace::Srgb)),
+                (65535, *b"???\0", None),
+            ] {
+                let mut tiff = Vec::new();
+                tiff.extend(if big { b"MM" } else { b"II" });
+                tiff.extend(word(TIFF_MAGIC));
+                tiff.extend(long(8));
+                tiff.extend(word(1));
+                tiff.extend(word(EXIF_IFD_TAG));
+                tiff.extend(word(4));
+                tiff.extend(long(1));
+                tiff.extend(long(26));
+                tiff.extend(long(0));
+                tiff.extend(word(2));
+                tiff.extend(word(COLOR_SPACE_TAG));
+                tiff.extend(word(3));
+                tiff.extend(long(1));
+                tiff.extend(word(space));
+                tiff.extend(word(0));
+                tiff.extend(word(INTEROPERABILITY_IFD_TAG));
+                tiff.extend(word(4));
+                tiff.extend(long(1));
+                tiff.extend(long(56));
+                tiff.extend(long(0));
+                tiff.extend(word(1));
+                tiff.extend(word(INTEROPERABILITY_INDEX_TAG));
+                tiff.extend(word(2));
+                tiff.extend(long(4));
+                tiff.extend(interoperability);
+                tiff.extend(long(0));
+                let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+                jpeg.extend(((tiff.len() + 8) as u16).to_be_bytes());
+                jpeg.extend(EXIF_SIGNATURE);
+                jpeg.extend(tiff);
+                assert_eq!(color_space(&jpeg), expected);
+                for end in 0..jpeg.len() {
+                    assert_eq!(color_space(&jpeg[..end]), None);
+                }
+            }
+        }
+    }
 
     #[test]
     fn reads_signed_and_unsigned_rationals_with_either_byte_order() {

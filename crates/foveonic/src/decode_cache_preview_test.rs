@@ -195,7 +195,11 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
         height: 6,
         rotation: 90,
         processing_version: Some([3, 1, 2, 0]),
-        properties: [("CAMMODEL".into(), "SIGMA dp0 Quattro".into())].into(),
+        properties: [
+            ("CAMMODEL".into(), "SIGMA dp0 Quattro".into()),
+            ("COLORSPACE".into(), "AdobeRGB".into()),
+        ]
+        .into(),
         matrices: Default::default(),
         lists: Default::default(),
     };
@@ -225,7 +229,7 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
             &fixture.source,
             &settings,
             &metadata,
-            fixture.write(true, [120; 3]).preview,
+            fixture.write(true, [80, 120, 160]).preview,
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -236,6 +240,20 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    assert!(
+        cache
+            .preview(&fixture.source)
+            .unwrap()
+            .rgb
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .all(|p| p
+                .iter()
+                .zip([80, 120, 160])
+                .all(|(a, b)| a.abs_diff(b) <= 2)),
+        "rendered sRGB previews must not receive the source's Adobe RGB conversion again"
+    );
     let destination = Key::read(&fixture.source)
         .unwrap()
         .location(cache.directory());

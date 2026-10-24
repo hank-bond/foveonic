@@ -14,5 +14,6 @@ bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 tiff = "0.10"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+moxcms = "0.8.1"
 tempfile = "3"
 rayon = "1.11"

@@ -18,7 +18,7 @@ use std::{
 
 pub const MAX_SIDE: u32 = 2048;
 // Bump when photographic processing or preview encoding changes its appearance.
-const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE01";
+const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE02";
 const MAX_ENCODED: u64 = 32 * 1024 * 1024;
 const JPEG_QUALITY: u8 = 92;
 // Signature, JSON length, and JSON CRC32 share the decoded source prefix layout.
@@ -104,7 +104,7 @@ impl Cache {
         })
     }
 
-    /// Queue the newest whole-photo display preview. Recipe checks happen on
+    /// Queue the newest whole-photo sRGB-encoded display preview. Recipe checks happen on
     /// the caller's background thread, never in the UI or main render worker.
     pub fn save_preview(
         &self,

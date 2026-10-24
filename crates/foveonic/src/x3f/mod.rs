@@ -69,6 +69,7 @@ const PROPERTY_HEADER_BYTES: usize = 24;
 const PROPERTY_ENTRY_BYTES: usize = 8;
 
 pub(crate) use camf::parse as cached_camera_metadata;
+pub(crate) use exif::color_space as jpeg_color_space;
 pub(crate) use exif::thumbnail as jpeg_thumbnail;
 
 pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> {
