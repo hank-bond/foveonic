@@ -18,9 +18,9 @@ use std::{
 
 pub const MAX_SIDE: u32 = 2048;
 // Bump when photographic processing or preview encoding changes its appearance.
-const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE02";
+const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE03";
+// Allow the largest RGB16 image plus its TIFF and compression overhead.
 const MAX_ENCODED: u64 = 32 * 1024 * 1024;
-const JPEG_QUALITY: u8 = 92;
 // Signature, JSON length, and JSON CRC32 share the decoded source prefix layout.
 const HEADER_LENGTH_OFFSET: usize = PREVIEW_MAGIC.len();
 const HEADER_CHECKSUM_OFFSET: usize = HEADER_LENGTH_OFFSET + size_of::<u64>();
@@ -53,6 +53,7 @@ struct PreviewHeader {
     extent: [u32; 2],
     native_extent: [u32; 2],
     rotation: u32,
+    color_space: crate::color_space::TiffColorSpace,
     rendered: bool,
     checksum: u32,
 }
@@ -97,21 +98,20 @@ impl Cache {
         }
         let key = self.preview_key(path).ok()?;
         let (header, encoded) = read(&key.location(&self.root), &key, &settings).ok()?;
-        use image::ImageDecoder;
-        let mut decoder =
-            image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(encoded)).ok()?;
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(MAX_SIDE);
-        limits.max_image_height = Some(MAX_SIDE);
-        limits.max_alloc = Some(u64::from(MAX_SIDE).pow(2) * 4);
-        decoder.set_limits(limits).ok()?;
-        if decoder.dimensions() != (header.extent[0], header.extent[1]) {
+        let mut limits = tiff::decoder::Limits::default();
+        limits.decoding_buffer_size = MAX_SIDE as usize * MAX_SIDE as usize * 3 * size_of::<u16>();
+        limits.intermediate_buffer_size = limits.decoding_buffer_size;
+        let mut decoder = tiff::decoder::Decoder::new(std::io::Cursor::new(encoded))
+            .ok()?
+            .with_limits(limits);
+        if decoder.dimensions().ok()? != (header.extent[0], header.extent[1])
+            || decoder.colortype().ok()? != tiff::ColorType::RGB(16)
+        {
             return None;
         }
-        let rgb = image::DynamicImage::from_decoder(decoder)
-            .ok()?
-            .into_rgb8()
-            .into_raw();
+        let tiff::decoder::DecodingResult::U16(rgb) = decoder.read_image().ok()? else {
+            return None;
+        };
         if self.preview_key(path).ok()? != key {
             return None;
         }
@@ -119,13 +119,14 @@ impl Cache {
             File::open(key.location(&self.root)).and_then(|f| f.set_modified(SystemTime::now()));
         Some(Preview {
             rgb,
+            color_space: header.color_space,
             extent: header.extent,
             rotation: header.rotation,
             native_extent: header.native_extent,
         })
     }
 
-    /// Queue the newest whole-photo sRGB-encoded display preview. Recipe checks happen on
+    /// Queue the newest whole-photo RGB16 display preview with its declared primaries. Recipe checks happen on
     /// the caller's background thread, never in the UI or main render worker.
     pub fn save_preview(
         &self,
@@ -170,6 +171,7 @@ impl Cache {
                     extent: preview.extent,
                     native_extent: preview.native_extent,
                     rotation: preview.rotation,
+                    color_space: preview.color_space,
                     rendered: true,
                     checksum: 0,
                 },
@@ -244,6 +246,7 @@ pub(super) fn prepared(
             extent: preview.extent,
             native_extent: preview.native_extent,
             rotation: preview.rotation,
+            color_space: preview.color_space,
             rendered: false,
             checksum: 0,
         },
@@ -277,17 +280,7 @@ fn embedded(
         return Ok(());
     }
     crate::background::checkpoint_or_cancel()?;
-    let image = image::RgbImage::from_raw(preview.extent[0], preview.extent[1], preview.rgb)
-        .ok_or("invalid preview samples")?;
-    let image = image::DynamicImage::ImageRgb8(image)
-        .thumbnail(MAX_SIDE, MAX_SIDE)
-        .into_rgb8();
-    let preview = Preview {
-        extent: [image.width(), image.height()],
-        rgb: image.into_raw(),
-        rotation: preview.rotation,
-        native_extent: preview.native_extent,
-    };
+    let preview = preview.resized(MAX_SIDE)?;
     let write = PendingPreview {
         path: path.to_owned(),
         header: PreviewHeader {
@@ -296,6 +289,7 @@ fn embedded(
             extent: preview.extent,
             native_extent: preview.native_extent,
             rotation: preview.rotation,
+            color_space: preview.color_space,
             rendered: false,
             checksum: 0,
         },
@@ -361,16 +355,23 @@ fn write_checked(
     {
         return Err("invalid display preview".into());
     }
-    let mut jpeg = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, JPEG_QUALITY).encode(
-        &write.preview.rgb,
-        write.preview.extent[0],
-        write.preview.extent[1],
-        image::ExtendedColorType::Rgb8,
-    )?;
-    write.header.checksum = crc32fast::hash(&jpeg);
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    {
+        let mut encoder = tiff::encoder::TiffEncoder::new(&mut encoded)?
+            .with_compression(tiff::encoder::Compression::Deflate(
+                tiff::encoder::DeflateLevel::Fast,
+            ))
+            .with_predictor(tiff::encoder::Predictor::Horizontal);
+        encoder.write_image::<tiff::encoder::colortype::RGB16>(
+            write.preview.extent[0],
+            write.preview.extent[1],
+            &write.preview.rgb,
+        )?;
+    }
+    let encoded = encoded.into_inner();
+    write.header.checksum = crc32fast::hash(&encoded);
     let header = serde_json::to_vec(&write.header)?;
-    let bytes = PREVIEW_PREFIX_BYTES + header.len() as u64 + jpeg.len() as u64;
+    let bytes = PREVIEW_PREFIX_BYTES + header.len() as u64 + encoded.len() as u64;
     if bytes > settings.max_bytes || bytes > MAX_ENCODED {
         return Ok(());
     }
@@ -393,7 +394,7 @@ fn write_checked(
         file.write_all(&(header.len() as u64).to_le_bytes())?;
         file.write_all(&crc32fast::hash(&header).to_le_bytes())?;
         file.write_all(&header)?;
-        file.write_all(&jpeg)?;
+        file.write_all(&encoded)?;
         drop(file);
         crate::background::checkpoint_or_cancel()?;
         if current() && Key::read(&write.path)? == write.header.key {

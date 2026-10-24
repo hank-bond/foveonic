@@ -6,6 +6,8 @@ mod batch;
 mod browser;
 mod capture;
 mod controls;
+mod display;
+mod display_image;
 mod export;
 mod help;
 mod help_examples;
@@ -82,6 +84,7 @@ struct App {
     status: String,
     status_error: bool,
     srgb_target: bool,
+    display: display::Host,
     render_state: egui_wgpu::RenderState,
     smoke: Option<smoke::Smoke>,
     last_frame: Option<std::time::Instant>,
@@ -100,6 +103,15 @@ impl App {
         timing::emit(
             "session",
             serde_json::json!({"frontend":"gui","adapter":rs.adapter.get_info().name,"gpu_supported":rs.adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY),"gpu_enabled":rs.device.features().contains(wgpu::Features::TIMESTAMP_QUERY)}),
+        );
+        let display = display::Host::new(cc)?;
+        timing::emit(
+            "display",
+            serde_json::json!({
+                "format": format!("{:?}", rs.target_format),
+                "encoding": format!("{:?}", display.target),
+                "managed": display.target.managed(),
+            }),
         );
         viewport::install(rs);
         widgets::install_style(&cc.egui_ctx);
@@ -121,6 +133,7 @@ impl App {
         if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
             preferences.preview_quality = preferences::PreviewMode::Smart;
         }
+        viewport::set_gamut(rs, preferences.display_gamut);
         let folder = preferences.startup_folder(path);
         let batch_engine = engine.executor();
         let worker = worker::Worker::new(engine, cc.egui_ctx.clone());
@@ -128,7 +141,11 @@ impl App {
             import_review::Review::new(batch_engine, worker.cache.clone(), cc.egui_ctx.clone());
         let previews =
             previews::Previews::new(rs.clone(), cc.egui_ctx.clone(), worker.cache.clone());
-        let browser = browser::Browser::with_cache(cc.egui_ctx.clone(), Some(worker.cache.clone()));
+        let browser = browser::Browser::with_cache(
+            cc.egui_ctx.clone(),
+            Some(worker.cache.clone()),
+            rs.clone(),
+        );
         let mut app = Self {
             import,
             settings_open: false,
@@ -165,6 +182,7 @@ impl App {
             status: "Open a folder of X3F photographs".into(),
             status_error: false,
             srgb_target: rs.target_format.is_srgb(),
+            display,
             render_state: rs.clone(),
             smoke: smoke::Smoke::from_env(),
             last_frame: None,
@@ -955,6 +973,10 @@ impl eframe::App for App {
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Err(error) = self.display.refresh(frame) {
+            self.status = format!("Display color management: {error}");
+            self.status_error = true;
+        }
         let began = std::time::Instant::now();
         if timing::enabled() {
             let gap = self
@@ -1022,12 +1044,18 @@ impl eframe::App for App {
         let previous_settings = self.settings.clone();
         let previous_selection = self.selected.clone();
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui));
+        let previous_gamut = self.preferences.display_gamut;
         application_settings::show(
             ctx,
             &mut self.settings_open,
             &mut self.preferences.decode_cache,
             &self.worker.cache,
+            &mut self.preferences.display_gamut,
+            self.display.target.managed(),
         );
+        if previous_gamut != self.preferences.display_gamut {
+            viewport::set_gamut(&self.render_state, self.preferences.display_gamut);
+        }
         let mut select = None;
         let screenshot = smoke::screenshot_active().then(smoke::screenshot_recipe);
         let organizer_minimum = browser::minimum_panel_width(&ctx.style());
@@ -1156,10 +1184,10 @@ fn main() -> eframe::Result {
                 [1440., 1000.]
             })
             .with_min_inner_size([1000., 600.]),
-        wgpu_options: egui_wgpu::WgpuConfiguration {
+        wgpu_options: display::configure(egui_wgpu::WgpuConfiguration {
             wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
             ..Default::default()
-        },
+        }),
         ..Default::default()
     };
     eframe::run_native(

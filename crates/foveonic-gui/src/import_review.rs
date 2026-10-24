@@ -237,7 +237,7 @@ mod tests {
     use super::*;
     #[test]
     fn stale_scan_replays_completions_without_erasing_later_picks_or_hidden_choices() {
-        let mut browser = Browser::with_cache(egui::Context::default(), None);
+        let mut browser = Browser::new(egui::Context::default());
         browser.import_mode = true;
         let path = PathBuf::from("card/image.x3f");
         browser.files = vec![path.clone()];

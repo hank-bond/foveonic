@@ -22,7 +22,8 @@ impl Fixture {
     }
     fn write(&self, rendered: bool, color: [u8; 3]) -> PendingPreview {
         let preview = Preview {
-            rgb: color.repeat(16 * 8),
+            color_space: crate::color_space::TiffColorSpace::AdobeRgb,
+            rgb: color.map(|v| u16::from(v) * 257).repeat(16 * 8),
             extent: [16, 8],
             native_extent: [6000, 3000],
             rotation: 90,
@@ -35,6 +36,7 @@ impl Fixture {
                 extent: preview.extent,
                 native_extent: preview.native_extent,
                 rotation: preview.rotation,
+                color_space: preview.color_space,
                 rendered,
                 checksum: 0,
             },
@@ -45,6 +47,27 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn preview_storage_retains_sixteen_bit_samples_and_each_declared_gamut() {
+    let fixture = Fixture::new();
+    let cache = Cache::at(fixture.root.join("cache"));
+    cache.control.lock().unwrap().settings = Settings::default();
+    for space in crate::color_space::TiffColorSpace::ALL {
+        let mut write = fixture.write(true, [0; 3]);
+        write.preview.rgb = (0..16 * 8 * 3).map(|v| (v * 131) as u16).collect();
+        write.preview.color_space = space;
+        write.header.color_space = space;
+        let expected = write.preview.clone();
+        write_checked(cache.directory(), write, &Settings::default(), &[], &|| {
+            true
+        })
+        .unwrap();
+        let actual = cache.preview(&fixture.source).unwrap();
+        assert_eq!(actual.rgb, expected.rgb);
+        assert_eq!(actual.color_space, space);
     }
 }
 
@@ -66,12 +89,10 @@ fn preview_reuses_only_the_same_source_and_recipe_and_obeys_policy() {
     assert_eq!(preview.extent, [16, 8]);
     assert_eq!(preview.native_extent, [6000, 3000]);
     assert_eq!(preview.rotation, 90);
-    assert!(preview
-        .rgb
-        .as_chunks::<3>()
-        .0
+    assert!(preview.rgb.as_chunks::<3>().0.iter().all(|p| p
         .iter()
-        .all(|p| p.iter().zip([20, 80, 140]).all(|(a, b)| a.abs_diff(b) <= 3)));
+        .zip([20 * 257, 80 * 257, 140 * 257])
+        .all(|(a, b)| a.abs_diff(b) == 0)));
     cache.control.lock().unwrap().settings.quattro = false;
     assert!(cache.preview(&fixture.source).is_none());
     cache.control.lock().unwrap().settings.quattro = true;
@@ -250,9 +271,9 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
             .iter()
             .all(|p| p
                 .iter()
-                .zip([80, 120, 160])
+                .zip([80 * 257, 120 * 257, 160 * 257])
                 .all(|(a, b)| a.abs_diff(b) <= 2)),
-        "rendered sRGB previews must not receive the source's Adobe RGB conversion again"
+        "rendered previews must retain their own declaration without another camera conversion"
     );
     let destination = Key::read(&fixture.source)
         .unwrap()

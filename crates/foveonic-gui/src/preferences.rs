@@ -1,9 +1,45 @@
-//! Persists workspace, cache and per-mode processing preferences separately from image edits.
+//! Persists workspace, display, cache and per-mode processing preferences separately from image edits.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub const APP_ID: &str = "foveonic";
 const STORAGE_KEY: &str = "ui.preferences";
+
+/// Application display limits. The window always remains host color managed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisplayGamut {
+    #[default]
+    Monitor,
+    AdobeRgb,
+    Srgb,
+    #[serde(rename = "prophoto-rgb")]
+    ProPhotoRgb,
+}
+impl DisplayGamut {
+    pub const ALL: [Self; 4] = [Self::Monitor, Self::Srgb, Self::AdobeRgb, Self::ProPhotoRgb];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Monitor => "Monitor",
+            Self::AdobeRgb => "Adobe RGB",
+            Self::Srgb => "sRGB",
+            Self::ProPhotoRgb => "ProPhoto RGB (ROMM)",
+        }
+    }
+    pub fn transform(self) -> eframe::egui_wgpu::ColorTransform {
+        use foveonic::color_space::{ColorSpace, TiffColorSpace};
+        let destination = match self {
+            Self::Monitor => return Default::default(),
+            Self::AdobeRgb => TiffColorSpace::AdobeRgb,
+            Self::Srgb => TiffColorSpace::Srgb,
+            Self::ProPhotoRgb => TiffColorSpace::ProPhotoRgb,
+        };
+        eframe::egui_wgpu::ColorTransform::new(
+            destination.transform(ColorSpace::Srgb),
+            TiffColorSpace::Srgb.transform(destination.into()),
+        )
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Organizer {
@@ -94,6 +130,7 @@ pub struct Preferences {
     pub zoom_snap: ZoomPreset,
     pub preview_quality: PreviewMode,
     pub decode_cache: foveonic::decode_cache::Settings,
+    pub display_gamut: crate::preferences::DisplayGamut,
     pub sections: Vec<Section>,
     pub collapsed: BTreeSet<Section>,
 }
@@ -111,6 +148,7 @@ impl Default for Preferences {
             zoom_snap: ZoomPreset::default(),
             preview_quality: PreviewMode::Full,
             decode_cache: Default::default(),
+            display_gamut: Default::default(),
             sections: Section::ALL.to_vec(),
             collapsed: BTreeSet::new(),
         }
@@ -202,6 +240,25 @@ mod tests {
             self.0.insert(k.into(), v);
         }
         fn flush(&mut self) {}
+    }
+    #[test]
+    fn display_gamut_defaults_for_existing_preferences_and_survives_restart() {
+        let mut store = Storage::default();
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(scope:Histogram)".into());
+        assert_eq!(
+            Preferences::load(Some(&store)).display_gamut,
+            crate::preferences::DisplayGamut::Monitor
+        );
+        for gamut in crate::preferences::DisplayGamut::ALL {
+            let prefs = Preferences {
+                display_gamut: gamut,
+                ..Default::default()
+            };
+            prefs.save(&mut store);
+            assert_eq!(Preferences::load(Some(&store)).display_gamut, gamut);
+        }
     }
     #[test]
     fn last_folder_survives_restart_and_explicit_launch_wins() {

@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["crates/docs-index", "crates/foveonic", "crates/foveonic-gui", "crates/xtask"]
+exclude = ["vendor/egui-wgpu"]
+
+[patch.crates-io]
+egui-wgpu = { path = "vendor/egui-wgpu" }
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"

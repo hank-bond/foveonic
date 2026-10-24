@@ -1,5 +1,9 @@
 // Present the selected image using its display mapping.
-struct Params { rect: vec4<f32>, options: vec4<f32> }
+// The native surface tag must match this extended, gamma-encoded output.
+override EXTENDED_DISPLAY: bool = false;
+// Small native textures retain linear light for egui texture interpolation.
+override LINEAR_OUTPUT: bool = false;
+struct Params { rect: vec4<f32>, options: vec4<f32>, primaries: array<vec4<f32>, 3>, color_transform: ColorTransform }
 @group(0) @binding(0) var image: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var input_image: texture_2d<f32>;
@@ -22,22 +26,26 @@ fn sample_at(uv: vec2<f32>) -> vec3<f32> {
     return mix(mix(fetch(base), fetch(base + vec2(1,0)), f.x), mix(fetch(base + vec2(0,1)), fetch(base + vec2(1,1)), f.x), f.y);
 }
 fn encode(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(v, vec3(1./2.4)) - 0.055, v * 12.92, v <= vec3(0.0031308)); }
+fn encode_extended(v: vec3<f32>) -> vec3<f32> { return sign(v) * encode(abs(v)); }
 @fragment fn fs(v: Vertex) -> @location(0) vec4<f32> {
     let uv = (v.uv - params.rect.xy) / params.rect.zw;
     if any(uv < vec2(0.)) || any(uv > vec2(1.)) { return vec4(select(vec3(0.055), vec3(0.0044), params.options.w > 0.), 1.); }
     var rgb = sample_at(uv);
+    // Bound SDR in the image's own primaries before converting it. The converted
+    // components can be negative or above one without representing HDR white.
+    if EXTENDED_DISPLAY && params.options.z >= 0. { rgb = clamp(rgb * params.options.y, vec3(0.), vec3(1.)); }
     let channel = i32(params.options.x);
     if channel >= 0 { rgb = vec3(rgb[channel]); }
-    // ROMM to sRGB uses the D50-adapted colorants of the embedded ICC profiles.
-    else if params.options.z > 1.5 { rgb = vec3(dot(vec3(2.0342010513, -0.7274670643, -0.3067339870), rgb), dot(vec3(-0.2286419318, 1.2316059151, -0.0029639833), rgb), dot(vec3(-0.0085179360, -0.1532819171, 1.1617998530), rgb)); }
-    else if params.options.z > 0. { rgb = vec3(1.39835574 * rgb.r - 0.39835574 * rgb.g, rgb.g, 1.04292899 * rgb.b - 0.04292899 * rgb.g); }
-    rgb *= params.options.y;
+    else if params.options.z >= 0. { rgb = apply_color_matrix(rgb, params.primaries); }
+    if !EXTENDED_DISPLAY || params.options.z < 0. { rgb *= params.options.y; }
     if params.options.z < -1.5 { rgb += 0.5; }
-    rgb = clamp(rgb, vec3(0.), vec3(1.));
+    if params.options.z >= 0. { rgb = map_display_color(rgb, params.color_transform); }
+    if !EXTENDED_DISPLAY || params.options.z < 0. { rgb = clamp(rgb, vec3(0.), vec3(1.)); }
     if params.options.z < 0. {
         // Coverage is a mask, not a color value. A color transfer would distort
         // how much of the neighborhood is marked.
         if params.options.w > 0. { rgb = select(pow((rgb + 0.055) / 1.055, vec3(2.4)), rgb / 12.92, rgb <= vec3(0.04045)); }
-    } else if params.options.w == 0. { rgb = encode(rgb); }
+    } else if EXTENDED_DISPLAY && !LINEAR_OUTPUT { rgb = encode_extended(rgb); }
+    else if !EXTENDED_DISPLAY && params.options.w == 0. { rgb = encode(rgb); }
     return vec4(rgb, 1.);
 }

@@ -23,13 +23,15 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 ### Source files
 
 - **[advanced.rs](./advanced.rs)** Displays advanced reconstruction controls with automatic ColorDQ and preset-linked parameter overrides.
-- **[application_settings.rs](./application_settings.rs)** Configures temporary source and preview disk reuse independently of photographic edits.
+- **[application_settings.rs](./application_settings.rs)** Configures application display and temporary disk reuse independently of photographic edits.
 - **[batch.rs](./batch.rs)** Runs frozen import jobs independently of review while yielding work to interactive rendering.
 - **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
 - **[browser_folders.rs](./browser_folders.rs)** Discovers descendant X3Fs and lays out folder groups for virtualized browsing.
 - **[browser_review.rs](./browser_review.rs)** Handles browser highlighting, import checkboxes, and shared hidden-photo visibility.
 - **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
+- **[display.rs](./display.rs)** Declares the window's display encoding and tags its native Metal layer for host color matching.
+- **[display_image.rs](./display_image.rs)** Uploads bounded linear-light photographic previews without clipping them to sRGB.
 - **[export.rs](./export.rs)** Shares camera-choice resolution and Full TIFF/DNG exports between interactive and batch workers.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
 - **[help_examples.rs](./help_examples.rs)** Presents embedded photographic comparisons through one image-switching popover template.
@@ -41,7 +43,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
 - **[mixer.rs](./mixer.rs)** Edits three-channel proportions with a triangular barycentric monochrome mixer.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
-- **[preferences.rs](./preferences.rs)** Persists workspace, cache and per-mode processing preferences separately from image edits.
+- **[preferences.rs](./preferences.rs)** Persists workspace, display, cache and per-mode processing preferences separately from image edits.
 - **[preview_image.rs](./preview_image.rs)** Prepares oriented display thumbnails and larger previews away from the UI thread.
 - **[previews.rs](./previews.rs)** Refreshes browser previews from complete photographic frames after foreground work yields.
 - **[processing.rs](./processing.rs)** Remembers per-mode output choices and edits them independently of photographic recipes.

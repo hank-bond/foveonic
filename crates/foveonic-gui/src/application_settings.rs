@@ -1,4 +1,4 @@
-//! Configures temporary source and preview disk reuse independently of photographic edits.
+//! Configures application display and temporary disk reuse independently of photographic edits.
 
 use crate::widgets;
 use eframe::egui;
@@ -9,9 +9,17 @@ const CACHE_BUDGET_GB: std::ops::RangeInclusive<f64> = 0.1..=1000.;
 const BUDGET_DRAG_STEP_GB: f64 = 0.5;
 const STATUS_REFRESH: std::time::Duration = std::time::Duration::from_millis(250);
 const WINDOW_WIDTH: f32 = 360.;
-const WINDOW_CENTER_OFFSET: egui::Vec2 = egui::vec2(190., 150.);
+const DISPLAY_GAMUT_WIDTH: f32 = 180.;
+const WINDOW_CENTER_OFFSET: egui::Vec2 = egui::vec2(190., 240.);
 
-pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings, cache: &Cache) {
+pub fn show(
+    ctx: &egui::Context,
+    open: &mut bool,
+    settings: &mut Settings,
+    cache: &Cache,
+    gamut: &mut crate::preferences::DisplayGamut,
+    managed: bool,
+) {
     let before = settings.clone();
     egui::Window::new("Settings")
         .open(open)
@@ -19,6 +27,22 @@ pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings, cache
         .default_width(WINDOW_WIDTH)
         .default_pos(ctx.available_rect().center() - WINDOW_CENTER_OFFSET)
         .show(ctx, |ui| {
+            ui.heading("Display");
+            ui.horizontal(|ui| {
+                ui.label("Gamut");
+                let combo = egui::ComboBox::from_id_salt("display-gamut")
+                    .width(DISPLAY_GAMUT_WIDTH).selected_text(gamut.label());
+                widgets::dropdown(ui, combo, |ui| {
+                    for option in crate::preferences::DisplayGamut::ALL {
+                        ui.selectable_value(gamut, option, option.label());
+                    }
+                });
+            });
+            ui.weak("Monitor uses the display's active color profile.");
+            ui.weak("The other choices limit photo colors before display.")
+                .on_hover_text("Applies to the viewport, navigator and browser previews. Saved edits and TIFF/DNG output are unchanged.");
+            if !managed { ui.weak("This window uses the sRGB display fallback."); }
+            ui.separator();
             ui.heading("Image cache");
             widgets::checkbox(ui, &mut settings.enabled, "Enable disk cache");
             ui.add_enabled_ui(settings.enabled, |ui| {

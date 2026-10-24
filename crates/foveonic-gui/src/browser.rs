@@ -76,7 +76,7 @@ struct Reply {
 
 #[derive(Clone)]
 pub struct Thumbnail {
-    pub texture: egui::TextureHandle,
+    pub texture: crate::display_image::Texture,
     /// Oriented full-size presentation dimensions, independent of the thumbnail's resolution.
     pub native_extent: [u32; 2],
 }
@@ -102,6 +102,7 @@ impl Mark {
     }
 }
 pub struct Browser {
+    render_state: Option<eframe::egui_wgpu::RenderState>,
     pub files: Vec<PathBuf>,
     pub root: Option<PathBuf>,
     pub import_mode: bool,
@@ -136,11 +137,19 @@ pub struct Browser {
 impl Browser {
     #[cfg(test)]
     pub fn new(context: egui::Context) -> Self {
-        Self::with_cache(context, None)
+        Self::start(context, None, None)
     }
     pub fn with_cache(
         context: egui::Context,
         cache: Option<Arc<foveonic::decode_cache::Cache>>,
+        render_state: eframe::egui_wgpu::RenderState,
+    ) -> Self {
+        Self::start(context, cache, Some(render_state))
+    }
+    fn start(
+        context: egui::Context,
+        cache: Option<Arc<foveonic::decode_cache::Cache>>,
+        render_state: Option<eframe::egui_wgpu::RenderState>,
     ) -> Self {
         let (sender, requests) = mpsc::sync_channel::<Request>(REQUEST_CAPACITY);
         let (ready, receiver) = mpsc::sync_channel(REPLY_CAPACITY);
@@ -206,6 +215,7 @@ impl Browser {
             }
         });
         Self {
+            render_state,
             files: Vec::new(),
             root: None,
             import_mode: false,
@@ -306,14 +316,27 @@ impl Browser {
             }
         }
     }
+    fn upload(
+        &self,
+        _ctx: &egui::Context,
+        pixels: crate::display_image::Pixels,
+    ) -> crate::display_image::Texture {
+        if let Some(rs) = &self.render_state {
+            return pixels.upload(rs);
+        }
+        #[cfg(test)]
+        {
+            pixels.headless(_ctx)
+        }
+        #[cfg(not(test))]
+        {
+            unreachable!("browser requires the shared display device")
+        }
+    }
     fn insert(&mut self, ctx: &egui::Context, path: PathBuf, image: PreparedPreview) {
         let native_extent = image.thumbnail.native_extent;
         let thumbnail = Thumbnail {
-            texture: ctx.load_texture(
-                path.to_string_lossy(),
-                image.thumbnail.image,
-                egui::TextureOptions::LINEAR,
-            ),
+            texture: self.upload(ctx, image.thumbnail.image),
             native_extent,
         };
         self.cache.insert(path.clone(), Some(thumbnail));
@@ -328,11 +351,7 @@ impl Browser {
             self.previews.insert(
                 path.clone(),
                 Thumbnail {
-                    texture: ctx.load_texture(
-                        format!("{} preview", path.display()),
-                        preview,
-                        egui::TextureOptions::LINEAR,
-                    ),
+                    texture: self.upload(ctx, preview),
                     native_extent,
                 },
             );
@@ -778,7 +797,10 @@ mod tests {
     fn prepared(color: [u8; 3], extent: [u32; 2]) -> super::PreparedPreview {
         super::PreparedPreview::new(
             foveonic::preview::Preview {
-                rgb: color.repeat((extent[0] * extent[1]) as usize),
+                color_space: foveonic::color_space::TiffColorSpace::Srgb,
+                rgb: color
+                    .map(|v| u16::from(v) * 257)
+                    .repeat((extent[0] * extent[1]) as usize),
                 extent,
                 rotation: 0,
                 native_extent: [6000, 3000],

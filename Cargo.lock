@@ -889,14 +889,13 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.31.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d319dfef570f699b6e9114e235e862a2ddcf75f0d1a061de9e1328d92146d820"
 dependencies = [
  "ahash",
  "bytemuck",
  "document-features",
  "egui",
  "epaint",
+ "half",
  "log",
  "profiling",
  "thiserror 1.0.69",
@@ -1147,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytemuck",
  "crc32fast",
@@ -1164,13 +1163,18 @@ dependencies = [
 
 [[package]]
 name = "foveonic-gui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytemuck",
  "eframe",
  "foveonic",
+ "half",
  "image",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "pollster",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",

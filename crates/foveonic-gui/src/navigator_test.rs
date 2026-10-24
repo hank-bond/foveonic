@@ -2,6 +2,9 @@
 
 use super::*;
 pub(crate) fn state() -> egui_wgpu::RenderState {
+    state_for(wgpu::TextureFormat::Rgba8UnormSrgb)
+}
+pub(crate) fn state_for(format: wgpu::TextureFormat) -> egui_wgpu::RenderState {
     let instance = wgpu::Instance::default();
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -16,7 +19,6 @@ pub(crate) fn state() -> egui_wgpu::RenderState {
         None,
     ))
     .unwrap();
-    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
     let rs = egui_wgpu::RenderState {
         available_adapters: vec![adapter.clone()],
@@ -63,7 +65,7 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
     let target = texture(
         &rs,
         [4, 4],
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba16Float,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
     );
     for (space, value, channel, expected) in [
@@ -148,20 +150,25 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
         rx.recv().unwrap().unwrap();
         let bytes = buffer.slice(..).get_mapped_range();
         for c in 0..3 {
+            let linear = half::f16::from_le_bytes([bytes[c * 2], bytes[c * 2 + 1]]).to_f32();
+            let encoded = (foveonic::preview::encode_sample(
+                foveonic::color_space::TiffColorSpace::Srgb,
+                linear,
+            ) / 257) as u8;
             assert!(
-                (i32::from(bytes[c]) - i32::from(expected)).abs() <= 1,
+                (i32::from(encoded) - i32::from(expected)).abs() <= 1,
                 "{space:?} {channel} {c}: {}",
                 bytes[c]
             );
         }
-        assert_eq!(bytes[3], 255);
+        assert_eq!(half::f16::from_le_bytes([bytes[6], bytes[7]]).to_f32(), 1.);
         drop(bytes);
         buffer.unmap();
     }
     let target = texture(
         &rs,
         [512, 341],
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba16Float,
         wgpu::TextureUsages::RENDER_ATTACHMENT,
     );
     viewport::prepare_preview(

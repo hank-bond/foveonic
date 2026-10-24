@@ -15,9 +15,9 @@ use std::{
 const PREVIEW_SIDE: u32 = foveonic::decode_cache::PREVIEW_MAX_SIDE;
 // Let the main image reach the screen before preparing browser feedback.
 const PRESENT_FIRST: Duration = Duration::from_millis(16);
-// Readback uses an RGBA8 target and publishes tightly packed RGB8.
-const RGBA_BYTES: u32 = 4;
-const RGB_BYTES: usize = 3;
+// Read back linear RGBA16Float before encoding a monitor-independent RGB16 asset.
+const RGBA_BYTES: u32 = size_of::<[u16; 4]>() as u32;
+const RGB_CHANNELS: usize = 3;
 // Bound completed CPU display pixels while the UI consumes its previous reply.
 const READY_CAPACITY: usize = 1;
 
@@ -78,6 +78,7 @@ impl Previews {
                 let prepared = PreparedPreview::new(
                     Preview {
                         rgb: preview.rgb.clone(),
+                        color_space: preview.color_space,
                         extent: preview.extent,
                         rotation: 0,
                         native_extent: job.native_extent,
@@ -191,7 +192,7 @@ fn downsample_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba16Float,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
@@ -238,15 +239,25 @@ fn downsample_texture(
     rx.recv()
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
+    let color_space = foveonic::color_space::TiffColorSpace::ProPhotoRgb;
+    let matrix = color_space.transform(foveonic::image::ColorSpace::Srgb);
     let rgb = {
         let bytes = buffer.slice(..).get_mapped_range();
-        let mut rgb = Vec::with_capacity(size[0] as usize * size[1] as usize * RGB_BYTES);
+        let mut rgb = Vec::with_capacity(size[0] as usize * size[1] as usize * RGB_CHANNELS);
         for row in bytes.chunks_exact(row as usize) {
             for pixel in row[..size[0] as usize * RGBA_BYTES as usize]
                 .as_chunks::<{ RGBA_BYTES as usize }>()
                 .0
             {
-                rgb.extend_from_slice(&pixel[..RGB_BYTES]);
+                let linear: [f32; 3] = std::array::from_fn(|c| {
+                    half::f16::from_le_bytes([pixel[c * 2], pixel[c * 2 + 1]]).to_f32()
+                });
+                rgb.extend((0..RGB_CHANNELS).map(|r| {
+                    foveonic::preview::encode_sample(
+                        color_space,
+                        (0..RGB_CHANNELS).map(|c| matrix[r][c] * linear[c]).sum(),
+                    )
+                }));
             }
         }
         rgb
@@ -254,6 +265,7 @@ fn downsample_texture(
     buffer.unmap();
     Ok(Preview {
         rgb,
+        color_space,
         extent: size,
         rotation: 0,
         native_extent: extent,
@@ -265,7 +277,36 @@ mod tests {
     use super::*;
     #[test]
     #[ignore = "requires a GPU"]
-    fn display_readback_converts_to_srgb_and_removes_row_padding() {
+    fn cached_preview_keeps_wide_colors_while_srgb_viewing_is_selected() {
+        use foveonic::image::{ColorSpace, Space};
+        let rs = crate::navigator::gpu_tests::state();
+        crate::viewport::set_gamut(&rs, crate::preferences::DisplayGamut::Srgb);
+        let source = crate::navigator::gpu_tests::texture(
+            &rs,
+            [1, 1],
+            wgpu::TextureFormat::Rgba32Float,
+            wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        rs.queue.write_texture(
+            source.as_image_copy(),
+            bytemuck::cast_slice(&[0_f32, 1., 0., 1.]),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(16),
+                rows_per_image: None,
+            },
+            source.size(),
+        );
+        let preview =
+            downsample_texture(&rs, &source, Space::ToneMappedRgb(ColorSpace::AdobeRgb)).unwrap();
+        let prepared = crate::preview_image::PreparedPreview::new(preview, true).unwrap();
+        let pixel = prepared.preview.unwrap().rgba[0];
+        assert!(half::f16::from_bits(pixel[0]).to_f32() < -0.3);
+        assert!(half::f16::from_bits(pixel[2]).to_f32() < -0.02);
+    }
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn display_readback_preserves_color_and_removes_row_padding() {
         use foveonic::image::{ColorSpace, Space};
         let rs = crate::navigator::gpu_tests::state();
         let source = crate::navigator::gpu_tests::texture(
@@ -297,15 +338,25 @@ mod tests {
             downsample_texture(&rs, &source, Space::ToneMappedRgb(ColorSpace::Srgb)).unwrap();
         assert_eq!(preview.extent, [4, 2]);
         assert_eq!(preview.rgb.len(), 4 * 2 * 3);
-        for (row, expected) in preview
-            .rgb
+        let linear = preview.linear_image().unwrap();
+        let matrix =
+            foveonic::color_space::TiffColorSpace::Srgb.transform(preview.color_space.into());
+        for (row, expected) in linear
+            .as_raw()
             .as_chunks::<12>()
             .0
             .iter()
-            .zip([[0, 188, 255], [255, 188, 0]])
+            .zip([[0., 0.5, 1.], [1., 0.5, 0.]])
         {
             for pixel in row.as_chunks::<3>().0 {
-                assert_eq!(pixel, &expected);
+                for c in 0..3 {
+                    let actual: f32 = (0..3).map(|i| matrix[c][i] * pixel[i]).sum();
+                    assert!(
+                        (actual - expected[c]).abs() < 0.002,
+                        "{actual} != {}",
+                        expected[c]
+                    );
+                }
             }
         }
     }

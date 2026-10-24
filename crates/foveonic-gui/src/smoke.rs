@@ -31,6 +31,17 @@ const SMART_TARGETS: &[&str] = &[
     "cache-reopen",
 ];
 
+const DISPLAY_COLOR_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "gamut-monitor",
+    "gamut-adobe",
+    "gamut-srgb",
+    "gamut-romm",
+    "gamut-monitor-again",
+    "gamut-settings",
+];
+
 const SCREENSHOT_TARGETS: &[&str] = &["preview", "readme"];
 const IMPORT_WIDE_BROWSER_WIDTH: f32 = 600.;
 const IMPORT_TARGETS: &[&str] = &[
@@ -209,12 +220,15 @@ pub struct Smoke {
     settled_frames: u8,
     fast_region: Option<crate::viewport::PixelRegion>,
     smart_full_revision: Option<u64>,
+    display_revision: Option<u64>,
 }
 impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_IMPORT").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_DISPLAY").is_some() {
+                DISPLAY_COLOR_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_IMPORT").is_some() {
                 IMPORT_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
                 SMART_TARGETS
@@ -247,6 +261,7 @@ impl Smoke {
             settled_frames: 0,
             fast_region: None,
             smart_full_revision: None,
+            display_revision: None,
         })
     }
     /// Hold processing replies until the embedded preview has been captured.
@@ -513,6 +528,25 @@ impl App {
                 )
                 .unwrap();
             }
+            if smoke.targets == DISPLAY_COLOR_TARGETS && !smoke.preview_pending() {
+                let frame = self.frame.as_ref().unwrap();
+                let revision = *smoke.display_revision.get_or_insert(frame.revision);
+                assert_eq!(
+                    frame.revision, revision,
+                    "display choice submitted photographic work"
+                );
+                assert!(!self.busy);
+                let report = serde_json::json!({"gamut":self.preferences.display_gamut,
+                    "image_revision":revision,"thumbnail_revision":self.browser.rendered_revision(&frame.path),
+                    "format":format!("{:?}",self.render_state.target_format)});
+                std::fs::write(
+                    smoke
+                        .directory
+                        .join(format!("{}.json", smoke.targets[smoke.index])),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                )
+                .unwrap();
+            }
             smoke.index += 1;
             smoke.awaiting = false;
             if smoke.index == smoke.targets.len() {
@@ -539,6 +573,20 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "gamut-monitor"
+                | "gamut-monitor-again"
+                | "gamut-adobe"
+                | "gamut-srgb"
+                | "gamut-romm" => {
+                    self.preferences.display_gamut = match smoke.targets[smoke.index] {
+                        "gamut-adobe" => crate::preferences::DisplayGamut::AdobeRgb,
+                        "gamut-srgb" => crate::preferences::DisplayGamut::Srgb,
+                        "gamut-romm" => crate::preferences::DisplayGamut::ProPhotoRgb,
+                        _ => crate::preferences::DisplayGamut::Monitor,
+                    };
+                    crate::viewport::set_gamut(&self.render_state, self.preferences.display_gamut);
+                }
+                "gamut-settings" => self.settings_open = true,
                 "browse-settings" => {
                     let destination = smoke.directory.join("processed");
                     std::fs::create_dir_all(&destination).unwrap();
@@ -910,6 +958,12 @@ impl App {
                             .any(|p| Some(p) != self.selected.as_ref()),
                         _ => true,
                     });
+            let ready = ready
+                && (smoke.targets != DISPLAY_COLOR_TARGETS
+                    || smoke.preview_pending()
+                    || self.frame.as_ref().is_some_and(|frame| {
+                        self.browser.rendered_revision(&frame.path) == Some(frame.revision)
+                    }));
             if ready {
                 if smoke.targets == SMART_TARGETS && smoke.targets[smoke.index] == "cache-settings"
                 {

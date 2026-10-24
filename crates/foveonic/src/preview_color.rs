@@ -1,4 +1,4 @@
-//! Normalizes embedded display pixels from camera metadata and JPEG profiles to sRGB.
+//! Preserves embedded display colors from camera metadata and JPEG profiles in declared RGB16 spaces.
 
 use crate::{color_space::ColorSpace, source::Result};
 use image::ImageDecoder;
@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, sync::Arc};
 // Keep cancellation responsive and temporary transform storage small.
 const TRANSFORM_PIXELS: usize = 4096;
 const RGB_CHANNELS: usize = 3;
+const RGB8_TO_RGB16: u16 = u16::MAX / u8::MAX as u16;
 
 #[derive(Clone)]
 pub(super) enum Encoding {
@@ -49,17 +50,24 @@ impl Encoding {
         fallback
     }
 
-    /// Color management is part of decoding small display assets. RAW processing
-    /// stays on the GPU, and already-normalized rendered previews bypass this path.
-    pub fn to_srgb(&self, rgb: &mut [u8]) -> Result<()> {
-        let (profile, fallback) = match self {
-            Self::Srgb => return Ok(()),
-            Self::AdobeRgb => (Arc::new(ColorProfile::new_adobe_rgb()), None),
-            Self::Profile { profile, fallback } => (profile.clone(), Some(fallback)),
+    /// Retain known camera primaries. Optional ICC profiles normalize into
+    /// wide ROMM RGB16 rather than clipping their colors to sRGB.
+    pub fn decode(&self, rgb: &[u8]) -> Result<(Vec<u16>, crate::color_space::TiffColorSpace)> {
+        use crate::color_space::TiffColorSpace;
+        let samples = || {
+            rgb.iter()
+                .map(|v| u16::from(*v) * RGB8_TO_RGB16)
+                .collect::<Vec<_>>()
         };
-        let transform = match profile.create_transform_8bit(
+        let (profile, fallback) = match self {
+            Self::Srgb => return Ok((samples(), TiffColorSpace::Srgb)),
+            Self::AdobeRgb => return Ok((samples(), TiffColorSpace::AdobeRgb)),
+            Self::Profile { profile, fallback } => (profile, fallback),
+        };
+        let destination = ColorProfile::new_from_slice(TiffColorSpace::ProPhotoRgb.profile())?;
+        let transform = match profile.create_transform_16bit(
             Layout::Rgb,
-            &ColorProfile::new_srgb(),
+            &destination,
             Layout::Rgb,
             TransformOptions {
                 rendering_intent: moxcms::RenderingIntent::RelativeColorimetric,
@@ -67,22 +75,19 @@ impl Encoding {
             },
         ) {
             Ok(transform) => transform,
-            // Parsing can succeed even when a profile lacks data required for
-            // an RGB transform. Optional profiles must not hide a usable preview.
-            Err(error) => {
-                return match fallback {
-                    Some(encoding) => encoding.to_srgb(rgb),
-                    None => Err(error.into()),
-                }
-            }
+            // A parsed optional profile can still lack a usable RGB transform.
+            // Fall back before changing any samples.
+            Err(_) => return fallback.decode(rgb),
         };
-        let mut converted = vec![0; TRANSFORM_PIXELS * RGB_CHANNELS];
-        for chunk in rgb.chunks_mut(converted.len()) {
+        let input = samples();
+        let mut converted = vec![0; input.len()];
+        for (chunk, output) in input
+            .chunks(TRANSFORM_PIXELS * RGB_CHANNELS)
+            .zip(converted.chunks_mut(TRANSFORM_PIXELS * RGB_CHANNELS))
+        {
             crate::background::checkpoint_or_cancel()?;
-            let output = &mut converted[..chunk.len()];
             transform.transform(chunk, output)?;
-            chunk.copy_from_slice(output);
         }
-        Ok(())
+        Ok((converted, TiffColorSpace::ProPhotoRgb))
     }
 }

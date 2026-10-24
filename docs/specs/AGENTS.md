@@ -20,6 +20,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[decode-cache](./decode-cache.md)** _(accepted, conforming, reference)._ A bounded temporary disk LRU reuses decoded sources, originals, selection metadata and previews with per-family workspace controls.
 - **[despeckle](./despeckle.md)** _(accepted, conforming, reference)._ Full-image GPU despeckling detects channel extrema and corrects them in deterministic reference order, independently of camera-record repair.
 - **[detail-and-noise](./detail-and-noise.md)** _(accepted, conforming, reference)._ Reference-style GPU noise filtering and detail reconstruction provide an inspectable photographic baseline.
+- **[display-color-management](./display-color-management.md)** _(accepted, incomplete, reference)._ Display colors follow each image's declared encoding and the host monitor's active profile.
 - **[editing-sidecars](./editing-sidecars.md)** _(accepted, conforming, reference)._ Original X3Fs and editing recipes in a visible source-folder subdirectory are authoritative.
 - **[family-controls](./family-controls.md)** _(accepted, conforming, reference)._ Family-authored editing panels share widgets and use processing-owned capabilities and defaults.
 - **[gui-screenshot](./gui-screenshot.md)** _(accepted, conforming, reference)._ An explicit Cargo task refreshes a lossless WebP README screenshot using the shared local example-photograph cache.

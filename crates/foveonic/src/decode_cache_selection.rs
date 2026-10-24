@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, fs, path::Path, sync::atomic::Ordering};
 
 const THUMBNAIL_SIDE: u32 = 256;
 const MAX_SELECTION_BYTES: u64 = 4 * 1024 * 1024;
-// Version 2 stores embedded thumbnails normalized to display sRGB.
-const FORMAT_VERSION: u32 = 2;
+// Version 3 retains RGB16 samples and their declared primaries.
+const FORMAT_VERSION: u32 = 3;
 const CHECKSUM_BYTES: usize = size_of::<u32>();
 
 #[derive(Serialize, Deserialize)]
@@ -104,17 +104,7 @@ pub(super) fn read(root: &Path, identity: &Identity, settings: &Settings) -> Res
 }
 
 fn resize(preview: Preview, side: u32) -> Result<Preview> {
-    let image = image::RgbImage::from_raw(preview.extent[0], preview.extent[1], preview.rgb)
-        .ok_or("invalid embedded preview")?;
-    let image = image::DynamicImage::ImageRgb8(image)
-        .thumbnail(side, side)
-        .into_rgb8();
-    Ok(Preview {
-        extent: [image.width(), image.height()],
-        rgb: image.into_raw(),
-        rotation: preview.rotation,
-        native_extent: preview.native_extent,
-    })
+    preview.resized(side)
 }
 
 /// All image sections come from the buffer already used by the RAW decoder.

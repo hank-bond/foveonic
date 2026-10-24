@@ -40,6 +40,8 @@ impl Mapping {
 struct Params {
     rect: [f32; 4],
     options: [f32; 4],
+    primaries: [[f32; 4]; 3],
+    color_transform: egui_wgpu::ColorTransform,
 }
 
 impl Params {
@@ -91,6 +93,11 @@ impl Params {
                 image.width() / canvas.width(),
                 image.height() / canvas.height(),
             ],
+            primaries: foveonic::color_space::TiffColorSpace::Srgb.transform(match space {
+                Space::LinearRgb(space) | Space::ToneMappedRgb(space) => space,
+                _ => foveonic::image::ColorSpace::Srgb,
+            }),
+            color_transform: Default::default(),
             options: [
                 if sensor && channel < 0 {
                     0.
@@ -131,8 +138,28 @@ impl Params {
 struct Resources {
     pipeline: wgpu::RenderPipeline,
     navigator_pipeline: wgpu::RenderPipeline,
+    color_transform: egui_wgpu::ColorTransform,
     layout: wgpu::BindGroupLayout,
     binds: HashMap<&'static str, wgpu::BindGroup>,
+}
+
+pub(crate) fn shader_source() -> String {
+    format!(
+        "{}\n{}",
+        egui_wgpu::COLOR_TRANSFORM_SHADER,
+        include_str!("view.wgsl")
+    )
+}
+
+pub(crate) fn set_gamut(rs: &egui_wgpu::RenderState, gamut: crate::preferences::DisplayGamut) {
+    let mut renderer = rs.renderer.write();
+    let transform = gamut.transform();
+    renderer.set_color_transform(transform);
+    renderer
+        .callback_resources
+        .get_mut::<Resources>()
+        .unwrap()
+        .color_transform = transform;
 }
 
 pub fn install(rs: &egui_wgpu::RenderState) {
@@ -174,14 +201,14 @@ pub fn install(rs: &egui_wgpu::RenderState) {
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Image presentation"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("view.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(shader_source().into()),
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[&layout],
         push_constant_ranges: &[],
     });
-    let pipeline_for = |format| {
+    let pipeline_for = |format, linear_output| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Image presentation"),
             layout: Some(&pipeline_layout),
@@ -194,7 +221,20 @@ pub fn install(rs: &egui_wgpu::RenderState) {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &HashMap::from([
+                        (
+                            "EXTENDED_DISPLAY".into(),
+                            if format == wgpu::TextureFormat::Rgba16Float {
+                                1.
+                            } else {
+                                0.
+                            },
+                        ),
+                        ("LINEAR_OUTPUT".into(), f64::from(linear_output)),
+                    ]),
+                    ..Default::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
@@ -208,11 +248,12 @@ pub fn install(rs: &egui_wgpu::RenderState) {
             cache: None,
         })
     };
-    let pipeline = pipeline_for(rs.target_format);
-    let navigator_pipeline = pipeline_for(wgpu::TextureFormat::Rgba8UnormSrgb);
+    let pipeline = pipeline_for(rs.target_format, false);
+    let navigator_pipeline = pipeline_for(wgpu::TextureFormat::Rgba16Float, true);
     rs.renderer.write().callback_resources.insert(Resources {
         pipeline,
         navigator_pipeline,
+        color_transform: Default::default(),
         layout,
         binds: HashMap::new(),
     });
@@ -317,9 +358,11 @@ impl CallbackTrait for Draw {
         let _span = self.probe.prepare();
         use wgpu::util::DeviceExt;
         let r = resources.get_mut::<Resources>().unwrap();
+        let mut params = self.params;
+        params.color_transform = r.color_transform;
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("View parameters"),
-            contents: bytemuck::bytes_of(&self.params),
+            contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let view = self.texture.texture().create_view(&Default::default());
@@ -557,7 +600,7 @@ impl Viewport {
     pub fn show_preview(
         &mut self,
         ui: &mut egui::Ui,
-        texture: &egui::TextureHandle,
+        texture: impl Into<egui::load::SizedTexture>,
         native_extent: [u32; 2],
     ) {
         let (canvas, image) = self.layout(ui, native_extent);
@@ -566,7 +609,7 @@ impl Viewport {
             .with_clip_rect(canvas.intersect(ui.clip_rect()));
         painter.rect_filled(canvas, 0., egui::Color32::from_gray(14));
         painter.image(
-            texture.id(),
+            texture.into().id,
             image,
             egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
             egui::Color32::WHITE,
@@ -1037,11 +1080,13 @@ mod tests {
     fn navigator_pointer_click_drag_and_double_click_control_the_main_view() {
         let ctx = egui::Context::default();
         let preview = crate::browser::Thumbnail {
-            texture: ctx.load_texture(
-                "navigator fixture",
-                egui::ColorImage::new([2, 2], egui::Color32::WHITE),
-                Default::default(),
-            ),
+            texture: ctx
+                .load_texture(
+                    "navigator fixture",
+                    egui::ColorImage::new([2, 2], egui::Color32::WHITE),
+                    Default::default(),
+                )
+                .into(),
             native_extent: [900, 600],
         };
         let mut viewport = Viewport {

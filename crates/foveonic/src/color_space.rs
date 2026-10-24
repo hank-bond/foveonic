@@ -61,6 +61,16 @@ impl From<ColorSpace> for TiffColorSpace {
     }
 }
 
+impl From<TiffColorSpace> for ColorSpace {
+    fn from(space: TiffColorSpace) -> Self {
+        match space {
+            TiffColorSpace::Srgb => Self::Srgb,
+            TiffColorSpace::AdobeRgb => Self::AdobeRgb,
+            TiffColorSpace::ProPhotoRgb => Self::ProPhotoRgb,
+        }
+    }
+}
+
 impl From<TiffColorSpace> for TransferFunction {
     fn from(space: TiffColorSpace) -> Self {
         match space {
@@ -102,9 +112,9 @@ impl TiffColorSpace {
         .map(|v| f64::from(v) / 65536.)
     }
 
-    /// Row-major matrix padded to WGSL uniform vec4 rows. Clipping happens
-    /// only after this transform, so out-of-gamut components can mix correctly.
-    pub(crate) fn transform(self, source: ColorSpace) -> [[f32; 4]; 3] {
+    /// Return a colorant transform padded to WGSL uniform vec4 rows.
+    /// Callers choose clipping and transfer independently.
+    pub fn transform(self, source: ColorSpace) -> [[f32; 4]; 3] {
         let source = Self::from(source);
         let matrix = if self == source {
             [1., 0., 0., 0., 1., 0., 0., 0., 1.]

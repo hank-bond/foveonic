@@ -23,6 +23,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[color-field-restraint](./color-field-restraint.md)** Expose one per-image highlight color restraint adjustment and remove rejected shader experiments while preserving optimized Local/Global defaults.
 - **[color-field](./color-field.md)** Implement GPU color-field highlight reconstruction, validate against the pinned reference, and compare quality/performance experiments using saved edits.
 - **[complete-reference-algorithms](./complete-reference-algorithms.md)** Track remaining reference-algorithm follow-ups and the completed default photographic output resizer.
+- **[display-color-management](./display-color-management.md)** Integrate ICC-derived display limits, managed macOS presentation and gamut-preserving previews.
 - **[dng-export](./dng-export.md)** Implement uncompressed uint16 DNG export through the existing TIFF writer, with baked technical corrections and one embedded appearance; evaluate compression later.
 - **[editing-optimization-handoff](./editing-optimization-handoff.md)** Continue native editing measurements with guarded GPU ownership while preserving the deferred mismatch evidence.
 - **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.
@@ -31,6 +32,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
+- **[release-0.4.0](./release-0.4.0.md)** Prepare and verify the signed v0.4.0 release with Merrill viewport-first Smart previews and managed display colors.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.

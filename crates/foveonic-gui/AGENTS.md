@@ -19,6 +19,7 @@ Refresh the README image explicitly with `cargo xtask screenshot`, following the
 ### Directories
 
 - **[assets/](./assets/AGENTS.md)** Desktop assets contain layered-X icon artwork and reviewed photographic-help comparisons.
+- **[examples/](./examples/AGENTS.md)** Explicit native display experiments validate presentation independently of photographic processing.
 - **[src/](./src/AGENTS.md)** GUI modules separate thumbnail browsing, interaction, bounded image jobs, and GPU presentation.
 
 ### Source files

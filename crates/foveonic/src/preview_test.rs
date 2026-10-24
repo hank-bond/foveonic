@@ -13,13 +13,29 @@ fn embedded(format: u32, extent: [u32; 2], stride: usize) -> Embedded {
 }
 
 #[test]
+fn preview_reduction_averages_linear_light_without_brightening_floats() {
+    let preview = Preview {
+        rgb: vec![0, 0, 0, 65535, 65535, 65535],
+        extent: [2, 1],
+        native_extent: [2, 1],
+        rotation: 0,
+        color_space: crate::color_space::TiffColorSpace::Srgb,
+    };
+    let reduced = preview.resized(1).unwrap();
+    for value in reduced.linear_image().unwrap().as_raw() {
+        assert!((value - 0.5).abs() < 0.0001, "{value}");
+    }
+}
+
+#[test]
 fn bitmap_preserves_rgb_and_omits_row_padding() {
     let bitmap = embedded(3, [1, 2], 4);
     assert_eq!(
         bitmap
             .decode(&[1, 2, 3, 99, 4, 5, 6, 99], &color::Encoding::Srgb)
-            .unwrap(),
-        [1, 2, 3, 4, 5, 6]
+            .unwrap()
+            .0,
+        [1, 2, 3, 4, 5, 6].map(|v| v * 257)
     );
     assert!(embedded(3, [1, 2], 2)
         .decode(&[0; 8], &color::Encoding::Srgb)
@@ -114,7 +130,7 @@ fn jpeg_pixel(pixel: [u8; 3], extent: [u32; 2]) -> Vec<u8> {
 }
 
 #[test]
-fn camera_space_normalizes_small_and_large_previews_across_architectures() {
+fn camera_space_is_retained_for_small_and_large_previews_across_architectures() {
     for (model, version, small_format) in [
         ("SIGMA SD15", 0x20000, 3),
         ("SIGMA DP2 Merrill", 0x30000, 18),
@@ -127,18 +143,14 @@ fn camera_space_normalizes_small_and_large_previews_across_architectures() {
             jpeg_pixel([128, 64, 32], [1, 1])
         };
         let large = jpeg_pixel([80, 120, 160], [2, 1]);
-        let mut expected_small = embedded(small_format, [1, 1], 3)
+        let expected_small = embedded(small_format, [1, 1], 3)
             .decode(&small, &color::Encoding::Srgb)
-            .unwrap();
-        let mut expected_large = embedded(18, [2, 1], 0)
+            .unwrap()
+            .0;
+        let expected_large = embedded(18, [2, 1], 0)
             .decode(&large, &color::Encoding::Srgb)
-            .unwrap();
-        color::Encoding::AdobeRgb
-            .to_srgb(&mut expected_small)
-            .unwrap();
-        color::Encoding::AdobeRgb
-            .to_srgb(&mut expected_large)
-            .unwrap();
+            .unwrap()
+            .0;
         let bytes = with_camera_properties(
             fixture_with_rotation(
                 &[(small_format, [1, 1], 3, small), (18, [2, 1], 0, large)],
@@ -151,6 +163,10 @@ fn camera_space_normalizes_small_and_large_previews_across_architectures() {
         for (full, expected) in [(false, expected_small), (true, expected_large)] {
             let preview = from_original(&bytes, full).unwrap();
             assert_eq!(preview.rgb, expected, "{model}, full={full}");
+            assert_eq!(
+                preview.color_space,
+                crate::color_space::TiffColorSpace::AdobeRgb
+            );
         }
     }
 }
@@ -186,7 +202,8 @@ fn version_four_without_properties_inherits_color_space_from_jpeg_makernotes() {
     let small = jpeg_pixel([128, 64, 32], [1, 1]);
     let expected = embedded(18, [1, 1], 0)
         .decode(&small, &color::Encoding::AdobeRgb)
-        .unwrap();
+        .unwrap()
+        .0;
     let bytes = fixture_with_rotation(
         &[(18, [2, 1], 0, tagged), (25, [1, 1], 0, small)],
         0x40002,
@@ -208,27 +225,36 @@ fn jpeg_icc_overrides_camera_space_and_srgb_bitmaps_keep_their_samples() {
     tagged.extend(&jpeg[2..]);
     let decoded = embedded(18, [1, 1], 0)
         .decode(&jpeg, &color::Encoding::Srgb)
-        .unwrap();
+        .unwrap()
+        .0;
     let managed = embedded(18, [1, 1], 0)
         .decode(&tagged, &color::Encoding::AdobeRgb)
-        .unwrap();
-    assert!(decoded.iter().zip(managed).all(|(a, b)| a.abs_diff(b) <= 1));
+        .unwrap()
+        .0;
+    let managed = as_srgb16(&managed, crate::color_space::TiffColorSpace::ProPhotoRgb);
+    assert!(decoded
+        .iter()
+        .zip(managed)
+        .all(|(a, b)| a.abs_diff(b) <= 128));
     let inherited = color::Encoding::AdobeRgb.jpeg(&tagged);
     assert_eq!(
-        embedded(18, [1, 1], 0).decode(&jpeg, &inherited).unwrap(),
+        embedded(18, [1, 1], 0).decode(&jpeg, &inherited).unwrap().0,
         embedded(18, [1, 1], 0)
             .decode(&tagged, &color::Encoding::AdobeRgb)
-            .unwrap(),
+            .unwrap()
+            .0,
         "an unlabelled nested thumbnail inherits its enclosing JPEG's profile"
     );
     tagged[20..20 + profile.len()].fill(0);
     assert_eq!(
         embedded(18, [1, 1], 0)
             .decode(&tagged, &color::Encoding::AdobeRgb)
-            .unwrap(),
+            .unwrap()
+            .0,
         embedded(18, [1, 1], 0)
             .decode(&jpeg, &color::Encoding::AdobeRgb)
-            .unwrap(),
+            .unwrap()
+            .0,
         "a malformed optional profile falls back to camera metadata"
     );
     let bytes = with_camera_properties(
@@ -236,7 +262,31 @@ fn jpeg_icc_overrides_camera_space_and_srgb_bitmaps_keep_their_samples() {
         "SIGMA SD15",
         "sRGB",
     );
-    assert_eq!(from_original(&bytes, false).unwrap().rgb, pixel);
+    assert_eq!(
+        from_original(&bytes, false).unwrap().rgb,
+        pixel.map(|v| u16::from(v) * 257)
+    );
+}
+
+#[test]
+fn an_embedded_adobe_icc_profile_retains_colors_outside_srgb() {
+    let profile =
+        moxcms::ColorProfile::new_from_slice(include_bytes!("../assets/adobe-rgb-1998-compat.icc"))
+            .unwrap();
+    let encoding = color::Encoding::Profile {
+        profile: std::sync::Arc::new(profile),
+        fallback: Box::new(color::Encoding::Srgb),
+    };
+    let (rgb, space) = encoding.decode(&[0, 255, 0]).unwrap();
+    assert_eq!(space, crate::color_space::TiffColorSpace::ProPhotoRgb);
+    let matrix = crate::color_space::TiffColorSpace::Srgb.transform(space.into());
+    let linear: [f32; 3] =
+        std::array::from_fn(|c| decode_sample(space, f32::from(rgb[c]) / 65535.));
+    let output: [f32; 3] = std::array::from_fn(|r| (0..3).map(|c| matrix[r][c] * linear[c]).sum());
+    assert!(
+        output[0] < -0.3 && output[1] > 0.99 && output[2] < -0.02,
+        "{output:?}"
+    );
 }
 
 #[test]
@@ -256,30 +306,40 @@ fn an_unusable_rgb_profile_falls_back_before_converting_any_pixels() {
         profile: std::sync::Arc::new(profile),
         fallback: Box::new(color::Encoding::AdobeRgb),
     };
-    let mut pixels = [80, 120, 160].repeat(5000);
-    let mut expected = pixels.clone();
-    color::Encoding::AdobeRgb.to_srgb(&mut expected).unwrap();
-    encoding.to_srgb(&mut pixels).unwrap();
-    assert_eq!(pixels, expected);
+    let pixels = [80, 120, 160].repeat(5000);
+    let expected = color::Encoding::AdobeRgb.decode(&pixels).unwrap();
+    assert_eq!(encoding.decode(&pixels).unwrap(), expected);
+}
+
+fn as_srgb16(samples: &[u16], space: crate::color_space::TiffColorSpace) -> Vec<u16> {
+    let matrix = crate::color_space::TiffColorSpace::Srgb.transform(space.into());
+    samples
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|pixel| {
+            let linear = pixel.map(|v| decode_sample(space, f32::from(v) / 65535.));
+            (0..3).map(move |r| {
+                encode_sample(
+                    crate::color_space::TiffColorSpace::Srgb,
+                    (0..3).map(|c| matrix[r][c] * linear[c]).sum(),
+                )
+            })
+        })
+        .collect()
 }
 
 #[test]
-fn adobe_preview_conversion_preserves_neutrals_and_clips_after_color_transform() {
-    // Reference values use Adobe RGB's 563/256 transfer and the viewport's
-    // Adobe-to-sRGB matrix, followed by sRGB encoding and 8-bit quantization.
-    for (input, expected) in [
-        ([128, 128, 128], [129_u8, 129, 129]),
-        ([128, 64, 32], [146, 62, 23]),
-        ([80, 120, 160], [51, 121, 163]),
-        ([32, 160, 96], [0, 161, 92]),
-        ([255, 0, 0], [255, 0, 0]),
-        ([0, 0, 0], [0, 0, 0]),
-        ([255, 255, 255], [255, 255, 255]),
-    ] {
-        let mut rgb = input;
-        color::Encoding::AdobeRgb.to_srgb(&mut rgb).unwrap();
-        assert!(rgb.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1));
-    }
+fn adobe_preview_retains_saturated_camera_codes_before_presentation() {
+    let input = [0, 255, 0];
+    let (rgb, space) = color::Encoding::AdobeRgb.decode(&input).unwrap();
+    assert_eq!(space, crate::color_space::TiffColorSpace::AdobeRgb);
+    assert_eq!(rgb, [0, 65535, 0]);
+    let matrix = crate::color_space::TiffColorSpace::Srgb.transform(space.into());
+    assert!(
+        matrix[0][1] < 0. && matrix[2][1] < 0.,
+        "the retained green lies outside sRGB"
+    );
 }
 
 #[test]
@@ -299,7 +359,7 @@ fn selection_uses_pixel_area_and_keeps_largest_preview_geometry() {
     assert_eq!(preview.extent, [1, 1]);
     assert_eq!(preview.native_extent, [20, 10]);
     assert_eq!(preview.rotation, 90);
-    assert_eq!(preview.rgb, [1, 1, 1]);
+    assert_eq!(preview.rgb, [257, 257, 257]);
 }
 
 #[test]
@@ -312,6 +372,7 @@ fn jpeg_dimensions_must_match_the_container() {
         embedded(18, [1, 1], 0)
             .decode(&jpeg, &color::Encoding::Srgb)
             .unwrap()
+            .0
             .len(),
         3
     );
@@ -394,13 +455,20 @@ fn original_bitmap_channels_match_same_file_jpeg() {
             })
             .expect("same original must contain a JPEG for independent color comparison");
         let preview = read(&path).unwrap();
-        let mut reference = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
+        let reference = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
             .unwrap()
             .into_rgb8();
-        color::Encoding::camera(&crate::source::read_capture_properties(&path).unwrap())
-            .jpeg(jpeg)
-            .to_srgb(reference.as_mut())
-            .unwrap();
+        let (rgb, space) =
+            color::Encoding::camera(&crate::source::read_capture_properties(&path).unwrap())
+                .jpeg(jpeg)
+                .decode(reference.as_raw())
+                .unwrap();
+        let reference = image::ImageBuffer::<image::Rgb<u16>, _>::from_raw(
+            reference.width(),
+            reference.height(),
+            as_srgb16(&rgb, space),
+        )
+        .unwrap();
         let reference = image::imageops::resize(
             &reference,
             preview.extent[0],
@@ -409,8 +477,7 @@ fn original_bitmap_channels_match_same_file_jpeg() {
         );
         let mut direct = 0_u64;
         let mut swapped = 0_u64;
-        for (thumbnail, expected) in preview
-            .rgb
+        for (thumbnail, expected) in as_srgb16(&preview.rgb, preview.color_space)
             .as_chunks::<3>()
             .0
             .iter()
@@ -447,7 +514,7 @@ fn previews_share_versioned_rotation_with_sensor_metadata() {
             let preview = read(&path).unwrap();
             assert_eq!(preview.rotation, degrees);
             assert_eq!(preview.extent, [2, 1]);
-            assert_eq!(preview.rgb, [1; 6]);
+            assert_eq!(preview.rgb, [257; 6]);
         }
     }
     let mut bytes = fixture_with_rotation(&[(3, [2, 1], 6, vec![1; 6])], 0x40001, 270);
@@ -547,15 +614,16 @@ fn exif_padding_is_removed_only_when_it_matches_the_photo_frame() {
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
         .encode_image(&pixels)
         .unwrap();
-    let (rgb, extent) = decode_exif_thumbnail(&jpeg, [5424, 3616], &color::Encoding::Srgb).unwrap();
+    let (rgb, extent, space) =
+        decode_exif_thumbnail(&jpeg, [5424, 3616], &color::Encoding::Srgb).unwrap();
     assert_eq!(extent, [160, 106]);
     assert_eq!(rgb.len(), 160 * 106 * 3);
-    let (adobe, extent) =
+    let (adobe, extent, adobe_space) =
         decode_exif_thumbnail(&jpeg, [5424, 3616], &color::Encoding::AdobeRgb).unwrap();
     assert_eq!(extent, [160, 106]);
-    let mut expected = rgb.clone();
-    color::Encoding::AdobeRgb.to_srgb(&mut expected).unwrap();
-    assert_eq!(adobe, expected);
+    assert_eq!(adobe, rgb);
+    assert_eq!(space, crate::color_space::TiffColorSpace::Srgb);
+    assert_eq!(adobe_space, crate::color_space::TiffColorSpace::AdobeRgb);
     let pixels = image::RgbImage::from_pixel(160, 120, image::Rgb([80, 120, 160]));
     let mut jpeg = Vec::new();
     image::codecs::jpeg::JpegEncoder::new(&mut jpeg)

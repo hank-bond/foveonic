@@ -5,6 +5,21 @@ kind: reference
 
 # Changelog
 
+## 0.4.0
+
+<!-- Add your release introduction here. -->
+
+### Changes
+
+- Merrill Smart now renders the zoomed viewport at Full quality before refining the whole photograph. The completed Full image stays ready for panning, with shared sensor corrections and noise context reused between stages.
+- Faster Merrill processing at tile boundaries and better reuse of earlier processing when editing Smart previews.
+- Color-managed display on macOS uses the monitor's selected profile across the viewport, navigator and browser previews, preserving colors beyond sRGB on capable displays.
+- Application settings offer Monitor, sRGB, Adobe RGB and ProPhoto RGB (ROMM) viewing limits. Switching the display gamut redraws immediately without reprocessing the RAW or changing exports.
+- Embedded previews honor camera color-space metadata and valid embedded ICC profiles across supported camera architectures. Rendered previews retain their gamut in the temporary cache, regardless of the selected viewing limit.
+- A ready decoded-photo cache now includes metadata and embedded preview inputs, avoiding additional source-file reads when opening a cached photograph. This reduces waiting on SD cards and other slow sources.
+
+Apple Silicon downloads target macOS 15 or later. They are Developer ID signed and unnotarized. First launch may require **Open Anyway** in macOS Privacy & Security settings. Interactive display behavior on macOS 15 and across multiple monitors still needs user testing.
+
 ## 0.3.0
 
 So the two big changes here are

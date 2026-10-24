@@ -19,6 +19,8 @@ impl Eq for SourceId {}
 
 // Let the main image reach the screen before preparing another display texture.
 const PRESENT_FIRST: Duration = Duration::from_millis(16);
+const MAX_SIDE: f32 = 512.;
+const TEXEL_BYTES: u32 = size_of::<[u16; 4]>() as u32;
 
 #[derive(Clone, Copy)]
 pub struct Image {
@@ -109,7 +111,7 @@ impl Navigator {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba16Float,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_SRC,
@@ -127,7 +129,7 @@ impl Navigator {
             if crate::timing::enabled() {
                 crate::timing::emit(
                     "navigator",
-                    serde_json::json!({"revision":job.key.revision,"completed_ms":started.elapsed().as_secs_f64()*1000.,"bytes":size[0]*size[1]*4}),
+                    serde_json::json!({"revision":job.key.revision,"completed_ms":started.elapsed().as_secs_f64()*1000.,"bytes":size[0]*size[1]*TEXEL_BYTES}),
                 );
             }
             if tx
@@ -262,7 +264,7 @@ impl Drop for Navigator {
     }
 }
 fn tile_extent(extent: [u32; 2]) -> [u32; 2] {
-    let scale = (512. / extent[0].max(extent[1]) as f32).min(1.);
+    let scale = (MAX_SIDE / extent[0].max(extent[1]) as f32).min(1.);
     extent.map(|v| (v as f32 * scale).round().max(1.) as u32)
 }
 #[cfg(test)]

@@ -1,24 +1,23 @@
 //! Prepares oriented display thumbnails and larger previews away from the UI thread.
 
-use eframe::egui;
+use crate::display_image::Pixels;
 
 const THUMBNAIL_SIDE: u32 = 256;
 
 pub(crate) struct DecodedThumbnail {
-    pub(crate) image: egui::ColorImage,
+    pub(crate) image: Pixels,
     pub(crate) native_extent: [u32; 2],
 }
 pub(crate) struct PreparedPreview {
     pub(crate) thumbnail: DecodedThumbnail,
-    pub(crate) preview: Option<egui::ColorImage>,
+    pub(crate) preview: Option<Pixels>,
 }
 impl PreparedPreview {
     pub(crate) fn new(
         preview: foveonic::preview::Preview,
         large: bool,
     ) -> foveonic::source::Result<Self> {
-        let image = image::RgbImage::from_raw(preview.extent[0], preview.extent[1], preview.rgb)
-            .ok_or("invalid decoded preview")?;
+        let image = preview.linear_image()?;
         let image = match preview.rotation {
             90 => image::imageops::rotate90(&image),
             180 => image::imageops::rotate180(&image),
@@ -30,21 +29,18 @@ impl PreparedPreview {
             native_extent.swap(0, 1);
         }
         let scale = (THUMBNAIL_SIDE as f64 / f64::from(image.width().max(image.height()))).min(1.);
-        let small = image::imageops::thumbnail(
+        let small = foveonic::preview::resize_linear(
             &image,
-            (f64::from(image.width()) * scale).round().max(1.) as u32,
-            (f64::from(image.height()) * scale).round().max(1.) as u32,
+            [
+                (f64::from(image.width()) * scale).round().max(1.) as u32,
+                (f64::from(image.height()) * scale).round().max(1.) as u32,
+            ],
         );
         let thumbnail = DecodedThumbnail {
-            image: egui::ColorImage::from_rgb(
-                [small.width() as usize, small.height() as usize],
-                &small,
-            ),
+            image: Pixels::from_linear(&small, preview.color_space.into()),
             native_extent,
         };
-        let preview = large.then(|| {
-            egui::ColorImage::from_rgb([image.width() as usize, image.height() as usize], &image)
-        });
+        let preview = large.then(|| Pixels::from_linear(&image, preview.color_space.into()));
         Ok(Self { thumbnail, preview })
     }
 }
@@ -61,9 +57,16 @@ mod tests {
     #[test]
     fn decoded_preview_rotates_pixels_and_native_extent_once() {
         let preview = foveonic::preview::Preview {
+            color_space: foveonic::color_space::TiffColorSpace::Srgb,
             rgb: (0..128)
                 .flat_map(|_| {
-                    (0..256).flat_map(|x| if x < 128 { [255, 0, 0] } else { [0, 255, 0] })
+                    (0..256).flat_map(|x| {
+                        if x < 128 {
+                            [65535, 0, 0]
+                        } else {
+                            [0, 65535, 0]
+                        }
+                    })
                 })
                 .collect(),
             extent: [256, 128],
@@ -73,17 +76,16 @@ mod tests {
         let thumbnail = DecodedThumbnail::from_preview(preview).unwrap();
         assert_eq!(thumbnail.native_extent, [1000, 2000]);
         assert_eq!(thumbnail.image.size, [128, 256]);
-        assert_eq!(thumbnail.image.pixels[0], eframe::egui::Color32::RED);
-        assert_eq!(
-            thumbnail.image.pixels[128 * 255],
-            eframe::egui::Color32::GREEN
-        );
+        let one = half::f16::ONE.to_bits();
+        assert_eq!(thumbnail.image.rgba[0], [one, 0, 0, one]);
+        assert_eq!(thumbnail.image.rgba[128 * 255], [0, one, 0, one]);
     }
 
     #[test]
     fn decoded_preview_downsampling_preserves_native_extent() {
         let preview = foveonic::preview::Preview {
-            rgb: vec![128; 600 * 300 * 3],
+            color_space: foveonic::color_space::TiffColorSpace::Srgb,
+            rgb: vec![128 * 257; 600 * 300 * 3],
             extent: [600, 300],
             rotation: 0,
             native_extent: [6000, 3000],
