@@ -304,7 +304,11 @@ pub fn preview_support(
         !settings.is_monochrome()
             && matches!(
                 model.strip_prefix("sigma ").unwrap_or(&model),
-                "dp0 quattro"
+                "dp1 merrill"
+                    | "dp2 merrill"
+                    | "dp3 merrill"
+                    | "sd1 merrill"
+                    | "dp0 quattro"
                     | "dp1 quattro"
                     | "dp2 quattro"
                     | "dp3 quattro"
@@ -329,9 +333,9 @@ pub fn preview_quality(
         PreviewMode::Full
     };
     let explanation = if available != Some(false) {
-        "Fast gives a smaller Quattro color preview for quicker browsing and edits. Smart shows Fast first, refines the clicked viewport above 100%, then completes Full for panning. Exports use Full."
+        "Fast gives a smaller color preview for quicker browsing and edits. Smart shows Fast first and switches to Full above 100% for detail and panning. Exports use Full."
     } else {
-        "Fast preview is available for Quattro color photographs."
+        "Fast and Smart previews are available for Merrill and Quattro color photographs."
     };
     widgets::button_group(ui, |ui| {
         widgets::centered_control_row(ui, |ui| {

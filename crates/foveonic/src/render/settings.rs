@@ -120,8 +120,16 @@ impl Settings {
         }
     }
 
-    /// The reduced recipe is available only for demonstrated Quattro color input.
+    /// Supported color recipes preserve native framing on their reduced working grid.
     pub fn fast_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
+        !self.is_monochrome()
+            && (super::recipes::merrill::fast_available(metadata)
+                || super::recipes::quattro::fast_available(metadata))
+    }
+
+    /// Quattro can refine one viewport before Full. Merrill currently refines
+    /// the whole frame because its noise stages require full-frame tile atlases.
+    pub fn regional_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
         !self.is_monochrome() && super::recipes::quattro::fast_available(metadata)
     }
 

@@ -279,6 +279,12 @@ impl App {
 
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
         let mapping = self.displayed_mapping();
+        let regional_smart = self.frame.as_ref().is_some_and(|frame| {
+            frame
+                .artifact
+                .settings
+                .regional_preview_available(&frame.artifact.metadata)
+        });
         let Some(smoke) = &mut self.smoke else {
             return;
         };
@@ -429,7 +435,7 @@ impl App {
             }
             if smoke.targets == SMART_TARGETS && !smoke.preview_pending() {
                 let target = smoke.targets[smoke.index];
-                let regional = target == "smart-detail";
+                let regional = target == "smart-detail" && regional_smart;
                 let frame = if regional {
                     self.detail.as_ref().unwrap()
                 } else {
@@ -437,6 +443,10 @@ impl App {
                 };
                 let visible = self.viewport.visible_pixels().unwrap();
                 let region = frame.artifact.settings.preview_region;
+                if !regional_smart || !matches!(target, "final" | "cache-reopen") {
+                    assert!(self.settings.reconstruction.is_some());
+                    assert!(frame.artifact.settings.reconstruction.is_some());
+                }
                 if regional {
                     let rect = region.unwrap();
                     assert!(crate::smart::contains(
@@ -460,6 +470,7 @@ impl App {
                     let full = matches!(
                         target,
                         "final"
+                            | "smart-detail"
                             | "smart-full"
                             | "smart-pan"
                             | "smart-edit"
@@ -490,7 +501,7 @@ impl App {
                 if target == "cache-reopen" {
                     assert!(self.worker.cache.status().hits > 0);
                 }
-                let report = serde_json::json!({"target":target,"quality":frame.quality_label(),"region":region,"native_extent":self.frame.as_ref().unwrap().display_extent(false),"rendered_extent":frame.texture.description().extent,
+                let report = serde_json::json!({"target":target,"quality":frame.quality_label(),"region":region,"regional_supported":regional_smart,"native_extent":self.frame.as_ref().unwrap().display_extent(false),"rendered_extent":frame.texture.description().extent,
                     "zoom_percent":self.viewport.zoom_percent(ctx.pixels_per_point()),"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds,"scope_revision":self.scope_key.map(|k|k.revision),"image_revision":frame.revision,"cache_hits":self.worker.cache.status().hits,"cache_ready":self.worker.cache.status().ready.len(),"continuation_running":self.busy});
                 std::fs::write(
                     smoke.directory.join(format!("{target}.json")),
@@ -586,6 +597,9 @@ impl App {
                 "smart-overview" => {
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Smart;
                     self.preferences.scope_viewport = true;
+                    if regional_smart {
+                        self.settings.reconstruction = Some(Default::default());
+                    }
                     self.submit(None);
                 }
                 "smart-100" => self.viewport.one_to_one = true,
@@ -845,7 +859,9 @@ impl App {
                 self.selected
                     .as_ref()
                     .is_some_and(|p| self.browser.thumbnail(p).is_some())
-            } else if smoke.targets == SMART_TARGETS && smoke.targets[smoke.index] == "smart-detail"
+            } else if smoke.targets == SMART_TARGETS
+                && smoke.targets[smoke.index] == "smart-detail"
+                && regional_smart
             {
                 self.detail.is_some()
             } else {
@@ -872,7 +888,11 @@ impl App {
             let ready = ready
                 && (smoke.targets != SMART_TARGETS
                     || match smoke.targets[smoke.index] {
-                        "smart-detail" => self.detail.is_some(),
+                        "smart-detail" if regional_smart => self.detail.is_some(),
+                        "smart-detail" => self.frame.as_ref().is_some_and(|f| {
+                            f.artifact.settings.preview_quality
+                                == foveonic::render::PreviewQuality::Full
+                        }),
                         "smart-full" | "smart-edit" => self.frame.as_ref().is_some_and(|f| {
                             f.artifact.settings.preview_quality
                                 == foveonic::render::PreviewQuality::Full

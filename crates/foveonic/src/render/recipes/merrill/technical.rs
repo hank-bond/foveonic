@@ -1,7 +1,7 @@
 //! Builds Merrill sensor corrections and technical color with lazy inspection preparation.
 
 use super::super::{requested, BuiltRecipe};
-use super::dng_base;
+use super::{dng_base, preview};
 use crate::color_space::ColorSpace;
 use crate::nodes::{
     color::{color_dq, color_mode},
@@ -32,6 +32,17 @@ pub(super) fn build(
 ) -> Result<Prepared> {
     let space = ColorSpace::from_metadata(&source.metadata)?;
     let mut params = calibration::encode(&source.metadata, space)?;
+    // Preview policy changes the working grid. Inspection and DNG keep native geometry.
+    let preview = (settings.preview_quality == crate::render::PreviewQuality::Fast
+        && mode.is_some()
+        && !settings.is_monochrome()
+        && names == ["final"]
+        && settings.preview_region.is_none())
+    .then(|| preview::Grid::new(params, settings.output_size))
+    .transpose()?;
+    if let Some(grid) = &preview {
+        params = grid.encode;
+    }
     if let Some(size) = settings.output_size {
         params.output[..2].copy_from_slice(&size);
     }
@@ -121,7 +132,9 @@ pub(super) fn build(
         calibrated = graph.add(Operation::Despeckle(prepared), &[calibrated])?;
         finish!();
     }
-    if settings.row_correction {
+    // Reduced browsing omits the expensive native row-bias estimate. Keep the
+    // requested edit intact so Full and inspection still apply its correction.
+    if settings.row_correction && preview.is_none() {
         let prepared = profile.measure("prepare row correction", || {
             banding::prepare(&source.metadata, calibration_gains)
         })?;
@@ -142,7 +155,15 @@ pub(super) fn build(
             execution,
         );
     }
-    let reconstruction = if let Some(controls) = settings.reconstruction {
+    if let Some(grid) = &preview {
+        // Reuse native sensor corrections when the overview is followed by Full.
+        graph.retain_for_session(calibrated);
+        calibrated = graph.add(Operation::ReduceLayers(grid.reduction), &[calibrated])?;
+    }
+    // Fast bypasses optional Noise and Detail without changing the saved controls.
+    // Full, inspection and DNG still build their requested reconstruction.
+    let noise_controls = settings.reconstruction.filter(|_| preview.is_none());
+    let reconstruction = if let Some(controls) = noise_controls {
         let params = profile.measure("prepare reference noise", || {
             crate::noise::prepare(&source.metadata, &settings.white_balance, controls)
         })?;
@@ -173,9 +194,12 @@ pub(super) fn build(
         })?,
         None => dng_base::unselected_mode(),
     };
-    let color = profile.measure("prepare color matrix", || {
+    let mut color = profile.measure("prepare color matrix", || {
         calibration::color(&source.metadata, &settings.white_balance, &mode)
     })?;
+    if let Some(grid) = &preview {
+        color.source[..2].copy_from_slice(&grid.reduction.output_extent());
+    }
     let mut linear = if let Some((params, base, _, _)) = reconstruction {
         graph.add(
             Operation::TiledColor {
@@ -195,7 +219,7 @@ pub(super) fn build(
         )?
     };
     finish!();
-    if settings.color_dq_selected() {
+    if preview.is_none() && settings.color_dq_selected() {
         let gain = if let Some(gain) = settings.color_dq_gain {
             gain
         } else {

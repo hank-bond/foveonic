@@ -1,4 +1,4 @@
-//! Refines the first Quattro detail viewport once before completing the whole Full frame.
+//! Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
 
 use crate::{preferences, worker, App};
 use eframe::egui;
@@ -94,9 +94,14 @@ impl App {
         {
             return;
         }
-        // Deliver the first detail tile before submitting the whole frame. Keep
-        // that tile visible while the serial image worker completes Full.
-        if self.detail.is_some() {
+        // Recipes without regional support refine the whole frame directly.
+        // Otherwise retain the first detail tile while Full completes.
+        if self.detail.is_some()
+            || !frame
+                .artifact
+                .settings
+                .regional_preview_available(&frame.artifact.metadata)
+        {
             self.submit_with_quality(None, None, preferences::PreviewMode::Full);
             return;
         }

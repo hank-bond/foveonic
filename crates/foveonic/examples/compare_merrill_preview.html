@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Merrill reduced preview comparison</title>
+<style>
+body{margin:0;background:#171717;color:#ddd;font:15px system-ui}header{padding:16px 24px;background:#252525}h1{font-size:20px;margin:0 0 8px}p{max-width:1100px;color:#aaa;font-size:13px;line-height:1.5}button,select{font:inherit;background:#333;color:#ddd;border:1px solid #555;border-radius:5px;padding:7px 12px;margin:3px}button[aria-pressed=true]{background:#304563;border-color:#82aaff}#canvas{height:calc(100vh - 240px);min-height:360px;overflow:auto;text-align:center}#photo{max-width:100%;max-height:100%;object-fit:contain;vertical-align:middle}#canvas.native{text-align:left}#canvas.native #photo{max-width:none;max-height:none}#timing{margin:8px 3px;font-variant-numeric:tabular-nums}table{border-collapse:collapse;margin:20px}td,th{padding:8px 16px;text-align:right;border-bottom:1px solid #444}th:first-child,td:first-child{text-align:left}summary{padding:12px;cursor:pointer}.note{color:#d8bd86}
+</style>
+<header><h1>Merrill · quarter-pixel preview experiment</h1>
+<div><select id="scene" aria-label="Photograph"></select><button id="fit">Fit / native 100%</button><button id="toggle">Toggle Full / selected (Space)</button></div>
+<div id="variants"></div><div id="timing"></div>
+<p>Fast omits row correction and Noise and Detail, then uses half width and height for camera color and finishing after native calibration, repairs, highlights and despeckle. The alternate Fast version also omits despeckle. Full applies the requested Noise and Detail controls. Use Fit to judge composition and color, or native 100% to inspect detail. Space alternates Full with your last Fast choice. Both versions keep the same framing.</p>
+</header><div id="canvas"><img id="photo" alt="Rendered Merrill photograph"></div>
+<details><summary>Measurements and limitations</summary><p id="method"></p><p class="note">Merrill Smart uses the reduced overview, then refines to whole-frame Full above 100%. Viewport-first Merrill refinement remains future work. Sensor correction still runs at full resolution, except explicitly omitted steps. Fast skips optional noise reconstruction and ColorDQ filtering while keeping their controls for Full. The no-despeckle variant is a separate experiment. Compare dark shadows and fine texture before choosing a tradeoff.</p><table id="results"></table></details>
+<script>
+const report=REPORT_DATA;
+const labels={'full':'Full','reduced':'Fast','skip-speckle':'Fast · no despeckle'};
+const scene=document.getElementById('scene'),photo=document.getElementById('photo'),canvas=document.getElementById('canvas');
+let selected='reduced',lastReduced='reduced';
+for(const entry of report.scenes){const option=document.createElement('option');option.value=entry.name;option.textContent=entry.name;scene.append(option)}
+for(const [key,label] of Object.entries(labels)){const button=document.createElement('button');button.textContent=label;button.dataset.variant=key;button.onclick=()=>{selected=key;if(key!=='full')lastReduced=key;show()};document.getElementById('variants').append(button)}
+function median(values){const sorted=[...values].sort((a,b)=>a-b);return sorted[Math.floor(sorted.length/2)]}
+function show(){const entry=report.scenes.find(e=>e.name===scene.value),asset=entry.assets[selected],full=entry.assets.full;
+photo.src=entry.name+'/'+asset.file;photo.style.width=canvas.classList.contains('native')?full.extent[0]+'px':'';photo.style.height=canvas.classList.contains('native')?full.extent[1]+'px':'';
+for(const button of document.querySelectorAll('[data-variant]'))button.setAttribute('aria-pressed',button.dataset.variant===selected);
+const elapsed=median(entry.runs.filter(r=>!r.warmup&&r.variant===selected).map(r=>r.milliseconds));
+document.getElementById('timing').textContent=labels[selected]+' · '+asset.extent.join(' × ')+' · '+Math.round(elapsed)+' ms median completed render';}
+scene.onchange=show;document.getElementById('fit').onclick=()=>{canvas.classList.toggle('native');show()};
+function toggle(){selected=selected==='full'?lastReduced:'full';show()}
+document.getElementById('toggle').onclick=toggle;document.onkeydown=e=>{if(e.code==='Space'&&e.target.tagName!=='SELECT'){e.preventDefault();toggle()}};
+document.getElementById('method').textContent=report.method+' Adapter: '+report.adapter;
+const table=document.getElementById('results'),head=table.insertRow();for(const label of ['Scene',...Object.values(labels)]){const cell=document.createElement('th');cell.textContent=label;head.append(cell)}
+for(const entry of report.scenes){const row=table.insertRow();row.insertCell().textContent=entry.name;for(const key of Object.keys(labels))row.insertCell().textContent=Math.round(median(entry.runs.filter(r=>!r.warmup&&r.variant===key).map(r=>r.milliseconds)))+' ms'}
+show();
+</script></html>

@@ -151,6 +151,7 @@ impl Engine {
                     Input::Rendered(image) => image.description.extent,
                 });
             let extent = match &node.operation {
+                Operation::ReduceLayers(prepared) => prepared.output_extent(),
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
                 Operation::PackedLab(p) => p.extent(),
                 Operation::CodeCrop(p) => p.extent(),
@@ -191,6 +192,14 @@ impl Engine {
                         return Err("code crop input extent mismatch".into());
                     }
                     Some(crate::nodes::finish::code_crop::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::ReduceLayers(prepared) => {
+                    Some(crate::nodes::color::pyramid_resample::apply(
                         gpu,
                         &input(0).buffer,
                         prepared,

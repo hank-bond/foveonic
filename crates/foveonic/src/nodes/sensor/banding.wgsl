@@ -4,6 +4,12 @@
 struct Params{source:vec4<u32>,area:vec4<u32>,values:vec4<f32>,gains:vec4<f32>};
 struct Patch{geometry:vec4<u32>,storage:vec4<u32>};
 struct Batch{value:vec4<u32>};
+// Largest geometric polynomial basis. Match host coefficient allocation.
+const MAX_FIT_COEFFICIENTS=6u;
+// Native patch rejection switches thresholds above this camera-code level.
+const BRIGHT_PATCH_LEVEL=600.0;
+const DARK_CORRELATION_LIMIT=0.06;
+const BRIGHT_CORRELATION_LIMIT=0.1;
 @group(0) @binding(0) var<storage,read> pixels:array<f32>;
 @group(0) @binding(1) var<storage,read> patches:array<Patch>;
 @group(0) @binding(2) var<uniform> params:Params;
@@ -18,27 +24,30 @@ struct Batch{value:vec4<u32>};
 @group(0) @binding(11) var<storage,read_write> offsets:array<vec4<f32>>;
 @group(0) @binding(12) var<storage,read_write> output:array<f32>;
 fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u]);}
-fn coefficient(p:u32,k:u32)->vec3<f32>{let i=(p*6u+k)*3u;return vec3(coefficients[i],coefficients[i+1u],coefficients[i+2u]);}
+fn coefficient(p:u32,k:u32)->vec3<f32>{let i=(p*MAX_FIT_COEFFICIENTS+k)*3u;return vec3(coefficients[i],coefficients[i+1u],coefficients[i+2u]);}
 fn residual(p:u32)->vec3<f32>{return vec3(residuals[p*3u],residuals[p*3u+1u],residuals[p*3u+2u]);}
 @compute @workgroup_size(32)
 fn fit(@builtin(global_invocation_id)id:vec3<u32>){
-    let index=id.x;if index>=params.source.z{return;}let estimate=patches[index];let side=estimate.geometry.z;let n=estimate.geometry.w;
-    // Share RGB loads without changing the order each coefficient accumulates
-    // them. Reordering those float32 operations would change the correction.
-    var sums:array<vec3<f32>,6>;
+    // Independent coefficients can run together while each recurrence keeps
+    // its original transposed sample order and Float32 FMA rounding.
+    let index=id.x/MAX_FIT_COEFFICIENTS;let k=id.x%MAX_FIT_COEFFICIENTS;
+    if index>=params.source.z{return;}let estimate=patches[index];let side=estimate.geometry.z;let n=estimate.geometry.w;
+    if k>=n{return;}
+    var sum=vec3(0.0);
     let start=estimate.storage.x+side*side*n;
     for(var x=0u;x<side;x++){for(var y=0u;y<side;y++){
         let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;let rgb=color(p);
-        for(var k=0u;k<n;k++){let weight=tables[start+k*side*side+x*side+y];sums[k]=fma(vec3(weight),rgb,sums[k]);}
+        let weight=tables[start+k*side*side+x*side+y];sum=fma(vec3(weight),rgb,sum);
     }}
-    for(var k=0u;k<n;k++){let destination=(index*6u+k)*3u;coefficients[destination]=sums[k].x;coefficients[destination+1u]=sums[k].y;coefficients[destination+2u]=sums[k].z;}
+    let destination=(index*MAX_FIT_COEFFICIENTS+k)*3u;coefficients[destination]=sum.x;coefficients[destination+1u]=sum.y;coefficients[destination+2u]=sum.z;
 }
 @compute @workgroup_size(64)
 fn residual_field(@builtin(global_invocation_id)id:vec3<u32>){
     if id.y>=batch.value.y{return;}let index=batch.value.x+id.y;let estimate=patches[index];let side=estimate.geometry.z;let n=estimate.geometry.w;
     if id.x>=side*side{return;}let x=id.x%side;let y=id.x/side;var predicted=vec3(0.0);
     for(var k=0u;k<n;k++){let weight=tables[estimate.storage.x+(x*side+y)*n+k];predicted=fma(vec3(weight),coefficient(index,k),predicted);}
-    let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;let value=color(p)-predicted;let q=(estimate.storage.y-patches[batch.value.x].storage.y+x*side+y)*3u;
+    // Adjacent GPU lanes write adjacent residuals, matching the later statistics.
+    let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;let value=color(p)-predicted;let q=(estimate.storage.y-patches[batch.value.x].storage.y+y*side+x)*3u;
     residuals[q]=value.x;residuals[q+1u]=value.y;residuals[q+2u]=value.z;
 }
 // Compensated float32 sums approximate the reference's double statistics while
@@ -46,29 +55,58 @@ fn residual_field(@builtin(global_invocation_id)id:vec3<u32>){
 fn kahan(value:vec3<f32>,sum:ptr<function,vec3<f32>>,error:ptr<function,vec3<f32>>){
     let corrected=value-*error;let total=*sum+corrected;*error=(total-*sum)-corrected;*sum=total;
 }
-@compute @workgroup_size(32)
-fn quality(@builtin(global_invocation_id)id:vec3<u32>){
-    if id.x>=batch.value.y{return;}let index=batch.value.x+id.x;let estimate=patches[index];let side=estimate.geometry.z;let area=f32(side*side);let start=estimate.storage.y-patches[batch.value.x].storage.y;
+// One workgroup shares each patch's statistics. Compensated lane sums and
+// compensated fixed-order merges keep the correlation decision stable while
+// distributing large patches across GPU lanes.
+const QUALITY_LANES=32u;
+var<workgroup> original_parts:array<vec3<f32>,QUALITY_LANES>;
+var<workgroup> residual_parts:array<vec3<f32>,QUALITY_LANES>;
+var<workgroup> variance_parts:array<vec3<f32>,QUALITY_LANES>;
+var<workgroup> covariance_parts:array<vec3<f32>,QUALITY_LANES>;
+var<workgroup> original_mean:vec3<f32>;
+var<workgroup> residual_mean:vec3<f32>;
+@compute @workgroup_size(QUALITY_LANES)
+fn quality(@builtin(workgroup_id)group:vec3<u32>,@builtin(local_invocation_id)lane:vec3<u32>){
+    if group.x>=batch.value.y{return;}let index=batch.value.x+group.x;let estimate=patches[index];let side=estimate.geometry.z;let area=f32(side*side);let start=estimate.storage.y-patches[batch.value.x].storage.y;
     var original_sum=vec3(0.0);var original_error=vec3(0.0);var sum=vec3(0.0);var sum_error=vec3(0.0);
-    for(var x=0u;x<side;x++){for(var y=0u;y<side;y++){
+    for(var q=lane.x;q<side*side;q+=QUALITY_LANES){let x=q%side;let y=q/side;
         let p=(estimate.geometry.y+y)*params.source.x+estimate.geometry.x+x;kahan(color(p),&original_sum,&original_error);
-        kahan(residual(start+x*side+y),&sum,&sum_error);
-    }}
-    let mean=sum/area;var variance=vec3(0.0);var variance_error=vec3(0.0);var covariance=vec3(0.0);var covariance_error=vec3(0.0);
-    for(var x=0u;x<side;x++){for(var y=0u;y<side;y++){
-        let delta=residual(start+x*side+y)-mean;kahan(delta*delta,&variance,&variance_error);
+        kahan(residual(start+q),&sum,&sum_error);
+    }
+    original_parts[lane.x]=original_sum;residual_parts[lane.x]=sum;
+    workgroupBarrier();
+    if lane.x==0u{
+        var merged_original=vec3(0.0);var merged_original_error=vec3(0.0);var merged=vec3(0.0);var merged_error=vec3(0.0);
+        for(var i=0u;i<QUALITY_LANES;i++){
+            kahan(original_parts[i],&merged_original,&merged_original_error);
+            kahan(residual_parts[i],&merged,&merged_error);
+        }
+        original_mean=merged_original/area;residual_mean=merged/area;
+    }
+    workgroupBarrier();
+    var variance=vec3(0.0);var variance_error=vec3(0.0);var covariance=vec3(0.0);var covariance_error=vec3(0.0);
+    for(var q=lane.x;q<side*side;q+=QUALITY_LANES){
+        let delta=residual(start+q)-residual_mean;kahan(delta*delta,&variance,&variance_error);
         kahan(vec3(delta.y*delta.x,delta.x*delta.z,delta.z*delta.y),&covariance,&covariance_error);
-    }}
+    }
+    variance_parts[lane.x]=variance;covariance_parts[lane.x]=covariance;
+    workgroupBarrier();
+    if lane.x!=0u{return;}
+    variance=vec3(0.0);variance_error=vec3(0.0);covariance=vec3(0.0);covariance_error=vec3(0.0);
+    for(var i=0u;i<QUALITY_LANES;i++){
+        kahan(variance_parts[i],&variance,&variance_error);
+        kahan(covariance_parts[i],&covariance,&covariance_error);
+    }
     let deviation=sqrt(variance);let ratios=abs(covariance)/vec3(deviation.x*deviation.y,deviation.x*deviation.z,deviation.y*deviation.z);
     let other=select(ratios.y,ratios.z,ratios.z>ratios.y);let correlation=select(other,ratios.x,ratios.x>other);
-    let limit=select(0.06,0.1,all(original_sum/area>vec3(600.0)));
+    let limit=select(DARK_CORRELATION_LIMIT,BRIGHT_CORRELATION_LIMIT,all(original_mean>vec3(BRIGHT_PATCH_LEVEL)));
     accepted[index]=select(1u,0u,correlation!=correlation || correlation>=limit);
 }
 @compute @workgroup_size(32)
 fn row_means(@builtin(global_invocation_id)id:vec3<u32>){
     if id.y>=batch.value.y{return;}let index=batch.value.x+id.y;let estimate=patches[index];let side=estimate.geometry.z;let y=id.x;if y>=side{return;}
     var sum=vec3(0.0);let start=estimate.storage.y-patches[batch.value.x].storage.y;
-    if accepted[index]!=0u{for(var x=0u;x<side;x++){sum+=residual(start+x*side+y);}}
+    if accepted[index]!=0u{for(var x=0u;x<side;x++){sum+=residual(start+y*side+x);}}
     means[estimate.storage.z+y]=vec4(sum/f32(side),f32(accepted[index]));
 }
 @compute @workgroup_size(64)

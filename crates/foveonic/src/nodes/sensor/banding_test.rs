@@ -151,3 +151,93 @@ fn gpu_row_patch_banks_match_native_biases_counts_and_bounds() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn parallel_patch_statistics_keep_bright_dark_and_correlated_rejection_decisions() {
+    use crate::gpu::Kernel;
+    let gpu = Gpu::new().unwrap();
+    for side in [31_u32, 73, 151] {
+        for level in [500_f32, 700.] {
+            for correlation in [0_f32, 0.059, 0.061, 0.099, 0.101, 0.8, 1.] {
+                let count = (side * side) as usize;
+                let samples: Vec<[f32; 3]> = (0..count)
+                    .map(|q| {
+                        let red = if q & 1 == 0 { -1. } else { 1. };
+                        let independent = if q & 2 == 0 { -1. } else { 1. };
+                        let blue = if q & 4 == 0 { -1. } else { 1. };
+                        [
+                            red,
+                            correlation * red
+                                + (1. - correlation * correlation).sqrt() * independent,
+                            blue,
+                        ]
+                    })
+                    .collect();
+                // Independent Float64 statistics are an oracle for the decision,
+                // rather than reproducing the shader's compensated lane merges.
+                let mean: [f64; 3] = std::array::from_fn(|c| {
+                    samples.iter().map(|p| f64::from(p[c])).sum::<f64>() / count as f64
+                });
+                let mut variance = [0_f64; 3];
+                let mut covariance = [0_f64; 3];
+                for sample in &samples {
+                    let d: [f64; 3] = std::array::from_fn(|c| f64::from(sample[c]) - mean[c]);
+                    for c in 0..3 {
+                        variance[c] += d[c] * d[c];
+                    }
+                    covariance[0] += d[0] * d[1];
+                    covariance[1] += d[0] * d[2];
+                    covariance[2] += d[2] * d[1];
+                }
+                let maximum = [(0, 1), (0, 2), (2, 1)]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(c, (a, b))| covariance[c].abs() / (variance[a] * variance[b]).sqrt())
+                    .fold(0_f64, f64::max);
+                let expected = u32::from(maximum < if level > 600. { 0.1 } else { 0.06 });
+                let pixels = gpu
+                    .upload("Patch brightness", &vec![[level; 3]; count])
+                    .unwrap();
+                let residuals = gpu.upload("Independent patch residuals", &samples).unwrap();
+                let patches = gpu
+                    .upload(
+                        "One statistics patch",
+                        &[Patch {
+                            geometry: [0, 0, side, 6],
+                            storage: [0; 4],
+                        }],
+                    )
+                    .unwrap();
+                let params = gpu.uniform(&Params {
+                    source: [side, side, 1, 0],
+                    area: [0; 4],
+                    values: [0.; 4],
+                    gains: [1.; 4],
+                });
+                let batch = gpu.uniform(&[0_u32, 1, side, 6]);
+                let mut accepted = gpu.storage("Patch rejection result", 4).unwrap();
+                let mut trace = gpu.trace(false, 1);
+                gpu.dispatch(
+                    Kernel::BandingQuality,
+                    &mut [
+                        (0, Read(&pixels)),
+                        (1, Read(&patches)),
+                        (2, Read(&params)),
+                        (5, Read(&residuals)),
+                        (6, Write(accepted.write())),
+                        (8, Read(&batch)),
+                    ],
+                    [1, 1],
+                    &mut trace,
+                );
+                let bytes = gpu.readback(&accepted).unwrap();
+                assert_eq!(
+                    u32::from_le_bytes(bytes[..4].try_into().unwrap()),
+                    expected,
+                    "side={side} level={level} correlation={correlation}"
+                );
+            }
+        }
+    }
+}

@@ -50,6 +50,18 @@ fn effective_preview_quality(
     }
 }
 
+fn resolve_preview(request: &Request, settings: &mut Settings, metadata: &Metadata) {
+    settings.preview_quality = effective_preview_quality(request, settings, metadata);
+    if request.preview_quality != PreviewMode::Smart
+        || request.export.is_some()
+        || request.comparison
+        || request.output != "final"
+        || !settings.regional_preview_available(metadata)
+    {
+        settings.preview_region = None;
+    }
+}
+
 pub struct Frame {
     pub path: PathBuf,
     pub output: String,
@@ -215,10 +227,7 @@ impl Worker {
                     let session = &mut source.as_mut().unwrap().1;
                     metadata = Some(session.metadata().clone());
                     defaults_errors = resolve_camera_settings(&mut settings, session.metadata());
-                    settings.preview_quality = effective_preview_quality(&request, &settings, session.metadata());
-                    if request.preview_quality != PreviewMode::Smart || request.export.is_some() || request.comparison || request.output != "final" || !settings.fast_preview_available(session.metadata()) {
-                        settings.preview_region = None;
-                    }
+                    resolve_preview(&request, &mut settings, session.metadata());
                     if let Some(export) = request.export.as_ref() {
                         let mut profile=Profile::new(crate::timing::mode());
                         let before=crate::timing::enabled().then(||engine.gpu_activity());
@@ -234,7 +243,7 @@ impl Worker {
                         state.clear||state.stop||state.request.as_ref().is_some_and(|pending|{
                             let mut next=pending.settings.clone();
                             resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
-                            next.preview_quality = effective_preview_quality(pending, &next, metadata.as_ref().unwrap());
+                            resolve_preview(pending, &mut next, metadata.as_ref().unwrap());
                             pending.path!=request.path||pending.output!=request.output||pending.comparison!=request.comparison||settings.preview_quality!=next.preview_quality||settings.preview_region!=next.preview_region||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
                         })
                     };
@@ -1140,6 +1149,62 @@ mod preview_tests {
         }
     }
     #[test]
+    fn merrill_smart_uses_fast_overview_and_whole_frame_full_without_changing_edits() {
+        use foveonic::source::{Matrix, MatrixEncoding};
+        let mut metadata = metadata();
+        metadata.width = 4928;
+        metadata.height = 3264;
+        metadata.processing_version = None;
+        metadata
+            .properties
+            .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
+        metadata.matrices.insert(
+            "ActiveImageArea".into(),
+            Matrix {
+                encoding: MatrixEncoding::Uint32,
+                representation: "test",
+                dimensions: vec![4],
+                values: vec![112., 64., 4815., 3199.],
+            },
+        );
+        let mut request = Request {
+            revision: 1,
+            path: "merrill.x3f".into(),
+            settings: Settings::new("Sunlight", "Standard"),
+            preview_quality: PreviewMode::Smart,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        };
+        let mut resolved = request.settings.clone();
+        resolve_preview(&request, &mut resolved, &metadata);
+        assert_eq!(resolved.preview_quality, PreviewQuality::Fast);
+        assert_eq!(resolved.preview_region, None);
+        assert!(resolved.row_correction && resolved.despeckle);
+        request.preview_quality = PreviewMode::Full;
+        resolve_preview(&request, &mut resolved, &metadata);
+        assert_eq!(resolved.preview_quality, PreviewQuality::Full);
+        request.preview_quality = PreviewMode::Smart;
+        request.settings.preview_region = Some([100, 100, 400, 300]);
+        resolved = request.settings.clone();
+        resolve_preview(&request, &mut resolved, &metadata);
+        assert_eq!(resolved.preview_quality, PreviewQuality::Full);
+        assert_eq!(
+            resolved.preview_region, None,
+            "Merrill must not publish a false regional frame"
+        );
+        for format in [ExportFormat::Tiff, ExportFormat::Dng] {
+            request.export = Some(Export {
+                path: "export.output".into(),
+                format,
+                tiff_color_space: None,
+            });
+            resolve_preview(&request, &mut resolved, &metadata);
+            assert_eq!(resolved.preview_quality, PreviewQuality::Full);
+            assert_eq!(resolved.preview_region, None);
+        }
+    }
+    #[test]
     fn fast_policy_keeps_inspection_monochrome_comparisons_and_exports_full() {
         let mut m = metadata();
         let mut r = Request {
@@ -1223,12 +1288,23 @@ mod preview_tests {
     #[ignore = "requires GPU and QUATTRO_X3F"]
     fn fast_preference_exports_full_files_and_returns_to_fast_preview() {
         let path = PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
+        preview_exports_full_files_and_returns_to_fast(path);
+    }
+
+    #[test]
+    #[ignore = "requires GPU and MERRILL_X3F"]
+    fn merrill_smart_exports_full_files_and_returns_to_fast_preview() {
+        let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
+        preview_exports_full_files_and_returns_to_fast(path);
+    }
+
+    fn preview_exports_full_files_and_returns_to_fast(path: PathBuf) {
         let source = Source::open(&path).unwrap();
         let engine = Engine::new().unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("foveonic-fast-export-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path();
         let mut settings = Settings::new("Sunlight", "Standard");
+        settings.reconstruction = Some(Default::default());
         settings.exposure = 0.5;
         settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::Srgb);
         let expected = engine
@@ -1320,7 +1396,8 @@ mod preview_tests {
         );
         assert_eq!(frame.texture.description().extent, native.map(|v| v / 2));
         assert_eq!(frame.display_extent(false), native);
+        assert!(frame.artifact.settings.reconstruction.is_some());
+        assert!(reply.settings.reconstruction.is_some());
         drop(worker);
-        std::fs::remove_dir_all(directory).unwrap();
     }
 }

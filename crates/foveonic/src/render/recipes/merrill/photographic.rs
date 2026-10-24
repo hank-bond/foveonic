@@ -53,12 +53,7 @@ pub(in crate::render::recipes) fn build(
         return Ok(recipe);
     }
     if !settings.is_monochrome() && settings.saturation != 1. {
-        let dimensions = [
-            source.metadata.width as u32,
-            source.metadata.height as u32,
-            0,
-            0,
-        ];
+        let dimensions = [recipe.params.source[0], recipe.params.source[1], 0, 0];
         recipe.final_id = recipe.graph.add(
             Operation::Saturation {
                 params: super::super::saturation(dimensions, settings.saturation),

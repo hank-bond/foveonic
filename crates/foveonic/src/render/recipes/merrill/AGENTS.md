@@ -18,6 +18,7 @@ Monochrome branches after the same sensor corrections, then uses its dedicated m
 - **[dng_base.rs](./dng_base.rs)** Builds a fresh linear technical base while leaving selected appearance to DNG metadata.
 - **[monochrome.rs](./monochrome.rs)** Authors sensor-layer monochrome filtering and finishing without the color reconstruction path.
 - **[photographic.rs](./photographic.rs)** Completes photographic RGB with selected camera appearance, exposure, tone, and saturation.
+- **[preview.rs](./preview.rs)** Prepares Merrill's half-size calibrated preview grid without changing source metadata.
 - **[technical.rs](./technical.rs)** Builds Merrill sensor corrections and technical color with lazy inspection preparation.
 
 <!-- INDEX:END -->

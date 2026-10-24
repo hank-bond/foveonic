@@ -204,6 +204,68 @@ fn smoke_sessions_neither_read_nor_write_fixture_recipes() {
 }
 
 #[test]
+fn fresh_merrill_capture_defaults_enable_noise_before_rendering() {
+    for model in [
+        "SIGMA DP1 Merrill",
+        "SIGMA DP2 Merrill",
+        "SIGMA DP3 Merrill",
+        "SIGMA SD1 Merrill",
+    ] {
+        let fresh = capture_defaults([("CAMMODEL".into(), model.into())].into()).unwrap();
+        assert_eq!(fresh.reconstruction, Some(Default::default()), "{model}");
+        let selected = selection_settings(fresh.clone(), &["Shade".into(), "Vivid".into()]);
+        assert_eq!(selected.reconstruction, fresh.reconstruction);
+    }
+}
+
+#[test]
+#[ignore = "requires MERRILL_X3F"]
+fn merrill_preview_quality_does_not_save_defaults_or_reenable_saved_off() {
+    let directory = Directory::new();
+    let path = directory.input("merrill.x3f");
+    fs::hard_link(std::env::var_os("MERRILL_X3F").unwrap(), &path).unwrap();
+    let mut session = Session::new(egui::Context::default(), true);
+    session.select(path.clone());
+    let mut settings = receive(&mut session);
+    assert!(settings.reconstruction.is_some());
+    for quality in [
+        foveonic::render::PreviewQuality::Fast,
+        foveonic::render::PreviewQuality::Full,
+    ] {
+        settings.preview_quality = quality;
+        session.refresh(&settings);
+    }
+    drop(session);
+    assert!(
+        !sidecar::path(&path).exists(),
+        "viewing must not create a recipe"
+    );
+
+    let mut session = Session::new(egui::Context::default(), true);
+    session.select(path.clone());
+    settings = receive(&mut session);
+    settings.reconstruction = None;
+    session.edited(&settings);
+    drop(session);
+    let saved = fs::read(sidecar::path(&path)).unwrap();
+    assert_eq!(sidecar::decode(&saved).unwrap().reconstruction, None);
+
+    let mut session = Session::new(egui::Context::default(), true);
+    session.select(path.clone());
+    let mut restored = receive(&mut session);
+    assert_eq!(restored.reconstruction, None);
+    for quality in [
+        foveonic::render::PreviewQuality::Fast,
+        foveonic::render::PreviewQuality::Full,
+    ] {
+        restored.preview_quality = quality;
+        session.refresh(&restored);
+    }
+    drop(session);
+    assert_eq!(fs::read(sidecar::path(&path)).unwrap(), saved);
+}
+
+#[test]
 fn fresh_capture_defaults_precede_launch_choices_and_early_edits() {
     let properties = [
         ("CAMMODEL".into(), "SIGMA dp2 Quattro".into()),

@@ -16,6 +16,7 @@ Setup reports complete file-read, in-memory decode and total source-open wall ti
 ### Source files
 
 - **[compare_color_field.rs](./compare_color_field.rs)** Renders saved-sidecar highlight comparisons and measures completed fresh recipes without changing edits.
+- **[compare_merrill_preview.rs](./compare_merrill_preview.rs)** Compares completed Merrill reduced-preview variants and writes a color-managed local review.
 - **[export_dng.rs](./export_dng.rs)** Exports one supported original with explicit WB/mode for DNG reader validation, without selecting sidecars.
 - **[measure_color_field_controls.rs](./measure_color_field_controls.rs)** Measures highlight selectivity in fresh/cached float outputs and RGB16, with matched preview regions.
 - **[profile_pipeline.rs](./profile_pipeline.rs)** Measures completed fresh processing with normal photographic controls, separate GPU diagnostics and optional exact goldens.

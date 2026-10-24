@@ -94,6 +94,8 @@ impl ControlCapabilities {
     ) -> Result<()> {
         if self.family == ProcessingFamily::Quattro {
             super::recipes::quattro::apply_capture_defaults(settings, metadata)?;
+        } else if self.family == ProcessingFamily::Merrill {
+            settings.reconstruction = Some(self.default_noise_controls());
         }
         Ok(())
     }
@@ -104,10 +106,12 @@ impl ControlCapabilities {
         if self.family == ProcessingFamily::Quattro {
             return super::recipes::quattro::editing_defaults(metadata, rendering);
         }
-        Ok(Settings {
+        let mut defaults = Settings {
             rendering,
             ..Settings::default()
-        })
+        };
+        self.apply_capture_defaults(&mut defaults, metadata)?;
+        Ok(defaults)
     }
 
     /// Capture properties identify the panel before full rendering metadata arrives.

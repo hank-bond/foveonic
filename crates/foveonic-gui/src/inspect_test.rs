@@ -682,7 +682,11 @@ mod preview_tests {
             ("SIGMA sd Quattro", true),
             ("SIGMA sd Quattro H", true),
             ("sd Quattro H", true),
-            ("SIGMA DP1 Merrill", false),
+            ("SIGMA DP1 Merrill", true),
+            ("SIGMA DP2 Merrill", true),
+            ("SIGMA DP3 Merrill", true),
+            ("SIGMA SD1 Merrill", true),
+            ("DP2 Merrill", true),
             ("SIGMA SD15", false),
         ] {
             let properties = [("CAMMODEL".to_string(), model.to_string())].into();

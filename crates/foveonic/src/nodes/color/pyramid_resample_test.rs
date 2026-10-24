@@ -21,6 +21,25 @@ fn rejects_empty_levels_and_keeps_explicit_ratio_geometry() {
 }
 
 #[test]
+#[ignore = "requires a working GPU adapter"]
+fn half_sampling_preserves_constants_and_filters_alternating_pixels() {
+    let gpu = Gpu::new().unwrap();
+    let pixels: Vec<f32> = (0..8)
+        .flat_map(|_| (0..8).flat_map(|x| [7., if x % 2 == 0 { 0. } else { 16. }, -3.]))
+        .collect();
+    let input = gpu.upload("Alternating RGB", &pixels).unwrap();
+    let prepared = Prepared::new([8, 8], Ratio::Half).unwrap();
+    let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+    let bytes = gpu.readback(&output).unwrap();
+    let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
+    for y in 0..4 {
+        for x in 1..3 {
+            assert_eq!(&actual[(y * 4 + x) * 3..(y * 4 + x + 1) * 3], [7., 8., -3.]);
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires PYRAMID_REFERENCE native fixtures and a GPU"]
 fn native_separable_images_match() {
     let directory = std::path::PathBuf::from(std::env::var_os("PYRAMID_REFERENCE").unwrap());

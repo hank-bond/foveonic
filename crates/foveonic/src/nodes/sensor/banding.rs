@@ -5,6 +5,10 @@
 //! e47af35. Host fitting matrices depend only on fixed geometric polynomial bases.
 use crate::gpu::Binding::{Read, Write};
 use crate::source::{MatrixEncoding, Metadata, Result};
+
+// Largest selected polynomial basis. Match the coefficient slots in banding.wgsl.
+const MAX_FIT_COEFFICIENTS: u32 = 6;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Params {
@@ -256,7 +260,7 @@ pub(crate) fn apply(
     let tables = gpu.upload("Geometric fitting basis and inverse", &p.tables)?;
     let mut coefficients = gpu.storage(
         "Row patch fitted coefficients",
-        p.patches.len() as u64 * 6 * 3 * 4,
+        p.patches.len() as u64 * u64::from(MAX_FIT_COEFFICIENTS) * 3 * 4,
     )?;
     let samples = p
         .batches
@@ -285,7 +289,7 @@ pub(crate) fn apply(
             (3, Read(&tables)),
             (4, Write(coefficients.write())),
         ],
-        [p.params.source[2].div_ceil(32), 1],
+        [(p.params.source[2] * MAX_FIT_COEFFICIENTS).div_ceil(32), 1],
         &mut trace,
     );
     for batch in &p.batches {
@@ -314,7 +318,7 @@ pub(crate) fn apply(
                 (6, Write(accepted.write())),
                 (8, Read(&batch_uniform)),
             ],
-            [batch[1].div_ceil(32), 1],
+            [batch[1], 1],
             &mut trace,
         );
         gpu.dispatch(

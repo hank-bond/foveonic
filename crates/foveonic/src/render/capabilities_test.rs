@@ -64,6 +64,38 @@ fn classic_resets_noise_adjustments_without_disabling_reconstruction() {
 }
 
 #[test]
+fn fresh_merrill_defaults_enable_noise_without_reenabling_saved_off_choices() {
+    let metadata = Metadata {
+        processing_version: None,
+        width: 4928,
+        height: 3264,
+        rotation: 0,
+        properties: [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    let capabilities = ControlCapabilities::from_metadata(&metadata).unwrap();
+    let mut fresh = Settings::default();
+    capabilities
+        .apply_capture_defaults(&mut fresh, &metadata)
+        .unwrap();
+    assert_eq!(fresh.reconstruction, Some(Default::default()));
+    assert_eq!(
+        capabilities
+            .editing_defaults(&metadata, Rendering::Color)
+            .unwrap(),
+        fresh
+    );
+    let mut saved = crate::sidecar::decode(
+        br#"{"format":"foveonic-editing","version":1,"settings":{"reconstruction":null}}"#,
+    )
+    .unwrap();
+    assert!(!capabilities.normalize(&mut saved));
+    assert_eq!(saved.reconstruction, None);
+    assert!(capabilities.validate(&saved).is_ok());
+}
+
+#[test]
 fn merrill_retains_its_supported_adjustments() {
     let capabilities = capabilities("SIGMA DP2 Merrill");
     let mut settings = Settings::new("Sunlight", "Standard");

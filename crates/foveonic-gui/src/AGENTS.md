@@ -49,7 +49,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
 - **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
-- **[smart.rs](./smart.rs)** Refines the first Quattro detail viewport once before completing the whole Full frame.
+- **[smart.rs](./smart.rs)** Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
 - **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
 - **[toolbar.rs](./toolbar.rs)** Places source opening, destination and shared processing actions on one padded toolbar row.

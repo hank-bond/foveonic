@@ -12,6 +12,8 @@ use crate::render::TiffColorSpace;
 use std::path::PathBuf;
 
 pub enum Operation {
+    /// Low-pass calibrated layers onto a grid with half the width and height.
+    ReduceLayers(crate::nodes::color::pyramid_resample::Prepared),
     ImageRegion {
         prepared: crate::nodes::finish::image_region::Prepared,
         data: DataType,
@@ -170,6 +172,7 @@ impl Operation {
     pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {
         use crate::{noise::RecipeStage as N, recipe::Key};
         match self {
+            Self::ReduceLayers(p) => p.key(),
             Self::ImageRegion {
                 prepared,
                 data,
@@ -282,6 +285,7 @@ impl Operation {
     }
     pub fn label(&self) -> &'static str {
         match self {
+            Self::ReduceLayers(_) => "reduce calibrated preview layers",
             Self::LinearCodeBase => "retain linear RGB code base",
             Self::PackedLab(p) => match p.direction() {
                 crate::nodes::color::packed_lab::Direction::Forward => {
@@ -381,6 +385,7 @@ impl Operation {
     pub(super) fn types(&self) -> (Vec<DataType>, DataType) {
         use DataType::*;
         match self {
+            Self::ReduceLayers(_) => (vec![CalibratedLayers], CalibratedLayers),
             Self::ImageRegion { data, .. } => (vec![*data], *data),
             Self::PackedLab(p) => match p.direction() {
                 crate::nodes::color::packed_lab::Direction::Forward => {
@@ -657,6 +662,7 @@ impl Operation {
 
     pub fn output_name(&self) -> &'static str {
         match self {
+            Self::ReduceLayers(_) => "preview.layers",
             Self::ImageRegion { output, .. } => output,
             Self::PackedLab(p) => match p.direction() {
                 crate::nodes::color::packed_lab::Direction::Forward => "local-contrast.lab",

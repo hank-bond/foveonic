@@ -18,7 +18,7 @@ pub enum FolderMode {
     Browse,
     Import,
 }
-/// Workspace policy. The worker resolves Smart into Fast or regional Full work.
+/// Workspace policy. Smart starts with Fast and refines to Full when viewing detail.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PreviewMode {
     #[default]

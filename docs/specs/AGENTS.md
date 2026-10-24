@@ -28,6 +28,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[image-information-bar](./image-information-bar.md)** _(accepted, conforming, reference)._ A compact image information bar shows capture settings, filename, and visible-region dimensions and coordinates for photographic review.
 - **[import-workflow](./import-workflow.md)** _(accepted, conforming, reference)._ Import mode reviews sources without source-side writes and carries selected originals, edits, and hidden-file decisions to a destination.
 - **[interactive-rendering](./interactive-rendering.md)** _(accepted, incomplete, reference)._ Slider feedback uses full-quality active-edit inputs, bounded latest-request scheduling, image-first delivery, and deferred scopes and navigator presentation.
+- **[merrill-fast-preview](./merrill-fast-preview.md)** _(accepted, conforming, reference)._ Merrill Fast uses a filtered quarter-pixel working grid and Smart refines it to whole-frame Full for detail.
 - **[monochrome-rendering](./monochrome-rendering.md)** _(accepted, conforming, reference)._ Merrill monochrome rendering mixes calibrated sensor layers before dedicated GPU filtering and exports editable linear monochrome DNG samples.
 - **[native-sharpening](./native-sharpening.md)** _(accepted, incomplete, reference)._ Optional GPU sharpening uses signed high-pass before exposure/tone, with distinct color-proportional and additive monochrome applications.
 - **[output-strategies](./output-strategies.md)** _(accepted, incomplete, reference)._ DNG preserves editing latitude and embeds color-mode presentation, while TIFF bakes the selected rendering.
@@ -43,7 +44,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[releases](./releases.md)** _(accepted, conforming, reference)._ Cargo packages macOS apps and release tags build Developer ID signed, unnotarized draft GitHub Releases without publishing them.
 - **[render-resources](./render-resources.md)** _(accepted, conforming, reference)._ Owned GPU render results separate image processing from display and export, with explicit pixel meaning and geometry.
 - **[row-banding](./row-banding.md)** _(accepted, conforming, reference)._ GPU row-banding correction fits the native geometric patch banks, rejects scene-correlated residuals, and subtracts bounded additive per-row sensor bias before reconstruction.
-- **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Quattro Smart preview shows Fast, refines the first detail viewport, then completes Full for unrestricted panning.
+- **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Smart preview shows Fast before Full detail, with viewport-first refinement where the recipe supports it.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
 
 <!-- INDEX:END -->

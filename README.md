@@ -11,7 +11,7 @@ A photo editor for Sigma X3F files, focused on speed, flexibility, and attractiv
 - Work with Sigma's older SD and DP cameras, Merrill, Quattro, and Quattro H.
 - Adjust exposure, colour, highlights, noise, and detail while keeping your original files untouched. Edits save automatically alongside your photographs.
 - Create black-and-white images by mixing the original sensor layers, rather than simply removing colour from the finished image.
-- Browse and edit Quattro and Quattro H photographs with responsive Smart previews. Zoom in to see full detail while the rest of the image finishes in the background.
+- Browse and edit Merrill, Quattro and Quattro H photographs with responsive Smart previews. Start with a smaller preview and zoom in for full detail. Quattro refines the visible area first while the rest of the image finishes in the background.
 - Export finished photographs or prepare them for further editing in another application.
 
 ## TIFF or DNG?
