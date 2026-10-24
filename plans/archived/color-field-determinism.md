@@ -1,10 +1,11 @@
 ---
 summary: "Make color-field GPU solver row ordering deterministic without changing equations, tolerances, Classic processing or per-image controls."
+status: archived
 ---
 
 # Deterministic color-field solver ordering
 
-The owner approved deterministic GPU row ordering after the [production investigation](./color-field-production.md) captured a small recovery-rounding difference crossing the downstream speckle detector's strict boundary. Preserve the [accepted recovery requirements](../docs/specs/color-field.md), all numerical bounds, solver iteration caps, compensated color arithmetic and exactly 64 Local brightness sweeps. Do not change Classic or its detector.
+The owner approved deterministic GPU row ordering after the [production investigation](../color-field-production.md) captured a small recovery-rounding difference crossing the downstream speckle detector's strict boundary. Preserve the [accepted recovery requirements](../../docs/specs/color-field.md), all numerical bounds, solver iteration caps, compensated color arithmetic and exactly 64 Local brightness sweeps. Do not change Classic or its detector.
 
 ## Design
 
@@ -33,4 +34,8 @@ The performance check interleaved two old/new execution orders over five scenes 
 
 The complete serial core GPU run passed 88 of 89 tests. Color Field and saved-recipe replay passed. The sole failure was the existing Classic recovery-threshold cached/fresh comparison: 31,019,819 differing components, maximum `0.9444937`. The two exact-cache tests that failed in the preceding run passed this time, which does not establish fixes for them. One pristine-main control run of the threshold test passed. That control does not clear the candidate failure or identify its cause. The candidate failure was frozen and not repeatedly retried. Classic processing has not been changed by this work.
 
-Workspace, tool, strict all-target Clippy, formatting and all eight GUI GPU tests passed. Remaining integration acceptance is the separate Classic exact-cache issue recorded in the [mismatch plan](./gpu-output-mismatch.md). The owner subsequently approved committing and merging this candidate while retaining the Classic failure as an open issue. App installation, launch and publication remain outside scope.
+Workspace, tool, strict all-target Clippy, formatting and all eight GUI GPU tests passed. Remaining integration acceptance is the separate Classic exact-cache issue recorded in the [mismatch plan](../gpu-output-mismatch.md). The owner subsequently approved committing and merging this candidate while retaining the Classic failure as an open issue. App installation, launch and publication remain outside scope.
+
+## Closure
+
+This completed implementation or experiment is archived during release 0.3.0 preparation at the owner's request. Earlier scope, review and working-tree statements describe that historical slice. Recorded limitations and separately tracked follow-ups remain explicit.

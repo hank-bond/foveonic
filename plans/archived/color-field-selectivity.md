@@ -1,5 +1,6 @@
 ---
 summary: "Experiment with local color-evidence acceptance thresholds, without added neutral bias, to reduce bleeding while preserving compatible reconstructed color."
+status: archived
 ---
 
 # Color evidence selectivity
@@ -8,7 +9,7 @@ summary: "Experiment with local color-evidence acceptance thresholds, without ad
 
 The owner clarified that the desired slider selects or rejects color evidence locally. The implemented neutral-restraint adjustment is not that control. The owner approved another experiment round. Keep neutral restraint off, do not change the GUI or promote a new default, and retain the optimized brightness methods, full-sensor geometry, Local's 64 sweeps and existing solver bounds. Recovery arithmetic stays in WGSL. Originals, sidecars, retained evidence and the running app remain untouched. Do not commit or install.
 
-Follow the [color-field requirements](../docs/specs/color-field.md). This round supersedes the tuning acceptance direction in the [neutral-restraint plan](./color-field-restraint.md), not its recorded measurements or unresolved cache observations.
+Follow the [color-field requirements](../../docs/specs/color-field.md). This round supersedes the tuning acceptance direction in the [neutral-restraint plan](../color-field-restraint.md), not its recorded measurements or unresolved cache observations.
 
 ## Questions
 
@@ -77,3 +78,7 @@ The explicit-coefficient baseline, with no evidence filtering, passed all sixtee
 The owner selected the mixed-evidence cutoff with original neutral coefficients preserved. The other tested mechanisms did not show a stronger photographic selection effect. The initial interface exposed raw cutoffs. The owner then clarified that the ordinary control should be positive-only optional processing: strength defaults to 0, preserving original behavior, and increasing toward 1 rejects more inconsistent evidence. Color Field has no redundant A button; Classic retains its automatic baseline. Positive strength maps to cutoff `0.005 / strength`. The [unified-control plan](./unified-highlight-control.md) records the current mapping, data migration and shared Method/Highlights layout and Classic-only A.
 
 The four core working files and comparison example were restored byte-for-byte to their pre-round contents. The diagnostic example and all trial sources/binaries were retained outside maintained source. The ordinary comparison renderer was rebuilt from restored source. No app bundle, original input or owner sidecar was replaced. No commit, install or launch was performed. The earlier single-pixel Output differences remain unresolved and are not cleared by these comparisons.
+
+## Closure
+
+This completed implementation or experiment is archived during release 0.3.0 preparation at the owner's request. Earlier scope, review and working-tree statements describe that historical slice. Recorded limitations and separately tracked follow-ups remain explicit.

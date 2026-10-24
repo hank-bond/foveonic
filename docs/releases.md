@@ -5,7 +5,7 @@ kind: how-to
 
 # Prepare an application release
 
-[Requirements](specs/releases.md) define the signed Apple Silicon release scope. The [signed-release plan](../plans/signed-releases.md) tracks validation. Release CI signs the app but does not submit it for notarization. Ordinary local builds need no Apple credentials.
+[Requirements](specs/releases.md) define the signed Apple Silicon release scope. The [signed-release plan](../plans/archived/signed-releases.md) tracks validation. Release CI signs the app but does not submit it for notarization. Ordinary local builds need no Apple credentials.
 
 ## Configure Apple credentials
 
@@ -30,13 +30,13 @@ CI imports the identity into a temporary keychain and removes it and temporary c
 
 ## Review locally
 
-1. Set the application version in `[workspace.package]` in `Cargo.toml`. Both application crates inherit it. The examples below use `0.2.0`.
-2. Review the matching `## 0.2.0` section in [CHANGELOG.md](../CHANGELOG.md). Replace its introductory placeholder with your own prose, or add the introduction to the GitHub draft later. Keep the change list below it.
+1. Set the application version in `[workspace.package]` in `Cargo.toml`. Both application crates inherit it. The examples below use `0.3.0`.
+2. Review the matching `## 0.3.0` section in [CHANGELOG.md](../CHANGELOG.md). Replace its introductory placeholder with your own prose, or add the introduction to the GitHub draft later. Keep the change list below it.
 3. Run the [workspace checks](contributing.md#run-checks), then validate the notes and build the bundle:
 
    ```sh
-   cargo xtask release-notes --tag v0.2.0
-   cargo xtask bundle --tag v0.2.0
+   cargo xtask release-notes --tag v0.3.0
+   cargo xtask bundle --tag v0.3.0
    ```
 
    Packaging does not install or launch the app. `cargo xtask run -- path/to/photo.x3f` builds and launches it for interactive review. Both build commands accept `--offline` after dependencies are cached. Local debug builds use `--debug` instead of `--tag`.
@@ -48,13 +48,13 @@ CI imports the identity into a temporary keychain and removes it and temporary c
 When ready to start CI, create and push the matching tag:
 
 ```sh
-git tag -a v0.2.0 -m "Foveonic v0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "Foveonic v0.3.0"
+git push origin v0.3.0
 ```
 
 The [release workflow](../.github/workflows/release.yml) runs checks on an Apple Silicon `macos-26` runner and builds with Xcode. It signs the app with Developer ID, hardened runtime and a secure timestamp, then verifies the signature before creating the ZIP and checksum and uploading them to a draft GitHub Release:
 
-- `Foveonic-v0.2.0-macos-arm64.zip`, containing `Foveonic.app`.
+- `Foveonic-v0.3.0-macos-arm64.zip`, containing `Foveonic.app`.
 - `SHA256SUMS`, for verifying the downloaded archive with `shasum -a 256 -c SHA256SUMS`.
 
 Signing or signature-verification failures stop uploads, without an unsigned fallback. There is no notarization submission, ticket stapling or Gatekeeper-acceptance gate.
@@ -67,18 +67,18 @@ Review the draft notes and download the archive through a browser so macOS appli
 
 For a build you trust, attempt to open the app, then use **System Settings → Privacy & Security → Open Anyway** for that app and confirm the prompt. Subsequent launches normally retain that approval. A newly downloaded version may be checked again. Do not disable Gatekeeper globally.
 
-Previously published unsigned releases remain unchanged. The first signing-only draft build and downloaded-app review are still pending as recorded in the [plan](../plans/signed-releases.md).
+Previously published unsigned releases remain unchanged. The first signing-only release, [v0.2.0](https://github.com/hank-bond/foveonic/releases/tag/v0.2.0), passed hosted checks, checksum/signature verification and an isolated native GUI smoke test before owner-approved publication. The [plan](../plans/archived/signed-releases.md) records the evidence and testing limits.
 
 Add your introduction above the changelog in the draft if it is not already present. Publish only after review. CI never publishes the release automatically.
 
 ## Manage Latest
 
-Version tags such as `v0.2.0` identify fixed release commits. GitHub's **Latest** designation is separate from Git tags. Drafts do not replace the published Latest release, and no moving Git tag named `latest` is needed.
+Version tags such as `v0.3.0` identify fixed release commits. GitHub's **Latest** designation is separate from Git tags. Drafts do not replace the published Latest release, and no moving Git tag named `latest` is needed.
 
 After reviewing the draft and app, publishing with an explicit Latest selection is available in GitHub's release editor or through:
 
 ```sh
-gh release edit v0.2.0 --draft=false --latest
+gh release edit v0.3.0 --draft=false --latest
 ```
 
 Run this only with owner publication approval. The stable [latest application release link](https://github.com/hank-bond/foveonic/releases/latest) follows that designation. Photograph collections are not application releases and should not be marked Latest.

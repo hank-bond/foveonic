@@ -2,7 +2,7 @@
 summary: "Cargo packages macOS apps and release tags build Developer ID signed, unnotarized draft GitHub Releases without publishing them."
 kind: reference
 status: accepted
-implementation: incomplete
+implementation: conforming
 ---
 
 # Application releases
@@ -29,4 +29,4 @@ Release assets remain Apple Silicon ZIP archives for macOS 26 or later. Intel bu
 
 Local packaging, archive round-trip checks, task/workspace tests, and mocked draft-release handling pass as recorded in the [preparation plan](../../plans/archived/cargo-releases.md). The first [hosted release run](https://github.com/hank-bond/foveonic/actions/runs/38832699996) passed checks, built and archived the app, and uploaded assets to a draft. The [v0.1.0 release](https://github.com/hank-bond/foveonic/releases/tag/v0.1.0) is now published with the Apple Silicon archive and checksums. That initial release was unsigned and unnotarized.
 
-The [signed-release plan](../../plans/signed-releases.md) tracks the signing migration. Hosted signing passed before the owner chose signing-only distribution. The signing-only draft upload and downloaded-app validation remain pending, so conformance is not yet established for the revised workflow.
+The [signed-release plan](../../plans/archived/signed-releases.md) tracks the signing migration. The [0.2.0 hosted run](https://github.com/hank-bond/foveonic/actions/runs/39973024540) passed signing-only draft creation and credential cleanup. The downloaded archive checksum, Developer ID signature, hardened runtime, secure timestamp, bundle version and architecture verify. Its isolated native GUI smoke test passes without changing local photographs or sidecars. The owner approved publishing [v0.2.0](https://github.com/hank-bond/foveonic/releases/tag/v0.2.0) as Latest. Browser-quarantine override testing was not automated.

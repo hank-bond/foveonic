@@ -1,10 +1,11 @@
 ---
 summary: "Add ordinary Quattro color and monochrome DNG export with a canonical technical base and one approximate embedded appearance."
+status: archived
 ---
 
 # Quattro DNG
 
-Requirements: [output strategies](../docs/specs/output-strategies.md) and [Quattro rendering](../docs/specs/quattro-rendering.md). The owner approved the same useful-editing approximation accepted for [Classic DNG](./archived/classic-dng.md). Keep the existing uncompressed writer, GPU encoding, export scheduling and single-appearance policy.
+Requirements: [output strategies](../../docs/specs/output-strategies.md) and [Quattro rendering](../../docs/specs/quattro-rendering.md). The owner approved the same useful-editing approximation accepted for [Classic DNG](./classic-dng.md). Keep the existing uncompressed writer, GPU encoding, export scheduling and single-appearance policy.
 
 ## Scope and boundaries
 
@@ -57,3 +58,7 @@ Metadata-only AsShotNeutral and BaselineExposure edits were tested on SD, DP2 an
 Local receipts are under `target/quattro-dng-review`: `sdk-validation.json`, `edited/validation.json`, boundary statistics, settings and SDK logs. `small-review/` holds 1400-pixel matched PNG pairs for Standard, monochrome, Vivid, Portrait, FCBlue and representative saved defaults. Representative retained files include `sd-quattro-recorded.dng`, `dp0-quattro-recorded.dng`, `dp2-quattro-fcblue.dng` and `sd-quattro-monochrome.dng`. Exact-decoding intermediates and duplicate full TIFFs were removed after validation, reclaiming 6.26 GB; ten selected DNGs and bounded review images remain.
 
 Final workspace validation passes: 438 ordinary tests, formatting, strict all-target Clippy and generated documentation indexes. Targeted GPU and GUI export tests pass separately. The release app bundle is rebuilt; changes remain uncommitted for owner review.
+
+## Closure
+
+This completed implementation or experiment is archived during release 0.3.0 preparation at the owner's request. Earlier scope, review and working-tree statements describe that historical slice. Recorded limitations and separately tracked follow-ups remain explicit.

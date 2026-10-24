@@ -5,6 +5,23 @@ kind: reference
 
 # Changelog
 
+## 0.3.0
+
+<!-- Add your release introduction here. -->
+
+### Changes
+
+- Browse and Import open folders recursively, with photographs grouped by subfolder.
+- Import mode keeps source cards and folders free of editing writes. Pick photographs, hide rejects, and remember imported or hidden files at the destination for the next review.
+- One Process action uses saved settings for DNG, TIFF and TIFF color space. Import can copy originals directly or process them and keep originals and edits in an `x3f` subfolder.
+- Background batches freeze the submitted edits and yield to interactive browsing and rendering.
+- Decoded-photo caching follows a configurable neighborhood around the selected photograph, defaulting to three behind and seven ahead. A configurable pool decodes sensor layers in photo order, with lower priority than interactive work.
+- Fast and Smart previews now support Merrill color photographs. Fast uses filtered half-width, half-height previews, and Smart refines the whole image to Full above 100% zoom for detail and panning.
+- Merrill Fast skips row correction and Noise and Detail while preserving the saved controls for Full. New Merrill photographs start with Noise and Detail enabled, and existing saved choices remain unchanged.
+- Faster Merrill GPU row correction, clearer cache readiness, and consistent browser picking and hiding shortcuts across the workspace.
+
+Apple Silicon downloads require macOS 26 or later. They are Developer ID signed and unnotarized. First launch may require **Open Anyway** in macOS Privacy & Security settings.
+
 ## 0.2.0
 
 The big change here is support for the other sensor architectures.  I'm trying out a bunch of optimization techniques to get latency down as much as possible.  The common approach is that we are progressively rendering and caching.  A new smart rendering mode will open the image in a 1/4 downscale, a double click will then render the full size for the viewport only, and then immediately render the full size for the whole sensor.  This makes interacting with quattro and quattro h files really snappy.  We also decode the files to the cache ahead of time, which shaves off about 400-600ms (on an M1 Pro) at the cost of using temporary directory space.  This gets cleared by your system when you restart, so you don't have to worry about clearing it out.

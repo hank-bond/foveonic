@@ -1,5 +1,6 @@
 ---
 summary: "Replace neutral restraint with a bounded color-consistency cutoff and share one Highlights/A row across Classic, Local and Global."
+status: archived
 ---
 
 # Unified highlight control
@@ -8,9 +9,9 @@ summary: "Replace neutral restraint with a bounded color-consistency cutoff and 
 
 The owner selected the local mixed-evidence cutoff after the [selectivity investigation](./color-field-selectivity.md). Put the Method dropdown first, then one Highlights slider and independent enable checkbox for all three methods. Classic alone retains A, its existing signed threshold range, and the baseline calculated from camera exposure metadata. After reviewing the initial raw-cutoff interface, the owner clarified the expected positive-only optional-processing direction. Color Field: Local and Color Field: Global now share a 0–1 selectivity strength. The owner removed the redundant color-field A button: strength defaults to 0, preserving the original behavior. Increasing strength rejects more inconsistent evidence. Do not reinterpret 0 as a tuned cutoff.
 
-Follow the [color-field requirements](../docs/specs/color-field.md). Preserve per-cell original neutral coefficients, immutable source reliability, healthy samples, full-sensor geometry, Local's 64 sweeps, compensated iterates, true-residual checks and existing stopping/error bounds. Use WGSL for recovery. Remove the neutral-restraint processing path and CLI option. Migrate retired automatic and neutral-restraint settings to 0 during decoding, without rewriting owner files or retaining a second recovery implementation. Preserve independent Classic and color-field settings across method switches.
+Follow the [color-field requirements](../../docs/specs/color-field.md). Preserve per-cell original neutral coefficients, immutable source reliability, healthy samples, full-sensor geometry, Local's 64 sweeps, compensated iterates, true-residual checks and existing stopping/error bounds. Use WGSL for recovery. Remove the neutral-restraint processing path and CLI option. Migrate retired automatic and neutral-restraint settings to 0 during decoding, without rewriting owner files or retaining a second recovery implementation. Preserve independent Classic and color-field settings across method switches.
 
-The owner subsequently approved commit, merge and worktree removal through the [production plan](./color-field-production.md). Do not install, launch or replace the running app. Preserve investigation evidence and report cache differences honestly.
+The owner subsequently approved commit, merge and worktree removal through the [production plan](../color-field-production.md). Do not install, launch or replace the running app. Preserve investigation evidence and report cache differences honestly.
 
 ## Steps
 
@@ -60,8 +61,12 @@ A preliminary interleaved A comparison with the frozen optimized renderer comple
 
 The dedicated cache test passed its Global cutoff 0.02/0.01/0.005 and restored-A comparisons, then failed on 0095 Local cutoff 0.02. Highlight layers differed by at most `0.045898438` calibrated codes. Output differed by `0.0011789203`, above the unchanged `0.0002` bound. The failing binary, source archive, sidecar bytes, checksums and log are retained. The actual intermediate image pair was not captured, so its extent and first divergent stage remain unknown. It must not be assumed to share the earlier single-pixel failure's cause.
 
-Under the strength interface, the failed Local cutoff-0.02 case is selectivity 0.25 with the same effective processing parameters. This historical failure was subsequently captured, traced to a speckle-detection boundary and resolved by approved deterministic solver ordering. The [determinism plan](./color-field-determinism.md) records the exact corpus comparisons and unchanged numerical bounds. That test was not rerun. Eleven other processor GPU tests were run with this known failed comparison explicitly excluded and reported separately. No assertion was weakened, and later fresh-only success does not clear the failure. The [GPU output mismatch plan](./gpu-output-mismatch.md) records the unresolved issue.
+Under the strength interface, the failed Local cutoff-0.02 case is selectivity 0.25 with the same effective processing parameters. This historical failure was subsequently captured, traced to a speckle-detection boundary and resolved by approved deterministic solver ordering. The [determinism plan](./color-field-determinism.md) records the exact corpus comparisons and unchanged numerical bounds. That test was not rerun. Eleven other processor GPU tests were run with this known failed comparison explicitly excluded and reported separately. No assertion was weakened, and later fresh-only success does not clear the failure. The [GPU output mismatch plan](../gpu-output-mismatch.md) records the unresolved issue.
 
 ### Disposition
 
 The requested control and deterministic recovery are implemented for review. The Color Field cached Output failure is resolved with exact comparisons and unchanged bounds. Final integration remains incomplete because the latest full suite encountered the separate existing Classic recovery-threshold cache failure. No app bundle was replaced, installed or launched. No commit was made. Originals and owner sidecars were not rewritten.
+
+## Closure
+
+This completed implementation or experiment is archived during release 0.3.0 preparation at the owner's request. Earlier scope, review and working-tree statements describe that historical slice. Recorded limitations and separately tracked follow-ups remain explicit.

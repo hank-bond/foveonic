@@ -1,5 +1,6 @@
 ---
 summary: "Measure simple color-field optimizations while preserving recovery equations, solver limits and numerical acceptance."
+status: archived
 ---
 
 # Color-field speed pass
@@ -8,7 +9,7 @@ summary: "Measure simple color-field optimizations while preserving recovery equ
 
 The owner approved an autonomous optimization pass through meaningful low-complexity ideas, followed by review. The public names are **Classic**, **Color Field: Local**, and **Color Field: Global**. Internal algorithm codes and em dashes are not method names. Classic remains default. Do not commit, install, close the running app, change owner edits or delete retained evidence.
 
-Follow the [color-field requirements](../docs/specs/color-field.md) and [implementation plan](./color-field.md). Keep equations, full-sensor geometry, 64 Local sweeps, stopping bounds, iteration limits and the `2e-4` identical-evidence error bound unchanged. Keep compensated color iterates and genuine true-residual validation. No fallback or CPU recovery.
+Follow the [color-field requirements](../../docs/specs/color-field.md) and [implementation plan](../color-field.md). Keep equations, full-sensor geometry, 64 Local sweeps, stopping bounds, iteration limits and the `2e-4` identical-evidence error bound unchanged. Keep compensated color iterates and genuine true-residual validation. No fallback or CPU recovery.
 
 ## Method
 
@@ -90,3 +91,7 @@ All 192 planned all-corpus Classic/Global/Local validation renders and all 42 re
 Ordinary workspace tests, strict Clippy, formatting, generated-index checks and all 11 Python report tests passed. Browser validation checked all 15 registered regions and 195 native crops with no JavaScript errors. Rebuilding the photographic report changed only labels and findings. Every other report-data field and its raw measurement hash stayed unchanged. All 16 originals and 14 frozen sidecars still match retained SHA-256 values.
 
 The release app and CLI were rebuilt offline. The app was not installed or launched by the assistant, no application default changed and no commit was made. Frozen baseline/candidate binaries, raw measurements, rejected trials and before-update reports remain preserved. Owner photographic review and the separate agreement/boundary-control decision remain open. No further low-complexity idea found in this pass demonstrated a meaningful gain beyond the retained changes.
+
+## Closure
+
+This completed implementation or experiment is archived during release 0.3.0 preparation at the owner's request. Earlier scope, review and working-tree statements describe that historical slice. Recorded limitations and separately tracked follow-ups remain explicit.

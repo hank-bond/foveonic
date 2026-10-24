@@ -5,7 +5,7 @@ status: archived
 
 # Quattro performance
 
-This completed pass follows the [Quattro integration](../quattro-integration.md) work. The entries below retain the sequence of measurements, rejected experiments, LOW investigation and accepted Fast integration. Earlier statements about prototype-only work describe those historical slices. Complete processing was measured separately from decoding and export, with immutable preparation owned by the engine and numerical behavior owned by the operations.
+This completed pass follows the [Quattro integration](./quattro-integration.md) work. The entries below retain the sequence of measurements, rejected experiments, LOW investigation and accepted Fast integration. Earlier statements about prototype-only work describe those historical slices. Complete processing was measured separately from decoding and export, with immutable preparation owned by the engine and numerical behavior owned by the operations.
 
 ## Method
 

@@ -27,6 +27,10 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[classic-monochrome](./classic-monochrome.md)** _(archived)._ Support reference-derived Classic monochrome rendering and editable DNG with independent color-mode controls.
 - **[classic-pipeline](./classic-pipeline.md)** _(archived)._ Build and validate an isolated end-to-end Classic GPU recipe to evaluate functional operations and shared engine machinery.
 - **[clickable-states](./clickable-states.md)** _(archived)._ Group editing corrections and share rounded clickable states without changing processing defaults.
+- **[color-field-bleeding](./color-field-bleeding.md)** _(archived)._ Profile color-field parameters that may reduce yellow bleeding into the 0170 striped skirt without losing genuine highlight color.
+- **[color-field-determinism](./color-field-determinism.md)** _(archived)._ Make color-field GPU solver row ordering deterministic without changing equations, tolerances, Classic processing or per-image controls.
+- **[color-field-selectivity](./color-field-selectivity.md)** _(archived)._ Experiment with local color-evidence acceptance thresholds, without added neutral bias, to reduce bleeding while preserving compatible reconstructed color.
+- **[color-field-speed](./color-field-speed.md)** _(archived)._ Measure simple color-field optimizations while preserving recovery equations, solver limits and numerical acceptance.
 - **[decode-cache-and-smart-preview](./decode-cache-and-smart-preview.md)** _(archived)._ Implement bounded decoded-source disk reuse, app settings and Quattro regional Smart refinement.
 - **[despeckle](./despeckle.md)** _(archived)._ GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
@@ -53,6 +57,8 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** _(archived)._ Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
 - **[pipeline-performance](./pipeline-performance.md)** _(archived)._ Completed full-pipeline profiling and output-equivalent optimization reduced six-photo render latency roughly five to seven times.
 - **[profiling-consolidation](./profiling-consolidation.md)** _(archived)._ Consolidate retained core, GUI and native profiling into explicit modes and reusable structured reports.
+- **[quattro-dng](./quattro-dng.md)** _(archived)._ Add ordinary Quattro color and monochrome DNG export with a canonical technical base and one approximate embedded appearance.
+- **[quattro-integration](./quattro-integration.md)** _(archived)._ Implement Quattro input, calibration and reconstruction through family-owned multiresolution recipes.
 - **[quattro-organization](./quattro-organization.md)** _(archived)._ Review Quattro consistency across family controls, recipe preparation, numerical nodes and shared execution.
 - **[quattro-performance](./quattro-performance.md)** _(archived)._ Completed output-equivalent repair and cache optimizations cut Quattro render latency roughly threefold.
 - **[quattro-performance-and-fast-preview](./quattro-performance-and-fast-preview.md)** _(archived)._ Measure Quattro latency and retain simple optimizations that preserve demonstrated photographic output.
@@ -62,9 +68,12 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
+- **[signed-releases](./signed-releases.md)** _(archived)._ Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases.
 - **[thumbnail-and-preview-cache](./thumbnail-and-preview-cache.md)** _(archived)._ Refresh rendered thumbnails, cache sharper asynchronous previews, and collect recipes in a visible source-folder directory.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** _(archived)._ Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
+- **[tiger-integration](./tiger-integration.md)** _(archived)._ Complete Tiger's native full-resolution rendering before consolidating and evaluating portable methods on ordinary Quattro.
 - **[tiger-smart-preview](./tiger-smart-preview.md)** _(archived)._ Enable Tiger Fast and Smart previews through the shared overview, regional refinement and whole-frame continuation.
+- **[unified-highlight-control](./unified-highlight-control.md)** _(archived)._ Replace neutral restraint with a bounded color-consistency cutoff and share one Highlights/A row across Classic, Local and Global.
 - **[viewport-scopes](./viewport-scopes.md)** _(archived)._ Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
 
 <!-- INDEX:END -->

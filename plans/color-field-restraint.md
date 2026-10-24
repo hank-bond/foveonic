@@ -6,11 +6,11 @@ summary: "Expose one per-image highlight color restraint adjustment and remove r
 
 ## Current direction
 
-The owner subsequently clarified that the intended control selects compatible color evidence rather than applying an added neutral bias across reconstructed pixels. This implementation is not accepted as that control. The [selectivity investigation](./color-field-selectivity.md) tested the corrected direction with neutral restraint off. The owner then selected a consistency cutoff, tracked in the [unified-control plan](./unified-highlight-control.md). The neutral-bias implementation is removed and its saved field migrates to A on load. Preserve the findings below as historical evidence, not as the current processing path.
+The owner subsequently clarified that the intended control selects compatible color evidence rather than applying an added neutral bias across reconstructed pixels. This implementation is not accepted as that control. The [selectivity investigation](./archived/color-field-selectivity.md) tested the corrected direction with neutral restraint off. The owner then selected a consistency cutoff, tracked in the [unified-control plan](./archived/unified-highlight-control.md). The neutral-bias implementation is removed and its saved field migrates to A on load. Preserve the findings below as historical evidence, not as the current processing path.
 
 ## Original approved scope
 
-The owner approved a shared per-image restraint slider and cleanup of rejected experiments. A useful adjustment can trade less skirt bleeding for less recovered flower or skin color. It does not need one setting that improves the entire corpus. Follow the [color-field requirements](../docs/specs/color-field.md) and retain the [bleeding investigation findings](./color-field-bleeding.md).
+The owner approved a shared per-image restraint slider and cleanup of rejected experiments. A useful adjustment can trade less skirt bleeding for less recovered flower or skin color. It does not need one setting that improves the entire corpus. Follow the [color-field requirements](../docs/specs/color-field.md) and retain the [bleeding investigation findings](./archived/color-field-bleeding.md).
 
 Use the tested final native-fit neutral penalty, not a second recovery implementation or CPU correction. Zero preserves the optimized baseline. Use a finite 0–8 adjustment with intermediate settings checked photographically. Keep brightness reconstruction, Local's 64 sweeps, convergence bounds and healthy pixels unchanged. Replace the two ordinary GUI agreement/boundary sliders with this single adjustment. Preserve investigation flags, numerical oracle coverage and retained evidence. Do not commit, install, launch or replace the running app.
 

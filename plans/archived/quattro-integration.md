@@ -1,10 +1,11 @@
 ---
 summary: "Implement Quattro input, calibration and reconstruction through family-owned multiresolution recipes."
+status: archived
 ---
 
 # Quattro integration
 
-The owner approved the DP2-first implementation sequence after reviewing the integration assessment. Begin with decoding and independent-resolution plane inspection, then add calibration and reconstruction incrementally. Preserve the [recipe and numerical-operation boundaries](../docs/specs/classic-rendering.md) established by Classic and the shared [output requirements](../docs/specs/output-strategies.md).
+The owner approved the DP2-first implementation sequence after reviewing the integration assessment. Begin with decoding and independent-resolution plane inspection, then add calibration and reconstruction incrementally. Preserve the [recipe and numerical-operation boundaries](../../docs/specs/classic-rendering.md) established by Classic and the shared [output requirements](../../docs/specs/output-strategies.md).
 
 ## Assessment
 
@@ -102,7 +103,7 @@ The authorized reference checkout contains the detailed decoder, dispatch, calib
 
 ## Implemented input and calibration boundaries
 
-The [input and inspection specification](../docs/specs/quattro-input.md) defines this slice. All five acquired originals decode exactly against independent native sensor captures: 175,371,264 Float32 components and 16,660,568 CAMF bytes. Full loading and bounded capture reading agree on camera properties, including originals without PROP. Processing versions and packed source storage are explicit.
+The [input and inspection specification](../../docs/specs/quattro-input.md) defines this slice. All five acquired originals decode exactly against independent native sensor captures: 175,371,264 Float32 components and 16,660,568 CAMF bytes. Full loading and bounded capture reading agree on camera properties, including originals without PROP. Processing versions and packed source storage are explicit.
 
 The GPU exposes `sensor.rgb` and `sensor.blue`. Supported Quattro processing versions additionally expose `extraction.rgb` and `extraction.blue`, with offset/scale correction and high-blue clipping. Complete DP2 extraction matches all 37,836,288 independently captured RGB/blue values exactly. Tiger raw inspection is available, while its different gain-bearing calibration remains unimplemented.
 
@@ -120,7 +121,7 @@ The next comparison target is an owned full-frame capture at successful PREPROCE
 
 ## Bundled calibration resources
 
-The approved default is the exact 24 `C80` through `C83` map files from the reference implementation. Their [provenance and hashes](../crates/foveonic/assets/quattro/README.md) stay beside the bundled files. Applications use these resources automatically. The existing explicit directory API can replace the bundle with an immutable snapshot, without changing recipe or numerical-node contracts.
+The approved default is the exact 24 `C80` through `C83` map files from the reference implementation. Their [provenance and hashes](../../crates/foveonic/assets/quattro/README.md) stay beside the bundled files. Applications use these resources automatically. The existing explicit directory API can replace the bundle with an immutable snapshot, without changing recipe or numerical-node contracts.
 
 - [x] Embed and validate all 24 source map files with their provenance.
 - [x] Verify default rendering and blue-map inspection without calibration environment configuration.
@@ -130,7 +131,7 @@ Bundled-resource verification passes: 383 ordinary workspace tests and strict Cl
 
 ## Initial color pipeline
 
-The foundation was committed separately. The next slice composes the ordinary full-size DP2 Quattro ISO100 photograph, under the [color-rendering specification](../docs/specs/quattro-rendering.md).
+The foundation was committed separately. The next slice composes the ordinary full-size DP2 Quattro ISO100 photograph, under the [color-rendering specification](../../docs/specs/quattro-rendering.md).
 
 - [x] Complete source-derived HLP calibration and mandatory sparse, RGB and blue repairs.
 - [x] Preserve the independent factory mask, sparse flags and highlight mask.
@@ -224,7 +225,7 @@ A separate ISO800 luminance-step-two capture has mean error 0.18076 and maximum 
 
 Final controls verification passes all 407 workspace tests, strict Clippy, formatting and documentation checks. Rebuilt GUI and CLI exports remain byte-identical to the retained eight Classic/Merrill baselines. Source changes remain in the isolated worktree for review.
 
-The [performance pass](archived/quattro-performance.md) parallelizes independent repairs and improves the functional edit checkpoint without changing same-setting pixels. Unedited files now resolve WB from their recorded camera choice; explicit and saved selections remain intact.
+The [performance pass](./quattro-performance.md) parallelizes independent repairs and improves the functional edit checkpoint without changing same-setting pixels. Unedited files now resolve WB from their recorded camera choice; explicit and saved selections remain intact.
 
 ## Reference quality completion
 
@@ -263,7 +264,7 @@ Color and monochrome Smooth/Crisp selections are stored independently. Source-de
 
 The complete native-input monochrome Stage3 comparison has maximum four camera codes and mean 0.187, from quantization through shared packed Lab and wavelet processing. Neutral mixing remains within one native code. These bounds are explicit and separate from the existing color checks. Complete monochrome comparisons pass dedicated measured bounds for minimum/Crisp and reference-default settings. Negative and positive exposure and combined monochrome tone edits each match every one of the 196,608 native response-table words. Positive monochrome exposure preserves the full curve domain and its response normalization.
 
-All eight retained Classic/Merrill TIFF regressions remain byte-identical after this integration. The [performance plan](./archived/quattro-performance-and-fast-preview.md) records accepted shader changes, rejected experiments and reproducible measurement conditions.
+All eight retained Classic/Merrill TIFF regressions remain byte-identical after this integration. The [performance plan](./quattro-performance-and-fast-preview.md) records accepted shader changes, rejected experiments and reproducible measurement conditions.
 
 
 ### Saved monochrome mixer
@@ -284,3 +285,7 @@ Egui tests cover both rendering panels for all five ordinary models with capture
 ## DNG extension
 
 The separately approved [Quattro DNG plan](./quattro-dng.md) adds editable color and monochrome exports using the accepted canonical-Standard approximation. Its unsigned-code source limitations and validation claims are tracked there.
+
+## Closure
+
+This completed implementation or experiment is archived during release 0.3.0 preparation at the owner's request. Earlier scope, review and working-tree statements describe that historical slice. Recorded limitations and separately tracked follow-ups remain explicit.

@@ -1,10 +1,11 @@
 ---
 summary: "Complete Tiger's native full-resolution rendering before consolidating and evaluating portable methods on ordinary Quattro."
+status: archived
 ---
 
 # Tiger integration
 
-Implement the accepted [Tiger requirements](../docs/specs/tiger-rendering.md), reusing the existing [Quattro composition contracts](../docs/specs/quattro-rendering.md) and [output requirements](../docs/specs/output-strategies.md).
+Implement the accepted [Tiger requirements](../../docs/specs/tiger-rendering.md), reusing the existing [Quattro composition contracts](../../docs/specs/quattro-rendering.md) and [output requirements](../../docs/specs/output-strategies.md).
 
 - [x] Audit original metadata, native evidence, adapter limits, and complete processing dependencies.
 - [x] Implement calibrated extraction and Tiger-specific repair preparation.
@@ -13,7 +14,7 @@ Implement the accepted [Tiger requirements](../docs/specs/tiger-rendering.md), r
 - [x] Complete application controls, inspection, TIFF, and editable DNG.
 - [x] Validate numerical fixtures, original-file boundaries, existing-family regressions, and native application behavior.
 - [x] Consolidate demonstrated shared contracts and compare portable Tiger methods on ordinary Quattro without changing its defaults.
-- [ ] Owner review of Tiger output and optional ordinary-Quattro comparisons.
+- [x] Owner approved merging and shipping Tiger. Optional ordinary-Quattro appearance changes remain deferred.
 
 Use an isolated worktree because main contains unrelated release work. The owner authorized committing the completed Tiger work, including Fast/Smart and paired phase-detection repair. Reference research and the original sd Quattro H fixture are already supplied by the owner. Findings should be recorded here without depending on private artifact paths.
 
@@ -52,4 +53,8 @@ QUATTRO_X3F=path/to/photo.x3f QUATTRO_TIGER_EXPERIMENT_DIR=path/to/new-output \
   cargo test --offline --release -p foveonic compare_portable_tiger_methods_on_ordinary_quattro -- --ignored --nocapture
 ```
 
-Final checks pass: 484 workspace tests, strict Clippy, formatting and documentation indexes, ten targeted native/numerical/ownership checks, both DNG behavior checks, cache round-trips and two native application sequences. Tiger Fast/Smart is tracked in the [preview plan](./archived/tiger-smart-preview.md). Reduced-resolution originals, other Tiger ISOs and a broader native whole-photo comparison remain follow-up coverage.
+Final checks pass: 484 workspace tests, strict Clippy, formatting and documentation indexes, ten targeted native/numerical/ownership checks, both DNG behavior checks, cache round-trips and two native application sequences. Tiger Fast/Smart is tracked in the [preview plan](./tiger-smart-preview.md). Reduced-resolution originals, other Tiger ISOs and a broader native whole-photo comparison remain follow-up coverage.
+
+## Closure
+
+The implemented Tiger route shipped in 0.2.0 after owner-approved integration. This completed implementation slice is archived during 0.3.0 preparation. The optional ordinary-Quattro experiments did not change defaults. Their photographic review and wider ISO/input coverage remain follow-ups under the [Tiger specification](../../docs/specs/tiger-rendering.md). Earlier worktree and uncommitted statements describe the historical implementation sequence.

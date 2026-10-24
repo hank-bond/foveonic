@@ -1,5 +1,6 @@
 ---
 summary: "Profile color-field parameters that may reduce yellow bleeding into the 0170 striped skirt without losing genuine highlight color."
+status: archived
 ---
 
 # Color-field bleeding on 0170
@@ -8,7 +9,7 @@ summary: "Profile color-field parameters that may reduce yellow bleeding into th
 
 The owner approved profiling parameters that could add useful processing flexibility, with priority on the strongly clipped yellow/white skirt in `_P2M0170`. The reference implementation screenshot shows the same yellow wash, so this is an opportunity to improve on the reference rather than a port defect. The owner also reports that the current agreement and boundary sliders have little visible effect. Preserve defaults and existing acceptance checks. Do not add a GUI control until a candidate demonstrates a clear photographic improvement and an understandable tradeoff. Do not commit or install.
 
-Follow the [color-field requirements](../docs/specs/color-field.md) and the [control sensitivity investigation](./color-field-controls.md). Source and sidecars remain immutable. Recovery remains in WGSL. Preview images are eight-bit review aids, not numerical goldens.
+Follow the [color-field requirements](../../docs/specs/color-field.md) and the [control sensitivity investigation](../color-field-controls.md). Source and sidecars remain immutable. Recovery remains in WGSL. Preview images are eight-bit review aids, not numerical goldens.
 
 ## Observations
 
@@ -36,7 +37,7 @@ Follow the [color-field requirements](../docs/specs/color-field.md) and the [con
 - [x] Isolate color data terms in the affected grid cells and final native fit while holding brightness reconstruction fixed.
 - [x] Recheck restrained candidates on flowers, white knitwear, skin, clouds and the severe-clipping scene.
 - [x] Summarize photographic tradeoffs. The owner clarified that per-image tuning need not improve every scene at one setting, then selected final-fit neutral restraint for a slider.
-- [x] Agree cleanup scope and remove rejected shader investigation hooks. The [restraint plan](./color-field-restraint.md) tracks integration and acceptance. Defaults remain unchanged.
+- [x] Agree cleanup scope and remove rejected shader investigation hooks. The [restraint plan](../color-field-restraint.md) tracks integration and acceptance. Defaults remain unchanged.
 
 ## Findings
 
@@ -65,4 +66,8 @@ These interventions do not prove a single physical cause. Field color itself is 
 
 The final round recorded 93 completed renders and 92 preview exports with no logged render errors. Two tool timeouts remain explicit incomplete measurements, not passing samples. One strong-neutral trial produced no completed render. A cross-scene diagnostic batch stopped after five completed renders and four exports. Neither was retried. Other cross-scene candidates completed both Local and Global across five independent scenes.
 
-Working source was restored byte-for-byte to its pre-round state. Preview images are eight-bit photographic review aids, not numerical goldens. No new default was selected. The initial screening incorrectly treated a cross-scene improvement as necessary for a slider. The owner clarified that losing genuine highlight color on one image is an acceptable tradeoff for reducing bleeding on another, then approved a shared final-fit color-restraint slider. The [restraint plan](./color-field-restraint.md) records that implementation and cleanup. Other experimental shader hooks are removed. Optimized Local/Global brightness and grid logic remain unchanged.
+Working source was restored byte-for-byte to its pre-round state. Preview images are eight-bit photographic review aids, not numerical goldens. No new default was selected. The initial screening incorrectly treated a cross-scene improvement as necessary for a slider. The owner clarified that losing genuine highlight color on one image is an acceptable tradeoff for reducing bleeding on another, then approved a shared final-fit color-restraint slider. The [restraint plan](../color-field-restraint.md) records that implementation and cleanup. Other experimental shader hooks are removed. Optimized Local/Global brightness and grid logic remain unchanged.
+
+## Closure
+
+This completed implementation or experiment is archived during release 0.3.0 preparation at the owner's request. Earlier scope, review and working-tree statements describe that historical slice. Recorded limitations and separately tracked follow-ups remain explicit.
