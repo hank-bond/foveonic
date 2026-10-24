@@ -119,6 +119,7 @@ pub struct Browser {
     advance_hidden: bool,
     pub decode_states: Arc<HashMap<PathBuf, EntryState>>,
     pub cache_enabled: bool,
+    prefetch_dirty: bool,
     sender: mpsc::SyncSender<Request>,
     receiver: mpsc::Receiver<Reply>,
     pending: HashSet<PathBuf>,
@@ -214,6 +215,7 @@ impl Browser {
             advance_hidden: false,
             decode_states: Arc::new(HashMap::new()),
             cache_enabled: false,
+            prefetch_dirty: true,
             sender,
             receiver,
             pending: HashSet::new(),
@@ -244,6 +246,7 @@ impl Browser {
         };
         let files = folders::discover(dir)?;
         self.files = files;
+        self.prefetch_dirty = true;
         self.root = Some(dir.to_owned());
         self.marks.clear();
         self.recorded_marks.clear();
@@ -262,6 +265,20 @@ impl Browser {
         self.rendered_revisions.clear();
         self.order.clear();
         Ok(())
+    }
+    pub fn invalidate_prefetch(&mut self) {
+        self.prefetch_dirty = true;
+    }
+    /// Publish order changes once. Selection changes also invalidate this snapshot.
+    /// A photo concealed by a history update may remain active in the viewport.
+    pub fn take_prefetch_order(&mut self, selected: Option<&Path>) -> Option<Vec<PathBuf>> {
+        std::mem::take(&mut self.prefetch_dirty).then(|| {
+            self.files
+                .iter()
+                .filter(|path| !self.excluded.contains(*path) || selected == Some(path.as_path()))
+                .cloned()
+                .collect()
+        })
     }
     pub fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(Reply {

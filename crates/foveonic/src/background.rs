@@ -56,6 +56,7 @@ impl Drop for Activity {
 pub(crate) struct Context {
     gate: Arc<Gate>,
     interrupt_epoch: Option<u64>,
+    decoder: Option<crate::decode_pool::Task>,
 }
 
 #[derive(Debug)]
@@ -80,6 +81,7 @@ pub(crate) fn run<T>(gate: Option<Arc<Gate>>, work: impl FnOnce() -> T) -> T {
         gate.map(|gate| Context {
             gate,
             interrupt_epoch: None,
+            decoder: None,
         }),
         work,
     )
@@ -93,6 +95,7 @@ pub(crate) fn interruptible<T>(gate: Arc<Gate>, work: impl FnOnce() -> T) -> T {
         Some(Context {
             gate,
             interrupt_epoch: Some(epoch),
+            decoder: None,
         }),
         work,
     )
@@ -132,26 +135,35 @@ pub(crate) fn checkpoint_or_cancel() -> crate::source::Result<()> {
         Ok(())
     })
 }
-/// Speculative photos use one CPU worker each, keeping a photo pool within its budget.
-pub(crate) fn speculative() -> bool {
-    CONTEXT.with(|c| {
-        c.borrow()
-            .as_ref()
-            .is_some_and(|c| c.interrupt_epoch.is_some())
+pub(crate) fn decoder_context() -> Option<crate::decode_pool::Task> {
+    context().and_then(|c| c.decoder)
+}
+pub(crate) fn decoder<T>(
+    task: crate::decode_pool::Task,
+    work: impl FnOnce() -> crate::source::Result<T>,
+) -> crate::source::Result<T> {
+    let turn = task.turn.clone();
+    let mut scheduling = context().ok_or("missing speculative context")?;
+    scheduling.decoder = Some(task);
+    with_context(Some(scheduling), || {
+        turn.wait()?;
+        work()
     })
 }
 
 /// Apply explicit QoS to active loads and every inherited decoder context.
 pub(crate) fn decode_priority() {
     #[cfg(target_os = "macos")]
-    set_qos(if context().is_some() {
-        QOS_BACKGROUND
-    } else {
-        QOS_USER_INITIATED
+    set_qos(match context() {
+        Some(context) if context.decoder.is_some() => QOS_UTILITY,
+        Some(_) => QOS_BACKGROUND,
+        None => QOS_USER_INITIATED,
     });
 }
 #[cfg(target_os = "macos")]
 const QOS_BACKGROUND: u32 = 0x09;
+#[cfg(target_os = "macos")]
+const QOS_UTILITY: u32 = 0x11;
 #[cfg(target_os = "macos")]
 const QOS_USER_INITIATED: u32 = 0x19;
 #[cfg(target_os = "macos")]
@@ -170,16 +182,20 @@ pub(crate) fn lower_priority() {
     set_qos(QOS_BACKGROUND);
     #[cfg(target_os = "linux")]
     {
-        // nice() is additive. Reused workers must apply the adjustment only once.
+        // Reused workers need no repeated scheduling calls.
         if PRIORITY_APPLIED.with(|applied| applied.replace(true)) {
             return;
         }
         unsafe extern "C" {
-            fn nice(increment: i32) -> i32;
+            fn getpriority(which: i32, who: u32) -> i32;
+            fn setpriority(which: i32, who: u32, value: i32) -> i32;
         }
         unsafe {
-            const BACKGROUND_NICE_INCREMENT: i32 = 10;
-            nice(BACKGROUND_NICE_INCREMENT);
+            const PRIO_PROCESS: i32 = 0;
+            const BACKGROUND_NICE: i32 = 10;
+            // Pool threads may already inherit this value. Never add it twice.
+            let inherited = getpriority(PRIO_PROCESS, 0);
+            setpriority(PRIO_PROCESS, 0, inherited.max(BACKGROUND_NICE));
         }
     }
 }
@@ -220,6 +236,26 @@ mod tests {
                     with_context(inherited, || assert_eq!(qos(), QOS_BACKGROUND))
                 })
                 .join()
+                .unwrap();
+            });
+            let pool = Arc::new(crate::decode_pool::Pool::new(3).unwrap());
+            let order = Arc::new(crate::decode_pool::Order::default());
+            interruptible(Arc::new(Gate::default()), || {
+                decoder(
+                    crate::decode_pool::Task {
+                        pool,
+                        turn: order.issue(),
+                    },
+                    || {
+                        assert_eq!(qos(), QOS_UTILITY);
+                        let task = decoder_context().unwrap();
+                        task.pool.planes(&task.turn, |_| {
+                            assert_eq!(qos(), QOS_UTILITY);
+                            Ok(())
+                        })?;
+                        Ok(())
+                    },
+                )
                 .unwrap();
             });
             decode_priority();

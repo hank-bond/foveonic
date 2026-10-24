@@ -14,6 +14,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[cache-and-smart-cleanup](./cache-and-smart-cleanup.md)** _(archived)._ Organize cache and Smart preview responsibilities and explain constants while preserving processing behavior.
+- **[cache-prefetch-window](./cache-prefetch-window.md)** _(archived)._ Bound background decoding around the selected photograph and retain nearby results under the disk budget.
 - **[cache-status-dots](./cache-status-dots.md)** _(archived)._ Replace the provisional cache checkmark with muted caption dots backed by explicit queue and disk states.
 - **[camera-repair-default](./camera-repair-default.md)** _(archived)._ Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
 - **[cargo-releases](./cargo-releases.md)** _(archived)._ Replace Python app packaging with Cargo tasks and prepare an unsigned v0.1.0 draft-release workflow.

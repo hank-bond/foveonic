@@ -205,9 +205,6 @@ impl App {
                     self.status = "No X3F files in this folder".into();
                     self.status_error = true;
                 }
-                self.worker
-                    .cache
-                    .prefetch_folder(self.browser.files.clone());
                 self.import.rescan(
                     &mut self.browser,
                     self.preferences.processing_destination.as_deref(),
@@ -220,6 +217,7 @@ impl App {
         }
     }
     fn clear_selection(&mut self) {
+        self.browser.invalidate_prefetch();
         self.revision += 1;
         self.selected = None;
         self.opening = None;
@@ -238,6 +236,7 @@ impl App {
         viewport::clear(&self.render_state);
     }
     fn select(&mut self, path: PathBuf) {
+        self.browser.invalidate_prefetch();
         let began = std::time::Instant::now();
         self.opening = Some(Opening {
             _priority: self.worker.cache.foreground(),
@@ -1081,6 +1080,11 @@ impl eframe::App for App {
             self.select(path);
         } else if changed && !self.exporting {
             self.submit(None);
+        }
+        if let Some(paths) = self.browser.take_prefetch_order(self.selected.as_deref()) {
+            self.worker
+                .cache
+                .prefetch_window(paths, self.selected.clone());
         }
         self.update_smart(ctx);
         self.update_scopes(ctx);

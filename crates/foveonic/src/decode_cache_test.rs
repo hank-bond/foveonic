@@ -69,6 +69,7 @@ fn decode_thread_budget_restores_legacy_settings_and_clamps_to_available_cores()
 fn defaults_enable_only_merrill_and_quattro_with_ten_decimal_gigabytes() {
     let settings = Settings::default();
     assert_eq!(settings.max_bytes, 10_000_000_000);
+    assert_eq!((settings.prefetch_behind, settings.prefetch_ahead), (3, 7));
     assert!(settings.permits(ProcessingFamily::Merrill));
     assert!(settings.permits(ProcessingFamily::Quattro));
     assert!(!settings.permits(ProcessingFamily::Classic));
@@ -187,11 +188,11 @@ fn successful_reuse_updates_lru_before_eviction() {
         .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2))
         .unwrap();
     load(&oldest, &identity, &Settings::default(), &|_| {}).unwrap();
-    let retained = prune(&root, size).unwrap();
+    let retained = prune(&root, size, &[]).unwrap();
     assert_eq!(retained.len(), 1);
     assert!(oldest.exists());
     assert!(!other.exists());
-    assert!(prune(&root, 0).unwrap().is_empty());
+    assert!(prune(&root, 0, &[]).unwrap().is_empty());
 }
 
 #[test]
@@ -303,7 +304,7 @@ fn folder_readiness_obeys_foreground_priority_identity_and_policy() {
     .unwrap();
     let foreground = cache.foreground();
     cache.configure(Settings::default());
-    cache.prefetch_folder(vec![fixture.source.clone()]);
+    cache.prefetch_window(vec![fixture.source.clone()], Some(fixture.source.clone()));
     std::thread::sleep(Duration::from_millis(30));
     assert!(
         cache.status().ready.is_empty(),
@@ -344,7 +345,10 @@ fn original_folder_prefetch_waits_for_foreground_and_skips_disabled_families() {
     let classic = root.join("sd15.x3f");
     let foreground = cache.foreground();
     cache.configure(Settings::default());
-    cache.prefetch_folder(vec![quattro.clone(), merrill.clone(), classic.clone()]);
+    cache.prefetch_window(
+        vec![quattro.clone(), merrill.clone(), classic.clone()],
+        Some(quattro.clone()),
+    );
     std::thread::sleep(Duration::from_millis(150));
     assert_eq!(cache.status().entries, 0);
     assert!(!cache.root.exists());
@@ -372,7 +376,7 @@ fn original_folder_prefetch_waits_for_foreground_and_skips_disabled_families() {
 }
 
 #[test]
-fn folder_prefetch_keeps_browser_order_for_one_pass() {
+fn prefetch_from_first_photo_follows_browser_order_for_one_window() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("cache"));
     let _foreground = cache.foreground();
@@ -383,7 +387,7 @@ fn folder_prefetch_keeps_browser_order_for_one_pass() {
     ]
     .map(PathBuf::from)
     .to_vec();
-    cache.prefetch_folder(paths.clone());
+    cache.prefetch_window(paths.clone(), paths.first().cloned());
     let mut state = cache.control.lock().unwrap();
     assert_eq!(
         state.queue.iter().collect::<Vec<_>>(),
@@ -435,7 +439,7 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
         entry_state(&root, &fixture.source, &disabled, false, &mut families),
         EntryState::Disabled
     );
-    prune(&root, 0).unwrap();
+    prune(&root, 0, &[]).unwrap();
     assert_eq!(
         entry_state(&root, &fixture.source, &policy, false, &mut families),
         EntryState::Uncached
@@ -458,7 +462,7 @@ fn foreground_open_interrupts_inflight_prefetch_then_resumes_browser_order() {
     fs::hard_link(&original, &second).unwrap();
     let cache = Cache::at(fixture.root.join("cache"));
     cache.configure(Settings::default());
-    cache.prefetch_folder(vec![first.clone(), second.clone()]);
+    cache.prefetch_window(vec![first.clone(), second.clone()], Some(first.clone()));
     let deadline = Instant::now() + Duration::from_secs(20);
     while !cache.status().prefetching.contains(&first) {
         assert!(Instant::now() < deadline, "prefetch did not start");
@@ -533,7 +537,7 @@ fn parallel_prefetch_throughput_preserves_exact_samples_and_disk_budget() {
         };
         cache.configure(settings.clone());
         let began = Instant::now();
-        cache.prefetch_folder(paths.clone());
+        cache.prefetch_window(paths.clone(), paths.first().cloned());
         while cache.status().ready.len() != PHOTOS {
             assert!(
                 began.elapsed() < Duration::from_secs(60),
@@ -557,5 +561,177 @@ fn parallel_prefetch_throughput_preserves_exact_samples_and_disk_budget() {
             );
         }
         drop(active);
+    }
+}
+
+#[test]
+fn selection_replaces_the_window_without_restarting_a_finished_or_cleared_pass() {
+    let fixture = Fixture::new();
+    let cache = Cache::at(fixture.root.join("cache"));
+    let _foreground = cache.foreground();
+    cache.configure(Settings::default());
+    let files: Vec<_> = (0..40).map(|i| PathBuf::from(format!("{i}.x3f"))).collect();
+    cache.prefetch_window(files.clone(), Some(files[10].clone()));
+    {
+        let mut state = cache.control.lock().unwrap();
+        assert_eq!(state.queue.len(), 11);
+        assert_eq!(state.queue.front(), Some(&files[10]));
+        assert_eq!(state.watched, files);
+        state.queue.clear(); // The controller has completed this pass.
+    }
+    cache.prefetch_window(files.clone(), Some(files[10].clone()));
+    assert!(cache.control.lock().unwrap().queue.is_empty());
+    cache.prefetch_window(files.clone(), Some(files[20].clone()));
+    {
+        let state = cache.control.lock().unwrap();
+        assert_eq!(state.queue.len(), 11);
+        assert_eq!(state.queue.front(), Some(&files[20]));
+        assert!(state.queue.iter().all(|p| files[17..=27].contains(p)));
+    }
+    cache.clear();
+    cache.prefetch_window(files.clone(), Some(files[20].clone()));
+    assert!(cache.control.lock().unwrap().queue.is_empty());
+    cache.prefetch_window(files.clone(), None);
+    assert!(cache.control.lock().unwrap().queue.is_empty());
+    cache.prefetch_window(files.clone(), Some(files[20].clone()));
+    cache.configure(Settings {
+        prefetch_behind: 0,
+        prefetch_ahead: 1,
+        ..Settings::default()
+    });
+    assert_eq!(
+        cache
+            .control
+            .lock()
+            .unwrap()
+            .queue
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+        files[20..22]
+    );
+}
+
+#[test]
+#[ignore = "requires QUATTRO_X3F"]
+fn navigation_keeps_nearest_decodes_when_the_window_exceeds_the_disk_budget() {
+    let original = PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
+    let expected = Source::open(&original).unwrap();
+    let fixture = Fixture::new();
+    let files: Vec<_> = (0..24)
+        .map(|i| {
+            let path = fixture.root.join(format!("{i:02}.x3f"));
+            fs::hard_link(&original, &path).unwrap();
+            path
+        })
+        .collect();
+    let probe = fixture.root.join("probe");
+    let identity = Identity::read(&files[0]).unwrap();
+    store(
+        &probe,
+        &files[0],
+        identity.clone(),
+        &expected,
+        DEFAULT_BUDGET,
+    )
+    .unwrap();
+    let entry_bytes = fs::metadata(probe.join(identity.name())).unwrap().len();
+    fs::remove_dir_all(probe).unwrap();
+    let cache = Cache::at(fixture.root.join("cache"));
+    let settings = Settings {
+        max_bytes: entry_bytes * 3 + entry_bytes / 2,
+        prefetch_behind: 1,
+        prefetch_ahead: 2,
+        ..Settings::default()
+    };
+    cache.configure(settings.clone());
+    for index in [5, 18] {
+        let began = Instant::now();
+        cache.prefetch_window(files.clone(), Some(files[index].clone()));
+        let nearest: HashSet<_> = [index, index + 1, index - 1]
+            .map(|i| files[i].clone())
+            .into();
+        let mut observed = HashSet::new();
+        loop {
+            let status = cache.status();
+            for path in status.ready.intersection(&nearest) {
+                if observed.insert(path.clone()) {
+                    eprintln!(
+                        "selection {index}: {} dot ready at {:.1} ms",
+                        path.file_name().unwrap().to_string_lossy(),
+                        began.elapsed().as_secs_f64() * 1000.
+                    );
+                }
+            }
+            if status.ready == nearest
+                && status.prefetching.is_empty()
+                && cache.control.lock().unwrap().queue.is_empty()
+            {
+                break;
+            }
+            assert!(
+                began.elapsed() < Duration::from_secs(60),
+                "neighborhood stalled: {status:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!ready(&cache.root, &files[index + 2], &settings));
+        assert!(cache.status().bytes <= settings.max_bytes);
+        let _foreground = cache.foreground();
+        let decoded = cache.open_cached(&files[index], |_| {}).unwrap();
+        assert_eq!(
+            bytemuck::cast_slice::<f32, u8>(decoded.samples()),
+            bytemuck::cast_slice::<f32, u8>(expected.samples())
+        );
+        eprintln!(
+            "selection {index}: retained current/+1/-1 in a three-decode budget, {:.1} ms",
+            began.elapsed().as_secs_f64() * 1000.
+        );
+    }
+    std::thread::sleep(Duration::from_millis(250));
+    assert!(cache.control.lock().unwrap().queue.is_empty());
+    assert!(cache.status().prefetching.is_empty());
+    assert!(cache.status().bytes <= settings.max_bytes);
+}
+
+#[test]
+#[ignore = "requires QUATTRO_X3F"]
+fn compare_active_and_speculative_decode_wall_time() {
+    let path = PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
+    let began = Instant::now();
+    let source = Source::open(&path).unwrap();
+    eprintln!(
+        "active: {:.1} ms {:?}",
+        began.elapsed().as_secs_f64() * 1000.,
+        source.load_timings()
+    );
+    drop(source);
+    for workers in [3, 5] {
+        let gate = Arc::new(crate::background::Gate::default());
+        let pool = Arc::new(crate::decode_pool::Pool::new(workers).unwrap());
+        let order = Arc::new(crate::decode_pool::Order::default());
+        std::thread::scope(|scope| {
+            for photo in 0..3 {
+                let gate = gate.clone();
+                let pool = pool.clone();
+                let turn = order.issue();
+                let path = &path;
+                scope.spawn(move || {
+                    crate::background::interruptible(gate, || {
+                        let began = Instant::now();
+                        crate::background::decoder(crate::decode_pool::Task { pool, turn }, || {
+                            let source = Source::open(path).unwrap();
+                            eprintln!(
+                                "{workers} layer workers, photo {photo}: {:.1} ms {:?}",
+                                began.elapsed().as_secs_f64() * 1000.,
+                                source.load_timings()
+                            );
+                            Ok(())
+                        })
+                        .unwrap();
+                    })
+                });
+            }
+        });
     }
 }

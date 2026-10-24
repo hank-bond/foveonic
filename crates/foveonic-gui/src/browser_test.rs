@@ -708,3 +708,32 @@ fn folder_groups_keep_one_selection_and_keyboard_range_across_directory_boundari
         assert!(!frame.labels.iter().any(|label| label == "DCIM/101SIGMA"));
     }
 }
+
+#[test]
+fn prefetch_order_tracks_visibility_and_keeps_a_concealed_active_photo() {
+    let mut browser = Browser::new(egui::Context::default());
+    browser.import_mode = true;
+    browser.files = ["a.x3f", "b.x3f", "c.x3f", "d.x3f"]
+        .map(PathBuf::from)
+        .to_vec();
+    let files = browser.files.clone();
+    browser
+        .recorded_marks
+        .insert(files[1].clone(), Mark::Imported);
+    browser.marks.insert(files[2].clone(), Mark::Hidden);
+    browser.refresh_filter();
+    assert_eq!(
+        browser.take_prefetch_order(Some(&files[1])).unwrap(),
+        [files[0].clone(), files[1].clone(), files[3].clone()]
+    );
+    browser.refresh_filter();
+    assert!(browser.take_prefetch_order(Some(&files[1])).is_none());
+    browser.invalidate_prefetch();
+    assert_eq!(
+        browser.take_prefetch_order(Some(&files[3])).unwrap(),
+        [files[0].clone(), files[3].clone()]
+    );
+    browser.hide_reviewed = false;
+    browser.refresh_filter();
+    assert_eq!(browser.take_prefetch_order(Some(&files[3])).unwrap(), files);
+}

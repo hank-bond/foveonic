@@ -1,6 +1,6 @@
 //! Stores bounded display previews under the decoded cache's identity, recipe, and shared LRU budget.
 
-use super::{prune_except, Cache, Command, Control, Identity, Settings, MAX_HEADER, TEMP_SEQUENCE};
+use super::{lru, Cache, Command, Control, Identity, Settings, MAX_HEADER, TEMP_SEQUENCE};
 use crate::{
     preview::Preview,
     render::ControlCapabilities,
@@ -204,6 +204,7 @@ pub(super) fn embedded(
     path: &Path,
     family: ProcessingFamily,
     settings: &Settings,
+    nearby: &[PathBuf],
     current: &impl Fn() -> bool,
 ) -> Result<()> {
     let key = Key::read(path)?;
@@ -246,15 +247,23 @@ pub(super) fn embedded(
         },
         preview,
     };
-    write_checked(root, write, settings, current)
+    write_checked(root, write, settings, nearby, current)
+}
+
+pub(super) fn location(root: &Path, path: &Path) -> Result<PathBuf> {
+    Ok(Key::read(path)?.location(root))
 }
 
 pub(super) fn store(root: &Path, write: PendingPreview, control: &Mutex<Control>) -> Result<()> {
-    let (settings, generation) = {
+    let (settings, generation, nearby) = {
         let state = control.lock().unwrap();
-        (state.settings.clone(), state.generation)
+        (
+            state.settings.clone(),
+            state.generation,
+            state.nearby.clone(),
+        )
     };
-    write_checked(root, write, &settings, &|| {
+    write_checked(root, write, &settings, &nearby, &|| {
         let state = control.lock().unwrap();
         !state.clear && state.generation == generation && state.settings == settings
     })
@@ -264,6 +273,7 @@ fn write_checked(
     root: &Path,
     mut write: PendingPreview,
     settings: &Settings,
+    nearby: &[PathBuf],
     current: &impl Fn() -> bool,
 ) -> Result<()> {
     if !current() || !settings.permits(write.header.family) {
@@ -308,8 +318,10 @@ fn write_checked(
         return Ok(());
     }
     fs::create_dir_all(root)?;
-    // Charge the replacement once, keeping the previous preview until rename.
-    prune_except(root, settings.max_bytes - bytes, Some(&destination))?;
+    crate::background::checkpoint_or_cancel()?;
+    if !current() || !lru::reserve(root, &destination, bytes, settings.max_bytes, nearby)? {
+        return Ok(());
+    }
     let temporary = root.join(format!(
         "{}.{}.writing",
         std::process::id(),

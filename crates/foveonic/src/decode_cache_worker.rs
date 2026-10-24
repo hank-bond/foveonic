@@ -1,4 +1,4 @@
-//! Schedules bounded cache writes, folder prefetch, and readiness scans behind foreground work.
+//! Schedules bounded cache writes, selection prefetch, and readiness scans behind foreground work.
 
 use super::{
     previews, prune, read_header, ready, store_checked, Command, Control, EntryState, Identity,
@@ -34,15 +34,34 @@ pub(super) fn start(
             let mut initialized = false;
             let mut last_scan = Instant::now();
             let mut families = HashMap::new();
+            let mut decoder_pool: Option<Arc<crate::decode_pool::Pool>> = None;
             loop {
-                let command = match receiver.recv_timeout(WORK_POLL_INTERVAL) {
+                let work_ready = {
+                    let state = control.lock().unwrap();
+                    gate.idle()
+                        && state.settings.enabled
+                        && state.settings.max_bytes > 0
+                        && !state.queue.is_empty()
+                };
+                // A queued neighborhood needs no idle poll delay between worker groups.
+                let wait = if work_ready {
+                    Duration::ZERO
+                } else {
+                    WORK_POLL_INTERVAL
+                };
+                let command = match receiver.recv_timeout(wait) {
                     Ok(command) => Some(command),
                     Err(mpsc::RecvTimeoutError::Timeout) => None,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 };
-                let (settings, clear) = {
+                let (settings, clear, nearby, generation) = {
                     let mut state = control.lock().unwrap();
-                    (state.settings.clone(), std::mem::take(&mut state.clear))
+                    (
+                        state.settings.clone(),
+                        std::mem::take(&mut state.clear),
+                        state.nearby.clone(),
+                        state.generation,
+                    )
                 };
                 if !initialized {
                     if let Some(parent) = root
@@ -80,9 +99,11 @@ pub(super) fn start(
                             identity,
                             &source,
                             settings.max_bytes,
+                            &nearby,
                             || {
                                 let state = control.lock().unwrap();
                                 !state.clear
+                                    && state.generation == generation
                                     && source
                                         .metadata
                                         .processing_family()
@@ -100,47 +121,51 @@ pub(super) fn start(
                         let _ = previews::store(&root, preview, &control);
                     }
                 }
-                // Only idle time admits new prefetch work. Decode and writes
-                // also yield at bounded checkpoints if a photo becomes active.
-                let (paths, generation, prefetch_settings) = {
-                    let mut state = control.lock().unwrap();
-                    let count = if gate.idle()
-                        && state.settings.enabled
-                        && !state.clear
-                        && state.settings.max_bytes > 0
-                    {
-                        state.settings.decode_threads.min(state.queue.len())
-                    } else {
-                        0
-                    };
+                let (generation, prefetch_settings, nearby, queued) = {
+                    let state = control.lock().unwrap();
                     (
-                        state.queue.drain(..count).collect::<Vec<_>>(),
                         state.generation,
                         state.settings.clone(),
+                        state.nearby.clone(),
+                        !state.queue.is_empty(),
                     )
                 };
-                let prefetched = !paths.is_empty();
+                let prefetched = gate.idle()
+                    && prefetch_settings.enabled
+                    && prefetch_settings.max_bytes > 0
+                    && queued;
                 if prefetched {
-                    status.lock().unwrap().prefetching = paths.clone();
-                    let results = prefetch_group(&paths, |path, publication| {
+                    if decoder_pool
+                        .as_ref()
+                        .is_none_or(|pool| pool.threads() != prefetch_settings.decode_threads)
+                    {
+                        decoder_pool =
+                            crate::decode_pool::Pool::new(prefetch_settings.decode_threads)
+                                .ok()
+                                .map(Arc::new);
+                    }
+                    if let Some(pool) = &decoder_pool {
                         background::interruptible(gate.clone(), || {
-                            prefetch(&root, path, &prefetch_settings, publication, || {
-                                let current = control.lock().unwrap();
-                                current.generation == generation && !current.clear
-                            })
-                        })
-                    });
-                    let mut current = control.lock().unwrap();
-                    if current.generation == generation && !current.clear {
-                        // Completion order never changes browser order. Interrupted
-                        // attempts go back ahead of rows that have not started yet.
-                        for (path, result) in paths.into_iter().zip(results).rev() {
-                            if result.is_err_and(|error| error.is::<background::Interrupted>()) {
-                                current.queue.push_front(path);
-                            }
+                            prefetch_pass(
+                                &root,
+                                &control,
+                                &status,
+                                pool,
+                                &prefetch_settings,
+                                &nearby,
+                                generation,
+                            );
+                        });
+                    } else {
+                        // Cache preparation is optional if native workers cannot be created.
+                        let mut state = control.lock().unwrap();
+                        if state.generation == generation {
+                            state.queue.clear();
                         }
                     }
-                    status.lock().unwrap().prefetching.clear();
+                }
+                if !prefetch_settings.enabled {
+                    decoder_pool = None;
                 }
                 if maintenance
                     || prefetched
@@ -155,32 +180,113 @@ pub(super) fn start(
     writer
 }
 
-/// A bounded group owns its partial decodes only until completion or cancellation.
-/// Publication is serialized so concurrent photos cannot race LRU budget checks.
-fn prefetch_group(
-    paths: &[PathBuf],
-    work: impl Fn(&Path, &Mutex<()>) -> Result<()> + Sync,
-) -> Vec<Result<()>> {
+/// Photo coordinators keep a bounded number of compressed inputs in flight.
+/// All sensor layers use the same FIFO pool, and completed photos free their
+/// coordinator immediately. There is no group completion barrier between photos.
+fn prefetch_pass(
+    root: &Path,
+    control: &Mutex<Control>,
+    status: &Mutex<Status>,
+    pool: &Arc<crate::decode_pool::Pool>,
+    settings: &Settings,
+    nearby: &[PathBuf],
+    generation: u64,
+) {
     let publication = Mutex::new(());
+    let order = Arc::new(crate::decode_pool::Order::default());
+    let scheduling = background::context();
     std::thread::scope(|scope| {
-        let workers: Vec<_> = paths
-            .iter()
-            .map(|path| {
-                let work = &work;
+        let workers: Vec<_> = (0..pool.threads())
+            .map(|_| {
                 let publication = &publication;
-                scope.spawn(move || work(path, publication))
+                let order = &order;
+                let scheduling = scheduling.clone();
+                scope.spawn(move || {
+                    background::with_context(scheduling, || loop {
+                        if background::checkpoint_or_cancel().is_err() {
+                            break;
+                        }
+                        let next = {
+                            let mut current = control.lock().unwrap();
+                            if current.generation != generation || current.clear {
+                                break;
+                            }
+                            current.queue.pop_front().map(|path| (path, order.issue()))
+                        };
+                        let Some((path, turn)) = next else {
+                            break;
+                        };
+                        status.lock().unwrap().prefetching.push(path.clone());
+                        let result = background::decoder(
+                            crate::decode_pool::Task {
+                                pool: pool.clone(),
+                                turn,
+                            },
+                            || {
+                                prefetch(
+                                    root,
+                                    &path,
+                                    settings,
+                                    nearby,
+                                    publication,
+                                    || {
+                                        let current = control.lock().unwrap();
+                                        current.generation == generation && !current.clear
+                                    },
+                                    || {
+                                        publish_ready(
+                                            root, &path, settings, control, status, generation,
+                                        )
+                                    },
+                                )
+                            },
+                        );
+                        let mut current = control.lock().unwrap();
+                        if current.generation == generation
+                            && !current.clear
+                            && result
+                                .as_ref()
+                                .is_err_and(|e| e.is::<background::Interrupted>())
+                        {
+                            // Several coordinators can unwind in any order. Restore only
+                            // unfinished paths, in the current neighborhood's priority order.
+                            let mut pending: HashSet<_> = current.queue.iter().cloned().collect();
+                            pending.insert(path.clone());
+                            current.queue = nearby
+                                .iter()
+                                .filter(|p| pending.contains(*p))
+                                .cloned()
+                                .collect();
+                        }
+                        status.lock().unwrap().prefetching.retain(|p| p != &path);
+                    })
+                })
             })
             .collect();
-        workers
-            .into_iter()
-            .map(|worker| {
-                worker
-                    .join()
-                    .map_err(|_| "cache prefetch worker panicked".into())
-                    .and_then(|result| result)
-            })
-            .collect()
-    })
+        for worker in workers {
+            let _ = worker.join();
+        }
+    });
+    status.lock().unwrap().prefetching.clear();
+}
+
+fn publish_ready(
+    root: &Path,
+    path: &Path,
+    settings: &Settings,
+    control: &Mutex<Control>,
+    status: &Mutex<Status>,
+    generation: u64,
+) {
+    if !ready(root, path, settings) {
+        return;
+    }
+    let current = control.lock().unwrap();
+    if current.generation == generation && !current.clear {
+        let mut status = status.lock().unwrap();
+        status.ready.insert(path.to_owned());
+        Arc::make_mut(&mut status.files).insert(path.to_owned(), EntryState::Ready);
+    }
 }
 
 // A completed speculative decode must also unwind while another photo owns
@@ -201,11 +307,17 @@ fn prefetch(
     root: &Path,
     path: &Path,
     settings: &Settings,
+    nearby: &[PathBuf],
     publication: &Mutex<()>,
     current: impl Fn() -> bool,
+    published: impl Fn(),
 ) -> Result<()> {
     crate::background::checkpoint_or_cancel()?;
     if !current() {
+        return Ok(());
+    }
+    if ready(root, path, settings) {
+        published();
         return Ok(());
     }
     let family = crate::source::read_capture_properties(path)?
@@ -215,25 +327,32 @@ fn prefetch(
     if !settings.permits(family) {
         return Ok(());
     }
-    // Keep preview publication under the same LRU lock as decoded sources.
-    let preview_result = {
-        let _publication = publication_lock(publication)?;
-        previews::embedded(root, path, family, settings, &current)
-    };
-    if let Err(error) = preview_result {
-        if error.is::<background::Interrupted>() {
-            return Err(error);
-        }
-    }
-    if !current() || ready(root, path, settings) {
-        return Ok(());
-    }
     let identity = Identity::read(path)?;
     let source = Source::open(path)?;
     crate::background::checkpoint_or_cancel()?;
+    {
+        let _publication = publication_lock(publication)?;
+        if current() && !ready(root, path, settings) {
+            store_checked(
+                root,
+                path,
+                identity,
+                &source,
+                settings.max_bytes,
+                nearby,
+                &current,
+            )?;
+        }
+    }
+    drop(source);
+    published();
+    // Publish the RAW dot before optional preview encoding. Other photo
+    // coordinators can keep reading and submitting layers during this work.
     let _publication = publication_lock(publication)?;
-    if current() && !ready(root, path, settings) {
-        store_checked(root, path, identity, &source, settings.max_bytes, current)?;
+    if let Err(error) = previews::embedded(root, path, family, settings, nearby, &current) {
+        if error.is::<background::Interrupted>() {
+            return Err(error);
+        }
     }
     Ok(())
 }
@@ -295,7 +414,7 @@ fn refresh(
     families: &mut FamilyCatalog,
 ) {
     crate::background::checkpoint();
-    let (settings, watched, generation, queued) = {
+    let (settings, watched, generation, queued, nearby) = {
         let state = control.lock().unwrap();
         (
             state.settings.clone(),
@@ -307,9 +426,10 @@ fn refresh(
                 .chain(state.stores.iter())
                 .cloned()
                 .collect::<HashSet<_>>(),
+            state.nearby.clone(),
         )
     };
-    let entries = prune(root, settings.max_bytes).unwrap_or_default();
+    let entries = prune(root, settings.max_bytes, &nearby).unwrap_or_default();
     let watching = watched.iter().cloned().collect::<HashSet<_>>();
     families.retain(|p, _| watching.contains(p));
     let files: HashMap<_, _> = watched
@@ -341,33 +461,16 @@ fn refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Barrier,
-    };
-
     #[test]
-    fn photo_workers_run_concurrently_and_publication_waits_cancel() {
-        const WORKERS: usize = 3;
-        let paths: Vec<_> = (0..WORKERS).map(|i| PathBuf::from(i.to_string())).collect();
-        let rendezvous = Barrier::new(WORKERS);
-        let active = AtomicUsize::new(0);
+    fn speculative_publication_wait_cancels_while_another_photo_owns_the_lock() {
+        let publication = Mutex::new(());
+        let _busy = publication.lock().unwrap();
         let gate = Arc::new(Gate::default());
-        let results = prefetch_group(&paths, |_, publication| {
-            background::interruptible(gate.clone(), || {
-                active.fetch_add(1, Ordering::SeqCst);
-                rendezvous.wait();
-                assert_eq!(active.load(Ordering::SeqCst), WORKERS);
-                let _busy = publication.lock().unwrap();
-                // Even when publication is unavailable, foreground work cancels
-                // this speculative worker rather than leaving it blocked with a source.
-                let _foreground = gate.foreground();
-                assert!(publication_lock(publication)
-                    .unwrap_err()
-                    .is::<background::Interrupted>());
-                Ok(())
-            })
+        background::interruptible(gate.clone(), || {
+            let _foreground = gate.foreground();
+            assert!(publication_lock(&publication)
+                .unwrap_err()
+                .is::<background::Interrupted>());
         });
-        assert!(results.into_iter().all(|r| r.is_ok()));
     }
 }

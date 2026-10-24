@@ -156,12 +156,16 @@ impl Browser {
     }
 
     pub fn refresh_filter(&mut self) {
-        self.excluded = self
+        let excluded = self
             .files
             .iter()
             .filter(|path| self.import_mode && self.hide_reviewed && self.mark(path).hidden())
             .cloned()
             .collect();
+        if self.excluded != excluded {
+            self.excluded = excluded;
+            self.invalidate_prefetch();
+        }
         self.highlighted
             .retain(|path| !self.excluded.contains(path));
     }

@@ -58,6 +58,7 @@ fn preview_reuses_only_the_same_source_and_recipe_and_obeys_policy() {
         cache.directory(),
         fixture.write(true, [20, 80, 140]),
         &Settings::default(),
+        &[],
         &|| true,
     )
     .unwrap();
@@ -94,6 +95,7 @@ fn preview_reuses_only_the_same_source_and_recipe_and_obeys_policy() {
         cache.directory(),
         fixture.write(true, [30, 90, 150]),
         &Settings::default(),
+        &[],
         &|| true,
     )
     .unwrap();
@@ -110,6 +112,7 @@ fn late_embedded_and_stale_recipe_jobs_cannot_replace_rendered_previews() {
         &root,
         fixture.write(true, [100, 150, 200]),
         &Settings::default(),
+        &[],
         &|| true,
     )
     .unwrap();
@@ -118,6 +121,7 @@ fn late_embedded_and_stale_recipe_jobs_cannot_replace_rendered_previews() {
         &root,
         fixture.write(false, [10, 20, 30]),
         &Settings::default(),
+        &[],
         &|| true,
     )
     .unwrap();
@@ -128,7 +132,7 @@ fn late_embedded_and_stale_recipe_jobs_cannot_replace_rendered_previews() {
         &crate::render::Settings::new("Shade", "Vivid"),
     )
     .unwrap();
-    write_checked(&root, stale, &Settings::default(), &|| true).unwrap();
+    write_checked(&root, stale, &Settings::default(), &[], &|| true).unwrap();
     assert_eq!(fs::read(key.location(&root)).unwrap(), bytes);
 }
 
@@ -140,6 +144,7 @@ fn previews_share_the_decoded_entry_budget_and_clear_policy() {
         &root,
         fixture.write(true, [100; 3]),
         &Settings::default(),
+        &[],
         &|| true,
     )
     .unwrap();
@@ -155,18 +160,25 @@ fn previews_share_the_decoded_entry_budget_and_clear_policy() {
         max_bytes: bytes + 100,
         ..Settings::default()
     };
-    write_checked(&root, fixture.write(true, [120; 3]), &settings, &|| true).unwrap();
+    write_checked(
+        &root,
+        fixture.write(true, [120; 3]),
+        &settings,
+        &[],
+        &|| true,
+    )
+    .unwrap();
     assert!(!decoded.exists());
     assert!(key.location(&root).exists());
     assert!(
-        prune(&root, settings.max_bytes)
+        prune(&root, settings.max_bytes, &[])
             .unwrap()
             .iter()
             .map(|e| e.1)
             .sum::<u64>()
             <= settings.max_bytes
     );
-    assert!(prune(&root, 0).unwrap().is_empty());
+    assert!(prune(&root, 0, &[]).unwrap().is_empty());
     assert!(!key.location(&root).exists());
 }
 
@@ -264,6 +276,7 @@ fn original_large_previews_keep_orientation_and_skip_cropped_camera_jpegs() {
             &path,
             family,
             &Settings::default(),
+            &[],
             &|| true,
         )
         .unwrap();

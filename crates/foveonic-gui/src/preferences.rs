@@ -419,6 +419,8 @@ mod preview_tests {
                 enabled: false,
                 max_bytes: 5_000_000_000,
                 decode_threads: 1,
+                prefetch_behind: 2,
+                prefetch_ahead: 5,
                 classic: true,
                 merrill: false,
                 quattro: true,

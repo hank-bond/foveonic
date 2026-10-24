@@ -19,12 +19,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
-// Active photos parallelize independent planes. Prefetch parallelizes photos instead,
-// so a configured worker never creates another three CPU workers underneath it.
+// Active photos have independent plane workers. Speculative photos share a bounded
+// FIFO layer pool across their nearest-neighbor queue.
 fn decode_planes<T: Send>(decode: impl Fn(usize) -> Result<T> + Sync) -> Result<Vec<T>> {
     const SENSOR_PLANES: usize = 3;
-    if crate::background::speculative() {
-        return (0..SENSOR_PLANES).map(decode).collect();
+    if let Some(task) = crate::background::decoder_context() {
+        return task.pool.planes(&task.turn, decode);
     }
     std::thread::scope(|scope| {
         let workers: [_; SENSOR_PLANES] = std::array::from_fn(|channel| {
@@ -348,7 +348,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     }
     if bytes.u32(12)? == 6 {
         let start = Instant::now();
-        let pixels = format6::decode(section, width, height)?;
+        let pixels = crate::decode_pool::one(|| format6::decode(section, width, height))?;
         return Ok((
             width,
             height,
@@ -427,27 +427,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn speculative_planes_stay_on_the_photo_worker_while_active_planes_parallelize() {
-        let active =
-            super::decode_planes(|channel| Ok((channel, std::thread::current().id()))).unwrap();
-        let ids: std::collections::HashSet<_> = active.iter().map(|p| p.1).collect();
-        assert_eq!(ids.len(), 3);
-        let gate = std::sync::Arc::new(crate::background::Gate::default());
-        crate::background::interruptible(gate, || {
-            let worker = std::thread::current().id();
-            let speculative =
-                super::decode_planes(|channel| Ok((channel, std::thread::current().id()))).unwrap();
-            assert_eq!(
-                speculative.iter().map(|p| p.0).collect::<Vec<_>>(),
-                [0, 1, 2]
-            );
-            assert!(speculative.iter().all(|p| p.1 == worker));
-        });
-    }
-
     use super::*;
-
     #[test]
     fn rotation_uses_the_file_version_geometry_offset() {
         for version in SUPPORTED_FILE_VERSIONS {

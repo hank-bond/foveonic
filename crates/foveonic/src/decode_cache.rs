@@ -1,6 +1,11 @@
 //! Reuses exact decoded sources and display previews in a bounded temporary disk LRU.
 
 pub use crate::background::Activity;
+#[path = "decode_cache_lru.rs"]
+mod lru;
+#[path = "decode_cache_window.rs"]
+mod window;
+use lru::prune;
 #[path = "decode_cache_preview.rs"]
 mod previews;
 #[path = "decode_cache_worker.rs"]
@@ -25,8 +30,10 @@ use std::{
 const FORMAT_VERSION: u32 = 1;
 const NAMESPACE: &str = "foveonic-decoded-v1";
 pub const DEFAULT_BUDGET: u64 = 10_000_000_000;
-// Match the former peak of three independent plane decoders, now shared across photos.
+// Start all three sensor layers of the nearest photo together by default.
 const DEFAULT_DECODE_THREADS: usize = 3;
+const DEFAULT_PREFETCH_BEHIND: usize = 3;
+const DEFAULT_PREFETCH_AHEAD: usize = 7;
 const MAGIC: &[u8; 8] = b"FOVDEC01";
 // Signature, JSON length and JSON checksum precede the versioned header.
 const PREFIX_BYTES: u64 = (MAGIC.len() + size_of::<u64>() + size_of::<u32>()) as u64;
@@ -39,8 +46,11 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub struct Settings {
     pub enabled: bool,
     pub max_bytes: u64,
-    /// CPU budget for speculative decoding. Each worker decodes one photo at a time.
+    /// Shared CPU workers for speculative sensor layers, across nearby photos.
     pub decode_threads: usize,
+    /// Browser neighbors to decode around the current photo, independently of CPU concurrency.
+    pub prefetch_behind: usize,
+    pub prefetch_ahead: usize,
     pub classic: bool,
     pub merrill: bool,
     pub quattro: bool,
@@ -51,6 +61,8 @@ impl Default for Settings {
             enabled: true,
             max_bytes: DEFAULT_BUDGET,
             decode_threads: available_decode_threads().min(DEFAULT_DECODE_THREADS),
+            prefetch_behind: DEFAULT_PREFETCH_BEHIND,
+            prefetch_ahead: DEFAULT_PREFETCH_AHEAD,
             classic: false,
             merrill: true,
             quattro: true,
@@ -147,10 +159,24 @@ struct Control {
     settings: Settings,
     clear: bool,
     watched: Vec<PathBuf>,
+    selected: Option<PathBuf>,
+    nearby: Vec<PathBuf>,
     queue: VecDeque<PathBuf>,
     stores: HashSet<PathBuf>,
     generation: u64,
     preview: Option<previews::PendingPreview>,
+}
+impl Control {
+    fn restart_prefetch(&mut self) {
+        self.nearby = window::around(
+            &self.watched,
+            self.selected.as_deref(),
+            self.settings.prefetch_behind,
+            self.settings.prefetch_ahead,
+        );
+        self.queue = self.nearby.clone().into();
+        self.generation += 1;
+    }
 }
 enum Command {
     Maintain,
@@ -189,6 +215,8 @@ impl Cache {
             },
             clear: false,
             watched: Vec::new(),
+            selected: None,
+            nearby: Vec::new(),
             queue: VecDeque::new(),
             stores: HashSet::new(),
             generation: 0,
@@ -209,8 +237,7 @@ impl Cache {
         settings.normalize();
         let mut state = self.control.lock().unwrap();
         state.settings = settings;
-        state.queue = state.watched.clone().into();
-        state.generation += 1;
+        state.restart_prefetch();
         self.gate.interrupt_prefetch();
         drop(state);
         let mut status = self.status.lock().unwrap();
@@ -238,19 +265,25 @@ impl Cache {
         drop(status);
         let _ = self.writer.try_send(Command::Maintain);
     }
-    /// Follow the supplied browser order for one bounded folder pass. Selection
-    /// does not reorder background work. Evicted entries wait for another pass.
-    pub fn prefetch_folder(&self, paths: Vec<PathBuf>) {
+    /// Replace speculative work with a bounded neighborhood of the selected photo.
+    /// Paths follow visible browser order and may include an active concealed photo.
+    /// Repeating the same request must not restart a completed or cleared pass.
+    pub fn prefetch_window(&self, paths: Vec<PathBuf>, selected: Option<PathBuf>) {
         let mut state = self.control.lock().unwrap();
-        state.queue = paths.clone().into();
+        if state.watched == paths && state.selected == selected {
+            return;
+        }
+        let order_changed = state.watched != paths;
         state.watched = paths;
-        state.generation += 1;
+        state.selected = selected;
+        state.restart_prefetch();
         self.gate.interrupt_prefetch();
         drop(state);
-        let mut status = self.status.lock().unwrap();
-        status.ready.clear();
-        status.files = Arc::new(HashMap::new());
-        drop(status);
+        if order_changed {
+            let mut status = self.status.lock().unwrap();
+            status.ready.clear();
+            status.files = Arc::new(HashMap::new());
+        }
         let _ = self.writer.try_send(Command::Maintain);
     }
     pub fn foreground(&self) -> Activity {
@@ -464,7 +497,7 @@ fn ready(root: &Path, path: &Path, settings: &Settings) -> bool {
 
 #[cfg(test)]
 fn store(root: &Path, path: &Path, identity: Identity, source: &Source, budget: u64) -> Result<()> {
-    store_checked(root, path, identity, source, budget, || true)
+    store_checked(root, path, identity, source, budget, &[], || true)
 }
 fn store_checked(
     root: &Path,
@@ -472,6 +505,7 @@ fn store_checked(
     identity: Identity,
     source: &Source,
     budget: u64,
+    nearby: &[PathBuf],
     current: impl Fn() -> bool,
 ) -> Result<()> {
     if !current() {
@@ -510,8 +544,13 @@ fn store_checked(
     if bytes > budget || json.len() as u64 > MAX_HEADER {
         return Ok(());
     }
+    if !current() {
+        return Ok(());
+    }
     fs::create_dir_all(root)?;
-    prune(root, budget - bytes)?;
+    if !lru::reserve(root, &root.join(identity.name()), bytes, budget, nearby)? {
+        return Ok(());
+    }
     let temporary = root.join(format!(
         "{}.{}.writing",
         std::process::id(),
@@ -543,43 +582,6 @@ fn store_checked(
     })();
     let _ = fs::remove_file(temporary);
     result
-}
-
-type Entry = (PathBuf, u64, SystemTime);
-fn prune(root: &Path, budget: u64) -> Result<Vec<Entry>> {
-    prune_except(root, budget, None)
-}
-fn prune_except(root: &Path, budget: u64, replacing: Option<&Path>) -> Result<Vec<Entry>> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut entries = fs::read_dir(root)?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            if replacing == Some(entry.path().as_path()) {
-                return None;
-            }
-            if !["decode", "preview"]
-                .iter()
-                .any(|s| entry.path().extension().is_some_and(|e| e == *s))
-            {
-                return None;
-            }
-            let metadata = entry.metadata().ok()?;
-            Some((entry.path(), metadata.len(), metadata.modified().ok()?))
-        })
-        .collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.2);
-    let mut total: u64 = entries.iter().map(|entry| entry.1).sum();
-    let mut retained = Vec::new();
-    for entry in entries {
-        if total > budget && fs::remove_file(&entry.0).is_ok() {
-            total -= entry.1;
-        } else {
-            retained.push(entry);
-        }
-    }
-    Ok(retained)
 }
 
 fn boot_key() -> String {

@@ -35,7 +35,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings, cache
                 });
                 let cores = available_decode_threads();
                 ui.horizontal(|ui| {
-                    ui.label("Background decode threads");
+                    ui.label("Background decode workers");
                     ui.add(
                         egui::DragValue::new(&mut settings.decode_threads)
                             .range(1..=cores)
@@ -44,8 +44,28 @@ pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings, cache
                 })
                 .response
                 .on_hover_text(format!(
-                    "Up to {cores} available cores. Decode several photos ahead together. \
+                    "Up to {cores} available cores. Share workers across RAW layers, nearest photos first. \
                      More threads use more CPU and memory. Active photos take priority."
+                ));
+                ui.horizontal(|ui| {
+                    ui.label("Decode neighbors");
+                    ui.label("Behind");
+                    ui.add(
+                        egui::DragValue::new(&mut settings.prefetch_behind)
+                            .range(0..=usize::MAX)
+                            .speed(1.),
+                    );
+                    ui.label("Ahead");
+                    ui.add(
+                        egui::DragValue::new(&mut settings.prefetch_ahead)
+                            .range(0..=usize::MAX)
+                            .speed(1.),
+                    );
+                })
+                .response
+                .on_hover_text(concat!(
+                    "Keep these nearby photos decoded around the selected image, ",
+                    "following the visible browser order. Zero disables prefetch in that direction.",
                 ));
                 widgets::checkbox(ui, &mut settings.classic, "Classic");
                 widgets::checkbox(ui, &mut settings.merrill, "Merrill");
@@ -59,7 +79,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings, cache
                 "photographs"
             };
             let activity = if !status.prefetching.is_empty() {
-                " · decoding folder"
+                " · decoding neighbors"
             } else if status.writing {
                 " · writing"
             } else {
@@ -77,7 +97,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings, cache
                 .on_hover_text(cache.directory().display().to_string());
             ui.weak("Decoded sources and display previews share this space limit.");
             ui.weak(concat!(
-                "The open folder is decoded ahead in the background. ",
+                "Nearby photos are decoded in the background. ",
                 "Dots beside filenames show cache readiness.",
             ));
         });

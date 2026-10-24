@@ -15,3 +15,4 @@ crc32fast = "1"
 tiff = "0.10"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 tempfile = "3"
+rayon = "1.11"

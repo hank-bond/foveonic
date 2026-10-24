@@ -3,6 +3,7 @@
 mod background;
 pub mod color_space;
 pub mod decode_cache;
+mod decode_pool;
 pub mod dng;
 mod gpu;
 mod graph;
