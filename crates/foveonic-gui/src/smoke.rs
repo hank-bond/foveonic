@@ -279,6 +279,10 @@ impl App {
 
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
         let mapping = self.displayed_mapping();
+        let quattro_smart = self.frame.as_ref().is_some_and(|frame| {
+            frame.artifact.metadata.processing_family().ok()
+                == Some(foveonic::source::ProcessingFamily::Quattro)
+        });
         let regional_smart = self.frame.as_ref().is_some_and(|frame| {
             frame
                 .artifact
@@ -443,7 +447,7 @@ impl App {
                 };
                 let visible = self.viewport.visible_pixels().unwrap();
                 let region = frame.artifact.settings.preview_region;
-                if !regional_smart || !matches!(target, "final" | "cache-reopen") {
+                if !quattro_smart || !matches!(target, "final" | "cache-reopen") {
                     assert!(self.settings.reconstruction.is_some());
                     assert!(frame.artifact.settings.reconstruction.is_some());
                 }
@@ -597,7 +601,7 @@ impl App {
                 "smart-overview" => {
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Smart;
                     self.preferences.scope_viewport = true;
-                    if regional_smart {
+                    if quattro_smart {
                         self.settings.reconstruction = Some(Default::default());
                     }
                     self.submit(None);

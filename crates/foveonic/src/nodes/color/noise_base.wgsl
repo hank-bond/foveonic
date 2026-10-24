@@ -20,7 +20,7 @@ fn put(index: u32, value: vec3<f32>) {
 }
 @compute @workgroup_size(8, 8)
 fn tile_input(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     let xy = full_position(p, params);
     var value = rgb(xy.y * params.source.x + xy.x);
@@ -32,22 +32,22 @@ fn tile_input(@builtin(global_invocation_id) id: vec3<u32>) {
 // the local raw-input second-edge repeats or working-rectangle fill.
 @compute @workgroup_size(8,8)
 fn global_tile(@builtin(global_invocation_id)id:vec3<u32>){
-    if id.x>=params.tile.x||id.y>=params.tile.y*params.source.z*params.source.w{return;}
-    let p=atlas_position(id.xy,params);let core=params.source.xy/params.source.zw;let origin=vec2(p.z%params.source.z,p.z/params.source.z)*core;
+    if id.x>=params.tile.x||id.y>=params.tile.y*tile_count(params){return;}
+    let p=atlas_position(id.xy,params);let core=params.source.xy/params.source.zw;let origin=native_tile(p.z,params)*core;
     let xy=vec2<u32>(clamp(vec2<i32>(origin+p.xy)-i32(params.tile.z),vec2(0),vec2<i32>(params.source.xy)-1));let source=xy.y*params.source.x+xy.x;let dest_index=tile_pixel(p,params);
     put(dest_index,rgb(source));
 }
 @compute @workgroup_size(8,8)
 fn global_tile_scalar(@builtin(global_invocation_id)id:vec3<u32>){
-    if id.x>=params.tile.x||id.y>=params.tile.y*params.source.z*params.source.w{return;}
-    let p=atlas_position(id.xy,params);let core=params.source.xy/params.source.zw;let origin=vec2(p.z%params.source.z,p.z/params.source.z)*core;
+    if id.x>=params.tile.x||id.y>=params.tile.y*tile_count(params){return;}
+    let p=atlas_position(id.xy,params);let core=params.source.xy/params.source.zw;let origin=native_tile(p.z,params)*core;
     let xy=vec2<u32>(clamp(vec2<i32>(origin+p.xy)-i32(params.tile.z),vec2(0),vec2<i32>(params.source.xy)-1));scalar_work[tile_pixel(p,params)]=input_pixels[xy.y*params.source.x+xy.x];
 }
 // Preserve the native transposed F backing seed explicitly, including compact
 // reduced LocalMean writes at its original allocation start. Global F is zero.
 @compute @workgroup_size(8,8)
 fn pattern_seed(@builtin(global_invocation_id)id:vec3<u32>){
-    if id.x>=params.tile.x||id.y>=params.tile.y*params.source.z*params.source.w{return;}let p=atlas_position(id.xy,params);var value=0.0;
+    if id.x>=params.tile.x||id.y>=params.tile.y*tile_count(params){return;}let p=atlas_position(id.xy,params);var value=0.0;
     if params.geometry.w==0u{let reduced=vec2<u32>(vec2<f32>(params.tile.xy)*params.reduction.x);let index=p.x*params.tile.y+p.y;let x=index/reduced.y;let y=index%reduced.y;let margin=params.geometry.x;
         if x>=margin&&x+margin<reduced.x&&y>=margin&&y+margin<reduced.y{value=input_pixels[(p.z*reduced.y+y)*reduced.x+x];}
     }
@@ -56,7 +56,7 @@ fn pattern_seed(@builtin(global_invocation_id)id:vec3<u32>){
 @compute @workgroup_size(8, 8)
 fn block_mean(@builtin(global_invocation_id) id: vec3<u32>) {
     let grid = (params.tile.xy + 31u) / 32u;
-    if id.x >= grid.x || id.y >= grid.y * params.source.z * params.source.w { return; }
+    if id.x >= grid.x || id.y >= grid.y * tile_count(params) { return; }
     let tile = id.y / grid.y;
     let row = id.y % grid.y;
     let first = vec2<i32>(vec2(id.x * 32u, row * 32u)) - 1;
@@ -74,7 +74,7 @@ fn block_mean(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(8, 8)
 fn radius_map(@builtin(global_invocation_id) id: vec3<u32>) {
     let grid = (params.tile.xy + 31u) / 32u;
-    if id.x >= grid.x || id.y >= grid.y * params.source.z * params.source.w { return; }
+    if id.x >= grid.x || id.y >= grid.y * tile_count(params) { return; }
     let tile = id.y / grid.y;
     let row = id.y % grid.y;
     var value = 1e30;
@@ -94,7 +94,7 @@ fn radius_map(@builtin(global_invocation_id) id: vec3<u32>) {
 
 @compute @workgroup_size(32, 8)
 fn bilateral(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     let pixel = tile_pixel(p, params);
     let center = rgb(pixel);
@@ -168,7 +168,7 @@ fn median_cross(p: vec3<u32>, delta: vec2<i32>) -> vec3<f32> {
 }
 @compute @workgroup_size(8,8)
 fn cross_medians(@builtin(global_invocation_id)id:vec3<u32>){
-    if id.x>=params.tile.x||id.y>=params.tile.y*params.source.z*params.source.w{return;}
+    if id.x>=params.tile.x||id.y>=params.tile.y*tile_count(params){return;}
     let p=atlas_position(id.xy,params);put(tile_pixel(p,params),median_cross(p,vec2(0)));
 }
 fn cached_median(p:vec3<u32>,delta:vec2<i32>)->vec3<f32>{
@@ -187,7 +187,7 @@ fn gradient(p: vec3<u32>, offset: vec2<i32>) -> f32 {
 }
 @compute @workgroup_size(8, 8)
 fn edge_map(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     var value = 0.;
     if p.x > 0u && p.x + 1u < params.tile.x && p.y >= 3u && p.y + 3u < params.tile.y {
@@ -214,7 +214,7 @@ fn local_mean(@builtin(global_invocation_id) id: vec3<u32>) {
     let vertical = params.diffusion.w > 0.;
     let lines = select(params.tile.y, params.tile.x, vertical);
     let length = select(params.tile.x, params.tile.y, vertical);
-    if id.x >= lines * params.source.z * params.source.w { return; }
+    if id.x >= lines * tile_count(params) { return; }
     let row = id.x % lines;
     let margin=params.geometry.x;
     if row < margin || row+margin >= lines {

@@ -24,6 +24,8 @@ fn parameters() -> Parameters {
         column: [0.375, 27., 0., 0.],
         reduction: [1., 0., 0., 0.],
         geometry: [8, 8, 21, 0],
+        window: [0, 0, 1, 1],
+        region: [0, 0, 80, 72],
     }
 }
 #[test]
@@ -127,6 +129,7 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
     // Four context tiles must extend the first source edge (not the local second edge).
     let mut p = parameters();
     p.source = [80, 72, 2, 2];
+    p = p.full_frame();
     p.tile = [56, 52, 8, 11];
     let copied = global_tiles(&gpu, &input, p, 3, &mut Profile::default()).unwrap();
     let actual = floats(&gpu, &copied);
@@ -159,6 +162,7 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
         .upload("Different following reduced tile", &wide)
         .unwrap();
     p.source = [160, 72, 2, 1];
+    p = p.full_frame();
     p.area[2] = 160;
     let two = base(&gpu, &wide, p, false, true, false, &mut Profile::default()).unwrap();
     let two = gpu.readback(two.tiles.as_ref().unwrap()).unwrap();
@@ -190,6 +194,7 @@ fn all_column_banding_presets_match_native_windows_and_coefficients() {
     for row in fixture["positions"].as_array().unwrap() {
         let mut p = parameters();
         p.source = [80, 112, 1, 1];
+        p = p.full_frame();
         p.tile = [80, 112, 0, 11];
         p.area = [0, 0, 80, 112];
         p.column_area = [0, 8, 80, 104];
@@ -255,6 +260,7 @@ fn column_conditioning_matches_native_blocks_borders_gain_and_clamps() {
     for gain in [0., 1., 1.3] {
         let mut p = parameters();
         p.source = [80, 112, 1, 1];
+        p = p.full_frame();
         p.tile = [80, 112, 0, 11];
         p.area = [0, 0, 80, 112];
         p.column_area = [0, 8, 80, 104];
@@ -466,6 +472,7 @@ fn processing_tile_projection_matches_reference_overlap_ramps() {
     let gpu = Gpu::new().unwrap();
     let mut p = parameters();
     p.source = [32, 24, 2, 2];
+    p = p.full_frame();
     p.tile = [32, 28, 8, 11];
     let mut values = Vec::new();
     for tile in 0..4 {
@@ -489,4 +496,93 @@ fn processing_tile_projection_matches_reference_overlap_ramps() {
         .map(|v| v.as_f64().unwrap() as f32)
         .collect();
     assert_eq!(floats(&gpu, &output), expected);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams() {
+    let gpu = Gpu::new().unwrap();
+    let mut p = parameters();
+    p.source = [256, 256, 4, 4];
+    p.tile = [192, 192, 64, 11];
+    p.area = [0, 0, 256, 256];
+    p.column_area = [0, 8, 256, 248];
+    p = p.full_frame();
+    let samples: Vec<f32> = (0..256 * 256 * 3)
+        .map(|i| 300. + ((i * 17 + i / 768 * 23) % 109) as f32)
+        .collect();
+    let input = gpu
+        .upload("Immutable native tile source", &samples)
+        .unwrap();
+    let render = |p: Parameters| {
+        let mut profile = Profile::default();
+        let base = base(&gpu, &input, p, false, true, true, &mut profile).unwrap();
+        let base_tiles = base.tiles.as_ref().unwrap();
+        let conditioned = column(&gpu, &input, p, &mut profile).unwrap();
+        let ratio = ratio(&gpu, &conditioned, base_tiles, p, &mut profile).unwrap();
+        let prepared = crate::nodes::color::pattern::Prepared::new(
+            [p.tile[0], p.tile[1], p.tile_count(), 4],
+            [0.1, 0.1, 0.5, 0.],
+        )
+        .unwrap();
+        let ratio = crate::nodes::color::pattern::apply(
+            &gpu,
+            &ratio,
+            base.seed.as_ref().unwrap(),
+            &prepared,
+            true,
+            false,
+            &mut profile,
+        )
+        .unwrap()
+        .ratio
+        .unwrap();
+        let gains = mix(&gpu, &conditioned, base_tiles, &ratio, p, &mut profile).unwrap();
+        let color = color(
+            &gpu,
+            base_tiles,
+            ColorParams {
+                source: [256, 256, 0, 0],
+                matrix: [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]],
+            },
+            p,
+            &mut profile,
+        )
+        .unwrap();
+        let output = restore(&gpu, &color, &gains, p, &mut profile).unwrap();
+        let signal = signal(&gpu, &color, &ratio, p, &mut profile).unwrap();
+        (floats(&gpu, &output), floats(&gpu, &signal))
+    };
+    for scale in [1., 0.75, 0.5, 0.375] {
+        p.reduction[0] = scale;
+        let (full, full_signal) = render(p);
+        for rect in [
+            [0, 0, 24, 28],
+            [30, 30, 50, 50],
+            [60, 60, 72, 72],
+            [125, 63, 132, 130],
+            [232, 230, 256, 256],
+        ] {
+            let regional = p.for_region(rect).unwrap();
+            assert!(regional.tile_count() < p.tile_count());
+            let (detail, detail_signal) = render(regional);
+            let width = (rect[2] - rect[0]) as usize;
+            for y in rect[1]..rect[3] {
+                for x in rect[0]..rect[2] {
+                    let dst = (y - rect[1]) as usize * width + (x - rect[0]) as usize;
+                    let src = (y * 256 + x) as usize;
+                    assert_eq!(
+                        &detail[dst * 3..dst * 3 + 3],
+                        &full[src * 3..src * 3 + 3],
+                        "scale {scale}, region {rect:?}, pixel {x},{y}"
+                    );
+                    assert_eq!(
+                        detail_signal[dst], full_signal[src],
+                        "signal scale {scale}, region {rect:?}, pixel {x},{y}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(floats(&gpu, &input), samples);
 }

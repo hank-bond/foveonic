@@ -259,10 +259,77 @@ pub(crate) struct Parameters {
     pub column: [f32; 4],   // Column range coefficient, horizontal window, and reserved values.
     pub reduction: [f32; 4], // Native eighth-quantized reconstruction scale.
     pub geometry: [u32; 4], // LocalMean margin, edge LUT margin, fixed bilateral size, global branch.
+    pub window: [u32; 4],   // First native tile column/row and compact atlas columns/rows.
+    pub region: [u32; 4],   // Half-open physical rectangle projected from the compact atlas.
 }
 impl Parameters {
     pub fn atlas_extent(self) -> [u32; 2] {
-        [self.tile[0], self.tile[1] * self.source[2] * self.source[3]]
+        [self.tile[0], self.tile[1] * self.tile_count()]
+    }
+    /// Native low-scale filtering uses whole-image context rather than independent tiles.
+    pub fn uses_global_context(self) -> bool {
+        const GLOBAL_CONTEXT_MAX_SCALE: f32 = 0.5;
+        self.reduction[0] <= GLOBAL_CONTEXT_MAX_SCALE
+    }
+    pub fn tile_count(self) -> u32 {
+        self.window[2] * self.window[3]
+    }
+    pub fn reduced_tile_extent(self) -> Result<[u32; 2]> {
+        let scale = self.reduction[0];
+        if !(0.375..=1.).contains(&scale) {
+            return Err("unsupported reconstruction scale".into());
+        }
+        let extent = [self.tile[0], self.tile[1]].map(|v| (v as f32 * scale) as u32);
+        if self.tile[..2]
+            .iter()
+            .zip(extent)
+            .any(|(&native, reduced)| reduced == 0 || native as f32 * scale != reduced as f32)
+        {
+            return Err("nonintegral reduced tile geometry".into());
+        }
+        Ok(extent)
+    }
+    pub fn output_extent(self) -> [u32; 2] {
+        [
+            self.region[2] - self.region[0],
+            self.region[3] - self.region[1],
+        ]
+    }
+    pub fn full_frame(mut self) -> Self {
+        self.window = [0, 0, self.source[2], self.source[3]];
+        self.region = [0, 0, self.source[0], self.source[1]];
+        self
+    }
+    /// Keep native tile phases and include both contributors to eight-pixel seams.
+    pub fn for_region(mut self, region: [u32; 4]) -> Result<Self> {
+        // Match the asymmetric eight-pixel blend in noise_stitch.wgsl.
+        const SEAM_SUPPORT: u32 = 5;
+        if self.source[2..].contains(&0)
+            || (0..2).any(|axis| {
+                self.source[axis] == 0 || !self.source[axis].is_multiple_of(self.source[axis + 2])
+            })
+        {
+            return Err("invalid processing tile grid".into());
+        }
+        if region[0] >= region[2]
+            || region[1] >= region[3]
+            || region[2] > self.source[0]
+            || region[3] > self.source[1]
+        {
+            return Err("invalid processing tile region".into());
+        }
+        for axis in 0..2 {
+            let core = self.source[axis] / self.source[axis + 2];
+            let first = region[axis].saturating_sub(SEAM_SUPPORT) / core;
+            let last = region[axis + 2]
+                .saturating_add(SEAM_SUPPORT)
+                .div_ceil(core)
+                .min(self.source[axis + 2]);
+            self.window[axis] = first;
+            self.window[axis + 2] = last - first;
+        }
+        self.region = region;
+        Ok(self)
     }
     pub fn atlas_pixels(self) -> u64 {
         let [w, h] = self.atlas_extent();
@@ -283,7 +350,9 @@ pub(crate) enum RecipeStage {
 }
 impl Parameters {
     pub(crate) fn key(self, stage: RecipeStage) -> crate::recipe::Key {
-        let key = crate::recipe::Key::pod(&self.source).slice(&self.tile[..3]);
+        let key = crate::recipe::Key::pod(&self.source)
+            .slice(&self.tile[..3])
+            .with(&self.window);
         match stage {
             RecipeStage::Base => key
                 .with(&self.tile[3])
@@ -397,7 +466,7 @@ pub(crate) fn pattern_parameters(
     }
     let adjustment = [0., 0., 0., 0.25, 0.5][controls.chroma as usize];
     super::pattern::Prepared::new(
-        [p.tile[0], p.tile[1], p.source[2] * p.source[3], half as u32],
+        [p.tile[0], p.tile[1], p.tile_count(), half as u32],
         [
             extra[1],
             extra[2],
@@ -789,6 +858,8 @@ pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Resu
         ],
         reduction: [reconstruction_scale, 0., 0., 0.],
         geometry: [8, 8, fixed_size, 0],
+        window: [0, 0, 4, 4],
+        region: [0, 0, w, h],
         column_area: [0; 4], // Prepared only when the column stage is required.
         column: [
             [0.625, 0.5, 0.375, 0.25, 0.125][controls.banding as usize]

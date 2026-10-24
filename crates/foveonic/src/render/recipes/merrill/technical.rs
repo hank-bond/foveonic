@@ -1,7 +1,7 @@
 //! Builds Merrill sensor corrections and technical color with lazy inspection preparation.
 
 use super::super::{requested, BuiltRecipe};
-use super::{dng_base, preview};
+use super::{dng_base, preview, region};
 use crate::color_space::ColorSpace;
 use crate::nodes::{
     color::{color_dq, color_mode},
@@ -45,6 +45,14 @@ pub(super) fn build(
     }
     if let Some(size) = settings.output_size {
         params.output[..2].copy_from_slice(&size);
+    }
+    let region = settings
+        .preview_region
+        .filter(|_| mode.is_some() && !settings.is_monochrome() && names == ["final"])
+        .map(|rect| region::Prepared::new(params, rect))
+        .transpose()?;
+    if let Some(region) = &region {
+        params = region.encode;
     }
     engine.check_extent([params.output[0], params.output[1]])?;
     let mut graph = Graph::default();
@@ -132,6 +140,15 @@ pub(super) fn build(
         calibrated = graph.add(Operation::Despeckle(prepared), &[calibrated])?;
         finish!();
     }
+    // Fast and Full share this native boundary. Keep it through refinement so
+    // a later edit's Fast response does not repeat sensor repair and highlights.
+    if mode.is_some()
+        && names == ["final"]
+        && !settings.is_monochrome()
+        && preview::available(&source.metadata)
+    {
+        graph.retain_for_session(calibrated);
+    }
     // Reduced browsing omits the expensive native row-bias estimate. Keep the
     // requested edit intact so Full and inspection still apply its correction.
     if settings.row_correction && preview.is_none() {
@@ -156,18 +173,49 @@ pub(super) fn build(
         );
     }
     if let Some(grid) = &preview {
-        // Reuse native sensor corrections when the overview is followed by Full.
-        graph.retain_for_session(calibrated);
         calibrated = graph.add(Operation::ReduceLayers(grid.reduction), &[calibrated])?;
     }
     // Fast bypasses optional Noise and Detail without changing the saved controls.
     // Full, inspection and DNG still build their requested reconstruction.
     let noise_controls = settings.reconstruction.filter(|_| preview.is_none());
+    if let Some(region) = &region {
+        graph.retain_for_session(calibrated);
+        if noise_controls.is_none() {
+            calibrated = graph.add(
+                Operation::ImageRegion {
+                    prepared: crate::nodes::finish::image_region::Prepared::new(
+                        [source.metadata.width as u32, source.metadata.height as u32],
+                        region.physical,
+                        3,
+                    )?,
+                    data: crate::graph::DataType::CalibratedLayers,
+                    output: "region.calibrated",
+                },
+                &[calibrated],
+            )?;
+        }
+    }
     let reconstruction = if let Some(controls) = noise_controls {
         let params = profile.measure("prepare reference noise", || {
             crate::noise::prepare(&source.metadata, &settings.white_balance, controls)
         })?;
-        let base = graph.add(Operation::NoiseBase(params), &[calibrated])?;
+        let params = if let Some(region) = &region {
+            params.for_region(region.physical)?
+        } else {
+            params
+        };
+        let base_inputs = if params.uses_global_context() {
+            let context = graph.add(Operation::NoiseContext(params.full_frame()), &[calibrated])?;
+            let edges = graph.named_output(context, "noise.global-edges")?;
+            if region.is_some() {
+                graph.retain_for_session(context);
+                graph.retain_for_session(edges);
+            }
+            vec![context, edges]
+        } else {
+            vec![calibrated]
+        };
+        let base = graph.add(Operation::NoiseBase(params), &base_inputs)?;
         finish!();
         let column_params = profile.measure("prepare column cuts", || {
             crate::noise::column_parameters(&source.metadata, params)
@@ -197,8 +245,8 @@ pub(super) fn build(
     let mut color = profile.measure("prepare color matrix", || {
         calibration::color(&source.metadata, &settings.white_balance, &mode)
     })?;
-    if let Some(grid) = &preview {
-        color.source[..2].copy_from_slice(&grid.reduction.output_extent());
+    if preview.is_some() || region.is_some() {
+        color.source[..2].copy_from_slice(&params.source[..2]);
     }
     let mut linear = if let Some((params, base, _, _)) = reconstruction {
         graph.add(

@@ -1149,7 +1149,7 @@ mod preview_tests {
         }
     }
     #[test]
-    fn merrill_smart_uses_fast_overview_and_whole_frame_full_without_changing_edits() {
+    fn merrill_smart_uses_fast_overview_and_regional_full_without_changing_edits() {
         use foveonic::source::{Matrix, MatrixEncoding};
         let mut metadata = metadata();
         metadata.width = 4928;
@@ -1190,8 +1190,8 @@ mod preview_tests {
         resolve_preview(&request, &mut resolved, &metadata);
         assert_eq!(resolved.preview_quality, PreviewQuality::Full);
         assert_eq!(
-            resolved.preview_region, None,
-            "Merrill must not publish a false regional frame"
+            resolved.preview_region, request.settings.preview_region,
+            "Merrill must preserve the requested native detail region"
         );
         for format in [ExportFormat::Tiff, ExportFormat::Dng] {
             request.export = Some(Export {

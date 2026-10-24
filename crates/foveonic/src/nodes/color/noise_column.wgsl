@@ -8,14 +8,14 @@
 @group(0) @binding(5) var<storage,read> table:array<f32>;
 fn rgb(p:u32)->vec3<f32>{return vec3(input_pixels[p*3u],input_pixels[p*3u+1u],input_pixels[p*3u+2u]);}
 fn cuts(tile:u32)->vec2<u32>{
-    let row=tile/params.source.z;
+    let row=native_tile(tile,params).y;
     let start=select(0u,params.column_area.y,row==0u);
     let end=select(params.tile.y,params.tile.y-(params.source.y-params.column_area.w),row+1u==params.source.w);
     return vec2(start,end);
 }
 @compute @workgroup_size(8,8)
 fn horizontal(@builtin(global_invocation_id)id:vec3<u32>){
-    if id.x>=params.tile.x || id.y>=params.tile.y*params.source.z*params.source.w{return;}
+    if id.x>=params.tile.x || id.y>=params.tile.y*tile_count(params){return;}
     let p=atlas_position(id.xy,params);let index=tile_pixel(p,params);var result=vec3(0.0);
     let half=u32(params.column.y)/2u;
     // Native filtering stops one column before the final correction column.
@@ -34,7 +34,7 @@ fn horizontal(@builtin(global_invocation_id)id:vec3<u32>){
 @compute @workgroup_size(64)
 fn block_deltas(@builtin(global_invocation_id)id:vec3<u32>){
     let blocks=params.tile.y/40u;let tile=id.y/blocks;let block=id.y%blocks;
-    if id.x>=params.tile.x || tile>=params.source.z*params.source.w{return;}
+    if id.x>=params.tile.x || tile>=tile_count(params){return;}
     let area=cuts(tile);let count=(area.y-area.x)/40u;var delta=vec3(0.0);
     if block<count{
         let first=area.x+block*40u;let last=select(first+40u,area.y,block+1u==count);
@@ -51,7 +51,7 @@ fn block_deltas(@builtin(global_invocation_id)id:vec3<u32>){
 }
 @compute @workgroup_size(8,8)
 fn correct(@builtin(global_invocation_id)id:vec3<u32>){
-    if id.x>=params.tile.x || id.y>=params.tile.y*params.source.z*params.source.w{return;}
+    if id.x>=params.tile.x || id.y>=params.tile.y*tile_count(params){return;}
     let p=atlas_position(id.xy,params);let index=tile_pixel(p,params);var value=rgb(index);let area=cuts(p.z);let count=(area.y-area.x)/40u;
     let half=u32(params.column.y)/2u;
     if count>0u && p.y>=area.x && p.y<area.y && p.x>=half && p.x<params.tile.x-half{

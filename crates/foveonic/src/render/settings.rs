@@ -127,10 +127,12 @@ impl Settings {
                 || super::recipes::quattro::fast_available(metadata))
     }
 
-    /// Quattro can refine one viewport before Full. Merrill currently refines
-    /// the whole frame because its noise stages require full-frame tile atlases.
+    /// Color recipes can refine native viewport detail before the whole frame.
     pub fn regional_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
-        !self.is_monochrome() && super::recipes::quattro::fast_available(metadata)
+        !self.is_monochrome()
+            && (super::recipes::quattro::fast_available(metadata)
+                || (self.output_size.is_none()
+                    && super::recipes::merrill::fast_available(metadata)))
     }
 
     pub fn is_monochrome(&self) -> bool {

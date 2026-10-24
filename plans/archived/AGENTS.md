@@ -51,6 +51,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[merrill-fast-noise](./merrill-fast-noise.md)** _(archived)._ Bypass optional Merrill Noise and Detail in Fast while preserving requested controls for Full.
 - **[merrill-fast-preview](./merrill-fast-preview.md)** _(archived)._ Integrate Merrill Fast and Smart previews while reducing native row-correction GPU cost.
 - **[merrill-noise-default](./merrill-noise-default.md)** _(archived)._ Enable Noise and Detail for newly opened Merrill photographs while preserving saved off choices.
+- **[merrill-regional-preview](./merrill-regional-preview.md)** _(archived)._ Deliver Merrill Smart detail from native processing tiles before continuing the whole frame.
 - **[metadata-first-loading](./metadata-first-loading.md)** _(archived)._ Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.
 - **[monochrome-performance](./monochrome-performance.md)** _(archived)._ Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output.
 - **[monochrome-rendering](./monochrome-rendering.md)** _(archived)._ GPU monochrome rendering, a triangular layer mixer, mode-specific editing, and linear monochrome DNG export are implemented and checked.

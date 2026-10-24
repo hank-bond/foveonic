@@ -1,4 +1,4 @@
-//! Compares completed Quattro detail-first and direct Full latency from matched Fast sessions.
+//! Compares completed detail-first and direct Full latency from matched camera-default Fast sessions.
 
 use foveonic::{
     image::ImageTexture,
@@ -16,6 +16,13 @@ struct Completed {
     extent: [u32; 2],
     activity: GpuActivity,
     profile: Profile,
+}
+
+fn camera_settings(source: &Source) -> Result<Settings> {
+    let mut settings = Settings::new("Sunlight", "Standard");
+    foveonic::render::ControlCapabilities::from_metadata(&source.metadata)?
+        .apply_capture_defaults(&mut settings, &source.metadata)?;
+    Ok(settings)
 }
 fn completed(
     engine: &Engine,
@@ -50,8 +57,8 @@ fn route(
     progressive: bool,
     mode: Mode,
 ) -> Result<serde_json::Value> {
+    let mut settings = camera_settings(&source)?;
     let mut session = RenderSession::new(source);
-    let mut settings = Settings::new("Sunlight", "Standard");
     settings.preview_quality = PreviewQuality::Fast;
     let (overview, _overview_texture) = completed(engine, &mut session, &settings, Mode::Off)?;
     let [width, height] = overview.extent.map(|v| v * 2);
@@ -84,6 +91,10 @@ fn main() -> Result<()> {
         return Err("report destination must be new".into());
     }
     let source = Arc::new(Source::open(&source_path)?);
+    let settings = camera_settings(&source)?;
+    if !settings.regional_preview_available(&source.metadata) {
+        return Err("this camera recipe does not support regional Smart preview".into());
+    }
     let engine = Engine::new()?;
     let mut runs = Vec::new();
     // Discard one warmup pair. Alternate route order to reduce ordering bias.
@@ -102,7 +113,7 @@ fn main() -> Result<()> {
         route(&engine, source.clone(), false, Mode::Gpu)?,
         route(&engine, source, true, Mode::Gpu)?,
     ];
-    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":Settings::new("Sunlight", "Standard"), "timing":"completed render and view preparation, source decode excluded, five warm matched-session trials", "runs":runs, "gpu_diagnostics":diagnostics});
+    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":settings, "timing":"completed render and view preparation, source decode excluded, five warm matched-session trials", "runs":runs, "gpu_diagnostics":diagnostics});
     std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
     Ok(())
 }

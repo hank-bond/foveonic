@@ -153,6 +153,8 @@ impl Engine {
             let extent = match &node.operation {
                 Operation::ReduceLayers(prepared) => prepared.output_extent(),
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
+                Operation::Reconstruct { params, .. } => params.output_extent(),
+                Operation::NoiseContext(p) => reconstruction::context_extent(*p),
                 Operation::PackedLab(p) => p.extent(),
                 Operation::CodeCrop(p) => p.extent(),
                 Operation::WaveletContrast(p) => p.extent(),
@@ -944,18 +946,43 @@ impl Engine {
                         gpu, *stage, &inputs, prepared, profile,
                     )?)
                 }
+                Operation::NoiseContext(params) => {
+                    let context =
+                        reconstruction::global_context(gpu, &input(0).buffer, *params, profile)?;
+                    let edge_id = node.outputs[1];
+                    if required[edge_id] {
+                        values[edge_id] = Some(Value {
+                            buffer: context.edges,
+                            description: DataType::ScalarField.image_description(extent),
+                        });
+                    }
+                    Some(context.layers)
+                }
                 Operation::NoiseBase(params) => {
                     let projected = node.outputs[1];
                     let edge_id = node.outputs[2];
-                    let base = reconstruction::base(
-                        gpu,
-                        &input(0).buffer,
-                        *params,
-                        required[edge_id],
-                        required[index] || required[projected],
-                        required[node.outputs[3]],
-                        profile,
-                    )?;
+                    let base = if params.uses_global_context() {
+                        reconstruction::base_from_context(
+                            gpu,
+                            &input(0).buffer,
+                            &input(1).buffer,
+                            *params,
+                            required[edge_id],
+                            required[index] || required[projected],
+                            required[node.outputs[3]],
+                            profile,
+                        )?
+                    } else {
+                        reconstruction::base(
+                            gpu,
+                            &input(0).buffer,
+                            *params,
+                            required[edge_id],
+                            required[index] || required[projected],
+                            required[node.outputs[3]],
+                            profile,
+                        )?
+                    };
                     if required[projected] {
                         values[projected] = Some(Value {
                             buffer: reconstruction::project(
@@ -966,7 +993,8 @@ impl Engine {
                                 false,
                                 profile,
                             )?,
-                            description: DataType::CalibratedLayers.image_description(inherited),
+                            description: DataType::CalibratedLayers
+                                .image_description(params.output_extent()),
                         });
                     }
                     if required[edge_id] {
@@ -979,7 +1007,8 @@ impl Engine {
                                 false,
                                 profile,
                             )?,
-                            description: DataType::ScalarField.image_description(inherited),
+                            description: DataType::ScalarField
+                                .image_description(params.output_extent()),
                         });
                     }
                     if required[node.outputs[3]] {
@@ -1002,7 +1031,8 @@ impl Engine {
                             buffer: reconstruction::project(
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
-                            description: DataType::CalibratedLayers.image_description(inherited),
+                            description: DataType::CalibratedLayers
+                                .image_description(params.output_extent()),
                         });
                     }
                     required[index].then_some(tiles)
@@ -1021,7 +1051,8 @@ impl Engine {
                             buffer: reconstruction::project(
                                 gpu, &ratio, *params, 1, false, profile,
                             )?,
-                            description: DataType::LuminanceRatio.image_description(inherited),
+                            description: DataType::LuminanceRatio
+                                .image_description(params.output_extent()),
                         });
                     }
                     required[index].then_some(ratio)
@@ -1048,7 +1079,8 @@ impl Engine {
                                 false,
                                 profile,
                             )?,
-                            description: DataType::LuminanceRatio.image_description(inherited),
+                            description: DataType::LuminanceRatio
+                                .image_description(params.output_extent()),
                         });
                     }
                     if required[mask] {
@@ -1061,7 +1093,8 @@ impl Engine {
                                 false,
                                 profile,
                             )?,
-                            description: DataType::ScalarField.image_description(inherited),
+                            description: DataType::ScalarField
+                                .image_description(params.output_extent()),
                         });
                     }
                     if required[index] {
@@ -1087,7 +1120,9 @@ impl Engine {
                             buffer: reconstruction::project(
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
-                            description: graph.outputs[projected].data.image_description(inherited),
+                            description: graph.outputs[projected]
+                                .data
+                                .image_description(params.output_extent()),
                         });
                     }
                     required[index].then_some(tiles)
@@ -1101,7 +1136,9 @@ impl Engine {
                             buffer: reconstruction::project(
                                 gpu, &tiles, *params, 3, false, profile,
                             )?,
-                            description: graph.outputs[projected].data.image_description(inherited),
+                            description: graph.outputs[projected]
+                                .data
+                                .image_description(params.output_extent()),
                         });
                     }
                     required[index].then_some(tiles)
@@ -1133,7 +1170,8 @@ impl Engine {
                     if let Some(buffer) = signal {
                         values[signal_id] = Some(Value {
                             buffer,
-                            description: DataType::SignedDetail.image_description(inherited),
+                            description: DataType::SignedDetail
+                                .image_description(params.output_extent()),
                         });
                     }
                     rgb

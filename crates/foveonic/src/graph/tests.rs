@@ -36,7 +36,8 @@ fn demand_tracks_ports_without_requiring_siblings_or_unrelated_nodes() {
 #[test]
 fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
     let mut graph = Graph::default();
-    let params = <crate::noise::Parameters as bytemuck::Zeroable>::zeroed();
+    let mut params = <crate::noise::Parameters as bytemuck::Zeroable>::zeroed();
+    params.reduction[0] = 1.;
     let raw = graph
         .add(
             Operation::RenderedInput {

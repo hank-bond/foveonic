@@ -20,6 +20,6 @@ Setup reports complete file-read, in-memory decode and total source-open wall ti
 - **[export_dng.rs](./export_dng.rs)** Exports one supported original with explicit WB/mode for DNG reader validation, without selecting sidecars.
 - **[measure_color_field_controls.rs](./measure_color_field_controls.rs)** Measures highlight selectivity in fresh/cached float outputs and RGB16, with matched preview regions.
 - **[profile_pipeline.rs](./profile_pipeline.rs)** Measures completed fresh processing with normal photographic controls, separate GPU diagnostics and optional exact goldens.
-- **[profile_smart_preview.rs](./profile_smart_preview.rs)** Compares completed Quattro detail-first and direct Full latency from matched Fast sessions.
+- **[profile_smart_preview.rs](./profile_smart_preview.rs)** Compares completed detail-first and direct Full latency from matched camera-default Fast sessions.
 
 <!-- INDEX:END -->

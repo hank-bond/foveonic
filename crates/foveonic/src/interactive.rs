@@ -398,6 +398,8 @@ mod tests {
         let mut p = Parameters::zeroed();
         p.source = [64, 64, 1, 1];
         p.tile = [64, 64, 0, 3];
+        p.reduction[0] = 1.;
+        p = p.full_frame();
         p.residual[3] = amount;
         let mut graph = Graph::default();
         let input = graph
@@ -641,6 +643,27 @@ mod tests {
         b.residual[0] = 0.3;
         assert!(a.key(S::Detail) != b.key(S::Detail));
         assert!(a.key(S::Ratio) == b.key(S::Ratio));
+    }
+
+    #[test]
+    fn regional_keys_separate_global_context_tiles_and_projected_views() {
+        use crate::{graph::Operation as O, noise::Parameters};
+        use bytemuck::Zeroable;
+        let mut p = Parameters::zeroed();
+        p.source = [256, 256, 4, 4];
+        p.tile = [192, 192, 64, 11];
+        p.reduction[0] = 0.5;
+        p = p.full_frame();
+        let a = p.for_region([10, 10, 20, 20]).unwrap();
+        let b = p.for_region([20, 20, 30, 30]).unwrap();
+        let distant = p.for_region([200, 200, 210, 210]).unwrap();
+        assert!(
+            O::NoiseContext(a).key("noise.global-context")
+                == O::NoiseContext(distant).key("noise.global-context")
+        );
+        assert!(O::NoiseBase(a).key("noise.tiles") == O::NoiseBase(b).key("noise.tiles"));
+        assert!(O::NoiseBase(a).key("noise.layers") != O::NoiseBase(b).key("noise.layers"));
+        assert!(O::NoiseBase(a).key("noise.tiles") != O::NoiseBase(distant).key("noise.tiles"));
     }
     #[test]
     fn coalescing_tracks_parameter_identity_not_recipe_invalidation() {

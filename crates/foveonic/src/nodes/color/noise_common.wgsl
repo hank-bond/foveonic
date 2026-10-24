@@ -14,6 +14,12 @@ struct NoiseParams {
     column:vec4<f32>,
     reduction:vec4<f32>,
     geometry:vec4<u32>,
+    window:vec4<u32>,
+    region:vec4<u32>,
+}
+fn tile_count(params: NoiseParams) -> u32 { return params.window.z * params.window.w; }
+fn native_tile(tile: u32, params: NoiseParams) -> vec2<u32> {
+    return params.window.xy + vec2(tile % params.window.z, tile / params.window.z);
 }
 fn tile_pixel(p: vec3<u32>, params: NoiseParams) -> u32 {
     return (p.z * params.tile.y + p.y) * params.tile.x + p.x;
@@ -23,7 +29,7 @@ fn atlas_position(p: vec2<u32>, params: NoiseParams) -> vec3<u32> {
 }
 fn full_position(p: vec3<u32>, params: NoiseParams) -> vec2<u32> {
     let core = params.source.xy / params.source.zw;
-    let origin = vec2(p.z % params.source.z, p.z / params.source.z) * core;
+    let origin = native_tile(p.z, params) * core;
     var xy = vec2<i32>(origin + p.xy) - i32(params.tile.z);
     // The reference repeats the second top/left sample and the final bottom/right sample.
     xy = select(xy, vec2(1), xy < vec2(0));

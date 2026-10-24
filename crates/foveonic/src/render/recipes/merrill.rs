@@ -5,6 +5,7 @@ mod dng_base;
 mod monochrome;
 mod photographic;
 mod preview;
+mod region;
 mod technical;
 
 pub(super) use dng_base::build as build_dng;

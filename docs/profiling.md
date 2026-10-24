@@ -34,14 +34,14 @@ Request `--profile gpu` for one additional synchronized diagnostic iteration aft
 
 ## Smart preview transitions
 
-Compare detail-first refinement with direct Full from equivalent Quattro Fast sessions:
+Compare detail-first refinement with direct Full from equivalent Merrill or Quattro Fast sessions:
 
 ```sh
 cargo run --offline --release -p foveonic --example profile_smart_preview -- \
   INPUT.x3f .local/smart-transitions.json
 ```
 
-The report destination must be new. The example uses Sunlight/Standard with core default controls and a central 992×1002 native-pixel detail tile. It excludes source decoding and GPU initialization. Each route starts from its own completed Fast overview. Five measured pairs follow one warmup pair, with alternating route order. Completed processing and display-texture preparation use profiling Off and retain the overview/detail textures as the GUI does. Separate GPU diagnostic runs contain stage timings and transfer/activity counters. Compare the first detail, direct Full, and additional Full continuation independently. Add the two progressive durations to measure when the whole image becomes Full. These are engine-to-ready measurements, not input-to-screen latency. Stored camera adjustments and different viewport sizes can change native app costs.
+The report destination must be new. The example uses Sunlight/Standard with camera-default controls and a central 992×1002 native-pixel detail tile. It excludes source decoding and GPU initialization. Each route starts from its own completed Fast overview. Five measured pairs follow one warmup pair, with alternating route order. Completed processing and display-texture preparation use profiling Off and retain the overview/detail textures as the GUI does. Separate GPU diagnostic runs contain stage timings and transfer/activity counters. Compare the first detail, direct Full, and additional Full continuation independently. Add the two progressive durations to measure when the whole image becomes Full. These are engine-to-ready measurements, not input-to-screen latency. Stored camera adjustments and different viewport sizes can change native app costs.
 
 ## Native feedback
 

@@ -12,13 +12,13 @@ fn raw_rgb(p: vec3<u32>) -> vec3<f32> {
 }
 @compute @workgroup_size(8, 8)
 fn luminance(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     output_values[tile_pixel(p, params)] = dot(raw_rgb(p), params.weights.xyz);
 }
 @compute @workgroup_size(8, 8)
 fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     let pixel = tile_pixel(p, params);
     let value = input_values[pixel];
@@ -40,7 +40,7 @@ fn diffuse(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 @compute @workgroup_size(8, 8)
 fn osf(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     let pixel = tile_pixel(p, params);
     var value = input_values[pixel];
@@ -63,7 +63,7 @@ fn osf(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 @compute @workgroup_size(8, 8)
 fn ratio(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let pixel = id.y * params.tile.x + id.x;
     output_values[pixel] = (input_values[pixel] + params.edge.z) / (max(dot(base_rgb(pixel), params.weights.xyz), 0.) + params.edge.z);
 }
@@ -74,7 +74,7 @@ fn strengthen(value: f32) -> f32 {
 }
 @compute @workgroup_size(8, 8)
 fn residual_mix(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     let pixel = tile_pixel(p, params);
     let a = base_rgb(pixel) * params.weights.xyz;
@@ -98,7 +98,7 @@ fn brightness(pixel: u32) -> f32 {
 }
 @compute @workgroup_size(8, 8)
 fn signal(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     let pixel = tile_pixel(p, params);
     var value = 0.;
@@ -113,7 +113,7 @@ fn signal(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 @compute @workgroup_size(8, 8)
 fn restore(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.tile.x || id.y >= params.tile.y * params.source.z * params.source.w { return; }
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let pixel = id.y * params.tile.x + id.x;
     let q = pixel * 3u;
     let color = max(base_rgb(pixel), vec3(0.));

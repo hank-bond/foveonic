@@ -112,6 +112,7 @@ pub enum Operation {
         amount: f32,
         space: ColorSpace,
     },
+    NoiseContext(crate::noise::Parameters),
     NoiseBase(crate::noise::Parameters),
     Column(crate::noise::Parameters),
     Ratio(crate::noise::Parameters),
@@ -171,7 +172,7 @@ impl Operation {
     /// Track inputs separately for each output so side outputs can be reused safely.
     pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {
         use crate::{noise::RecipeStage as N, recipe::Key};
-        match self {
+        let key = match self {
             Self::ReduceLayers(p) => p.key(),
             Self::ImageRegion {
                 prepared,
@@ -258,6 +259,7 @@ impl Operation {
                 stage, prepared, ..
             } => prepared.key(*stage),
             Self::MonoSharpen { amount, .. } => Key::pod(amount),
+            Self::NoiseContext(p) => p.full_frame().key(N::Base),
             Self::NoiseBase(p) => p.key(N::Base),
             Self::Column(p) => p.key(N::Column),
             Self::Ratio(p) => p.key(N::Ratio),
@@ -281,6 +283,24 @@ impl Operation {
                 ..
             } => Key::pod(params).with(&(*destination as u32)),
             Self::Tiff { params, space, .. } => Key::pod(params).with(&(*space as u32)),
+        };
+        // Compact tile buffers depend on their window. Only projected images
+        // also depend on the physical output rectangle within those tiles.
+        match self {
+            Self::NoiseBase(p) if matches!(output, "noise.layers" | "noise.edges") => {
+                key.with(&p.region)
+            }
+            Self::Column(p) if output == "column.layers" => key.with(&p.region),
+            Self::Ratio(p) if output == "detail.raw-ratio" => key.with(&p.region),
+            Self::Pattern { params, .. } if matches!(output, "detail.ratio" | "pattern.mask") => {
+                key.with(&params.region)
+            }
+            Self::TiledColor { params, .. } if output == "color.rgb" => key.with(&params.region),
+            Self::TiledColorDq { params, .. } if output == "color-dq.rgb" => {
+                key.with(&params.region)
+            }
+            Self::Reconstruct { params, .. } => key.with(&params.region),
+            _ => key,
         }
     }
     pub fn label(&self) -> &'static str {
@@ -364,6 +384,7 @@ impl Operation {
             Self::Banding(_) => "submit row banding correction",
             Self::Monochrome { stage, .. } => stage.label(),
             Self::MonoSharpen { .. } => "submit monochrome sharpening",
+            Self::NoiseContext(_) => "prepare reduced whole-image noise context",
             Self::NoiseBase(_) => "submit reference noise base",
             Self::Column(_) => "submit reference column conditioning",
             Self::Ratio(_) => "submit reference luminance ratio",
@@ -535,7 +556,15 @@ impl Operation {
             Self::MonoSharpen { space, .. } => {
                 (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
             }
-            Self::NoiseBase(_) => (vec![CalibratedLayers], FilteredTiles),
+            Self::NoiseContext(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::NoiseBase(p) => (
+                if p.uses_global_context() {
+                    vec![CalibratedLayers, ScalarField]
+                } else {
+                    vec![CalibratedLayers]
+                },
+                FilteredTiles,
+            ),
             Self::Column(_) => (vec![CalibratedLayers], ConditionedTiles),
             Self::Ratio(_) => (
                 vec![ConditionedTiles, FilteredTiles],
@@ -642,11 +671,19 @@ impl Operation {
             Self::RootDetail(_) => vec![("detail.signal", SignedDetail, vec![0])],
             Self::Black(_) => vec![("black.histogram", Histogram, vec![0])],
             Self::Banding(_) => vec![("banding.rows", RowTable, vec![0])],
-            Self::NoiseBase(_) => vec![
-                ("noise.layers", CalibratedLayers, vec![0]),
-                ("noise.edges", ScalarField, vec![0]),
-                ("noise.pattern-seed-tiles", PatternSeedTiles, vec![0]),
-            ],
+            Self::NoiseContext(_) => vec![("noise.global-edges", ScalarField, vec![0])],
+            Self::NoiseBase(p) => {
+                let inputs = if p.uses_global_context() {
+                    vec![0, 1]
+                } else {
+                    vec![0]
+                };
+                vec![
+                    ("noise.layers", CalibratedLayers, inputs.clone()),
+                    ("noise.edges", ScalarField, inputs.clone()),
+                    ("noise.pattern-seed-tiles", PatternSeedTiles, inputs),
+                ]
+            }
             Self::Column(_) => vec![("column.layers", CalibratedLayers, vec![0])],
             Self::Ratio(_) => vec![("detail.raw-ratio", LuminanceRatio, vec![0, 1])],
             Self::Pattern { .. } => vec![
@@ -765,6 +802,7 @@ impl Operation {
             Self::Banding(_) => "banding.layers",
             Self::Monochrome { stage, .. } => stage.output_name(),
             Self::MonoSharpen { .. } => "sharpen.rgb",
+            Self::NoiseContext(_) => "noise.global-context",
             Self::NoiseBase(_) => "noise.tiles",
             Self::Column(_) => "column.tiles",
             Self::Ratio(_) => "detail.raw-ratio-tiles",

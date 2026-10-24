@@ -43,8 +43,10 @@ pub(crate) fn project(
     core_only: bool,
     profile: &mut Profile,
 ) -> Result<crate::gpu::ReadGuard> {
-    let size =
-        u64::from(params.source[0]) * u64::from(params.source[1]) * u64::from(components) * 4;
+    let size = u64::from(params.output_extent()[0])
+        * u64::from(params.output_extent()[1])
+        * u64::from(components)
+        * 4;
     let mut output = gpu.storage("Projected processing tiles", size)?;
     params.weights[3] = components as f32;
     params.diffusion[3] = if core_only { 2. } else { 0. };
@@ -57,7 +59,7 @@ pub(crate) fn project(
             (1, Read(&uniform)),
             (2, Write(output.write())),
         ],
-        [params.source[0].div_ceil(8), params.source[1].div_ceil(8)],
+        params.output_extent().map(|v| v.div_ceil(8)),
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
@@ -72,6 +74,10 @@ pub(crate) struct Base {
 struct Filtered {
     tiles: Option<crate::gpu::ReadGuard>,
     edges: crate::gpu::ReadGuard,
+}
+pub(crate) struct GlobalContext {
+    pub layers: crate::gpu::ReadGuard,
+    pub edges: crate::gpu::ReadGuard,
 }
 fn raw_tiles(
     gpu: &Gpu,
@@ -168,82 +174,43 @@ pub(crate) fn base(
     profile: &mut Profile,
 ) -> Result<Base> {
     let scale = p.reduction[0];
-    if !(0.375..=1.).contains(&scale) {
-        return Err("unsupported reconstruction scale".into());
+    let tiles = p.tile_count();
+    let reduced_tile = p.reduced_tile_extent()?;
+    if p.uses_global_context() {
+        let context = global_context(gpu, input, p, profile)?;
+        return base_from_context(
+            gpu,
+            &context.layers,
+            &context.edges,
+            p,
+            keep_edges,
+            need_tiles,
+            keep_seed,
+            profile,
+        );
     }
-    let tiles = p.source[2] * p.source[3];
-    let reduced_tile = [
-        (p.tile[0] as f32 * scale) as u32,
-        (p.tile[1] as f32 * scale) as u32,
-    ];
-    if p.tile[..2]
-        .iter()
-        .zip(reduced_tile)
-        .any(|(&a, b)| a as f32 * scale != b as f32)
-    {
-        return Err("nonintegral reduced tile geometry".into());
-    }
-    let global = scale <= 0.5;
     let mut reduced = p;
     reduced.tile[..2].copy_from_slice(&reduced_tile);
     reduced.tile[2] = (p.tile[2] as f32 * scale) as u32;
-    let (raw, filter_params) = if global {
-        let mut whole = p;
-        whole.source[2..].copy_from_slice(&[1, 1]);
-        whole.tile = [p.source[0], p.source[1], 0, p.geometry[2]];
-        whole.geometry = [4, 0, p.geometry[2], 1];
-        let raw = raw_tiles(gpu, input, whole, profile)?;
-        let size = [
-            (p.source[0] as f32 * scale) as u32,
-            (p.source[1] as f32 * scale) as u32,
-        ];
-        let sampling = resample::Prepared::new([p.source[0], p.source[1]], size, 1, scale)?;
-        let raw = resample::apply(gpu, &raw, &sampling, profile)?;
-        whole.source[..2].copy_from_slice(&size);
-        whole.tile[..2].copy_from_slice(&size);
-        reduced.source[..2].copy_from_slice(&size);
-        reduced.geometry[3] = 1;
-        (raw, whole)
+    let raw = raw_tiles(gpu, input, p, profile)?;
+    let raw = if scale < 1. {
+        resample::apply(
+            gpu,
+            &raw,
+            &resample::Prepared::new([p.tile[0], p.tile[1]], reduced_tile, tiles, scale)?,
+            profile,
+        )?
     } else {
-        let raw = raw_tiles(gpu, input, p, profile)?;
-        let raw = if scale < 1. {
-            resample::apply(
-                gpu,
-                &raw,
-                &resample::Prepared::new([p.tile[0], p.tile[1]], reduced_tile, tiles, scale)?,
-                profile,
-            )?
-        } else {
-            raw
-        };
-        (raw, reduced)
+        raw
     };
-    let filtered = filter(gpu, &raw, filter_params, need_tiles, profile)?;
+    let filtered = filter(gpu, &raw, reduced, need_tiles, profile)?;
     let seed = if keep_seed {
-        let mut seed_p = p;
-        seed_p.geometry[3] = u32::from(global);
-        Some(pattern_seed(gpu, &filtered.edges, seed_p, profile)?)
+        Some(pattern_seed(gpu, &filtered.edges, p, profile)?)
     } else {
         None
     };
-    let base = if global {
-        filtered
-            .tiles
-            .as_ref()
-            .map(|v| global_tiles(gpu, v, reduced, 3, profile))
-            .transpose()?
-    } else {
-        filtered.tiles
-    };
-    let edges = if keep_edges {
-        Some(if global {
-            global_tiles(gpu, &filtered.edges, reduced, 1, profile)?
-        } else {
-            filtered.edges
-        })
-    } else {
-        None
-    };
+    let base = filtered.tiles;
+    let edges = keep_edges.then_some(filtered.edges);
     if scale < 1. {
         let up = resample::Prepared::new(reduced_tile, [p.tile[0], p.tile[1]], tiles, 1. / scale)?;
         Ok(Base {
@@ -265,6 +232,87 @@ pub(crate) fn base(
         })
     }
 }
+/// The low-scale branch filters the reduced whole sensor before tile extraction.
+/// Keep this immutable context independent of the requested tile window.
+pub(crate) fn global_context(
+    gpu: &Gpu,
+    input: &crate::gpu::ReadGuard,
+    p: Parameters,
+    profile: &mut Profile,
+) -> Result<GlobalContext> {
+    p.reduced_tile_extent()?;
+    let mut whole = p.full_frame();
+    whole.source[2..].copy_from_slice(&[1, 1]);
+    whole.window = [0, 0, 1, 1];
+    whole.tile = [p.source[0], p.source[1], 0, p.geometry[2]];
+    whole.geometry = [4, 0, p.geometry[2], 1];
+    let raw = raw_tiles(gpu, input, whole, profile)?;
+    let size = context_extent(p);
+    let raw = resample::apply(
+        gpu,
+        &raw,
+        &resample::Prepared::new([p.source[0], p.source[1]], size, 1, p.reduction[0])?,
+        profile,
+    )?;
+    whole.source[..2].copy_from_slice(&size);
+    whole.tile[..2].copy_from_slice(&size);
+    let filtered = filter(gpu, &raw, whole, true, profile)?;
+    Ok(GlobalContext {
+        layers: filtered.tiles.ok_or("missing whole-image noise base")?,
+        edges: filtered.edges,
+    })
+}
+
+pub(crate) fn context_extent(p: Parameters) -> [u32; 2] {
+    [p.source[0], p.source[1]].map(|v| (v as f32 * p.reduction[0]) as u32)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn base_from_context(
+    gpu: &Gpu,
+    context: &crate::gpu::ReadGuard,
+    context_edges: &crate::gpu::ReadGuard,
+    p: Parameters,
+    keep_edges: bool,
+    need_tiles: bool,
+    keep_seed: bool,
+    profile: &mut Profile,
+) -> Result<Base> {
+    let scale = p.reduction[0];
+    let reduced_tile = p.reduced_tile_extent()?;
+    let mut reduced = p;
+    reduced.source[..2].copy_from_slice(&context_extent(p));
+    reduced.tile[..2].copy_from_slice(&reduced_tile);
+    reduced.tile[2] = (p.tile[2] as f32 * scale) as u32;
+    reduced.geometry[3] = 1;
+    let up = resample::Prepared::new(
+        [reduced.tile[0], reduced.tile[1]],
+        [p.tile[0], p.tile[1]],
+        p.tile_count(),
+        1. / scale,
+    )?;
+    let tiles = if need_tiles {
+        let tiles = global_tiles(gpu, context, reduced, 3, profile)?;
+        Some(resample::apply(gpu, &tiles, &up, profile)?)
+    } else {
+        None
+    };
+    let edges = if keep_edges {
+        let tiles = global_tiles(gpu, context_edges, reduced, 1, profile)?;
+        Some(resample::apply_scalar(gpu, &tiles, &up, profile)?)
+    } else {
+        None
+    };
+    let seed = if keep_seed {
+        let mut seed_p = p;
+        seed_p.geometry[3] = 1;
+        Some(pattern_seed(gpu, context_edges, seed_p, profile)?)
+    } else {
+        None
+    };
+    Ok(Base { tiles, edges, seed })
+}
+
 fn filter(
     gpu: &Gpu,
     raw: &crate::gpu::ReadGuard,
@@ -277,7 +325,7 @@ fn filter(
     let mut edges = gpu.storage("Noise edge weights", n * 4)?;
     let grid = [
         params.tile[0].div_ceil(32),
-        params.tile[1].div_ceil(32) * params.source[2] * params.source[3],
+        params.tile[1].div_ceil(32) * params.tile_count(),
     ];
     let mut block_mean = gpu.storage(
         "Noise block means",
@@ -361,10 +409,7 @@ fn filter(
             (4, Write(weights.write())),
             (5, Write(prefix.write())),
         ],
-        [
-            (params.tile[1] * params.source[2] * params.source[3]).div_ceil(64),
-            1,
-        ],
+        [(params.tile[1] * params.tile_count()).div_ceil(64), 1],
         &mut trace,
     );
     let mut vertical = params;
@@ -380,10 +425,7 @@ fn filter(
             (4, Write(weights.write())),
             (5, Write(prefix.write())),
         ],
-        [
-            (params.tile[0] * params.source[2] * params.source[3]).div_ceil(64),
-            1,
-        ],
+        [(params.tile[0] * params.tile_count()).div_ceil(64), 1],
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
@@ -408,11 +450,7 @@ pub(crate) fn column(
     }
     let mut deltas = gpu.storage(
         "Column block deltas",
-        u64::from(params.tile[0])
-            * u64::from(blocks)
-            * u64::from(params.source[2])
-            * u64::from(params.source[3])
-            * 12,
+        u64::from(params.tile[0]) * u64::from(blocks) * u64::from(params.tile_count()) * 12,
     )?;
     let mut output = gpu.storage("Column conditioned tiles", n * 12)?;
     let uniform = gpu.uniform(&params);
@@ -447,10 +485,7 @@ pub(crate) fn column(
             (2, Read(&smoothed)),
             (3, Write(deltas.write())),
         ],
-        [
-            params.tile[0].div_ceil(64),
-            blocks * params.source[2] * params.source[3],
-        ],
+        [params.tile[0].div_ceil(64), blocks * params.tile_count()],
         &mut trace,
     );
     gpu.dispatch(

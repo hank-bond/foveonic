@@ -326,3 +326,29 @@ fn camera_noise_parameters_match_reference() {
         assert!(column_parameters(&incomplete, p).is_err());
     }
 }
+
+#[test]
+fn regional_geometry_rejects_invalid_grids_rectangles_and_reduction() {
+    use bytemuck::Zeroable;
+    let mut params = Parameters::zeroed();
+    params.source = [256, 256, 4, 4];
+    params.tile = [192, 192, 64, 11];
+    params.reduction[0] = 0.375;
+    params = params.full_frame();
+    assert_eq!(params.reduced_tile_extent().unwrap(), [72, 72]);
+    for rect in [[10, 10, 10, 20], [10, 20, 20, 10], [0, 0, 257, 256]] {
+        assert!(params.for_region(rect).is_err());
+    }
+    for grid in [[256, 256, 0, 4], [0, 256, 4, 4], [255, 256, 4, 4]] {
+        let mut invalid = params;
+        invalid.source = grid;
+        assert!(invalid.for_region([0, 0, 20, 20]).is_err());
+    }
+    for scale in [0., 0.25, 1.125, f32::NAN] {
+        let mut invalid = params;
+        invalid.reduction[0] = scale;
+        assert!(invalid.reduced_tile_extent().is_err());
+    }
+    params.tile[0] = 193;
+    assert!(params.reduced_tile_extent().is_err());
+}
