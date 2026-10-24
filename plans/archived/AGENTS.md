@@ -39,6 +39,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[embedded-thumbnails](./embedded-thumbnails.md)** _(archived)._ Read Classic bitmap thumbnails through an encoding-based embedded-preview path.
 - **[export-toolbar](./export-toolbar.md)** _(archived)._ Move TIFF color selection from Editing to a padded, grouped Open/Export toolbar.
 - **[family-controls](./family-controls.md)** _(archived)._ Separate family editing panels and centralize processing control constraints before reviewing broader organization.
+- **[fast-preview-controls](./fast-preview-controls.md)** _(archived)._ Separate quarter-resolution Fast controls from Smart's reconstruction-bypassing Draft recipe and publish the verified release.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** _(archived)._ Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[gui-screenshot](./gui-screenshot.md)** _(archived)._ Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README.
 - **[help-comparisons](./help-comparisons.md)** _(archived)._ Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
