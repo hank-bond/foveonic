@@ -10,11 +10,12 @@ implementation: conforming
 ## Requirements
 
 - Local macOS packaging and launching **must** use a Rust workspace task exposed through Cargo. Normal builds **must not** require Python or regenerate checked-in artwork.
-- Packaging **must** preserve the native icon appearances, compiler-provided icon metadata, executable permissions, stable application identity, and macOS 26 minimum. It **must** use Cargo's reported executable path, including custom target directories.
+- Packaging **must** preserve native icon appearances where supported, compiler-provided icon metadata, the fallback ICNS for earlier systems, executable permissions, stable application identity, and macOS 15.0 minimum. Executable deployment target, icon compilation and bundle minimum must agree. It **must** use Cargo's reported executable path, including custom target directories.
 - Application crates and bundle metadata **must** share one version. Release tags **must** use `v` followed by that version. A mismatched tag **must** fail before release assets are uploaded.
 - Pushing a release tag **must** trigger GitHub Actions checks and an Apple Silicon macOS app build with Xcode 26 or later. GPU/original-file fixtures **must** remain opt-in.
 - Release CI **must** sign the app with a valid Developer ID Application identity for the configured team, enable hardened runtime and obtain a secure timestamp. Local packaging **must not** require signing credentials.
 - Release CI **must** verify the app's signature before creating the archive and checksum. The archive **must** preserve the app bundle and executable permissions. Release CI **must not** submit the app for notarization or require Gatekeeper acceptance.
+- A macOS 15 Apple Silicon job must download the signed draft, verify its checksum/signature and run the executable's help command. This checks binary loading on Sequoia. Interactive GUI, Metal rendering and browser-quarantine acceptance remain separate runtime checks.
 - Missing credentials, ambiguous signing identities, or signing and signature-verification failures **must** block release uploads. There **must not** be an unsigned fallback.
 - Release guidance **must** explain that downloads are not notarized and may require the per-app **Open Anyway** control in macOS Privacy & Security settings on first launch. It **must not** recommend disabling Gatekeeper globally.
 - Signing credentials **must** come from GitHub Actions secrets. The Team ID **may** be a repository variable. Certificate exports and imported private keys **must** remain in temporary runner storage and be cleaned up on success, failure or cancellation.
@@ -23,7 +24,7 @@ implementation: conforming
 
 ## Release scope
 
-Release assets remain Apple Silicon ZIP archives for macOS 26 or later. Intel builds and installers are outside the current scope. Creating or pushing a tag and publishing its release remain separate owner-approved actions. Previously published unsigned releases remain unchanged.
+Release assets are Apple Silicon ZIP archives targeting macOS 15 Sequoia or later. Building uses Xcode 26 or later, independently of the application's deployment target. The owner approved including Sequoia-targeted builds in 0.3.0 for a user trial. Runtime checks on macOS 15 remain outstanding and must not be described as completed. Intel builds and installers are outside the current scope. Creating or pushing a tag and publishing its release remain separate owner-approved actions. Previously published releases remain unchanged.
 
 ## Validation
 

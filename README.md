@@ -22,7 +22,7 @@ A photo editor for Sigma X3F files, focused on speed, flexibility, and attractiv
 
 ## Get Foveonic
 
-Download the Mac app from the [latest release](https://github.com/hank-bond/foveonic/releases/latest). Current downloads require an Apple Silicon Mac running macOS 26 or later.
+Download the Mac app from the [latest release](https://github.com/hank-bond/foveonic/releases/latest). Version 0.3.0 targets Apple Silicon Macs running macOS 15 Sequoia or later. Sequoia compatibility is new and awaits feedback from users running macOS 15.
 
 The app isn't notarized, so macOS may block the first launch. Use **System Settings → Privacy & Security → Open Anyway** for Foveonic.
 

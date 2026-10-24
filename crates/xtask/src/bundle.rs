@@ -9,6 +9,9 @@ use std::{
     process::Command,
 };
 
+// Keep executable, icon resources and LaunchServices on the same runtime floor.
+pub(crate) const MINIMUM_MACOS_VERSION: &str = "15.0";
+
 pub fn compile_icon(root: &Path, output: &Path) -> Result<()> {
     let status = Command::new("xcrun")
         .args(["actool", "--compile"])
@@ -17,7 +20,7 @@ pub fn compile_icon(root: &Path, output: &Path) -> Result<()> {
             "--platform",
             "macosx",
             "--minimum-deployment-target",
-            "26.0",
+            MINIMUM_MACOS_VERSION,
             "--app-icon",
             "Foveonic",
             "--standalone-icon-behavior",
@@ -61,7 +64,7 @@ pub fn assemble(binary: &Path, compiled: &Path, version: &str) -> Result<PathBuf
         ("CFBundlePackageType", "APPL"),
         ("CFBundleShortVersionString", version),
         ("CFBundleVersion", version),
-        ("LSMinimumSystemVersion", "26.0"),
+        ("LSMinimumSystemVersion", MINIMUM_MACOS_VERSION),
     ] {
         metadata.insert(key.into(), Value::String(value.into()));
     }
@@ -157,7 +160,7 @@ mod tests {
             ("CFBundleExecutable", "foveonic-gui"),
             ("CFBundleShortVersionString", "0.1.0"),
             ("CFBundleVersion", "0.1.0"),
-            ("LSMinimumSystemVersion", "26.0"),
+            ("LSMinimumSystemVersion", "15.0"),
         ] {
             assert_eq!(metadata[key].as_string(), Some(value));
         }

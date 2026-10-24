@@ -63,7 +63,7 @@ A new draft receives only the tagged changelog section. An existing draft keeps 
 
 ## Publish manually
 
-Review the draft notes and download the archive through a browser so macOS applies its normal download checks. Extract and test the app on macOS 26 or later before publishing. Downloads are Developer ID signed but not notarized, so Gatekeeper may block the first launch.
+Review the draft notes and download the archive through a browser so macOS applies its normal download checks. Releases target macOS 15 Sequoia or later. Sequoia runtime testing remains pending user feedback. Verify the executable and bundle both target 15.0, and test the app on available supported systems before publishing. Downloads are Developer ID signed but not notarized, so Gatekeeper may block the first launch.
 
 For a build you trust, attempt to open the app, then use **System Settings → Privacy & Security → Open Anyway** for that app and confirm the prompt. Subsequent launches normally retain that approval. A newly downloaded version may be checked again. Do not disable Gatekeeper globally.
 

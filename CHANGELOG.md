@@ -7,10 +7,17 @@ kind: reference
 
 ## 0.3.0
 
-<!-- Add your release introduction here. -->
+So the two big changes here are
+1. Added the first iteration of the Import mode, which does not save any sidecar data to the loaded directory, and offers "already imported" hiding if you tend to not format your cards very often.  Expect this to change as I refine my taste here.
+2. Merrill now supports its own implementation of Smart preview.  Currently it does not do viewport rendering, only 1/4 res with noise and detail reconstruction off, and Full res with it on upon zoom.
+
+Also I am retargeting to support macOS 15, but unsure if it actually works so it will need testing.
+
+A guided walkthru mode and better user facing documentation will come later once the experience starts to stabilize.
 
 ### Changes
 
+- Apple Silicon builds now target macOS 15 Sequoia or later, with compatible icon resources. Sequoia runtime testing is still pending user feedback.
 - Browse and Import open folders recursively, with photographs grouped by subfolder.
 - Import mode keeps source cards and folders free of editing writes. Pick photographs, hide rejects, and remember imported or hidden files at the destination for the next review.
 - One Process action uses saved settings for DNG, TIFF and TIFF color space. Import can copy originals directly or process them and keep originals and edits in an `x3f` subfolder.
@@ -20,7 +27,7 @@ kind: reference
 - Merrill Fast skips row correction and Noise and Detail while preserving the saved controls for Full. New Merrill photographs start with Noise and Detail enabled, and existing saved choices remain unchanged.
 - Faster Merrill GPU row correction, clearer cache readiness, and consistent browser picking and hiding shortcuts across the workspace.
 
-Apple Silicon downloads require macOS 26 or later. They are Developer ID signed and unnotarized. First launch may require **Open Anyway** in macOS Privacy & Security settings.
+Apple Silicon downloads target macOS 15 or later. They are Developer ID signed and unnotarized. First launch may require **Open Anyway** in macOS Privacy & Security settings.
 
 ## 0.2.0
 

@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      MACOSX_DEPLOYMENT_TARGET: '26.0'
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +51,22 @@ jobs:
 
       - name: Build native app bundle
         run: cargo xtask bundle --tag "$RELEASE_TAG"
+
+      - name: Verify Sequoia deployment target
+        run: |
+          python3 - <<'PY'
+          import pathlib, plistlib, re, subprocess
+          app = pathlib.Path("target/release/Foveonic.app/Contents")
+          info = plistlib.loads((app / "Info.plist").read_bytes())
+          if info.get("LSMinimumSystemVersion") != "15.0":
+              raise SystemExit("Bundle must target macOS 15.0")
+          build = subprocess.check_output([
+              "xcrun", "vtool", "-show-build", str(app / "MacOS/foveonic-gui"),
+          ], text=True)
+          if re.findall(r"^\s*minos\s+(\S+)", build, re.MULTILINE) != ["15.0"]:
+              raise SystemExit("Executable must target macOS 15.0")
+          print(build)
+          PY
 
       - name: Import certificate and sign app
         env:
@@ -144,3 +160,31 @@ jobs:
           fi
           rm -rf "$SIGNING_TEMP_DIR"
           exit "$status"
+
+  sequoia:
+    name: Signed app startup on macOS 15
+    needs: macos
+    runs-on: macos-15
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      VERIFY_DIR: ${{ runner.temp }}/foveonic-sequoia
+    steps:
+      - name: Download the signed draft assets
+        run: |
+          mkdir -p "$VERIFY_DIR"
+          gh release download "$RELEASE_TAG" --dir "$VERIFY_DIR" \
+            --pattern "Foveonic-${RELEASE_TAG}-macos-arm64.zip" --pattern SHA256SUMS
+
+      - name: Verify and start the executable on Sequoia
+        working-directory: ${{ env.VERIFY_DIR }}
+        run: |
+          sw_vers
+          test "$(sw_vers -productVersion | cut -d . -f1)" = 15
+          test "$(uname -m)" = arm64
+          shasum -a 256 -c SHA256SUMS
+          ditto -x -k "Foveonic-${RELEASE_TAG}-macos-arm64.zip" .
+          codesign --verify --deep --strict --verbose=2 Foveonic.app
+          Foveonic.app/Contents/MacOS/foveonic-gui --help

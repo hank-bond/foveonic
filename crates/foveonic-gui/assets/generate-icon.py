@@ -13,6 +13,7 @@ ET.register_namespace("", SVG)
 ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 BEVEL_WIDTH = 1.4  # Projected source units; about 3.6 pixels in the 1024 export.
 LOGO_WIDTH = 0.90  # Visual-review choice, not an Apple sizing requirement.
+MINIMUM_MACOS_VERSION = "15.0"  # Match the native bundle's oldest supported runtime.
 
 
 def bevel_faces(points, width=BEVEL_WIDTH, dark=False):
@@ -89,7 +90,7 @@ def compile_icon(assets, output):
     # macOS supplies the correct padding, sizes, and automatic appearances.
     subprocess.run([
         "xcrun", "actool", "--compile", str(output), "--platform", "macosx",
-        "--minimum-deployment-target", "26.0", "--app-icon", "Foveonic",
+        "--minimum-deployment-target", MINIMUM_MACOS_VERSION, "--app-icon", "Foveonic",
         "--standalone-icon-behavior", "all",
         "--output-partial-info-plist", str(output / "partial.plist"),
         str(assets / "Foveonic.icon"),

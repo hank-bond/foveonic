@@ -71,7 +71,10 @@ pub fn build(root: &Path, package: &str, debug: bool, offline: bool) -> Result<P
             "foveonic-gui",
             "--message-format=json-render-diagnostics",
         ])
-        .env("MACOSX_DEPLOYMENT_TARGET", "26.0");
+        .env(
+            "MACOSX_DEPLOYMENT_TARGET",
+            crate::bundle::MINIMUM_MACOS_VERSION,
+        );
     if !debug {
         command.arg("--release");
     }

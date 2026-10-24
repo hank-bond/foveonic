@@ -8,7 +8,7 @@ Follow [`gui-and-batch.md`](../../plans/gui-and-batch.md) and [`pipeline-inspect
 
 Read [`src/AGENTS.md`](./src/AGENTS.md) before implementation.
 
-On macOS 26, use `cargo xtask run -- {X3F_OR_FOLDER}` from the repository root. It builds a local `.app` with native automatic icon appearances, without installing or publishing it. `cargo xtask bundle` builds without launching. Add `--debug` to select the debug profile. Keep the native icon system-owned rather than restoring a runtime Dock override. Bundle tests run in `cargo test --workspace`. Artwork tests are separate under `assets/`. See the [Cargo tasks](../xtask/AGENTS.md) and [release checklist](../../docs/releases.md).
+On macOS with Xcode 26 or later, use `cargo xtask run -- {X3F_OR_FOLDER}` from the repository root. It builds a local `.app` targeting macOS 15 with native automatic icon appearances and a compiler-generated fallback icon, without installing or publishing it. `cargo xtask bundle` builds without launching. Add `--debug` to select the debug profile. Keep the native icon system-owned rather than restoring a runtime Dock override. Bundle tests run in `cargo test --workspace`. Artwork tests are separate under `assets/`. See the [Cargo tasks](../xtask/AGENTS.md) and [release checklist](../../docs/releases.md).
 
 Refresh the README image explicitly with `cargo xtask screenshot`, following the [capture guide](../../docs/gui-screenshot.md). Normal builds do not sync photographs or capture screenshots.
 
