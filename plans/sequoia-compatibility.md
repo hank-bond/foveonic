@@ -12,14 +12,15 @@ The owner first requested a compatibility investigation, then approved including
 - [x] Review the app's platform calls and the pinned Metal backend.
 - [x] Build the current GUI and native icon resources for macOS 15.0 in an isolated output directory.
 - [x] Check the executable's deployment command and launch the experimental bundle on the current macOS 26 host.
-- [ ] Exercise the bundle on an Apple Silicon Mac running macOS 15.
+- [ ] Check interactive GUI, Metal rendering and icons on the user's Apple Silicon Mac running macOS 15.
 - [x] Owner approved a macOS 15 runtime target for the release and requested a Sequoia user trial.
 - [x] Align packaging, icon generation, CI deployment target and release documentation at 15.0.
 - [x] Verify the final executable load command, bundle minimum and fallback icon resources.
 - [x] Run local checks and native Smart/Import smoke tests on the available macOS 26 host.
-- [ ] Verify the signed binary loads on a macOS 15 Apple Silicon runner.
-- [ ] Commit and rebuild the unpublished 0.3.0 draft through signed CI, preserving the owner's prose.
-- [ ] Verify the downloaded signed replacement and record exact testing limits.
+- [x] Verify the signed binary loads on a macOS 15 Apple Silicon runner.
+- [x] Commit and rebuild the unpublished 0.3.0 draft through signed CI, preserving the owner's prose.
+- [x] Verify the downloaded signed replacement and record exact testing limits.
+- [x] Publish the verified 0.3.0 release as Latest under the owner's approval.
 
 ## Findings
 
@@ -46,3 +47,13 @@ The normal packaging task now uses the same 15.0 target for executable, icons an
 The owner saved an introduction in the existing draft and approved publishing when ready. Its text is retained in the changelog and draft. The original unpublished 0.3.0 tag may move to the approved Sequoia preparation commit. Previously published tags remain fixed. The existing draft's compatibility footer is the only prose to change when its assets are replaced.
 
 Local checks pass all 529 workspace tests, strict all-target Clippy, formatting, five artwork tests and documentation checks. The native executable's LC_BUILD_VERSION reports minos 15.0 with SDK 26.5. Bundle minimum is 15.0 and both compiled icon resources are present. The Sequoia CI guard passes against that actual build. Isolated Smart and Import smoke sequences pass on macOS 26 without source-side writes. GitHub lists `macos-15` as an [Apple Silicon runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners). A dependent CI job now downloads the signed draft and checks binary loading on that OS. This is a basic process-startup check, not a replacement for the user's GUI and rendering trial.
+
+## Published evidence and remaining coverage
+
+The initial hosted attempt was rejected before running jobs because `runner.temp` was used in job-level environment configuration. Commit `9ffeeae` moves path resolution into runner steps. The [replacement run](https://github.com/hank-bond/foveonic/actions/runs/40069873574) passes the full build, deployment guard, Developer ID signing, archive upload and credential cleanup. Its dependent Apple Silicon job runs on macOS 15.7.9 build 24G830, downloads the signed archive, verifies its checksum/signature and successfully runs the GUI executable's help command.
+
+The downloaded replacement reports executable and bundle minima of 15.0, version 0.3.0, arm64 architecture, the expected Developer ID chain, hardened runtime and secure timestamp. Its SHA-256 is `49e0c1c8b1a3eababe82f12e6d7cb4fa41e907d1668dc909ff01d30b1a0d83d4`. Native Smart and Import smoke sequences pass again on the available macOS 26 host. Original hashes and source sidecars remain unchanged, and the signed bundle still verifies after launch.
+
+The owner approved publishing when ready. [v0.3.0](https://github.com/hank-bond/foveonic/releases/tag/v0.3.0) is published as Latest with the verified replacement and checksums. The owner's saved introduction and change list are unchanged. Only the draft's old macOS 26 compatibility footer was updated to target macOS 15. The published tag is fixed at `9ffeeae`. Previously published releases were not changed.
+
+The remaining checkbox is the interactive Sequoia trial: opening photographs, Metal rendering, native dialogs, icons and cache/import behavior on the user's actual machine. The hosted help command validates loading and process startup, not these interactions. Browser-applied quarantine and Open Anyway were not automated. This plan remains active for that bounded coverage follow-up.

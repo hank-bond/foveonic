@@ -24,7 +24,7 @@ implementation: conforming
 
 ## Release scope
 
-Release assets are Apple Silicon ZIP archives targeting macOS 15 Sequoia or later. Building uses Xcode 26 or later, independently of the application's deployment target. The owner approved including Sequoia-targeted builds in 0.3.0 for a user trial. Runtime checks on macOS 15 remain outstanding and must not be described as completed. Intel builds and installers are outside the current scope. Creating or pushing a tag and publishing its release remain separate owner-approved actions. Previously published releases remain unchanged.
+Release assets are Apple Silicon ZIP archives targeting macOS 15 Sequoia or later. Building uses Xcode 26 or later, independently of the application's deployment target. The owner approved including Sequoia-targeted builds in 0.3.0 for a user trial. Interactive GUI, Metal rendering and icon checks on macOS 15 remain outstanding and must not be described as completed by the CI process-startup check. Intel builds and installers are outside the current scope. Creating or pushing a tag and publishing its release remain separate owner-approved actions. Previously published releases remain unchanged.
 
 ## Validation
 
