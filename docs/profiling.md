@@ -77,3 +77,13 @@ Host times are wall durations, including driver work or waits where applicable; 
 Native receipt, callback encoding and callback gaps do not establish screen scanout. External pointer/pipe timestamps select interaction windows but do not provide precise event-to-screen latency. Keep fresh full-processing costs separate from warm session feedback: a cached edit can skip the denoiser entirely. Summaries aggregate a supplied dataset; compare methods in separate datasets and use raw source/settings context when interpreting interactive sweeps.
 
 Run portable tool tests with `python3 -m unittest discover -s scripts/profiling -p 'test_*.py'`. No dashboard, tracing service or installation is required.
+
+## Capture an early loading stall
+
+Run the current app with wall profiling and redirect stderr to a local file:
+
+```sh
+FOVEONIC_PROFILE=wall cargo run --release -p foveonic-gui 2> target/interactive-profile.log
+```
+
+Launch the executable directly through Cargo so its environment and stderr stay attached to the terminal. Use Browse or Import normally and quit after reproducing the stall. Ordinary build messages may share this file with the marked JSON records. `selection` reports the start and recipe-ready delay before image submission. `worker_started` reports queue delay. `source_load.input` distinguishes `decoded-cache` from `original`, with separate cached identity lookup, header, payload read/checksum and camera-metadata timings. Existing processing and presentation events cover the remaining path. Nested durations overlap. Logging remains opt-in and creates no profiling-only GPU waits.

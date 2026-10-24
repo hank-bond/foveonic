@@ -135,13 +135,14 @@ impl App {
             processing_open: false,
             opening: None,
             browser,
-            worker,
             previews,
-            capture: capture::Loader::new(cc.egui_ctx.clone()),
+            capture: capture::Loader::new(cc.egui_ctx.clone(), worker.cache.clone()),
             sidecars: sidecars::Session::new(
                 cc.egui_ctx.clone(),
                 std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_none(),
+                worker.cache.clone(),
             ),
+            worker,
             metadata: None,
             selected: None,
             settings,
@@ -237,6 +238,7 @@ impl App {
     }
     fn select(&mut self, path: PathBuf) {
         self.browser.invalidate_prefetch();
+        timing::selected(self.revision + 1, &path);
         let began = std::time::Instant::now();
         self.opening = Some(Opening {
             _priority: self.worker.cache.foreground(),
@@ -980,7 +982,10 @@ impl eframe::App for App {
             });
         }
         if let Some(saved) = self.sidecars.receive() {
-            if self.selected.is_some() {
+            if let Some(path) = &self.selected {
+                if let Some(opening) = &self.opening {
+                    timing::selection_ready(self.revision, path, opening.began);
+                }
                 self.settings = sidecars::selection_settings(saved, &self.camera_overrides);
                 inspect::normalize(
                     &self.settings,

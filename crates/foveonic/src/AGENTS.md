@@ -25,9 +25,11 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 - **[background.rs](./background.rs)** Gives foreground work priority over interruptible prefetch and pausable background jobs.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
-- **[decode_cache.rs](./decode_cache.rs)** Reuses exact decoded sources and display previews in a bounded temporary disk LRU.
-- **[decode_cache_lru.rs](./decode_cache_lru.rs)** Applies the shared disk budget while favoring nearby decoded sources and display previews.
+- **[decode_cache.rs](./decode_cache.rs)** Reuses decoded sources, original bytes, selection metadata and previews in a bounded temporary disk LRU.
+- **[decode_cache_lru.rs](./decode_cache_lru.rs)** Applies the shared disk budget while favoring nearby source bundles and display previews.
+- **[decode_cache_original.rs](./decode_cache_original.rs)** Retains original X3F bytes for imports under the decoded cache's identity and budget.
 - **[decode_cache_preview.rs](./decode_cache_preview.rs)** Stores bounded display previews under the decoded cache's identity, recipe, and shared LRU budget.
+- **[decode_cache_selection.rs](./decode_cache_selection.rs)** Keeps complete local selection metadata and thumbnails beside decoded sources.
 - **[decode_cache_window.rs](./decode_cache_window.rs)** Orders a bounded selection neighborhood for prefetch and cache retention.
 - **[decode_cache_worker.rs](./decode_cache_worker.rs)** Schedules bounded cache writes, selection prefetch, and readiness scans behind foreground work.
 - **[decode_pool.rs](./decode_pool.rs)** Shares a bounded FIFO sensor-layer pool across ordered speculative photo loads.

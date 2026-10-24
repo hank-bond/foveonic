@@ -1,4 +1,4 @@
-//! Reuses exact decoded sources and display previews in a bounded temporary disk LRU.
+//! Reuses decoded sources, original bytes, selection metadata and previews in a bounded temporary disk LRU.
 
 pub use crate::background::Activity;
 #[path = "decode_cache_lru.rs"]
@@ -6,8 +6,13 @@ mod lru;
 #[path = "decode_cache_window.rs"]
 mod window;
 use lru::prune;
+#[path = "decode_cache_original.rs"]
+mod original;
 #[path = "decode_cache_preview.rs"]
 mod previews;
+#[path = "decode_cache_selection.rs"]
+mod selection;
+pub use selection::Selection;
 #[path = "decode_cache_worker.rs"]
 mod worker;
 use crate::source::{LoadStage, Metadata, ProcessingFamily, Result, Source, SourceStorage};
@@ -165,6 +170,9 @@ struct Control {
     stores: HashSet<PathBuf>,
     generation: u64,
     preview: Option<previews::PendingPreview>,
+    identities: HashMap<PathBuf, Identity>,
+    recipes: HashMap<PathBuf, crate::render::Settings>,
+    recipe_updates: BTreeMap<PathBuf, crate::render::Settings>,
 }
 impl Control {
     fn restart_prefetch(&mut self) {
@@ -184,6 +192,7 @@ enum Command {
         path: PathBuf,
         identity: Identity,
         source: Arc<Source>,
+        original: Vec<u8>,
     },
 }
 
@@ -221,6 +230,9 @@ impl Cache {
             stores: HashSet::new(),
             generation: 0,
             preview: None,
+            identities: HashMap::new(),
+            recipes: HashMap::new(),
+            recipe_updates: BTreeMap::new(),
         }));
         let status = Arc::new(Mutex::new(Status::default()));
         let gate = Arc::new(crate::background::Gate::default());
@@ -237,6 +249,7 @@ impl Cache {
         settings.normalize();
         let mut state = self.control.lock().unwrap();
         state.settings = settings;
+        state.identities.clear();
         state.restart_prefetch();
         self.gate.interrupt_prefetch();
         drop(state);
@@ -249,6 +262,9 @@ impl Cache {
     pub fn clear(&self) {
         let mut state = self.control.lock().unwrap();
         state.clear = true;
+        state.identities.clear();
+        state.recipes.clear();
+        state.recipe_updates.clear();
         state.preview = None;
         state.queue.clear();
         state.stores.clear();
@@ -305,6 +321,28 @@ impl Cache {
         &self.root
     }
 
+    /// Reuse verified header metadata before loading the much larger pixel payload.
+    /// Selection and editing defaults must not seek through the card again on a cache hit.
+    pub fn capture_properties(&self, path: &Path) -> Result<BTreeMap<String, String>> {
+        if let Some(selection) = self.selection(path) {
+            return Ok(selection.properties);
+        }
+        let settings = self.control.lock().unwrap().settings.clone();
+        let cached = (|| -> Result<BTreeMap<String, String>> {
+            if !settings.enabled {
+                return Err("decoded cache disabled".into());
+            }
+            let identity = Identity::read(path)?;
+            let mut file = File::open(self.root.join(identity.name()))?;
+            let header = read_header(&mut file, &identity, &settings)?;
+            if Identity::read(path)? != identity {
+                return Err("source changed while reading cached capture metadata".into());
+            }
+            Ok(header.properties)
+        })();
+        cached.or_else(|_| crate::source::read_capture_properties(path))
+    }
+
     pub fn open(&self, path: &Path, progress: impl Fn(LoadStage)) -> Result<Arc<Source>> {
         if let Some(source) = self.open_cached(path, &progress) {
             return Ok(source);
@@ -314,7 +352,10 @@ impl Cache {
             .enabled
             .then(|| Identity::read(path).ok())
             .flatten();
-        let source = Arc::new(Source::open_with_progress(path, progress)?);
+        let (source, original) = crate::x3f::read_owned(path, || progress(LoadStage::FileRead))?;
+        source.validate()?;
+        progress(LoadStage::Decoded);
+        let source = Arc::new(source);
         if let Some(identity) = identity {
             let mut control = self.control.lock().unwrap();
             if source
@@ -329,6 +370,7 @@ impl Cache {
                         path: path.to_owned(),
                         identity,
                         source: source.clone(),
+                        original,
                     })
                     .is_ok()
                 {
@@ -353,10 +395,23 @@ impl Cache {
         if !settings.enabled {
             return None;
         }
-        let identity = Identity::read(path).ok()?;
+        let lookup_started = Instant::now();
+        let known = self.control.lock().unwrap().identities.get(path).cloned();
+        let identity = known
+            .clone()
+            .map_or_else(|| Identity::read(path).ok(), Some)?;
         let location = self.root.join(identity.name());
+        let lookup =
+            crate::profile::Timing::elapsed("decoded cache identity lookup", lookup_started);
         match load(&location, &identity, &settings, &progress) {
-            Ok(source) if Identity::read(path).ok().as_ref() == Some(&identity) => {
+            Ok(mut source)
+                if if known.is_some() {
+                    self.control.lock().unwrap().identities.get(path) == Some(&identity)
+                } else {
+                    Identity::read(path).ok().as_ref() == Some(&identity)
+                } =>
+            {
+                source.timings.insert(0, lookup);
                 self.status.lock().unwrap().hits += 1;
                 Some(Arc::new(source))
             }
@@ -377,6 +432,8 @@ fn load(
     let start = Instant::now();
     let mut file = File::open(path)?;
     let header = read_header(&mut file, identity, settings)?;
+    let header_timing = crate::profile::Timing::elapsed("decoded cache header", start);
+    let payload_started = Instant::now();
     let mut pixels = vec![0_f32; usize::try_from(header.samples)?];
     let mut camf = vec![0; usize::try_from(header.camf_bytes)?];
     let mut checksum = crc32fast::Hasher::new();
@@ -393,7 +450,10 @@ fn load(
     if checksum.finalize() != header.checksum {
         return Err("decoded cache checksum mismatch".into());
     }
+    let payload_timing =
+        crate::profile::Timing::elapsed("decoded cache payload read and checksum", payload_started);
     progress(LoadStage::FileRead);
+    let metadata_started = Instant::now();
     let (matrices, lists) = crate::x3f::cached_camera_metadata(&camf)?;
     let source = Source {
         metadata: Arc::new(Metadata {
@@ -412,7 +472,12 @@ fn load(
             SourceStorage::InterleavedRgb
         },
         camf,
-        timings: vec![crate::profile::Timing::elapsed("decoded cache read", start)],
+        timings: vec![
+            header_timing,
+            payload_timing,
+            crate::profile::Timing::elapsed("cached camera metadata", metadata_started),
+            crate::profile::Timing::elapsed("decoded cache read", start),
+        ],
     };
     source.validate()?;
     let _ = file.set_modified(SystemTime::now());

@@ -99,8 +99,8 @@ impl Worker {
             };
             if let Some(scan) = scan {
                 let completed = status.lock().unwrap().imported.len();
-                let result =
-                    cache.background(|| scan_files(scan, completed, || cache.background(|| ())));
+                let result = cache
+                    .background(|| scan_files(scan, completed, &cache, || cache.background(|| ())));
                 // A stale scan can be discarded. Batch completion never waits for UI receipt.
                 *scanned.lock().unwrap() = Some(result);
             }
@@ -114,7 +114,9 @@ impl Worker {
                         if let Some(scan) = scan {
                             let completed = status.lock().unwrap().imported.len();
                             *scanned.lock().unwrap() =
-                                Some(scan_files(scan, completed, || cache.background(|| ())));
+                                Some(scan_files(scan, completed, &cache, || {
+                                    cache.background(|| ())
+                                }));
                             context.request_repaint();
                         }
                         stop
@@ -166,7 +168,12 @@ impl Drop for Worker {
     }
 }
 
-fn scan_files(scan: Scan, completed_imports: usize, checkpoint: impl Fn()) -> Scanned {
+fn scan_files(
+    scan: Scan,
+    completed_imports: usize,
+    cache: &Cache,
+    checkpoint: impl Fn(),
+) -> Scanned {
     let mut result = Scanned {
         generation: scan.generation,
         sources: HashMap::new(),
@@ -188,7 +195,11 @@ fn scan_files(scan: Scan, completed_imports: usize, checkpoint: impl Fn()) -> Sc
     };
     for path in scan.files {
         checkpoint();
-        let identity = match Identity::read(&path) {
+        let identity = match cache
+            .import_identity(&path)
+            .map(Ok)
+            .unwrap_or_else(|| Identity::read(&path))
+        {
             Ok(identity) => identity,
             Err(error) => {
                 result.errors.push(format!("{}: {error}", path.display()));
@@ -203,9 +214,16 @@ fn scan_files(scan: Scan, completed_imports: usize, checkpoint: impl Fn()) -> Sc
             }
         }
         let settings = (|| -> Result<Settings> {
-            foveonic::sidecar::load(&path)?.map(Ok).unwrap_or_else(|| {
-                crate::sidecars::capture_defaults(foveonic::source::read_capture_properties(&path)?)
-            })
+            if let Some(selection) = cache.selection(&path) {
+                selection
+                    .settings
+                    .map(Ok)
+                    .unwrap_or_else(|| crate::sidecars::capture_defaults(selection.properties))
+            } else {
+                foveonic::sidecar::load(&path)?.map(Ok).unwrap_or_else(|| {
+                    crate::sidecars::capture_defaults(cache.capture_properties(&path)?)
+                })
+            }
         })()
         .map_err(|error| error.to_string());
         if let Err(error) = &settings {
@@ -320,14 +338,21 @@ fn import_photo(
     let original = originals.join(&name);
     let mut created = Vec::new();
     let result = (|| -> Result<PathBuf> {
-        importing::copy_original(&photo.path, &original, &photo.identity)?;
+        if !cache.copy_original(&photo.path, &original, &photo.identity)? {
+            importing::copy_original(&photo.path, &original, &photo.identity)?;
+        }
         created.push(original.clone());
         foveonic::sidecar::save(&original, &photo.settings)?;
         created.push(foveonic::sidecar::path(&original));
         if !formats.is_empty() {
             // Reuse the source's decode cache. No second camera-card read after copying
             // when prefetch has prepared the source. Cache transfer is deferred.
-            let cached = if Identity::read(&photo.path).ok().as_ref() == Some(&photo.identity) {
+            let cached = if cache
+                .import_identity(&photo.path)
+                .or_else(|| Identity::read(&photo.path).ok())
+                .as_ref()
+                == Some(&photo.identity)
+            {
                 cache.open_cached(&photo.path, |_| {})
             } else {
                 None

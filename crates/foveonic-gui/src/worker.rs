@@ -218,7 +218,7 @@ impl Worker {
                         let _span = crate::timing::Span::new(request.revision, "source_open");
                         let loaded = decoded_cache.open(&request.path, |stage| reporter.loaded(stage))?;
                         if crate::timing::enabled() {
-                            crate::timing::emit("source_load", serde_json::json!({"revision":request.revision,"source":request.path,"timings":loaded.load_timings(),"read_cache_state":"uncontrolled","extent":[loaded.metadata.width,loaded.metadata.height]}));
+                            crate::timing::emit("source_load", serde_json::json!({"revision":request.revision,"source":request.path,"timings":loaded.load_timings(),"read_cache_state":"uncontrolled","input":if loaded.load_timings().iter().any(|t|t.stage=="decoded cache read"){"decoded-cache"}else{"original"},"extent":[loaded.metadata.width,loaded.metadata.height]}));
                         }
                         source = Some((request.path.clone(), RenderSession::new(loaded)));
                     }

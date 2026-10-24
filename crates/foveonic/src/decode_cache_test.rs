@@ -76,6 +76,103 @@ fn defaults_enable_only_merrill_and_quattro_with_ten_decimal_gigabytes() {
 }
 
 #[test]
+#[ignore = "requires FOVEONIC_FIXTURE_DIR"]
+fn complete_selection_uses_only_local_cache_when_the_original_and_sidecar_are_unavailable() {
+    let fixture = Fixture::new();
+    let original = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+        .join("blue-parking-sign.x3f");
+    fs::copy(original, &fixture.source).unwrap();
+    let recipe = crate::render::Settings::new("Sunlight", "Standard");
+    crate::sidecar::save(&fixture.source, &recipe).unwrap();
+    let cache = Cache::at(fixture.root.join("cache"));
+    cache.configure(Settings::default());
+    cache.prefetch_window(vec![fixture.source.clone()], Some(fixture.source.clone()));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !cache.status().ready.contains(&fixture.source) {
+        assert!(
+            Instant::now() < deadline,
+            "complete cache preparation timed out"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _foreground = cache.foreground();
+    let identity = Identity::read(&fixture.source).unwrap();
+    let selection = cache.selection(&fixture.source).unwrap();
+    assert_eq!(selection.settings, Some(recipe.clone()));
+    assert!(selection.thumbnail.is_some());
+    let preview = cache.preview(&fixture.source).unwrap();
+    fs::rename(&fixture.source, fixture.root.join("removed.x3f")).unwrap();
+    fs::rename(
+        crate::sidecar::path(&fixture.source),
+        fixture.root.join("removed.json"),
+    )
+    .unwrap();
+    assert_eq!(
+        cache.capture_properties(&fixture.source).unwrap(),
+        selection.properties
+    );
+    assert_eq!(
+        cache.selection(&fixture.source).unwrap().settings,
+        Some(recipe)
+    );
+    assert_eq!(cache.preview(&fixture.source).unwrap().rgb, preview.rgb);
+    let expected_identity = cache.import_identity(&fixture.source).unwrap();
+    let destination = fixture.root.join("imported.x3f");
+    assert!(cache
+        .copy_original(&fixture.source, &destination, &expected_identity)
+        .unwrap());
+    assert_eq!(
+        fs::read(destination).unwrap(),
+        fs::read(fixture.root.join("removed.x3f")).unwrap()
+    );
+    let source = cache.open(&fixture.source, |_| {}).unwrap();
+    assert_eq!(source.metadata.properties, selection.properties);
+    assert_eq!(cache.status().hits, 1);
+    assert_eq!(
+        fs::metadata(fixture.root.join("imported.x3f"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        fs::metadata(fixture.root.join("removed.x3f"))
+            .unwrap()
+            .modified()
+            .unwrap()
+    );
+    let cached_original = cache.root.join(identity.name()).with_extension("original");
+    let mut damaged = fs::read(&cached_original).unwrap();
+    damaged[0] ^= 1;
+    fs::write(&cached_original, &damaged).unwrap();
+    let rejected = fixture.root.join("rejected.x3f");
+    assert!(!cache
+        .copy_original(&fixture.source, &rejected, &expected_identity)
+        .unwrap());
+    assert!(
+        !rejected.exists(),
+        "a corrupt cached original must not be imported"
+    );
+    damaged[0] ^= 1;
+    fs::write(cached_original, damaged).unwrap();
+    let mut changed = crate::render::Settings::new("Shade", "Vivid");
+    changed.exposure = 0.5;
+    cache.saved_settings(&fixture.source, &changed);
+    assert_eq!(
+        cache.selection(&fixture.source).unwrap().settings,
+        Some(changed)
+    );
+    cache.status.lock().unwrap().ready.remove(&fixture.source);
+    drop(_foreground);
+    cache.writer.send(Command::Maintain).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !cache.status().ready.contains(&fixture.source) {
+        assert!(
+            Instant::now() < deadline,
+            "cached selection must survive background refresh while the original is unavailable"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn persistence_preserves_sample_bits_geometry_and_source_location() {
     let fixture = Fixture::new();
     let root = fixture.root.join("cache");
@@ -208,6 +305,7 @@ fn background_writes_obey_budget_changes_disable_and_clear() {
             path: fixture.source.clone(),
             identity,
             source: Arc::new(fixture.image()),
+            original: fs::read(&fixture.source).unwrap(),
         })
         .unwrap();
     let wait_for = |done: &dyn Fn() -> bool| {
@@ -302,6 +400,17 @@ fn folder_readiness_obeys_foreground_priority_identity_and_policy() {
         DEFAULT_BUDGET,
     )
     .unwrap();
+    super::selection::prepare(
+        &cache.root,
+        &fixture.source,
+        &Identity::read(&fixture.source).unwrap(),
+        &fixture.image().metadata,
+        &fs::read(&fixture.source).unwrap(),
+        &Settings::default(),
+        &[],
+        &|| true,
+    )
+    .unwrap();
     let foreground = cache.foreground();
     cache.configure(Settings::default());
     cache.prefetch_window(vec![fixture.source.clone()], Some(fixture.source.clone()));
@@ -319,6 +428,20 @@ fn folder_readiness_obeys_foreground_priority_identity_and_policy() {
         }
     };
     wait(&|| cache.status().ready.contains(&fixture.source));
+    assert!(cache.selection(&fixture.source).is_some());
+    let external_recipe = crate::render::Settings::new("Shade", "Vivid");
+    crate::sidecar::save(&fixture.source, &external_recipe).unwrap();
+    cache.writer.send(Command::Maintain).unwrap();
+    wait(&|| {
+        cache
+            .selection(&fixture.source)
+            .is_some_and(|s| s.settings.as_ref() == Some(&external_recipe))
+    });
+    fs::write(&fixture.source, b"edited original at same location").unwrap();
+    cache.writer.send(Command::Maintain).unwrap();
+    wait(&|| !cache.status().ready.contains(&fixture.source));
+    assert!(cache.selection(&fixture.source).is_none());
+    assert!(cache.open_cached(&fixture.source, |_| {}).is_none());
     cache.configure(Settings {
         quattro: false,
         ..Settings::default()
@@ -328,7 +451,6 @@ fn folder_readiness_obeys_foreground_priority_identity_and_policy() {
         cache.root.read_dir().unwrap().next().is_some(),
         "disabled families retain disposable entries"
     );
-    fs::write(&fixture.source, b"edited original at same location").unwrap();
     assert!(!ready(&cache.root, &fixture.source, &Settings::default()));
     cache.clear();
     wait(&|| cache.status().entries == 0);
@@ -427,10 +549,41 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
         DEFAULT_BUDGET,
     )
     .unwrap();
+    super::selection::prepare(
+        &root,
+        &fixture.source,
+        &Identity::read(&fixture.source).unwrap(),
+        &fixture.image().metadata,
+        &fs::read(&fixture.source).unwrap(),
+        &Settings::default(),
+        &[],
+        &|| true,
+    )
+    .unwrap();
     assert_eq!(
         entry_state(&root, &fixture.source, &policy, true, &mut families),
         EntryState::Ready
     );
+    let original = root
+        .join(Identity::read(&fixture.source).unwrap().name())
+        .with_extension("original");
+    fs::write(&original, b"truncated").unwrap();
+    assert_eq!(
+        entry_state(&root, &fixture.source, &policy, false, &mut families),
+        EntryState::Uncached,
+        "a truncated original must not advertise a complete local bundle"
+    );
+    fs::write(original, fs::read(&fixture.source).unwrap()).unwrap();
+    let identity = Identity::read(&fixture.source).unwrap();
+    let metadata = root.join(identity.name()).with_extension("metadata");
+    let valid = fs::read(&metadata).unwrap();
+    fs::write(&metadata, b"corrupt selection").unwrap();
+    assert!(super::selection::read(&root, &identity, &policy).is_err());
+    assert_eq!(
+        entry_state(&root, &fixture.source, &policy, false, &mut families),
+        EntryState::Uncached
+    );
+    fs::write(metadata, valid).unwrap();
     let disabled = Settings {
         quattro: false,
         ..Settings::default()
@@ -438,6 +591,21 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
     assert_eq!(
         entry_state(&root, &fixture.source, &disabled, false, &mut families),
         EntryState::Disabled
+    );
+    assert!(
+        super::selection::update_recipe(
+            &root,
+            &Identity::read(&fixture.source).unwrap(),
+            Some(crate::render::Settings::new("Sunlight", "Standard")),
+            &Settings {
+                max_bytes: 1,
+                ..policy.clone()
+            },
+            &[],
+            &|| true,
+        )
+        .is_err(),
+        "denied recipe writes must not acknowledge persistence"
     );
     prune(&root, 0, &[]).unwrap();
     assert_eq!(
@@ -635,7 +803,23 @@ fn navigation_keeps_nearest_decodes_when_the_window_exceeds_the_disk_budget() {
         DEFAULT_BUDGET,
     )
     .unwrap();
-    let entry_bytes = fs::metadata(probe.join(identity.name())).unwrap().len();
+    super::selection::prepare(
+        &probe,
+        &files[0],
+        &identity,
+        &expected.metadata,
+        &fs::read(&files[0]).unwrap(),
+        &Settings::default(),
+        &[],
+        &|| true,
+    )
+    .unwrap();
+    // Readiness now includes every local companion, not just the decoded planes.
+    let entry_bytes = prune(&probe, DEFAULT_BUDGET, &[])
+        .unwrap()
+        .iter()
+        .map(|entry| entry.1)
+        .sum::<u64>();
     fs::remove_dir_all(probe).unwrap();
     let cache = Cache::at(fixture.root.join("cache"));
     let settings = Settings {

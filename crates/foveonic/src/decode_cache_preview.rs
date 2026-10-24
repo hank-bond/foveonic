@@ -64,6 +64,27 @@ pub(super) struct PendingPreview {
 }
 
 impl Cache {
+    fn preview_key(&self, path: &Path) -> Result<Key> {
+        if let Some(selection) = self.selection(path) {
+            let source = self
+                .control
+                .lock()
+                .unwrap()
+                .identities
+                .get(path)
+                .cloned()
+                .ok_or("selection invalidated")?;
+            return Ok(Key {
+                source,
+                recipe: selection
+                    .settings
+                    .as_ref()
+                    .map(sidecar::encode)
+                    .transpose()?,
+            });
+        }
+        Key::read(path)
+    }
     /// Call on a dedicated background thread. Missing, stale,
     /// disabled, or corrupt entries all fall back to the embedded thumbnail.
     pub fn preview(&self, path: &Path) -> Option<Preview> {
@@ -74,7 +95,7 @@ impl Cache {
         if !settings.enabled || settings.max_bytes == 0 {
             return None;
         }
-        let key = Key::read(path).ok()?;
+        let key = self.preview_key(path).ok()?;
         let (header, encoded) = read(&key.location(&self.root), &key, &settings).ok()?;
         use image::ImageDecoder;
         let mut decoder =
@@ -91,7 +112,7 @@ impl Cache {
             .ok()?
             .into_rgb8()
             .into_raw();
-        if Key::read(path).ok()? != key {
+        if self.preview_key(path).ok()? != key {
             return None;
         }
         let _ =
@@ -113,7 +134,7 @@ impl Cache {
         metadata: &Metadata,
         preview: Preview,
     ) -> Result<()> {
-        let key = Key::read(path)?;
+        let key = self.preview_key(path)?;
         let mut expected = match &key.recipe {
             Some(bytes) => sidecar::decode(bytes)?,
             None => {
@@ -199,7 +220,40 @@ fn read(path: &Path, key: &Key, settings: &Settings) -> Result<(PreviewHeader, V
     Ok((header, encoded))
 }
 
-pub(super) fn embedded(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepared(
+    root: &Path,
+    path: &Path,
+    identity: Identity,
+    recipe: Option<&crate::render::Settings>,
+    family: ProcessingFamily,
+    preview: Preview,
+    settings: &Settings,
+    nearby: &[PathBuf],
+    current: &impl Fn() -> bool,
+) -> Result<()> {
+    let key = Key {
+        source: identity,
+        recipe: recipe.map(sidecar::encode).transpose()?,
+    };
+    let write = PendingPreview {
+        path: path.to_owned(),
+        header: PreviewHeader {
+            key,
+            family,
+            extent: preview.extent,
+            native_extent: preview.native_extent,
+            rotation: preview.rotation,
+            rendered: false,
+            checksum: 0,
+        },
+        preview,
+    };
+    write_checked(root, write, settings, nearby, current)
+}
+
+#[cfg(test)]
+fn embedded(
     root: &Path,
     path: &Path,
     family: ProcessingFamily,
@@ -251,7 +305,10 @@ pub(super) fn embedded(
 }
 
 pub(super) fn location(root: &Path, path: &Path) -> Result<PathBuf> {
-    Ok(Key::read(path)?.location(root))
+    // Eviction needs only the source identity, never its editing recipe.
+    Ok(root
+        .join(Identity::read(path)?.name())
+        .with_extension("preview"))
 }
 
 pub(super) fn store(root: &Path, write: PendingPreview, control: &Mutex<Control>) -> Result<()> {

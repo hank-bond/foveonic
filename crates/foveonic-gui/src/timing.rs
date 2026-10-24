@@ -74,6 +74,22 @@ pub fn event(revision: u64, phase: &'static str) {
         );
     }
 }
+pub fn selected(revision: u64, path: &std::path::Path) {
+    if enabled() {
+        emit(
+            "selection",
+            json!({"revision":revision,"source":path,"phase":"started","at_ms":milliseconds(clock(),Instant::now())}),
+        );
+    }
+}
+pub fn selection_ready(revision: u64, path: &std::path::Path, began: Instant) {
+    if enabled() {
+        emit(
+            "selection",
+            json!({"revision":revision,"source":path,"phase":"recipe_ready","elapsed_ms":began.elapsed().as_secs_f64()*1000.,"at_ms":milliseconds(clock(),Instant::now())}),
+        );
+    }
+}
 pub fn requested(
     revision: u64,
     path: &std::path::Path,

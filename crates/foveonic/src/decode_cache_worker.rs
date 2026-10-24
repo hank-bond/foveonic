@@ -5,7 +5,7 @@ use super::{
     Settings, Status, NAMESPACE,
 };
 use crate::background::{self, Gate};
-use crate::source::{ProcessingFamily, Result, Source};
+use crate::source::{ProcessingFamily, Result};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
@@ -84,6 +84,7 @@ pub(super) fn start(
                     path,
                     identity,
                     source,
+                    original,
                 }) = command
                 {
                     if !clear
@@ -96,7 +97,7 @@ pub(super) fn start(
                         let _ = store_checked(
                             &root,
                             &path,
-                            identity,
+                            identity.clone(),
                             &source,
                             settings.max_bytes,
                             &nearby,
@@ -111,11 +112,55 @@ pub(super) fn start(
                                     && state.settings.max_bytes == settings.max_bytes
                             },
                         );
+                        let current = || {
+                            let state = control.lock().unwrap();
+                            !state.clear
+                                && state.generation == generation
+                                && state.settings == settings
+                        };
+                        let _ = super::selection::prepare(
+                            &root,
+                            &path,
+                            &identity,
+                            &source.metadata,
+                            &original,
+                            &settings,
+                            &nearby,
+                            &current,
+                        );
+                        publish_ready(&root, &path, &settings, &control, &status, generation);
                         status.lock().unwrap().writing = false;
                     }
                     control.lock().unwrap().stores.remove(&path);
                 }
                 if gate.idle() && !clear {
+                    loop {
+                        background::checkpoint();
+                        let update = {
+                            let mut state = control.lock().unwrap();
+                            state.recipe_updates.pop_first().and_then(|(path, recipe)| {
+                                state
+                                    .identities
+                                    .get(&path)
+                                    .cloned()
+                                    .map(|identity| (identity, recipe))
+                            })
+                        };
+                        let Some((identity, recipe)) = update else {
+                            break;
+                        };
+                        let _ = super::selection::update_recipe(
+                            &root,
+                            &identity,
+                            Some(recipe),
+                            &settings,
+                            &nearby,
+                            &|| {
+                                let state = control.lock().unwrap();
+                                !state.clear && state.generation == generation
+                            },
+                        );
+                    }
                     let preview = control.lock().unwrap().preview.take();
                     if let Some(preview) = preview {
                         let _ = previews::store(&root, preview, &control);
@@ -278,11 +323,16 @@ fn publish_ready(
     status: &Mutex<Status>,
     generation: u64,
 ) {
-    if !ready(root, path, settings) {
+    let identity = match Identity::read(path) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    if !complete_identity(root, &identity, settings) {
         return;
     }
-    let current = control.lock().unwrap();
+    let mut current = control.lock().unwrap();
     if current.generation == generation && !current.clear {
+        current.identities.insert(path.to_owned(), identity);
         let mut status = status.lock().unwrap();
         status.ready.insert(path.to_owned());
         Arc::make_mut(&mut status.files).insert(path.to_owned(), EntryState::Ready);
@@ -316,19 +366,17 @@ fn prefetch(
     if !current() {
         return Ok(());
     }
-    if ready(root, path, settings) {
+    if complete(root, path, settings) {
         published();
         return Ok(());
     }
-    let family = crate::source::read_capture_properties(path)?
-        .get("CAMMODEL")
-        .and_then(|m| ProcessingFamily::from_camera_model(m))
-        .ok_or("unknown prefetch family")?;
-    if !settings.permits(family) {
-        return Ok(());
-    }
     let identity = Identity::read(path)?;
-    let source = Source::open(path)?;
+    let Some((source, original)) =
+        crate::x3f::read_cacheable(path, |family| settings.permits(family))?
+    else {
+        return Ok(());
+    };
+    source.validate()?;
     crate::background::checkpoint_or_cancel()?;
     {
         let _publication = publication_lock(publication)?;
@@ -336,7 +384,7 @@ fn prefetch(
             store_checked(
                 root,
                 path,
-                identity,
+                identity.clone(),
                 &source,
                 settings.max_bytes,
                 nearby,
@@ -344,18 +392,40 @@ fn prefetch(
             )?;
         }
     }
+    let _publication = publication_lock(publication)?;
+    super::selection::prepare(
+        root,
+        path,
+        &identity,
+        &source.metadata,
+        &original,
+        settings,
+        nearby,
+        &current,
+    )?;
     drop(source);
     published();
-    // Publish the RAW dot before optional preview encoding. Other photo
-    // coordinators can keep reading and submitting layers during this work.
-    let _publication = publication_lock(publication)?;
-    if let Err(error) = previews::embedded(root, path, family, settings, nearby, &current) {
-        if error.is::<background::Interrupted>() {
-            return Err(error);
-        }
-    }
     Ok(())
 }
+fn complete(root: &Path, path: &Path, settings: &Settings) -> bool {
+    Identity::read(path).is_ok_and(|identity| complete_identity(root, &identity, settings))
+}
+fn complete_identity(root: &Path, identity: &Identity, settings: &Settings) -> bool {
+    let decoded = std::fs::File::open(root.join(identity.name()))
+        .ok()
+        .is_some_and(|mut file| read_header(&mut file, identity, settings).is_ok());
+    decoded
+        && fs::metadata(root.join(identity.name()).with_extension("original"))
+            .is_ok_and(|m| m.is_file() && m.len() == identity.length)
+        && super::selection::read(root, identity, settings).is_ok_and(|s| {
+            s.thumbnail.is_none()
+                || root
+                    .join(identity.name())
+                    .with_extension("preview")
+                    .is_file()
+        })
+}
+
 pub(super) type FamilyCatalog = HashMap<PathBuf, (Identity, Option<ProcessingFamily>)>;
 
 pub(super) fn entry_state(
@@ -368,8 +438,12 @@ pub(super) fn entry_state(
     if !settings.enabled || settings.max_bytes == 0 {
         return EntryState::Disabled;
     }
-    let Ok(identity) = Identity::read(path) else {
-        return EntryState::Unavailable;
+    let identity = match Identity::read(path) {
+        Ok(identity) => identity,
+        Err(_) => match families.get(path) {
+            Some((identity, _)) if complete_identity(root, identity, settings) => identity.clone(),
+            _ => return EntryState::Unavailable,
+        },
     };
     let family = if let Some((_, family)) = families.get(path).filter(|(old, _)| old == &identity) {
         *family
@@ -390,7 +464,7 @@ pub(super) fn entry_state(
             p.get("CAMMODEL")
                 .and_then(|m| ProcessingFamily::from_camera_model(m))
         });
-        families.insert(path.to_owned(), (identity, family));
+        families.insert(path.to_owned(), (identity.clone(), family));
         family
     };
     let Some(family) = family else {
@@ -399,7 +473,7 @@ pub(super) fn entry_state(
     if !settings.permits(family) {
         return EntryState::Disabled;
     }
-    if ready(root, path, settings) {
+    if complete_identity(root, &identity, settings) {
         EntryState::Ready
     } else if queued {
         EntryState::Queued
@@ -414,7 +488,7 @@ fn refresh(
     families: &mut FamilyCatalog,
 ) {
     crate::background::checkpoint();
-    let (settings, watched, generation, queued, nearby) = {
+    let (settings, watched, generation, queued, nearby, known) = {
         let state = control.lock().unwrap();
         (
             state.settings.clone(),
@@ -427,25 +501,74 @@ fn refresh(
                 .cloned()
                 .collect::<HashSet<_>>(),
             state.nearby.clone(),
+            state.identities.clone(),
         )
     };
     let entries = prune(root, settings.max_bytes, &nearby).unwrap_or_default();
     let watching = watched.iter().cloned().collect::<HashSet<_>>();
     families.retain(|p, _| watching.contains(p));
+    for (path, identity) in known {
+        if watching.contains(&path) && !families.contains_key(&path) {
+            let family = File::open(root.join(identity.name()))
+                .ok()
+                .and_then(|mut file| read_header(&mut file, &identity, &settings).ok())
+                .and_then(|header| {
+                    header
+                        .properties
+                        .get("CAMMODEL")
+                        .and_then(|m| ProcessingFamily::from_camera_model(m))
+                });
+            families.insert(path, (identity, family));
+        }
+    }
     let files: HashMap<_, _> = watched
         .into_iter()
         .map(|path| {
             crate::background::checkpoint();
             let state = entry_state(root, &path, &settings, queued.contains(&path), families);
+            if state == EntryState::Ready && Identity::read(&path).is_ok() {
+                if let Some((identity, _)) = families.get(&path) {
+                    let previous = control.lock().unwrap().recipes.get(&path).cloned();
+                    if let Ok(recipe) = crate::sidecar::load(&path) {
+                        let updated = super::selection::update_recipe(
+                            root,
+                            identity,
+                            recipe,
+                            &settings,
+                            &nearby,
+                            &|| {
+                                let state = control.lock().unwrap();
+                                !state.clear && state.generation == generation
+                            },
+                        );
+                        if updated.is_ok() {
+                            let mut state = control.lock().unwrap();
+                            if state.generation == generation
+                                && state.recipes.get(&path) == previous.as_ref()
+                            {
+                                state.recipes.remove(&path);
+                            }
+                        }
+                    }
+                }
+            }
             (path, state)
         })
         .collect();
-    let ready = files
+    let ready: HashSet<PathBuf> = files
         .iter()
         .filter(|(_, state)| **state == EntryState::Ready)
         .map(|(p, _)| p.clone())
         .collect();
-    let state = control.lock().unwrap();
+    let identities: HashMap<_, _> = ready
+        .iter()
+        .filter_map(|p| {
+            // Keep the identity whose bundle entry_state verified. Re-reading
+            // the source here could attach a replacement file to an older Ready result.
+            families.get(p).map(|(i, _)| (p.clone(), i.clone()))
+        })
+        .collect();
+    let mut state = control.lock().unwrap();
     let mut status = status.lock().unwrap();
     status.entries = entries
         .iter()
@@ -453,6 +576,8 @@ fn refresh(
         .count();
     status.bytes = entries.iter().map(|e| e.1).sum();
     if state.generation == generation && !state.clear {
+        state.identities = identities;
+        state.recipes.retain(|p, _| watching.contains(p));
         status.ready = ready;
         status.files = Arc::new(files);
     }

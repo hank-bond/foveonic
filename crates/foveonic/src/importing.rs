@@ -23,6 +23,23 @@ pub struct Identity {
     length: u64,
 }
 impl Identity {
+    pub(crate) fn from_snapshot(
+        path: &Path,
+        length: u64,
+        modified_seconds: u64,
+        modified_nanos: u32,
+    ) -> Self {
+        Self {
+            filename: path
+                .file_name()
+                .unwrap_or_default()
+                .as_encoded_bytes()
+                .to_vec(),
+            length,
+            modified_seconds,
+            modified_nanos,
+        }
+    }
     pub fn read(path: &Path) -> Result<Self> {
         let metadata = fs::metadata(path)?;
         if !metadata.is_file() {

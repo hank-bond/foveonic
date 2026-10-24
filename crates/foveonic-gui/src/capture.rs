@@ -30,9 +30,11 @@ pub struct Loader {
     pub properties: Option<Properties>,
 }
 impl Loader {
-    pub fn new(context: egui::Context) -> Self {
-        Self::with_reader(context, |path| {
-            foveonic::source::read_capture_properties(path).map_err(|error| error.to_string())
+    pub fn new(context: egui::Context, cache: Arc<foveonic::decode_cache::Cache>) -> Self {
+        Self::with_reader(context, move |path| {
+            cache
+                .capture_properties(path)
+                .map_err(|error| error.to_string())
         })
     }
 

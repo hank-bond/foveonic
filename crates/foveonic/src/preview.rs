@@ -67,7 +67,6 @@ fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
     read_reader(&mut file, selection)
 }
 
-#[cfg(test)]
 pub(crate) fn from_original(bytes: &[u8], full: bool) -> Result<Preview> {
     read_reader(
         &mut std::io::Cursor::new(bytes),

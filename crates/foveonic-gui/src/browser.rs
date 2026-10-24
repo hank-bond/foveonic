@@ -53,7 +53,7 @@ fn cache_appearance(state: EntryState) -> (egui::Color32, &'static str) {
         EntryState::Unsupported => (egui::Color32::from_gray(100), "Decode caching is unavailable for this source."),
         EntryState::Unavailable => (egui::Color32::from_gray(100), "Cannot read this source to check cache eligibility."),
         EntryState::Queued => (egui::Color32::from_rgb(158, 136, 75), "Queued for caching or preparing decoded data."),
-        EntryState::Ready => (egui::Color32::from_rgb(85, 137, 99), "Decoded source cached and ready to open."),
+        EntryState::Ready => (egui::Color32::from_rgb(85, 137, 99), "RAW, metadata, thumbnails and original file cached and ready."),
         EntryState::Uncached => (egui::Color32::from_rgb(155, 91, 88), "Supported, but not cached. The entry may have been cleared, evicted, or unable to fit in the cache."),
     }
 }
@@ -153,7 +153,15 @@ impl Browser {
             {
                 if matches!(kind, RequestKind::EmbeddedThenCached) {
                     let thumb = (|| -> foveonic::source::Result<PreparedPreview> {
-                        let preview = foveonic::preview::read(&path)?;
+                        let preview = if let Some(selection) =
+                            cache.as_ref().and_then(|c| c.selection(&path))
+                        {
+                            selection
+                                .thumbnail
+                                .ok_or("no embedded thumbnail in cached source")?
+                        } else {
+                            foveonic::preview::read(&path)?
+                        };
                         PreparedPreview::new(preview, false)
                     })()
                     .map_err(|e| e.to_string());

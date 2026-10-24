@@ -1,4 +1,4 @@
-//! Applies the shared disk budget while favoring nearby decoded sources and display previews.
+//! Applies the shared disk budget while favoring nearby source bundles and display previews.
 
 use super::{previews, Identity};
 use crate::source::Result;
@@ -16,6 +16,8 @@ pub(super) type Entry = (PathBuf, u64, SystemTime);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum EntryKind {
     Decoded,
+    Original,
+    Metadata,
     Preview,
 }
 type Priority = (usize, EntryKind);
@@ -72,10 +74,9 @@ fn entries(root: &Path) -> Result<Vec<Entry>> {
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
-            if !path
-                .extension()
-                .is_some_and(|s| s == "decode" || s == "preview")
-            {
+            if !path.extension().is_some_and(|s| {
+                s == "decode" || s == "preview" || s == "metadata" || s == "original"
+            }) {
                 return None;
             }
             let metadata = entry.metadata().ok()?;
@@ -89,6 +90,14 @@ fn priorities(root: &Path, nearby: &[PathBuf]) -> HashMap<PathBuf, Priority> {
     for (rank, path) in nearby.iter().enumerate() {
         if let Ok(identity) = Identity::read(path) {
             priorities.insert(root.join(identity.name()), (rank, EntryKind::Decoded));
+            priorities.insert(
+                root.join(identity.name()).with_extension("original"),
+                (rank, EntryKind::Original),
+            );
+            priorities.insert(
+                root.join(identity.name()).with_extension("metadata"),
+                (rank, EntryKind::Metadata),
+            );
         }
         if let Ok(location) = previews::location(root, path) {
             priorities.insert(location, (rank, EntryKind::Preview));

@@ -79,6 +79,32 @@ fn shared_budget_keeps_decoded_raw_before_its_preview_and_counts_replacements_on
 }
 
 #[test]
+fn complete_nearby_bundles_take_priority_over_a_distant_decode() {
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().join("cache");
+    fs::create_dir(&root).unwrap();
+    let selected = source(folder.path(), "selected.x3f");
+    let distant = source(folder.path(), "distant.x3f");
+    let raw = decoded(&root, &selected, 100, 1);
+    let companions =
+        [("original", 40), ("metadata", 10), ("preview", 5)].map(|(extension, size)| {
+            let path = raw.with_extension(extension);
+            fs::write(&path, vec![0; size]).unwrap();
+            path
+        });
+    let incoming = root.join(Identity::read(&distant).unwrap().name());
+    let nearby = [selected, distant];
+    assert!(!reserve(&root, &incoming, 100, 155, &nearby).unwrap());
+    assert!(companions.iter().all(|path| path.exists()));
+    let retained = prune(&root, 155, &nearby).unwrap();
+    assert_eq!(retained.iter().map(|entry| entry.1).sum::<u64>(), 155);
+    let retained = prune(&root, 100, &nearby).unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].0, raw);
+    assert!(companions.iter().all(|path| !path.exists()));
+}
+
+#[test]
 fn smaller_budget_evicts_farther_neighbors_and_selection_changes_release_old_preferences() {
     let folder = tempfile::tempdir().unwrap();
     let root = folder.path().join("cache");

@@ -73,6 +73,33 @@ pub(crate) use exif::color_space as jpeg_color_space;
 pub(crate) use exif::thumbnail as jpeg_thumbnail;
 
 pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> {
+    read_owned(path, read_complete).map(|(source, _)| source)
+}
+
+/// Cache preparation also uses the already-read original to build display assets.
+pub(crate) fn read_owned(path: &Path, read_complete: impl FnOnce()) -> Result<(Source, Vec<u8>)> {
+    let (data, read) = read_original(path, read_complete)?;
+    decode_owned(data, read)
+}
+
+/// Inspect cache eligibility from the same original buffer before spending CPU on its sensor planes.
+pub(crate) fn read_cacheable(
+    path: &Path,
+    permits: impl Fn(crate::source::ProcessingFamily) -> bool,
+) -> Result<Option<(Source, Vec<u8>)>> {
+    let (data, read) = read_original(path, || {})?;
+    let properties = capture::read(&mut std::io::Cursor::new(&data))?;
+    let family = properties
+        .get("CAMMODEL")
+        .and_then(|m| crate::source::ProcessingFamily::from_camera_model(m))
+        .ok_or("unknown cache source family")?;
+    if !permits(family) {
+        return Ok(None);
+    }
+    decode_owned(data, read).map(Some)
+}
+
+fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, Timing)> {
     let start = Instant::now();
     let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
@@ -100,6 +127,10 @@ pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> 
     }
     let read = Timing::elapsed("file read", start);
     read_complete();
+    Ok((data, read))
+}
+
+fn decode_owned(data: Vec<u8>, read: Timing) -> Result<(Source, Vec<u8>)> {
     let start = Instant::now();
     let mut source = decode(&data)?;
     crate::background::checkpoint_or_cancel()?;
@@ -107,7 +138,7 @@ pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> 
     // part of the same decode twice. Metadata parsing is included here too.
     let decode = Timing::elapsed("X3F decode wall", start);
     source.timings.splice(0..0, [read, decode]);
-    Ok(source)
+    Ok((source, data))
 }
 
 fn decode(data: &[u8]) -> Result<Source> {

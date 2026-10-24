@@ -34,7 +34,7 @@ struct Store {
     thread: Option<JoinHandle<()>>,
 }
 impl Store {
-    fn new(ctx: egui::Context, enabled: bool) -> Self {
+    fn new(ctx: egui::Context, enabled: bool, cache: Arc<foveonic::decode_cache::Cache>) -> Self {
         let pending = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let slot = pending.clone();
         let (sender, replies) = mpsc::channel();
@@ -60,10 +60,15 @@ impl Store {
             };
             let reply = match job {
                 Job::Load(generation, path, recent) => {
+                    let cached = cache.selection(&path);
                     let result = if enabled {
-                        sidecar::load(&path)
-                            .map(|saved| recent.or(saved))
-                            .map_err(|e| e.to_string())
+                        (if let Some(cached) = &cached {
+                            Ok(cached.settings.clone())
+                        } else {
+                            sidecar::load(&path)
+                        })
+                        .map(|saved| recent.or(saved))
+                        .map_err(|e| e.to_string())
                     } else {
                         Ok(None)
                     };
@@ -72,7 +77,10 @@ impl Store {
                     let fresh = if matches!(&result, Ok(Some(_))) {
                         Settings::default()
                     } else {
-                        foveonic::source::read_capture_properties(&path)
+                        cached
+                            .map(|s| s.properties)
+                            .map(Ok)
+                            .unwrap_or_else(|| cache.capture_properties(&path))
                             .ok()
                             .and_then(|properties| capture_defaults(properties).ok())
                             .unwrap_or_default()
@@ -81,6 +89,9 @@ impl Store {
                 }
                 Job::Save(path, settings) => {
                     let result = sidecar::save(&path, &settings).map_err(|e| e.to_string());
+                    if result.is_ok() {
+                        cache.saved_settings(&path, &settings);
+                    }
                     if let Err(error) = &result {
                         eprintln!("Cannot save edits for {}: {error}", path.display());
                     }
@@ -138,9 +149,13 @@ pub struct Session {
     review_edits: BTreeMap<PathBuf, Settings>,
 }
 impl Session {
-    pub fn new(ctx: egui::Context, enabled: bool) -> Self {
+    pub fn new(
+        ctx: egui::Context,
+        enabled: bool,
+        cache: Arc<foveonic::decode_cache::Cache>,
+    ) -> Self {
         Self {
-            store: Store::new(ctx, enabled),
+            store: Store::new(ctx, enabled, cache),
             enabled,
             generation: 0,
             selected: None,

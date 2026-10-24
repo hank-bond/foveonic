@@ -102,6 +102,7 @@ fn scanning_restores_destination_decisions_without_decoding_originals() {
             files: vec![path.clone()],
         },
         3,
+        &Cache::new(),
         || {},
     );
     assert!(scan.errors.is_empty());
@@ -135,6 +136,7 @@ fn history_matching_and_hidden_identity_do_not_require_a_readable_editing_recipe
             files: vec![path.clone()],
         },
         0,
+        &Cache::new(),
         || {},
     );
     assert_eq!(scan.errors.len(), 1);
