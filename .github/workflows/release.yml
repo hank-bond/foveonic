@@ -170,16 +170,15 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.ref_name }}
-      VERIFY_DIR: ${{ runner.temp }}/foveonic-sequoia
     steps:
       - name: Download the signed draft assets
         run: |
-          mkdir -p "$VERIFY_DIR"
-          gh release download "$RELEASE_TAG" --dir "$VERIFY_DIR" \
+          mkdir -p "$RUNNER_TEMP/foveonic-sequoia"
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/foveonic-sequoia" \
             --pattern "Foveonic-${RELEASE_TAG}-macos-arm64.zip" --pattern SHA256SUMS
 
       - name: Verify and start the executable on Sequoia
-        working-directory: ${{ env.VERIFY_DIR }}
+        working-directory: ${{ runner.temp }}/foveonic-sequoia
         run: |
           sw_vers
           test "$(sw_vers -productVersion | cut -d . -f1)" = 15
