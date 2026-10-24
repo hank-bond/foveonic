@@ -105,7 +105,7 @@ fn compose(
     if source.storage() != SourceStorage::PackedRgbBluePhases {
         return Err("sensor plane inspection requires six-sample cells".into());
     }
-    let fast = settings.preview_quality == crate::render::PreviewQuality::Fast
+    let fast = settings.preview_quality.is_reduced()
         && !dng
         && !settings.is_monochrome()
         && names == ["final"]

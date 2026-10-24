@@ -27,7 +27,15 @@ pub enum Rendering {
 pub enum PreviewQuality {
     #[default]
     Full,
+    /// Reduced working grid with the requested Noise and Detail controls.
     Fast,
+    /// Reduced working grid that may omit optional reconstruction for Smart feedback.
+    Draft,
+}
+impl PreviewQuality {
+    pub fn is_reduced(self) -> bool {
+        self != Self::Full
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

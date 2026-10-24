@@ -33,7 +33,7 @@ pub(super) fn build(
     let space = ColorSpace::from_metadata(&source.metadata)?;
     let mut params = calibration::encode(&source.metadata, space)?;
     // Preview policy changes the working grid. Inspection and DNG keep native geometry.
-    let preview = (settings.preview_quality == crate::render::PreviewQuality::Fast
+    let preview = (settings.preview_quality.is_reduced()
         && mode.is_some()
         && !settings.is_monochrome()
         && names == ["final"]
@@ -175,9 +175,11 @@ pub(super) fn build(
     if let Some(grid) = &preview {
         calibrated = graph.add(Operation::ReduceLayers(grid.reduction), &[calibrated])?;
     }
-    // Fast bypasses optional Noise and Detail without changing the saved controls.
-    // Full, inspection and DNG still build their requested reconstruction.
-    let noise_controls = settings.reconstruction.filter(|_| preview.is_none());
+    // Smart's draft omits optional reconstruction. Standalone Fast applies the
+    // requested controls on its reduced grid without changing the saved edits.
+    let draft =
+        preview.is_some() && settings.preview_quality == crate::render::PreviewQuality::Draft;
+    let noise_controls = settings.reconstruction.filter(|_| !draft);
     if let Some(region) = &region {
         graph.retain_for_session(calibrated);
         if noise_controls.is_none() {
@@ -196,13 +198,15 @@ pub(super) fn build(
         }
     }
     let reconstruction = if let Some(controls) = noise_controls {
-        let params = profile.measure("prepare reference noise", || {
+        let native_params = profile.measure("prepare reference noise", || {
             crate::noise::prepare(&source.metadata, &settings.white_balance, controls)
         })?;
-        let params = if let Some(region) = &region {
-            params.for_region(region.physical)?
+        let params = if let Some(grid) = &preview {
+            grid.noise(native_params)?
+        } else if let Some(region) = &region {
+            native_params.for_region(region.physical)?
         } else {
-            params
+            native_params
         };
         let base_inputs = if params.uses_global_context() {
             let context = graph.add(Operation::NoiseContext(params.full_frame()), &[calibrated])?;
@@ -218,7 +222,14 @@ pub(super) fn build(
         let base = graph.add(Operation::NoiseBase(params), &base_inputs)?;
         finish!();
         let column_params = profile.measure("prepare column cuts", || {
-            crate::noise::column_parameters(&source.metadata, params)
+            if let Some(grid) = &preview {
+                grid.noise(crate::noise::column_parameters(
+                    &source.metadata,
+                    native_params,
+                )?)
+            } else {
+                crate::noise::column_parameters(&source.metadata, params)
+            }
         })?;
         let conditioned = graph.add(Operation::Column(column_params), &[calibrated])?;
         finish!();
@@ -267,7 +278,7 @@ pub(super) fn build(
         )?
     };
     finish!();
-    if preview.is_none() && settings.color_dq_selected() {
+    if !draft && settings.color_dq_selected() {
         let gain = if let Some(gain) = settings.color_dq_gain {
             gain
         } else {

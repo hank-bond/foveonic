@@ -502,7 +502,7 @@ impl App {
                         if full {
                             foveonic::render::PreviewQuality::Full
                         } else {
-                            foveonic::render::PreviewQuality::Fast
+                            foveonic::render::PreviewQuality::Draft
                         }
                     );
                     assert_eq!(frame.artifact.settings.preview_region, None);

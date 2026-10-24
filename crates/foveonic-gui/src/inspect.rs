@@ -333,7 +333,7 @@ pub fn preview_quality(
         PreviewMode::Full
     };
     let explanation = if available != Some(false) {
-        "Fast gives a smaller color preview for quicker browsing and edits. Smart shows Fast first and switches to Full above 100% for detail and panning. Exports use Full."
+        "Fast renders at quarter resolution with your Noise and Detail controls. Smart starts with a lighter Draft and switches to Full above 100% for detail and panning. Exports use Full."
     } else {
         "Fast and Smart previews are available for Merrill and Quattro color photographs."
     };

@@ -13,6 +13,7 @@ kind: reference
 
 - Merrill Smart now renders the zoomed viewport at Full quality before refining the whole photograph. The completed Full image stays ready for panning, with shared sensor corrections and noise context reused between stages.
 - Faster Merrill processing at tile boundaries and better reuse of earlier processing when editing Smart previews.
+- Standalone Fast keeps Noise and Detail enabled when requested, processing at quarter resolution. Smart starts with a lighter Draft recipe that skips optional Noise and Detail before Full refinement.
 - Color-managed display on macOS uses the monitor's selected profile across the viewport, navigator and browser previews, preserving colors beyond sRGB on capable displays.
 - Application settings offer Monitor, sRGB, Adobe RGB and ProPhoto RGB (ROMM) viewing limits. Switching the display gamut redraws immediately without reprocessing the RAW or changing exports.
 - Embedded previews honor camera color-space metadata and valid embedded ICC profiles across supported camera architectures. Rendered previews retain their gamut in the temporary cache, regardless of the selected viewing limit.

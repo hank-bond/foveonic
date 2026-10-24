@@ -43,7 +43,7 @@ fn effective_preview_quality(
             PreviewMode::Full => PreviewQuality::Full,
             PreviewMode::Fast => PreviewQuality::Fast,
             PreviewMode::Smart if request.settings.preview_region.is_some() => PreviewQuality::Full,
-            PreviewMode::Smart => PreviewQuality::Fast,
+            PreviewMode::Smart => PreviewQuality::Draft,
         }
     } else {
         PreviewQuality::Full
@@ -73,10 +73,10 @@ pub struct Frame {
     pub queued_at: std::time::Instant,
 }
 impl Frame {
-    /// Keep zoom coordinates on the native photograph while Fast stores fewer pixels.
+    /// Keep zoom coordinates native while Fast and Draft store fewer pixels.
     pub fn display_extent(&self, input: bool) -> [u32; 2] {
         let extent = self.view(input).description().extent;
-        if self.artifact.settings.preview_quality == PreviewQuality::Fast
+        if self.artifact.settings.preview_quality.is_reduced()
             && self.artifact.settings.output_size.is_none()
         {
             extent.map(|v| v * 2)
@@ -88,6 +88,7 @@ impl Frame {
         match self.artifact.settings.preview_quality {
             PreviewQuality::Full => "Full",
             PreviewQuality::Fast => "Fast",
+            PreviewQuality::Draft => "Draft",
         }
     }
     /// Keep the output visible until its matching input is ready.
@@ -1178,9 +1179,13 @@ mod preview_tests {
         };
         let mut resolved = request.settings.clone();
         resolve_preview(&request, &mut resolved, &metadata);
-        assert_eq!(resolved.preview_quality, PreviewQuality::Fast);
+        assert_eq!(resolved.preview_quality, PreviewQuality::Draft);
         assert_eq!(resolved.preview_region, None);
         assert!(resolved.row_correction && resolved.despeckle);
+        request.preview_quality = PreviewMode::Fast;
+        resolve_preview(&request, &mut resolved, &metadata);
+        assert_eq!(resolved.preview_quality, PreviewQuality::Fast);
+        assert!(crate::smart::same_edits(&resolved, &request.settings));
         request.preview_quality = PreviewMode::Full;
         resolve_preview(&request, &mut resolved, &metadata);
         assert_eq!(resolved.preview_quality, PreviewQuality::Full);
@@ -1223,7 +1228,7 @@ mod preview_tests {
         r.preview_quality = PreviewMode::Smart;
         assert_eq!(
             effective_preview_quality(&r, &r.settings, &m),
-            PreviewQuality::Fast
+            PreviewQuality::Draft
         );
         r.settings.preview_region = Some([100, 100, 400, 300]);
         assert_eq!(
@@ -1274,7 +1279,11 @@ mod preview_tests {
             r.preview_quality = quality;
             assert_eq!(
                 effective_preview_quality(&r, &r.settings, &m),
-                PreviewQuality::Fast
+                if quality == PreviewMode::Smart {
+                    PreviewQuality::Draft
+                } else {
+                    PreviewQuality::Fast
+                }
             );
         }
         r.settings.preview_region = Some([100, 100, 400, 300]);

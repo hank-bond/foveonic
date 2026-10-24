@@ -59,7 +59,7 @@ fn route(
 ) -> Result<serde_json::Value> {
     let mut settings = camera_settings(&source)?;
     let mut session = RenderSession::new(source);
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.preview_quality = PreviewQuality::Draft;
     let (overview, _overview_texture) = completed(engine, &mut session, &settings, Mode::Off)?;
     let [width, height] = overview.extent.map(|v| v * 2);
     // Match the central 200% viewport in the native landscape smoke, including overscan.

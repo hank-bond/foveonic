@@ -19,6 +19,27 @@ pub(super) struct Grid {
     pub encode: EncodeParams,
 }
 impl Grid {
+    /// Apply camera noise controls to the reduced samples. Keep filter support
+    /// in working pixels and map sensor-coordinate bounds without editing metadata.
+    pub fn noise(&self, mut params: crate::noise::Parameters) -> Result<crate::noise::Parameters> {
+        let extent = self.reduction.output_extent();
+        for (axis, length) in extent.into_iter().enumerate() {
+            let tiles = params.source[axis + 2];
+            if tiles == 0 || !length.is_multiple_of(tiles) {
+                return Err("reduced noise grid requires complete processing tiles".into());
+            }
+            params.source[axis] = length;
+            params.tile[axis] = length / tiles + 2 * params.tile[2];
+            params.area[axis] /= SCALE;
+            params.area[axis + 2] = params.area[axis + 2].div_ceil(SCALE);
+            params.column_area[axis] /= SCALE;
+            params.column_area[axis + 2] = params.column_area[axis + 2].div_ceil(SCALE);
+        }
+        params.region = [0, 0, extent[0], extent[1]];
+        params.reduced_tile_extent()?;
+        Ok(params)
+    }
+
     pub fn new(mut encode: EncodeParams, output_size: Option<[u32; 2]>) -> Result<Self> {
         let extent = [encode.source[0], encode.source[1]];
         // Keep framing exactly representable on the reduced grid.
