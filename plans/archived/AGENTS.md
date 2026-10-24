@@ -39,6 +39,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[help-comparisons](./help-comparisons.md)** _(archived)._ Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
 - **[highlight-threshold](./highlight-threshold.md)** _(archived)._ Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** _(archived)._ A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
+- **[import-workflow](./import-workflow.md)** _(archived)._ Added inline import review and bounded asynchronous processing with shared recipes and foreground priority.
 - **[inspection-differences](./inspection-differences.md)** _(archived)._ Inspect operation inputs and outputs alongside amplified signed layer/channel differences.
 - **[inspection-popup-help](./inspection-popup-help.md)** _(archived)._ Prevent Quattro inspection menus from crashing when a stage lacks explanatory help.
 - **[lens-correction-audit](./lens-correction-audit.md)** _(archived)._ Audit available lens corrections and defer chromatic aberration after finding no supported vignetting or distortion profile route.

@@ -34,7 +34,7 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pipelines: Vec<wgpu::ComputePipeline>,
-    field: std::sync::OnceLock<std::result::Result<field::FieldKernels, String>>,
+    field: std::sync::Arc<std::sync::OnceLock<std::result::Result<field::FieldKernels, String>>>,
     #[cfg(test)]
     shader_writes: Vec<u32>,
     pub adapter_name: String,
@@ -42,6 +42,18 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    pub fn executor(&self) -> Self {
+        Self {
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            pipelines: self.pipelines.clone(),
+            field: self.field.clone(),
+            #[cfg(test)]
+            shader_writes: self.shader_writes.clone(),
+            adapter_name: self.adapter_name.clone(),
+            activity: Default::default(),
+        }
+    }
     pub fn new() -> Result<Self> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -68,14 +80,22 @@ impl Gpu {
     }
 
     fn submit(&self, encoder: wgpu::CommandEncoder) {
+        // Import renders inherit the cache's foreground gate. Never queue an
+        // entire batch ahead of interactive work on the shared device queue.
+        crate::background::checkpoint();
         self.activity
             .lock()
             .expect("GPU activity counter")
             .submissions += 1;
-        self.queue.submit(Some(encoder.finish()));
+        let submitted = self.queue.submit(Some(encoder.finish()));
+        if crate::background::context().is_some() {
+            self.device
+                .poll(wgpu::Maintain::WaitForSubmissionIndex(submitted));
+        }
     }
 
     pub fn upload<T: bytemuck::Pod>(&self, label: &str, values: &[T]) -> Result<ReadGuard> {
+        crate::background::checkpoint();
         self.check_size(std::mem::size_of_val(values) as u64)?;
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
@@ -530,5 +550,66 @@ impl Gpu {
         let data = slice.get_mapped_range().to_vec();
         staging.unmap();
         Ok(data)
+    }
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+    use std::{
+        sync::{mpsc, Arc},
+        time::Duration,
+    };
+
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn background_executor_yields_submissions_and_keeps_activity_separate() {
+        let foreground = Gpu::new().unwrap();
+        let background = foreground.executor();
+        let gate = Arc::new(crate::background::Gate::default());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (advance_tx, advance_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let background_gate = gate.clone();
+        let thread = std::thread::spawn(move || {
+            crate::background::run(Some(background_gate), || {
+                background.submit(
+                    background
+                        .device
+                        .create_command_encoder(&Default::default()),
+                );
+                entered_tx.send(()).unwrap();
+                advance_rx.recv().unwrap();
+                background.submit(
+                    background
+                        .device
+                        .create_command_encoder(&Default::default()),
+                );
+                done_tx.send(background.activity()).unwrap();
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Interrupt an executor that has already submitted work, rather than
+        // only holding a job before its first render begins.
+        let active = gate.foreground();
+        advance_tx.send(()).unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+        foreground.submit(
+            foreground
+                .device
+                .create_command_encoder(&Default::default()),
+        );
+        foreground.device.poll(wgpu::Maintain::Wait);
+        assert_eq!(foreground.activity().submissions, 1);
+        drop(active);
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .submissions,
+            2
+        );
+        assert_eq!(foreground.activity().submissions, 1);
+        thread.join().unwrap();
     }
 }

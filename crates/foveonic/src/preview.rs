@@ -211,8 +211,13 @@ fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
     }
     file.seek(SeekFrom::Start(selected.offset))?;
     let mut encoded = vec![0; selected.size];
-    file.read_exact(&mut encoded)?;
+    for chunk in encoded.chunks_mut(crate::background::IO_CHUNK_BYTES) {
+        crate::background::checkpoint_or_cancel()?;
+        file.read_exact(chunk)?;
+    }
+    crate::background::checkpoint_or_cancel()?;
     let rgb = selected.decode(&encoded)?;
+    crate::background::checkpoint_or_cancel()?;
 
     Ok(Preview {
         rgb,
@@ -303,6 +308,7 @@ impl Embedded {
             }
             let mut rgb = Vec::with_capacity(self.pixels() as usize * 3);
             for row in encoded[..required].chunks_exact(self.stride) {
+                crate::background::checkpoint_or_cancel()?;
                 rgb.extend_from_slice(&row[..row_bytes]);
             }
             Ok(rgb)

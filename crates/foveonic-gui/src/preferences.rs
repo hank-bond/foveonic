@@ -1,4 +1,4 @@
-//! Persists cache, organizer, scope, preview, zoom and tool preferences separately from image edits.
+//! Persists workspace, cache and per-mode processing preferences separately from image edits.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -10,6 +10,13 @@ pub enum Organizer {
     #[default]
     Icons,
     List,
+}
+/// Source-write policy chosen when opening a folder.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FolderMode {
+    #[default]
+    Browse,
+    Import,
 }
 /// Workspace policy. The worker resolves Smart into Fast or regional Full work.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +82,12 @@ impl Section {
 #[serde(default)]
 pub struct Preferences {
     pub last_folder: Option<std::path::PathBuf>,
+    pub last_folder_mode: FolderMode,
+    // Keep the persisted key stable while both modes share the destination.
+    #[serde(rename = "import_destination")]
+    pub processing_destination: Option<std::path::PathBuf>,
+    pub browse_processing: crate::processing::Settings,
+    pub import_processing: crate::processing::Settings,
     pub organizer: Organizer,
     pub scope: Scope,
     pub scope_viewport: bool,
@@ -88,6 +101,10 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             last_folder: None,
+            last_folder_mode: FolderMode::Browse,
+            processing_destination: None,
+            browse_processing: Default::default(),
+            import_processing: Default::default(),
             organizer: Organizer::Icons,
             scope: Scope::Histogram,
             scope_viewport: true,
@@ -108,6 +125,7 @@ impl Preferences {
         result
     }
     fn normalize(&mut self) {
+        self.decode_cache.normalize();
         let mut seen = BTreeSet::new();
         self.sections.retain(|s| seen.insert(*s));
         for section in Section::ALL {
@@ -116,14 +134,42 @@ impl Preferences {
             }
         }
     }
-    /// A launch path must override the saved folder. Keep a missing saved path
-    /// long enough for the app to explain the problem rather than hiding it.
-    pub fn startup_path(&self, explicit: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
-        explicit.or_else(|| self.last_folder.clone())
+    /// An explicit path takes precedence. Reopening the remembered folder keeps
+    /// its source-write policy, including when launching one of its X3Fs.
+    pub fn startup_folder(
+        &self,
+        explicit: Option<std::path::PathBuf>,
+    ) -> Option<(std::path::PathBuf, FolderMode)> {
+        match explicit {
+            Some(path) => {
+                let folder = if path.is_dir() {
+                    path.as_path()
+                } else {
+                    path.parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .unwrap_or(std::path::Path::new("."))
+                };
+                let mode = if std::fs::canonicalize(folder).ok().is_some_and(|folder| {
+                    self.last_folder
+                        .as_ref()
+                        .is_some_and(|root| folder.starts_with(root))
+                }) {
+                    self.last_folder_mode
+                } else {
+                    FolderMode::Browse
+                };
+                Some((path, mode))
+            }
+            None => self
+                .last_folder
+                .clone()
+                .map(|path| (path, self.last_folder_mode)),
+        }
     }
-    pub fn remember_folder(&mut self, path: &std::path::Path) {
+    pub fn remember_folder(&mut self, path: &std::path::Path, mode: FolderMode) {
         if let Ok(folder) = std::fs::canonicalize(path) {
             self.last_folder = Some(folder);
+            self.last_folder_mode = mode;
         }
     }
     pub fn save(&self, storage: &mut dyn eframe::Storage) {
@@ -161,16 +207,114 @@ mod tests {
     fn last_folder_survives_restart_and_explicit_launch_wins() {
         let mut prefs = Preferences::default();
         let folder = std::fs::canonicalize(std::env::temp_dir()).unwrap();
-        prefs.remember_folder(&folder);
-        prefs.remember_folder(&folder.join("foveonic-nonexistent-saved-folder"));
+        prefs.remember_folder(&folder, FolderMode::Browse);
+        prefs.remember_folder(
+            &folder.join("foveonic-nonexistent-saved-folder"),
+            FolderMode::Import,
+        );
         assert_eq!(prefs.last_folder.as_ref(), Some(&folder));
         let mut store = Storage::default();
         prefs.save(&mut store);
         let loaded = Preferences::load(Some(&store));
-        assert_eq!(loaded.startup_path(None), Some(folder));
+        assert_eq!(
+            loaded.startup_folder(None),
+            Some((folder, FolderMode::Browse))
+        );
         let explicit = std::path::PathBuf::from("explicit.x3f");
-        assert_eq!(loaded.startup_path(Some(explicit.clone())), Some(explicit));
+        assert_eq!(
+            loaded.startup_folder(Some(explicit.clone())),
+            Some((explicit, FolderMode::Browse))
+        );
     }
+    #[test]
+    fn remembered_import_folder_keeps_its_write_policy_on_restart_and_direct_file_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let card = directory.path().join("card");
+        let library = directory.path().join("library");
+        std::fs::create_dir(&card).unwrap();
+        std::fs::create_dir(&library).unwrap();
+        let card = std::fs::canonicalize(card).unwrap();
+        let mut prefs = Preferences::default();
+        prefs.remember_folder(&card, FolderMode::Import);
+        let mut store = Storage::default();
+        prefs.save(&mut store);
+        let mut restored = Preferences::load(Some(&store));
+        assert_eq!(
+            restored.startup_folder(None),
+            Some((card.clone(), FolderMode::Import))
+        );
+        let nested = card.join("DCIM").join("100SIGMA");
+        std::fs::create_dir_all(&nested).unwrap();
+        for explicit in [
+            card.clone(),
+            card.join("photo.x3f"),
+            nested.join("photo.x3f"),
+        ] {
+            assert_eq!(
+                restored.startup_folder(Some(explicit.clone())),
+                Some((explicit, FolderMode::Import))
+            );
+        }
+        assert_eq!(
+            restored.startup_folder(Some(library.clone())),
+            Some((library, FolderMode::Browse))
+        );
+        restored.remember_folder(&directory.path().join("missing"), FolderMode::Browse);
+        assert_eq!(restored.last_folder_mode, FolderMode::Import);
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(last_folder:Some(\"card\"))".into());
+        assert_eq!(
+            Preferences::load(Some(&store)).last_folder_mode,
+            FolderMode::Browse
+        );
+    }
+
+    #[test]
+    fn processing_destination_survives_restart_independently_of_the_source_folder() {
+        let mut store = Storage::default();
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(organizer:List)".into());
+        assert_eq!(Preferences::load(Some(&store)).processing_destination, None);
+        store.0.insert(
+            STORAGE_KEY.into(),
+            "(import_destination:Some(\"photos/remembered\"))".into(),
+        );
+        assert_eq!(
+            Preferences::load(Some(&store)).processing_destination,
+            Some("photos/remembered".into())
+        );
+        let prefs = Preferences {
+            last_folder: Some("card/DCIM".into()),
+            processing_destination: Some("photos/selected".into()),
+            ..Default::default()
+        };
+        prefs.save(&mut store);
+        assert_eq!(Preferences::load(Some(&store)), prefs);
+    }
+    #[test]
+    fn processing_choices_default_to_dng_and_remain_independent_across_restart() {
+        use crate::export::ExportFormat;
+        use foveonic::render::TiffColorSpace;
+        let mut store = Storage::default();
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(organizer:List)".into());
+        let mut prefs = Preferences::load(Some(&store));
+        assert_eq!(prefs.browse_processing.format, ExportFormat::Dng);
+        assert_eq!(prefs.import_processing.format, ExportFormat::Dng);
+        assert!(!prefs.import_processing.copy_only);
+        prefs.browse_processing.format = ExportFormat::Tiff;
+        prefs.browse_processing.tiff_color_space = Some(TiffColorSpace::AdobeRgb);
+        prefs.import_processing.copy_only = true;
+        prefs.save(&mut store);
+        let restored = Preferences::load(Some(&store));
+        assert_eq!(restored, prefs);
+        assert_eq!(restored.import_processing.format, ExportFormat::Dng);
+        assert_eq!(restored.import_processing.tiff_color_space, None);
+    }
+
     #[test]
     fn zoom_snap_defaults_to_200_and_survives_restart() {
         assert_eq!(Preferences::load(None).zoom_snap, ZoomPreset::Percent200);
@@ -274,6 +418,7 @@ mod preview_tests {
             decode_cache: foveonic::decode_cache::Settings {
                 enabled: false,
                 max_bytes: 5_000_000_000,
+                decode_threads: 1,
                 classic: true,
                 merrill: false,
                 quattro: true,

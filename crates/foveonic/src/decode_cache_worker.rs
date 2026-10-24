@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, Mutex},
+    sync::{mpsc, Arc, Mutex, MutexGuard, TryLockError},
     time::{Duration, Instant},
 };
 
@@ -102,22 +102,45 @@ pub(super) fn start(
                 }
                 // Only idle time admits new prefetch work. Decode and writes
                 // also yield at bounded checkpoints if a photo becomes active.
-                let next = if gate.idle() && settings.enabled && settings.max_bytes > 0 {
+                let (paths, generation, prefetch_settings) = {
                     let mut state = control.lock().unwrap();
-                    let generation = state.generation;
-                    state.queue.pop_front().map(|p| (p, generation))
-                } else {
-                    None
+                    let count = if gate.idle()
+                        && state.settings.enabled
+                        && !state.clear
+                        && state.settings.max_bytes > 0
+                    {
+                        state.settings.decode_threads.min(state.queue.len())
+                    } else {
+                        0
+                    };
+                    (
+                        state.queue.drain(..count).collect::<Vec<_>>(),
+                        state.generation,
+                        state.settings.clone(),
+                    )
                 };
-                let mut prefetched = false;
-                if let Some((path, generation)) = next {
-                    status.lock().unwrap().prefetching = Some(path.clone());
-                    let result = prefetch(&root, &path, &settings, || {
-                        let current = control.lock().unwrap();
-                        current.generation == generation && !current.clear
+                let prefetched = !paths.is_empty();
+                if prefetched {
+                    status.lock().unwrap().prefetching = paths.clone();
+                    let results = prefetch_group(&paths, |path, publication| {
+                        background::interruptible(gate.clone(), || {
+                            prefetch(&root, path, &prefetch_settings, publication, || {
+                                let current = control.lock().unwrap();
+                                current.generation == generation && !current.clear
+                            })
+                        })
                     });
-                    prefetched = result.is_ok();
-                    status.lock().unwrap().prefetching = None;
+                    let mut current = control.lock().unwrap();
+                    if current.generation == generation && !current.clear {
+                        // Completion order never changes browser order. Interrupted
+                        // attempts go back ahead of rows that have not started yet.
+                        for (path, result) in paths.into_iter().zip(results).rev() {
+                            if result.is_err_and(|error| error.is::<background::Interrupted>()) {
+                                current.queue.push_front(path);
+                            }
+                        }
+                    }
+                    status.lock().unwrap().prefetching.clear();
                 }
                 if maintenance
                     || prefetched
@@ -132,13 +155,56 @@ pub(super) fn start(
     writer
 }
 
+/// A bounded group owns its partial decodes only until completion or cancellation.
+/// Publication is serialized so concurrent photos cannot race LRU budget checks.
+fn prefetch_group(
+    paths: &[PathBuf],
+    work: impl Fn(&Path, &Mutex<()>) -> Result<()> + Sync,
+) -> Vec<Result<()>> {
+    let publication = Mutex::new(());
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                let work = &work;
+                let publication = &publication;
+                scope.spawn(move || work(path, publication))
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| "cache prefetch worker panicked".into())
+                    .and_then(|result| result)
+            })
+            .collect()
+    })
+}
+
+// A completed speculative decode must also unwind while another photo owns
+// publication. Blocking on Mutex::lock would retain its buffers during foreground work.
+fn publication_lock(publication: &Mutex<()>) -> Result<MutexGuard<'_, ()>> {
+    const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(1);
+    loop {
+        background::checkpoint_or_cancel()?;
+        match publication.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(_)) => return Err("cache publication lock poisoned".into()),
+            Err(TryLockError::WouldBlock) => std::thread::sleep(LOCK_RETRY_INTERVAL),
+        }
+    }
+}
+
 fn prefetch(
     root: &Path,
     path: &Path,
     settings: &Settings,
+    publication: &Mutex<()>,
     current: impl Fn() -> bool,
 ) -> Result<()> {
-    crate::background::checkpoint();
+    crate::background::checkpoint_or_cancel()?;
     if !current() {
         return Ok(());
     }
@@ -149,13 +215,23 @@ fn prefetch(
     if !settings.permits(family) {
         return Ok(());
     }
-    let _ = previews::embedded(root, path, family, settings, &current);
+    // Keep preview publication under the same LRU lock as decoded sources.
+    let preview_result = {
+        let _publication = publication_lock(publication)?;
+        previews::embedded(root, path, family, settings, &current)
+    };
+    if let Err(error) = preview_result {
+        if error.is::<background::Interrupted>() {
+            return Err(error);
+        }
+    }
     if !current() || ready(root, path, settings) {
         return Ok(());
     }
     let identity = Identity::read(path)?;
     let source = Source::open(path)?;
-    crate::background::checkpoint();
+    crate::background::checkpoint_or_cancel()?;
+    let _publication = publication_lock(publication)?;
     if current() && !ready(root, path, settings) {
         store_checked(root, path, identity, &source, settings.max_bytes, current)?;
     }
@@ -259,5 +335,39 @@ fn refresh(
     if state.generation == generation && !state.clear {
         status.ready = ready;
         status.files = Arc::new(files);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Barrier,
+    };
+
+    #[test]
+    fn photo_workers_run_concurrently_and_publication_waits_cancel() {
+        const WORKERS: usize = 3;
+        let paths: Vec<_> = (0..WORKERS).map(|i| PathBuf::from(i.to_string())).collect();
+        let rendezvous = Barrier::new(WORKERS);
+        let active = AtomicUsize::new(0);
+        let gate = Arc::new(Gate::default());
+        let results = prefetch_group(&paths, |_, publication| {
+            background::interruptible(gate.clone(), || {
+                active.fetch_add(1, Ordering::SeqCst);
+                rendezvous.wait();
+                assert_eq!(active.load(Ordering::SeqCst), WORKERS);
+                let _busy = publication.lock().unwrap();
+                // Even when publication is unavailable, foreground work cancels
+                // this speculative worker rather than leaving it blocked with a source.
+                let _foreground = gate.foreground();
+                assert!(publication_lock(publication)
+                    .unwrap_err()
+                    .is::<background::Interrupted>());
+                Ok(())
+            })
+        });
+        assert!(results.into_iter().all(|r| r.is_ok()));
     }
 }

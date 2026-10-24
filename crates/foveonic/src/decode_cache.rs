@@ -25,6 +25,8 @@ use std::{
 const FORMAT_VERSION: u32 = 1;
 const NAMESPACE: &str = "foveonic-decoded-v1";
 pub const DEFAULT_BUDGET: u64 = 10_000_000_000;
+// Match the former peak of three independent plane decoders, now shared across photos.
+const DEFAULT_DECODE_THREADS: usize = 3;
 const MAGIC: &[u8; 8] = b"FOVDEC01";
 // Signature, JSON length and JSON checksum precede the versioned header.
 const PREFIX_BYTES: u64 = (MAGIC.len() + size_of::<u64>() + size_of::<u32>()) as u64;
@@ -37,6 +39,8 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub struct Settings {
     pub enabled: bool,
     pub max_bytes: u64,
+    /// CPU budget for speculative decoding. Each worker decodes one photo at a time.
+    pub decode_threads: usize,
     pub classic: bool,
     pub merrill: bool,
     pub quattro: bool,
@@ -46,13 +50,21 @@ impl Default for Settings {
         Self {
             enabled: true,
             max_bytes: DEFAULT_BUDGET,
+            decode_threads: available_decode_threads().min(DEFAULT_DECODE_THREADS),
             classic: false,
             merrill: true,
             quattro: true,
         }
     }
 }
+/// Available logical CPU cores, including when the platform cannot report a count.
+pub fn available_decode_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+}
 impl Settings {
+    pub fn normalize(&mut self) {
+        self.decode_threads = self.decode_threads.clamp(1, available_decode_threads());
+    }
     pub fn permits(&self, family: ProcessingFamily) -> bool {
         self.enabled
             && self.max_bytes > 0
@@ -82,7 +94,7 @@ pub struct Status {
     pub hits: u64,
     pub misses: u64,
     pub writing: bool,
-    pub prefetching: Option<PathBuf>,
+    pub prefetching: Vec<PathBuf>,
     pub ready: HashSet<PathBuf>,
     pub files: Arc<HashMap<PathBuf, EntryState>>,
 }
@@ -149,7 +161,8 @@ enum Command {
     },
 }
 
-/// Only one source write can run and one can wait. A full queue drops cache
+/// Prefetch retains at most one source per decode worker. Foreground insertion
+/// allows one source write and one pending source. A full queue drops cache
 /// insertion, never an image request. Sources are shared, not copied for writing.
 pub struct Cache {
     root: PathBuf,
@@ -192,11 +205,13 @@ impl Cache {
             gate,
         }
     }
-    pub fn configure(&self, settings: Settings) {
+    pub fn configure(&self, mut settings: Settings) {
+        settings.normalize();
         let mut state = self.control.lock().unwrap();
         state.settings = settings;
         state.queue = state.watched.clone().into();
         state.generation += 1;
+        self.gate.interrupt_prefetch();
         drop(state);
         let mut status = self.status.lock().unwrap();
         status.ready.clear();
@@ -211,6 +226,7 @@ impl Cache {
         state.queue.clear();
         state.stores.clear();
         state.generation += 1;
+        self.gate.interrupt_prefetch();
         drop(state);
         let mut status = self.status.lock().unwrap();
         status.ready.clear();
@@ -222,37 +238,20 @@ impl Cache {
         drop(status);
         let _ = self.writer.try_send(Command::Maintain);
     }
-    /// Replace the bounded one-pass folder queue. Evicted entries are not
-    /// endlessly decoded again when a folder exceeds the configured budget.
+    /// Follow the supplied browser order for one bounded folder pass. Selection
+    /// does not reorder background work. Evicted entries wait for another pass.
     pub fn prefetch_folder(&self, paths: Vec<PathBuf>) {
         let mut state = self.control.lock().unwrap();
         state.queue = paths.clone().into();
         state.watched = paths;
         state.generation += 1;
+        self.gate.interrupt_prefetch();
         drop(state);
         let mut status = self.status.lock().unwrap();
         status.ready.clear();
         status.files = Arc::new(HashMap::new());
         drop(status);
         let _ = self.writer.try_send(Command::Maintain);
-    }
-    /// Move remaining neighbors ahead of distant files without repeating the
-    /// pass or discarding ready entries when the owner changes selection.
-    pub fn prioritize(&self, selected: &Path) {
-        let mut state = self.control.lock().unwrap();
-        let Some(center) = state.watched.iter().position(|p| p == selected) else {
-            return;
-        };
-        let order = state
-            .watched
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (p.clone(), (i.abs_diff(center), i < center)))
-            .collect::<std::collections::HashMap<_, _>>();
-        state
-            .queue
-            .make_contiguous()
-            .sort_by_key(|p| order.get(p).copied());
     }
     pub fn foreground(&self) -> Activity {
         self.gate.foreground()
@@ -274,24 +273,14 @@ impl Cache {
     }
 
     pub fn open(&self, path: &Path, progress: impl Fn(LoadStage)) -> Result<Arc<Source>> {
+        if let Some(source) = self.open_cached(path, &progress) {
+            return Ok(source);
+        }
         let settings = self.control.lock().unwrap().settings.clone();
         let identity = settings
             .enabled
             .then(|| Identity::read(path).ok())
             .flatten();
-        if let Some(identity) = &identity {
-            let location = self.root.join(identity.name());
-            match load(&location, identity, &settings, &progress) {
-                Ok(source) if Identity::read(path).ok().as_ref() == Some(identity) => {
-                    self.status.lock().unwrap().hits += 1;
-                    return Ok(Arc::new(source));
-                }
-                _ => {
-                    // Missing, obsolete and corrupt entries are all regenerable.
-                    self.status.lock().unwrap().misses += 1;
-                }
-            }
-        }
         let source = Arc::new(Source::open_with_progress(path, progress)?);
         if let Some(identity) = identity {
             let mut control = self.control.lock().unwrap();
@@ -322,6 +311,28 @@ impl Cache {
         }
         Ok(source)
     }
+
+    /// Reuse a verified decode without falling back to reading the original.
+    /// Import can decode its completed local copy when the card cache is missing.
+    pub fn open_cached(&self, path: &Path, progress: impl Fn(LoadStage)) -> Option<Arc<Source>> {
+        crate::background::decode_priority();
+        let settings = self.control.lock().unwrap().settings.clone();
+        if !settings.enabled {
+            return None;
+        }
+        let identity = Identity::read(path).ok()?;
+        let location = self.root.join(identity.name());
+        match load(&location, &identity, &settings, &progress) {
+            Ok(source) if Identity::read(path).ok().as_ref() == Some(&identity) => {
+                self.status.lock().unwrap().hits += 1;
+                Some(Arc::new(source))
+            }
+            _ => {
+                self.status.lock().unwrap().misses += 1;
+                None
+            }
+        }
+    }
 }
 
 fn load(
@@ -335,11 +346,17 @@ fn load(
     let header = read_header(&mut file, identity, settings)?;
     let mut pixels = vec![0_f32; usize::try_from(header.samples)?];
     let mut camf = vec![0; usize::try_from(header.camf_bytes)?];
-    file.read_exact(bytemuck::cast_slice_mut(&mut pixels))?;
-    file.read_exact(&mut camf)?;
     let mut checksum = crc32fast::Hasher::new();
-    checksum.update(bytemuck::cast_slice(&pixels));
-    checksum.update(&camf);
+    for output in [
+        bytemuck::cast_slice_mut::<f32, u8>(&mut pixels),
+        camf.as_mut_slice(),
+    ] {
+        for chunk in output.chunks_mut(crate::background::IO_CHUNK_BYTES) {
+            crate::background::checkpoint_or_cancel()?;
+            file.read_exact(chunk)?;
+            checksum.update(chunk);
+        }
+    }
     if checksum.finalize() != header.checksum {
         return Err("decoded cache checksum mismatch".into());
     }
@@ -467,7 +484,7 @@ fn store_checked(
     for bytes in
         bytemuck::cast_slice::<f32, u8>(&source.pixels).chunks(crate::background::IO_CHUNK_BYTES)
     {
-        crate::background::checkpoint();
+        crate::background::checkpoint_or_cancel()?;
         checksum.update(bytes);
     }
     checksum.update(&source.camf);
@@ -512,7 +529,7 @@ fn store_checked(
         for bytes in bytemuck::cast_slice::<f32, u8>(&source.pixels)
             .chunks(crate::background::IO_CHUNK_BYTES)
         {
-            crate::background::checkpoint();
+            crate::background::checkpoint_or_cancel()?;
             file.write_all(bytes)?;
         }
         file.write_all(&source.camf)?;

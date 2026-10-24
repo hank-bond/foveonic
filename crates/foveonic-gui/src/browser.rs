@@ -1,4 +1,4 @@
-//! Browses X3F paths with focused keyboard selection and bounded embedded and rendered previews.
+//! Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
 
 use crate::preview_image::PreparedPreview;
 use eframe::egui;
@@ -9,6 +9,11 @@ use std::{
     sync::{mpsc, Arc},
     thread,
 };
+
+#[path = "browser_folders.rs"]
+mod folders;
+#[path = "browser_review.rs"]
+mod review;
 
 // Leave a quiet status column beside the filename, outside photographic content.
 const STATUS_RADIUS: f32 = 3.;
@@ -22,6 +27,7 @@ const PREVIEW_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_se
 // Bound queued decoded display pixels separately from the inexpensive path queue.
 const REPLY_CAPACITY: usize = 2;
 const GRID_TILE_HEIGHT: f32 = 146.;
+const LIST_ROW_HEIGHT: f32 = 40.;
 // Image padding includes the filename band below each thumbnail.
 const GRID_IMAGE_INSETS: egui::Vec2 = egui::vec2(12., 28.);
 // Preserve the existing grid reflow thresholds independently of the panel minimum.
@@ -74,8 +80,43 @@ pub struct Thumbnail {
     /// Oriented full-size presentation dimensions, independent of the thumbnail's resolution.
     pub native_extent: [u32; 2],
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mark {
+    #[default]
+    Unmarked,
+    Pick,
+    Hidden,
+    Imported,
+}
+impl Mark {
+    pub fn hidden(self) -> bool {
+        matches!(self, Self::Hidden | Self::Imported)
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unmarked => "",
+            Self::Pick => "Pick",
+            Self::Hidden => "Hidden",
+            Self::Imported => "Imported",
+        }
+    }
+}
 pub struct Browser {
     pub files: Vec<PathBuf>,
+    pub root: Option<PathBuf>,
+    pub import_mode: bool,
+    pub marks: HashMap<PathBuf, Mark>,
+    pub recorded_marks: HashMap<PathBuf, Mark>,
+    pub excluded: HashSet<PathBuf>,
+    pub hide_reviewed: bool,
+    pub clear_selection: bool,
+    shortcuts: Vec<review::Shortcut>,
+    highlighted: HashSet<PathBuf>,
+    anchor: Option<PathBuf>,
+    last_active: Option<PathBuf>,
+    review_clicked: bool,
+    focus_requested: bool,
+    advance_hidden: bool,
     pub decode_states: Arc<HashMap<PathBuf, EntryState>>,
     pub cache_enabled: bool,
     sender: mpsc::SyncSender<Request>,
@@ -157,6 +198,20 @@ impl Browser {
         });
         Self {
             files: Vec::new(),
+            root: None,
+            import_mode: false,
+            marks: HashMap::new(),
+            recorded_marks: HashMap::new(),
+            excluded: HashSet::new(),
+            hide_reviewed: true,
+            clear_selection: false,
+            shortcuts: Vec::new(),
+            highlighted: HashSet::new(),
+            anchor: None,
+            last_active: None,
+            review_clicked: false,
+            focus_requested: false,
+            advance_hidden: false,
             decode_states: Arc::new(HashMap::new()),
             cache_enabled: false,
             sender,
@@ -187,12 +242,16 @@ impl Browser {
                 "not a file or folder",
             ));
         };
-        let mut files = std::fs::read_dir(dir)?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file() && p.extension().is_some_and(|s| s.eq_ignore_ascii_case("x3f")))
-            .collect::<Vec<_>>();
-        files.sort();
+        let files = folders::discover(dir)?;
         self.files = files;
+        self.root = Some(dir.to_owned());
+        self.marks.clear();
+        self.recorded_marks.clear();
+        self.excluded.clear();
+        self.highlighted.clear();
+        self.anchor = None;
+        self.last_active = None;
+        self.clear_selection = false;
         self.decode_states = Arc::new(HashMap::new());
         self.cache.clear();
         self.previews.clear();
@@ -360,7 +419,6 @@ impl Browser {
                 egui::Color32::WHITE,
             );
         }
-        let name = path.file_stem().unwrap_or_default().to_string_lossy();
         let caption = egui::Rect::from_min_max(
             egui::pos2(
                 rect.left() + GRID_IMAGE_INSETS.x / 2.,
@@ -371,10 +429,11 @@ impl Browser {
                 rect.bottom() - CAPTION_BOTTOM_INSET,
             ),
         );
-        ui.painter().with_clip_rect(caption).text(
-            caption.center(),
+        let text = self.review_control(ui, path, caption);
+        ui.painter().with_clip_rect(text).text(
+            text.center(),
             egui::Align2::CENTER_CENTER,
-            name,
+            path.file_stem().unwrap_or_default().to_string_lossy(),
             egui::FontId::proportional(CAPTION_FONT_SIZE),
             egui::Color32::LIGHT_GRAY,
         );
@@ -384,6 +443,13 @@ impl Browser {
             egui::pos2(rect.right() - STATUS_INSET, caption.center().y),
         );
         response.on_hover_text(self.file_help(path))
+    }
+    pub fn mark(&self, path: &Path) -> Mark {
+        self.marks
+            .get(path)
+            .or_else(|| self.recorded_marks.get(path))
+            .copied()
+            .unwrap_or_default()
     }
     fn cache_state(&self, path: &Path) -> EntryState {
         if !self.cache_enabled {
@@ -397,7 +463,11 @@ impl Browser {
     }
     fn file_help(&self, path: &Path) -> String {
         let (_, help) = cache_appearance(self.cache_state(path));
-        format!("{}\n{help}", path.display())
+        if self.import_mode {
+            format!("{}\n{help}\n{} · Space checks highlighted photos. Delete hides without deleting originals.", path.display(), self.mark(path).label())
+        } else {
+            format!("{}\n{help}", path.display())
+        }
     }
     fn cache_badge(&self, ui: &egui::Ui, path: &Path, center: egui::Pos2) {
         let (color, _) = cache_appearance(self.cache_state(path));
@@ -409,6 +479,25 @@ impl Browser {
         selected: Option<&Path>,
         mode: crate::preferences::Organizer,
     ) -> Option<PathBuf> {
+        self.review_clicked = false;
+        self.clear_selection = false;
+        let focus_requested = std::mem::take(&mut self.focus_requested);
+        if self.last_active.as_deref() != selected {
+            if let Some(path) = selected.filter(|path| !self.excluded.contains(*path)) {
+                if !self.highlighted.contains(path) {
+                    self.highlighted.clear();
+                    self.highlighted.insert(path.to_owned());
+                    self.anchor = Some(path.to_owned());
+                }
+            }
+            self.last_active = selected.map(Path::to_owned);
+        }
+        let files: Vec<_> = self
+            .files
+            .iter()
+            .filter(|path| !self.excluded.contains(*path))
+            .cloned()
+            .collect();
         // Rows come and go as the list scrolls. A stable organizer-level focus
         // target keeps keyboard selection working when the focused row disappears.
         let focus = ui.interact(
@@ -416,55 +505,72 @@ impl Browser {
             ui.make_persistent_id("organizer focus"),
             egui::Sense::focusable_noninteractive(),
         );
-        if focus.clicked_elsewhere() || !ui.is_enabled() {
+        if focus_requested && ui.is_enabled() {
+            focus.request_focus();
+            ui.ctx().request_repaint();
+        } else if focus.clicked_elsewhere() || !ui.is_enabled() {
             focus.surrender_focus();
         } else if ui.input(|input| input.pointer.primary_pressed())
             && ui.rect_contains_pointer(focus.rect)
             && !focus.has_focus()
         {
-            // Waiting until click release would miss the first arrow key afterward.
-            // Give egui time to install the key filter by focusing on press.
+            // Keep one focus target while virtualized image rows come and go.
             focus.request_focus();
         }
-        ui.memory_mut(|memory| {
-            memory.set_focus_lock_filter(
-                focus.id,
-                egui::EventFilter {
-                    horizontal_arrows: true,
-                    vertical_arrows: true,
-                    escape: true,
-                    ..Default::default()
-                },
-            );
-        });
         let mut chosen = None;
         let width = ui.available_width();
         let columns = icon_columns(width);
         let icons = mode == crate::preferences::Organizer::Icons;
-        let rows = if icons {
-            self.files.len().div_ceil(columns)
+        let height = if icons {
+            GRID_TILE_HEIGHT
         } else {
-            self.files.len()
+            LIST_ROW_HEIGHT
         };
-        let height = if icons { GRID_TILE_HEIGHT } else { 40. };
-        let mut active = selected.and_then(|path| self.files.iter().position(|p| p == path));
-        if ui.is_enabled() && focus.has_focus() {
-            for key in [
-                egui::Key::ArrowLeft,
-                egui::Key::ArrowRight,
-                egui::Key::ArrowUp,
-                egui::Key::ArrowDown,
-            ] {
-                if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
-                    let next = arrow_selection(
-                        active,
-                        self.files.len(),
-                        if icons { columns } else { 1 },
-                        key,
-                    );
-                    if next != active {
-                        active = next;
-                        chosen = next.map(|index| self.files[index].clone());
+        let layout = folders::Layout::new(
+            &files,
+            self.root.as_deref(),
+            if icons { columns } else { 1 },
+            height,
+            ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y,
+            ui.spacing().item_spacing.y,
+        );
+        let mut active = selected.and_then(|path| files.iter().position(|p| p == path));
+        let shortcuts = std::mem::take(&mut self.shortcuts);
+        if !shortcuts.is_empty() {
+            ui.ctx().request_repaint();
+        }
+        if ui.is_enabled() {
+            for shortcut in shortcuts {
+                match shortcut {
+                    review::Shortcut::SelectAll => {
+                        self.highlighted = files.iter().cloned().collect()
+                    }
+                    review::Shortcut::TogglePick | review::Shortcut::Hide => {
+                        if self.import_mode {
+                            if self.highlighted.is_empty() {
+                                if let Some(path) =
+                                    selected.filter(|path| files.iter().any(|file| file == *path))
+                                {
+                                    self.highlighted.insert(path.to_owned());
+                                    self.anchor = Some(path.to_owned());
+                                }
+                            }
+                            if matches!(shortcut, review::Shortcut::TogglePick) {
+                                self.toggle_highlighted(&files);
+                            } else {
+                                self.hide_highlighted(&files);
+                            }
+                        }
+                    }
+                    review::Shortcut::Arrow(key, modifiers) => {
+                        let next = layout.arrow(active, key);
+                        if next != active {
+                            active = next;
+                            chosen = next.map(|index| files[index].clone());
+                            if let Some(path) = &chosen {
+                                self.highlight(path, &files, modifiers);
+                            }
+                        }
                     }
                 }
             }
@@ -472,10 +578,9 @@ impl Browser {
         let mut scroll = egui::ScrollArea::vertical().id_salt("organizer items");
         let reveal_selection = std::mem::take(&mut self.reveal_selection);
         if let Some(active) = active.filter(|_| chosen.is_some() || reveal_selection) {
-            let row = active / if icons { columns } else { 1 };
-            let stride = height + ui.spacing().item_spacing.y;
-            let top = row as f32 * stride;
-            let bottom = top + height;
+            let row = layout.photo_row(active);
+            let top = row.top;
+            let bottom = row.top + row.height;
             let id = ui.make_persistent_id(egui::Id::new("organizer items"));
             let offset = egui::scroll_area::State::load(ui.ctx(), id)
                 .unwrap_or_default()
@@ -491,106 +596,148 @@ impl Browser {
             };
             scroll = scroll.vertical_scroll_offset(offset);
         }
-        let highlighted = chosen.as_deref().or(selected).map(Path::to_owned);
-        scroll.show_rows(ui, height, rows, |ui, range| {
-            for row in range {
-                if icons {
-                    let tile_width = (width - (columns - 1) as f32 * ui.spacing().item_spacing.x)
-                        / columns as f32;
-                    ui.horizontal(|ui| {
-                        for index in row * columns..((row + 1) * columns).min(self.files.len()) {
-                            let path = self.files[index].clone();
-                            if self
-                                .tile(
+        let highlighted = self.highlighted.clone();
+        scroll.show_viewport(ui, |ui, viewport| {
+            ui.set_height(layout.height);
+            let origin = ui.max_rect().min;
+            for row in layout.visible(viewport.top(), viewport.bottom()) {
+                let rect = egui::Rect::from_min_size(
+                    origin + egui::vec2(0., row.top),
+                    egui::vec2(width, row.height),
+                );
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .id_salt(match &row.content {
+                            folders::Content::Folder(path) => ("folder", path),
+                            folders::Content::Photos(range) => ("photos", &files[range.start]),
+                        })
+                        .max_rect(rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                    |ui| {
+                        let folders::Content::Photos(range) = &row.content else {
+                            if let folders::Content::Folder(directory) = &row.content {
+                                // The first group shares the browser header's divider.
+                                folders::heading(
                                     ui,
-                                    &path,
-                                    highlighted.as_deref() == Some(path.as_path()),
-                                    egui::vec2(tile_width, GRID_TILE_HEIGHT),
-                                )
-                                .clicked()
+                                    rect,
+                                    directory,
+                                    self.root.as_deref(),
+                                    row.top > 0.,
+                                );
+                            }
+                            return;
+                        };
+                        if icons {
+                            let tile_width = (width
+                                - (columns - 1) as f32 * ui.spacing().item_spacing.x)
+                                / columns as f32;
+                            ui.horizontal(|ui| {
+                                for path in &files[range.clone()] {
+                                    if self
+                                        .tile(
+                                            ui,
+                                            path,
+                                            highlighted.contains(path),
+                                            egui::vec2(tile_width, GRID_TILE_HEIGHT),
+                                        )
+                                        .clicked()
+                                        && !self.review_clicked
+                                    {
+                                        self.highlight(
+                                            path,
+                                            &files,
+                                            ui.input(|input| input.modifiers),
+                                        );
+                                        if self.highlighted.contains(path) {
+                                            chosen = Some(path.clone());
+                                        }
+                                    }
+                                }
+                            });
+                        } else {
+                            let path = files[range.start].clone();
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(width, LIST_ROW_HEIGHT),
+                                egui::Sense::CLICK,
+                            );
+                            crate::widgets::paint(ui, &response, highlighted.contains(&path));
+                            if ui.is_rect_visible(rect) {
+                                if let Some(thumb) = self.thumbnail(&path) {
+                                    let size = egui::vec2(
+                                        thumb.native_extent[0] as f32,
+                                        thumb.native_extent[1] as f32,
+                                    );
+                                    let factor = (32. / size.x).min(32. / size.y);
+                                    ui.painter().image(
+                                        thumb.texture.id(),
+                                        egui::Rect::from_center_size(
+                                            egui::pos2(rect.left() + 21., rect.center().y),
+                                            size * factor,
+                                        ),
+                                        egui::Rect::from_min_max(
+                                            egui::Pos2::ZERO,
+                                            egui::pos2(1., 1.),
+                                        ),
+                                        egui::Color32::WHITE,
+                                    );
+                                }
+                                let caption = egui::Rect::from_min_max(
+                                    egui::pos2(rect.left() + 45., rect.top()),
+                                    egui::pos2(rect.right() - STATUS_GUTTER, rect.bottom()),
+                                );
+                                let text = self.review_control(ui, &path, caption);
+                                ui.painter().with_clip_rect(text).text(
+                                    egui::pos2(text.left(), text.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    path.file_stem().unwrap_or_default().to_string_lossy(),
+                                    egui::FontId::proportional(CAPTION_FONT_SIZE),
+                                    egui::Color32::LIGHT_GRAY,
+                                );
+                            }
+                            self.cache_badge(
+                                ui,
+                                &path,
+                                rect.right_center() + egui::vec2(-STATUS_INSET, 0.),
+                            );
+                            if response.on_hover_text(self.file_help(&path)).clicked()
+                                && !self.review_clicked
                             {
-                                chosen = Some(path);
+                                self.highlight(&path, &files, ui.input(|input| input.modifiers));
+                                if self.highlighted.contains(&path) {
+                                    chosen = Some(path);
+                                }
                             }
                         }
-                    });
-                } else {
-                    let path = self.files[row].clone();
-                    let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(width, 40.), egui::Sense::CLICK);
-                    crate::widgets::paint(
-                        ui,
-                        &response,
-                        highlighted.as_deref() == Some(path.as_path()),
-                    );
-                    if ui.is_rect_visible(rect) {
-                        if let Some(thumb) = self.thumbnail(&path) {
-                            let size = egui::vec2(
-                                thumb.native_extent[0] as f32,
-                                thumb.native_extent[1] as f32,
-                            );
-                            let factor = (32. / size.x).min(32. / size.y);
-                            ui.painter().image(
-                                thumb.texture.id(),
-                                egui::Rect::from_center_size(
-                                    egui::pos2(rect.left() + 21., rect.center().y),
-                                    size * factor,
-                                ),
-                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                                egui::Color32::WHITE,
-                            );
-                        }
-                        let text = egui::Rect::from_min_max(
-                            egui::pos2(rect.left() + 45., rect.top()),
-                            egui::pos2(rect.right() - STATUS_GUTTER, rect.bottom()),
-                        );
-                        ui.painter().with_clip_rect(text).text(
-                            egui::pos2(text.left(), text.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            path.file_stem().unwrap_or_default().to_string_lossy(),
-                            egui::FontId::proportional(CAPTION_FONT_SIZE),
-                            egui::Color32::LIGHT_GRAY,
-                        );
-                    }
-                    self.cache_badge(
-                        ui,
-                        &path,
-                        rect.right_center() + egui::vec2(-STATUS_INSET, 0.),
-                    );
-                    if response.on_hover_text(self.file_help(&path)).clicked() {
-                        chosen = Some(path);
-                    }
-                }
+                    },
+                );
             }
         });
-        if chosen.is_some() && !focus.has_focus() {
-            focus.request_focus();
-            // Install the arrow filter on the next pass, before subsequent keyboard input.
+        // Background history updates may conceal a row, but must not move the
+        // viewed photo or trigger another render as each import completes.
+        let advance_hidden = std::mem::take(&mut self.advance_hidden);
+        if let Some(path) = chosen
+            .as_deref()
+            .or(selected)
+            .filter(|path| advance_hidden && self.excluded.contains(*path))
+        {
+            chosen = self.next_visible(path);
+            self.highlighted.clear();
+            if let Some(next) = &chosen {
+                self.highlighted.insert(next.clone());
+                self.anchor = Some(next.clone());
+            }
+            self.clear_selection = chosen.is_none();
             ui.ctx().request_repaint();
         }
-        chosen
-    }
-}
-fn arrow_selection(
-    current: Option<usize>,
-    count: usize,
-    columns: usize,
-    key: egui::Key,
-) -> Option<usize> {
-    if count == 0 {
-        return None;
-    }
-    let Some(index) = current else {
-        return Some(0);
-    };
-    Some(match key {
-        egui::Key::ArrowLeft => index.saturating_sub(1),
-        egui::Key::ArrowRight => (index + 1).min(count - 1),
-        egui::Key::ArrowUp if index >= columns => index - columns,
-        egui::Key::ArrowDown if index / columns < (count - 1) / columns => {
-            (index + columns).min(count - 1)
+        if (chosen.is_some() || self.review_clicked) && !focus.has_focus() {
+            focus.request_focus();
+            ui.ctx().request_repaint();
         }
-        _ => index,
-    })
+        if self.review_clicked {
+            ui.ctx().request_repaint();
+        }
+        chosen.filter(|path| Some(path.as_path()) != selected)
+    }
 }
 fn icon_columns(width: f32) -> usize {
     ((width + GRID_REFLOW_GAP) / (GRID_REFLOW_TILE_WIDTH + GRID_REFLOW_GAP))

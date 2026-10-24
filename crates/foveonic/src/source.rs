@@ -430,6 +430,7 @@ impl Source {
         path: impl AsRef<Path>,
         progress: impl Fn(LoadStage),
     ) -> Result<Self> {
+        crate::background::decode_priority();
         let source = crate::x3f::read(path.as_ref(), || progress(LoadStage::FileRead))?;
         source.validate()?;
         progress(LoadStage::Decoded);

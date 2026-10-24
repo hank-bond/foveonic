@@ -103,6 +103,17 @@ impl Engine {
         Ok(self)
     }
 
+    /// Share compiled kernels and the ordered device queue with an independent executor.
+    /// Per-photo calibration estimates and retained render histories stay separate.
+    pub fn executor(&self) -> Self {
+        Self {
+            gpu: self.gpu.executor(),
+            owner: Arc::new(()),
+            calibration_statistics: Default::default(),
+            calibration_resources: self.calibration_resources.clone(),
+        }
+    }
+
     pub(crate) fn cached_neutral(
         &self,
         source: &Source,

@@ -66,31 +66,14 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
             )
             .ok_or("compressed plane offset overflow")?;
     }
-    let planes = std::thread::scope(|scope| -> Result<Vec<_>> {
-        let workers = inputs.map(|(input, width, height, seed)| {
-            let table = &table;
-            let scheduling = crate::background::context();
-            scope.spawn(move || {
-                crate::background::run(scheduling, || {
-                    table.decode_bounded(input, width, height, seed, 16383)
-                })
-            })
-        });
-        // Join all three before returning an error so scoped panics remain errors.
-        workers
-            .map(|worker| {
-                worker
-                    .join()
-                    .map_err(|_| "sensor decoder worker panicked".into())
-                    .and_then(|result| result)
-            })
-            .into_iter()
-            .collect()
+    let planes = super::decode_planes(|channel| {
+        let (input, width, height, seed) = inputs[channel];
+        table.decode_bounded(input, width, height, seed, 16383)
     })?;
     let cells = product(low_width, low_height)?;
     let mut output = Vec::with_capacity(product(cells, 6)?);
     for y in 0..low_height {
-        crate::background::checkpoint();
+        crate::background::checkpoint_or_cancel()?;
         for x in 0..low_width {
             let index = y * low_width + x;
             output.push(f32::from(planes[0][index]));

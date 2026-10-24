@@ -23,7 +23,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 ### Source files
 
-- **[background.rs](./background.rs)** Pauses optional decode work at bounded checkpoints while foreground requests run.
+- **[background.rs](./background.rs)** Gives foreground work priority over interruptible prefetch and pausable background jobs.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[decode_cache.rs](./decode_cache.rs)** Reuses exact decoded sources and display previews in a bounded temporary disk LRU.
 - **[decode_cache_preview.rs](./decode_cache_preview.rs)** Stores bounded display previews under the decoded cache's identity, recipe, and shared LRU budget.
@@ -32,6 +32,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
 - **[graph.rs](./graph.rs)** Builds typed dependency-ordered graphs and validates connections between operation ports.
 - **[image.rs](./image.rs)** Keeps GPU images with their photo settings and defines crop and orientation views.
+- **[importing.rs](./importing.rs)** Copies originals and stores current import and hidden decisions in one destination file.
 - **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
 - **[interactive.rs](./interactive.rs)** Reuses unchanged inputs for the current edit while keeping earlier images safe.
 - **[lib.rs](./lib.rs)** Shares X3F decoding and GPU photo processing between TIFF and DNG exports.

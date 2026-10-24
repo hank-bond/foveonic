@@ -19,6 +19,7 @@ implementation: incomplete
 - A completed image **must** be deliverable without waiting for scopes. Scope work **must** yield to a pending image request and scope replies **must** match the displayed artifact revision.
 - While dragging, completed older frames for the same photo and inspection root **may** provide progressive feedback, without overwriting current editing settings or being mislabeled as current. Other-photo/root and out-of-order replies **must** remain rejected. The newest request **must** eventually display after interaction stops.
 - Export **must** remain non-cancellable, use current requested settings, and preserve immutable displayed results and provenance.
+- Asynchronous [import batches](./import-workflow.md) must freeze settings at submission and leave interactive controls available. Their independent executor must yield I/O and GPU submissions to queued and active interactive requests. The current submission may finish before foreground work proceeds. Background execution must not build an entire frame of queued GPU work ahead of interaction.
 - Navigator presentation **must** use a small GPU-generated display-ready texture and ordinary egui image drawing, preserving overlays, interactions and the main viewport clipping fix. Regenerate only for content/mapping changes; no photographic readback or scope dependency. Main-image latency takes priority: navigator updates **may** lag during sliding, with explicit revision/mapping/source pairing and no other-photo/root mismatch.
 
 ## Progress display

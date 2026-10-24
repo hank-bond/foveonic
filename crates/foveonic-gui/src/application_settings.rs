@@ -2,7 +2,7 @@
 
 use crate::widgets;
 use eframe::egui;
-use foveonic::decode_cache::{Cache, Settings};
+use foveonic::decode_cache::{available_decode_threads, Cache, Settings};
 
 const BYTES_PER_GB: f64 = 1_000_000_000.;
 const CACHE_BUDGET_GB: std::ops::RangeInclusive<f64> = 0.1..=1000.;
@@ -33,6 +33,20 @@ pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings, cache
                         settings.max_bytes = (gb * BYTES_PER_GB).round() as u64;
                     }
                 });
+                let cores = available_decode_threads();
+                ui.horizontal(|ui| {
+                    ui.label("Background decode threads");
+                    ui.add(
+                        egui::DragValue::new(&mut settings.decode_threads)
+                            .range(1..=cores)
+                            .speed(1.),
+                    );
+                })
+                .response
+                .on_hover_text(format!(
+                    "Up to {cores} available cores. Decode several photos ahead together. \
+                     More threads use more CPU and memory. Active photos take priority."
+                ));
                 widgets::checkbox(ui, &mut settings.classic, "Classic");
                 widgets::checkbox(ui, &mut settings.merrill, "Merrill");
                 widgets::checkbox(ui, &mut settings.quattro, "Quattro");
@@ -44,7 +58,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut Settings, cache
             } else {
                 "photographs"
             };
-            let activity = if status.prefetching.is_some() {
+            let activity = if !status.prefetching.is_empty() {
                 " · decoding folder"
             } else if status.writing {
                 " · writing"

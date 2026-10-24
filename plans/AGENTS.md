@@ -37,6 +37,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[quattro-dng](./quattro-dng.md)** Add ordinary Quattro color and monochrome DNG export with a canonical technical base and one approximate embedded appearance.
 - **[quattro-integration](./quattro-integration.md)** Implement Quattro input, calibration and reconstruction through family-owned multiresolution recipes.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
+- **[sequoia-compatibility](./sequoia-compatibility.md)** Check whether the Apple Silicon app needs macOS 26 APIs or can target macOS 15 Sequoia.
 - **[signed-releases](./signed-releases.md)** Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
 - **[tiger-integration](./tiger-integration.md)** Complete Tiger's native full-resolution rendering before consolidating and evaluating portable methods on ordinary Quattro.

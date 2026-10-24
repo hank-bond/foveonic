@@ -134,6 +134,8 @@ pub struct Session {
     last_queued: Option<Settings>,
     unsaved: BTreeMap<PathBuf, Settings>,
     errors: BTreeMap<PathBuf, String>,
+    memory_only: bool,
+    review_edits: BTreeMap<PathBuf, Settings>,
 }
 impl Session {
     pub fn new(ctx: egui::Context, enabled: bool) -> Self {
@@ -148,6 +150,8 @@ impl Session {
             last_queued: None,
             unsaved: BTreeMap::new(),
             errors: BTreeMap::new(),
+            memory_only: false,
+            review_edits: BTreeMap::new(),
         }
     }
     pub fn select(&mut self, path: PathBuf) {
@@ -172,6 +176,18 @@ impl Session {
         self.ready
     }
 
+    /// Import review retains requested edits until another folder is opened.
+    /// Already queued ordinary-folder saves still finish on the existing writer.
+    pub fn set_memory_only(&mut self, enabled: bool) {
+        self.clear();
+        self.memory_only = enabled;
+        self.review_edits.clear();
+    }
+
+    pub fn review_settings(&self, path: &std::path::Path) -> Option<&Settings> {
+        self.review_edits.get(path)
+    }
+
     /// An older load must not replace the settings for the photo now selected.
     pub fn receive(&mut self) -> Option<Settings> {
         let mut loaded = None;
@@ -187,8 +203,14 @@ impl Session {
                             if !self.unsaved.contains_key(&path) {
                                 self.errors.remove(&path);
                             }
-                            loaded =
-                                Some(self.unsaved.get(&path).cloned().or(saved).unwrap_or(*fresh));
+                            loaded = Some(
+                                self.review_edits
+                                    .get(&path)
+                                    .cloned()
+                                    .or_else(|| self.unsaved.get(&path).cloned())
+                                    .or(saved)
+                                    .unwrap_or(*fresh),
+                            );
                         }
                         Err(error) => {
                             self.writable = false;
@@ -231,6 +253,14 @@ impl Session {
     }
     /// Resolve recorded camera choices after metadata arrives without losing pre-load edits.
     pub fn refresh(&mut self, settings: &Settings) {
+        if self.memory_only {
+            if self.ready {
+                if let Some(path) = &self.selected {
+                    self.review_edits.insert(path.clone(), settings.clone());
+                }
+            }
+            return;
+        }
         if !self.enabled
             || !self.ready
             || !self.writable
@@ -270,7 +300,9 @@ impl Session {
 
 /// Resolve scalar source defaults off the UI thread, before launch choices and
 /// edits are applied. CAMF preset catalogues arrive separately with full metadata.
-fn capture_defaults(properties: BTreeMap<String, String>) -> foveonic::source::Result<Settings> {
+pub(crate) fn capture_defaults(
+    properties: BTreeMap<String, String>,
+) -> foveonic::source::Result<Settings> {
     let metadata = crate::capture::processing_metadata(properties);
     let mut settings = Settings::default();
     if let Ok(capabilities) = foveonic::render::ControlCapabilities::from_metadata(&metadata) {

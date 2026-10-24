@@ -7,6 +7,7 @@ pub mod dng;
 mod gpu;
 mod graph;
 pub mod image;
+pub mod importing;
 pub mod inspection;
 mod interactive;
 mod nodes;

@@ -19,6 +19,32 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
+// Active photos parallelize independent planes. Prefetch parallelizes photos instead,
+// so a configured worker never creates another three CPU workers underneath it.
+fn decode_planes<T: Send>(decode: impl Fn(usize) -> Result<T> + Sync) -> Result<Vec<T>> {
+    const SENSOR_PLANES: usize = 3;
+    if crate::background::speculative() {
+        return (0..SENSOR_PLANES).map(decode).collect();
+    }
+    std::thread::scope(|scope| {
+        let workers: [_; SENSOR_PLANES] = std::array::from_fn(|channel| {
+            let decode = &decode;
+            let scheduling = crate::background::context();
+            scope.spawn(move || crate::background::with_context(scheduling, || decode(channel)))
+        });
+        // Join every child, including after a failure, before leaving the scope.
+        workers
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| "sensor decoder worker panicked".into())
+                    .and_then(|result| result)
+            })
+            .into_iter()
+            .collect()
+    })
+}
+
 const MINIMUM_FILE_BYTES: u64 = 44; // Forty-byte base header and trailing directory pointer.
 const MAXIMUM_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 const BASE_HEADER_BYTES: usize = 40;
@@ -58,7 +84,7 @@ pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> 
     // original at once when the next selected photo needs the storage device.
     let mut limited = (&mut file).take(length + 1);
     loop {
-        crate::background::checkpoint();
+        crate::background::checkpoint_or_cancel()?;
         let before = data.len();
         limited
             .by_ref()
@@ -75,6 +101,7 @@ pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> 
     read_complete();
     let start = Instant::now();
     let mut source = decode(&data)?;
+    crate::background::checkpoint_or_cancel()?;
     // Parallel-plane timings overlap this total, so adding them would count
     // part of the same decode twice. Metadata parsing is included here too.
     let decode = Timing::elapsed("X3F decode wall", start);
@@ -356,33 +383,17 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
         start = start.checked_add(aligned).ok_or("plane offset overflow")?;
     }
     let start_time = Instant::now();
-    let planes = std::thread::scope(|scope| -> Result<Vec<_>> {
-        let workers: [_; 3] = std::array::from_fn(|channel| {
-            let table = &table;
-            let (input, seed) = inputs[channel];
-            let scheduling = crate::background::context();
-            scope.spawn(move || {
-                crate::background::run(scheduling, || -> Result<_> {
-                    let start = Instant::now();
-                    let pixels = table.decode(input, width, height, seed)?;
-                    Ok((
-                        pixels,
-                        Timing::elapsed(
-                            ["sensor plane R", "sensor plane G", "sensor plane B"][channel],
-                            start,
-                        ),
-                    ))
-                })
-            })
-        });
-        workers
-            .into_iter()
-            .map(|worker| {
-                worker
-                    .join()
-                    .map_err(|_| "sensor decoder worker panicked")?
-            })
-            .collect()
+    let planes = decode_planes(|channel| {
+        let (input, seed) = inputs[channel];
+        let start = Instant::now();
+        let pixels = table.decode(input, width, height, seed)?;
+        Ok((
+            pixels,
+            Timing::elapsed(
+                ["sensor plane R", "sensor plane G", "sensor plane B"][channel],
+                start,
+            ),
+        ))
     })?;
     let mut timings = vec![Timing::elapsed("sensor planes wall", start_time)];
     timings.extend(planes.iter().map(|(_, timing)| timing.clone()));
@@ -390,15 +401,25 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     let mut pixels = vec![0.; product(count, 3)?];
     // Disjoint contiguous triplets let the compiler vectorize this pass
     // without changing the channel-interleaving order.
-    for (((pixel, red), green), blue) in pixels
-        .as_chunks_mut::<3>()
-        .0
-        .iter_mut()
-        .zip(&planes[0].0)
-        .zip(&planes[1].0)
-        .zip(&planes[2].0)
+    // Keep the existing contiguous triplets while bounding speculative CPU work.
+    let samples_per_chunk = crate::background::IO_CHUNK_BYTES / std::mem::size_of::<f32>() / 3;
+    for (((chunk, red), green), blue) in pixels
+        .chunks_mut(samples_per_chunk * 3)
+        .zip(planes[0].0.chunks(samples_per_chunk))
+        .zip(planes[1].0.chunks(samples_per_chunk))
+        .zip(planes[2].0.chunks(samples_per_chunk))
     {
-        *pixel = [*red as f32, *green as f32, *blue as f32];
+        crate::background::checkpoint_or_cancel()?;
+        for (((pixel, red), green), blue) in chunk
+            .as_chunks_mut::<3>()
+            .0
+            .iter_mut()
+            .zip(red)
+            .zip(green)
+            .zip(blue)
+        {
+            *pixel = [*red as f32, *green as f32, *blue as f32];
+        }
     }
     timings.push(Timing::elapsed("sensor interleave", start_time));
     Ok((width, height, pixels, timings))
@@ -406,6 +427,25 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn speculative_planes_stay_on_the_photo_worker_while_active_planes_parallelize() {
+        let active =
+            super::decode_planes(|channel| Ok((channel, std::thread::current().id()))).unwrap();
+        let ids: std::collections::HashSet<_> = active.iter().map(|p| p.1).collect();
+        assert_eq!(ids.len(), 3);
+        let gate = std::sync::Arc::new(crate::background::Gate::default());
+        crate::background::interruptible(gate, || {
+            let worker = std::thread::current().id();
+            let speculative =
+                super::decode_planes(|channel| Ok((channel, std::thread::current().id()))).unwrap();
+            assert_eq!(
+                speculative.iter().map(|p| p.0).collect::<Vec<_>>(),
+                [0, 1, 2]
+            );
+            assert!(speculative.iter().all(|p| p.1 == worker));
+        });
+    }
+
     use super::*;
 
     #[test]

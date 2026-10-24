@@ -32,6 +32,17 @@ const SMART_TARGETS: &[&str] = &[
 ];
 
 const SCREENSHOT_TARGETS: &[&str] = &["preview", "readme"];
+const IMPORT_WIDE_BROWSER_WIDTH: f32 = 600.;
+const IMPORT_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "browse-settings",
+    "browse-processed",
+    "browse-processed-again",
+    "import-review",
+    "import-render-options",
+    "import-copied",
+];
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -203,7 +214,9 @@ impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_IMPORT").is_some() {
+                IMPORT_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
                 SMART_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_FAST").is_some() {
                 FAST_PREVIEW_TARGETS
@@ -511,6 +524,42 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "browse-settings" => {
+                    let destination = smoke.directory.join("processed");
+                    std::fs::create_dir_all(&destination).unwrap();
+                    self.preferences.processing_destination = Some(destination.clone());
+                    self.import.rescan(&mut self.browser, Some(&destination));
+                    self.preferences.browse_processing = Default::default();
+                    self.processing_open = true;
+                }
+                "browse-processed" | "browse-processed-again" => {
+                    self.processing_open = false;
+                    self.process();
+                }
+                "import-review" => {
+                    let destination = smoke.directory.join("imported");
+                    self.open(
+                        self.browser.root.clone().unwrap(),
+                        crate::preferences::FolderMode::Import,
+                    );
+                    self.preferences.processing_destination = Some(destination.clone());
+                    self.import.smoke_prepare(&destination, &mut self.browser);
+                }
+                "import-render-options" => {
+                    self.preferences.import_processing.copy_only = false;
+                    self.processing_open = true;
+                    let id = egui::Id::new("organizer");
+                    if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
+                        state.rect.max.x = state.rect.min.x + IMPORT_WIDE_BROWSER_WIDTH;
+                        ctx.data_mut(|data| data.insert_persisted(id, state));
+                    }
+                }
+                "import-copied" => {
+                    self.processing_open = false;
+                    self.preferences.import_processing.copy_only = true;
+                    self.sidecars.refresh(&self.settings);
+                    self.process();
+                }
                 "readme" => {
                     let recipe = screenshot_recipe();
                     assert_eq!(
@@ -813,6 +862,13 @@ impl App {
             };
             let ready =
                 ready && (smoke.targets != SCREENSHOT_TARGETS || self.browser.thumbnails_ready());
+            let ready = ready
+                && (smoke.targets != IMPORT_TARGETS
+                    || match smoke.targets[smoke.index] {
+                        "import-review" | "import-render-options" => self.import.smoke_ready(false),
+                        "import-copied" => self.import.smoke_ready(true),
+                        _ => true,
+                    });
             let ready = ready
                 && (smoke.targets != SMART_TARGETS
                     || match smoke.targets[smoke.index] {

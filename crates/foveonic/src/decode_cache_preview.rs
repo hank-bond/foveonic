@@ -210,7 +210,7 @@ pub(super) fn embedded(
     if read(&key.location(root), &key, settings).is_ok() {
         return Ok(());
     }
-    crate::background::checkpoint();
+    crate::background::checkpoint_or_cancel()?;
     let preview = crate::preview::read_full(path)?;
     // DP0's large JPEG omits Raw borders. Keep its correctly framed small
     // thumbnail until a photographic render can supply those missing pixels.
@@ -221,7 +221,7 @@ pub(super) fn embedded(
     {
         return Ok(());
     }
-    crate::background::checkpoint();
+    crate::background::checkpoint_or_cancel()?;
     let image = image::RgbImage::from_raw(preview.extent[0], preview.extent[1], preview.rgb)
         .ok_or("invalid preview samples")?;
     let image = image::DynamicImage::ImageRgb8(image)
@@ -269,7 +269,7 @@ fn write_checked(
     if !current() || !settings.permits(write.header.family) {
         return Ok(());
     }
-    crate::background::checkpoint();
+    crate::background::checkpoint_or_cancel()?;
     if Key::read(&write.path)? != write.header.key {
         return Ok(());
     }
@@ -326,7 +326,7 @@ fn write_checked(
         file.write_all(&header)?;
         file.write_all(&jpeg)?;
         drop(file);
-        crate::background::checkpoint();
+        crate::background::checkpoint_or_cancel()?;
         if current() && Key::read(&write.path)? == write.header.key {
             fs::rename(&temporary, destination)?;
         }

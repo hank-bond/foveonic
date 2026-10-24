@@ -1340,7 +1340,7 @@ impl Engine {
             }
             // Queuing a whole outdated render would delay both drawing and newer edits.
             // Finish submitted work off-thread, then check for newer work between stages.
-            // Batch rendering has no interactive queue to protect and can stay asynchronous.
+            // Background executors also yield at GPU submission boundaries.
             if execution.cancel.is_some() {
                 gpu.device.poll(wgpu::Maintain::Wait);
             }

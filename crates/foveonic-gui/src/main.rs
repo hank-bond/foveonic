@@ -2,12 +2,15 @@
 
 mod advanced;
 mod application_settings;
+mod batch;
 mod browser;
 mod capture;
 mod controls;
+mod export;
 mod help;
 mod help_examples;
 mod icon;
+mod import_review;
 mod information;
 mod inspect;
 mod metadata;
@@ -16,6 +19,7 @@ mod navigator;
 mod preferences;
 mod preview_image;
 mod previews;
+mod processing;
 mod progress;
 mod scopes;
 mod sections;
@@ -33,16 +37,24 @@ use foveonic::{
     render::{Engine, Settings},
     source::Metadata,
 };
-use preferences::{Organizer, Section};
+use preferences::{FolderMode, Section};
 use std::{path::PathBuf, sync::Arc};
 
 // Keep folder readiness responsive during prefetch without polling idle folders at frame rate.
 const CACHE_ACTIVE_POLL: std::time::Duration = std::time::Duration::from_millis(150);
 const CACHE_IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Opening starts at selection, including recipe reads before worker submission.
+struct Opening {
+    _priority: foveonic::decode_cache::Activity,
+    began: std::time::Instant,
+}
+
 struct App {
+    import: import_review::Review,
     settings_open: bool,
-    selection_activity: Option<foveonic::decode_cache::Activity>,
+    processing_open: bool,
+    opening: Option<Opening>,
     browser: browser::Browser,
     worker: worker::Worker,
     capture: capture::Loader,
@@ -109,14 +121,19 @@ impl App {
         if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
             preferences.preview_quality = preferences::PreviewMode::Smart;
         }
-        let path = preferences.startup_path(path);
+        let folder = preferences.startup_folder(path);
+        let batch_engine = engine.executor();
         let worker = worker::Worker::new(engine, cc.egui_ctx.clone());
+        let import =
+            import_review::Review::new(batch_engine, worker.cache.clone(), cc.egui_ctx.clone());
         let previews =
             previews::Previews::new(rs.clone(), cc.egui_ctx.clone(), worker.cache.clone());
         let browser = browser::Browser::with_cache(cc.egui_ctx.clone(), Some(worker.cache.clone()));
         let mut app = Self {
+            import,
             settings_open: false,
-            selection_activity: None,
+            processing_open: false,
+            opening: None,
             browser,
             worker,
             previews,
@@ -144,7 +161,7 @@ impl App {
             busy: false,
             exporting: false,
             preferences,
-            status: "Open a folder or Merrill X3F".into(),
+            status: "Open a folder of X3F photographs".into(),
             status_error: false,
             srgb_target: rs.target_format.is_srgb(),
             render_state: rs.clone(),
@@ -155,15 +172,19 @@ impl App {
             .cache
             .configure(app.preferences.decode_cache.clone());
         app.viewport.zoom_snap = app.preferences.zoom_snap;
-        if let Some(path) = path {
-            app.open(path);
+        if let Some((path, mode)) = folder {
+            app.open(path, mode);
         }
         Ok(app)
     }
-    fn open(&mut self, path: PathBuf) {
+    fn open(&mut self, path: PathBuf, mode: FolderMode) {
         self.status_error = false;
         match self.browser.open(&path) {
             Ok(()) => {
+                // Commit the policy only after the folder can be opened, and
+                // before any of its photographs can load or queue edits.
+                self.browser.import_mode = mode == FolderMode::Import;
+                self.sidecars.set_memory_only(self.browser.import_mode);
                 let folder = if path.is_dir() {
                     path.as_path()
                 } else {
@@ -171,7 +192,7 @@ impl App {
                         .filter(|p| !p.as_os_str().is_empty())
                         .unwrap_or(std::path::Path::new("."))
                 };
-                self.preferences.remember_folder(folder);
+                self.preferences.remember_folder(folder, mode);
                 let selected = if path.is_file() {
                     Some(path)
                 } else {
@@ -180,29 +201,17 @@ impl App {
                 if let Some(path) = selected {
                     self.select(path);
                 } else {
-                    self.revision += 1;
-                    self.selected = None;
-                    self.sidecars.clear();
-                    self.capture.select(None);
-                    self.metadata = None;
-                    self.frame = None;
-                    self.detail = None;
-                    self.smart.reset();
-                    self.scope_images = None;
-                    self.scope_snapshot = None;
-                    self.busy = false;
-                    self.worker.clear();
-                    self.viewport.reset();
-                    viewport::clear(&self.render_state);
+                    self.clear_selection();
                     self.status = "No X3F files in this folder".into();
                     self.status_error = true;
                 }
                 self.worker
                     .cache
                     .prefetch_folder(self.browser.files.clone());
-                if let Some(selected) = &self.selected {
-                    self.worker.cache.prioritize(selected);
-                }
+                self.import.rescan(
+                    &mut self.browser,
+                    self.preferences.processing_destination.as_deref(),
+                );
             }
             Err(e) => {
                 self.status = format!("Cannot open {}: {e}", path.display());
@@ -210,15 +219,37 @@ impl App {
             }
         }
     }
+    fn clear_selection(&mut self) {
+        self.revision += 1;
+        self.selected = None;
+        self.opening = None;
+        self.sidecars.clear();
+        self.capture.select(None);
+        self.metadata = None;
+        self.frame = None;
+        self.detail = None;
+        self.smart.reset();
+        self.scope_images = None;
+        self.scope_snapshot = None;
+        self.scope_key = None;
+        self.busy = false;
+        self.worker.clear();
+        self.viewport.reset();
+        viewport::clear(&self.render_state);
+    }
     fn select(&mut self, path: PathBuf) {
-        self.selection_activity = Some(self.worker.cache.foreground());
-        self.worker.cache.prioritize(&path);
+        let began = std::time::Instant::now();
+        self.opening = Some(Opening {
+            _priority: self.worker.cache.foreground(),
+            began,
+        });
         self.capture.select(Some(path.clone()));
         self.sidecars.select(path.clone());
         self.selected = Some(path);
         self.settings = Settings::new("", "");
         self.revision += 1;
         self.worker.clear();
+        self.worker.progress.begin(self.revision, began);
         self.busy = false;
         self.status = "Loading editing recipe…".into();
         self.metadata = None;
@@ -231,17 +262,17 @@ impl App {
         self.viewport.reset();
         viewport::clear(&self.render_state);
     }
-    fn submit(&mut self, export: Option<worker::Export>) {
+    fn submit(&mut self, export: Option<export::Export>) {
         self.detail = None;
         self.smart.reset();
         self.submit_request(export, None);
     }
-    fn submit_request(&mut self, export: Option<worker::Export>, region: Option<[u32; 4]>) {
+    fn submit_request(&mut self, export: Option<export::Export>, region: Option<[u32; 4]>) {
         self.submit_with_quality(export, region, self.preferences.preview_quality);
     }
     fn submit_with_quality(
         &mut self,
-        export: Option<worker::Export>,
+        export: Option<export::Export>,
         region: Option<[u32; 4]>,
         quality: preferences::PreviewMode,
     ) {
@@ -254,7 +285,7 @@ impl App {
             self.busy = true;
             self.exporting = export.is_some();
             self.status = if let Some(export) = &export {
-                format!("Exporting {}…", export.format.label())
+                format!("Processing {}…", export.format.label())
             } else if let Some(frame) = &self.frame {
                 format!(
                     "Updating {}; displaying {} · {}",
@@ -268,7 +299,7 @@ impl App {
             timing::requested(self.revision, path, &self.output, &self.settings);
             let mut requested = self.settings.clone();
             requested.preview_region = region;
-            self.worker.submit(worker::Request {
+            let request = worker::Request {
                 revision: self.revision,
                 path: path.clone(),
                 settings: requested,
@@ -282,8 +313,13 @@ impl App {
                     )
                     .is_some(),
                 export,
-            });
-            self.selection_activity = None;
+            };
+            if let Some(opening) = &self.opening {
+                self.worker.submit_at(request, opening.began);
+            } else {
+                self.worker.submit(request);
+            }
+            self.opening = None;
         }
     }
     fn receive(&mut self, ctx: &egui::Context) {
@@ -422,7 +458,7 @@ impl App {
                 }
                 Ok(None) => {
                     self.status = match reply.exported {
-                        Some(format) => format!("{} exported", format.label()),
+                        Some(format) => format!("{} saved", format.label()),
                         None => "Request superseded".into(),
                     };
                     if reply.exported.is_some() {
@@ -499,45 +535,84 @@ impl App {
         });
         self.scope_key = Some(key);
     }
+    fn process(&mut self) {
+        // Freeze edits before either executor receives the job.
+        self.sidecars.refresh(&self.settings);
+        if self.browser.import_mode {
+            self.import.submit(
+                &self.browser,
+                &self.sidecars,
+                &self.preferences.import_processing,
+            );
+        } else if let (Some(source), Some(destination)) = (
+            &self.selected,
+            self.preferences.processing_destination.as_deref(),
+        ) {
+            let options = &self.preferences.browse_processing;
+            match export::next_path(source, destination, options.format) {
+                Ok(path) => self.submit(Some(export::Export {
+                    path,
+                    format: options.format,
+                    tiff_color_space: options.tiff_color_space,
+                })),
+                Err(error) => {
+                    self.status = error.to_string();
+                    self.status_error = true;
+                }
+            }
+        }
+    }
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         toolbar::container(ui, |ui| {
-            ui.horizontal(|ui| {
+            toolbar::row(ui, |ui| {
                 let export_ready = self.sidecars.ready()
                     && self.selected.is_some()
                     && toolbar::can_export(&self.settings, self.metadata.as_deref());
+                let process_ready = if self.browser.import_mode {
+                    self.import.ready(&self.browser)
+                } else {
+                    export_ready && self.preferences.processing_destination.is_some()
+                };
                 let actions = toolbar::show(
                     ui,
-                    !self.exporting,
-                    export_ready,
-                    &mut self.settings.tiff_color_space,
+                    toolbar::State {
+                        enabled: !self.exporting,
+                        process_ready,
+                        importing: self.browser.import_mode,
+                        destination: self.preferences.processing_destination.as_deref(),
+                    },
                 );
-                if actions.open_folder {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        self.open(path);
+                if let Some(mode) = actions.open_folder {
+                    let title = match mode {
+                        FolderMode::Browse => "Browse folder",
+                        FolderMode::Import => "Import from folder",
+                    };
+                    let mut dialog = rfd::FileDialog::new().set_title(title);
+                    if let Some(folder) = &self.preferences.last_folder {
+                        dialog = dialog.set_directory(folder);
+                    }
+                    if let Some(path) = dialog.pick_folder() {
+                        self.open(path, mode);
                     }
                 }
-                if actions.open_file {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("X3F", &["x3f"])
-                        .pick_file()
-                    {
-                        self.open(path);
+                if actions.destination {
+                    let mut dialog = rfd::FileDialog::new().set_title("Processing destination");
+                    if let Some(path) = self.preferences.processing_destination.as_deref() {
+                        dialog = dialog.set_directory(path);
+                    }
+                    if let Some(path) = dialog.pick_folder() {
+                        self.preferences.processing_destination = Some(path);
+                        self.import.rescan(
+                            &mut self.browser,
+                            self.preferences.processing_destination.as_deref(),
+                        );
                     }
                 }
-                if let Some(format) = actions.export {
-                    let name = self
-                        .selected
-                        .as_ref()
-                        .and_then(|p| p.file_stem())
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "render".into());
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter(format.label(), &[format.extension()])
-                        .set_file_name(format!("{name}.{}", format.extension()))
-                        .save_file()
-                    {
-                        self.submit(Some(worker::Export { path, format }));
-                    }
+                if actions.settings {
+                    self.processing_open = true;
+                }
+                if actions.process {
+                    self.process();
                 }
                 progress::show(
                     ui,
@@ -558,7 +633,23 @@ impl App {
                     .on_hover_text(&self.status);
                 }
             });
+            self.sidecars.refresh(&self.settings);
+            self.import.show_status(ui);
         });
+        processing::show(
+            ui.ctx(),
+            &mut self.processing_open,
+            if self.browser.import_mode {
+                FolderMode::Import
+            } else {
+                FolderMode::Browse
+            },
+            if self.browser.import_mode {
+                &mut self.preferences.import_processing
+            } else {
+                &mut self.preferences.browse_processing
+            },
+        );
         if let Some(warning) = self.sidecars.warning() {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(egui::Color32::YELLOW, warning);
@@ -624,6 +715,7 @@ impl App {
             .id_salt("tool sections")
             .show(ui, |ui| {
                 for section in self.preferences.sections.clone() {
+                    ui.add_space(sections::SECTION_GAP);
                     ui.push_id(section.title(), |ui| {
                         let collapsed = self.preferences.collapsed.contains(&section);
                         let mut response = sections::header(ui, section, collapsed);
@@ -642,7 +734,6 @@ impl App {
                             movement = Some((source, section, after));
                         }
                     });
-                    ui.add_space(7.);
                 }
             });
         if let Some((source, target, after)) = movement {
@@ -825,7 +916,11 @@ impl App {
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.weak("Open a folder or Merrill X3F");
+                        ui.weak(if self.browser.files.is_empty() {
+                            "Open a folder of X3F photographs"
+                        } else {
+                            "No visible photographs"
+                        });
                     });
                 }
             },
@@ -850,6 +945,10 @@ impl App {
     }
 }
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.browser.capture_shortcuts(ctx, input, !self.exporting);
+    }
+
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.preferences.zoom_snap = self.viewport.zoom_snap;
         self.preferences.save(storage);
@@ -869,12 +968,13 @@ impl eframe::App for App {
             );
         }
         self.capture.receive();
+        self.import.update(&mut self.browser);
         let cache_status = self.worker.cache.status();
         self.browser.decode_states = cache_status.files;
         self.browser.cache_enabled =
             self.preferences.decode_cache.enabled && self.preferences.decode_cache.max_bytes > 0;
         if self.preferences.decode_cache.enabled && !self.browser.files.is_empty() {
-            ctx.request_repaint_after(if cache_status.prefetching.is_some() {
+            ctx.request_repaint_after(if !cache_status.prefetching.is_empty() {
                 CACHE_ACTIVE_POLL
             } else {
                 CACHE_IDLE_POLL
@@ -937,27 +1037,14 @@ impl eframe::App for App {
             .width_range(organizer_minimum..=organizer_limit)
             .resizable(true)
             .show(ctx, |ui| {
-                widgets::control_row(ui, |ui| {
-                    ui.label(format!("{} files", self.browser.files.len()));
-                    widgets::selectable_value(
-                        ui,
-                        &mut self.preferences.organizer,
-                        Organizer::Icons,
-                        "Icons",
-                    );
-                    widgets::selectable_value(
-                        ui,
-                        &mut self.preferences.organizer,
-                        Organizer::List,
-                        "List",
-                    );
-                });
+                let browser_focus = ui.make_persistent_id("organizer focus");
+                self.browser.header(
+                    ui,
+                    &mut self.preferences.organizer,
+                    !self.exporting,
+                    browser_focus,
+                );
                 ui.separator();
-                if let Some(path) = &self.selected {
-                    if let Some(folder) = path.parent().and_then(|p| p.file_name()) {
-                        ui.add(egui::Label::new(folder.to_string_lossy()).truncate());
-                    }
-                }
                 ui.add_enabled_ui(!self.exporting, |ui| {
                     select = self.browser.organizer(
                         ui,
@@ -986,7 +1073,11 @@ impl eframe::App for App {
         {
             self.sidecars.edited(&self.settings);
         }
-        if let Some(path) = select {
+        if std::mem::take(&mut self.browser.clear_selection) {
+            self.clear_selection();
+            self.status = "No visible photographs".into();
+            self.status_error = false;
+        } else if let Some(path) = select {
             self.select(path);
         } else if changed && !self.exporting {
             self.submit(None);

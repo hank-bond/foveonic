@@ -1,6 +1,9 @@
 //! Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
-use crate::preferences::PreviewMode;
+use crate::{
+    export::{self, resolve_camera_settings, Export, ExportFormat},
+    preferences::PreviewMode,
+};
 use eframe::egui;
 #[cfg(test)]
 use foveonic::source::Source;
@@ -16,30 +19,6 @@ use std::{
     sync::{mpsc, Arc, Condvar, Mutex},
     thread,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExportFormat {
-    Tiff,
-    Dng,
-}
-impl ExportFormat {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Tiff => "TIFF",
-            Self::Dng => "DNG",
-        }
-    }
-    pub fn extension(self) -> &'static str {
-        match self {
-            Self::Tiff => "tiff",
-            Self::Dng => "dng",
-        }
-    }
-}
-pub struct Export {
-    pub path: PathBuf,
-    pub format: ExportFormat,
-}
 
 pub struct Request {
     pub revision: u64,
@@ -240,11 +219,11 @@ impl Worker {
                     if request.preview_quality != PreviewMode::Smart || request.export.is_some() || request.comparison || request.output != "final" || !settings.fast_preview_available(session.metadata()) {
                         settings.preview_region = None;
                     }
-                    if let Some(export) = request.export.as_ref().filter(|e| e.format == ExportFormat::Dng) {
+                    if let Some(export) = request.export.as_ref() {
                         let mut profile=Profile::new(crate::timing::mode());
                         let before=crate::timing::enabled().then(||engine.gpu_activity());
-                        foveonic::dng::write_source(&engine,session.source(),&settings,&export.path,&mut profile)?;
-                        if let Some(before)=before {crate::timing::emit("export",serde_json::json!({"revision":request.revision,"source":request.path,"destination":export.path,"format":"dng","settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
+                        export::write(&engine, session, &settings, export, &mut profile, |stage| reporter.rendered(stage))?;
+                        if let Some(before)=before {crate::timing::emit("export",serde_json::json!({"revision":request.revision,"source":request.path,"destination":export.path,"format":export.format.extension(),"settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
                         reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
                         return Ok(None);
                     }
@@ -302,13 +281,6 @@ impl Worker {
                                 .into(),
                         );
                     };
-                    if let Some(export)=&request.export{
-                        let path=&export.path;
-                        let before=crate::timing::enabled().then(||engine.gpu_activity());
-                        engine.write_tiff(image,path,&mut profile)?;
-                        if let Some(before)=before{crate::timing::emit("export",serde_json::json!({"revision":request.revision,"source":request.path,"destination":path,"settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
-                        return Ok(None);
-                    }
                     if cancel(){return Ok(None);}
                     let texture = {
                         let _span = crate::timing::Span::new(request.revision, "view_prepare_host");
@@ -390,7 +362,10 @@ impl Worker {
         wake.notify_one();
     }
     pub fn submit(&self, request: Request) {
-        let queued_at = std::time::Instant::now();
+        self.submit_at(request, std::time::Instant::now());
+    }
+    /// A newly opened photo includes recipe loading before it reaches this queue.
+    pub fn submit_at(&self, request: Request, queued_at: std::time::Instant) {
         self.progress.begin(request.revision, queued_at);
         let (lock, wake) = &*self.pending;
         let mut state = lock.lock().unwrap();
@@ -458,43 +433,6 @@ fn analyze_scopes(
     }
     context.request_repaint();
     true
-}
-
-/// Camera defaults fill missing choices only. Otherwise loading metadata
-/// could overwrite a launch override or an edit made while the photo was opening.
-fn resolve_camera_settings(settings: &mut Settings, metadata: &Metadata) -> Vec<String> {
-    let mut errors = Vec::new();
-    let capabilities = foveonic::render::ControlCapabilities::from_metadata(metadata).ok();
-    let color_required =
-        capabilities.map_or(!settings.is_monochrome(), |c| c.color_mode_active(settings));
-    let wb_required = capabilities.is_none_or(|c| c.white_balance_active(settings));
-    for (value, recorded, required) in [
-        (
-            &mut settings.white_balance,
-            capabilities.map_or_else(
-                || metadata.recorded_white_balance(),
-                |c| c.default_white_balance(metadata),
-            ),
-            wb_required,
-        ),
-        (
-            &mut settings.color_mode,
-            capabilities.map_or_else(
-                || metadata.recorded_color_mode(),
-                |c| c.default_color_mode(metadata),
-            ),
-            color_required,
-        ),
-    ] {
-        if value.is_empty() {
-            match recorded {
-                Ok(name) => *value = name,
-                Err(error) if required => errors.push(error.to_string()),
-                Err(_) => (),
-            }
-        }
-    }
-    errors
 }
 
 #[cfg(test)]
@@ -566,6 +504,7 @@ mod tests {
                 export: Some(super::Export {
                     path: destination.clone(),
                     format: super::ExportFormat::Dng,
+                    tiff_color_space: settings.tiff_color_space,
                 }),
             });
             let reply = loop {
@@ -1147,6 +1086,24 @@ mod tests {
                 .revision,
             99
         );
+        let opening_began = std::time::Instant::now() - std::time::Duration::from_millis(250);
+        worker.submit_at(
+            super::Request {
+                preview_quality: crate::preferences::PreviewMode::Full,
+                revision: 100,
+                path: "test.x3f".into(),
+                settings: foveonic::render::Settings::new("Sunlight", "Standard"),
+                output: "final".into(),
+                comparison: false,
+                export: None,
+            },
+            opening_began,
+        );
+        assert_eq!(
+            worker.pending.0.lock().unwrap().queued_at,
+            Some(opening_began)
+        );
+        assert!(worker.progress.snapshot().unwrap().milliseconds() >= 250.);
         worker.clear();
         let state = worker.pending.0.lock().unwrap();
         assert!(state.request.is_none());
@@ -1226,6 +1183,7 @@ mod preview_tests {
             r.export = Some(Export {
                 path: "test.output".into(),
                 format,
+                tiff_color_space: None,
             });
             assert_eq!(
                 effective_preview_quality(&r, &r.settings, &m),
@@ -1317,6 +1275,7 @@ mod preview_tests {
             let destination = directory.join(format!("export-{index}.{extension}"));
             let mut export_settings = settings.clone();
             export_settings.preview_region = Some([100, 100, 400, 300]);
+            export_settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::ProPhotoRgb);
             worker.submit(Request {
                 revision: index as u64 + 1,
                 path: path.clone(),
@@ -1327,11 +1286,16 @@ mod preview_tests {
                 export: Some(Export {
                     path: destination.clone(),
                     format,
+                    tiff_color_space: settings.tiff_color_space,
                 }),
             });
             let exported = receive();
             assert!(exported.result.unwrap().is_none());
             assert_eq!(exported.exported, Some(format));
+            assert_eq!(
+                exported.settings.tiff_color_space,
+                Some(foveonic::render::TiffColorSpace::ProPhotoRgb)
+            );
             assert!(
                 std::fs::read(directory.join(format!("expected.{extension}"))).unwrap()
                     == std::fs::read(destination).unwrap(),

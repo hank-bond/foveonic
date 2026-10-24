@@ -51,6 +51,33 @@ fn failure(session: &mut Session) {
 }
 
 #[test]
+fn import_edits_survive_photo_switches_without_writes_and_are_discarded_on_exit() {
+    let directory = Directory::new();
+    let a = directory.input("a.x3f");
+    let b = directory.input("b.x3f");
+    let saved = Settings::new("Shade", "Vivid");
+    sidecar::save(&a, &saved).unwrap();
+    let before = fs::read(sidecar::path(&a)).unwrap();
+    let mut session = Session::new(egui::Context::default(), true);
+    session.set_memory_only(true);
+    session.select(a.clone());
+    let mut edited = receive(&mut session);
+    edited.exposure = 2.;
+    session.edited(&edited);
+    session.select(b.clone());
+    receive(&mut session);
+    session.select(a.clone());
+    assert_eq!(receive(&mut session), edited);
+    assert_eq!(session.review_settings(&a), Some(&edited));
+    session.set_memory_only(false);
+    session.select(a.clone());
+    assert_eq!(receive(&mut session), saved);
+    drop(session);
+    assert_eq!(fs::read(sidecar::path(&a)).unwrap(), before);
+    assert!(!sidecar::path(&b).exists());
+}
+
+#[test]
 fn restore_per_photo_choices_and_do_not_write_just_by_viewing() {
     let directory = Directory::new();
     let a = directory.input("a.x3f");

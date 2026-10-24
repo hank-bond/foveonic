@@ -47,6 +47,25 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn decode_thread_budget_restores_legacy_settings_and_clamps_to_available_cores() {
+    let legacy: Settings =
+        serde_json::from_str(r#"{"enabled":true,"max_bytes":10000000000}"#).unwrap();
+    assert_eq!(legacy.decode_threads, available_decode_threads().min(3));
+    for (requested, expected) in [(0, 1), (usize::MAX, available_decode_threads())] {
+        let fixture = Fixture::new();
+        let cache = Cache::at(fixture.root.join("cache"));
+        cache.configure(Settings {
+            decode_threads: requested,
+            ..Settings::default()
+        });
+        assert_eq!(
+            cache.control.lock().unwrap().settings.decode_threads,
+            expected
+        );
+    }
+}
+
+#[test]
 fn defaults_enable_only_merrill_and_quattro_with_ten_decimal_gigabytes() {
     let settings = Settings::default();
     assert_eq!(settings.max_bytes, 10_000_000_000);
@@ -353,25 +372,29 @@ fn original_folder_prefetch_waits_for_foreground_and_skips_disabled_families() {
 }
 
 #[test]
-fn selecting_a_file_prioritizes_remaining_neighbors_without_repeating_the_pass() {
+fn folder_prefetch_keeps_browser_order_for_one_pass() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("cache"));
     let _foreground = cache.foreground();
-    cache.prefetch_folder(["a", "b", "c", "d", "e"].map(PathBuf::from).into());
-    cache.prioritize(Path::new("c"));
+    let paths = [
+        "card/a.x3f",
+        "card/DCIM/100SIGMA/a.x3f",
+        "card/DCIM/101SIGMA/a.x3f",
+    ]
+    .map(PathBuf::from)
+    .to_vec();
+    cache.prefetch_folder(paths.clone());
     let mut state = cache.control.lock().unwrap();
     assert_eq!(
-        state
-            .queue
-            .iter()
-            .map(|p| p.to_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["c", "d", "b", "e", "a"]
+        state.queue.iter().collect::<Vec<_>>(),
+        paths.iter().collect::<Vec<_>>()
     );
-    state.queue.pop_front();
-    drop(state);
-    cache.prioritize(Path::new("d"));
-    assert_eq!(cache.control.lock().unwrap().queue.len(), 4);
+    assert_eq!(state.queue.pop_front(), Some(paths[0].clone()));
+    assert_eq!(
+        state.queue.iter().collect::<Vec<_>>(),
+        paths[1..].iter().collect::<Vec<_>>()
+    );
+    assert_eq!(state.watched, paths);
 }
 
 #[test]
@@ -422,4 +445,117 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
         entry_state(&root, &fixture.source, &policy, false, &mut families),
         EntryState::Unavailable
     );
+}
+
+#[test]
+#[ignore = "requires QUATTRO_X3F"]
+fn foreground_open_interrupts_inflight_prefetch_then_resumes_browser_order() {
+    let original = PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
+    let fixture = Fixture::new();
+    let first = fixture.root.join("a.x3f");
+    let second = fixture.root.join("b.x3f");
+    fs::hard_link(&original, &first).unwrap();
+    fs::hard_link(&original, &second).unwrap();
+    let cache = Cache::at(fixture.root.join("cache"));
+    cache.configure(Settings::default());
+    cache.prefetch_folder(vec![first.clone(), second.clone()]);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !cache.status().prefetching.contains(&first) {
+        assert!(Instant::now() < deadline, "prefetch did not start");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let cancelling = Instant::now();
+    let active = cache.foreground();
+    while !cache.status().prefetching.is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "prefetch did not unwind during foreground work"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    eprintln!(
+        "prefetch cancellation acknowledged: {:.1} ms",
+        cancelling.elapsed().as_secs_f64() * 1000.
+    );
+    {
+        let state = cache.control.lock().unwrap();
+        assert_eq!(
+            state.queue.iter().cloned().collect::<Vec<_>>(),
+            [first.clone(), second.clone()]
+        );
+    }
+    let began = Instant::now();
+    let selected = cache.open(&second, |_| {}).unwrap();
+    eprintln!(
+        "foreground source open during interrupted prefetch: {:.1} ms",
+        began.elapsed().as_secs_f64() * 1000.
+    );
+    assert!(!cache.gate.idle());
+    assert!(!ready(&cache.root, &first, &Settings::default()));
+    drop(active);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !cache.status().ready.contains(&first) {
+        assert!(
+            Instant::now() < deadline,
+            "prefetch did not resume: {:?}",
+            cache.status()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let resumed = cache.open(&first, |_| {}).unwrap();
+    assert_eq!(
+        bytemuck::cast_slice::<f32, u8>(selected.samples()),
+        bytemuck::cast_slice::<f32, u8>(resumed.samples())
+    );
+}
+
+#[test]
+#[ignore = "requires QUATTRO_X3F"]
+fn parallel_prefetch_throughput_preserves_exact_samples_and_disk_budget() {
+    let original = PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
+    let fixture = Fixture::new();
+    const PHOTOS: usize = 6;
+    let paths: Vec<_> = (0..PHOTOS)
+        .map(|i| {
+            let path = fixture.root.join(format!("{i}.x3f"));
+            fs::hard_link(&original, &path).unwrap();
+            path
+        })
+        .collect();
+    let expected = Source::open(&original).unwrap();
+    let mut budgets = vec![1, available_decode_threads().min(3)];
+    budgets.dedup();
+    for threads in budgets {
+        let cache = Cache::at(fixture.root.join(format!("cache-{threads}")));
+        let settings = Settings {
+            decode_threads: threads,
+            ..Settings::default()
+        };
+        cache.configure(settings.clone());
+        let began = Instant::now();
+        cache.prefetch_folder(paths.clone());
+        while cache.status().ready.len() != PHOTOS {
+            assert!(
+                began.elapsed() < Duration::from_secs(60),
+                "prefetch stalled: {:?}",
+                cache.status()
+            );
+            assert!(cache.status().prefetching.len() <= threads);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        eprintln!(
+            "{PHOTOS} Quattro photos, {threads} background decode threads: {:.1} ms",
+            began.elapsed().as_secs_f64() * 1000.
+        );
+        assert!(cache.status().bytes <= settings.max_bytes);
+        let active = cache.foreground();
+        for path in &paths {
+            let restored = cache.open_cached(path, |_| {}).unwrap();
+            assert_eq!(
+                bytemuck::cast_slice::<f32, u8>(expected.samples()),
+                bytemuck::cast_slice::<f32, u8>(restored.samples())
+            );
+        }
+        drop(active);
+    }
 }

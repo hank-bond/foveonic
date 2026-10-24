@@ -3,7 +3,7 @@
 use eframe::egui;
 
 const RADIUS: u8 = 4;
-const BUTTON_GROUP_MARGIN: i8 = 4;
+pub const BUTTON_GROUP_MARGIN: i8 = 4;
 pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);
 
 /// Give related controls a shared padded background without changing their spacing.
@@ -179,11 +179,15 @@ pub fn dropdown<R>(
     combo: egui::ComboBox,
     menu_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
-    // Keep the parent UI so existing dropdown and popup IDs remain stable.
-    let previous = ui.spacing().button_padding;
+    // ComboBox creates an inner horizontal row using interact_size.y before
+    // measuring its text. Reserve the padded height so that row cannot start
+    // lower than adjacent buttons. Keep the parent UI and popup IDs stable.
+    let previous = ui.spacing().clone();
     ui.spacing_mut().button_padding = button_padding(ui);
+    ui.spacing_mut().interact_size.y = control_height(ui);
     let response = combo.show_ui(ui, menu_contents);
-    ui.spacing_mut().button_padding = previous;
+    ui.spacing_mut().button_padding = previous.button_padding;
+    ui.spacing_mut().interact_size = previous.interact_size;
     response
 }
 
@@ -489,8 +493,9 @@ mod tests {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.style_mut().override_font_id = Some(egui::FontId::proportional(em));
                         ui.add_enabled_ui(enabled, |ui| {
-                            ui.horizontal(|ui| {
+                            centered_control_row(ui, |ui| {
                                 let spacing = ui.spacing().clone();
+                                let before = button(ui, "Before", false, egui::Vec2::ZERO).rect;
                                 let id = ui.make_persistent_id(egui::Id::new("padded dropdown"));
                                 let response = dropdown(
                                     ui,
@@ -505,11 +510,17 @@ mod tests {
                                 let next = button(ui, "Next", false, egui::Vec2::ZERO).rect;
                                 assert!((next.height() - rect.height()).abs() < 1.);
                                 assert!(
+                                    (before.center().y - rect.center().y).abs() < 0.5,
+                                    "before={before:?} dropdown={rect:?} next={next:?}"
+                                );
+                                assert!((next.center().y - rect.center().y).abs() < 0.5);
+                                assert!(
                                     (next.left() - rect.right() - spacing.item_spacing.x).abs()
                                         < 0.01
                                 );
                                 assert_eq!(ui.spacing().button_padding, spacing.button_padding);
                                 assert_eq!(ui.spacing().item_spacing, spacing.item_spacing);
+                                assert_eq!(ui.spacing().interact_size, spacing.interact_size);
                             });
                         });
                     });

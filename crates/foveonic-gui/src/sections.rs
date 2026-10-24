@@ -2,6 +2,8 @@
 use crate::preferences::Section;
 use eframe::egui;
 
+pub const SECTION_GAP: f32 = 7.;
+
 pub fn disclosure_icon(ui: &egui::Ui, center: egui::Pos2, collapsed: bool, color: egui::Color32) {
     let points = if collapsed {
         vec![
@@ -98,6 +100,7 @@ mod tests {
                     .exact_width(300.)
                     .show(ctx, |ui| {
                         for section in prefs.sections.clone() {
+                            ui.add_space(SECTION_GAP);
                             ui.push_id(section.title(), |ui| {
                                 let response =
                                     header(ui, section, prefs.collapsed.contains(&section));
@@ -109,7 +112,6 @@ mod tests {
                                     movement = Some((source, section, after));
                                 }
                             });
-                            ui.add_space(7.);
                         }
                     });
             },

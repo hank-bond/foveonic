@@ -1130,6 +1130,7 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "tempfile",
  "tiff 0.10.3",
  "wgpu",
 ]
@@ -1146,6 +1147,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
