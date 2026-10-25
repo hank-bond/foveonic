@@ -119,10 +119,28 @@ fn complete_selection_uses_only_local_cache_when_the_original_and_sidecar_are_un
     let expected_identity = cache.import_identity(&fixture.source).unwrap();
     let destination = fixture.root.join("imported.x3f");
     assert!(cache
-        .copy_original(&fixture.source, &destination, &expected_identity)
+        .copy_original(
+            &fixture.source,
+            &destination,
+            &expected_identity,
+            crate::importing::ConflictPolicy::Rename
+        )
         .unwrap());
     assert_eq!(
-        fs::read(destination).unwrap(),
+        fs::read(&destination).unwrap(),
+        fs::read(fixture.root.join("removed.x3f")).unwrap()
+    );
+    fs::write(&destination, b"previous imported original").unwrap();
+    assert!(cache
+        .copy_original(
+            &fixture.source,
+            &destination,
+            &expected_identity,
+            crate::importing::ConflictPolicy::Overwrite
+        )
+        .unwrap());
+    assert_eq!(
+        fs::read(&destination).unwrap(),
         fs::read(fixture.root.join("removed.x3f")).unwrap()
     );
     let source = cache.open(&fixture.source, |_| {}).unwrap();
@@ -144,7 +162,12 @@ fn complete_selection_uses_only_local_cache_when_the_original_and_sidecar_are_un
     fs::write(&cached_original, &damaged).unwrap();
     let rejected = fixture.root.join("rejected.x3f");
     assert!(!cache
-        .copy_original(&fixture.source, &rejected, &expected_identity)
+        .copy_original(
+            &fixture.source,
+            &rejected,
+            &expected_identity,
+            crate::importing::ConflictPolicy::Rename
+        )
         .unwrap());
     assert!(
         !rejected.exists(),

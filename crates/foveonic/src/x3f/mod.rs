@@ -50,13 +50,15 @@ const MAXIMUM_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 const BASE_HEADER_BYTES: usize = 40;
 const SECTION_VERSION: u32 = 0x0002_0000;
 // Version words hold major/minor halves. DP1 Merrill review originals use
-// 2.3 with the same directory, property, CAMF, and format-30 sensor sections.
-const SUPPORTED_FILE_VERSIONS: [u32; 7] = [
+// 2.3 and DP2 Merrill originals use 3.1 with the same directory, property,
+// CAMF, and format-30 sensor sections. All readers share this version list.
+pub(crate) const SUPPORTED_FILE_VERSIONS: [u32; 8] = [
     0x0002_0000,
     0x0002_0001,
     0x0002_0002,
     0x0002_0003,
     0x0003_0000,
+    0x0003_0001,
     0x0004_0001,
     0x0004_0002,
 ];
@@ -507,19 +509,23 @@ mod tests {
     }
 
     #[test]
-    fn merrill_version_23_keeps_the_base_header_directory_contract() {
+    fn merrill_versions_keep_the_base_header_directory_contract() {
         let mut data = vec![0; 44];
         data[..4].copy_from_slice(b"FOVb");
-        data[4..8].copy_from_slice(&0x0002_0003_u32.to_le_bytes());
-        assert_eq!(
-            decode(&data).err().unwrap().to_string(),
-            "X3F directory outside file"
-        );
-        data[4..8].copy_from_slice(&0x0002_0004_u32.to_le_bytes());
-        assert_eq!(
-            decode(&data).err().unwrap().to_string(),
-            "unsupported X3F header"
-        );
+        for version in [0x0002_0003_u32, 0x0003_0001] {
+            data[4..8].copy_from_slice(&version.to_le_bytes());
+            assert_eq!(
+                decode(&data).err().unwrap().to_string(),
+                "X3F directory outside file"
+            );
+        }
+        for version in [0x0002_0004_u32, 0x0003_0002] {
+            data[4..8].copy_from_slice(&version.to_le_bytes());
+            assert_eq!(
+                decode(&data).err().unwrap().to_string(),
+                "unsupported X3F header"
+            );
+        }
     }
 
     #[test]

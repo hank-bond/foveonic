@@ -1,12 +1,13 @@
 //! Shares camera-choice resolution and Full TIFF/DNG exports between interactive and batch workers.
 
 use foveonic::{
+    importing::ConflictPolicy,
     inspection::Content,
     profile::Profile,
     render::{Engine, PreviewQuality, RenderSession, Settings},
     source::Metadata,
 };
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExportFormat {
@@ -33,13 +34,16 @@ pub struct Export {
     pub path: PathBuf,
     pub format: ExportFormat,
     pub tiff_color_space: Option<foveonic::render::TiffColorSpace>,
+    pub conflict: ConflictPolicy,
 }
 
-/// Browse processing chooses a free name; publication also checks for collisions.
+/// Reprocessing may replace old outputs, while different photos in one batch keep distinct names.
 pub fn next_path(
     source: &std::path::Path,
     directory: &std::path::Path,
     format: ExportFormat,
+    conflict: ConflictPolicy,
+    reserved: &HashSet<PathBuf>,
 ) -> foveonic::source::Result<PathBuf> {
     let stem = source.file_stem().ok_or("source has no filename")?;
     for suffix in 0..u32::MAX {
@@ -49,7 +53,7 @@ pub fn next_path(
         }
         name.push(format!(".{}", format.extension()));
         let path = directory.join(name);
-        if !path.exists() {
+        if !reserved.contains(&path) && (conflict == ConflictPolicy::Overwrite || !path.exists()) {
             return Ok(path);
         }
     }
@@ -73,7 +77,7 @@ pub fn write(
     if !errors.is_empty() {
         return Err(errors.join("; ").into());
     }
-    foveonic::importing::write_output(&export.path, |temporary| {
+    foveonic::importing::write_output(&export.path, export.conflict, |temporary| {
         match export.format {
             ExportFormat::Dng => {
                 foveonic::dng::write_source(
@@ -151,17 +155,62 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let source = std::path::Path::new("card/photo.x3f");
         for name in ["photo.dng", "photo-1.dng"] {
-            let output = next_path(source, folder.path(), ExportFormat::Dng).unwrap();
+            let output = next_path(
+                source,
+                folder.path(),
+                ExportFormat::Dng,
+                ConflictPolicy::Rename,
+                &HashSet::new(),
+            )
+            .unwrap();
             assert_eq!(output, folder.path().join(name));
             std::fs::write(output, b"existing output").unwrap();
         }
         assert_eq!(
-            next_path(source, folder.path(), ExportFormat::Tiff).unwrap(),
+            next_path(
+                source,
+                folder.path(),
+                ExportFormat::Tiff,
+                ConflictPolicy::Rename,
+                &HashSet::new()
+            )
+            .unwrap(),
             folder.path().join("photo.tiff")
         );
         assert_eq!(
             std::fs::read(folder.path().join("photo.dng")).unwrap(),
             b"existing output"
+        );
+    }
+
+    #[test]
+    fn overwrite_reuses_existing_names_but_never_collides_with_another_photo_in_the_batch() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("photo.dng");
+        std::fs::write(&path, b"previous render").unwrap();
+        let source = std::path::Path::new("folder/photo.x3f");
+        assert_eq!(
+            next_path(
+                source,
+                folder.path(),
+                ExportFormat::Dng,
+                ConflictPolicy::Overwrite,
+                &HashSet::new()
+            )
+            .unwrap(),
+            path
+        );
+        let reserved = [path.clone()].into();
+        assert_eq!(
+            next_path(
+                source,
+                folder.path(),
+                ExportFormat::Dng,
+                ConflictPolicy::Overwrite,
+                &reserved
+            )
+            .unwrap(),
+            folder.path().join("photo-1.dng")
         );
     }
 }

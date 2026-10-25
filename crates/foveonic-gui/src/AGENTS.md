@@ -24,7 +24,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 - **[advanced.rs](./advanced.rs)** Displays advanced reconstruction controls with automatic ColorDQ and preset-linked parameter overrides.
 - **[application_settings.rs](./application_settings.rs)** Configures application display and temporary disk reuse independently of photographic edits.
-- **[batch.rs](./batch.rs)** Runs frozen import jobs independently of review while yielding work to interactive rendering.
+- **[batch.rs](./batch.rs)** Runs frozen Browse and Import batches while yielding work to interactive rendering.
 - **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
 - **[browser_folders.rs](./browser_folders.rs)** Discovers descendant X3Fs and lays out folder groups for virtualized browsing.
 - **[browser_review.rs](./browser_review.rs)** Handles browser highlighting, import checkboxes, and shared hidden-photo visibility.
@@ -36,7 +36,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
 - **[help_examples.rs](./help_examples.rs)** Presents embedded photographic comparisons through one image-switching popover template.
 - **[icon.rs](./icon.rs)** Loads the window icon while leaving macOS Dock appearances to the app bundle.
-- **[import_review.rs](./import_review.rs)** Tracks destination-scoped import review, readiness, frozen submission, and batch status.
+- **[import_review.rs](./import_review.rs)** Prepares frozen processing selections and tracks destination-scoped import review and batch status.
 - **[information.rs](./information.rs)** Shows selectable capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
 - **[inspect.rs](./inspect.rs)** Groups viewport preview quality, pipeline views, and display-only Input/Output and Difference comparisons.
 - **[main.rs](./main.rs)** Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.

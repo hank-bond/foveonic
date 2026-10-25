@@ -72,6 +72,8 @@ Coordinates above are illustrative, not portable across layouts. Keep warm-up po
 
 ## Interpret results
 
+Browse and Import processing use the same profiling mode as interactive rendering. `source_load` and `export` records identify batch work with `frontend: "batch"`. They include cache/original input classification and the export's existing host/GPU stage timings. `batch_photo` reports the whole photo operation, including source loading, original copying in Import, output publication and history. Whole-photo time can include pauses for interactive work. Nested stage durations overlap and must not be added to that total.
+
 Host times are wall durations, including driver work or waits where applicable; they are not CPU-active measurements. Nested spans are not additive. GPU timestamps cover passes, not implicit resource initialization or inter-pass queue delays. Wall time minus GPU time is not pure queue waiting. Allocation/transfer totals are not memory residency. Repeated passes aggregate by stage with sample counts and totals per profile, not list position.
 
 Native receipt, callback encoding and callback gaps do not establish screen scanout. External pointer/pipe timestamps select interaction windows but do not provide precise event-to-screen latency. Keep fresh full-processing costs separate from warm session feedback: a cached edit can skip the denoiser entirely. Summaries aggregate a supplied dataset; compare methods in separate datasets and use raw source/settings context when interpreting interactive sweeps.

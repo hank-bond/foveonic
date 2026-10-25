@@ -24,9 +24,10 @@ type Priority = (usize, EntryKind);
 
 pub(super) fn prune(root: &Path, budget: u64, nearby: &[PathBuf]) -> Result<Vec<Entry>> {
     let entries = entries(root)?;
-    let remove = evictions(entries, budget, &priorities(root, nearby));
+    let remove = evictions(entries, budget, &priorities(root, nearby)?);
     let mut retained = Vec::new();
     for (entry, evict) in remove {
+        crate::background::checkpoint_or_cancel()?;
         if evict {
             fs::remove_file(entry.0)?;
         } else {
@@ -51,7 +52,7 @@ pub(super) fn reserve(
     let mut entries = entries(root)?;
     entries.retain(|entry| entry.0 != destination);
     entries.push((destination.to_owned(), bytes, SystemTime::now()));
-    let remove = evictions(entries, budget, &priorities(root, nearby));
+    let remove = evictions(entries, budget, &priorities(root, nearby)?);
     if remove
         .iter()
         .any(|(entry, evict)| entry.0 == destination && *evict)
@@ -59,6 +60,7 @@ pub(super) fn reserve(
         return Ok(false);
     }
     for (entry, evict) in remove {
+        crate::background::checkpoint_or_cancel()?;
         if evict {
             fs::remove_file(entry.0)?;
         }
@@ -85,9 +87,10 @@ fn entries(root: &Path) -> Result<Vec<Entry>> {
         .collect())
 }
 
-fn priorities(root: &Path, nearby: &[PathBuf]) -> HashMap<PathBuf, Priority> {
+fn priorities(root: &Path, nearby: &[PathBuf]) -> Result<HashMap<PathBuf, Priority>> {
     let mut priorities = HashMap::new();
     for (rank, path) in nearby.iter().enumerate() {
+        crate::background::checkpoint_or_cancel()?;
         if let Ok(identity) = Identity::read(path) {
             priorities.insert(root.join(identity.name()), (rank, EntryKind::Decoded));
             priorities.insert(
@@ -103,7 +106,7 @@ fn priorities(root: &Path, nearby: &[PathBuf]) -> HashMap<PathBuf, Priority> {
             priorities.insert(location, (rank, EntryKind::Preview));
         }
     }
-    priorities
+    Ok(priorities)
 }
 
 fn evictions(

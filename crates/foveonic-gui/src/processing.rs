@@ -2,7 +2,7 @@
 
 use crate::{export::ExportFormat, preferences::FolderMode, widgets};
 use eframe::egui;
-use foveonic::render::TiffColorSpace;
+use foveonic::{importing::ConflictPolicy, render::TiffColorSpace};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -11,6 +11,7 @@ pub struct Settings {
     pub format: ExportFormat,
     pub tiff_color_space: Option<TiffColorSpace>,
     pub copy_only: bool,
+    pub conflict: ConflictPolicy,
 }
 
 impl Settings {
@@ -91,6 +92,21 @@ pub fn show(ctx: &egui::Context, open: &mut bool, mode: FolderMode, settings: &m
                 });
             }
         }
+        ui.horizontal(|ui| {
+            ui.label("On conflict");
+            let label = |policy| match policy {
+                ConflictPolicy::Overwrite => "Overwrite",
+                ConflictPolicy::Rename => "Rename",
+            };
+            let combo = egui::ComboBox::from_id_salt("processing-conflict")
+                .width(widgets::dropdown_width(ui, ["Overwrite", "Rename"]))
+                .selected_text(label(settings.conflict));
+            widgets::dropdown(ui, combo, |ui| {
+                for policy in [ConflictPolicy::Overwrite, ConflictPolicy::Rename] {
+                    widgets::menu_value(ui, &mut settings.conflict, policy, label(policy));
+                }
+            });
+        });
         ui.weak("Remembered for this mode. Process uses these choices immediately.");
         if mode == FolderMode::Import {
             ui.weak(if settings.copy_only {
@@ -166,6 +182,8 @@ mod tests {
         let popup = click(&output, "DNG");
         let output = click(&popup, "TIFF");
         assert!(has_label(&output, "Color space"));
+        let popup = click(&output, "Overwrite");
+        let output = click(&popup, "Rename");
         let popup = click(&output, "Camera");
         let output = click(&popup, "ProPhoto RGB");
         let popup = click(&output, "Process + originals");
@@ -181,5 +199,27 @@ mod tests {
         assert_eq!(settings.format, ExportFormat::Tiff);
         assert_eq!(settings.tiff_color_space, Some(TiffColorSpace::ProPhotoRgb));
         assert_eq!(settings.formats(), vec![ExportFormat::Tiff]);
+        assert_eq!(settings.conflict, ConflictPolicy::Rename);
+    }
+
+    #[test]
+    fn conflict_defaults_to_overwrite_and_roundtrips_independently_for_each_mode() {
+        let mut preferences: crate::preferences::Preferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            preferences.browse_processing.conflict,
+            ConflictPolicy::Overwrite
+        );
+        assert_eq!(
+            preferences.import_processing.conflict,
+            ConflictPolicy::Overwrite
+        );
+        preferences.browse_processing.conflict = ConflictPolicy::Rename;
+        let restored: crate::preferences::Preferences =
+            serde_json::from_slice(&serde_json::to_vec(&preferences).unwrap()).unwrap();
+        assert_eq!(restored.browse_processing.conflict, ConflictPolicy::Rename);
+        assert_eq!(
+            restored.import_processing.conflict,
+            ConflictPolicy::Overwrite
+        );
     }
 }

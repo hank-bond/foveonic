@@ -81,6 +81,7 @@ impl Cache {
         path: &Path,
         destination: &Path,
         expected: &crate::importing::Identity,
+        conflict: crate::importing::ConflictPolicy,
     ) -> Result<bool> {
         if self.import_identity(path).as_ref() != Some(expected) {
             return Ok(false);
@@ -130,7 +131,10 @@ impl Cache {
             UNIX_EPOCH + Duration::new(identity.modified_seconds, identity.modified_nanos),
         )?;
         temporary.as_file().sync_all()?;
-        temporary.persist_noclobber(destination)?;
+        match conflict {
+            crate::importing::ConflictPolicy::Overwrite => temporary.persist(destination)?,
+            crate::importing::ConflictPolicy::Rename => temporary.persist_noclobber(destination)?,
+        };
         Ok(true)
     }
 }

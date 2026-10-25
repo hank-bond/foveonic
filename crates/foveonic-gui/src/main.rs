@@ -218,7 +218,7 @@ impl App {
                     self.browser.files.first().cloned()
                 };
                 if let Some(path) = selected {
-                    self.select(path);
+                    self.select(path, false);
                 } else {
                     self.clear_selection();
                     self.status = "No X3F files in this folder".into();
@@ -254,7 +254,7 @@ impl App {
         self.viewport.reset();
         viewport::clear(&self.render_state);
     }
-    fn select(&mut self, path: PathBuf) {
+    fn select(&mut self, path: PathBuf, preserve_viewport: bool) {
         self.browser.invalidate_prefetch();
         timing::selected(self.revision + 1, &path);
         let began = std::time::Instant::now();
@@ -278,7 +278,7 @@ impl App {
         self.detail = None;
         self.smart.reset();
         self.scope_key = None;
-        self.viewport.reset();
+        self.viewport.begin_image(preserve_viewport);
         viewport::clear(&self.render_state);
     }
     fn submit(&mut self, export: Option<export::Export>) {
@@ -557,41 +557,31 @@ impl App {
     fn process(&mut self) {
         // Freeze edits before either executor receives the job.
         self.sidecars.refresh(&self.settings);
-        if self.browser.import_mode {
-            self.import.submit(
-                &self.browser,
-                &self.sidecars,
-                &self.preferences.import_processing,
-            );
-        } else if let (Some(source), Some(destination)) = (
-            &self.selected,
-            self.preferences.processing_destination.as_deref(),
-        ) {
-            let options = &self.preferences.browse_processing;
-            match export::next_path(source, destination, options.format) {
-                Ok(path) => self.submit(Some(export::Export {
-                    path,
-                    format: options.format,
-                    tiff_color_space: options.tiff_color_space,
-                })),
-                Err(error) => {
-                    self.status = error.to_string();
-                    self.status_error = true;
-                }
-            }
-        }
+        self.import.submit(
+            &self.browser,
+            &self.sidecars,
+            if self.browser.import_mode {
+                &self.preferences.import_processing
+            } else {
+                &self.preferences.browse_processing
+            },
+        );
     }
     fn toolbar(&mut self, ui: &mut egui::Ui) {
+        self.import
+            .prepare_browse(&self.browser, self.selected.as_deref());
         toolbar::container(ui, |ui| {
             toolbar::row(ui, |ui| {
                 let export_ready = self.sidecars.ready()
                     && self.selected.is_some()
                     && toolbar::can_export(&self.settings, self.metadata.as_deref());
-                let process_ready = if self.browser.import_mode {
-                    self.import.ready(&self.browser)
-                } else {
-                    export_ready && self.preferences.processing_destination.is_some()
-                };
+                let only_current = self
+                    .browser
+                    .processing_selection(self.selected.as_deref())
+                    .as_slice()
+                    == self.selected.as_slice();
+                let process_ready = self.import.ready(&self.browser)
+                    && (self.browser.import_mode || !only_current || export_ready);
                 let actions = toolbar::show(
                     ui,
                     toolbar::State {
@@ -1109,8 +1099,8 @@ impl eframe::App for App {
             self.clear_selection();
             self.status = "No visible photographs".into();
             self.status_error = false;
-        } else if let Some(path) = select {
-            self.select(path);
+        } else if let Some(selection) = select {
+            self.select(selection.path, selection.preserve_viewport);
         } else if changed && !self.exporting {
             self.submit(None);
         }

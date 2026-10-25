@@ -4,6 +4,79 @@ use super::*;
 use std::time::{Duration, Instant};
 
 #[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
+fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_error() {
+    let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+        .join("blue-parking-sign.x3f");
+    let source_sidecar = fs::read(foveonic::sidecar::path(&path)).ok();
+    let destination = tempfile::tempdir().unwrap();
+    let original = destination.path().join(path.file_name().unwrap());
+    fs::write(&original, b"previous original").unwrap();
+    let sidecar = foveonic::sidecar::path(&original);
+    fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+    fs::write(&sidecar, b"invalid previous sidecar").unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.exposure = 0.75;
+    let mut photo = Photo {
+        identity: Identity::read(&path).unwrap(),
+        path: path.clone(),
+        settings: settings.clone(),
+    };
+    let engine = Engine::new().unwrap();
+    let before = serde_json::to_value(engine.gpu_activity()).unwrap();
+    let cache = Cache::new();
+    let mut output = Output {
+        formats: vec![],
+        tiff_color_space: None,
+        conflict: ConflictPolicy::Overwrite,
+    };
+    let error = import_photo(
+        &engine,
+        &cache,
+        &photo,
+        destination.path(),
+        &output,
+        &mut HashSet::new(),
+        |_| Err("history could not be saved".into()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("history could not be saved"));
+    assert_eq!(fs::read(&original).unwrap(), fs::read(&path).unwrap());
+    assert_eq!(Identity::read(&original).unwrap(), photo.identity);
+    assert_eq!(
+        foveonic::sidecar::load(&original).unwrap(),
+        Some(settings.clone())
+    );
+    photo.settings.exposure = 1.25;
+    output.conflict = ConflictPolicy::Rename;
+    let renamed = import_photo(
+        &engine,
+        &cache,
+        &photo,
+        destination.path(),
+        &output,
+        &mut HashSet::new(),
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(renamed, PathBuf::from("blue-parking-sign-1.x3f"));
+    assert_eq!(
+        foveonic::sidecar::load(&destination.path().join(renamed)).unwrap(),
+        Some(photo.settings)
+    );
+    assert_eq!(foveonic::sidecar::load(&original).unwrap(), Some(settings));
+    assert_eq!(
+        serde_json::to_value(engine.gpu_activity()).unwrap(),
+        before,
+        "copy-only import must not render"
+    );
+    assert_eq!(
+        fs::read(foveonic::sidecar::path(&path)).ok(),
+        source_sidecar
+    );
+}
+
+#[test]
 fn saving_eye_and_delete_decisions_preserves_import_provenance_and_undoes_manual_hides() {
     let source = tempfile::tempdir().unwrap();
     let destination = tempfile::tempdir().unwrap();
@@ -17,6 +90,7 @@ fn saving_eye_and_delete_decisions_preserves_import_provenance_and_undoes_manual
         &imported,
         &destination.path().join("imported.x3f"),
         &imported_identity,
+        ConflictPolicy::Rename,
     )
     .unwrap();
     let mut history = History::default();
@@ -183,9 +257,14 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
             },
             missing
         ],
-        decisions: Vec::new(),
-        formats: vec![ExportFormat::Tiff, ExportFormat::Dng],
-        tiff_color_space: output_space,
+        operation: Operation::Import {
+            decisions: Vec::new()
+        },
+        output: Output {
+            formats: vec![ExportFormat::Tiff, ExportFormat::Dng],
+            tiff_color_space: output_space,
+            conflict: ConflictPolicy::Rename,
+        },
     }));
     requested.exposure = 1.35;
     // Complete actual foreground work while the submitted batch waits behind it.
@@ -256,8 +335,12 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
             settings: frozen.clone(),
         },
         &copied,
-        &[],
-        None,
+        &Output {
+            formats: vec![],
+            tiff_color_space: None,
+            conflict: ConflictPolicy::Rename,
+        },
+        &mut HashSet::new(),
         |_| Ok(()),
     )
     .unwrap();
@@ -267,10 +350,18 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         serde_json::to_value(before).unwrap(),
         "copy-only import must not render"
     );
-    // A history publication failure belongs to the same photo operation as
-    // output creation. Keep prior successful files and roll back only the retry.
-    let failed_original =
-        copied.join(importing::available_name(&path, &copied, &copied, &[]).unwrap());
+    // A history failure leaves complete files available and reports this photo for retry.
+    let failed_original = copied.join(
+        importing::available_name(
+            &path,
+            &copied,
+            &copied,
+            &[],
+            ConflictPolicy::Rename,
+            &HashSet::new(),
+        )
+        .unwrap(),
+    );
     let error = import_photo(
         &engine,
         &cache,
@@ -280,14 +371,18 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
             settings: frozen,
         },
         &copied,
-        &[],
-        None,
+        &Output {
+            formats: vec![],
+            tiff_color_space: None,
+            conflict: ConflictPolicy::Rename,
+        },
+        &mut HashSet::new(),
         |_| Err("cannot publish history".into()),
     )
     .unwrap_err();
     assert!(error.to_string().contains("cannot publish history"));
-    assert!(!failed_original.exists());
-    assert!(!foveonic::sidecar::path(&failed_original).exists());
+    assert!(failed_original.is_file());
+    assert!(foveonic::sidecar::path(&failed_original).is_file());
     assert!(copied.join(&relative).is_file());
     assert_eq!(
         fs::read(foveonic::sidecar::path(&path)).ok(),

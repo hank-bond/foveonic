@@ -118,7 +118,7 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
             let help = if state.importing {
                 "Process picked photos and save hidden decisions using Import settings."
             } else {
-                "Process the current photo using Browse settings."
+                "Process all highlighted photos using Browse settings."
             };
             widgets::button(ui, "Process", false, egui::Vec2::ZERO).on_hover_text(help)
         }).inner.clicked();

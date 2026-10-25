@@ -515,6 +515,7 @@ mod tests {
                     path: destination.clone(),
                     format: super::ExportFormat::Dng,
                     tiff_color_space: settings.tiff_color_space,
+                    conflict: foveonic::importing::ConflictPolicy::Rename,
                 }),
             });
             let reply = loop {
@@ -1203,6 +1204,7 @@ mod preview_tests {
                 path: "export.output".into(),
                 format,
                 tiff_color_space: None,
+                conflict: foveonic::importing::ConflictPolicy::Rename,
             });
             resolve_preview(&request, &mut resolved, &metadata);
             assert_eq!(resolved.preview_quality, PreviewQuality::Full);
@@ -1254,6 +1256,7 @@ mod preview_tests {
                 path: "test.output".into(),
                 format,
                 tiff_color_space: None,
+                conflict: foveonic::importing::ConflictPolicy::Rename,
             });
             assert_eq!(
                 effective_preview_quality(&r, &r.settings, &m),
@@ -1372,6 +1375,7 @@ mod preview_tests {
                     path: destination.clone(),
                     format,
                     tiff_color_space: settings.tiff_color_space,
+                    conflict: foveonic::importing::ConflictPolicy::Rename,
                 }),
             });
             let exported = receive();

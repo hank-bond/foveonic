@@ -94,10 +94,7 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
     let mut header = [0; V4_HEADER_BYTES];
     file.read_exact(&mut header[..BASE_HEADER_BYTES])?;
     if &header[..4] != b"FOVb"
-        || ![
-            0x20000, 0x20001, 0x20002, 0x20003, 0x30000, 0x40001, 0x40002,
-        ]
-        .contains(&u32_at(&header, VERSION_OFFSET))
+        || !crate::x3f::SUPPORTED_FILE_VERSIONS.contains(&u32_at(&header, VERSION_OFFSET))
     {
         return Err("unsupported X3F header".into());
     }

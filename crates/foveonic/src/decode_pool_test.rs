@@ -113,3 +113,66 @@ fn cancellation_reaches_queued_layers_and_unblocks_later_photo_admission() {
         .unwrap();
     });
 }
+
+#[test]
+fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
+    let pool = Arc::new(Pool::new(1).unwrap());
+    let order = Arc::new(Order::default());
+    let first = order.issue();
+    let second = order.issue();
+    let gate = Arc::new(background::Gate::default());
+    let latches: Arc<Vec<Latch>> = Arc::new(
+        (0..3)
+            .map(|_| (Mutex::new(false), Condvar::new()))
+            .collect(),
+    );
+    let (started, receive) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let release = ReleaseAll(latches.clone());
+        let old_pool = pool.clone();
+        let old_gate = gate.clone();
+        let job = scope.spawn(move || {
+            background::interruptible(old_gate, || {
+                background::decoder(
+                    Task {
+                        pool: old_pool,
+                        turn: first,
+                    },
+                    || {
+                        let task = background::decoder_context().unwrap();
+                        task.pool.planes(&task.turn, |layer| {
+                            started.send(layer).unwrap();
+                            let mut released = latches[layer].0.lock().unwrap();
+                            while !*released {
+                                released = latches[layer].1.wait(released).unwrap();
+                            }
+                            background::checkpoint_or_cancel()?;
+                            Ok(layer)
+                        })
+                    },
+                )
+            })
+        });
+        receive.recv_timeout(Duration::from_secs(10)).unwrap();
+        // A selection/window change invalidates the epoch without acquiring foreground work.
+        gate.interrupt_prefetch();
+        drop(release);
+        assert!(job
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .is::<background::Interrupted>());
+        assert!(
+            receive.try_recv().is_err(),
+            "obsolete queued layers started decoding"
+        );
+    });
+    let next = background::interruptible(gate, || {
+        background::decoder(Task { pool, turn: second }, || {
+            let task = background::decoder_context().unwrap();
+            task.pool.planes(&task.turn, Ok)
+        })
+    })
+    .unwrap();
+    assert_eq!(next, [0, 1, 2]);
+}

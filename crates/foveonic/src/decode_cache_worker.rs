@@ -216,8 +216,14 @@ pub(super) fn start(
                     || prefetched
                     || (gate.idle() && last_scan.elapsed() >= READINESS_SCAN_INTERVAL)
                 {
-                    refresh(&root, &control, &status, &mut families);
-                    last_scan = Instant::now();
+                    // A scan must not keep the actor on an obsolete folder walk
+                    // after selection changes or foreground work interrupts it.
+                    let refreshed = background::interruptible(gate.clone(), || {
+                        refresh(&root, &control, &status, &mut families)
+                    });
+                    if refreshed.is_ok() {
+                        last_scan = Instant::now();
+                    }
                 }
             }
         });
@@ -486,10 +492,15 @@ fn refresh(
     control: &Mutex<Control>,
     status: &Mutex<Status>,
     families: &mut FamilyCatalog,
-) {
-    crate::background::checkpoint();
+) -> Result<()> {
+    background::checkpoint_or_cancel()?;
     let (settings, watched, generation, queued, nearby, known) = {
         let state = control.lock().unwrap();
+        // Newly queued neighbors take precedence over a directory-wide scan.
+        // This also handles a replacement arriving just after the prior pass exits.
+        if state.settings.enabled && state.settings.max_bytes > 0 && !state.queue.is_empty() {
+            return Err(Box::new(background::Interrupted));
+        }
         (
             state.settings.clone(),
             state.watched.clone(),
@@ -504,10 +515,15 @@ fn refresh(
             state.identities.clone(),
         )
     };
-    let entries = prune(root, settings.max_bytes, &nearby).unwrap_or_default();
+    let entries = match prune(root, settings.max_bytes, &nearby) {
+        Ok(entries) => entries,
+        Err(error) if error.is::<background::Interrupted>() => return Err(error),
+        Err(_) => Vec::new(),
+    };
     let watching = watched.iter().cloned().collect::<HashSet<_>>();
     families.retain(|p, _| watching.contains(p));
     for (path, identity) in known {
+        background::checkpoint_or_cancel()?;
         if watching.contains(&path) && !families.contains_key(&path) {
             let family = File::open(root.join(identity.name()))
                 .ok()
@@ -523,9 +539,10 @@ fn refresh(
     }
     let files: HashMap<_, _> = watched
         .into_iter()
-        .map(|path| {
-            crate::background::checkpoint();
+        .map(|path| -> Result<_> {
+            background::checkpoint_or_cancel()?;
             let state = entry_state(root, &path, &settings, queued.contains(&path), families);
+            background::checkpoint_or_cancel()?;
             if state == EntryState::Ready && Identity::read(&path).is_ok() {
                 if let Some((identity, _)) = families.get(&path) {
                     let previous = control.lock().unwrap().recipes.get(&path).cloned();
@@ -552,9 +569,9 @@ fn refresh(
                     }
                 }
             }
-            (path, state)
+            Ok((path, state))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let ready: HashSet<PathBuf> = files
         .iter()
         .filter(|(_, state)| **state == EntryState::Ready)
@@ -568,6 +585,7 @@ fn refresh(
             families.get(p).map(|(i, _)| (p.clone(), i.clone()))
         })
         .collect();
+    background::checkpoint_or_cancel()?;
     let mut state = control.lock().unwrap();
     let mut status = status.lock().unwrap();
     status.entries = entries
@@ -581,11 +599,47 @@ fn refresh(
         status.ready = ready;
         status.files = Arc::new(files);
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_yields_to_replacement_neighbors_and_cancels_with_the_old_epoch() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = super::super::Cache::at(folder.path().join("cache"));
+        let foreground = cache.foreground();
+        cache.configure(Settings::default());
+        let first = folder.path().join("first.x3f");
+        let second = folder.path().join("second.x3f");
+        cache.prefetch_window(vec![first.clone(), second.clone()], Some(first.clone()));
+        let mut families = FamilyCatalog::new();
+        assert!(
+            refresh(&cache.root, &cache.control, &cache.status, &mut families)
+                .unwrap_err()
+                .is::<background::Interrupted>()
+        );
+        assert!(
+            families.is_empty(),
+            "pending neighbors must run before source scanning"
+        );
+        background::interruptible(cache.gate.clone(), || {
+            drop(foreground);
+            cache.prefetch_window(vec![first, second.clone()], Some(second));
+            assert!(
+                refresh(&cache.root, &cache.control, &cache.status, &mut families)
+                    .unwrap_err()
+                    .is::<background::Interrupted>()
+            );
+        });
+        assert!(
+            families.is_empty(),
+            "obsolete scans must not inspect replacement sources"
+        );
+    }
+
     #[test]
     fn speculative_publication_wait_cancels_while_another_photo_owns_the_lock() {
         let publication = Mutex::new(());

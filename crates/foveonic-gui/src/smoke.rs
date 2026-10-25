@@ -670,7 +670,7 @@ impl App {
                 }
                 "cache-reopen" => {
                     self.settings_open = false;
-                    self.select(self.selected.clone().unwrap());
+                    self.select(self.selected.clone().unwrap(), false);
                 }
                 "fast" | "fast-again" => {
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;

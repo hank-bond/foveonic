@@ -13,6 +13,7 @@ struct Fixture {
     control_checked: bool,
     control_actions: usize,
     number: f64,
+    preserve_viewport: Option<bool>,
 }
 struct ControlFrame {
     button: egui::Response,
@@ -51,9 +52,11 @@ impl Fixture {
             control_checked: false,
             control_actions: 0,
             number: 0.5,
+            preserve_viewport: None,
         }
     }
     fn frame(&mut self, events: Vec<egui::Event>) -> Frame {
+        self.preserve_viewport = None;
         let mut result = None;
         let modifiers = events
             .iter()
@@ -106,11 +109,12 @@ impl Fixture {
                         eye = Some(self.browser.visibility_button(ui, focus).rect);
                     }
                     grid = ui.available_rect_before_wrap();
-                    if let Some(path) =
+                    if let Some(selection) =
                         self.browser
                             .organizer(ui, self.selected.as_deref(), self.mode)
                     {
-                        self.selected = Some(path);
+                        self.preserve_viewport = Some(selection.preserve_viewport);
+                        self.selected = Some(selection.path);
                     }
                     if self.browser.clear_selection {
                         self.selected = None;
@@ -369,6 +373,49 @@ fn command_and_shift_click_highlight_ranges_without_checking_them() {
         );
         assert_eq!(fixture.browser.highlighted.len(), 2);
         assert!(fixture.browser.marks.is_empty());
+    }
+}
+
+#[test]
+fn browse_processing_uses_highlights_in_browser_order_and_falls_back_to_the_view() {
+    for mode in [Organizer::Icons, Organizer::List] {
+        let mut fixture = Fixture::new(mode);
+        fixture.select_first();
+        fixture.frame(vec![egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }]);
+        assert_eq!(
+            fixture
+                .browser
+                .processing_selection(fixture.selected.as_deref()),
+            fixture.browser.files
+        );
+        fixture.browser.highlighted = [
+            fixture.browser.files[9].clone(),
+            fixture.browser.files[2].clone(),
+        ]
+        .into();
+        assert_eq!(
+            fixture
+                .browser
+                .processing_selection(fixture.selected.as_deref()),
+            [
+                fixture.browser.files[2].clone(),
+                fixture.browser.files[9].clone()
+            ]
+        );
+        fixture.browser.highlighted.clear();
+        assert_eq!(
+            fixture
+                .browser
+                .processing_selection(fixture.selected.as_deref()),
+            [fixture.selected.clone().unwrap()]
+        );
+        assert!(fixture.browser.processing_selection(None).is_empty());
     }
 }
 
@@ -643,6 +690,37 @@ fn shift_arrow_extends_the_photo_range_after_clicking_the_viewport() {
         assert_eq!(fixture.browser.highlighted.len(), 2);
         fixture.key(egui::Key::Space, false);
         assert_eq!(fixture.browser.review_counts(), (2, 0));
+    }
+}
+
+#[test]
+fn shift_arrows_carry_viewport_policy_with_each_navigation_event() {
+    for mode in [Organizer::Icons, Organizer::List] {
+        let mut fixture = Fixture::new(mode);
+        for key in [
+            egui::Key::ArrowLeft,
+            egui::Key::ArrowRight,
+            egui::Key::ArrowUp,
+            egui::Key::ArrowDown,
+        ] {
+            fixture.selected = Some(fixture.browser.files[20].clone());
+            let frame = fixture.frame(vec![]);
+            fixture.click(frame.outside.center());
+            for repeat in [false, true] {
+                let previous = fixture.selected.clone();
+                fixture.frame(vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat,
+                    modifiers: egui::Modifiers::SHIFT,
+                }]);
+                assert_ne!(fixture.selected, previous);
+                assert_eq!(fixture.preserve_viewport, Some(true));
+            }
+            fixture.key(egui::Key::ArrowRight, false);
+            assert_eq!(fixture.preserve_viewport, Some(false));
+        }
     }
 }
 

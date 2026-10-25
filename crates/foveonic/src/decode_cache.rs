@@ -314,6 +314,10 @@ impl Cache {
             work()
         })
     }
+    /// Run requested work behind interaction without maintenance-level throttling.
+    pub fn processing<T>(&self, work: impl FnOnce() -> T) -> T {
+        crate::background::processing(self.gate.clone(), work)
+    }
     pub fn status(&self) -> Status {
         self.status.lock().unwrap().clone()
     }

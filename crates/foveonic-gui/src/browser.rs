@@ -15,6 +15,12 @@ mod folders;
 #[path = "browser_review.rs"]
 mod review;
 
+pub struct Selection {
+    pub path: PathBuf,
+    /// Captured from the navigation event, independently of loading time.
+    pub preserve_viewport: bool,
+}
+
 // Leave a quiet status column beside the filename, outside photographic content.
 const STATUS_RADIUS: f32 = 3.;
 const STATUS_INSET: f32 = 10.;
@@ -522,7 +528,7 @@ impl Browser {
         ui: &mut egui::Ui,
         selected: Option<&Path>,
         mode: crate::preferences::Organizer,
-    ) -> Option<PathBuf> {
+    ) -> Option<Selection> {
         self.review_clicked = false;
         self.clear_selection = false;
         let focus_requested = std::mem::take(&mut self.focus_requested);
@@ -610,9 +616,12 @@ impl Browser {
                         let next = layout.arrow(active, key);
                         if next != active {
                             active = next;
-                            chosen = next.map(|index| files[index].clone());
-                            if let Some(path) = &chosen {
-                                self.highlight(path, &files, modifiers);
+                            chosen = next.map(|index| Selection {
+                                path: files[index].clone(),
+                                preserve_viewport: modifiers.shift,
+                            });
+                            if let Some(selection) = &chosen {
+                                self.highlight(&selection.path, &files, modifiers);
                             }
                         }
                     }
@@ -693,7 +702,10 @@ impl Browser {
                                             ui.input(|input| input.modifiers),
                                         );
                                         if self.highlighted.contains(path) {
-                                            chosen = Some(path.clone());
+                                            chosen = Some(Selection {
+                                                path: path.clone(),
+                                                preserve_viewport: false,
+                                            });
                                         }
                                     }
                                 }
@@ -748,7 +760,10 @@ impl Browser {
                             {
                                 self.highlight(&path, &files, ui.input(|input| input.modifiers));
                                 if self.highlighted.contains(&path) {
-                                    chosen = Some(path);
+                                    chosen = Some(Selection {
+                                        path,
+                                        preserve_viewport: false,
+                                    });
                                 }
                             }
                         }
@@ -760,15 +775,19 @@ impl Browser {
         // viewed photo or trigger another render as each import completes.
         let advance_hidden = std::mem::take(&mut self.advance_hidden);
         if let Some(path) = chosen
-            .as_deref()
+            .as_ref()
+            .map(|selection| selection.path.as_path())
             .or(selected)
             .filter(|path| advance_hidden && self.excluded.contains(*path))
         {
-            chosen = self.next_visible(path);
+            chosen = self.next_visible(path).map(|path| Selection {
+                path,
+                preserve_viewport: false,
+            });
             self.highlighted.clear();
             if let Some(next) = &chosen {
-                self.highlighted.insert(next.clone());
-                self.anchor = Some(next.clone());
+                self.highlighted.insert(next.path.clone());
+                self.anchor = Some(next.path.clone());
             }
             self.clear_selection = chosen.is_none();
             ui.ctx().request_repaint();
@@ -780,7 +799,7 @@ impl Browser {
         if self.review_clicked {
             ui.ctx().request_repaint();
         }
-        chosen.filter(|path| Some(path.as_path()) != selected)
+        chosen.filter(|selection| Some(selection.path.as_path()) != selected)
     }
 }
 fn icon_columns(width: f32) -> usize {

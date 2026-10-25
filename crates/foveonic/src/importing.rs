@@ -1,8 +1,9 @@
-//! Copies originals and stores current import and hidden decisions in one destination file.
+//! Copies originals, publishes complete outputs, and stores destination import and hidden decisions.
 
 use crate::source::Result;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs::{self, File, FileTimes},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -109,7 +110,12 @@ impl History {
     }
     /// Only one current decision is retained per identity. This is not an audit log.
     pub fn set(&mut self, record: Record) {
-        self.records.retain(|old| old.identity != record.identity);
+        // Replacing an original retires the previous source's claim to that path.
+        self.records.retain(|old| {
+            old.identity != record.identity
+                && !matches!((&old.disposition, &record.disposition),
+                    (Disposition::Imported { original: old }, Disposition::Imported { original: new }) if old == new)
+        });
         self.records.push(record);
     }
     pub fn forget(&mut self, identity: &Identity) {
@@ -148,12 +154,14 @@ impl History {
     }
 }
 
-/// Return a free basename for the original and every selected rendered extension.
+/// Keep each photo's outputs together, with distinct names within a submitted batch.
 pub fn available_name(
     source: &Path,
     originals: &Path,
     destination: &Path,
     extensions: &[&str],
+    conflict: ConflictPolicy,
+    reserved: &HashSet<PathBuf>,
 ) -> Result<PathBuf> {
     let name = source.file_name().ok_or("source has no filename")?;
     let stem = source.file_stem().ok_or("source has no stem")?;
@@ -168,21 +176,33 @@ pub fn available_name(
             name
         };
         let name = PathBuf::from(name);
-        if !originals.join(&name).exists()
-            && !crate::sidecar::path(&originals.join(&name)).exists()
-            && extensions
-                .iter()
-                .all(|extension| !destination.join(&name).with_extension(extension).exists())
-        {
+        let paths: Vec<_> = std::iter::once(originals.join(&name))
+            .chain(std::iter::once(crate::sidecar::path(
+                &originals.join(&name),
+            )))
+            .chain(
+                extensions
+                    .iter()
+                    .map(|extension| destination.join(&name).with_extension(extension)),
+            )
+            .collect();
+        if paths.iter().all(|path| {
+            !reserved.contains(path) && (conflict == ConflictPolicy::Overwrite || !path.exists())
+        }) {
             return Ok(name);
         }
     }
     Err("no free import filename".into())
 }
 
-/// Write beside the destination and publish without replacing an existing file.
+/// Copy with the selected conflict policy, publishing only a completed file.
 /// The original's modification time is preserved. Creation time is platform-specific.
-pub fn copy_original(source: &Path, destination: &Path, expected: &Identity) -> Result<()> {
+pub fn copy_original(
+    source: &Path,
+    destination: &Path,
+    expected: &Identity,
+    conflict: ConflictPolicy,
+) -> Result<()> {
     if &Identity::read(source)? != expected {
         return Err("source changed since import was submitted".into());
     }
@@ -211,13 +231,28 @@ pub fn copy_original(source: &Path, destination: &Path, expected: &Identity) -> 
         .as_file()
         .set_times(FileTimes::new().set_modified(metadata.modified()?))?;
     temporary.as_file().sync_all()?;
-    temporary.persist_noclobber(destination)?;
+    match conflict {
+        ConflictPolicy::Overwrite => temporary.persist(destination)?,
+        ConflictPolicy::Rename => temporary.persist_noclobber(destination)?,
+    };
     Ok(())
 }
 
-/// Existing export writers accept a new filename and perform their usual packaging.
-/// Publish their completed output without overwriting a destination that appeared meanwhile.
-pub fn write_output(destination: &Path, write: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+/// Determines whether a completed file replaces an existing destination or keeps both versions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ConflictPolicy {
+    #[default]
+    Overwrite,
+    Rename,
+}
+
+/// Render beside the destination and publish only a complete, synced output.
+/// Overwrite replaces atomically. Rename refuses a collision at publication.
+pub fn write_output(
+    destination: &Path,
+    conflict: ConflictPolicy,
+    write: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
     let directory = tempfile::tempdir_in(destination.parent().ok_or("destination has no parent")?)?;
     let temporary = directory.path().join(
         destination
@@ -226,7 +261,11 @@ pub fn write_output(destination: &Path, write: impl FnOnce(&Path) -> Result<()>)
     );
     write(&temporary)?;
     File::open(&temporary)?.sync_all()?;
-    tempfile::TempPath::try_from_path(temporary)?.persist_noclobber(destination)?;
+    let temporary = tempfile::TempPath::try_from_path(temporary)?;
+    match conflict {
+        ConflictPolicy::Overwrite => temporary.persist(destination)?,
+        ConflictPolicy::Rename => temporary.persist_noclobber(destination)?,
+    }
     Ok(())
 }
 

@@ -1,19 +1,20 @@
-//! Runs frozen import jobs independently of review while yielding work to interactive rendering.
+//! Runs frozen Browse and Import batches while yielding work to interactive rendering.
 
 use crate::export::{self, Export, ExportFormat};
 use eframe::egui;
 use foveonic::{
     decode_cache::Cache,
-    importing::{self, Disposition, History, Identity, Record},
+    importing::{self, ConflictPolicy, Disposition, History, Identity, Record},
     profile::Profile,
     render::{Engine, RenderSession, Settings},
     source::Result,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
     sync::{Arc, Condvar, Mutex},
+    time::Instant,
 };
 
 #[derive(Clone)]
@@ -43,9 +44,17 @@ pub struct Scanned {
 pub struct Batch {
     pub destination: PathBuf,
     pub photos: Vec<Photo>,
-    pub decisions: Vec<Decision>,
+    pub operation: Operation,
+    pub output: Output,
+}
+pub struct Output {
     pub formats: Vec<ExportFormat>,
     pub tiff_color_space: Option<foveonic::render::TiffColorSpace>,
+    pub conflict: ConflictPolicy,
+}
+pub enum Operation {
+    Browse,
+    Import { decisions: Vec<Decision> },
 }
 pub struct Decision {
     pub path: PathBuf,
@@ -100,12 +109,12 @@ impl Worker {
             if let Some(scan) = scan {
                 let completed = status.lock().unwrap().imported.len();
                 let result = cache
-                    .background(|| scan_files(scan, completed, &cache, || cache.background(|| ())));
+                    .processing(|| scan_files(scan, completed, &cache, || cache.processing(|| ())));
                 // A stale scan can be discarded. Batch completion never waits for UI receipt.
                 *scanned.lock().unwrap() = Some(result);
             }
             if let Some(batch) = batch {
-                cache.background(|| {
+                cache.processing(|| {
                     run_batch(&engine, &cache, batch, &status, &context, || {
                         let (stop, scan) = {
                             let mut state = slot.0.lock().unwrap();
@@ -115,7 +124,7 @@ impl Worker {
                             let completed = status.lock().unwrap().imported.len();
                             *scanned.lock().unwrap() =
                                 Some(scan_files(scan, completed, &cache, || {
-                                    cache.background(|| ())
+                                    cache.processing(|| ())
                                 }));
                             context.request_repaint();
                         }
@@ -270,40 +279,76 @@ fn run_batch(
 ) {
     let result = (|| -> Result<()> {
         fs::create_dir_all(&batch.destination)?;
-        let mut history = History::load(&batch.destination)?;
-        apply_decisions(&mut history, &batch.destination, batch.decisions);
-        history.save(&batch.destination)?;
-        for photo in batch.photos {
+        let mut history = match batch.operation {
+            Operation::Browse => None,
+            Operation::Import { decisions } => {
+                let mut history = History::load(&batch.destination)?;
+                apply_decisions(&mut history, &batch.destination, decisions);
+                history.save(&batch.destination)?;
+                Some(history)
+            }
+        };
+        let mut reserved: HashSet<_> = batch
+            .photos
+            .iter()
+            .map(|photo| photo.path.clone())
+            .collect();
+        for photo in &batch.photos {
+            let started = crate::timing::enabled().then(Instant::now);
             if stop() {
                 break;
             }
-            let result = import_photo(
-                engine,
-                cache,
-                &photo,
-                &batch.destination,
-                &batch.formats,
-                batch.tiff_color_space,
-                |original| {
-                    // Publish history only after outputs finish. Keep the old
-                    // in-memory history if publication fails and outputs roll back.
-                    let mut updated = history.clone();
-                    updated.set(Record {
-                        identity: photo.identity.clone(),
-                        source: photo.path.to_string_lossy().into_owned(),
-                        disposition: Disposition::Imported {
-                            original: original.to_owned(),
-                        },
-                    });
-                    updated.save(&batch.destination)?;
-                    history = updated;
-                    Ok(())
-                },
-            );
+            let result = if let Some(history) = &mut history {
+                import_photo(
+                    engine,
+                    cache,
+                    photo,
+                    &batch.destination,
+                    &batch.output,
+                    &mut reserved,
+                    |original| {
+                        // Record imports only after all requested files finish.
+                        let mut updated = history.clone();
+                        updated.set(Record {
+                            identity: photo.identity.clone(),
+                            source: photo.path.to_string_lossy().into_owned(),
+                            disposition: Disposition::Imported {
+                                original: original.to_owned(),
+                            },
+                        });
+                        updated.save(&batch.destination)?;
+                        *history = updated;
+                        Ok(())
+                    },
+                )
+                .map(|_| ())
+            } else {
+                export_photo(
+                    engine,
+                    cache,
+                    photo,
+                    &batch.destination,
+                    &batch.output,
+                    &mut reserved,
+                )
+            };
+            if let Some(started) = started {
+                crate::timing::emit(
+                    "batch_photo",
+                    serde_json::json!({
+                        "source":photo.path,"destination":batch.destination,
+                        "operation":if history.is_some(){"import"}else{"browse"},
+                        "completed_ms":started.elapsed().as_secs_f64()*1000.,
+                        "status":if result.is_ok(){"complete"}else{"error"},
+                        "error":result.as_ref().err().map(ToString::to_string),
+                    }),
+                );
+            }
             let mut status = progress.lock().unwrap();
             status.completed += 1;
             match result {
-                Ok(_) => status.imported.push(photo.path),
+                Ok(()) if history.is_some() => status.imported.push(photo.path.clone()),
+                Ok(()) => (),
                 Err(error) => status
                     .errors
                     .push(format!("{}: {error}", photo.path.display())),
@@ -318,15 +363,50 @@ fn run_batch(
     }
 }
 
+fn export_photo(
+    engine: &Engine,
+    cache: &Cache,
+    photo: &Photo,
+    destination: &std::path::Path,
+    output: &Output,
+    reserved: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    // Exports consume cache hits without filling the browsing cache on a miss.
+    // Writing a whole decode/preview bundle here competes with the requested output.
+    let source = match cache.open_cached(&photo.path, |_| {}) {
+        Some(source) => source,
+        None => Arc::new(foveonic::source::Source::open(&photo.path)?),
+    };
+    source_loaded(&photo.path, &source, None);
+    let mut session = RenderSession::new(source);
+    for &format in &output.formats {
+        let path = export::next_path(&photo.path, destination, format, output.conflict, reserved)?;
+        reserved.insert(path.clone());
+        write_export(
+            engine,
+            &mut session,
+            photo,
+            &Export {
+                path,
+                format,
+                tiff_color_space: output.tiff_color_space,
+                conflict: output.conflict,
+            },
+        )?;
+    }
+    Ok(())
+}
+
 fn import_photo(
     engine: &Engine,
     cache: &Cache,
     photo: &Photo,
     destination: &std::path::Path,
-    formats: &[ExportFormat],
-    tiff_color_space: Option<foveonic::render::TiffColorSpace>,
+    output: &Output,
+    reserved: &mut HashSet<PathBuf>,
     finish: impl FnOnce(&std::path::Path) -> Result<()>,
 ) -> Result<PathBuf> {
+    let formats = &output.formats;
     let originals = if formats.is_empty() {
         destination.to_owned()
     } else {
@@ -334,61 +414,119 @@ fn import_photo(
     };
     fs::create_dir_all(&originals)?;
     let extensions: Vec<_> = formats.iter().map(|format| format.extension()).collect();
-    let name = importing::available_name(&photo.path, &originals, destination, &extensions)?;
+    let name = importing::available_name(
+        &photo.path,
+        &originals,
+        destination,
+        &extensions,
+        output.conflict,
+        reserved,
+    )?;
     let original = originals.join(&name);
-    let mut created = Vec::new();
-    let result = (|| -> Result<PathBuf> {
-        if !cache.copy_original(&photo.path, &original, &photo.identity)? {
-            importing::copy_original(&photo.path, &original, &photo.identity)?;
+    let sidecar = foveonic::sidecar::path(&original);
+    let rendered: Vec<_> = formats
+        .iter()
+        .map(|format| destination.join(&name).with_extension(format.extension()))
+        .collect();
+    reserved.insert(original.clone());
+    reserved.insert(sidecar.clone());
+    reserved.extend(rendered.iter().cloned());
+
+    if !cache.copy_original(&photo.path, &original, &photo.identity, output.conflict)? {
+        importing::copy_original(&photo.path, &original, &photo.identity, output.conflict)?;
+    }
+    let recipe = foveonic::sidecar::encode(&photo.settings)?;
+    fs::create_dir_all(sidecar.parent().ok_or("sidecar has no parent")?)?;
+    importing::write_output(&sidecar, output.conflict, |temporary| {
+        fs::write(temporary, &recipe)?;
+        Ok(())
+    })?;
+    if !formats.is_empty() {
+        // Reuse the source cache after copying. A miss reads the completed local copy.
+        let cached = if cache
+            .import_identity(&photo.path)
+            .or_else(|| Identity::read(&photo.path).ok())
+            .as_ref()
+            == Some(&photo.identity)
+        {
+            cache.open_cached(&photo.path, |_| {})
+        } else {
+            None
+        };
+        let source = match cached {
+            Some(source) => source,
+            None => Arc::new(foveonic::source::Source::open(&original)?),
+        };
+        source_loaded(&photo.path, &source, Some(&original));
+        let mut session = RenderSession::new(source);
+        for (&format, path) in formats.iter().zip(rendered) {
+            write_export(
+                engine,
+                &mut session,
+                photo,
+                &Export {
+                    path,
+                    format,
+                    tiff_color_space: output.tiff_color_space,
+                    conflict: output.conflict,
+                },
+            )?;
         }
-        created.push(original.clone());
-        foveonic::sidecar::save(&original, &photo.settings)?;
-        created.push(foveonic::sidecar::path(&original));
-        if !formats.is_empty() {
-            // Reuse the source's decode cache. No second camera-card read after copying
-            // when prefetch has prepared the source. Cache transfer is deferred.
-            let cached = if cache
-                .import_identity(&photo.path)
-                .or_else(|| Identity::read(&photo.path).ok())
-                .as_ref()
-                == Some(&photo.identity)
-            {
-                cache.open_cached(&photo.path, |_| {})
-            } else {
-                None
-            };
-            let source = match cached {
-                Some(source) => source,
-                None => cache.open(&original, |_| {})?,
-            };
-            let mut session = RenderSession::new(source);
-            for &format in formats {
-                let output = destination.join(&name).with_extension(format.extension());
-                export::write(
-                    engine,
-                    &mut session,
-                    &photo.settings,
-                    &Export {
-                        path: output.clone(),
-                        format,
-                        tiff_color_space,
-                    },
-                    &mut Profile::default(),
-                    |_| {},
-                )?;
-                created.push(output);
-            }
-        }
-        let relative = original.strip_prefix(destination)?.to_owned();
-        finish(&relative)?;
-        Ok(relative)
-    })();
-    if result.is_err() {
-        // Runtime failures leave this photo picked for retry. Other successful
-        // photos remain imported. Existing destination files are never removed.
-        for path in created.into_iter().rev() {
-            let _ = fs::remove_file(path);
-        }
+    }
+    let relative = original.strip_prefix(destination)?.to_owned();
+    finish(&relative)?;
+    Ok(relative)
+}
+
+fn source_loaded(
+    path: &std::path::Path,
+    source: &foveonic::source::Source,
+    copied: Option<&std::path::Path>,
+) {
+    if crate::timing::enabled() {
+        let cached = source
+            .load_timings()
+            .iter()
+            .any(|t| t.stage == "decoded cache read");
+        crate::timing::emit(
+            "source_load",
+            serde_json::json!({
+                "frontend":"batch","source":path,"timings":source.load_timings(),
+                "camera":source.metadata.properties.get("CAMMODEL"),
+                "input":if cached {"decoded-cache"}else if copied.is_some(){"copied-original"}else{"original"},
+                "read_from":if cached {None}else{Some(copied.unwrap_or(path))},
+                "extent":[source.metadata.width,source.metadata.height],
+            }),
+        );
+    }
+}
+
+fn write_export(
+    engine: &Engine,
+    session: &mut RenderSession,
+    photo: &Photo,
+    output: &Export,
+) -> Result<()> {
+    let mut profile = Profile::new(crate::timing::mode());
+    let started = crate::timing::enabled().then(Instant::now);
+    let result = export::write(
+        engine,
+        session,
+        &photo.settings,
+        output,
+        &mut profile,
+        |_| {},
+    );
+    if let Some(started) = started {
+        crate::timing::emit(
+            "export",
+            serde_json::json!({
+                "frontend":"batch","source":photo.path,"destination":output.path,
+                "format":output.format.extension(),"settings":photo.settings,"profile":profile,
+                "completed_ms":started.elapsed().as_secs_f64()*1000.,
+                "status":if result.is_ok(){"complete"}else{"error"},
+            }),
+        );
     }
     result
 }

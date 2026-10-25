@@ -17,6 +17,27 @@ pub(super) enum Shortcut {
 }
 
 impl Browser {
+    /// Export highlights in browser order, with the viewed photo as an empty-selection fallback.
+    pub fn processing_selection(&self, active: Option<&Path>) -> Vec<PathBuf> {
+        let paths: Vec<_> = self
+            .files
+            .iter()
+            .filter(|path| self.highlighted.contains(*path) && !self.excluded.contains(*path))
+            .cloned()
+            .collect();
+        if paths.is_empty() {
+            active
+                .filter(|path| {
+                    self.files.iter().any(|p| p == path) && !self.excluded.contains(*path)
+                })
+                .map(Path::to_owned)
+                .into_iter()
+                .collect()
+        } else {
+            paths
+        }
+    }
+
     /// Route workspace commands before egui interprets Space as a button click
     /// or arrows as focus movement. Focused text editors keep the original input.
     pub fn capture_shortcuts(

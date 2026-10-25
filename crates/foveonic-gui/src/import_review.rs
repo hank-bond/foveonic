@@ -1,4 +1,4 @@
-//! Tracks destination-scoped import review, readiness, frozen submission, and batch status.
+//! Prepares frozen processing selections and tracks destination-scoped import review and batch status.
 
 use crate::{
     batch,
@@ -17,6 +17,7 @@ pub struct Review {
     generation: u64,
     scanning: bool,
     sources: HashMap<PathBuf, batch::SourceInfo>,
+    browse_selection: Vec<PathBuf>,
     errors: Vec<String>,
     worker: batch::Worker,
     received_imports: usize,
@@ -28,6 +29,7 @@ impl Review {
             generation: 0,
             scanning: false,
             sources: HashMap::new(),
+            browse_selection: Vec::new(),
             errors: Vec::new(),
             worker: batch::Worker::new(engine, cache, context),
             received_imports: 0,
@@ -38,6 +40,7 @@ impl Review {
         self.generation += 1;
         self.scanning = browser.import_mode;
         self.sources.clear();
+        self.browse_selection.clear();
         self.errors.clear();
         browser.recorded_marks.clear();
         if browser.import_mode {
@@ -48,30 +51,60 @@ impl Review {
             });
         }
     }
+    /// Prepare only the highlighted Browse photos, away from the UI thread.
+    /// Recipes are ready before Process is enabled so later edits cannot alter a submitted job.
+    pub fn prepare_browse(&mut self, browser: &Browser, active: Option<&std::path::Path>) {
+        if browser.import_mode {
+            return;
+        }
+        let paths = browser.processing_selection(active);
+        if paths == self.browse_selection {
+            return;
+        }
+        self.browse_selection = paths;
+        self.generation += 1;
+        let files: Vec<_> = self
+            .browse_selection
+            .iter()
+            .filter(|path| !self.sources.contains_key(*path))
+            .cloned()
+            .collect();
+        self.scanning = !files.is_empty();
+        self.errors.clear();
+        if self.scanning {
+            self.worker.scan(batch::Scan {
+                generation: self.generation,
+                destination: None,
+                files,
+            });
+        }
+    }
     pub fn update(&mut self, browser: &mut Browser) {
         let mut replay_from = self.received_imports;
         if let Some(scanned) = self.worker.receive_scan() {
-            if browser.import_mode && scanned.generation == self.generation {
+            if scanned.generation == self.generation {
                 self.scanning = false;
-                self.sources = scanned.sources;
+                self.sources.extend(scanned.sources);
                 // A completion already received by the UI may postdate this scan.
                 // Replay its recorded status without undoing later checkbox changes.
                 replay_from = scanned.completed_imports;
                 self.errors = scanned.errors;
-                browser.recorded_marks = scanned
-                    .dispositions
-                    .into_iter()
-                    .map(|(path, disposition)| {
-                        (
-                            path,
-                            if matches!(disposition, Disposition::Hidden) {
-                                Mark::Hidden
-                            } else {
-                                Mark::Imported
-                            },
-                        )
-                    })
-                    .collect();
+                if browser.import_mode {
+                    browser.recorded_marks = scanned
+                        .dispositions
+                        .into_iter()
+                        .map(|(path, disposition)| {
+                            (
+                                path,
+                                if matches!(disposition, Disposition::Hidden) {
+                                    Mark::Hidden
+                                } else {
+                                    Mark::Imported
+                                },
+                            )
+                        })
+                        .collect();
+                }
             }
         }
         let progress = self.worker.progress();
@@ -89,11 +122,15 @@ impl Review {
         !self.worker.progress().running
             && !self.scanning
             && self.scan_destination.is_some()
-            && (browser.review_counts().0 > 0 || !browser.marks.is_empty())
+            && if browser.import_mode {
+                browser.review_counts().0 > 0 || !browser.marks.is_empty()
+            } else {
+                !self.browse_selection.is_empty()
+            }
     }
     pub fn show_status(&self, ui: &mut egui::Ui) {
         let progress = self.worker.progress();
-        if self.scanning {
+        if self.scanning && self.browse_selection.is_empty() {
             ui.weak("Checking import history…");
         }
         // Batch status remains visible when the owner returns to ordinary browsing.
@@ -143,10 +180,15 @@ impl Review {
         let mut photos = Vec::new();
         let mut decisions = Vec::new();
         self.errors.clear();
-        for path in &browser.files {
+        let paths = if browser.import_mode {
+            &browser.files
+        } else {
+            &self.browse_selection
+        };
+        for path in paths {
             let mark = browser.mark(path);
             let Some(source) = self.sources.get(path) else {
-                if mark == Mark::Pick || browser.marks.contains_key(path) {
+                if !browser.import_mode || mark == Mark::Pick || browser.marks.contains_key(path) {
                     self.errors.push(format!(
                         "{}: source metadata is unavailable",
                         path.display()
@@ -154,9 +196,9 @@ impl Review {
                 }
                 continue;
             };
-            if mark == Mark::Pick {
+            if !browser.import_mode || mark == Mark::Pick {
                 let edits = sidecars
-                    .review_settings(path)
+                    .requested_settings(path)
                     .map(Ok)
                     .unwrap_or(source.settings.as_ref());
                 match edits {
@@ -178,9 +220,20 @@ impl Review {
         if self.worker.submit(batch::Batch {
             destination,
             photos,
-            decisions,
-            formats: settings.formats(),
-            tiff_color_space: settings.tiff_color_space,
+            operation: if browser.import_mode {
+                batch::Operation::Import { decisions }
+            } else {
+                batch::Operation::Browse
+            },
+            output: batch::Output {
+                formats: if browser.import_mode {
+                    settings.formats()
+                } else {
+                    vec![settings.format]
+                },
+                tiff_color_space: settings.tiff_color_space,
+                conflict: settings.conflict,
+            },
         }) {
             self.received_imports = 0;
         }
@@ -233,52 +286,5 @@ fn apply_imports(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn stale_scan_replays_completions_without_erasing_later_picks_or_hidden_choices() {
-        let mut browser = Browser::new(egui::Context::default());
-        browser.import_mode = true;
-        let path = PathBuf::from("card/image.x3f");
-        browser.files = vec![path.clone()];
-        browser.marks.insert(path.clone(), Mark::Pick);
-        let progress = batch::Progress {
-            destination: Some("photos".into()),
-            imported: vec![path.clone()],
-            ..Default::default()
-        };
-        apply_imports(
-            &mut browser,
-            &progress,
-            Some(std::path::Path::new("photos")),
-            0,
-            0,
-        );
-        assert_eq!(browser.mark(&path), Mark::Imported);
-        assert!(!browser.marks.contains_key(&path));
-        // A scan started before completion replaces recorded status. A new pick
-        // made after the first receipt must survive replaying that completion.
-        for mark in [Mark::Pick, Mark::Hidden] {
-            browser.recorded_marks.clear();
-            browser.marks.insert(path.clone(), mark);
-            apply_imports(
-                &mut browser,
-                &progress,
-                Some(std::path::Path::new("photos")),
-                0,
-                1,
-            );
-            assert_eq!(browser.recorded_marks[&path], Mark::Imported);
-            assert_eq!(browser.mark(&path), mark);
-        }
-        browser.recorded_marks.clear();
-        apply_imports(
-            &mut browser,
-            &progress,
-            Some(std::path::Path::new("elsewhere")),
-            0,
-            0,
-        );
-        assert!(browser.recorded_marks.is_empty());
-    }
-}
+#[path = "import_review_test.rs"]
+mod tests;

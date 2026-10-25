@@ -146,7 +146,7 @@ pub struct Session {
     unsaved: BTreeMap<PathBuf, Settings>,
     errors: BTreeMap<PathBuf, String>,
     memory_only: bool,
-    review_edits: BTreeMap<PathBuf, Settings>,
+    requested: BTreeMap<PathBuf, Settings>,
 }
 impl Session {
     pub fn new(
@@ -166,7 +166,7 @@ impl Session {
             unsaved: BTreeMap::new(),
             errors: BTreeMap::new(),
             memory_only: false,
-            review_edits: BTreeMap::new(),
+            requested: BTreeMap::new(),
         }
     }
     pub fn select(&mut self, path: PathBuf) {
@@ -196,11 +196,12 @@ impl Session {
     pub fn set_memory_only(&mut self, enabled: bool) {
         self.clear();
         self.memory_only = enabled;
-        self.review_edits.clear();
+        self.requested.clear();
     }
 
-    pub fn review_settings(&self, path: &std::path::Path) -> Option<&Settings> {
-        self.review_edits.get(path)
+    /// Batch submission uses the latest controls even after an asynchronous save finishes.
+    pub fn requested_settings(&self, path: &std::path::Path) -> Option<&Settings> {
+        self.requested.get(path).or_else(|| self.unsaved.get(path))
     }
 
     /// An older load must not replace the settings for the photo now selected.
@@ -219,8 +220,9 @@ impl Session {
                                 self.errors.remove(&path);
                             }
                             loaded = Some(
-                                self.review_edits
+                                self.requested
                                     .get(&path)
+                                    .filter(|_| self.memory_only)
                                     .cloned()
                                     .or_else(|| self.unsaved.get(&path).cloned())
                                     .or(saved)
@@ -268,12 +270,14 @@ impl Session {
     }
     /// Resolve recorded camera choices after metadata arrives without losing pre-load edits.
     pub fn refresh(&mut self, settings: &Settings) {
-        if self.memory_only {
-            if self.ready {
-                if let Some(path) = &self.selected {
-                    self.review_edits.insert(path.clone(), settings.clone());
+        if self.ready {
+            if let Some(path) = &self.selected {
+                if self.requested.get(path) != Some(settings) {
+                    self.requested.insert(path.clone(), settings.clone());
                 }
             }
+        }
+        if self.memory_only {
             return;
         }
         if !self.enabled

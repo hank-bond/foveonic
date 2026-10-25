@@ -57,6 +57,8 @@ pub(crate) struct Context {
     gate: Arc<Gate>,
     interrupt_epoch: Option<u64>,
     decoder: Option<crate::decode_pool::Task>,
+    #[cfg(target_os = "macos")]
+    processing: bool,
 }
 
 #[derive(Debug)]
@@ -82,8 +84,27 @@ pub(crate) fn run<T>(gate: Option<Arc<Gate>>, work: impl FnOnce() -> T) -> T {
             gate,
             interrupt_epoch: None,
             decoder: None,
+            #[cfg(target_os = "macos")]
+            processing: false,
         }),
         work,
+    )
+}
+
+/// User-requested processing yields to interaction without maintenance-level throttling.
+pub(crate) fn processing<T>(gate: Arc<Gate>, work: impl FnOnce() -> T) -> T {
+    with_context(
+        Some(Context {
+            gate,
+            interrupt_epoch: None,
+            decoder: None,
+            #[cfg(target_os = "macos")]
+            processing: true,
+        }),
+        || {
+            checkpoint();
+            work()
+        },
     )
 }
 
@@ -96,6 +117,8 @@ pub(crate) fn interruptible<T>(gate: Arc<Gate>, work: impl FnOnce() -> T) -> T {
             gate,
             interrupt_epoch: Some(epoch),
             decoder: None,
+            #[cfg(target_os = "macos")]
+            processing: false,
         }),
         work,
     )
@@ -105,6 +128,7 @@ pub(crate) fn with_context<T>(context: Option<Context>, work: impl FnOnce() -> T
     impl Drop for Restore {
         fn drop(&mut self) {
             CONTEXT.with(|c| *c.borrow_mut() = self.0.take());
+            decode_priority();
         }
     }
     let _restore = Restore(CONTEXT.with(|c| c.replace(context)));
@@ -155,7 +179,7 @@ pub(crate) fn decoder<T>(
 pub(crate) fn decode_priority() {
     #[cfg(target_os = "macos")]
     set_qos(match context() {
-        Some(context) if context.decoder.is_some() => QOS_UTILITY,
+        Some(context) if context.processing || context.decoder.is_some() => QOS_UTILITY,
         Some(_) => QOS_BACKGROUND,
         None => QOS_USER_INITIATED,
     });
@@ -238,6 +262,25 @@ mod tests {
                 .join()
                 .unwrap();
             });
+            assert_eq!(qos(), QOS_USER_INITIATED);
+            processing(Arc::new(Gate::default()), || {
+                assert_eq!(qos(), QOS_UTILITY);
+                run(Some(Arc::new(Gate::default())), || {
+                    assert_eq!(qos(), QOS_BACKGROUND)
+                });
+                assert_eq!(
+                    qos(),
+                    QOS_UTILITY,
+                    "nested maintenance must restore batch priority"
+                );
+                let inherited = context();
+                std::thread::spawn(move || {
+                    with_context(inherited, || assert_eq!(qos(), QOS_UTILITY))
+                })
+                .join()
+                .unwrap();
+            });
+            assert_eq!(qos(), QOS_USER_INITIATED);
             let pool = Arc::new(crate::decode_pool::Pool::new(3).unwrap());
             let order = Arc::new(crate::decode_pool::Order::default());
             interruptible(Arc::new(Gate::default()), || {
@@ -306,21 +349,28 @@ mod tests {
 
     #[test]
     fn background_waits_for_all_queued_and_running_foreground_work() {
-        let gate = Arc::new(Gate::default());
-        let queued = gate.foreground();
-        let running = gate.foreground();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            run(Some(gate), || {
-                checkpoint();
-                tx.send(()).unwrap();
-            })
-        });
-        assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
-        drop(queued);
-        assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
-        drop(running);
-        rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        checkpoint(); // Ordinary decode callers never acquire the background gate.
+        for requested in [false, true] {
+            let gate = Arc::new(Gate::default());
+            let queued = gate.foreground();
+            let running = gate.foreground();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let work = || {
+                    checkpoint();
+                    tx.send(()).unwrap();
+                };
+                if requested {
+                    processing(gate, work)
+                } else {
+                    run(Some(gate), work)
+                }
+            });
+            assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
+            drop(queued);
+            assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
+            drop(running);
+            rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            checkpoint(); // Ordinary decode callers never acquire the background gate.
+        }
     }
 }

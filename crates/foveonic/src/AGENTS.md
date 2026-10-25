@@ -37,7 +37,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
 - **[graph.rs](./graph.rs)** Builds typed dependency-ordered graphs and validates connections between operation ports.
 - **[image.rs](./image.rs)** Keeps GPU images with their photo settings and defines crop and orientation views.
-- **[importing.rs](./importing.rs)** Copies originals and stores current import and hidden decisions in one destination file.
+- **[importing.rs](./importing.rs)** Copies originals, publishes complete outputs, and stores destination import and hidden decisions.
 - **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
 - **[interactive.rs](./interactive.rs)** Reuses unchanged inputs for the current edit while keeping earlier images safe.
 - **[lib.rs](./lib.rs)** Shares X3F decoding and GPU photo processing between TIFF and DNG exports.

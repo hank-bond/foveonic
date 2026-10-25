@@ -425,6 +425,8 @@ pub struct Viewport {
     pub zoom_snap: ZoomPreset,
     last_canvas: Option<(egui::Vec2, [u32; 2])>,
     last_image: Option<(egui::Rect, egui::Rect)>,
+    /// Image-relative center carried until the next photograph's geometry arrives.
+    pending_center: Option<egui::Vec2>,
     navigator_offset: egui::Vec2,
 }
 impl Default for Viewport {
@@ -436,6 +438,7 @@ impl Default for Viewport {
             zoom_snap: ZoomPreset::default(),
             last_canvas: None,
             last_image: None,
+            pending_center: None,
             navigator_offset: egui::Vec2::ZERO,
         }
     }
@@ -447,6 +450,25 @@ impl Viewport {
         self.one_to_one = false;
         self.last_canvas = None;
         self.last_image = None;
+        self.pending_center = None;
+        self.navigator_offset = egui::Vec2::ZERO;
+    }
+
+    /// Start a photo change without carrying stale pixel bounds into loading.
+    /// A pending center survives repeated navigation before any preview arrives.
+    pub fn begin_image(&mut self, preserve_viewport: bool) {
+        if !preserve_viewport {
+            self.reset();
+            return;
+        }
+        if let Some((size, extent)) = self.last_canvas {
+            let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
+            let image_size = egui::vec2(extent[0] as f32, extent[1] as f32) * scale;
+            self.pending_center = Some(egui::vec2(0.5, 0.5) - self.pan / image_size);
+        }
+        self.last_canvas = None;
+        self.last_image = None;
+        self.navigator_offset = egui::Vec2::ZERO;
     }
     fn fit_scale(size: egui::Vec2, extent: [u32; 2]) -> f32 {
         (size.x / extent[0] as f32).min(size.y / extent[1] as f32)
@@ -486,8 +508,12 @@ impl Viewport {
         if self.one_to_one {
             return Some(100.);
         }
-        let (size, extent) = self.last_canvas?;
-        let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
+        let scale = if let Some(scale) = self.scale {
+            scale
+        } else {
+            let (size, extent) = self.last_canvas?;
+            Self::fit_scale(size, extent)
+        };
         Some(scale * pixels_per_point * 100.)
     }
 
@@ -528,6 +554,13 @@ impl Viewport {
     }
 
     fn reframe(&mut self, size: egui::Vec2, extent: [u32; 2]) {
+        if size.x > 0. && size.y > 0. {
+            if let Some(center) = self.pending_center.take() {
+                let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
+                let image_size = egui::vec2(extent[0] as f32, extent[1] as f32) * scale;
+                self.pan = (egui::vec2(0.5, 0.5) - center) * image_size;
+            }
+        }
         if let (Some(scale), Some((old_size, old_extent))) = (self.scale, self.last_canvas) {
             if size != old_size && extent == old_extent && size.x > 0. && size.y > 0. {
                 let old_canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, old_size);
@@ -843,6 +876,67 @@ impl Viewport {
                 egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(95, 155, 245)),
                 egui::StrokeKind::Inside,
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod photo_navigation_tests {
+    use super::*;
+
+    #[test]
+    fn preserved_view_survives_loading_and_maps_to_the_next_images_geometry() {
+        let canvas_size = egui::vec2(800., 600.);
+        let previous_extent = [4000, 3000];
+        let expected_center = egui::vec2(0.65, 0.4);
+        for pixels_per_point in [1., 2.] {
+            for extent in [previous_extent, [2000, 1500], [3000, 4000]] {
+                let scale = 2. / pixels_per_point;
+                let mut viewport = Viewport {
+                    scale: Some(scale),
+                    pan: (egui::vec2(0.5, 0.5) - expected_center)
+                        * egui::vec2(4000., 3000.)
+                        * scale,
+                    last_canvas: Some((canvas_size, previous_extent)),
+                    ..Default::default()
+                };
+                viewport.begin_image(true);
+                assert_eq!(viewport.zoom_percent(pixels_per_point), Some(200.));
+                assert!(viewport.visible_pixels().is_none());
+                // Repeated Shift navigation can supersede photos before they load.
+                viewport.begin_image(true);
+                viewport.reframe(egui::Vec2::ZERO, extent);
+                viewport.reframe(canvas_size, extent);
+                let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, canvas_size);
+                let image = viewport.image_rect(canvas, extent);
+                let center = (canvas.center() - image.min) / image.size();
+                assert!((center - expected_center).length() < 1e-6);
+                assert_eq!(viewport.zoom_percent(pixels_per_point), Some(200.));
+                let bounds = viewport.visible_pixels();
+                // Replacing the loading preview with the render must not move it.
+                viewport.reframe(canvas_size, extent);
+                assert_eq!(viewport.visible_pixels(), bounds);
+            }
+        }
+    }
+
+    #[test]
+    fn normal_navigation_cancels_a_pending_view_and_fit_stays_centered() {
+        let size = egui::vec2(800., 600.);
+        let mut viewport = Viewport {
+            scale: Some(2.),
+            pan: egui::vec2(-700., 240.),
+            last_canvas: Some((size, [4000, 3000])),
+            ..Default::default()
+        };
+        viewport.begin_image(true);
+        viewport.begin_image(false);
+        assert_eq!(viewport.zoom_percent(1.), None);
+        for extent in [[4000, 3000], [3000, 4000]] {
+            viewport.reframe(size, extent);
+            assert_eq!(viewport.scale, None);
+            assert_eq!(viewport.pan, egui::Vec2::ZERO);
+            viewport.begin_image(true);
         }
     }
 }

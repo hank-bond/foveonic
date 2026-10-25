@@ -134,6 +134,7 @@ fn camera_space_is_retained_for_small_and_large_previews_across_architectures() 
     for (model, version, small_format) in [
         ("SIGMA SD15", 0x20000, 3),
         ("SIGMA DP2 Merrill", 0x30000, 18),
+        ("SIGMA DP2 Merrill", 0x30001, 18),
         ("SIGMA dp0 Quattro", 0x40001, 25),
         ("SIGMA sd Quattro H", 0x40002, 25),
     ] {
@@ -507,7 +508,7 @@ fn previews_share_versioned_rotation_with_sensor_metadata() {
         "foveonic-preview-orientation-{}.x3f",
         std::process::id()
     ));
-    for version in [0x20000, 0x30000, 0x40001, 0x40002] {
+    for version in crate::x3f::SUPPORTED_FILE_VERSIONS {
         for degrees in [0, 90, 180, 270] {
             let bytes = fixture_with_rotation(&[(3, [2, 1], 6, vec![1; 6])], version, degrees);
             std::fs::write(&path, bytes).unwrap();

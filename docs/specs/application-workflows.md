@@ -9,7 +9,7 @@ implementation: incomplete
 
 ## Requirements
 
-- The application **must** process Merrill-architecture X3F files.
+- The application **must** process Merrill-architecture X3F files, including version 3.1 originals. RAW decoding, capture metadata and embedded previews **must** accept the same supported file versions.
 - The application **must** provide a GUI and a CLI supporting batch processing.
 - The GUI **must** offer photographic processing controls broadly comparable to the reference implementation and follow [GUI workspace](./gui-workspace.md) requirements.
 - Selecting an X3F in the GUI **must** restore its saved [editing recipe](./editing-sidecars.md), or initialize white balance and color mode from that file's recorded settings when no recipe is saved, and render automatically. Explicit launch overrides **may** replace those choices, and the controls **must** remain editable. Missing or unsupported choices **must** require manual selection.

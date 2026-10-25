@@ -72,7 +72,7 @@ fn import_edits_survive_photo_switches_without_writes_and_are_discarded_on_exit(
     receive(&mut session);
     session.select(a.clone());
     assert_eq!(receive(&mut session), edited);
-    assert_eq!(session.review_settings(&a), Some(&edited));
+    assert_eq!(session.requested_settings(&a), Some(&edited));
     session.set_memory_only(false);
     session.select(a.clone());
     assert_eq!(receive(&mut session), saved);
@@ -137,6 +137,34 @@ fn requested_latest_edits_survive_photo_switches_and_orderly_shutdown() {
     drop(session);
     assert_eq!(sidecar::load(&a).unwrap(), Some(a_settings));
     assert_eq!(sidecar::load(&b).unwrap(), Some(b_settings));
+}
+
+#[test]
+fn batch_recipes_retain_latest_browse_edits_after_save_and_freeze_independently() {
+    let directory = Directory::new();
+    let path = directory.input("photo.x3f");
+    let cache = Arc::new(foveonic::decode_cache::Cache::new());
+    let mut session = Session::new(egui::Context::default(), true, cache);
+    session.select(path.clone());
+    let mut settings = receive(&mut session);
+    settings.exposure = 0.7;
+    session.edited(&settings);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !session.unsaved.is_empty() {
+        session.receive();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(session.requested_settings(&path), Some(&settings));
+    let frozen = session.requested_settings(&path).unwrap().clone();
+    settings.exposure = 1.4;
+    session.edited(&settings);
+    assert_eq!(frozen.exposure, 0.7);
+    session.select(directory.input("other.x3f"));
+    receive(&mut session);
+    assert_eq!(session.requested_settings(&path), Some(&settings));
+    session.set_memory_only(false);
+    assert!(session.requested.is_empty());
 }
 
 #[test]

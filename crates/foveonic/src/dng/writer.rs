@@ -11,6 +11,9 @@ use tiff::{
     tags::Tag,
 };
 
+#[path = "capture.rs"]
+mod capture;
+
 const ROWS_PER_STRIP: u32 = 32;
 const DENOMINATOR: u32 = 1_000_000;
 
@@ -83,6 +86,7 @@ fn samples<W: Write + Seek>(
     let mut offsets = Vec::new();
     let mut counts = Vec::new();
     for strip in packed.chunks(strip_bytes) {
+        crate::background::checkpoint();
         let rgb: Vec<u16> = strip
             .as_chunks::<8>()
             .0
@@ -126,8 +130,11 @@ pub(super) fn write<W: Write + Seek>(
     let (settings, scale) = history_context;
     let [width, height] = size;
     let mut encoder = TiffEncoder::new(&mut out)?;
+    let capture = capture::Capture::new(metadata);
+    let exif = capture.write_exif(&mut encoder, size)?;
     let mut directory = encoder.image_directory()?;
     samples(&mut directory, packed, size)?;
+    capture.write_primary(&mut directory, exif)?;
 
     let model = metadata
         .properties
