@@ -7,7 +7,7 @@ kind: reference
 
 ## 0.4.2
 
-<!-- Add your release introduction here. -->
+Usability improvements to make importing a better experience.
 
 ### Changes
 
@@ -15,8 +15,6 @@ kind: reference
 - Selected-photo loading and rendering take priority over thumbnails, processing batches and speculative caching. Scrolling promotes newly visible thumbnails, and switching folders discards stale preview work.
 - Copy the viewed photograph's settings with Command/Ctrl+Shift+C and paste with Command/Ctrl+Shift+V to all highlighted photographs, or the viewed photograph when none are highlighted. Browse saves edits asynchronously, while Import keeps them in memory until processing. Text and numeric fields retain their normal keyboard behavior.
 - Fix a late preview-cache miss that could leave an evicted browser thumbnail blank.
-
-Apple Silicon downloads target macOS 15 or later. They are Developer ID signed and unnotarized. First launch may require **Open Anyway** in macOS Privacy & Security settings. Interactive display behavior on macOS 15 and across multiple monitors still needs user testing.
 
 ## 0.4.1
 

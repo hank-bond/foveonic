@@ -71,6 +71,8 @@ Previously published unsigned releases remain unchanged. The first signing-only 
 
 Add your introduction above the changelog in the draft if it is not already present. Publish only after review. CI never publishes the release automatically.
 
+Keep release notes focused on changes in that version. Platform support, signing and first-launch guidance live in this guide and need not be repeated in each release. Mention them in version notes only when that behavior changes.
+
 ## Manage Latest
 
 Version tags such as `v0.3.0` identify fixed release commits. GitHub's **Latest** designation is separate from Git tags. Drafts do not replace the published Latest release, and no moving Git tag named `latest` is needed.
