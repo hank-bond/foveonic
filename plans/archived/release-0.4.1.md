@@ -22,8 +22,14 @@ The local tagged bundle reports 0.4.1 in both version fields. The bundle and App
 
 ## Signed draft verification
 
-Merrill reconstruction and UI cleanup are committed as `3775c84`. Release preparation is `94677aa`, tagged `v0.4.1`. The [hosted run](https://github.com/hank-bond/foveonic/actions/runs/40252167818) passed workspace checks, Developer ID signing, archive upload, credential cleanup and signed executable startup on macOS 15.
+Merrill reconstruction and UI cleanup are committed as `3775c84`. The first release candidate was `94677aa`. Its [hosted run](https://github.com/hank-bond/foveonic/actions/runs/40252167818) passed workspace checks, Developer ID signing, archive upload, credential cleanup and signed executable startup on macOS 15.
 
-The downloaded archive matches both SHA256SUMS and its hosted asset digest, `565bd975e4e7bf48c0e5af5bf7928badd20722b3b7200c2228003c7d039844fe`. Its Developer ID signature, hardened runtime, secure timestamp, arm64 architecture, version 0.4.1, macOS 15.0 deployment target and help-command startup verify locally. Interactive macOS 15 display behavior, multi-monitor behavior and Gatekeeper first-launch acceptance remain separate user checks. No app was installed or launched for this preparation.
+That candidate's downloaded archive matched both SHA256SUMS and its hosted asset digest, `565bd975e4e7bf48c0e5af5bf7928badd20722b3b7200c2228003c7d039844fe`. Its Developer ID signature, hardened runtime, secure timestamp, arm64 architecture, version 0.4.1, macOS 15.0 deployment target and help-command startup verified locally. Interactive macOS 15 display behavior, multi-monitor behavior and Gatekeeper first-launch acceptance remain separate user checks. No app was installed or launched for this preparation.
+
+## Shortcut correction
+
+The owner requested Option/Alt+arrow for preserving the viewport so Shift+arrow remains dedicated to range selection. Commit `9e79847` implements the change and passes 27 browser tests, GUI all-target Clippy, formatting, documentation checks and local app packaging. The owner approved replacing the draft candidate, and `v0.4.1` now targets that commit. The draft's shortcut note was updated while preserving its other prose.
+
+The replacement [hosted run](https://github.com/hank-bond/foveonic/actions/runs/40253479231) passed every check, signed packaging and macOS 15 startup. Its downloaded archive matches SHA256SUMS and the hosted digest, `05835ef8083c552519e2b7e29aad6f4a5002e5355a6703405f5c4db4056735f7`. Developer ID signature, hardened runtime, timestamp, arm64 architecture, version 0.4.1, macOS 15.0 deployment target and executable startup verify locally. The draft assets now contain the corrected shortcut.
 
 The [draft](https://github.com/hank-bond/foveonic/releases/tag/v0.4.1) awaits the owner's introduction and publication review. Version 0.4.0 remains Latest.
