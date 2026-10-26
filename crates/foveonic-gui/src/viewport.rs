@@ -903,7 +903,7 @@ mod photo_navigation_tests {
                 viewport.begin_image(true);
                 assert_eq!(viewport.zoom_percent(pixels_per_point), Some(200.));
                 assert!(viewport.visible_pixels().is_none());
-                // Repeated Shift navigation can supersede photos before they load.
+                // Repeated navigation can supersede photos before they load.
                 viewport.begin_image(true);
                 viewport.reframe(egui::Vec2::ZERO, extent);
                 viewport.reframe(canvas_size, extent);

@@ -618,7 +618,7 @@ impl Browser {
                             active = next;
                             chosen = next.map(|index| Selection {
                                 path: files[index].clone(),
-                                preserve_viewport: modifiers.shift,
+                                preserve_viewport: modifiers.alt,
                             });
                             if let Some(selection) = &chosen {
                                 self.highlight(&selection.path, &files, modifiers);

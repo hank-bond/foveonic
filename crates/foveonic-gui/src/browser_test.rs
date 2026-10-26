@@ -688,13 +688,14 @@ fn shift_arrow_extends_the_photo_range_after_clicking_the_viewport() {
         }]);
         assert_eq!(fixture.index(), Some(1));
         assert_eq!(fixture.browser.highlighted.len(), 2);
+        assert_eq!(fixture.preserve_viewport, Some(false));
         fixture.key(egui::Key::Space, false);
         assert_eq!(fixture.browser.review_counts(), (2, 0));
     }
 }
 
 #[test]
-fn shift_arrows_carry_viewport_policy_with_each_navigation_event() {
+fn option_arrows_carry_viewport_policy_with_each_navigation_event() {
     for mode in [Organizer::Icons, Organizer::List] {
         let mut fixture = Fixture::new(mode);
         for key in [
@@ -713,10 +714,11 @@ fn shift_arrows_carry_viewport_policy_with_each_navigation_event() {
                     physical_key: None,
                     pressed: true,
                     repeat,
-                    modifiers: egui::Modifiers::SHIFT,
+                    modifiers: egui::Modifiers::ALT,
                 }]);
                 assert_ne!(fixture.selected, previous);
                 assert_eq!(fixture.preserve_viewport, Some(true));
+                assert_eq!(fixture.browser.highlighted.len(), 1);
             }
             fixture.key(egui::Key::ArrowRight, false);
             assert_eq!(fixture.preserve_viewport, Some(false));

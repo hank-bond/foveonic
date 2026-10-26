@@ -87,7 +87,9 @@ impl Browser {
                 | egui::Key::ArrowRight
                 | egui::Key::ArrowUp
                 | egui::Key::ArrowDown
-                    if modifiers.is_none() || modifiers.shift_only() =>
+                    if modifiers.is_none()
+                        || modifiers.shift_only()
+                        || modifiers.matches_exact(egui::Modifiers::ALT) =>
                 {
                     Some(Shortcut::Arrow(*key, *modifiers))
                 }

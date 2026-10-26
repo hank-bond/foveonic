@@ -16,7 +16,7 @@ kind: reference
 - One Detail change inspection view shows the combined Fine/Coarse brightness adjustment. Merrill Auto sharpening now starts at zero, with manual sharpening kept separate.
 - Noise, Detail, Tone and Color, and Refinement can be bypassed while retaining their settings. Disabled controls stay visible. Compact label columns, brighter slider tracks, and grouped detail controls give sliders more room.
 - Existing Merrill recipes retain their cleanup settings and use neutral detail defaults when the new texture controls are absent. Quattro retains its own reconstruction controls.
-- Hold Shift while navigating the browser with arrow keys to retain the zoom and viewport position across photographs.
+- Hold Option/Alt while navigating the browser with arrow keys to retain the zoom and viewport position across photographs. Shift+arrow extends the highlighted selection.
 - Browse processing handles all highlighted photographs with frozen edits. Processing settings offer Overwrite or Rename on conflicts, defaulting to Overwrite for rendered files, copied originals and their sidecars.
 - DNG exports preserve available capture details, including date, camera, lens, exposure, aperture and ISO.
 - Background cache decoding cancels obsolete queued work when the selection moves. Interactive work and submitted processing take priority over cache maintenance, and batches avoid filling the decode cache unnecessarily.
