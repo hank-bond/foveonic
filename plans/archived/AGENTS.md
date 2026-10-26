@@ -69,7 +69,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[release-0.1.1](./release-0.1.1.md)** _(archived)._ Release v0.1.1 passed local and hosted checks and was published as GitHub's Latest application release.
 - **[release-0.3.0](./release-0.3.0.md)** _(archived)._ Prepare and verify the signed v0.3.0 macOS release with Import, cache scheduling and Merrill Smart previews.
 - **[release-0.4.0](./release-0.4.0.md)** _(archived)._ Prepare and verify the signed v0.4.0 draft with Merrill viewport-first Smart previews and managed display colors.
-- **[release-0.4.1](./release-0.4.1.md)** _(archived)._ Verify the signed 0.4.1 draft with independent Merrill noise/detail controls and processing fixes.
+- **[release-0.4.1](./release-0.4.1.md)** _(archived)._ Record the verified and published 0.4.1 release with Merrill noise/detail controls and processing fixes.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** _(archived)._ Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.

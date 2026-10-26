@@ -1,11 +1,11 @@
 ---
-summary: "Verify the signed 0.4.1 draft with independent Merrill noise/detail controls and processing fixes."
+summary: "Record the verified and published 0.4.1 release with Merrill noise/detail controls and processing fixes."
 status: archived
 ---
 
 # Release 0.4.1
 
-The owner requested a cleanup, commit and patch release preparation under the [release requirements](../../docs/specs/releases.md) and [release guidance](../../docs/releases.md). The verified release remains a draft with space for the owner's introduction.
+The owner requested a cleanup, commit and patch release preparation under the [release requirements](../../docs/specs/releases.md) and [release guidance](../../docs/releases.md). After saving the introduction, the owner explicitly approved publication as Latest.
 
 - [x] Clean up and commit Merrill reconstruction, shared editing controls and their specifications.
 - [x] Verify workspace tests, strict Clippy, formatting, documentation, artwork and native GPU processing.
@@ -32,4 +32,4 @@ The owner requested Option/Alt+arrow for preserving the viewport so Shift+arrow 
 
 The replacement [hosted run](https://github.com/hank-bond/foveonic/actions/runs/40253479231) passed every check, signed packaging and macOS 15 startup. Its downloaded archive matches SHA256SUMS and the hosted digest, `05835ef8083c552519e2b7e29aad6f4a5002e5355a6703405f5c4db4056735f7`. Developer ID signature, hardened runtime, timestamp, arm64 architecture, version 0.4.1, macOS 15.0 deployment target and executable startup verify locally. The draft assets now contain the corrected shortcut.
 
-The [draft](https://github.com/hank-bond/foveonic/releases/tag/v0.4.1) awaits the owner's introduction and publication review. Version 0.4.0 remains Latest.
+The [0.4.1 release](https://github.com/hank-bond/foveonic/releases/tag/v0.4.1) is published as Latest. Publication preserved the owner's saved notes exactly and retained the verified replacement assets and `9e79847` tag target.
