@@ -1,5 +1,6 @@
 //! Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
+mod actions;
 mod application_settings;
 mod batch;
 mod browser;
@@ -24,6 +25,7 @@ mod processing;
 mod progress;
 mod scopes;
 mod sections;
+mod shortcuts;
 mod sidecars;
 mod smart;
 mod smoke;
@@ -52,6 +54,7 @@ struct Opening {
 }
 
 struct App {
+    actions: Vec<actions::Edit>,
     import: import_review::Review,
     settings_open: bool,
     processing_open: bool,
@@ -146,6 +149,7 @@ impl App {
             rs.clone(),
         );
         let mut app = Self {
+            actions: Vec::new(),
             import,
             settings_open: false,
             processing_open: false,
@@ -954,7 +958,7 @@ impl App {
 }
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
-        self.browser.capture_shortcuts(ctx, input, !self.exporting);
+        self.capture_actions(ctx, input);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -1074,7 +1078,8 @@ impl eframe::App for App {
                     );
                 });
             });
-        let mut changed = normalized;
+        let actions_changed = self.dispatch_actions(ctx);
+        let mut changed = normalized || actions_changed;
         let tools_limit = (ctx.available_rect().width() - 240.).clamp(300., 600.);
         egui::SidePanel::right("settings")
             .default_width(

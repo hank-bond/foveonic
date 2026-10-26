@@ -22,6 +22,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 ### Source files
 
+- **[actions.rs](./actions.rs)** Applies workspace commands through browser selection and the existing per-photo editing session.
 - **[application_settings.rs](./application_settings.rs)** Configures application display and temporary disk reuse independently of photographic edits.
 - **[batch.rs](./batch.rs)** Runs frozen Browse and Import batches while yielding work to interactive rendering.
 - **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
@@ -50,6 +51,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[progress.rs](./progress.rs)** Shows request-to-image time and discrete completed loading and rendering stages.
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
+- **[shortcuts.rs](./shortcuts.rs)** Defines workspace actions and routes their keys before widgets, preserving text and modal input.
 - **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
 - **[smart.rs](./smart.rs)** Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.

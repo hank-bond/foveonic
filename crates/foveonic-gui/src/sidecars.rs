@@ -268,6 +268,20 @@ impl Session {
         }
         self.refresh(settings);
     }
+
+    /// Apply an explicit edit to a browser target. Unviewed photos use the same
+    /// coalescing writer and malformed-recipe protection as the active photo.
+    pub fn apply(&mut self, path: PathBuf, settings: Settings) {
+        if self.selected.as_ref() == Some(&path) {
+            self.edited(&settings);
+            return;
+        }
+        self.requested.insert(path.clone(), settings.clone());
+        if self.enabled && !self.memory_only {
+            self.unsaved.insert(path.clone(), settings.clone());
+            self.store.save(path, settings);
+        }
+    }
     /// Resolve recorded camera choices after metadata arrives without losing pre-load edits.
     pub fn refresh(&mut self, settings: &Settings) {
         if self.ready {

@@ -76,7 +76,22 @@ impl Fixture {
             events,
             ..Default::default()
         };
-        self.browser.capture_shortcuts(&self.ctx, &mut input, true);
+        let mut browser_actions = Vec::new();
+        for invocation in crate::shortcuts::capture(
+            &self.ctx,
+            &mut input,
+            crate::shortcuts::Availability {
+                enabled: true,
+                browser: !self.browser.files.is_empty(),
+                import: self.browser.import_mode,
+                settings: false,
+            },
+        ) {
+            if let crate::shortcuts::Action::Browser(action) = invocation.action {
+                browser_actions.push((action, invocation.modifiers));
+            }
+        }
+        self.browser.set_actions(browser_actions);
         let output = self.ctx.run(input, |ctx| {
             let mut grid = egui::Rect::NOTHING;
             let mut focus = egui::Id::NULL;

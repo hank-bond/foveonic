@@ -51,6 +51,82 @@ fn failure(session: &mut Session) {
 }
 
 #[test]
+fn pasted_settings_reach_active_and_unviewed_photos_and_freeze_independently() {
+    let directory = Directory::new();
+    let paths: Vec<_> = ["a.x3f", "b.x3f", "c.x3f"]
+        .map(|name| directory.input(name))
+        .into();
+    let mut session = Session::new(
+        egui::Context::default(),
+        true,
+        Arc::new(foveonic::decode_cache::Cache::new()),
+    );
+    session.select(paths[0].clone());
+    receive(&mut session);
+    let mut copied = Settings::new("Shade", "Vivid");
+    copied.exposure = 0.7;
+    for path in &paths {
+        session.apply(path.clone(), copied.clone());
+    }
+    let frozen = session.requested_settings(&paths[1]).unwrap().clone();
+    copied.exposure = 1.4;
+    session.edited(&copied);
+    session.select(paths[1].clone());
+    assert_eq!(receive(&mut session), frozen);
+    drop(session);
+    assert_eq!(sidecar::load(&paths[0]).unwrap(), Some(copied));
+    for path in &paths[1..] {
+        assert_eq!(sidecar::load(path).unwrap(), Some(frozen.clone()));
+    }
+}
+
+#[test]
+fn pasted_import_settings_survive_selection_without_source_writes() {
+    let directory = Directory::new();
+    let a = directory.input("a.x3f");
+    let b = directory.input("b.x3f");
+    let mut session = Session::new(
+        egui::Context::default(),
+        true,
+        Arc::new(foveonic::decode_cache::Cache::new()),
+    );
+    session.set_memory_only(true);
+    session.select(a.clone());
+    receive(&mut session);
+    let mut copied = Settings::new("Shade", "Vivid");
+    copied.exposure = 0.7;
+    session.apply(a.clone(), copied.clone());
+    session.apply(b.clone(), copied.clone());
+    session.select(b.clone());
+    assert_eq!(receive(&mut session), copied);
+    assert_eq!(session.requested_settings(&a), Some(&copied));
+    drop(session);
+    assert!(!sidecar::path(&a).exists());
+    assert!(!sidecar::path(&b).exists());
+}
+
+#[test]
+fn pasting_to_an_unviewed_malformed_recipe_preserves_it_and_reports_the_error() {
+    let directory = Directory::new();
+    let path = directory.input("protected.x3f");
+    fs::write(sidecar::path(&path), "unreadable recipe").unwrap();
+    let mut session = Session::new(
+        egui::Context::default(),
+        true,
+        Arc::new(foveonic::decode_cache::Cache::new()),
+    );
+    session.apply(path.clone(), Settings::new("Shade", "Vivid"));
+    failure(&mut session);
+    assert!(session.warning().unwrap().contains("protected.x3f"));
+    assert!(session.can_retry());
+    drop(session);
+    assert_eq!(
+        fs::read_to_string(sidecar::path(&path)).unwrap(),
+        "unreadable recipe"
+    );
+}
+
+#[test]
 fn import_edits_survive_photo_switches_without_writes_and_are_discarded_on_exit() {
     let directory = Directory::new();
     let a = directory.input("a.x3f");

@@ -9,13 +9,6 @@ const MARK_GUTTER: f32 = 24.;
 const MARK_SIDE: f32 = 16.;
 const EYE_STROKE: f32 = 1.3;
 
-pub(super) enum Shortcut {
-    SelectAll,
-    TogglePick,
-    Hide,
-    Arrow(egui::Key, egui::Modifiers),
-}
-
 impl Browser {
     /// Export highlights in browser order, with the viewed photo as an empty-selection fallback.
     pub fn processing_selection(&self, active: Option<&Path>) -> Vec<PathBuf> {
@@ -36,72 +29,6 @@ impl Browser {
         } else {
             paths
         }
-    }
-
-    /// Route workspace commands before egui interprets Space as a button click
-    /// or arrows as focus movement. Focused text editors keep the original input.
-    pub fn capture_shortcuts(
-        &mut self,
-        ctx: &egui::Context,
-        input: &mut egui::RawInput,
-        enabled: bool,
-    ) {
-        self.shortcuts.clear();
-        if !enabled || self.files.is_empty() || !input.focused {
-            return;
-        }
-        let (focused, popup) = ctx.memory(|memory| {
-            (
-                memory.focused(),
-                memory.any_popup_open() || memory.top_modal_layer().is_some(),
-            )
-        });
-        // DragValue uses TextEdit with the same ID while its value is focused.
-        let typing = focused.is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
-        if typing || popup {
-            return;
-        }
-        input.events.retain(|event| {
-            let egui::Event::Key {
-                key,
-                pressed: true,
-                modifiers,
-                ..
-            } = event
-            else {
-                return true;
-            };
-            let shortcut = match *key {
-                egui::Key::A if modifiers.matches_exact(egui::Modifiers::COMMAND) => {
-                    Some(Shortcut::SelectAll)
-                }
-                egui::Key::Space if self.import_mode && modifiers.is_none() => {
-                    Some(Shortcut::TogglePick)
-                }
-                egui::Key::Delete | egui::Key::Backspace
-                    if self.import_mode && modifiers.is_none() =>
-                {
-                    Some(Shortcut::Hide)
-                }
-                egui::Key::ArrowLeft
-                | egui::Key::ArrowRight
-                | egui::Key::ArrowUp
-                | egui::Key::ArrowDown
-                    if modifiers.is_none()
-                        || modifiers.shift_only()
-                        || modifiers.matches_exact(egui::Modifiers::ALT) =>
-                {
-                    Some(Shortcut::Arrow(*key, *modifiers))
-                }
-                _ => None,
-            };
-            if let Some(shortcut) = shortcut {
-                self.shortcuts.push(shortcut);
-                false
-            } else {
-                true
-            }
-        });
     }
 
     pub fn review_counts(&self) -> (usize, usize) {

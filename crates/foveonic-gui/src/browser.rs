@@ -1,6 +1,6 @@
 //! Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
 
-use crate::preview_image::PreparedPreview;
+use crate::{preview_image::PreparedPreview, shortcuts::BrowserAction};
 use eframe::egui;
 use foveonic::decode_cache::EntryState;
 use std::{
@@ -102,7 +102,7 @@ pub struct Browser {
     pub excluded: HashSet<PathBuf>,
     pub hide_reviewed: bool,
     pub clear_selection: bool,
-    shortcuts: Vec<review::Shortcut>,
+    actions: Vec<(BrowserAction, egui::Modifiers)>,
     highlighted: HashSet<PathBuf>,
     anchor: Option<PathBuf>,
     last_active: Option<PathBuf>,
@@ -167,7 +167,7 @@ impl Browser {
             excluded: HashSet::new(),
             hide_reviewed: true,
             clear_selection: false,
-            shortcuts: Vec::new(),
+            actions: Vec::new(),
             highlighted: HashSet::new(),
             anchor: None,
             last_active: None,
@@ -237,6 +237,9 @@ impl Browser {
         self.rendered_revisions.clear();
         self.order.clear();
         Ok(())
+    }
+    pub fn set_actions(&mut self, actions: Vec<(BrowserAction, egui::Modifiers)>) {
+        self.actions = actions;
     }
     pub fn invalidate_prefetch(&mut self) {
         self.prefetch_dirty = true;
@@ -609,17 +612,15 @@ impl Browser {
             ui.spacing().item_spacing.y,
         );
         let mut active = selected.and_then(|path| files.iter().position(|p| p == path));
-        let shortcuts = std::mem::take(&mut self.shortcuts);
-        if !shortcuts.is_empty() {
+        let actions = std::mem::take(&mut self.actions);
+        if !actions.is_empty() {
             ui.ctx().request_repaint();
         }
         if ui.is_enabled() {
-            for shortcut in shortcuts {
-                match shortcut {
-                    review::Shortcut::SelectAll => {
-                        self.highlighted = files.iter().cloned().collect()
-                    }
-                    review::Shortcut::TogglePick | review::Shortcut::Hide => {
+            for (action, modifiers) in actions {
+                match action {
+                    BrowserAction::SelectAll => self.highlighted = files.iter().cloned().collect(),
+                    BrowserAction::TogglePick | BrowserAction::Hide => {
                         if self.import_mode {
                             if self.highlighted.is_empty() {
                                 if let Some(path) =
@@ -629,14 +630,14 @@ impl Browser {
                                     self.anchor = Some(path.to_owned());
                                 }
                             }
-                            if matches!(shortcut, review::Shortcut::TogglePick) {
+                            if matches!(action, BrowserAction::TogglePick) {
                                 self.toggle_highlighted(&files);
                             } else {
                                 self.hide_highlighted(&files);
                             }
                         }
                     }
-                    review::Shortcut::Arrow(key, modifiers) => {
+                    BrowserAction::Arrow(key) => {
                         let next = layout.arrow(active, key);
                         if next != active {
                             active = next;

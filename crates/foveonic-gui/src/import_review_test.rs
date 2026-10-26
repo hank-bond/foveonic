@@ -64,7 +64,22 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
         }],
         ..Default::default()
     };
-    browser.capture_shortcuts(&context, &mut input, true);
+    let mut browser_actions = Vec::new();
+    for invocation in crate::shortcuts::capture(
+        &context,
+        &mut input,
+        crate::shortcuts::Availability {
+            enabled: true,
+            browser: true,
+            import: browser.import_mode,
+            settings: false,
+        },
+    ) {
+        if let crate::shortcuts::Action::Browser(action) = invocation.action {
+            browser_actions.push((action, invocation.modifiers));
+        }
+    }
+    browser.set_actions(browser_actions);
     let _ = context.run(input, |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             browser.organizer(ui, Some(&paths[0]), Organizer::Icons);

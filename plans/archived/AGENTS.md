@@ -48,6 +48,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[import-workflow](./import-workflow.md)** _(archived)._ Added inline import review and bounded asynchronous processing with shared recipes and foreground priority.
 - **[inspection-differences](./inspection-differences.md)** _(archived)._ Inspect operation inputs and outputs alongside amplified signed layer/channel differences.
 - **[inspection-popup-help](./inspection-popup-help.md)** _(archived)._ Prevent Quattro inspection menus from crashing when a stage lacks explanatory help.
+- **[keyboard-actions](./keyboard-actions.md)** _(archived)._ Centralize workspace shortcuts and apply copied editing recipes to highlighted photographs.
 - **[lens-correction-audit](./lens-correction-audit.md)** _(archived)._ Audit available lens corrections and defer chromatic aberration after finding no supported vignetting or distortion profile route.
 - **[merrill-fast-noise](./merrill-fast-noise.md)** _(archived)._ Bypass optional Merrill Noise and Detail in Fast while preserving requested controls for Full.
 - **[merrill-fast-preview](./merrill-fast-preview.md)** _(archived)._ Integrate Merrill Fast and Smart previews while reducing native row-correction GPU cost.
