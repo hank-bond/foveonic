@@ -109,7 +109,7 @@ impl Worker {
             if let Some(scan) = scan {
                 let completed = status.lock().unwrap().imported.len();
                 let result = cache
-                    .processing(|| scan_files(scan, completed, &cache, || cache.processing(|| ())));
+                    .background(|| scan_files(scan, completed, &cache, || cache.background(|| ())));
                 // A stale scan can be discarded. Batch completion never waits for UI receipt.
                 *scanned.lock().unwrap() = Some(result);
             }

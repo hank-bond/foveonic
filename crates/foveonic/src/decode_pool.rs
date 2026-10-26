@@ -42,13 +42,15 @@ impl Order {
 impl Turn {
     pub fn wait(&self) -> Result<()> {
         const TURN_POLL: Duration = Duration::from_millis(5);
-        let mut state = self.order.state.lock().unwrap();
         loop {
+            // Thumbnail demand can pause admission. Leave the order lock free
+            // so already-admitted photos can release their turns while paused.
             background::checkpoint_or_cancel()?;
+            let state = self.order.state.lock().unwrap();
             if self.ticket == state.next {
                 return Ok(());
             }
-            state = self.order.wake.wait_timeout(state, TURN_POLL).unwrap().0;
+            drop(self.order.wake.wait_timeout(state, TURN_POLL).unwrap());
         }
     }
     pub fn release(&self) {
@@ -99,7 +101,7 @@ impl Pool {
                 let scheduling = background::context();
                 let decode = &decode;
                 scope.spawn_fifo(move |_| {
-                    *result = Some(background::with_context(scheduling, || {
+                    *result = Some(background::decoding(scheduling, || {
                         background::checkpoint_or_cancel()?;
                         decode(channel)
                     }));
@@ -123,7 +125,7 @@ impl Pool {
             let scheduling = background::context();
             let result = &mut result;
             scope.spawn_fifo(move |_| {
-                *result = Some(background::with_context(scheduling, || {
+                *result = Some(background::decoding(scheduling, || {
                     background::checkpoint_or_cancel()?;
                     decode()
                 }));

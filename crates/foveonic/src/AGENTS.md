@@ -23,7 +23,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 ### Source files
 
-- **[background.rs](./background.rs)** Gives foreground work priority over interruptible prefetch and pausable background jobs.
+- **[background.rs](./background.rs)** Prioritizes selected photos and thumbnails over batches and interruptible speculative work.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[decode_cache.rs](./decode_cache.rs)** Reuses decoded sources, original bytes, selection metadata and previews in a bounded temporary disk LRU.
 - **[decode_cache_lru.rs](./decode_cache_lru.rs)** Applies the shared disk budget while favoring nearby source bundles and display previews.

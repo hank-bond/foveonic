@@ -21,6 +21,8 @@ Grid and list previews must show small muted status dots beside filenames. In th
 
 Implementation and validation are recorded in the [prefetch window plan](../../plans/archived/cache-prefetch-window.md).
 
+[Browser thumbnail demand](./browser-previews.md) must take priority over speculative source reads, publication and maintenance while yielding to selected-photo work. In-memory sensor-layer tasks may finish under thumbnail demand at Utility QoS. Their existing foreground cancellation remains authoritative. Submitted batches outrank speculative work. Passive import-history scans remain background work.
+
 Readiness scans and eviction bookkeeping must follow the same cancellation policy as speculative decoding. A changed selection must stop an obsolete directory walk at its next checkpoint, and the replacement decode neighborhood must take priority over a directory-wide readiness scan. Interrupted scans must not publish stale readiness or postpone a retry as though the scan completed.
 
 The [single-read cache plan](../../plans/archived/single-read-cache.md) records complete-bundle readiness, source-independent selection and import, and loading diagnostics.

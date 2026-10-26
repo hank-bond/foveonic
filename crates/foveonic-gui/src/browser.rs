@@ -7,13 +7,15 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{mpsc, Arc},
-    thread,
 };
 
 #[path = "browser_folders.rs"]
 mod folders;
+#[path = "browser_loader.rs"]
+mod loader;
 #[path = "browser_review.rs"]
 mod review;
+use loader::{Kind, Reply, Request, Worker as Loader};
 
 pub struct Selection {
     pub path: PathBuf,
@@ -27,11 +29,10 @@ const STATUS_INSET: f32 = 10.;
 const STATUS_GUTTER: f32 = 20.;
 const THUMBNAIL_CACHE_ENTRIES: usize = 256;
 const PREVIEW_CACHE_ENTRIES: usize = 2;
-const REQUEST_CAPACITY: usize = 32;
+// Texture uploads must leave time for input and the selected image every frame.
+const REPLIES_PER_FRAME: usize = 4;
 // A miss may become ready after background rendering or folder prefetch.
 const PREVIEW_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-// Bound queued decoded display pixels separately from the inexpensive path queue.
-const REPLY_CAPACITY: usize = 2;
 const GRID_TILE_HEIGHT: f32 = 146.;
 const LIST_ROW_HEIGHT: f32 = 40.;
 // Image padding includes the filename band below each thumbnail.
@@ -62,22 +63,6 @@ fn cache_appearance(state: EntryState) -> (egui::Color32, &'static str) {
         EntryState::Ready => (egui::Color32::from_rgb(85, 137, 99), "RAW, metadata, thumbnails and original file cached and ready."),
         EntryState::Uncached => (egui::Color32::from_rgb(155, 91, 88), "Supported, but not cached. The entry may have been cleared, evicted, or unable to fit in the cache."),
     }
-}
-
-#[derive(Clone, Copy)]
-enum RequestKind {
-    EmbeddedThenCached,
-    CachedOnly,
-}
-struct Request {
-    path: PathBuf,
-    version: u64,
-    kind: RequestKind,
-}
-struct Reply {
-    path: PathBuf,
-    version: u64,
-    image: Result<PreparedPreview, String>,
 }
 
 #[derive(Clone)]
@@ -127,9 +112,16 @@ pub struct Browser {
     pub decode_states: Arc<HashMap<PathBuf, EntryState>>,
     pub cache_enabled: bool,
     prefetch_dirty: bool,
-    sender: mpsc::SyncSender<Request>,
+    thumbnail_worker: Loader,
+    preview_worker: Loader,
+    thumbnail_pass: bool,
+    visible: Vec<PathBuf>,
     receiver: mpsc::Receiver<Reply>,
     pending: HashSet<PathBuf>,
+    pending_previews: HashSet<PathBuf>,
+    // Complete one larger-preview lookup per thumbnail. The two-entry viewport
+    // cache must not make every visible row reload its larger image each second.
+    preview_checked: HashSet<PathBuf>,
     cache: HashMap<PathBuf, Option<Thumbnail>>,
     previews: HashMap<PathBuf, Thumbnail>,
     preview_order: VecDeque<PathBuf>,
@@ -157,69 +149,14 @@ impl Browser {
         cache: Option<Arc<foveonic::decode_cache::Cache>>,
         render_state: Option<eframe::egui_wgpu::RenderState>,
     ) -> Self {
-        let (sender, requests) = mpsc::sync_channel::<Request>(REQUEST_CAPACITY);
-        let (ready, receiver) = mpsc::sync_channel(REPLY_CAPACITY);
-        thread::spawn(move || {
-            while let Ok(Request {
-                path,
-                version,
-                kind,
-            }) = requests.recv()
-            {
-                if matches!(kind, RequestKind::EmbeddedThenCached) {
-                    let thumb = (|| -> foveonic::source::Result<PreparedPreview> {
-                        let preview = if let Some(selection) =
-                            cache.as_ref().and_then(|c| c.selection(&path))
-                        {
-                            selection
-                                .thumbnail
-                                .ok_or("no embedded thumbnail in cached source")?
-                        } else {
-                            foveonic::preview::read(&path)?
-                        };
-                        PreparedPreview::new(preview, false)
-                    })()
-                    .map_err(|e| e.to_string());
-                    if ready
-                        .send(Reply {
-                            path: path.clone(),
-                            version,
-                            image: thumb,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    context.request_repaint();
-                }
-                if let Some(preview) = cache.as_ref().and_then(|c| c.preview(&path)) {
-                    let prepared = PreparedPreview::new(preview, true).map_err(|e| e.to_string());
-                    if ready
-                        .send(Reply {
-                            path,
-                            version,
-                            image: prepared,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    context.request_repaint();
-                } else if matches!(kind, RequestKind::CachedOnly) {
-                    if ready
-                        .send(Reply {
-                            path,
-                            version,
-                            image: Err("No cached preview".into()),
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                    context.request_repaint();
-                }
-            }
-        });
+        let (ready, receiver) = mpsc::sync_channel(loader::REPLY_CAPACITY);
+        let thumbnail_worker = Loader::start(
+            Kind::Thumbnail,
+            cache.clone(),
+            context.clone(),
+            ready.clone(),
+        );
+        let preview_worker = Loader::start(Kind::Preview, cache, context, ready);
         Self {
             render_state,
             files: Vec::new(),
@@ -240,9 +177,14 @@ impl Browser {
             decode_states: Arc::new(HashMap::new()),
             cache_enabled: false,
             prefetch_dirty: true,
-            sender,
+            thumbnail_worker,
+            preview_worker,
+            thumbnail_pass: true,
+            visible: Vec::new(),
             receiver,
             pending: HashSet::new(),
+            pending_previews: HashSet::new(),
+            preview_checked: HashSet::new(),
             cache: HashMap::new(),
             previews: HashMap::new(),
             preview_order: VecDeque::new(),
@@ -269,6 +211,10 @@ impl Browser {
             ));
         };
         let files = folders::discover(dir)?;
+        self.thumbnail_worker.replace(Vec::new(), &[]);
+        self.preview_worker.replace(Vec::new(), &[]);
+        self.thumbnail_pass = true;
+        self.visible.clear();
         self.files = files;
         self.prefetch_dirty = true;
         self.root = Some(dir.to_owned());
@@ -285,6 +231,8 @@ impl Browser {
         self.preview_order.clear();
         self.versions.clear();
         self.pending.clear();
+        self.pending_previews.clear();
+        self.preview_checked.clear();
         self.preview_attempts.clear();
         self.rendered_revisions.clear();
         self.order.clear();
@@ -305,22 +253,37 @@ impl Browser {
         })
     }
     pub fn receive(&mut self, ctx: &egui::Context) {
-        while let Ok(Reply {
-            path,
-            version,
-            image,
-        }) = self.receiver.try_recv()
-        {
+        for _ in 0..REPLIES_PER_FRAME {
+            let Ok(Reply {
+                path,
+                version,
+                kind,
+                image,
+            }) = self.receiver.try_recv()
+            else {
+                return;
+            };
             if self.versions.get(&path) != Some(&version) || !self.files.contains(&path) {
                 continue;
             }
-            self.pending.remove(&path);
+            match kind {
+                Kind::Thumbnail => {
+                    self.pending.remove(&path);
+                }
+                Kind::Preview => {
+                    self.pending_previews.remove(&path);
+                    self.preview_checked.insert(path.clone());
+                }
+            }
             if let Ok(image) = image {
                 self.insert(ctx, path, image);
-            } else {
+            } else if kind == Kind::Thumbnail {
+                // A missing larger preview says nothing about a small thumbnail
+                // that may have been evicted while this reply was in flight.
                 self.cache.entry(path).or_insert(None);
             }
         }
+        ctx.request_repaint();
     }
     fn upload(
         &self,
@@ -349,7 +312,12 @@ impl Browser {
         self.order.retain(|p| p != &path);
         self.order.push_back(path.clone());
         while self.order.len() > THUMBNAIL_CACHE_ENTRIES {
-            if let Some(old) = self.order.pop_front() {
+            let index = self
+                .order
+                .iter()
+                .position(|p| !self.visible.contains(p))
+                .unwrap_or(0);
+            if let Some(old) = self.order.remove(index) {
                 self.cache.remove(&old);
             }
         }
@@ -387,6 +355,10 @@ impl Browser {
             self.sequence += 1;
             self.versions.insert(path.clone(), self.sequence);
             self.pending.remove(&path);
+            self.pending_previews.remove(&path);
+            self.preview_checked.insert(path.clone());
+            self.thumbnail_worker.cancel(&path);
+            self.preview_worker.cancel(&path);
             self.insert(ctx, path, image);
         }
     }
@@ -405,26 +377,78 @@ impl Browser {
         {
             self.preview_attempts
                 .insert(path.to_owned(), std::time::Instant::now());
-            self.request(path, RequestKind::CachedOnly);
+            self.request(path, Kind::Preview);
         }
         self.thumbnail(path)
     }
-    fn request(&mut self, path: &Path, kind: RequestKind) {
-        if self.pending.contains(path) {
+    fn request(&mut self, path: &Path, kind: Kind) {
+        let pending = match kind {
+            Kind::Thumbnail => &mut self.pending,
+            Kind::Preview => &mut self.pending_previews,
+        };
+        if !pending.insert(path.to_owned()) {
             return;
         }
-        self.sequence += 1;
-        if self
-            .sender
-            .try_send(Request {
-                path: path.to_owned(),
-                version: self.sequence,
-                kind,
-            })
-            .is_ok()
-        {
+        let version = if kind == Kind::Thumbnail {
+            self.pending_previews.remove(path);
+            self.preview_checked.remove(path);
+            self.preview_worker.cancel(path);
+            self.sequence += 1;
             self.versions.insert(path.to_owned(), self.sequence);
-            self.pending.insert(path.to_owned());
+            self.sequence
+        } else if let Some(version) = self.versions.get(path) {
+            *version
+        } else {
+            pending.remove(path);
+            return;
+        };
+        let request = Request {
+            path: path.to_owned(),
+            version,
+        };
+        match kind {
+            Kind::Thumbnail => self.thumbnail_worker.request(request),
+            Kind::Preview => self.preview_worker.request(request),
+        }
+    }
+    fn schedule_thumbnails(&mut self, visible: Vec<PathBuf>, selected: Option<&Path>) {
+        self.visible = visible;
+        if std::mem::take(&mut self.thumbnail_pass) {
+            let requests = self
+                .files
+                .iter()
+                .filter(|p| !self.cache.contains_key(*p))
+                .map(|path| {
+                    let version = if self.pending.contains(path) {
+                        self.versions[path]
+                    } else {
+                        self.sequence += 1;
+                        self.versions.insert(path.clone(), self.sequence);
+                        self.pending.insert(path.clone());
+                        self.sequence
+                    };
+                    Request {
+                        path: path.clone(),
+                        version,
+                    }
+                })
+                .collect();
+            self.thumbnail_worker.replace(requests, &self.visible);
+        } else {
+            self.thumbnail_worker.visible(&self.visible);
+        }
+        let mut keep = self.visible.clone();
+        if let Some(path) = selected {
+            keep.push(path.to_owned());
+        }
+        self.preview_worker.retain(&keep);
+        self.pending_previews.retain(|p| keep.contains(p));
+        for path in self.visible.clone() {
+            if self.cache.get(&path).is_some_and(Option::is_some)
+                && !self.preview_checked.contains(&path)
+            {
+                self.preview(&path);
+            }
         }
     }
     pub fn reveal_selection(&mut self) {
@@ -437,7 +461,7 @@ impl Browser {
         if let Some(texture) = self.cache.get(path) {
             return texture.clone();
         }
-        self.request(path, RequestKind::EmbeddedThenCached);
+        self.request(path, Kind::Thumbnail);
         None
     }
     pub fn tile(
@@ -653,6 +677,19 @@ impl Browser {
         scroll.show_viewport(ui, |ui, viewport| {
             ui.set_height(layout.height);
             let origin = ui.max_rect().min;
+            let visible = layout
+                .visible(viewport.top(), viewport.bottom())
+                .iter()
+                .filter_map(|row| {
+                    if let folders::Content::Photos(range) = &row.content {
+                        Some(range.clone())
+                    } else {
+                        None
+                    }
+                })
+                .flat_map(|range| files[range].iter().cloned())
+                .collect();
+            self.schedule_thumbnails(visible, selected);
             for row in layout.visible(viewport.top(), viewport.bottom()) {
                 let rect = egui::Rect::from_min_size(
                     origin + egui::vec2(0., row.top),
@@ -852,6 +889,7 @@ mod tests {
         tx.send(super::Reply {
             path: path.clone(),
             version: 1,
+            kind: super::Kind::Thumbnail,
             image: Ok(prepared([0, 0, 255], [16, 8])),
         })
         .unwrap();
@@ -873,6 +911,122 @@ mod tests {
             .contains_key(std::path::Path::new("one.x3f")));
         assert!(browser.thumbnail(std::path::Path::new("one.x3f")).is_some());
     }
+    #[test]
+    fn sidebar_preview_lookup_finishes_once_while_the_selected_view_can_retry() {
+        let context = eframe::egui::Context::default();
+        let mut browser = super::Browser::new(context.clone());
+        let path = std::path::PathBuf::from("photo.x3f");
+        browser.files.push(path.clone());
+        browser.versions.insert(path.clone(), 1);
+        let mut small = prepared([128; 3], [16, 8]);
+        small.preview = None;
+        browser.insert(&context, path.clone(), small);
+        browser.pending_previews.insert(path.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        browser.receiver = rx;
+        tx.send(super::Reply {
+            path: path.clone(),
+            version: 1,
+            kind: super::Kind::Preview,
+            image: Err("No cached preview".into()),
+        })
+        .unwrap();
+        browser.receive(&context);
+        browser.schedule_thumbnails(vec![path.clone()], None);
+        assert!(browser.pending_previews.is_empty());
+        assert!(browser.preview(&path).is_some());
+        assert!(browser.pending_previews.contains(&path));
+    }
+    #[test]
+    fn a_late_preview_miss_does_not_suppress_reloading_an_evicted_thumbnail() {
+        let context = eframe::egui::Context::default();
+        let mut browser = super::Browser::new(context.clone());
+        let path = std::path::PathBuf::from("evicted.x3f");
+        browser.files.push(path.clone());
+        browser.versions.insert(path.clone(), 1);
+        browser.pending_previews.insert(path.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        browser.receiver = rx;
+        tx.send(super::Reply {
+            path: path.clone(),
+            version: 1,
+            kind: super::Kind::Preview,
+            image: Err("No cached preview".into()),
+        })
+        .unwrap();
+        browser.receive(&context);
+        assert!(!browser.cache.contains_key(&path));
+        assert!(browser.thumbnail(&path).is_none());
+        assert!(browser.pending.contains(&path));
+    }
+    #[test]
+    fn folder_pass_prepares_offscreen_thumbnails_once_and_keeps_visible_textures() {
+        use std::time::{Duration, Instant};
+        let folder = tempfile::tempdir().unwrap();
+        let mut data = vec![0; 40];
+        data[..4].copy_from_slice(b"FOVb");
+        data[4..8].copy_from_slice(&0x20000_u32.to_le_bytes());
+        data.extend(b"SECi");
+        for word in [0x20000_u32, 2, 3, 2, 1, 6] {
+            data.extend(word.to_le_bytes());
+        }
+        data.extend([128_u8; 6]);
+        let directory = data.len() as u32;
+        data.extend(b"SECd");
+        for word in [0x20000_u32, 1, 40, 34] {
+            data.extend(word.to_le_bytes());
+        }
+        data.extend(b"IMAG");
+        data.extend(directory.to_le_bytes());
+        let count = super::THUMBNAIL_CACHE_ENTRIES + 20;
+        for index in 0..count {
+            std::fs::write(folder.path().join(format!("photo-{index:04}.x3f")), &data).unwrap();
+        }
+        let context = eframe::egui::Context::default();
+        let mut browser = super::Browser::new(context.clone());
+        browser.open(folder.path()).unwrap();
+        let draw = |browser: &mut super::Browser| {
+            context.run(
+                eframe::egui::RawInput {
+                    screen_rect: Some(eframe::egui::Rect::from_min_size(
+                        eframe::egui::Pos2::ZERO,
+                        eframe::egui::vec2(350., 400.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    eframe::egui::CentralPanel::default().show(ctx, |ui| {
+                        browser.organizer(ui, None, crate::preferences::Organizer::Icons);
+                    });
+                },
+            )
+        };
+        let _ = draw(&mut browser);
+        assert!(!browser.visible.is_empty());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !browser.pending.is_empty() && Instant::now() < deadline {
+            browser.receive(&context);
+            let _ = draw(&mut browser);
+            std::thread::yield_now();
+        }
+        assert!(browser.pending.is_empty(), "folder warmup did not finish");
+        assert_eq!(browser.versions.len(), count);
+        assert_eq!(browser.order.len(), super::THUMBNAIL_CACHE_ENTRIES);
+        assert!(browser
+            .visible
+            .iter()
+            .all(|p| browser.cache.get(p).is_some_and(Option::is_some)));
+        let revision = browser.sequence;
+        for _ in 0..3 {
+            let _ = draw(&mut browser);
+        }
+        assert!(browser.pending.is_empty());
+        assert_eq!(
+            browser.sequence, revision,
+            "eviction restarted the greedy pass"
+        );
+    }
+
     #[test]
     fn unavailable_folder_does_not_open_its_parent_or_replace_the_organizer() {
         let mut browser = super::Browser::new(eframe::egui::Context::default());

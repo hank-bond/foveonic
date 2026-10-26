@@ -77,6 +77,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[signed-releases](./signed-releases.md)** _(archived)._ Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases.
 - **[single-read-cache](./single-read-cache.md)** _(archived)._ Prepare all browsing and rendering inputs from one original read and keep cache hits independent of card I/O.
 - **[thumbnail-and-preview-cache](./thumbnail-and-preview-cache.md)** _(archived)._ Refresh rendered thumbnails, cache sharper asynchronous previews, and collect recipes in a visible source-folder directory.
+- **[thumbnail-priority](./thumbnail-priority.md)** _(archived)._ Load visible thumbnails first, greedily prepare the folder, and coordinate work behind the selected photo.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** _(archived)._ Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
 - **[tiger-integration](./tiger-integration.md)** _(archived)._ Complete Tiger's native full-resolution rendering before consolidating and evaluating portable methods on ordinary Quattro.
 - **[tiger-smart-preview](./tiger-smart-preview.md)** _(archived)._ Enable Tiger Fast and Smart previews through the shared overview, regional refinement and whole-frame continuation.

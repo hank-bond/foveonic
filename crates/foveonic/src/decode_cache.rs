@@ -305,6 +305,15 @@ impl Cache {
     pub fn foreground(&self) -> Activity {
         self.gate.foreground()
     }
+    /// Reserve browser-thumbnail priority while small requests remain queued.
+    /// Active photo work still comes first. Speculative in-memory decodes may finish.
+    pub fn thumbnail_demand(&self) -> Activity {
+        self.gate.thumbnails()
+    }
+    /// Run a small preview read behind the selected photo, ahead of optional jobs.
+    pub fn thumbnail<T>(&self, work: impl FnOnce() -> T) -> T {
+        crate::background::thumbnail(self.gate.clone(), work)
+    }
     /// Run optional presentation work on a dedicated background thread.
     /// This lowers that thread's scheduling priority and shares prefetch's foreground gate.
     pub fn background<T>(&self, work: impl FnOnce() -> T) -> T {

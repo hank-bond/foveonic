@@ -89,8 +89,8 @@ impl Cache {
     /// Call on a dedicated background thread. Missing, stale,
     /// disabled, or corrupt entries all fall back to the embedded thumbnail.
     pub fn preview(&self, path: &Path) -> Option<Preview> {
-        // These small reads must remain available while the main render runs,
-        // so they use low priority rather than waiting behind its activity gate.
+        // The caller owns cooperative scheduling. Keep larger-image decoding
+        // at background QoS on this dedicated thread.
         crate::background::lower_priority();
         let settings = self.control.lock().unwrap().settings.clone();
         if !settings.enabled || settings.max_bytes == 0 {
