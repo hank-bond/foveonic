@@ -16,6 +16,25 @@ fn capabilities(model: &str) -> ControlCapabilities {
 }
 
 #[test]
+fn merrill_texture_defaults_keep_manual_sharpening_independent() {
+    let mut s = Settings::new("Sunlight", "Standard");
+    s.reconstruction = Some(Default::default());
+    assert!(capabilities("SIGMA DP2 Merrill").validate(&s).is_ok());
+    let metadata = Metadata {
+        processing_version: None,
+        width: 4928,
+        height: 3264,
+        rotation: 0,
+        properties: [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    assert_eq!(s.effective_sharpen_amount(&metadata).unwrap(), 0.);
+    s.sharpen_amount = Some(0.75);
+    assert_eq!(s.effective_sharpen_amount(&metadata).unwrap(), 0.75);
+}
+
+#[test]
 fn classic_models_share_supported_controls_and_preserve_effect_selections() {
     for model in [
         "SIGMA SD9",
@@ -599,4 +618,27 @@ fn quattro_capture_panel_support_includes_tiger_and_still_checks_full_geometry()
         // the recipe's geometry and processing-version requirements.
         assert!(!capabilities.editing_available(Some(&metadata), Some(model)));
     }
+}
+
+#[test]
+fn retired_residual_amount_resets_only_for_merrill_and_keeps_texture_edits() {
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(serde_json::from_str(r#"{"detail":0.7,"chroma":3,"overrides":{"mean-decay":0.6},"texture":{"enabled":false,"fine":0.8,"coarse":0.2,"fine_size":0.75,"coarse_size":1.6}}"#).unwrap());
+    let original = settings.clone();
+    let merrill = capabilities("SIGMA DP2 Merrill");
+    assert!(merrill.validate(&settings).is_ok());
+    assert!(merrill.normalize(&mut settings));
+    assert_eq!(settings.reconstruction.unwrap().detail, 1.);
+    assert_eq!(
+        settings.reconstruction.unwrap().texture,
+        original.reconstruction.unwrap().texture
+    );
+    assert_eq!(settings.reconstruction.unwrap().chroma, 3);
+    assert!(merrill.validate(&settings).is_ok());
+    assert!(!merrill.normalize(&mut settings));
+    let mut quattro = original;
+    let cap = capabilities("SIGMA dp0 Quattro");
+    cap.normalize(&mut quattro);
+    assert_eq!(quattro.reconstruction.unwrap().detail, 0.7);
+    assert_eq!(quattro.reconstruction.unwrap().texture, Default::default());
 }

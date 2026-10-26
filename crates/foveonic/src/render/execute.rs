@@ -153,7 +153,7 @@ impl Engine {
             let extent = match &node.operation {
                 Operation::ReduceLayers(prepared) => prepared.output_extent(),
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
-                Operation::Reconstruct { params, .. } => params.output_extent(),
+                Operation::ProjectColorTiles { params, .. } => params.output_extent(),
                 Operation::NoiseContext(p) => reconstruction::context_extent(*p),
                 Operation::PackedLab(p) => p.extent(),
                 Operation::CodeCrop(p) => p.extent(),
@@ -990,7 +990,6 @@ impl Engine {
                                 base.tiles.as_ref().unwrap(),
                                 *params,
                                 3,
-                                false,
                                 profile,
                             )?,
                             description: DataType::CalibratedLayers
@@ -1004,7 +1003,6 @@ impl Engine {
                                 base.edges.as_ref().unwrap(),
                                 *params,
                                 1,
-                                false,
                                 profile,
                             )?,
                             description: DataType::ScalarField
@@ -1023,14 +1021,16 @@ impl Engine {
                         None
                     }
                 }
-                Operation::Column(params) => {
-                    let tiles = reconstruction::column(gpu, &input(0).buffer, *params, profile)?;
+                Operation::Column { params, enabled } => {
+                    let tiles = if *enabled {
+                        reconstruction::column(gpu, &input(0).buffer, *params, profile)?
+                    } else {
+                        reconstruction::raw_tiles(gpu, &input(0).buffer, *params, profile)?
+                    };
                     let projected = node.outputs[1];
                     if required[projected] {
                         values[projected] = Some(Value {
-                            buffer: reconstruction::project(
-                                gpu, &tiles, *params, 3, false, profile,
-                            )?,
+                            buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: DataType::CalibratedLayers
                                 .image_description(params.output_extent()),
                         });
@@ -1048,9 +1048,7 @@ impl Engine {
                     let projected = node.outputs[1];
                     if required[projected] {
                         values[projected] = Some(Value {
-                            buffer: reconstruction::project(
-                                gpu, &ratio, *params, 1, false, profile,
-                            )?,
+                            buffer: reconstruction::project(gpu, &ratio, *params, 1, profile)?,
                             description: DataType::LuminanceRatio
                                 .image_description(params.output_extent()),
                         });
@@ -1076,7 +1074,6 @@ impl Engine {
                                 result.ratio.as_ref().unwrap(),
                                 *params,
                                 1,
-                                false,
                                 profile,
                             )?,
                             description: DataType::LuminanceRatio
@@ -1090,7 +1087,6 @@ impl Engine {
                                 result.mask.as_ref().unwrap(),
                                 *params,
                                 1,
-                                false,
                                 profile,
                             )?,
                             description: DataType::ScalarField
@@ -1103,23 +1099,46 @@ impl Engine {
                         None
                     }
                 }
-                Operation::Detail(params) => Some(reconstruction::mix(
+                Operation::ProjectColorTiles { params, .. } => Some(reconstruction::project(
                     gpu,
                     &input(0).buffer,
-                    &input(1).buffer,
-                    &input(2).buffer,
                     *params,
+                    3,
                     profile,
                 )?),
+                Operation::Texture { params, prepared } => {
+                    use crate::nodes::color::texture;
+                    let result = texture::apply(
+                        gpu,
+                        texture::Inputs {
+                            raw: &input(0).buffer,
+                            base: (node.inputs.len() > 1).then(|| &input(1).buffer),
+                            ratio: (node.inputs.len() > 2).then(|| &input(2).buffer),
+                        },
+                        *params,
+                        *prepared,
+                        texture::Requested {
+                            layers: required[index],
+                            change: required[node.outputs[1]],
+                        },
+                        profile,
+                    )?;
+                    if let Some(buffer) = result.change {
+                        values[node.outputs[1]] = Some(Value {
+                            buffer,
+                            description: DataType::LuminanceRatio
+                                .image_description(params.output_extent()),
+                        });
+                    }
+                    result.layers
+                }
                 Operation::TiledColor { params, color, .. } => {
                     let tiles =
                         reconstruction::color(gpu, &input(0).buffer, *color, *params, profile)?;
                     let projected = node.outputs[1];
                     if required[projected] {
                         values[projected] = Some(Value {
-                            buffer: reconstruction::project(
-                                gpu, &tiles, *params, 3, false, profile,
-                            )?,
+                            buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: graph.outputs[projected]
                                 .data
                                 .image_description(params.output_extent()),
@@ -1133,48 +1152,13 @@ impl Engine {
                     let projected = node.outputs[1];
                     if required[projected] {
                         values[projected] = Some(Value {
-                            buffer: reconstruction::project(
-                                gpu, &tiles, *params, 3, false, profile,
-                            )?,
+                            buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: graph.outputs[projected]
                                 .data
                                 .image_description(params.output_extent()),
                         });
                     }
                     required[index].then_some(tiles)
-                }
-                Operation::Reconstruct { params, .. } => {
-                    let signal_id = node.outputs[1];
-                    let signal = if required[signal_id] {
-                        Some(reconstruction::signal(
-                            gpu,
-                            &input(0).buffer,
-                            &input(2).buffer,
-                            *params,
-                            profile,
-                        )?)
-                    } else {
-                        None
-                    };
-                    let rgb = if required[index] {
-                        Some(reconstruction::restore(
-                            gpu,
-                            &input(0).buffer,
-                            &input(1).buffer,
-                            *params,
-                            profile,
-                        )?)
-                    } else {
-                        None
-                    };
-                    if let Some(buffer) = signal {
-                        values[signal_id] = Some(Value {
-                            buffer,
-                            description: DataType::SignedDetail
-                                .image_description(params.output_extent()),
-                        });
-                    }
-                    rgb
                 }
                 Operation::Banding(prepared) => {
                     let result =

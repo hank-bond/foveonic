@@ -75,14 +75,26 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Highlights" => {
             "Shapes the brighter part of the tone curve. Use it to adjust the appearance of bright surfaces and their tonal separation. It is not highlight recovery: detail lost at capture cannot be brought back by this slider. 0 leaves it unchanged."
         }
+        "Tone" | "Tone and Color" => {
+            "Temporarily bypasses exposure, saturation and tonal edits while preserving their values. The selected camera color mode and its base tone curve remain active. Neutral slider values already leave those edits unchanged."
+        }
+        "Refinement" => {
+            "Temporarily bypasses final sharpening while preserving its amount and Auto selection. Zero sharpening is already neutral."
+        }
+        "Noise" => {
+            "Enables chromatic, luminance and column noise cleanup. Switching it off preserves your settings and leaves Detail independent. Automatic ColorDQ follows Noise. A manual ColorDQ override remains independent."
+        }
+        "Detail" => {
+            "Enables Fine and Coarse brightness texture adjustments independently of Noise. Switching it off uses neutral detail while preserving your amounts and sizes. At 1 both amounts already recombine neutrally and the spatial detail filters are skipped."
+        }
         "Noise and Detail" => {
-            "Enables noise reduction followed by detail restoration, using the camera's noise information. Use it to balance smoother areas against fine texture. Too much smoothing can look waxy. Too much restored detail can bring noise back. The Chroma noise, Luma noise, Banding noise, Detail, and ColorDQ gain controls are shown while this is on."
+            "Enables the camera's noise reduction and detail restoration. Too much smoothing can look waxy. Too much restored detail can bring noise back. Shared sensor corrections remain independently selectable."
         }
         "Chroma noise" => {
-            "Reduces colored speckles and blotches, especially in shadows. Start at 2. These are five preset settings. 0 still smooths noise and is not an Off setting. Compare smooth areas and fine color texture: cleanup can also remove real color detail."
+            "Reduces colored speckles and blotches, especially in shadows. For Merrill, higher positions remove more colored grain independently of texture contrast. Start at 2. The five settings run from 0 to 4. At 0 the added chromatic cleanup is off, while shared sensor corrections remain active. Quattro retains its camera presets. Compare smooth areas and fine color texture: cleanup can also remove real color detail."
         }
         "Luma noise" => {
-            "Reduces grain rather than colored blotches. Start at 2. These are five preset settings. 0 still smooths noise and is not an Off setting. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
+            "Reduces grain rather than colored blotches. For Merrill, higher positions use more cleaned brightness evidence without adding contrast gain. Fine and Coarse detail set texture restoration separately. Start at 2. At 0 the added brightness cleanup is off, while shared sensor corrections remain active. Quattro retains its camera presets. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
         }
         "Banding noise" => {
             "Reduces sensor-column stripes independently of Row banding in Corrections. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger filter to estimate column offsets, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
@@ -90,8 +102,17 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Smooth / Crisp" => {
             "Balances smoother rendering against crisper texture. It selects the camera's linked detail-restoration, local-contrast and sharpening settings. The middle position is the normal starting point. Color and luminance noise remain separate controls."
         }
-        "Detail" => {
-            "Controls how much fine texture is kept after noise reduction. At 0 the image is smoother. 1 is the normal starting point. Higher values bring back more texture, but can also bring back grain and colored speckles. This is separate from sharpening."
+        "Fine detail" => {
+            "Restores the smallest brightness textures after noise cleanup, including hair edges and pores. 0 suppresses this texture, 1 restores it at unit strength, and higher values enhance it. Coarse detail controls broader texture separately. Noise and real texture can occupy the same scale."
+        }
+        "Fine size" => {
+            "Size of the Fine/Coarse boundary. 1 keeps the tuned default. Higher values include broader structures in Fine detail. The two bands share this boundary. Set a detail amount away from 1, then inspect texture.change to see its effect. Double-click to reset."
+        }
+        "Coarse size" => {
+            "Width of the additional blur separating Coarse detail from broad shading. 1 keeps the tuned default. Higher values include broader structures in Coarse detail. Set a detail amount away from 1 and inspect texture.change to see its effect. Both amounts at 1 recombine neutrally regardless of size. Double-click to reset."
+        }
+        "Coarse detail" => {
+            "Restores medium-scale brightness texture and local contrast, including skin relief and fabric. Lower values give a gentler appearance while retaining broad shading. 1 restores unit strength. Higher values emphasize relief. Fine detail controls smaller structures separately."
         }
         "ColorDQ gain" => {
             "Tames fine color speckles using camera information. Too much can also weaken real color detail. 0 turns it off. This is different from Saturation. Compare a shadow crop before increasing it. A chooses the amount automatically while noise reduction is on."
@@ -274,14 +295,17 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "detail.ratio" => {
             "A diagnostic view of the brightness detail to be restored. Middle gray means no brightness change, lighter means a boost, and darker means a reduction. It is not the finished photo."
         }
+        "texture.change" => {
+            "The brightness gain from the Fine and Coarse adjustments relative to neutral detail. Middle gray means unchanged, lighter means increased, and darker means decreased. Both detail amounts at 1 produce flat gray. This excludes denoising, broad shading, color conversion, and final sharpening. These are multiplicative gains before color conversion, not final RGB differences."
+        }
         "color.rgb" => {
-            "The sensor readings converted into red, green, and blue. If noise reduction is enabled, this is the smoothed base before detail restoration. The final contrast and brightness look has not yet been applied, so it can look dark or flat."
+            "The sensor readings converted into red, green, and blue. With Merrill noise reduction enabled, texture has already been restored in the sensor layers before this conversion. The final contrast and brightness look has not yet been applied, so it can look dark or flat."
         }
         "color-dq.rgb" => {
-            "The color image after the extra ColorDQ color cleanup, before detail restoration and the final tone adjustments. Compare fine color texture with color.rgb."
+            "The color image after the extra ColorDQ color cleanup, before final tone adjustments. Merrill texture restoration is already included. Compare fine color texture with color.rgb."
         }
         "reconstruction.rgb" => {
-            "The color image after fine detail has been restored to the noise-reduced base. Exposure, the final tone curve, saturation, and sharpening have not yet been applied."
+            "The reconstructed color image projected from its processing tiles. Merrill includes the selected Noise and Detail adjustments before this projection. Exposure, the final tone curve, saturation, and sharpening have not yet been applied."
         }
         "detail.signal" => {
             "A diagnostic view of fine brightness variation used by the detail processing. Middle gray means no variation. Lighter and darker marks show bright and dark detail. It can contain grain as well as real texture, and is not the finished photo or an exact preview of the Detail slider."
@@ -414,8 +438,8 @@ mod tests {
             .unwrap()
             .contains("after noise reduction"));
         assert!(editing("Sharpen").unwrap().contains("0 turns it off"));
-        assert!(editing("Chroma noise").unwrap().contains("0 still"));
-        assert!(editing("Luma noise").unwrap().contains("0 still"));
+        assert!(editing("Chroma noise").unwrap().contains("cleanup is off"));
+        assert!(editing("Luma noise").unwrap().contains("cleanup is off"));
         let repair = editing("Bad pixels").unwrap();
         assert!(repair.contains("information recorded by the camera"));
         assert!(repair.contains("small patches"));

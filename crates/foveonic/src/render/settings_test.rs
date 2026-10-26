@@ -83,43 +83,38 @@ fn classic_auto_sharpening_matches_recipe_default_without_merrill_descriptors() 
 }
 
 #[test]
-fn automatic_sharpening_uses_iso_interpolation_and_luminance_not_detail_or_export_size() {
-    let metadata = metadata();
+fn merrill_color_auto_sharpening_is_zero_and_monochrome_keeps_camera_coefficients() {
+    let mut metadata = metadata();
+    metadata
+        .properties
+        .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
     let mut settings = Settings::new("Sunlight", "Standard");
     assert_eq!(settings.sharpen_amount, Some(0.));
-    assert!(!settings.sharpen_selected());
-    assert!(settings.tiff_color_space.is_none());
-    // Manual and Off do not require camera coefficients.
+    settings.sharpen_amount = None;
+    for choice in 0..=4 {
+        settings.reconstruction = Some(crate::noise::Controls {
+            chroma: choice,
+            luminance: 4 - choice,
+            texture: crate::noise::TextureControls {
+                fine: choice as f32 / 2.,
+                coarse_size: 2.,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.);
+        settings.output_size = Some([9, 17]);
+        settings.tiff_color_space = Some(TiffColorSpace::ProPhotoRgb);
+        assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.);
+    }
+    settings.reconstruction = None;
     assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.);
     settings.sharpen_amount = Some(0.75);
     assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.75);
     settings.sharpen_amount = None;
-    assert!(settings.sharpen_selected());
-    assert!(crate::inspection::output_names(&settings, None).contains(&"sharpen.rgb"));
-    // ISO 200 lies one third between the two source knots: base 1.75.
-    assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.75);
-    for (choice, multiplier) in [0.5, 0.75, 1., 1.25, 1.5].into_iter().enumerate() {
-        settings.reconstruction = Some(crate::noise::Controls {
-            luminance: choice as u32,
-            chroma: 4 - choice as u32,
-            detail: 0.,
-            ..Default::default()
-        });
-        assert_eq!(
-            settings.effective_sharpen_amount(&metadata).unwrap(),
-            1.75 * multiplier
-        );
-        settings.reconstruction.as_mut().unwrap().detail = 2.;
-        settings.output_size = Some([9, 17]);
-        settings.tiff_color_space = Some(TiffColorSpace::ProPhotoRgb);
-        assert_eq!(
-            settings.effective_sharpen_amount(&metadata).unwrap(),
-            1.75 * multiplier
-        );
-    }
     settings.rendering = Rendering::Monochrome;
+    // ISO 200 lies one third between the source knots, giving the mono base 1.75.
     assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.75);
-    assert!(crate::inspection::output_names(&settings, None).contains(&"sharpen.rgb"));
     assert_eq!(
         crate::inspection::comparison_input(&settings, "sharpen.rgb", None),
         Some("monochrome.rgb")
@@ -129,9 +124,8 @@ fn automatic_sharpening_uses_iso_interpolation_and_luminance_not_detail_or_expor
     table.values[12] = -1.;
     table.values[25] = -2.;
     assert_eq!(settings.effective_sharpen_amount(&zero).unwrap(), 0.);
-    let mut invalid = metadata;
-    invalid.matrices.remove("Histogram");
-    assert!(settings.effective_sharpen_amount(&invalid).is_err());
+    metadata.matrices.remove("Histogram");
+    assert!(settings.effective_sharpen_amount(&metadata).is_err());
 }
 
 #[test]
@@ -243,4 +237,55 @@ fn preview_region_is_transient_and_invalidates_only_regional_work() {
         crate::sidecar::encode(&full).unwrap(),
         crate::sidecar::encode(&region).unwrap()
     );
+}
+#[test]
+fn merrill_group_switches_keep_colordq_independent_of_detail() {
+    let mut settings = super::Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    assert!(settings.color_dq_selected());
+    settings.reconstruction.as_mut().unwrap().detail_enabled = false;
+    assert!(settings.color_dq_selected());
+    assert!(settings.merrill_reconstruction().is_some());
+    settings.reconstruction.as_mut().unwrap().noise_enabled = false;
+    assert!(!settings.color_dq_selected());
+    assert!(settings.merrill_reconstruction().is_none());
+    settings.reconstruction.as_mut().unwrap().detail_enabled = true;
+    assert!(!settings.color_dq_selected());
+    assert!(settings.merrill_reconstruction().is_none());
+    settings.reconstruction.as_mut().unwrap().texture.fine = 0.8;
+    assert!(settings.merrill_reconstruction().is_some());
+    settings.color_dq_gain = Some(0.7);
+    assert!(settings.color_dq_selected());
+}
+
+#[test]
+fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
+    let mut settings = Settings::new("Shade", "Vivid");
+    settings.exposure = 0.7;
+    settings.saturation = 1.3;
+    settings.tone.contrast = 0.4;
+    settings.sharpen_amount = None;
+    settings.tone_enabled = false;
+    settings.refinement_enabled = false;
+    let saved = settings.clone();
+    let effective = settings.processing_settings();
+    assert_eq!(effective.exposure, 0.);
+    assert_eq!(effective.saturation, 1.);
+    assert_eq!(effective.tone, ToneControls::default());
+    assert_eq!(effective.sharpen_amount, Some(0.));
+    assert_eq!(effective.color_mode, "Vivid");
+    assert_eq!(settings, saved);
+    assert!(!settings.sharpen_selected());
+    assert_eq!(
+        crate::sidecar::decode(&crate::sidecar::encode(&settings).unwrap()).unwrap(),
+        saved
+    );
+    settings.tone_enabled = true;
+    settings.refinement_enabled = true;
+    assert!(matches!(
+        settings.processing_settings(),
+        std::borrow::Cow::Borrowed(_)
+    ));
+    assert_eq!(settings.exposure, saved.exposure);
+    assert_eq!(settings.sharpen_amount, None);
 }

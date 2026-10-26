@@ -114,13 +114,23 @@ pub enum Operation {
     },
     NoiseContext(crate::noise::Parameters),
     NoiseBase(crate::noise::Parameters),
-    Column(crate::noise::Parameters),
+    Column {
+        params: crate::noise::Parameters,
+        enabled: bool,
+    },
     Ratio(crate::noise::Parameters),
     Pattern {
         params: crate::noise::Parameters,
         prepared: pattern::Prepared,
     },
-    Detail(crate::noise::Parameters),
+    Texture {
+        params: crate::noise::Parameters,
+        prepared: crate::nodes::color::texture::Prepared,
+    },
+    ProjectColorTiles {
+        params: crate::noise::Parameters,
+        space: ColorSpace,
+    },
     TiledColor {
         params: crate::noise::Parameters,
         color: ColorParams,
@@ -129,10 +139,6 @@ pub enum Operation {
     TiledColorDq {
         params: crate::noise::Parameters,
         table: color_dq::Table,
-        space: ColorSpace,
-    },
-    Reconstruct {
-        params: crate::noise::Parameters,
         space: ColorSpace,
     },
     ColorDq {
@@ -261,17 +267,13 @@ impl Operation {
             Self::MonoSharpen { amount, .. } => Key::pod(amount),
             Self::NoiseContext(p) => p.full_frame().key(N::Base),
             Self::NoiseBase(p) => p.key(N::Base),
-            Self::Column(p) => p.key(N::Column),
+            Self::Column { params, enabled } => params.key(N::Column).with(&u32::from(*enabled)),
             Self::Ratio(p) => p.key(N::Ratio),
             Self::Pattern { params, prepared } => params.key(N::Geometry).join(prepared.key()),
-            Self::Detail(p) => p.key(N::Detail),
+            Self::Texture { params, prepared } => params.key(N::Texture).join(prepared.key()),
+            Self::ProjectColorTiles { params, .. } => params.key(N::Geometry).with(&params.region),
             Self::TiledColor { params, color, .. } => params.key(N::Geometry).with(color),
             Self::TiledColorDq { params, table, .. } => params.key(N::Geometry).join(table.key()),
-            Self::Reconstruct { params, .. } => params.key(if output == "detail.signal" {
-                N::Signal
-            } else {
-                N::Geometry
-            }),
             Self::ColorDq { table, .. } => table.key(),
             Self::Sharpen { amount, .. } => Key::pod(amount),
             Self::Tone {
@@ -290,16 +292,16 @@ impl Operation {
             Self::NoiseBase(p) if matches!(output, "noise.layers" | "noise.edges") => {
                 key.with(&p.region)
             }
-            Self::Column(p) if output == "column.layers" => key.with(&p.region),
+            Self::Column { params, .. } if output == "column.layers" => key.with(&params.region),
             Self::Ratio(p) if output == "detail.raw-ratio" => key.with(&p.region),
             Self::Pattern { params, .. } if matches!(output, "detail.ratio" | "pattern.mask") => {
                 key.with(&params.region)
             }
+            Self::Texture { params, .. } if output == "texture.change" => key.with(&params.region),
             Self::TiledColor { params, .. } if output == "color.rgb" => key.with(&params.region),
             Self::TiledColorDq { params, .. } if output == "color-dq.rgb" => {
                 key.with(&params.region)
             }
-            Self::Reconstruct { params, .. } => key.with(&params.region),
             _ => key,
         }
     }
@@ -386,13 +388,14 @@ impl Operation {
             Self::MonoSharpen { .. } => "submit monochrome sharpening",
             Self::NoiseContext(_) => "prepare reduced whole-image noise context",
             Self::NoiseBase(_) => "submit reference noise base",
-            Self::Column(_) => "submit reference column conditioning",
+            Self::Column { enabled: true, .. } => "submit reference column conditioning",
+            Self::Column { enabled: false, .. } => "pack sensor tiles",
             Self::Ratio(_) => "submit reference luminance ratio",
             Self::Pattern { .. } => "submit reference pattern conditioning",
-            Self::Detail(_) => "submit reference detail",
+            Self::Texture { .. } => "submit texture restoration",
+            Self::ProjectColorTiles { .. } => "submit color tile projection",
             Self::TiledColor { .. } => "submit tiled color",
             Self::TiledColorDq { .. } => "submit tiled ColorDQ",
-            Self::Reconstruct { .. } => "submit reconstruction",
             Self::ColorDq { .. } => "submit ColorDQ",
             Self::Saturation { .. } => "submit saturation",
             Self::SharpSignal { .. } => "submit native high-pass",
@@ -565,22 +568,25 @@ impl Operation {
                 },
                 FilteredTiles,
             ),
-            Self::Column(_) => (vec![CalibratedLayers], ConditionedTiles),
+            Self::Column { .. } => (vec![CalibratedLayers], ConditionedTiles),
             Self::Ratio(_) => (
                 vec![ConditionedTiles, FilteredTiles],
                 UnconditionedRatioTiles,
             ),
             Self::Pattern { .. } => (vec![UnconditionedRatioTiles, PatternSeedTiles], RatioTiles),
-            Self::Detail(_) => (
-                vec![ConditionedTiles, FilteredTiles, RatioTiles],
-                ResidualTiles,
-            ),
+            Self::Texture { prepared, .. } => {
+                let mut inputs = vec![ConditionedTiles];
+                if prepared.needs_base() {
+                    inputs.push(FilteredTiles);
+                }
+                if prepared.needs_ratio() {
+                    inputs.push(RatioTiles);
+                }
+                (inputs, FilteredTiles)
+            }
+            Self::ProjectColorTiles { space, .. } => (vec![ColorTiles(*space)], LinearRgb(*space)),
             Self::TiledColor { space, .. } => (vec![FilteredTiles], ColorTiles(*space)),
             Self::TiledColorDq { space, .. } => (vec![ColorTiles(*space)], ColorTiles(*space)),
-            Self::Reconstruct { space, .. } => (
-                vec![ColorTiles(*space), ResidualTiles, RatioTiles],
-                LinearRgb(*space),
-            ),
             Self::ColorDq { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::Saturation { space, .. } => (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space)),
             Self::SharpSignal { space } => (vec![LinearRgb(*space)], SignedDetail),
@@ -684,15 +690,19 @@ impl Operation {
                     ("noise.pattern-seed-tiles", PatternSeedTiles, inputs),
                 ]
             }
-            Self::Column(_) => vec![("column.layers", CalibratedLayers, vec![0])],
+            Self::Column { .. } => vec![("column.layers", CalibratedLayers, vec![0])],
             Self::Ratio(_) => vec![("detail.raw-ratio", LuminanceRatio, vec![0, 1])],
             Self::Pattern { .. } => vec![
                 ("detail.ratio", LuminanceRatio, vec![0, 1]),
                 ("pattern.mask", ScalarField, vec![0, 1]),
             ],
+            Self::Texture { .. } => vec![(
+                "texture.change",
+                LuminanceRatio,
+                (0..self.types().0.len()).collect(),
+            )],
             Self::TiledColor { space, .. } => vec![("color.rgb", LinearRgb(*space), vec![0])],
             Self::TiledColorDq { space, .. } => vec![("color-dq.rgb", LinearRgb(*space), vec![0])],
-            Self::Reconstruct { .. } => vec![("detail.signal", SignedDetail, vec![0, 2])],
             _ => Vec::new(),
         }
     }
@@ -804,13 +814,13 @@ impl Operation {
             Self::MonoSharpen { .. } => "sharpen.rgb",
             Self::NoiseContext(_) => "noise.global-context",
             Self::NoiseBase(_) => "noise.tiles",
-            Self::Column(_) => "column.tiles",
+            Self::Column { .. } => "column.tiles",
             Self::Ratio(_) => "detail.raw-ratio-tiles",
             Self::Pattern { .. } => "detail.ratio-tiles",
-            Self::Detail(_) => "detail.gain-tiles",
+            Self::Texture { .. } => "texture.layers-tiles",
+            Self::ProjectColorTiles { .. } => "reconstruction.rgb",
             Self::TiledColor { .. } => "color.tiles",
             Self::TiledColorDq { .. } => "color-dq.tiles",
-            Self::Reconstruct { .. } => "reconstruction.rgb",
             Self::Color { .. } => "color.rgb",
             Self::ColorDq { .. } => "color-dq.rgb",
             Self::Tone { .. } => "tone.rgb",

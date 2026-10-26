@@ -1,4 +1,4 @@
-//! Executes reference-style processing tiles, noise filtering, residual detail, and image projections on GPU.
+//! Filters camera noise, conditions brightness, and projects processing tiles on GPU.
 
 use crate::gpu::Binding::{Read, Write};
 #[cfg(test)]
@@ -40,7 +40,6 @@ pub(crate) fn project(
     tiles: &crate::gpu::ReadGuard,
     mut params: Parameters,
     components: u32,
-    core_only: bool,
     profile: &mut Profile,
 ) -> Result<crate::gpu::ReadGuard> {
     let size = u64::from(params.output_extent()[0])
@@ -49,7 +48,6 @@ pub(crate) fn project(
         * 4;
     let mut output = gpu.storage("Projected processing tiles", size)?;
     params.weights[3] = components as f32;
-    params.diffusion[3] = if core_only { 2. } else { 0. };
     let uniform = gpu.uniform(&params);
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
@@ -79,7 +77,7 @@ pub(crate) struct GlobalContext {
     pub layers: crate::gpu::ReadGuard,
     pub edges: crate::gpu::ReadGuard,
 }
-fn raw_tiles(
+pub(crate) fn raw_tiles(
     gpu: &Gpu,
     input: &crate::gpu::ReadGuard,
     p: Parameters,
@@ -334,7 +332,7 @@ fn filter(
     let mut radii = gpu.storage("Adaptive noise radii", block_mean.size())?;
     let tables = gpu.upload("Reference noise lookup tables", &tables(params))?;
     let uniform = gpu.uniform(&params);
-    let mut trace = gpu.trace(profile.mode.gpu(), 7);
+    let mut trace = gpu.trace(profile.mode.gpu(), 9);
     if params.geometry[3] == 0 {
         gpu.dispatch(
             Kernel::NoiseBlock,
@@ -399,17 +397,47 @@ fn filter(
     }
     let mut prefix = gpu.storage("Directional prefix sums", n * 12)?;
     let mut weights = gpu.storage("Directional accumulated weights", n * 4)?;
+    // Transpose into existing workspaces, rather than changing the recurrence
+    // or keeping another RGB allocation. Adjacent lanes then access adjacent
+    // samples for both scan directions.
+    let mut transposed_edges = gpu.storage("Transposed recursive weights", n * 4)?;
     gpu.dispatch(
-        Kernel::NoiseMean,
+        Kernel::NoiseMeanTranspose,
         &mut [
             (0, Read(&filtered)),
             (1, Read(&uniform)),
             (2, Write(horizontal.write())),
             (3, Read(&edges)),
+            (4, Write(transposed_edges.write())),
+        ],
+        groups(params),
+        &mut trace,
+    );
+    let mut transposed = params;
+    transposed.tile.swap(0, 1);
+    transposed.diffusion[3] = 1.;
+    let transposed_uniform = gpu.uniform(&transposed);
+    gpu.dispatch(
+        Kernel::NoiseMean,
+        &mut [
+            (0, Read(&horizontal)),
+            (1, Read(&transposed_uniform)),
+            (2, Write(filtered.write())),
+            (3, Read(&transposed_edges)),
             (4, Write(weights.write())),
             (5, Write(prefix.write())),
         ],
         [(params.tile[1] * params.tile_count()).div_ceil(64), 1],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::NoiseMeanRestore,
+        &mut [
+            (0, Read(&filtered)),
+            (1, Read(&transposed_uniform)),
+            (2, Write(horizontal.write())),
+        ],
+        groups(transposed),
         &mut trace,
     );
     let mut vertical = params;
@@ -561,33 +589,6 @@ pub(crate) fn ratio(
     Ok(a)
 }
 
-pub(crate) fn mix(
-    gpu: &Gpu,
-    raw: &crate::gpu::ReadGuard,
-    base: &crate::gpu::ReadGuard,
-    ratio: &crate::gpu::ReadGuard,
-    params: Parameters,
-    profile: &mut Profile,
-) -> Result<crate::gpu::ReadGuard> {
-    let mut gains = gpu.storage("Residual layer gains", params.atlas_pixels() * 12)?;
-    let uniform = gpu.uniform(&params);
-    let mut trace = gpu.trace(profile.mode.gpu(), 1);
-    gpu.dispatch(
-        Kernel::NoiseMix,
-        &mut [
-            (0, Read(raw)),
-            (1, Read(&uniform)),
-            (2, Write(gains.write())),
-            (3, Read(base)),
-            (4, Read(ratio)),
-        ],
-        groups(params),
-        &mut trace,
-    );
-    gpu.finish_trace(&trace, profile)?;
-    Ok(gains)
-}
-
 pub(crate) fn color(
     gpu: &Gpu,
     input: &crate::gpu::ReadGuard,
@@ -637,55 +638,4 @@ pub(crate) fn color_dq(
     );
     gpu.finish_trace(&trace, profile)?;
     Ok(output)
-}
-pub(crate) fn restore(
-    gpu: &Gpu,
-    color: &crate::gpu::ReadGuard,
-    gains: &crate::gpu::ReadGuard,
-    params: Parameters,
-    profile: &mut Profile,
-) -> Result<crate::gpu::ReadGuard> {
-    let mut output = gpu.storage("Reconstructed RGB tiles", params.atlas_pixels() * 12)?;
-    let uniform = gpu.uniform(&params);
-    let mut trace = gpu.trace(profile.mode.gpu(), 1);
-    gpu.dispatch(
-        Kernel::NoiseRestore,
-        &mut [
-            (0, Read(gains)),
-            (1, Read(&uniform)),
-            (2, Write(output.write())),
-            (3, Read(color)),
-        ],
-        groups(params),
-        &mut trace,
-    );
-    gpu.finish_trace(&trace, profile)?;
-    project(gpu, &output, params, 3, false, profile)
-}
-pub(crate) fn signal(
-    gpu: &Gpu,
-    color: &crate::gpu::ReadGuard,
-    ratio: &crate::gpu::ReadGuard,
-    params: Parameters,
-    profile: &mut Profile,
-) -> Result<crate::gpu::ReadGuard> {
-    let mut output = gpu.storage(
-        "Signed reconstruction detail tiles",
-        params.atlas_pixels() * 4,
-    )?;
-    let uniform = gpu.uniform(&params);
-    let mut trace = gpu.trace(profile.mode.gpu(), 1);
-    gpu.dispatch(
-        Kernel::NoiseSignal,
-        &mut [
-            (1, Read(&uniform)),
-            (2, Write(output.write())),
-            (3, Read(color)),
-            (4, Read(ratio)),
-        ],
-        groups(params),
-        &mut trace,
-    );
-    gpu.finish_trace(&trace, profile)?;
-    project(gpu, &output, params, 1, true, profile)
 }

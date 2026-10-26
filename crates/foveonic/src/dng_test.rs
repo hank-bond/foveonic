@@ -74,6 +74,14 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
         .iter()
         .all(|v| v.is_finite()));
 
+    // Unopened older sidecars can reach batch export before GUI normalization.
+    // Their retired Merrill residual value cannot select another algorithm.
+    let mut older = settings.clone();
+    older.reconstruction.as_mut().unwrap().detail = 0.42;
+    let migrated = prepare_base(&engine, &source, &older, &mut Profile::default()).unwrap();
+    assert_eq!(engine.readback_image(&migrated).unwrap(), pixels);
+    drop(migrated);
+
     let mut presentation = settings.clone();
     presentation.color_mode = "Vivid".into();
     presentation.exposure = 0.75;

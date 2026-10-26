@@ -49,6 +49,8 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
     supported.monochrome.noise = settings.monochrome.noise;
     supported.monochrome.mix = settings.monochrome.mix;
     supported.monochrome_smoothness = settings.monochrome_smoothness;
+    supported.tone_enabled = settings.tone_enabled;
+    supported.refinement_enabled = settings.refinement_enabled;
     supported.exposure = settings.exposure.clamp(-2., 2.);
     supported.tone = settings.tone;
     supported.saturation = settings.saturation;
@@ -83,11 +85,13 @@ pub(in crate::render) fn color_mode_presets(metadata: &Metadata) -> Vec<&str> {
 /// Missing file adjustments use the reference file-loader defaults.
 pub(in crate::render) fn default_noise_controls() -> crate::noise::Controls {
     crate::noise::Controls {
+        noise_enabled: true,
+        detail_enabled: true,
         chroma: 2,
         luminance: 2,
         banding: 2,
         detail: 0.5,
-        overrides: Default::default(),
+        texture: Default::default(),
     }
 }
 
@@ -107,11 +111,13 @@ pub(in crate::render) fn captured_noise_controls(
     let detail = captured.smoothness.unwrap_or(baseline.detail);
     smooth_crisp_level(detail)?;
     Ok(crate::noise::Controls {
+        noise_enabled: true,
+        detail_enabled: true,
         chroma: step(captured.chroma_noise, baseline.chroma)?,
         luminance: step(captured.luminance_noise, baseline.luminance)?,
         banding: step(captured.banding_noise, baseline.banding)?,
         detail,
-        overrides: Default::default(),
+        texture: Default::default(),
     })
 }
 

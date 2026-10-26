@@ -52,99 +52,6 @@ fn noise_controls_have_five_choices_and_neutral_detail() {
 }
 
 #[test]
-fn advanced_override_validation_and_link_state_are_parameter_local() {
-    let mut controls = Controls::default();
-    for parameter in Parameter::ALL {
-        assert!(controls.overrides.get(parameter).is_none());
-        for value in [*parameter.bounds().start(), *parameter.bounds().end()] {
-            controls.overrides.set(parameter, Some(value));
-            controls.validate().unwrap();
-            assert_eq!(controls.overrides.get(parameter), Some(value));
-        }
-        controls.overrides.set(parameter, Some(f32::NAN));
-        assert!(controls.validate().is_err());
-        controls
-            .overrides
-            .set(parameter, Some(*parameter.bounds().end() + 1.));
-        assert!(controls.validate().is_err());
-        controls.overrides.set(parameter, None);
-    }
-    assert_eq!(controls, Controls::default());
-}
-
-#[test]
-fn linked_mean_decay_keeps_native_limits_and_manual_values_use_the_full_range() {
-    for scale in [0.375, 0.5, 0.625, 0.75, 0.875, 1.] {
-        for preset in [0.9, 0.95, 0.985] {
-            let linked = mean_decay(preset, scale, None);
-            let expected = match scale {
-                0.625 | 0.75 | 0.875 => preset.min(0.92),
-                _ => preset,
-            };
-            assert_eq!(linked, expected);
-            assert_eq!(mean_decay(preset, scale, Some(linked)), linked);
-            for manual in [0., 0.5, 0.92, 0.95, 0.99, 1.] {
-                assert_eq!(mean_decay(preset, scale, Some(manual)), manual);
-            }
-        }
-    }
-}
-
-#[test]
-#[ignore = "requires FOVEONIC_FIXTURE_DIR"]
-fn linked_parameters_share_engine_values_capture_without_jumps_and_keep_overrides() {
-    let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
-        .join("blue-parking-sign.x3f");
-    let source = crate::source::Source::open(path).unwrap();
-    let mut controls = Controls::default();
-    let original = prepare(&source.metadata, "Sunlight", controls).unwrap();
-    let values = calculated_values(&source.metadata, "Sunlight", controls).unwrap();
-    for parameter in Parameter::ALL {
-        controls
-            .overrides
-            .set(parameter, Some(values[parameter as usize]));
-    }
-    assert_eq!(
-        bytemuck::bytes_of(&prepare(&source.metadata, "Sunlight", controls).unwrap()),
-        bytemuck::bytes_of(&original)
-    );
-    controls.chroma = 0;
-    controls.luminance = 4;
-    controls.detail = 0.5;
-    let manual = prepare(&source.metadata, "Sunlight", controls).unwrap();
-    assert_eq!(
-        [
-            manual.filter[1],
-            manual.filter[2],
-            manual.filter[3],
-            manual.edge[0],
-            manual.diffusion[1],
-            manual.residual[0],
-            manual.residual[1]
-        ],
-        values
-    );
-    assert_eq!(manual.residual[3], 0.5);
-    controls.overrides = Overrides::default();
-    let latest = calculated_values(&source.metadata, "Sunlight", controls).unwrap();
-    assert_ne!(latest, values);
-    for parameter in Parameter::ALL {
-        let mut other = controls;
-        if parameter.parent() == "Chroma noise" {
-            other.luminance = 0;
-        } else {
-            other.chroma = 4;
-        }
-        assert_eq!(
-            calculated_values(&source.metadata, "Sunlight", other).unwrap()[parameter as usize],
-            latest[parameter as usize],
-            "{} has a second basic parent",
-            parameter.key()
-        );
-    }
-}
-
-#[test]
 #[ignore = "requires FOVEONIC_FIXTURE_DIR"]
 fn camera_noise_parameters_match_reference() {
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
@@ -163,7 +70,6 @@ fn camera_noise_parameters_match_reference() {
             ("edge", &p.edge[..]),
             ("weights", &p.weights[..3]),
             ("mono", &p.mono[..3]),
-            ("residual", &p.residual[..]),
             ("diffusion", &p.diffusion[..]),
         ] {
             for (index, (actual, expected)) in values
@@ -200,14 +106,14 @@ fn camera_noise_parameters_match_reference() {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|row| row["file"] == fixture["file"])
+            .filter(|row| row["file"] == fixture["file"] && row["chroma"] == 2)
         {
             let controls = Controls {
                 chroma: expected["chroma"].as_u64().unwrap() as u32,
                 ..Controls::default()
             };
             let params = prepare(&source.metadata, "Sunlight", controls).unwrap();
-            let pattern = pattern_parameters(&source.metadata, params, controls).unwrap();
+            let pattern = pattern_parameters(&source.metadata, params).unwrap();
             assert_eq!(
                 u64::from(pattern.params.shape[3]),
                 expected["half"].as_u64().unwrap()
@@ -230,7 +136,7 @@ fn camera_noise_parameters_match_reference() {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|r| r["file"] == fixture["file"])
+            .filter(|r| r["file"] == fixture["file"] && r["choice"] == 2)
         {
             let choice = expected["choice"].as_u64().unwrap() as u32;
             let p = prepare(

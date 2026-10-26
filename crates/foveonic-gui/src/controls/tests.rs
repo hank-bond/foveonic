@@ -1,6 +1,6 @@
 //! Checks family panel composition, shared widgets, and editing interactions.
 
-use super::common::adjustment;
+use super::common::{adjustment, adjustment_with_nudge, automatic_adjustment};
 use super::merrill::{highlight_choice, select_highlight, HIGHLIGHT_METHODS};
 use super::*;
 use crate::help;
@@ -123,11 +123,13 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
     for label in [
         "Color mode",
         "Saturation",
-        "Noise and Detail",
-        "Chroma noise",
-        "Luma noise",
-        "Banding noise",
-        "Detail",
+        "Noise",
+        "Chroma",
+        "Luma",
+        "Banding",
+        "Fine",
+        "Size",
+        "Coarse",
         "ColorDQ gain",
     ] {
         assert!(
@@ -153,7 +155,7 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
     );
     let (_, output, after) = frame(5.1, vec![pointer_button(color, false)]);
     assert!(!after.is_monochrome());
-    for label in ["Color mode", "Saturation", "Noise and Detail"] {
+    for label in ["Color mode", "Saturation", "Noise", "Detail"] {
         assert_eq!(text_centers(&output, label).len(), 1);
     }
     for label in ["Color Mix", "Mono noise", "Mono banding"] {
@@ -180,12 +182,7 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
         settings.rendering = rendering;
         settings.saturation = 1.4;
         settings.reconstruction = Some(Default::default());
-        settings
-            .reconstruction
-            .as_mut()
-            .unwrap()
-            .overrides
-            .set(foveonic::noise::Parameter::BaseBlend, Some(0.2));
+        settings.reconstruction.as_mut().unwrap().texture.fine = 0.2;
         settings.color_dq_gain = Some(1.2);
         settings.monochrome.mix = [0.2, 0.3, 0.5];
         settings.monochrome.noise = 4;
@@ -209,17 +206,18 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
         for label in [
             "Color mode",
             "Saturation",
-            "Noise and Detail",
-            "Chroma noise",
-            "Luma noise",
-            "Banding noise",
-            "Detail",
+            "Noise",
+            "Chroma",
+            "Luma",
+            "Banding",
+            "Fine",
+            "Size",
+            "Coarse",
             "ColorDQ gain",
-            "Base filter blend",
         ] {
             assert_eq!(
                 text_centers(&output, label).len(),
-                usize::from(rendering == Rendering::Color),
+                usize::from(rendering == Rendering::Color) * if label == "Size" { 2 } else { 1 },
                 "{rendering:?}: {label}"
             );
         }
@@ -284,11 +282,11 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     let headers = text_centers(&output, "Advanced");
     assert_eq!(headers.len(), 2);
     assert!(text_centers(&output, "Speckles").is_empty());
-    let noise_parameter = foveonic::noise::Parameter::MeanDecay.label();
+    let noise_parameter = "Mean decay";
     assert!(text_centers(&output, noise_parameter).is_empty());
     assert!(text_centers(&output, "ColorDQ gain").is_empty());
     assert_eq!(text_centers(&output, "Tone and Color").len(), 1);
-    assert_eq!(text_centers(&output, "Noise and Detail").len(), 1);
+    assert_eq!(text_centers(&output, "Noise").len(), 1);
     for pressed in [true, false] {
         assert!(
             !frame(
@@ -303,12 +301,8 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     }
     let (_, output, current) = frame(1.5, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
     assert_eq!(current, defaults);
-    assert!(!text_centers(&output, noise_parameter).is_empty());
+    assert!(text_centers(&output, noise_parameter).is_empty());
     assert_eq!(text_centers(&output, "ColorDQ gain").len(), 1);
-    assert!(
-        text_centers(&output, "ColorDQ gain")[0].y
-            < text_centers(&output, foveonic::noise::Parameter::BaseBlend.label())[0].y
-    );
     assert!(text_centers(&output, "Speckles").is_empty());
     let corrections = text_centers(&output, "Advanced")[1];
     for pressed in [true, false] {
@@ -325,7 +319,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     }
     let (_, output, current) = frame(2.5, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
     assert_eq!(current, defaults);
-    assert!(!text_centers(&output, noise_parameter).is_empty());
+    assert!(text_centers(&output, noise_parameter).is_empty());
     for label in ["Speckles", "Bad pixels", "Row banding"] {
         assert_eq!(text_centers(&output, label).len(), 1);
     }
@@ -633,7 +627,7 @@ fn all_visible_editing_controls_have_explanations() {
     );
     assert!(text_centers(&output, "Sensor").is_empty());
     assert!(text_centers(&output, "Sensor gain").is_empty());
-    for label in [
+    for key in [
         "White balance",
         "Color mode",
         "Exposure",
@@ -641,24 +635,37 @@ fn all_visible_editing_controls_have_explanations() {
         "Contrast",
         "Shadows",
         "Highlights",
-        "Noise and Detail",
+        "Noise",
+        "Detail",
         "Chroma noise",
         "Luma noise",
         "Banding noise",
-        "Detail",
+        "Fine detail",
+        "Fine size",
+        "Coarse detail",
+        "Coarse size",
         "ColorDQ gain",
         "Sharpen",
         "Bad pixels",
         "Speckles",
         "Row banding",
     ] {
+        let label = match key {
+            "Chroma noise" => "Chroma",
+            "Luma noise" => "Luma",
+            "Banding noise" => "Banding",
+            "Fine detail" => "Fine",
+            "Coarse detail" => "Coarse",
+            "Fine size" | "Coarse size" => "Size",
+            _ => key,
+        };
         assert!(
             output.shapes.iter().any(|shape| matches!(
                 &shape.shape, egui::Shape::Text(text) if text.galley.job.text == label
             )),
             "control missing: {label}"
         );
-        assert!(help::editing(label).is_some(), "help missing: {label}");
+        assert!(help::editing(key).is_some(), "help missing: {label}");
     }
     assert_eq!(
         output
@@ -732,7 +739,7 @@ fn color_field_controls_preserve_edits_and_remain_distinct_from_stock_threshold(
             assert!(!shown("Color-field tuning"));
             assert!(!shown("Color restraint"));
             assert!(shown("Highlights"));
-            let y = text_centers(&output, "Highlights").last().unwrap().y;
+            let y = text_centers(&output, "Threshold")[0].y;
             assert_eq!(
                 text_centers(&output, "A")
                     .iter()
@@ -741,10 +748,10 @@ fn color_field_controls_preserve_edits_and_remain_distinct_from_stock_threshold(
                 if mode == HighlightMode::Classic { 1 } else { 0 }
             );
             assert!(
-                text_centers(&output, "Method")[0].y
-                    < text_centers(&output, "Highlights").last().unwrap().y
+                text_centers(&output, "Highlights").last().unwrap().y
+                    < text_centers(&output, "Threshold")[0].y
             );
-            assert!(shown("Method"));
+            assert!(shown("Threshold"));
             for label in [
                 "Highlight method",
                 "Color-field highlights",
@@ -799,7 +806,7 @@ fn all_highlight_methods_share_manual_reset_and_enabled_pointer_behavior() {
         };
         let (output, changed) = frame(0., Vec::new(), &mut settings);
         assert!(!changed);
-        let y = text_centers(&output, "Highlights").last().unwrap().y;
+        let y = text_centers(&output, "Threshold")[0].y;
         let auto = text_centers(&output, "A")
             .into_iter()
             .find(|position| (position.y - y).abs() < 2.);
@@ -974,7 +981,7 @@ fn colordq_stays_inside_collapsed_noise_advanced_and_repair_has_no_parameter_row
                     .iter()
                     .filter(|shape| matches!(
                         &shape.shape,
-                        egui::Shape::Text(text) if text.galley.job.text == "Noise and Detail"
+                        egui::Shape::Text(text) if text.galley.job.text == "Noise"
                     ))
                     .count(),
                 1,
@@ -1015,10 +1022,11 @@ fn colordq_stays_inside_collapsed_noise_advanced_and_repair_has_no_parameter_row
                     )
                 })
                 .count();
-            assert_eq!(advanced_headers, 1 + usize::from(reconstruction));
+            assert_eq!(advanced_headers, 2);
             if reconstruction {
                 let y = position("Advanced").unwrap();
-                assert!(y > position("Detail").unwrap());
+                assert!(y > position("Banding").unwrap());
+                assert!(y < position("Detail").unwrap());
                 assert!(y < position("Refinement").unwrap());
             }
         }
@@ -1099,7 +1107,7 @@ fn automatic_row_disables_editing_and_toggles_to_resolved_or_fallback_value() {
                             0. ..=2.,
                             1.,
                             calculated,
-                            None,
+                            super::common::RowControls::default(),
                         );
                     });
                 },
@@ -1196,13 +1204,13 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
                 })
                 .unwrap()
         };
-        let label = bounds("Highlights");
+        let label = bounds("Threshold");
         assert!(label.left() < bounds("Bad pixels").left());
         assert_eq!(bounds("Bad pixels").left(), bounds("Speckles").left());
         assert_eq!(bounds("Bad pixels").left(), bounds("Row banding").left());
         let ordered = [
             "Tone and Color",
-            "Noise and Detail",
+            "Noise",
             "Refinement",
             "Sharpen",
             "Corrections",
@@ -1278,7 +1286,10 @@ fn tone_and_correction_highlights_have_independent_controls() {
         .find_map(|shape| match &shape.shape {
             egui::Shape::Text(text)
                 if text.galley.job.text == "A"
-                    && (text.pos.y + text.galley.size().y * 0.5 - highlights[1].y).abs() < 2. =>
+                    && (text.pos.y + text.galley.size().y * 0.5
+                        - text_centers(&output, "Threshold")[0].y)
+                        .abs()
+                        < 2. =>
             {
                 Some(text.pos + text.galley.size() * 0.5)
             }
@@ -1309,7 +1320,7 @@ fn tone_and_correction_highlights_have_independent_controls() {
     assert_eq!(manual.highlight_threshold_ev, Some(0.));
     assert_eq!(manual.tone, tone.tone);
     frame(2.2, vec![]);
-    let correction_slider = egui::pos2(280., highlights[1].y);
+    let correction_slider = egui::pos2(280., text_centers(&output, "Threshold")[0].y);
     frame(
         3.,
         vec![
@@ -1363,7 +1374,10 @@ fn highlight_row_keeps_inline_enable_auto_manual_value_and_reset() {
                             -2. ..=2.,
                             0.,
                             Some(0.),
-                            Some(&mut enabled),
+                            super::common::RowControls {
+                                enabled: Some(&mut enabled),
+                                ..Default::default()
+                            },
                         );
                     });
                 },
@@ -1384,7 +1398,7 @@ fn highlight_row_keeps_inline_enable_auto_manual_value_and_reset() {
                 })
                 .unwrap()
         };
-        let checkbox = center("Highlights");
+        let checkbox = center("Threshold");
         let auto = center("A");
         assert!(
             (checkbox.y - auto.y).abs() < 2.,
@@ -1505,7 +1519,7 @@ fn bad_pixel_repair_checkbox_disables_and_restores_camera_selection() {
     render(vec![]);
     let (_, output, repair, _) = render(vec![]);
     assert_eq!(repair, Some(RepairThreshold::Camera));
-    let advanced = text_centers(&output, "Advanced")[0];
+    let advanced = *text_centers(&output, "Advanced").last().unwrap();
     for pressed in [true, false] {
         assert!(
             !render(vec![
@@ -1612,7 +1626,10 @@ fn highlight_popover_opens_on_all_row_parts_and_switches_without_editing() {
                                         -2_f32..=2.,
                                         0.,
                                         Some(0.),
-                                        Some(&mut enabled)
+                                        super::common::RowControls {
+                                            enabled: Some(&mut enabled),
+                                            ..Default::default()
+                                        }
                                     ));
                                 });
                             });
@@ -1698,7 +1715,7 @@ fn correction_comparisons_open_and_switch_without_editing_even_on_disabled_contr
                 };
                 frame(vec![], true);
                 let output = frame(vec![], true);
-                let advanced = text_centers(&output, "Advanced")[0];
+                let advanced = *text_centers(&output, "Advanced").last().unwrap();
                 for pressed in [true, false] {
                     frame(
                         vec![
@@ -1776,7 +1793,7 @@ fn correction_checkboxes_start_enabled_and_toggle_independently() {
         let (_, output, repair, highlights, despeckle, rows) = render(vec![]);
         assert!(repair && highlights && despeckle && rows);
         if label != "Highlights" {
-            let advanced = text_centers(&output, "Advanced")[0];
+            let advanced = *text_centers(&output, "Advanced").last().unwrap();
             for pressed in [true, false] {
                 assert!(
                     !render(vec![
@@ -1821,7 +1838,7 @@ fn correction_checkboxes_start_enabled_and_toggle_independently() {
 }
 
 #[test]
-fn noise_and_detail_checkbox_enables_shared_defaults_and_requests_rerender() {
+fn noise_checkbox_enables_only_noise_and_preserves_inactive_settings() {
     let ctx = egui::Context::default();
     let mut settings = Settings::new("Sunlight", "Standard");
     let mut frame = |time, events| {
@@ -1851,7 +1868,7 @@ fn noise_and_detail_checkbox_enables_shared_defaults_and_requests_rerender() {
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) if text.galley.job.text == "Noise and Detail" => {
+            egui::Shape::Text(text) if text.galley.job.text == "Noise" => {
                 Some(text.pos + text.galley.size() * 0.5)
             }
             _ => None,
@@ -1867,9 +1884,16 @@ fn noise_and_detail_checkbox_enables_shared_defaults_and_requests_rerender() {
         assert!(!frame(time, vec![egui::Event::PointerMoved(point), event(true)]).0);
         let (changed, _, controls) = frame(time + 0.1, vec![event(false)]);
         assert!(changed);
-        assert_eq!(controls, enabled.then(Default::default));
+        assert_eq!(
+            controls,
+            Some(foveonic::noise::Controls {
+                noise_enabled: enabled,
+                detail_enabled: false,
+                ..Default::default()
+            })
+        );
     }
-    assert!(settings.reconstruction.is_none());
+    assert!(settings.reconstruction.is_some());
     assert_eq!(settings.exposure, 0.);
 }
 
@@ -2088,7 +2112,7 @@ fn banding_slider_snaps_to_five_choices_and_double_click_resets() {
     };
     frame(0., vec![]);
     let mut seen = std::collections::BTreeSet::new();
-    for (i, x) in [112., 140., 170., 195., 215., 240., 260., 285., 310.]
+    for (i, x) in [112., 140., 170., 195., 215., 240., 260., 285., 310., 330.]
         .into_iter()
         .enumerate()
     {
@@ -2110,7 +2134,7 @@ fn banding_slider_snaps_to_five_choices_and_double_click_resets() {
         }
     }
     assert_eq!(seen, (0..=4).collect());
-    let point = egui::pos2(310., 18.);
+    let point = egui::pos2(330., 18.);
     let mut reset = 4;
     for (time, pressed) in [(10., true), (10.05, false), (10.1, true), (10.15, false)] {
         reset = frame(
@@ -2192,7 +2216,7 @@ fn double_click_resets_the_slider_and_value_remains_editable() {
             adjustment(ui, "Exposure", &mut value, -4. ..=4., 0.);
         });
     });
-    // The slider follows the 92-point label in this row, before the value field.
+    // Click inside the slider, between the font-sized label and the value field.
     slider.min = egui::pos2(108., 8.);
     slider.max = egui::pos2(320., 28.);
     let point = slider.center();
@@ -2304,11 +2328,12 @@ fn family_panels_show_supported_controls_without_mutating_edits() {
             },
         );
         assert_eq!(settings, before);
+        let classic = metadata.processing_family().unwrap() == ProcessingFamily::Classic;
         for label in [
             "White balance",
             "Color mode",
             "Exposure",
-            "Noise and Detail",
+            if classic { "Noise and Detail" } else { "Noise" },
             "Sharpen",
             "Speckles",
             "Bad pixels",
@@ -2318,13 +2343,15 @@ fn family_panels_show_supported_controls_without_mutating_edits() {
                 "{model}: missing {label}"
             );
         }
-        let classic = metadata.processing_family().unwrap() == ProcessingFamily::Classic;
         for label in [
-            "Chroma noise",
-            "Luma noise",
-            "Banding noise",
-            "Detail",
-            "Method",
+            "Chroma",
+            "Luma",
+            "Banding",
+            "Fine",
+            "Size",
+            "Coarse",
+            "Size",
+            "Threshold",
             "Row banding",
         ] {
             assert_eq!(
@@ -2800,5 +2827,437 @@ fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
         }
         assert!(!values[0].is_empty());
         assert_eq!(values[0], values[1], "{rendering:?}");
+    }
+}
+
+#[test]
+fn merrill_texture_controls_are_always_visible_and_keep_their_values() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(foveonic::noise::Controls {
+        texture: foveonic::noise::TextureControls {
+            fine: 0.8,
+            coarse: 0.2,
+            fine_size: 0.75,
+            coarse_size: 1.75,
+        },
+        ..Default::default()
+    });
+    let before = settings.clone();
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(440., 1400.),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!processing(ui, &mut settings, None));
+            });
+        },
+    );
+    assert_eq!(settings, before);
+    for label in ["Fine", "Size", "Coarse"] {
+        assert!(!text_centers(&output, label).is_empty(), "{label}");
+    }
+    for label in [
+        "Separate texture (experimental)",
+        "Mean decay",
+        "Base filter blend",
+    ] {
+        assert!(text_centers(&output, label).is_empty(), "{label}");
+    }
+}
+
+#[test]
+fn label_alignment_preserves_controls_across_fonts_and_scales() {
+    for font_size in [11., 13.] {
+        for density in [1., 2.] {
+            let ctx = egui::Context::default();
+            crate::widgets::install_style(&ctx);
+            ctx.set_pixels_per_point(density);
+            ctx.style_mut(|style| {
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Body, egui::FontId::proportional(font_size));
+            });
+            let mut output = None;
+            for time in [0., 0.1] {
+                output = Some(ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 300.),
+                        )),
+                        time: Some(time),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            for row in 0..3 {
+                                ui.push_id(row, |ui| {
+                                    let mut value = 1_f32;
+                                    let changed = if row == 1 {
+                                        super::common::LabelColumn::new(ui, &["xxx"], &["xxx"])
+                                            .indented()
+                                            .adjustment(
+                                                ui,
+                                                ("xxx", "xxx"),
+                                                &mut value,
+                                                0. ..=2.,
+                                                1.,
+                                            )
+                                    } else {
+                                        super::common::LabelColumn::new(ui, &["xxx"], &["xxx"])
+                                            .adjustment(
+                                                ui,
+                                                if row == 2 {
+                                                    ("ggg", "ggg")
+                                                } else {
+                                                    ("xxx", "xxx")
+                                                },
+                                                &mut value,
+                                                0. ..=2.,
+                                                1.,
+                                            )
+                                    };
+                                    assert!(!changed);
+                                    assert_eq!(value, 1.);
+                                });
+                            }
+                        });
+                    },
+                ));
+            }
+            let output = output.unwrap();
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if matches!(t.galley.text(), "xxx" | "ggg") => Some(t),
+                    _ => None,
+                })
+                .collect();
+            let knobs: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Circle(c) => Some(c.center),
+                    _ => None,
+                })
+                .collect();
+            let values: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == "1.00" => Some(t),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), 3);
+            assert_eq!(knobs.len(), 3);
+            assert_eq!(values.len(), 3);
+            let ink_left =
+                |t: &egui::epaint::TextShape| t.pos.x + t.galley.rows[0].visuals.mesh_bounds.left();
+            assert!(
+                (ink_left(labels[1]) - ink_left(labels[0]) - ctx.style().spacing.indent).abs()
+                    < 0.1
+            );
+            for row in 0..3 {
+                assert!(
+                    (knobs[row].x - knobs[0].x).abs() < 0.1,
+                    "child shifted its slider: font {font_size}, density {density}, knobs {knobs:?}"
+                );
+                let text = values[row];
+                let middle = text.pos + text.galley.size() * 0.5;
+                let input = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r)
+                            if r.rect.contains(middle) && r.rect.width() < 100. =>
+                        {
+                            Some(r.rect)
+                        }
+                        _ => None,
+                    })
+                    .min_by(|a, b| a.area().total_cmp(&b.area()))
+                    .unwrap();
+                assert!(
+                    (input.center().y - knobs[row].y).abs() < 0.1,
+                    "font {font_size} density {density}: input {input:?}, slider {:?}",
+                    knobs[row]
+                );
+                let baseline = labels[row].pos.y + labels[row].galley.rows[0].glyphs[0].pos.y;
+                let reference_baseline = labels[0].pos.y + labels[0].galley.rows[0].glyphs[0].pos.y;
+                assert!(
+                    ((baseline - knobs[row].y) - (reference_baseline - knobs[0].y)).abs() < 0.1,
+                    "descender changed the baseline"
+                );
+                if row < 2 {
+                    let body_center = labels[row].pos.y
+                        + labels[row].galley.rows[0].visuals.mesh_bounds.center().y;
+                    assert!(
+                        (body_center - knobs[row].y).abs() <= 0.5 / density,
+                        "font {font_size} density {density}: lowercase body {body_center}, slider {}",
+                        knobs[row].y
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn independent_noise_and_detail_toggles_preserve_all_inactive_values() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(foveonic::noise::Controls {
+        chroma: 4,
+        luminance: 1,
+        banding: 3,
+        texture: foveonic::noise::TextureControls {
+            fine: 1.3,
+            coarse: 0.4,
+            fine_size: 0.8,
+            coarse_size: 1.7,
+        },
+        ..Default::default()
+    });
+    let original = settings.clone();
+    let mut frame = |time, events| {
+        let mut changed = false;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 1800.),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    changed = processing(ui, &mut settings, None);
+                });
+            },
+        );
+        (changed, output, settings.clone())
+    };
+    let (_, mut output, _) = frame(0., vec![]);
+    for (index, label) in ["Detail", "Noise"].into_iter().enumerate() {
+        let point = text_centers(&output, label)[0];
+        for (iteration, enabled) in [false, true].into_iter().enumerate() {
+            let time = 1. + (index * 4 + iteration * 2) as f64;
+            frame(
+                time,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    pointer_button(point, true),
+                ],
+            );
+            let (changed, next, current) = frame(time + 0.1, vec![pointer_button(point, false)]);
+            assert!(changed);
+            let mut expected = original.clone();
+            let controls = expected.reconstruction.as_mut().unwrap();
+            if label == "Detail" {
+                controls.detail_enabled = enabled;
+            } else {
+                controls.noise_enabled = enabled;
+            }
+            assert_eq!(current, expected);
+            assert_eq!(current.color_dq_selected(), label == "Detail" || enabled);
+            output = next;
+        }
+    }
+}
+
+#[test]
+fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edits() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.exposure = 0.7;
+    settings.tone.contrast = 0.3;
+    settings.saturation = 1.2;
+    settings.sharpen_amount = Some(0.4);
+    settings.reconstruction = Some(Default::default());
+    let original = settings.clone();
+    let mut frame = |time, events| {
+        let mut changed = false;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 2000.),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    changed = processing(ui, &mut settings, None);
+                });
+            },
+        );
+        (changed, output, settings.clone())
+    };
+    let (_, mut output, _) = frame(0., vec![]);
+    let labels = [
+        "Tone and Color",
+        "Exposure",
+        "Noise",
+        "Chroma",
+        "Detail",
+        "Fine",
+        "Size",
+        "Coarse",
+        "Refinement",
+        "Sharpen",
+        "Corrections",
+        "Threshold",
+    ];
+    let positions = |out: &egui::FullOutput| {
+        labels
+            .iter()
+            .map(|label| text_centers(out, label))
+            .collect::<Vec<_>>()
+    };
+    let baseline = positions(&output);
+    for (index, (label, parameter)) in [
+        ("Tone and Color", "Exposure"),
+        ("Noise", "Chroma"),
+        ("Detail", "Fine"),
+        ("Refinement", "Sharpen"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let time = 1. + 4. * index as f64;
+        let point = text_centers(&output, label)[0];
+        frame(
+            time,
+            vec![
+                egui::Event::PointerMoved(point),
+                pointer_button(point, true),
+            ],
+        );
+        let (changed, off, current) = frame(time + 0.1, vec![pointer_button(point, false)]);
+        assert!(changed);
+        assert_eq!(positions(&off), baseline, "{label} shifted controls");
+        let mut expected = original.clone();
+        match label {
+            "Tone and Color" => expected.tone_enabled = false,
+            "Refinement" => expected.refinement_enabled = false,
+            "Noise" => expected.reconstruction.as_mut().unwrap().noise_enabled = false,
+            "Detail" => expected.reconstruction.as_mut().unwrap().detail_enabled = false,
+            _ => unreachable!(),
+        }
+        assert_eq!(current, expected);
+        let slider = egui::pos2(240., text_centers(&off, parameter)[0].y);
+        frame(
+            time + 1.,
+            vec![
+                egui::Event::PointerMoved(slider),
+                pointer_button(slider, true),
+            ],
+        );
+        let (changed, _, current) = frame(time + 1.1, vec![pointer_button(slider, false)]);
+        assert!(!changed, "disabled {parameter} changed");
+        assert_eq!(current, expected);
+        frame(
+            time + 2.,
+            vec![
+                egui::Event::PointerMoved(point),
+                pointer_button(point, true),
+            ],
+        );
+        let (changed, next, current) = frame(time + 2.1, vec![pointer_button(point, false)]);
+        assert!(changed);
+        assert_eq!(current, original);
+        assert_eq!(positions(&next), baseline);
+        output = next;
+    }
+}
+
+#[test]
+fn parameter_group_padding_and_child_pipe_have_balanced_visible_gaps() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    let mut group = egui::Rect::NOTHING;
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400., 180.),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let padding = f32::from(crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING);
+                let column = super::common::LabelColumn::new(ui, &["Coarse"], &["Size"])
+                    .with_outer_padding(padding);
+                group = crate::widgets::parameter_group(ui, |ui| {
+                    column.adjustment(ui, ("Coarse detail", "Coarse"), &mut 1_f32, 0. ..=2., 1.);
+                    column.indented().adjustment(
+                        ui,
+                        ("Coarse size", "Size"),
+                        &mut 1_f32,
+                        0.5..=2.,
+                        1.,
+                    );
+                })
+                .response
+                .rect;
+            });
+        },
+    );
+    let text = |label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some(t),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let child = text("Size");
+    let glyph_left = child.pos.x + child.galley.rows[0].visuals.mesh_bounds.left();
+    let pipe = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::LineSegment { points, .. } if points[0].x == points[1].x => {
+                Some(points[0].x)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(((pipe - group.left()) - (glyph_left - pipe)).abs() < 0.1);
+    let padding = f32::from(crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING);
+    assert_eq!(text("Coarse").pos.x - group.left(), padding);
+    for value in output.shapes.iter().filter_map(|shape| match &shape.shape {
+        egui::Shape::Text(t) if t.galley.text() == "1.00" => Some(t),
+        _ => None,
+    }) {
+        let center = value.pos + value.galley.size() * 0.5;
+        let field = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(r) if r.rect.contains(center) => Some(r.rect),
+                _ => None,
+            })
+            .min_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap();
+        assert_eq!(group.right() - field.right(), padding);
     }
 }

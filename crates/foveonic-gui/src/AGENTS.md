@@ -22,7 +22,6 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 ### Source files
 
-- **[advanced.rs](./advanced.rs)** Displays advanced reconstruction controls with automatic ColorDQ and preset-linked parameter overrides.
 - **[application_settings.rs](./application_settings.rs)** Configures application display and temporary disk reuse independently of photographic edits.
 - **[batch.rs](./batch.rs)** Runs frozen Browse and Import batches while yielding work to interactive rendering.
 - **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.

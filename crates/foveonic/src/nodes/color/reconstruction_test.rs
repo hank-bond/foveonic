@@ -18,7 +18,6 @@ fn parameters() -> Parameters {
             [0.0001, 0.0002, 0.00005, 0.],
         ],
         mono: [70. / 9., 0.12 / 9., 0.00035 / 9., 0.],
-        residual: [0.6, 0.3, 1.2, 1.],
         diffusion: [0.25, 1., 2., 0.],
         column_area: [0, 8, 80, 64],
         column: [0.375, 27., 0., 0.],
@@ -56,7 +55,6 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
                 }
             }
             assert_eq!(actual.len(), expected.len());
-            eprintln!("{label}: maximum {max} at {pos}");
             assert!(
                 max < tolerance,
                 "{label} maximum {max} at {pos}, {} vs {}",
@@ -339,7 +337,7 @@ fn check(data: &[f32], fixture: &Value, name: &str, channels: usize, tolerance: 
 
 #[test]
 #[ignore = "requires a GPU"]
-fn reference_noise_and_detail_components_match_synthetic_fixtures() {
+fn noise_base_and_luminance_conditioning_match_synthetic_fixtures() {
     let gpu = Gpu::new().unwrap();
     let p = parameters();
     let input = gpu.upload("Synthetic sensor layers", &source()).unwrap();
@@ -443,27 +441,8 @@ fn reference_noise_and_detail_components_match_synthetic_fixtures() {
     );
     check(&floats(&gpu, &b), &fixture, "osf", 1, 0.001);
     let ratio = ratio(&gpu, &input, &base, p, &mut profile).unwrap();
-    let gains = mix(&gpu, &input, &base, &ratio, p, &mut profile).unwrap();
     check(&floats(&gpu, &ratio), &fixture, "ratio", 1, 0.001);
-    check(&floats(&gpu, &gains), &fixture, "gains", 3, 0.001);
-    let sharp = signal(&gpu, &base, &ratio, p, &mut profile).unwrap();
-    let signal_samples = floats(&gpu, &sharp);
-    check(&signal_samples, &fixture, "signal", 1, 0.3);
-    for y in 0..72 {
-        for x in 0..80 {
-            if x < 2 || x + 2 >= 80 || y < 2 || y + 2 >= 72 {
-                assert_eq!(signal_samples[y * 80 + x], 0.);
-            }
-        }
-    }
-    let output = restore(&gpu, &base, &gains, p, &mut profile).unwrap();
-    check(&floats(&gpu, &output), &fixture, "restored", 3, 0.2);
     assert_eq!(floats(&gpu, &input), source());
-    // Detail zero retains the filtered base through the reference reconstruction clamps.
-    let mut neutral = p;
-    neutral.residual[3] = 0.;
-    let neutral = mix(&gpu, &input, &base, &ratio, neutral, &mut profile).unwrap();
-    assert!(floats(&gpu, &neutral).iter().all(|v| *v == 1.));
 }
 
 #[test]
@@ -486,7 +465,7 @@ fn processing_tile_projection_matches_reference_overlap_ramps() {
     }
     let tiles = gpu.upload("Projection fixture", &values).unwrap();
     let mut profile = Profile::default();
-    let output = project(&gpu, &tiles, p, 3, false, &mut profile).unwrap();
+    let output = project(&gpu, &tiles, p, 3, &mut profile).unwrap();
     let fixture: Value =
         serde_json::from_str(include_str!("../../../tests/data/noise-reference.json")).unwrap();
     let expected: Vec<f32> = fixture["projection"]
@@ -537,10 +516,37 @@ fn compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams() {
         .unwrap()
         .ratio
         .unwrap();
-        let gains = mix(&gpu, &conditioned, base_tiles, &ratio, p, &mut profile).unwrap();
+        let restored = crate::nodes::color::texture::apply(
+            &gpu,
+            crate::nodes::color::texture::Inputs {
+                raw: &conditioned,
+                base: Some(base_tiles),
+                ratio: Some(&ratio),
+            },
+            p,
+            crate::nodes::color::texture::Prepared::new(
+                crate::noise::Controls {
+                    texture: crate::noise::TextureControls {
+                        fine: 0.7,
+                        coarse: 1.2,
+                        fine_size: 2.,
+                        coarse_size: 2.,
+                    },
+                    ..Default::default()
+                },
+                1.,
+            )
+            .unwrap(),
+            crate::nodes::color::texture::Requested {
+                layers: true,
+                change: true,
+            },
+            &mut profile,
+        )
+        .unwrap();
         let color = color(
             &gpu,
-            base_tiles,
+            restored.layers.as_ref().unwrap(),
             ColorParams {
                 source: [256, 256, 0, 0],
                 matrix: [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]],
@@ -549,9 +555,11 @@ fn compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams() {
             &mut profile,
         )
         .unwrap();
-        let output = restore(&gpu, &color, &gains, p, &mut profile).unwrap();
-        let signal = signal(&gpu, &color, &ratio, p, &mut profile).unwrap();
-        (floats(&gpu, &output), floats(&gpu, &signal))
+        let output = project(&gpu, &color, p, 3, &mut profile).unwrap();
+        (
+            floats(&gpu, &output),
+            floats(&gpu, restored.change.as_ref().unwrap()),
+        )
     };
     for scale in [1., 0.75, 0.5, 0.375] {
         p.reduction[0] = scale;

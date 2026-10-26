@@ -768,7 +768,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
         "noise bilateral base"
             | "directional local mean"
             | "reconstruction luminance"
-            | "residual detail mixing"
+            | "texture restoration"
             | "tone"
     )));
     assert!(!profile.host.iter().any(|t| t.stage == "prepare color mode"));
@@ -788,7 +788,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     assert!(!profile
         .gpu
         .iter()
-        .any(|t| t.stage.starts_with("pattern") || t.stage == "residual detail mixing"));
+        .any(|t| t.stage.starts_with("pattern") || t.stage == "texture restoration"));
     drop(raw);
     profile = Profile::new(crate::profile::Mode::Gpu);
     let mask = engine
@@ -800,7 +800,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
         "pattern horizontal swaps"
             | "pattern vertical swaps"
             | "pattern ratio blend"
-            | "residual detail mixing"
+            | "texture restoration"
             | "tone"
     )));
     drop(mask);
@@ -814,10 +814,7 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
         )
         .unwrap();
     assert!(!profile.host.iter().any(|t| t.stage == "prepare color mode"));
-    assert!(!profile
-        .gpu
-        .iter()
-        .any(|t| t.stage == "residual detail mixing"));
+    assert!(!profile.gpu.iter().any(|t| t.stage == "texture restoration"));
     assert_eq!(artifacts.len(), 2);
     for artifact in &artifacts {
         assert_eq!(artifact.settings.reconstruction, settings.reconstruction);
@@ -839,10 +836,12 @@ fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     let mut artifacts = engine
         .render_artifacts(&source, &settings, &["detail.signal"], &mut profile)
         .unwrap();
-    assert!(!profile.gpu.iter().any(|t| matches!(
-        t.stage,
-        "residual detail mixing" | "detail reconstruction" | "tone"
-    )));
+    assert!(profile.gpu.iter().any(|t| t.stage == "texture restoration"));
+    assert!(profile
+        .gpu
+        .iter()
+        .any(|t| t.stage == "native mono high-pass"));
+    assert!(!profile.gpu.iter().any(|t| t.stage == "tone"));
     let crate::inspection::Content::Image(signal) = artifacts.remove(0).content else {
         panic!("expected an image")
     };
@@ -1065,86 +1064,6 @@ fn camera_repair_matches_manual_cutoff_and_sensor_inspection_skips_selection() {
 
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
-fn advanced_overrides_preserve_captured_base_and_produce_finite_extremes() {
-    let engine = Engine::new().unwrap();
-    let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
-        .join("blue-parking-sign.x3f");
-    let source = Source::open(path).unwrap();
-    let mut settings = Settings::new("Sunlight", "Standard");
-    settings.reconstruction = Some(Default::default());
-    let read = |settings: &Settings, root| {
-        let artifact = engine
-            .render_artifacts(&source, settings, &[root], &mut Profile::default())
-            .unwrap()
-            .pop()
-            .unwrap();
-        let crate::inspection::Content::Image(image) = artifact.content else {
-            panic!()
-        };
-        engine.gpu.readback(&image.buffer).unwrap()
-    };
-    let baseline = read(&settings, "noise.layers");
-    let values = crate::noise::calculated_values(
-        &source.metadata,
-        "Sunlight",
-        settings.reconstruction.unwrap(),
-    )
-    .unwrap();
-    for parameter in crate::noise::Parameter::ALL {
-        settings
-            .reconstruction
-            .as_mut()
-            .unwrap()
-            .overrides
-            .set(parameter, Some(values[parameter as usize]));
-    }
-    assert_eq!(read(&settings, "noise.layers"), baseline);
-    for decay in [0.95, 0.99, 1.] {
-        settings
-            .reconstruction
-            .as_mut()
-            .unwrap()
-            .overrides
-            .set(crate::noise::Parameter::MeanDecay, Some(decay));
-        let base = read(&settings, "noise.layers");
-        assert_ne!(base, baseline, "manual Mean decay {decay} was still capped");
-        assert!(bytemuck::cast_slice::<u8, f32>(&base)
-            .iter()
-            .all(|v| v.is_finite()));
-        let result = read(&settings, "reconstruction.rgb");
-        assert!(bytemuck::cast_slice::<u8, f32>(&result)
-            .iter()
-            .all(|v| v.is_finite()));
-    }
-    settings
-        .reconstruction
-        .as_mut()
-        .unwrap()
-        .overrides
-        .set(crate::noise::Parameter::MeanDecay, Some(0.));
-    assert_ne!(read(&settings, "noise.layers"), baseline);
-    drop(baseline);
-    for maximum in [false, true] {
-        for parameter in crate::noise::Parameter::ALL {
-            let bounds = parameter.bounds();
-            settings.reconstruction.as_mut().unwrap().overrides.set(
-                parameter,
-                Some(if maximum {
-                    *bounds.end()
-                } else {
-                    *bounds.start()
-                }),
-            );
-        }
-        let bytes = read(&settings, "reconstruction.rgb");
-        assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
-            .iter()
-            .all(|v| v.is_finite()));
-    }
-}
-
-#[test]
-#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn reconstruction_originals_stay_finite_across_noise_choices() {
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let engine = Engine::new().unwrap();
@@ -1162,7 +1081,10 @@ fn reconstruction_originals_stay_finite_across_noise_choices() {
             settings.reconstruction = Some(crate::noise::Controls {
                 chroma: choice,
                 luminance: (choice + 2) % 5,
-                detail: if choice == 0 { 0. } else { 1. },
+                texture: crate::noise::TextureControls {
+                    fine: if choice == 0 { 0. } else { 1. },
+                    ..Default::default()
+                },
                 ..Default::default()
             });
             settings.color_dq_gain = Some(if choice == 4 { 1. } else { 0. });

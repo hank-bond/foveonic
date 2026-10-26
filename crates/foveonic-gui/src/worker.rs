@@ -847,10 +847,9 @@ mod tests {
     #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
     fn continuous_drag_makes_progress_then_settles_with_matching_scopes() {
         fn edit(settings: &mut foveonic::render::Settings, control: &str, revision: u64) {
-            use foveonic::noise::Parameter;
             match control {
                 "detail" => {
-                    settings.reconstruction.as_mut().unwrap().detail = revision as f32 / 20.
+                    settings.reconstruction.as_mut().unwrap().texture.fine = revision as f32 / 20.
                 }
                 "exposure" => settings.exposure = revision as f32 / 40.,
                 "chroma" => {
@@ -859,18 +858,23 @@ mod tests {
                 "luma" => {
                     settings.reconstruction.as_mut().unwrap().luminance = (revision % 5) as u32
                 }
-                key => {
-                    let p = Parameter::ALL.into_iter().find(|p| p.key() == key).unwrap();
-                    let bounds = p.bounds();
-                    let value = *bounds.start()
-                        + (*bounds.end() - *bounds.start()) * ((revision % 40) as f32 / 40.);
+                "coarse" => {
+                    settings.reconstruction.as_mut().unwrap().texture.coarse =
+                        (revision % 40) as f32 / 20.
+                }
+                "fine-size" => {
+                    settings.reconstruction.as_mut().unwrap().texture.fine_size =
+                        0.5 + (revision % 40) as f32 / 40.
+                }
+                "coarse-size" => {
                     settings
                         .reconstruction
                         .as_mut()
                         .unwrap()
-                        .overrides
-                        .set(p, Some(value));
+                        .texture
+                        .coarse_size = 0.5 + (revision % 40) as f32 / 40.
                 }
+                _ => unreachable!(),
             }
         }
         for control in [
@@ -878,13 +882,9 @@ mod tests {
             "exposure",
             "chroma",
             "luma",
-            "base-blend",
-            "edge-cutoff",
-            "mean-decay",
-            "edge-scale",
-            "luma-noise-scale",
-            "brightness-mix",
-            "layer-mix",
+            "coarse",
+            "fine-size",
+            "coarse-size",
         ] {
             let last = if matches!(control, "detail" | "exposure") {
                 41

@@ -51,15 +51,16 @@ Options (also available for batch):
   --row-correction          Reduce additive per-row sensor banding (default on)
   --no-row-correction       Disable per-row banding correction
   --repair-badness MIN       Enable ordered repair with a manual cutoff in 0..15
-  --noise-override KEY=VALUE Override a reconstruction parameter. Repeatable, enables reconstruction
-                            Keys: base-blend, edge-cutoff, mean-decay, edge-scale,
-                            luma-noise-scale, brightness-mix, layer-mix
-  --reconstruction          Enable reference-style full-resolution noise/detail processing
-  --chroma-noise CHOICE      Camera noise-table choice 0..4, default 2. Enables reconstruction
-  --luma-noise CHOICE        Camera noise-table choice 0..4, default 2. Enables reconstruction
+  --reconstruction          Enable full-resolution noise/detail processing
+  --fine-detail FACTOR      Fine texture restoration 0..2, default 1
+  --coarse-detail FACTOR    Coarse texture restoration 0..2, default 1
+  --fine-size FACTOR        Fine boundary size 0.5..2, default 1
+  --coarse-size FACTOR      Coarse boundary size 0.5..2, default 1
+  --chroma-noise CHOICE      Chroma cleanup 0..4, default 2. Enables reconstruction
+  --luma-noise CHOICE        Luma cleanup 0..4, default 2. Enables reconstruction
   --banding-noise CHOICE     Column-noise preset 0..4, default 2. Enables reconstruction
   --mono-smoothness VALUE    Quattro monochrome Smooth/Crisp 0..1, default from file or 0.5
-  --detail FACTOR           Merrill residual multiplier (default 1), Quattro Smooth/Crisp 0..1 (default 0.5)
+  --smooth-crisp FACTOR     Quattro Smooth/Crisp 0..1 (default from file or 0.5)
   --sharpen AMOUNT           auto, off, or manual amount (Quattro -2..2, default from file)
   --highlight-amount VALUE  Quattro highlight recovery 0..1, default from file or 1
   --tiff-color-space SPACE   camera (default), srgb, adobe-rgb, or prophoto-rgb
@@ -459,19 +460,6 @@ mod tests {
                 .repair,
             Some(RepairThreshold::Manual(2))
         );
-        let overridden = parse("--wb Sunlight --mode Standard --noise-override mean-decay=0.7 --noise-override brightness-mix=0.5").unwrap().0.reconstruction.unwrap();
-        assert_eq!(
-            overridden
-                .overrides
-                .get(foveonic::noise::Parameter::MeanDecay),
-            Some(0.7)
-        );
-        assert_eq!(
-            overridden
-                .overrides
-                .get(foveonic::noise::Parameter::BrightnessMix),
-            Some(0.5)
-        );
         assert_eq!(
             parse("--wb Sunlight --mode Standard --reconstruction")
                 .unwrap()
@@ -480,10 +468,12 @@ mod tests {
             Some(Default::default())
         );
         assert_eq!(
-            parse("--wb Sunlight --mode Standard --chroma-noise 1 --luma-noise 4 --detail 0.75")
-                .unwrap()
-                .0
-                .reconstruction,
+            parse(
+                "--wb Sunlight --mode Standard --chroma-noise 1 --luma-noise 4 --smooth-crisp 0.75"
+            )
+            .unwrap()
+            .0
+            .reconstruction,
             Some(foveonic::noise::Controls {
                 chroma: 1,
                 luminance: 4,
@@ -561,17 +551,13 @@ mod tests {
             "--banding-noise 5",
             "--banding-noise -1",
             "--banding-noise 1.5",
-            "--noise-override mean-decay=NaN",
-            "--noise-override edge-cutoff=1",
-            "--noise-override unknown=1",
-            "--noise-override mean-decay:1",
             "--sharpen-radius 1.5", // retired Gaussian control
             "--sharpen NaN",
             "--size 0x400",
             "--chroma-noise 5",
             "--luma-noise 5",
-            "--detail -1",
-            "--detail NaN",
+            "--smooth-crisp -1",
+            "--smooth-crisp NaN",
         ] {
             assert!(
                 parse(&format!("--wb Sunlight --mode Standard {invalid}")).is_err(),

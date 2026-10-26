@@ -1,4 +1,4 @@
-//! Resolves camera noise presets and linked overrides for shared GPU reconstruction.
+//! Prepares the fixed Merrill noise base, column conditioning, and camera-derived processing couplings.
 //!
 //! Adapted from the reference implementation's noise.rs and params.rs at e47af35 with owner permission.
 
@@ -8,237 +8,18 @@ mod tests;
 
 use crate::source::{MatrixEncoding, Metadata, Result};
 
-/// Five noise presets and a family-defined detail control.
-/// Merrill uses a residual multiplier. Quattro uses normalized Smooth/Crisp (0..1).
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Controls {
-    pub chroma: u32,
-    pub luminance: u32,
-    pub banding: u32,
-    pub detail: f32,
-    pub overrides: Overrides,
-}
-impl Default for Controls {
-    fn default() -> Self {
-        Self {
-            chroma: 2,
-            luminance: 2,
-            banding: 2,
-            detail: 1.,
-            overrides: Overrides::default(),
-        }
-    }
-}
-impl Controls {
-    pub fn validate(self) -> Result<()> {
-        if self.chroma > 4
-            || self.luminance > 4
-            || self.banding > 4
-            || !self.detail.is_finite()
-            || self.detail < 0.
-        {
-            return Err(
-                "noise choices must be in 0..4 and detail must be finite and nonnegative".into(),
-            );
-        }
-        self.overrides.validate()
-    }
-}
+#[path = "noise_controls.rs"]
+mod controls;
+pub use controls::{Controls, TextureControls};
 
-/// Each advanced field follows one basic control so changing that control
-/// has a clear effect and does not unexpectedly reset another override.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(usize)]
-pub enum Parameter {
-    BaseBlend,
-    EdgeCutoff,
-    MeanDecay,
-    EdgeScale,
-    LumaNoiseScale,
-    BrightnessMix,
-    LayerMix,
-}
-impl Parameter {
-    pub const ALL: [Self; 7] = [
-        Self::BaseBlend,
-        Self::EdgeCutoff,
-        Self::MeanDecay,
-        Self::EdgeScale,
-        Self::LumaNoiseScale,
-        Self::BrightnessMix,
-        Self::LayerMix,
-    ];
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::BaseBlend => "base-blend",
-            Self::EdgeCutoff => "edge-cutoff",
-            Self::MeanDecay => "mean-decay",
-            Self::EdgeScale => "edge-scale",
-            Self::LumaNoiseScale => "luma-noise-scale",
-            Self::BrightnessMix => "brightness-mix",
-            Self::LayerMix => "layer-mix",
-        }
+fn mean_decay(preset: f32, scale: f32) -> f32 {
+    // The camera's reduced local filtering needs this ceiling to limit seams.
+    const REDUCED_LOCAL_MAX_DECAY: f32 = 0.92;
+    if scale > 0.5 && scale < 1. {
+        preset.min(REDUCED_LOCAL_MAX_DECAY)
+    } else {
+        preset
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::BaseBlend => "Base filter blend",
-            Self::EdgeCutoff => "Mean edge cutoff",
-            Self::MeanDecay => "Mean decay",
-            Self::EdgeScale => "Edge sensitivity",
-            Self::LumaNoiseScale => "Luma noise scale",
-            Self::BrightnessMix => "Brightness mix",
-            Self::LayerMix => "Layer detail mix",
-        }
-    }
-    pub fn parent(self) -> &'static str {
-        match self {
-            Self::LumaNoiseScale | Self::BrightnessMix => "Chroma noise",
-            _ => "Luma noise",
-        }
-    }
-    pub fn bounds(self) -> std::ops::RangeInclusive<f32> {
-        match self {
-            Self::EdgeCutoff => 0. ..=0.99,
-            Self::EdgeScale => 0.01..=4.,
-            Self::LumaNoiseScale => 0. ..=64.,
-            _ => 0. ..=1.,
-        }
-    }
-    pub fn help(self) -> &'static str {
-        match self {
-            Self::BaseBlend => {
-                "Chooses how much initial smoothing is used before the later noise-reduction steps. 0 starts with the unsmoothed image. 1 uses the fully smoothed starting image. More smoothing can reduce grain but soften fine texture. 0 does not turn all noise reduction off."
-            }
-            Self::EdgeCutoff => {
-                "Sets how readily smoothing stops at an edge. Higher values stop it at smaller changes, helping preserve fine boundaries but potentially leaving more grain. Lower values let smoothing cross more edges and can soften detail."
-            }
-            Self::MeanDecay => {
-                "Sets how far smoothing reaches through areas without strong edges. Higher values smooth over longer distances, reducing unevenness but potentially spreading softness. Linked values may be limited to 0.92. Unlink to use the full 0 to 1 range. Near 1, seams between processing regions may become visible."
-            }
-            Self::EdgeScale => {
-                "Sets how strongly detected edges hold back smoothing. Higher values protect edges more strongly but can also leave grain untouched. Lower values allow more smoothing across edges, which can soften real texture."
-            }
-            Self::LumaNoiseScale => {
-                "Sets how much brightness grain is treated before detail is restored. Higher values allow more smoothing of brightness variations, but can remove fine texture. It works together with Brightness mix and Detail, so its effect depends on those settings."
-            }
-            Self::BrightnessMix => {
-                "Chooses which brightness texture is restored after smoothing. 0 uses the original texture, including its grain. 1 uses the cleaned-up texture. Higher values can give a smoother result but restore less fine texture. The Detail slider sets the amount restored."
-            }
-            Self::LayerMix => {
-                "Chooses whether restored detail changes brightness alone (0) or also restores differences between the camera's three color-sensitive sensor layers (1). Higher values can restore more color texture, but also more color noise. The Detail slider sets the amount restored."
-            }
-        }
-    }
-}
-
-/// None follows the basic control. Some keeps an explicit value instead,
-/// before the detail multiplier is applied.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Overrides([Option<f32>; 7]);
-impl Overrides {
-    pub fn get(self, parameter: Parameter) -> Option<f32> {
-        self.0[parameter as usize]
-    }
-    pub fn set(&mut self, parameter: Parameter, value: Option<f32>) {
-        self.0[parameter as usize] = value;
-    }
-    fn value(self, parameter: Parameter, calculated: f32) -> f32 {
-        self.get(parameter).unwrap_or(calculated)
-    }
-    fn validate(self) -> Result<()> {
-        for parameter in Parameter::ALL {
-            if self
-                .get(parameter)
-                .is_some_and(|v| !v.is_finite() || !parameter.bounds().contains(&v))
-            {
-                return Err(format!("invalid noise override {}", parameter.key()).into());
-            }
-        }
-        Ok(())
-    }
-}
-
-impl serde::Serialize for Overrides {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
-        let mut map = serializer.serialize_map(Some(Parameter::ALL.len()))?;
-        for parameter in Parameter::ALL {
-            map.serialize_entry(parameter.key(), &self.get(parameter))?;
-        }
-        map.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for Overrides {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        struct Fields;
-        impl<'de> serde::de::Visitor<'de> for Fields {
-            type Value = Overrides;
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("named noise overrides")
-            }
-            fn visit_map<M: serde::de::MapAccess<'de>>(
-                self,
-                mut map: M,
-            ) -> std::result::Result<Overrides, M::Error> {
-                let mut seen = [false; 7];
-                let mut overrides = Overrides::default();
-                while let Some((name, value)) = map.next_entry::<String, Option<f32>>()? {
-                    let index = Parameter::ALL
-                        .iter()
-                        .position(|p| p.key() == name)
-                        .ok_or_else(|| {
-                            serde::de::Error::custom(format!("unknown noise override {name}"))
-                        })?;
-                    if seen[index] {
-                        return Err(serde::de::Error::custom(format!(
-                            "duplicate noise override {name}"
-                        )));
-                    }
-                    seen[index] = true;
-                    overrides.set(Parameter::ALL[index], value);
-                }
-                Ok(overrides)
-            }
-        }
-        deserializer.deserialize_map(Fields)
-    }
-}
-
-/// Values shown by linked GUI rows come from the same preparation as shader parameters.
-pub fn calculated_values(
-    metadata: &Metadata,
-    wb: &str,
-    mut controls: Controls,
-) -> Result<[f32; 7]> {
-    controls.overrides = Overrides::default();
-    let p = prepare(metadata, wb, controls)?;
-    Ok([
-        p.filter[1],
-        p.filter[2],
-        p.filter[3],
-        p.edge[0],
-        p.diffusion[1],
-        p.residual[0],
-        p.residual[1],
-    ])
-}
-
-fn mean_decay(preset: f32, scale: f32, manual: Option<f32>) -> f32 {
-    // Linked values retain the native reduced-local ceiling. Manual values
-    // bypass it, so unlinking must capture the effective linked value.
-    manual.unwrap_or_else(|| {
-        if scale > 0.5 && scale < 1. {
-            preset.min(0.92)
-        } else {
-            preset
-        }
-    })
 }
 
 /// Uniform layout shared by the reference-style shader passes.
@@ -253,10 +34,9 @@ pub(crate) struct Parameters {
     pub weights: [f32; 4],
     pub model: [[f32; 4]; 3], // Constant, linear, and quadratic variance by sensor layer.
     pub mono: [f32; 4],
-    pub residual: [f32; 4], // Mono mix, color mix, residual strength, detail multiplier.
     pub diffusion: [f32; 4], // Step, noise-model step, fixed contrast, directional axis.
     pub column_area: [u32; 4], // Camera column bounds, not the shading or working-area bounds.
-    pub column: [f32; 4],   // Column range coefficient, horizontal window, and reserved values.
+    pub column: [f32; 4],    // Column range coefficient, horizontal window, and reserved values.
     pub reduction: [f32; 4], // Native eighth-quantized reconstruction scale.
     pub geometry: [u32; 4], // LocalMean margin, edge LUT margin, fixed bilateral size, global branch.
     pub window: [u32; 4],   // First native tile column/row and compact atlas columns/rows.
@@ -337,16 +117,14 @@ impl Parameters {
     }
 }
 
-/// Key only the fields a stage uses. Otherwise a Detail or override edit
-/// would rerun expensive filtering even when its inputs have not changed.
+/// Key only the fields each stage uses so texture edits can reuse filtering.
 #[derive(Clone, Copy)]
 pub(crate) enum RecipeStage {
     Base,
     Column,
     Ratio,
     Geometry,
-    Detail,
-    Signal,
+    Texture,
 }
 impl Parameters {
     pub(crate) fn key(self, stage: RecipeStage) -> crate::recipe::Key {
@@ -372,11 +150,7 @@ impl Parameters {
                 .with(&self.mono)
                 .slice(&self.diffusion[..3])
                 .with(&self.edge[2]),
-            RecipeStage::Detail => key
-                .slice(&self.weights[..3])
-                .with(&self.edge[2])
-                .with(&self.residual),
-            RecipeStage::Signal => key.with(&self.edge[3]),
+            RecipeStage::Texture => key.slice(&self.weights[..3]).with(&self.edge[2]),
             RecipeStage::Geometry => key,
         }
     }
@@ -402,9 +176,7 @@ pub(crate) fn column_parameters(metadata: &Metadata, mut p: Parameters) -> Resul
 pub(crate) fn pattern_parameters(
     metadata: &Metadata,
     p: Parameters,
-    controls: Controls,
 ) -> Result<super::pattern::Prepared> {
-    controls.validate()?;
     const EXTRA: [[f32; 13]; 7] = [
         [
             100., 0.025, 0.025, 0., 0.12, 0.0025, 3., 0., 0., 0., 0., 0., 0.,
@@ -464,15 +236,9 @@ pub(crate) fn pattern_parameters(
     if !half.is_finite() || half.fract() != 0. || !(0. ..=4.).contains(&half) {
         return Err("unsupported pattern half size".into());
     }
-    let adjustment = [0., 0., 0., 0.25, 0.5][controls.chroma as usize];
     super::pattern::Prepared::new(
         [p.tile[0], p.tile[1], p.tile_count(), half as u32],
-        [
-            extra[1],
-            extra[2],
-            (extra[3] + adjustment).clamp(0., 1.),
-            0.,
-        ],
+        [extra[1], extra[2], extra[3].clamp(0., 1.), 0.],
     )
 }
 
@@ -692,17 +458,9 @@ fn recipe(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Recipe> {
             (fraction * rows[upper][c]) as f64,
         )
     });
-    let mut sliders = table::<13>(metadata, "DenoisingSlidersStep")?.unwrap_or(SLIDERS.to_vec());
+    let sliders = table::<13>(metadata, "DenoisingSlidersStep")?.unwrap_or(SLIDERS.to_vec());
     if sliders.len() != 5 || sliders.iter().flatten().any(|v| *v < 0.) {
         return Err("invalid noise slider rows".into());
-    }
-    if sliders.iter().all(|r| r[11] == 1.) {
-        for (r, v) in sliders
-            .iter_mut()
-            .zip([4. / 3., 7. / 6., 1., 5. / 6., 2. / 3.])
-        {
-            r[11] = v;
-        }
     }
     let chroma = sliders[controls.chroma as usize];
     let luminance = sliders[controls.luminance as usize];
@@ -716,10 +474,11 @@ fn recipe(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Recipe> {
 }
 pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Parameters> {
     controls.validate()?;
+    let controls = controls.base_controls();
     let (w, h) = (metadata.width as u32, metadata.height as u32);
     if !w.is_multiple_of(4) || !h.is_multiple_of(4) || w < 512 || h < 512 {
         return Err(
-            "reference reconstruction requires four-by-four tiles with 64-pixel context".into(),
+            "Merrill noise filtering requires four-by-four tiles with 64-pixel context".into(),
         );
     }
     let Recipe {
@@ -735,22 +494,12 @@ pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Resu
     let lower_strength = t.mul_add(f64::from_bits(0x3fb99999999999a0), 0.8);
     let lower_decay = t.mul_add(f64::from_bits(0xbf9eb851eb851ec0), 0.95);
     let upper_scale = t.mul_add(0.1, 0.2);
-    let lower_blend = t.mul_add(f64::from_bits(0x3fc3333333333334), 0.8);
-    let fraction = controls.luminance as f64 * 0.25;
-    let (strength, decay, edge_scale, blend) = match controls.luminance {
-        0 => (lower_strength, lower_decay, 1., lower_blend),
-        4 => (upper_strength, 0.95, upper_scale, 1.),
-        _ => (
-            (upper_strength - lower_strength).mul_add(fraction, lower_strength),
-            (0.95 - lower_decay).mul_add(fraction, lower_decay),
-            (upper_scale - 1.).mul_add(fraction, 1.),
-            if controls.luminance == 1 {
-                ((1. + lower_blend) as f32 * 0.5) as f64
-            } else {
-                1.
-            },
-        ),
-    };
+    // Cleanup sliders act after this camera-derived middle-preset base.
+    const MIDDLE_PRESET_FRACTION: f64 = 0.5;
+    let strength =
+        (upper_strength - lower_strength).mul_add(MIDDLE_PRESET_FRACTION, lower_strength);
+    let decay = (0.95 - lower_decay).mul_add(MIDDLE_PRESET_FRACTION, lower_decay);
+    let edge_scale = (upper_scale - 1.).mul_add(MIDDLE_PRESET_FRACTION, 1.);
     let model = table::<3>(metadata, "ColorNoiseModel")?.unwrap_or(vec![
         [7.428315, 10.099755, 1.7354154],
         [0.053895496, 0.06337678, 0.12630486],
@@ -765,9 +514,6 @@ pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Resu
         1.,
         MatrixEncoding::Float32,
     )? * chroma[0];
-    let noise_step = controls
-        .overrides
-        .value(Parameter::LumaNoiseScale, noise_step);
     let mono: [f32; 4] = std::array::from_fn(|r| {
         if r < 3 {
             ((model[r][0] + model[r][2]) + model[r][1]) / 9. * noise_step
@@ -817,20 +563,12 @@ pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Resu
         area,
         filter: [
             mixed[4] as f32,
-            controls.overrides.value(Parameter::BaseBlend, blend as f32),
-            controls
-                .overrides
-                .value(Parameter::EdgeCutoff, (strength as f32).clamp(0., 0.99)),
-            mean_decay(
-                (decay as f32).clamp(0., 1.),
-                reconstruction_scale,
-                controls.overrides.get(Parameter::MeanDecay),
-            ),
+            1.,
+            (strength as f32).clamp(0., 0.99),
+            mean_decay((decay as f32).clamp(0., 1.), reconstruction_scale),
         ],
         edge: [
-            controls
-                .overrides
-                .value(Parameter::EdgeScale, edge_scale as f32),
+            edge_scale as f32,
             scalar(metadata, "EdgeMapLinShift", 10., MatrixEncoding::Float32)?,
             scalar(metadata, "ResidualEpsilon", 5., MatrixEncoding::Float32)?,
             iso,
@@ -838,18 +576,6 @@ pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Resu
         weights: [weights[0], weights[1], weights[2], 0.],
         model,
         mono,
-        residual: [
-            controls.overrides.value(
-                Parameter::BrightnessMix,
-                ((mixed[9] as f32) * chroma[9]).clamp(0., 1.),
-            ),
-            controls.overrides.value(
-                Parameter::LayerMix,
-                ((mixed[10] as f32) * luminance[10]).clamp(0., 1.),
-            ),
-            ((mixed[11] as f32) * chroma[11]).max(0.),
-            controls.detail,
-        ],
         diffusion: [
             scalar(metadata, "AnisoLambda", 0.25, MatrixEncoding::Float32)?,
             noise_step,

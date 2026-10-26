@@ -116,9 +116,9 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
         "submit reference column conditioning",
         "submit reference luminance ratio",
         "submit reference pattern conditioning",
-        "submit reference detail",
+        "submit texture restoration",
         "submit tiled ColorDQ",
-        "submit reconstruction",
+        "submit color tile projection",
     ];
     for stage in reconstruction_stages {
         assert!(
@@ -208,7 +208,7 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
         .render(&source, &standalone, &mut Profile::default())
         .unwrap();
     assert_ne!(engine.readback_image(&unchecked).unwrap(), standalone_bytes);
-    // A lower native reconstruction scale uses whole-grid context in Fast too.
+    // Stronger cleanup keeps the same camera-derived base in Fast.
     standalone.reconstruction = Some(crate::noise::Controls {
         luminance: 4,
         ..Default::default()
@@ -248,7 +248,7 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
         if step == 1 {
             settings.exposure = 0.5;
             settings.saturation = 0.7;
-            settings.reconstruction.as_mut().unwrap().detail = 1.2;
+            settings.reconstruction.as_mut().unwrap().texture.fine = 1.2;
         }
         if step == 2 {
             settings = full.settings().clone();
@@ -299,6 +299,38 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
         .render_dng_base(&source, &settings, &mut Profile::default())
         .unwrap();
     assert_eq!(dng.description().extent, full.description().extent);
+    let c = settings.reconstruction.as_mut().unwrap();
+    c.texture.coarse = 0.25;
+    for quality in [PreviewQuality::Fast, PreviewQuality::Draft] {
+        settings.preview_quality = quality;
+        let mut profile = Profile::new(Mode::Wall);
+        let reduced = engine.render(&source, &settings, &mut profile).unwrap();
+        assert_eq!(
+            reduced.description().extent,
+            full.description().extent.map(|v| v / 2)
+        );
+        assert_eq!(
+            profile
+                .host
+                .iter()
+                .any(|p| p.stage == "submit texture restoration"),
+            quality == PreviewQuality::Fast
+        );
+        assert!(
+            bytemuck::cast_slice::<u8, f32>(&engine.readback_image(&reduced).unwrap())
+                .iter()
+                .all(|v| v.is_finite())
+        );
+    }
+    let mut profile = Profile::new(Mode::Wall);
+    let dng = engine
+        .render_dng_base(&source, &settings, &mut profile)
+        .unwrap();
+    assert_eq!(dng.description().extent, full.description().extent);
+    assert!(profile
+        .host
+        .iter()
+        .any(|p| p.stage == "submit texture restoration"));
 }
 
 #[test]
@@ -366,9 +398,17 @@ fn regional_detail_matches_full_and_continues_without_repeating_sensor_correctio
                 );
         }
         let source = std::sync::Arc::new(source);
-        for noise in [false, true] {
+        for (noise, tuned) in [(false, false), (true, false), (true, true)] {
             let mut settings = Settings::new("Sunlight", "Standard");
             settings.reconstruction = noise.then(Default::default);
+            if tuned {
+                settings.reconstruction.as_mut().unwrap().texture = crate::noise::TextureControls {
+                    fine: 0.8,
+                    coarse: 0.25,
+                    fine_size: 2.,
+                    coarse_size: 2.,
+                };
+            }
             if global_context && noise {
                 assert_eq!(
                     crate::noise::prepare(&source.metadata, "Sunlight", Default::default())
@@ -478,4 +518,160 @@ fn regional_detail_matches_full_and_continues_without_repeating_sensor_correctio
             drop(overview);
         }
     }
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn independent_groups_match_neutral_bypass_and_cached_refinement() {
+    use crate::{
+        inspection::Content,
+        profile::{Mode, Profile},
+        render::{Engine, RenderSession, Settings},
+        source::Source,
+    };
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = std::sync::Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
+    let engine = Engine::new().unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    let reference = engine
+        .render(&source, &settings, &mut Profile::default())
+        .unwrap();
+    let reference = engine.readback_image(&reference).unwrap();
+    let controls = settings.reconstruction.as_mut().unwrap();
+    controls.detail_enabled = false;
+    controls.texture = crate::noise::TextureControls {
+        fine: 1.5,
+        coarse: 0.2,
+        fine_size: 0.75,
+        coarse_size: 1.8,
+    };
+    let neutral = engine
+        .render(&source, &settings, &mut Profile::default())
+        .unwrap();
+    assert!(
+        reference == engine.readback_image(&neutral).unwrap(),
+        "disabled detail must match neutral processing"
+    );
+    drop(reference);
+    // An enabled but neutral Detail section needs no filtering when Noise is off.
+    let mut neutral_only = settings.clone();
+    let controls = neutral_only.reconstruction.as_mut().unwrap();
+    controls.noise_enabled = false;
+    controls.detail_enabled = true;
+    controls.texture.fine = 1.;
+    controls.texture.coarse = 1.;
+    let mut profile = Profile::new(Mode::Wall);
+    let image = engine.render(&source, &neutral_only, &mut profile).unwrap();
+    assert!(!profile.host.iter().any(|p| matches!(
+        p.stage,
+        "submit reference noise base"
+            | "submit reference pattern conditioning"
+            | "submit texture restoration"
+    )));
+    neutral_only.reconstruction = None;
+    let bypass = engine
+        .render(&source, &neutral_only, &mut Profile::default())
+        .unwrap();
+    assert!(engine.readback_image(&image).unwrap() == engine.readback_image(&bypass).unwrap());
+    let mut session = RenderSession::new(source.clone());
+    for (noise, detail) in [
+        (true, false),
+        (false, true),
+        (false, false),
+        (true, true),
+        (false, true),
+    ] {
+        let controls = settings.reconstruction.as_mut().unwrap();
+        controls.noise_enabled = noise;
+        controls.detail_enabled = detail;
+        let mut profile = Profile::new(Mode::Wall);
+        let fresh = engine.render(&source, &settings, &mut profile).unwrap();
+        let fresh = engine.readback_image(&fresh).unwrap();
+        let has_column = profile
+            .host
+            .iter()
+            .any(|s| s.stage == "submit reference column conditioning");
+        assert_eq!(has_column, noise);
+        let artifacts = engine
+            .render_session(
+                &mut session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let Content::Image(cached) = &artifacts[0].content else {
+            panic!("expected image")
+        };
+        assert!(
+            fresh == engine.readback_image(cached).unwrap(),
+            "cached groups noise={noise}, detail={detail}"
+        );
+        if !noise && !detail {
+            let mut bypass = settings.clone();
+            bypass.reconstruction = None;
+            let bypass = engine
+                .render(&source, &bypass, &mut Profile::default())
+                .unwrap();
+            assert!(
+                fresh == engine.readback_image(&bypass).unwrap(),
+                "both disabled must match the baseline"
+            );
+        }
+        if !noise && detail {
+            settings.preview_region = Some([1000, 900, 1300, 1200]);
+            let region = engine
+                .render(&source, &settings, &mut Profile::default())
+                .unwrap();
+            let geometry = super::super::region::Prepared::new(
+                crate::nodes::sensor::calibration::encode(
+                    &source.metadata,
+                    crate::color_space::ColorSpace::from_metadata(&source.metadata).unwrap(),
+                )
+                .unwrap(),
+                settings.preview_region.unwrap(),
+            )
+            .unwrap();
+            let bytes = engine.readback_image(&region).unwrap();
+            let full: &[f32] = bytemuck::cast_slice(&fresh);
+            let pixels: &[f32] = bytemuck::cast_slice(&bytes);
+            let [x0, y0, x1, y1] = region.view().crop;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let dst = ((y * region.description().extent[0] + x) * 3) as usize;
+                    let src = (((y + geometry.physical[1]) * neutral.description().extent[0]
+                        + x
+                        + geometry.physical[0])
+                        * 3) as usize;
+                    assert_eq!(
+                        &pixels[dst..dst + 3],
+                        &full[src..src + 3],
+                        "detail-only region {x},{y}"
+                    );
+                }
+            }
+            settings.preview_region = None;
+        }
+    }
+    settings.preview_region = None;
+    settings.exposure = 0.7;
+    settings.saturation = 1.2;
+    settings.tone.contrast = 0.3;
+    settings.sharpen_amount = Some(0.75);
+    settings.tone_enabled = false;
+    settings.refinement_enabled = false;
+    let image = engine
+        .render(&source, &settings, &mut Profile::default())
+        .unwrap();
+    assert_eq!(image.settings(), &settings);
+    let mut neutral = settings.processing_settings().into_owned();
+    neutral.tone_enabled = true;
+    neutral.refinement_enabled = true;
+    let expected = engine
+        .render(&source, &neutral, &mut Profile::default())
+        .unwrap();
+    assert!(engine.readback_image(&image).unwrap() == engine.readback_image(&expected).unwrap());
 }

@@ -10,6 +10,7 @@ pub(crate) mod pyramid_resample;
 pub(crate) mod raw_color_blend;
 pub(crate) mod reconstruction;
 pub(crate) mod rgb_prefilter;
+pub(crate) mod texture;
 pub(crate) mod two_scale_noise;
 pub(crate) mod uv_repair;
 

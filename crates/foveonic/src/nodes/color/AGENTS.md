@@ -26,18 +26,20 @@ Keep tiled sample meanings and side-output dependencies explicit. Noise controls
 - **[log_reconstruction.rs](./log_reconstruction.rs)** Reconstructs signed RGB from guided log residuals with caller-selected filtering controls.
 - **[mod.rs](./mod.rs)** Owns color noise preparation, reconstruction, and camera color conditioning.
 - **[neighborhood_decorrelate.rs](./neighborhood_decorrelate.rs)** Decorrelates RGB noise through ordered neighborhood updates with supplied variance and weight tables.
-- **[noise.rs](./noise.rs)** Resolves camera noise presets and linked overrides for shared GPU reconstruction.
+- **[noise.rs](./noise.rs)** Prepares the fixed Merrill noise base, column conditioning, and camera-derived processing couplings.
+- **[noise_controls.rs](./noise_controls.rs)** Defines independent Merrill cleanup and texture controls, retaining saved Quattro Smooth/Crisp values.
 - **[packed_lab.rs](./packed_lab.rs)** Converts unsigned RGB code triples to packed Lab codes and back with supplied matrices.
 - **[pattern.rs](./pattern.rs)** Prepares repeatable pattern-correction geometry without moving photo work to the CPU.
 - **[purple_fringe.rs](./purple_fringe.rs)** Corrects spatial green fringes through three immutable, brightness-preserving RGB passes.
 - **[pyramid_resample.rs](./pyramid_resample.rs)** Resamples RGB by one half or two using the reference triangular pyramid kernels.
 - **[range_reconstruction.rs](./range_reconstruction.rs)** Reconstructs linear RGB with range filtering, guided means, and deterministic residual diffusion.
 - **[raw_color_blend.rs](./raw_color_blend.rs)** Applies highlight neutralization, adaptive camera-color response and chroma outlier protection.
-- **[reconstruction.rs](./reconstruction.rs)** Executes reference-style processing tiles, noise filtering, residual detail, and image projections on GPU.
+- **[reconstruction.rs](./reconstruction.rs)** Filters camera noise, conditions brightness, and projects processing tiles on GPU.
 - **[residual_finish.rs](./residual_finish.rs)** Applies residual gains and derives signed detail from reconstructed unsigned code RGB.
 - **[rgb_prefilter.rs](./rgb_prefilter.rs)** Composes white balance, UV classification and fixed-radius range filtering in camera RGB codes.
 - **[sector_color.rs](./sector_color.rs)** Applies prepared chroma-sector matrices without selecting a camera or color mode.
 - **[spatial_color_gain.rs](./spatial_color_gain.rs)** Multiplies red and blue by prepared spatial gains while preserving green.
+- **[texture.rs](./texture.rs)** Restores independently cleaned brightness and chroma in sensor tiles before color conversion.
 - **[two_scale_noise.rs](./two_scale_noise.rs)** Combines full/half-resolution RGB filtering with brightness protection or edge-guided residual blending.
 - **[uv_repair.rs](./uv_repair.rs)** Converts RGB/YUV and classifies radius-one chroma neighborhoods against a supplied noise model.
 - **[weighted_white_balance.rs](./weighted_white_balance.rs)** Estimates a camera-layer neutral from reduced pixels and chroma-weighted histograms. Equations follow the recovered reference implementation. Image planes stay on the GPU.

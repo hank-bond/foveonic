@@ -8,7 +8,6 @@ struct NoiseParams {
     weights: vec4<f32>,
     model: array<vec4<f32>, 3>,
     mono: vec4<f32>,
-    residual: vec4<f32>,
     diffusion: vec4<f32>,
     column_area:vec4<u32>,
     column:vec4<f32>,

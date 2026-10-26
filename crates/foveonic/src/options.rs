@@ -168,19 +168,14 @@ fn parse_settings_with_noise_defaults(
             "--saturation" => settings.saturation = value.parse()?,
             "--color-dq-gain" => settings.color_dq_gain = Some(value.parse()?),
             "--repair-badness" => settings.repair = Some(RepairThreshold::Manual(value.parse()?)),
-            "--noise-override" => {
-                let (key, value) = value
-                    .split_once('=')
-                    .ok_or("noise override requires KEY=VALUE")?;
-                let parameter = foveonic::noise::Parameter::ALL
-                    .into_iter()
-                    .find(|p| p.key() == key)
-                    .ok_or("unknown noise override parameter")?;
-                settings
-                    .reconstruction
-                    .get_or_insert(noise_defaults)
-                    .overrides
-                    .set(parameter, Some(value.parse()?));
+            "--fine-detail" | "--coarse-detail" | "--fine-size" | "--coarse-size" => {
+                let controls = settings.reconstruction.get_or_insert(noise_defaults);
+                match flag {
+                    "--fine-detail" => controls.texture.fine = value.parse()?,
+                    "--coarse-detail" => controls.texture.coarse = value.parse()?,
+                    "--fine-size" => controls.texture.fine_size = value.parse()?,
+                    _ => controls.texture.coarse_size = value.parse()?,
+                }
             }
             "--chroma-noise" => {
                 settings.reconstruction.get_or_insert(noise_defaults).chroma = value.parse()?
@@ -201,7 +196,7 @@ fn parse_settings_with_noise_defaults(
                 settings.monochrome_smoothness = Some(value.parse()?);
                 settings.rendering = Rendering::Monochrome;
             }
-            "--detail" => {
+            "--smooth-crisp" => {
                 settings.reconstruction.get_or_insert(noise_defaults).detail = value.parse()?
             }
             "--sharpen" => {
@@ -242,7 +237,7 @@ fn parse_settings_with_noise_defaults(
 }
 
 #[cfg(test)]
-mod color_field_tests {
+mod tests {
     use super::*;
     #[test]
     fn three_highlight_presets_select_shared_color_field_configurations() {
@@ -374,5 +369,38 @@ mod color_field_tests {
             .map(OsString::from)
         )
         .is_err());
+    }
+    #[test]
+    fn texture_cli_preserves_amounts_sizes_and_validates_ranges() {
+        let parse = |args: &[&str]| {
+            parse_settings(
+                ["--wb", "Sunlight", "--mode", "Standard"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .chain(args.iter().map(OsString::from)),
+            )
+        };
+        let (s, _, _) = parse(&[
+            "--fine-detail",
+            "0.8",
+            "--coarse-detail",
+            "0.2",
+            "--fine-size",
+            "0.75",
+            "--coarse-size",
+            "1.8",
+        ])
+        .unwrap();
+        let c = s.reconstruction.unwrap();
+        assert_eq!(c.texture.fine, 0.8);
+        assert_eq!(c.texture.coarse, 0.2);
+        assert_eq!(c.texture.fine_size, 0.75);
+        assert_eq!(c.texture.coarse_size, 1.8);
+        assert_eq!(c.detail, foveonic::noise::Controls::default().detail);
+        assert!(parse(&["--fine-detail", "NaN"]).is_err());
+        assert!(parse(&["--coarse-detail", "-0.1"]).is_err());
+        assert!(parse(&["--fine-size", "0.49"]).is_err());
+        assert!(parse(&["--coarse-size", "2.01"]).is_err());
+        assert!(parse(&["--reconstruction-method", "other"]).is_err());
     }
 }

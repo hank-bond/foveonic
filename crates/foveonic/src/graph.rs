@@ -26,7 +26,6 @@ pub enum DataType {
     ConditionedTiles,
     PatternSeedTiles,
     UnconditionedRatioTiles,
-    ResidualTiles,
     RatioTiles,
     ColorTiles(ColorSpace),
     BlackLevels,
@@ -83,7 +82,6 @@ impl DataType {
             | Self::ConditionedTiles
             | Self::PatternSeedTiles
             | Self::UnconditionedRatioTiles
-            | Self::ResidualTiles
             | Self::RatioTiles
             | Self::ColorTiles(_) => return None,
         };

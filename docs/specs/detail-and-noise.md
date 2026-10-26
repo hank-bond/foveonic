@@ -1,5 +1,5 @@
 ---
-summary: "Reference-style GPU noise filtering and detail reconstruction provide an inspectable photographic baseline."
+summary: "Merrill GPU reconstruction separates noise cleanup from independently sized Fine and Coarse brightness detail."
 kind: reference
 status: accepted
 implementation: conforming
@@ -7,61 +7,60 @@ implementation: conforming
 
 # Detail and noise processing
 
-This document describes color reconstruction. [Monochrome rendering](./monochrome-rendering.md) has a separate sensor-layer mixing, filtering, and signed-detail recipe, independent of the retained color reconstruction controls.
+This specification describes Merrill color reconstruction. [Monochrome rendering](./monochrome-rendering.md) and Quattro retain their own algorithms and controls. The owner accepted the neutral portrait rendering and selected this approach to replace the earlier reference residual-gain restoration.
 
 ## Requirements
 
-- Noise filtering and detail reconstruction **must** run in GPU shaders through the shared GUI/CLI engine.
-- The first implementation **must** follow the reference algorithms, stage order, and camera-derived parameters. Necessary departures **must** be documented and checked with arithmetic fixtures and photographs.
-- Reconstruction **must** provide noise-aware base filtering, edge-guided smoothing, luminance conditioning, and residual detail reconstruction at the native metadata-selected full/local reduced/global geometry. Column/pattern conditioning and full-resolution detail/color/restoration **must** stay at their reference positions.
-- The graph **must** expose useful image stages for inspection and preserve the settings behind retained artifacts.
-- Controls **must** be shared by the GUI and CLI. New Merrill photographs opened in the GUI without a saved recipe **must** start with Noise and Detail enabled. Existing recipes, including explicit off selections, remain authoritative. [Fast previews](./merrill-fast-preview.md) honor that processing on their reduced grid. Smart's Draft overview bypasses it without changing the requested checkbox or controls. CLI selection remains explicit through the reconstruction options. Camera-record repair and despeckling use the independently agreed enabled defaults in [processing graphs](./processing-graphs.md).
-- Modern alternatives **must** use distinct node implementations so their photographic results and resource use can be compared with the reference-style baseline.
+- Noise filtering and texture restoration must run on GPU through the shared GUI/CLI engine, including Full TIFF/DNG, standalone Fast, and regional Smart refinement.
+- New Merrill photographs opened in the GUI without a saved recipe must start with Noise and Detail enabled independently. Existing explicit off selections remain authoritative. CLI selection remains explicit through reconstruction options.
+- Chroma and Luma noise must control cleanup independently of texture contrast. Fine and Coarse detail must offer separate amounts and sizes. Broad shading must remain available at zero detail amounts.
+- Full processing and inspection must retain native framing. [Fast previews](./merrill-fast-preview.md) use their reduced grid with the requested controls. Smart's initial Draft bypasses optional reconstruction without changing saved edits.
+- Retained images and original sensor samples must remain immutable. Inspection must compute requested outputs without changing the photograph.
 
-## Implementation direction
+## Reconstruction
 
-Use the reference's 4×4 processing tiles with 64-pixel context. Prepare camera noise models and control-table selections in Rust. Shader stages build a bilateral/edge-guided base, condition luminance with diffusion, derive residual gains, and restore detail after camera color conversion and optional ColorDQ. Keep the signed detail signal available for inspection.
+The horizontal recursive mean uses transposed RGB and edge layouts so neighboring GPU lanes access contiguous samples. It preserves each line's original arithmetic order and restores native tile layout before the vertical scan. RGB workspaces are reused, with one additional scalar edge buffer.
 
-Reconstruction selects native full-resolution or reduced local/global base filtering, restoring the base to full-resolution tile geometry before detail/color/restoration. Chroma and luminance controls select the reference's five table rows, numbered 0–4 with default 2. Banding noise selects the five column-estimation presets in [column conditioning](./column-conditioning.md), also defaulting to 2. A finite nonnegative detail multiplier scales the reference residual strength, with 1× retaining that selection and 0× displaying the filtered base.
+The camera-derived noise base retains the reference implementation's bilateral/edge filtering, recursive means, diffusion and pattern conditioning at the middle noise selection. Metadata still selects full-resolution, reduced local or global filtering as described in [reduced reconstruction](./reduced-reconstruction.md). [Column conditioning](./column-conditioning.md) retains its separate five Banding noise presets. Shared calibration, repair, despeckle, [row correction](./row-banding.md), and [highlight restoration](./highlight-restoration.md) retain their positions.
 
-## Inspection and controls
+Luma noise blends original column-conditioned brightness toward cleaned brightness. The stabilizing epsilon in the conditioned ratio is undone before restoration. Chroma noise blends original and filtered sensor-layer color proportions at a common camera-weighted brightness. Both choices run from 0 to 4, starting at 2. Luma cleanup is linear in that choice. Chroma cleanup uses `1 - (1 - choice/4)^2`, removing three quarters of chromatic residual at the middle setting. These edits do not change base filtering, pattern selection, automatic ColorDQ, or texture gain. Zero cleanup with unit detail must reproduce the column-conditioned sensor samples exactly, including signed shadows. Other selected sensor corrections still apply.
 
-`Settings::reconstruction` enables the path with shared `noise::Controls`. The GUI exposes a Noise and Detail enable toggle with Chroma noise, Luma noise, Banding noise, and Detail. Its Advanced subsection starts with ColorDQ gain, followed by the linked parameters, following [GUI workspace](./gui-workspace.md) control requirements. CLI options are `--reconstruction`, `--chroma-noise`, `--luma-noise`, `--banding-noise`, and `--detail`; parameter options also enable the path.
+Fine and Coarse amounts act on log-luminance residual bands. Zero suppresses a band, one restores it neutrally, and two enhances it. Four separable binomial steps start with native strides 1, 2, 4 and 8. The first pair separates Fine from Coarse. The last pair separates Coarse from broad shading, which is always restored at unit strength. Fine size and Coarse size independently dilate these pairs from 0.5× to 2×, starting at 1×. Fractional taps interpolate between samples. The bands share their boundary, so changing Fine size also changes the smaller-scale edge of Coarse. Maximum support is 60 pixels inside the existing 64-pixel processing-tile context. Fast scales the default strides to its working grid before applying size multipliers.
 
-Public images are `noise.layers` (calibrated sensor codes), `noise.edges` (recursive weights, nominal 0–1), `detail.ratio` (multiplicative luminance residual, displayed 0–2 with 1 neutral), `reconstruction.rgb` (working linear camera-color RGB in 0–4095 code units), and `detail.signal` (signed camera-code detail, displayed −1000…1000 with zero at middle gray). The existing `color.rgb` and optional `color-dq.rgb` expose the filtered base before restoration. Display mappings preserve processing values. Tile atlases remain internal typed connections.
+Both detail amounts start at one. At those values, the bands recombine neutrally and the spatial pyramid is skipped, including for the neutral change map. One effective-control resolver treats disabled and neutral detail identically for recipe construction, inspection availability and GPU preparation. Saved enable choices and sizes remain unchanged. With Noise off and Detail neutral, the recipe bypasses the entire optional filtering foundation. When luminance cleanup is zero, photographic texture processing must not depend on luminance diffusion or pattern conditioning. Explicit inspection of those stages may still run them. Column-only cleanup must not require the filtered base. Lower amounts deliberately soften their bands. These frequency bands cannot distinguish hair from pores at the same scale.
 
-## Linked advanced controls
+Restoration stays in calibrated sensor tiles before camera color conversion and ColorDQ. ColorDQ uses its camera-derived amount with the middle-preset cap unless manually set. [Final sharpening](./native-sharpening.md) remains a separate edit using the actual reconstructed RGB. Merrill color Auto sharpening is zero. Manual sharpening retains its meaning.
 
-- Selected advanced parameters **should** each have one basic reconstruction control as their parent. Camera/ISO metadata may also contribute to their calculated values. Several controls may influence the same visual effect.
-- Each advanced control **must** support linked and overridden states. Linked controls **must** display their calculated values, look slightly darker, and be read-only while the link button remains interactive. Unlinked controls **must** use explicit overrides and normal editable styling. Link buttons **must** be neutral when linked and blue when overridden, with guidance in tooltips.
-- Unlinking **must** capture the current calculated value without changing the image. Changing a basic control **must** update its linked advanced values and preserve unlinked overrides. Relinking **must** adopt the latest calculated value.
-- The detail multiplier **must** remain separate and apply after linked/overridden parameters are resolved. It does not become another parent of those advanced controls.
-- GUI displays and engine execution **must** use the same parameter calculation. Retained artifacts **must** preserve the selected basic controls and overrides.
+## Controls and inspection
 
-The first advanced set exposes existing preset-driven fields with their own link buttons:
+`Settings::reconstruction` stores shared `noise::Controls`. Merrill has independent Noise and Detail section checkboxes, styled with the same subdued text as other section headings. Noise contains Chroma, Luma and Banding rows. Detail contains Fine and Coarse amounts, each paired with its indented Size row inside a padded linked group. Unchecked sections keep their controls visible but disabled so the layout remains stable. Each section sizes its own compact label column. Slider tracks and numeric fields remain aligned within each section. Numeric fields should fit normal signed values without an extra em of unused width. ColorDQ gain remains under Noise → Advanced with its existing automatic/manual toggle. There is one Merrill reconstruction method.
 
-| Parameter | Basic parent | Manual range |
-| --- | --- | --- |
-| Base filter blend | Luma noise | 0–1 |
-| Mean edge cutoff | Luma noise | 0–0.99 |
-| Mean decay | Luma noise | 0–1 |
-| Edge sensitivity | Luma noise | 0.01–4 |
-| Luma noise scale | Chroma noise | 0–64 |
-| Brightness mix | Chroma noise | 0–1 |
-| Layer detail mix | Luma noise | 0–1 |
+Disabling a section must preserve all its values. Disabled Detail uses unit Fine/Coarse amounts and skips the spatial detail pyramid. Disabled Noise bypasses chroma/luma cleanup and column correction. Detail can still use the filtered sensor base to separate its frequency bands. Disabling both groups bypasses their tile processing. An enabled neutral Detail section with Noise off takes the same bypass. Automatic ColorDQ follows Noise independently of Detail. Explicit ColorDQ gain remains authoritative, including zero. Shared sensor corrections remain independently selectable. Smart Draft temporarily bypasses both groups without changing these saved selections.
 
-These coefficients retain the reference's coupling and nonlinear effects. Higher numbers do not uniformly mean stronger noise reduction. Tooltips describe each field and its parent. Camera-only bilateral range/radius, diffusion step/contrast, and extrema clamping remain internal.
+CLI controls are `--reconstruction`, `--chroma-noise`, `--luma-noise`, `--banding-noise`, `--fine-detail`, `--coarse-detail`, `--fine-size`, and `--coarse-size`. Parameter options enable reconstruction. `--smooth-crisp` belongs to Quattro.
 
-Linked Mean decay **must** retain the native 0.92 ceiling for reduced local filtering. Its displayed calculated value **must** include that ceiling so unlinking captures the effective value without changing the image. Manual Mean decay **must** use its full 0–1 range without the linked ceiling. Values near 1 can reveal finite-tile boundaries.
+Useful inspection roots include:
 
-`Controls::overrides` stores optional values by `noise::Parameter`; `None` is linked. `noise::calculated_values` uses the shared engine preparation with overrides removed. CLI accepts repeated `--noise-override KEY=VALUE`, enabling reconstruction. Zero/Off semantics remain a separate decision; the reference's preset 0 and detail multiplier 0 retain their existing meanings.
+| Output | Meaning |
+| --- | --- |
+| `noise.layers` | Filtered calibrated sensor base. |
+| `noise.edges` | Recursive smoothing weights, nominal 0–1. |
+| `column.layers` | Column-conditioned sensor input. |
+| `detail.raw-ratio` / `detail.ratio` | Brightness ratios before/after pattern conditioning, neutral 1. |
+| `pattern.mask` | Pattern-conditioning selection, independently of camera defects. |
+| `texture.change` | Combined Fine/Coarse gain relative to neutral detail, excluding denoising and later color/sharpening. |
+| `color.rgb` / `color-dq.rgb` | Restored sensor layers converted to working RGB before/after ColorDQ. |
+| `reconstruction.rgb` | Working RGB projected from processing tiles. |
+| `detail.signal` | Signed high-pass of reconstructed RGB for optional final sharpening. |
 
-## Baseline boundaries
+`texture.change` is a scalar multiplicative brightness map. One displays as middle gray, lighter means increased and darker means decreased brightness. Both amounts at one produce flat gray. Set an amount away from one to inspect the effect of its size. Individual Fine/Coarse inspection maps are retired. Projection is not a separate correction, so `reconstruction.rgb` does not expose a before/after comparison pair.
 
-The recipe retains existing calibration/repair. Shared noise metadata supplies despeckle dose while retaining actual calibration WB factors. ColorDQ selects native processing-ISO gain capped by the noise-derived limit with reconstruction; `Some(gain)`/`--color-dq-gain` overrides it and 0 explicitly disables it. The GUI's ColorDQ A toggle restores the calculated choice; automatic selection is inactive without reconstruction. [Row preprocessing](./row-banding.md) and [highlight restoration](./highlight-restoration.md) are now integrated. [Full-resolution column correction](./column-conditioning.md) is integrated at the reference position before luminance/detail estimation. [Pattern conditioning](./pattern-conditioning.md) is integrated between ratio creation and residual mixing with distinct original-ratio/mask/conditioned-ratio inspection. The [metadata-selected reduced local/global branch](./reduced-reconstruction.md) is integrated. Signed reference detail is inspectable and now feeds [optional native final sharpening](./native-sharpening.md) before Exposure/tone. Gaussian radius/blur stages are retired; amount 0 remains Off.
+## Saved settings and migration
 
-Shaders use float32 arithmetic and owned, initialized workspaces. Source images stay immutable. Tile extraction defines outer context corners, and directional passes preserve their initialized tile borders. The signed signal has a zero-filled two-pixel tile border. The 64-pixel context separates these workspace borders from projected cores. Numerical checks cover reference interior arithmetic, diffusion's delayed border writes, and overlap ramps.
+The independent enable flags, four texture amounts and sizes persist with the recipe. Older populated reconstruction settings enable both groups. An older null reconstruction setting leaves both off. Merely displaying an old recipe must not populate or rewrite it. Saved experimental texture values are retained while the retired `enabled` flag is ignored. Earlier sidecars missing texture start at neutral amounts and sizes. The earlier residual multiplier has no equivalent and is reset for Merrill when camera capabilities normalize the recipe. Quattro retains that stored field for its Smooth/Crisp behavior. Retired linked overrides are accepted only while reading older sidecars and are omitted on save. Unknown and duplicate fields remain errors. Loading alone must not rewrite sidecars.
 
-## Conformance
+The old linked-control UI, alternate method selector, residual-gain kernels, core-only detail projection and comparison generator are removed. Pattern preparation uses camera metadata and processing geometry independently of cleanup controls. The camera-derived base algorithms and their attribution remain.
 
-Checks cover metadata-derived ISO/models, calibration scaling, bilateral/edge filtering, recursive directional means, diffusion and extrema borders, ratios, residual mixing, reconstruction, signed detail, and tile-overlap projection against retained reference fixtures. GPU integration checks cover selective execution, independently retained image outputs, scalar meanings, all five noise choices and explicit ColorDQ. The [implementation plan](../../plans/archived/detail-and-noise.md) summarizes native review, native-size TIFF comparisons, and timing/memory measurements on six original Merrill photographs. The owner accepted the implemented photographic and interface results. Cross-platform runtime checks remain unperformed. Linked-control checks cover parameter bounds, single-parent calculation, exact captured-parameter equality, preserved overrides, pointer-driven unlink/relink, changed filtering, and finite output at manual extrema. Native checks on six originals and UI-preference restart evidence are recorded in the [editor review plan](../../plans/archived/editor-review-focus.md).
+## Validation
+
+Checks cover fixed camera-base parameters, independent cleanup endpoints, signed identity, spatial band response, size bounds, exact combined-change mapping, neutral pyramid bypass, independent group toggles, selective inspection, and retained ownership. Native fixtures cover cached/fresh edits, regional seams and corners, all four orientations, Fast/Draft behavior, Full continuation, TIFF and DNG geometry. Sidecar checks cover old and experimental settings, strict schema handling, and save/reload. The filter optimization preserves the accepted portrait's sensor-base and final floating-point samples exactly. Cross-platform photographic/runtime checks remain unperformed.

@@ -178,6 +178,13 @@ impl ControlCapabilities {
         if self.family == ProcessingFamily::Classic {
             settings.monochrome = Default::default();
         }
+        if self.family == ProcessingFamily::Merrill {
+            if let Some(controls) = &mut settings.reconstruction {
+                // The former Merrill residual amount has no band-equivalent.
+                // Quattro still owns this field as its Smooth/Crisp control.
+                controls.detail = crate::noise::Controls::default().detail;
+            }
+        }
         if !self.noise_adjustments {
             settings.reconstruction = settings.reconstruction.map(|_| Default::default());
         }

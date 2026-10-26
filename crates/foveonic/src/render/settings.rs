@@ -55,11 +55,15 @@ pub struct Settings {
     pub color_mode: String,
     /// Stops applied to linear RGB before the selected rendering mode's tone curve.
     pub exposure: f32,
+    /// Bypass tone/color edits without changing their saved values or camera look.
+    pub tone_enabled: bool,
+    /// Bypass optional final refinement while retaining its amount and Auto choice.
+    pub refinement_enabled: bool,
     pub tone: ToneControls,
     /// Color saturation after tone. Zero is grayscale and one leaves it unchanged.
     pub saturation: f32,
     /// ColorDQ gain after camera color conversion. Zero skips this correction.
-    /// None chooses the camera's automatic gain when reconstruction is on.
+    /// None chooses the camera's automatic gain when noise cleanup is on.
     /// Some keeps an explicit override, including zero for Off.
     pub color_dq_gain: Option<f32>,
     /// Ordered camera-record repair, using the current cutoff or an explicit minimum badness.
@@ -100,6 +104,8 @@ impl Default for Settings {
             white_balance: String::new(),
             color_mode: String::new(),
             exposure: 0.,
+            tone_enabled: true,
+            refinement_enabled: true,
             tone: ToneControls::default(),
             saturation: 1.,
             color_dq_gain: None,
@@ -155,28 +161,61 @@ impl Settings {
                 ..Default::default()
             }
         } else {
-            self.reconstruction.unwrap_or_default()
+            self.reconstruction.unwrap_or_default().base_controls()
         }
     }
 
     pub fn sharpen_selected(&self) -> bool {
-        self.sharpen_amount.is_none_or(|amount| amount > 0.)
+        self.processing_sharpen_amount()
+            .is_none_or(|amount| amount > 0.)
     }
 
     /// Resolve Auto to the authored recipe's sharpening default. Output size
-    /// and residual Detail do not change it, including when reconstruction is off.
+    /// and texture amounts do not change it, including when reconstruction is off.
     pub fn effective_sharpen_amount(&self, metadata: &crate::source::Metadata) -> Result<f32> {
-        match self.sharpen_amount {
+        match self.processing_sharpen_amount() {
             Some(amount) => Ok(amount),
             None => super::recipes::default_sharpen_amount(self, metadata),
         }
     }
 
+    fn processing_sharpen_amount(&self) -> Option<f32> {
+        if self.refinement_enabled {
+            self.sharpen_amount
+        } else {
+            Some(0.)
+        }
+    }
+
     pub fn color_dq_selected(&self) -> bool {
         !self.is_monochrome()
-            && self
-                .color_dq_gain
-                .map_or(self.reconstruction.is_some(), |v| v > 0.)
+            && self.color_dq_gain.map_or(
+                self.reconstruction
+                    .is_some_and(|c| c.merrill_effects().noise),
+                |v| v > 0.,
+            )
+    }
+
+    /// Merrill's optional tile processing, retaining inactive controls in the recipe.
+    pub fn merrill_reconstruction(&self) -> Option<crate::noise::Controls> {
+        self.reconstruction
+            .filter(|c| c.merrill_effects().needs_tiles())
+    }
+
+    /// Resolve section bypasses at the recipe boundary. Artifacts and sidecars
+    /// keep the requested values, including inactive edits.
+    pub(crate) fn processing_settings(&self) -> std::borrow::Cow<'_, Self> {
+        if self.tone_enabled && self.refinement_enabled {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut effective = self.clone();
+        if !self.tone_enabled {
+            effective.exposure = 0.;
+            effective.saturation = 1.;
+            effective.tone = Default::default();
+        }
+        effective.sharpen_amount = self.processing_sharpen_amount();
+        std::borrow::Cow::Owned(effective)
     }
 
     pub fn validate(&self) -> Result<()> {

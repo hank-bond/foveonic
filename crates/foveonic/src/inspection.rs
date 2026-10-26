@@ -65,7 +65,7 @@ pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'s
         names.push("tone.rgb");
         return names;
     }
-    if settings.reconstruction.is_some() {
+    if settings.merrill_reconstruction().is_some() {
         names.extend([
             "noise.layers",
             "noise.edges",
@@ -74,20 +74,21 @@ pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'s
             "pattern.mask",
             "detail.ratio",
         ]);
+        names.push("texture.change");
     }
     names.push("color.rgb");
     if settings.color_dq_selected() {
         names.push("color-dq.rgb");
     }
-    if settings.reconstruction.is_some() {
+    if settings.merrill_reconstruction().is_some() {
         names.extend(["reconstruction.rgb", "detail.signal"]);
     }
     names.push("tone.rgb");
-    if settings.saturation != 1. {
+    if settings.tone_enabled && settings.saturation != 1. {
         names.push("saturation.rgb");
     }
     if settings.sharpen_selected() {
-        if settings.reconstruction.is_none() {
+        if settings.merrill_reconstruction().is_none() {
             names.push("detail.signal");
         }
         names.push("sharpen.rgb");
@@ -147,8 +148,10 @@ pub fn image_outputs_with_family(
                 | "chroma.layers"
                 | "color.corrected-layers" => Channels::Layers,
                 "noise.edges" | "detail.ratio" | "detail.raw-ratio" | "pattern.mask"
-                | "detail.signal" | "highlight.density" | "mono.mix" | "mono.directional"
-                | "mono.column" | "mono.filtered" | "mono.despeckle" => Channels::Scalar,
+                | "detail.signal" | "texture.change" | "highlight.density" | "mono.mix"
+                | "mono.directional" | "mono.column" | "mono.filtered" | "mono.despeckle" => {
+                    Channels::Scalar
+                }
                 _ => Channels::Rgb,
             };
             Some(ImageOutput { name, channels })
@@ -203,7 +206,9 @@ pub fn comparison_input(
             _ => None,
         };
     }
-    if settings.reconstruction.is_some() && matches!(output, "noise.layers" | "column.layers") {
+    if settings.merrill_reconstruction().is_some()
+        && matches!(output, "noise.layers" | "column.layers")
+    {
         return Some(input);
     }
     let base = if settings.color_dq_selected() {
@@ -213,15 +218,17 @@ pub fn comparison_input(
     };
     match output {
         "color-dq.rgb" if settings.color_dq_selected() => Some("color.rgb"),
-        "reconstruction.rgb" if settings.reconstruction.is_some() => Some(base),
+        // Texture is restored before color conversion. Projection does not
+        // provide a before/after pair in the same physical image grid.
+        "reconstruction.rgb" => None,
         "sharpen.rgb" if settings.sharpen_selected() => {
-            Some(if settings.reconstruction.is_some() {
+            Some(if settings.merrill_reconstruction().is_some() {
                 "reconstruction.rgb"
             } else {
                 base
             })
         }
-        "saturation.rgb" if settings.saturation != 1. => Some("tone.rgb"),
+        "saturation.rgb" if settings.tone_enabled && settings.saturation != 1. => Some("tone.rgb"),
         _ => None,
     }
 }
@@ -311,12 +318,12 @@ mod tests {
         }
         assert_eq!(
             super::comparison_input(&s, "reconstruction.rgb", None),
-            Some("color-dq.rgb")
+            None
         );
         s.color_dq_gain = Some(0.);
         assert_eq!(
             super::comparison_input(&s, "reconstruction.rgb", None),
-            Some("color.rgb")
+            None
         );
         s.sharpen_amount = Some(0.75);
         assert_eq!(
@@ -350,6 +357,39 @@ mod tests {
                 assert!(images.iter().any(|i| i.name == input), "{input}");
             }
         }
+    }
+
+    #[test]
+    fn texture_catalog_exposes_one_scalar_change_view_only_with_reconstruction() {
+        let mut s = crate::render::Settings::new("Sunlight", "Standard");
+        assert!(!super::output_names(&s, None).contains(&"texture.change"));
+        s.reconstruction = Some(Default::default());
+        let images = super::image_outputs(&s, None);
+        assert_eq!(
+            images
+                .iter()
+                .find(|o| o.name == "texture.change")
+                .unwrap()
+                .channels,
+            super::Channels::Scalar
+        );
+        assert!(!images
+            .iter()
+            .any(|o| matches!(o.name, "texture.fine" | "texture.coarse")));
+        assert_eq!(super::comparison_input(&s, "texture.change", None), None);
+        s.reconstruction.as_mut().unwrap().detail_enabled = false;
+        assert!(super::output_names(&s, None).contains(&"texture.change"));
+        s.reconstruction.as_mut().unwrap().noise_enabled = false;
+        let outputs = super::output_names(&s, None);
+        assert!(!outputs.contains(&"texture.change"));
+        assert!(!outputs.contains(&"reconstruction.rgb"));
+        assert!(!outputs.contains(&"color-dq.rgb"));
+        s.reconstruction.as_mut().unwrap().detail_enabled = true;
+        assert!(!super::output_names(&s, None).contains(&"texture.change"));
+        s.reconstruction.as_mut().unwrap().texture.fine = 0.8;
+        assert!(super::output_names(&s, None).contains(&"texture.change"));
+        s.rendering = crate::render::Rendering::Monochrome;
+        assert!(!super::output_names(&s, None).contains(&"texture.change"));
     }
 
     #[test]

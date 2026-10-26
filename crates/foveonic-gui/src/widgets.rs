@@ -4,15 +4,38 @@ use eframe::egui;
 
 const RADIUS: u8 = 4;
 pub const BUTTON_GROUP_MARGIN: i8 = 4;
+pub const PARAMETER_GROUP_HORIZONTAL_PADDING: i8 = 2 * BUTTON_GROUP_MARGIN;
 pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);
+/// Keep slider tracks distinct from both linked groups and the main panel.
+pub const SLIDER_TRACK_FILL: egui::Color32 = egui::Color32::from_gray(60);
 
 /// Give related controls a shared padded background without changing their spacing.
 pub fn button_group<R>(
     ui: &mut egui::Ui,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
+    linked_group(ui, egui::Margin::same(BUTTON_GROUP_MARGIN), contents)
+}
+
+/// Keep paired parameter rows roomy at the sides without increasing row gaps.
+pub fn parameter_group<R>(
+    ui: &mut egui::Ui,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    linked_group(
+        ui,
+        egui::Margin::symmetric(PARAMETER_GROUP_HORIZONTAL_PADDING, BUTTON_GROUP_MARGIN),
+        contents,
+    )
+}
+
+fn linked_group<R>(
+    ui: &mut egui::Ui,
+    padding: egui::Margin,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
     egui::Frame::new()
-        .inner_margin(BUTTON_GROUP_MARGIN)
+        .inner_margin(padding)
         .corner_radius(6)
         .fill(MENU_BACKGROUND)
         .show(ui, |ui| {
@@ -48,6 +71,10 @@ pub fn install_style(ctx: &egui::Context) {
     style
         .text_styles
         .insert(egui::TextStyle::Body, egui::FontId::proportional(13.));
+    // About two lowercase characters in this proportional font, split evenly
+    // around the indentation pipe.
+    style.spacing.indent = egui::TextStyle::Body.resolve(&style).size;
+    style.visuals.indent_has_left_vline = true;
     ctx.set_style(style);
 }
 
@@ -212,7 +239,11 @@ pub fn button(ui: &mut egui::Ui, label: &str, on: bool, minimum: egui::Vec2) -> 
     response
 }
 
-pub fn checkbox(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
+pub fn checkbox(
+    ui: &mut egui::Ui,
+    value: &mut bool,
+    label: impl Into<egui::WidgetText>,
+) -> egui::Response {
     let background = ui.painter().add(egui::Shape::Noop);
     let response = ui
         .scope(|ui| {
@@ -317,6 +348,32 @@ pub fn menu_value<T: PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indentation_reserves_one_body_em_total_with_a_centered_pipe() {
+        let ctx = egui::Context::default();
+        install_style(&ctx);
+        let mut parent_left = 0.;
+        let mut child_left = 0.;
+        let mut em = 0.;
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                em = egui::TextStyle::Body.resolve(ui.style()).size;
+                parent_left = ui.available_rect_before_wrap().left();
+                ui.indent("indentation-spacing", |ui| {
+                    child_left = ui.available_rect_before_wrap().left();
+                    ui.label("Child");
+                });
+            });
+        });
+        assert_eq!(child_left - parent_left, em);
+        assert!(output.shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::LineSegment { points, .. } => {
+                points[0].x == parent_left + 0.5 * em && points[1].x == parent_left + 0.5 * em
+            }
+            _ => false,
+        }));
+    }
 
     fn render(
         ctx: &egui::Context,

@@ -50,29 +50,30 @@ impl Engine {
         if names.is_empty() {
             return Ok(Vec::new());
         }
+        let effective = settings.processing_settings();
         let built = match recipe {
             Recipe::Photographic(_) => match source.metadata.processing_family()? {
                 crate::source::ProcessingFamily::Merrill => {
-                    merrill::build(self, source, settings, names, profile, execution)?
+                    merrill::build(self, source, &effective, names, profile, execution)?
                 }
                 crate::source::ProcessingFamily::Classic => {
-                    classic::build(self, source, settings, names, profile, execution)?
+                    classic::build(self, source, &effective, names, profile, execution)?
                 }
                 crate::source::ProcessingFamily::Quattro => profile
                     .measure("prepare recipe", || {
-                        quattro::build(self, source, settings, names, execution)
+                        quattro::build(self, source, &effective, names, execution)
                     })?,
             },
             Recipe::DngBase => match source.metadata.processing_family()? {
                 crate::source::ProcessingFamily::Merrill => {
-                    merrill::build_dng(self, source, settings, profile, execution)?
+                    merrill::build_dng(self, source, &effective, profile, execution)?
                 }
                 crate::source::ProcessingFamily::Classic => {
-                    classic::build_dng(self, source, settings, profile, execution)?
+                    classic::build_dng(self, source, &effective, profile, execution)?
                 }
                 crate::source::ProcessingFamily::Quattro => profile
                     .measure("prepare Quattro DNG recipe", || {
-                        quattro::build_dng(self, source, settings, execution)
+                        quattro::build_dng(self, source, &effective, execution)
                     })?,
             },
         };
@@ -116,6 +117,8 @@ pub(super) fn prepare_dng_appearance(
     statistics: super::WhiteBalanceStats,
 ) -> Result<crate::dng::appearance::Prepared> {
     use crate::{dng::appearance::Prepared, source::ProcessingFamily};
+    let effective = settings.processing_settings();
+    let settings = &effective;
     let family = metadata.processing_family()?;
     let mut prepared = match family {
         ProcessingFamily::Merrill => merrill::prepare_dng_appearance(metadata, settings)?,
@@ -141,6 +144,7 @@ pub(super) fn default_sharpen_amount(
     match metadata.processing_family().ok() {
         Some(ProcessingFamily::Classic) => Ok(1.),
         Some(ProcessingFamily::Quattro) => quattro::default_sharpen_amount(settings, metadata),
+        Some(ProcessingFamily::Merrill) if !settings.is_monochrome() => Ok(0.),
         _ => Ok(crate::noise::couplings(
             metadata,
             &settings.white_balance,

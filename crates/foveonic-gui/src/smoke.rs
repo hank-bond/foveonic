@@ -132,7 +132,7 @@ const DIFFERENCE_TARGETS: &[&str] = &[
 const DETAIL_TARGETS: &[&str] = &[
     "preview",
     "final",
-    "reference",
+    "reconstructed",
     "slide-detail-0.0",
     "slide-detail-0.2",
     "slide-detail-0.4",
@@ -148,7 +148,7 @@ const DETAIL_TARGETS: &[&str] = &[
 const NOISE_TARGETS: &[&str] = &[
     "preview",
     "final",
-    "reference",
+    "reconstructed",
     "noise.layers",
     "noise.edges",
     "detail.ratio",
@@ -169,10 +169,10 @@ const NOISE_TARGETS: &[&str] = &[
 const EDITOR_TARGETS: &[&str] = &[
     "preview",
     "final",
-    "reference",
-    "manual-decay",
-    "parent-changed",
-    "relinked",
+    "reconstructed",
+    "fine-soft",
+    "coarse-large",
+    "neutral-detail",
     "rgb-blue",
     "layers-two",
     "repair-auto",
@@ -186,7 +186,7 @@ const EDITOR_TARGETS: &[&str] = &[
 const SPECKLE_TARGETS: &[&str] = &[
     "preview",
     "final",
-    "reference",
+    "reconstructed",
     "camera-only",
     "bolt-before",
     "white-before",
@@ -202,7 +202,7 @@ const REPAIR_TARGETS: &[&str] = &[
     "final",
     "leaf-before",
     "leaf-after",
-    "reference",
+    "reconstructed",
     "final-default",
 ];
 
@@ -749,7 +749,7 @@ impl App {
                     self.submit(None);
                 }
                 name if name.starts_with("slide-detail-") => {
-                    self.settings.reconstruction.as_mut().unwrap().detail =
+                    self.settings.reconstruction.as_mut().unwrap().texture.fine =
                         name.strip_prefix("slide-detail-").unwrap().parse().unwrap();
                     self.submit(None);
                 }
@@ -801,35 +801,25 @@ impl App {
                     self.viewport.reset();
                     self.submit(None);
                 }
-                "reference" => {
+                "reconstructed" => {
                     if editor_review_active() {
                         self.preferences.collapsed = [Section::Navigator, Section::Scopes].into();
                     }
                     self.settings.reconstruction = Some(Default::default());
                     self.submit(None);
                 }
-                "manual-decay" => {
-                    self.settings
-                        .reconstruction
-                        .as_mut()
-                        .unwrap()
-                        .overrides
-                        .set(foveonic::noise::Parameter::MeanDecay, Some(0.5));
+                "fine-soft" => {
+                    self.settings.reconstruction.as_mut().unwrap().texture.fine = 0.5;
                     self.submit(None);
                 }
-                "parent-changed" => {
+                "coarse-large" => {
                     let controls = self.settings.reconstruction.as_mut().unwrap();
-                    controls.chroma = 0;
-                    controls.luminance = 4;
+                    controls.texture.coarse = 0.5;
+                    controls.texture.coarse_size = 2.;
                     self.submit(None);
                 }
-                "relinked" => {
-                    self.settings
-                        .reconstruction
-                        .as_mut()
-                        .unwrap()
-                        .overrides
-                        .set(foveonic::noise::Parameter::MeanDecay, None);
+                "neutral-detail" => {
+                    self.settings.reconstruction.as_mut().unwrap().texture = Default::default();
                     self.submit(None);
                 }
                 "rgb-blue" => self.channel = 2,
@@ -859,7 +849,10 @@ impl App {
                 | "final-neutral" => {
                     let mut controls = foveonic::noise::Controls::default();
                     match smoke.targets[smoke.index] {
-                        "detail-zero" => controls.detail = 0.,
+                        "detail-zero" => {
+                            controls.texture.fine = 0.;
+                            controls.texture.coarse = 0.;
+                        }
                         "noise-low" => {
                             controls.chroma = 0;
                             controls.luminance = 0;

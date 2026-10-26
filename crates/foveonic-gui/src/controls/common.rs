@@ -8,6 +8,182 @@ use foveonic::{
 };
 use std::ops::RangeInclusive;
 
+// General editing rows share this font-sized column. Compact sections supply
+// their own LabelColumn rather than reserving space for unrelated controls.
+const COLUMN_LABELS: &[&str] = &[
+    "Rendering",
+    "White balance",
+    "Smooth / Crisp",
+    "ColorDQ gain",
+];
+const ROW_HEIGHT: f32 = 20.;
+
+fn label_width(ui: &egui::Ui) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let width = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.into(), font.clone(), egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    COLUMN_LABELS
+        .iter()
+        .map(|s| width(s))
+        .chain([width("Highlights") + ui.spacing().icon_width + ui.spacing().icon_spacing])
+        .fold(0., f32::max)
+        .ceil()
+}
+
+/// Reserve the full column while centering the lowercase body on its control.
+/// Keep glyphs and their natural spacing intact. Only the label's layout box
+/// changes, so native labels/checkboxes retain their interaction and help.
+fn aligned_label(
+    ui: &mut egui::Ui,
+    text: &str,
+    indent: Option<f32>,
+    enabled: Option<&mut bool>,
+    width: Option<f32>,
+) -> egui::Response {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let width = width.unwrap_or_else(|| label_width(ui));
+    let prefix = if enabled.is_some() {
+        ui.spacing().icon_width + ui.spacing().icon_spacing
+    } else {
+        0.
+    };
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        text.into(),
+        font.clone(),
+        egui::Color32::PLACEHOLDER,
+    );
+    if indent.is_some() {
+        job.sections[0].leading_space = ui.spacing().indent;
+    }
+    let mut galley = ui.painter().layout_job(job);
+    let reference = ui
+        .painter()
+        .layout_no_wrap("x".into(), font, egui::Color32::PLACEHOLDER);
+    let body_offset = reference
+        .rows
+        .first()
+        .and_then(|row| row.glyphs.first())
+        .map_or(0., |glyph| {
+            glyph.uv_rect.offset.y + glyph.uv_rect.size.y * 0.5
+        });
+    let baseline = galley
+        .rows
+        .first()
+        .and_then(|row| row.glyphs.first())
+        .map_or(galley.size().y * 0.5, |g| g.pos.y);
+    let ink_left = galley
+        .rows
+        .first()
+        .map_or(0., |row| row.visuals.mesh_bounds.left());
+    let column = std::sync::Arc::make_mut(&mut galley);
+    // Native widgets center this box. Putting its midpoint at baseline minus
+    // half the x-height aligns the visible letter body, independent of g/p/h.
+    column.rect.max.x = column.rect.min.x + (width - prefix).max(column.size().x);
+    column.rect.max.y = column.rect.min.y + 2. * (baseline + body_offset);
+    let response = if let Some(value) = enabled {
+        ui.add_sized([width, ROW_HEIGHT], |ui: &mut egui::Ui| {
+            crate::widgets::checkbox(ui, value, galley)
+        })
+    } else {
+        ui.add_sized([width, ROW_HEIGHT], egui::Label::new(galley))
+    };
+    if let Some(outer_padding) = indent {
+        // Center on the actual visible glyph edge, including the group's
+        // padding to the left of this row. Font side bearings count too.
+        let x = response.rect.left() + (ink_left - outer_padding) * 0.5;
+        ui.painter().line_segment(
+            [
+                egui::pos2(x, response.rect.top()),
+                egui::pos2(x, response.rect.bottom()),
+            ],
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
+    }
+    response
+}
+
+pub(super) fn label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    aligned_label(ui, text, None, None, None)
+}
+
+pub(super) fn label_toggle(ui: &mut egui::Ui, text: &str, enabled: &mut bool) -> egui::Response {
+    aligned_label(ui, text, None, Some(enabled), None)
+}
+
+/// A section's labels share only the space needed by that section.
+#[derive(Clone, Copy)]
+pub(super) struct LabelColumn {
+    width: f32,
+    indent: bool,
+    outer_padding: f32,
+}
+impl LabelColumn {
+    pub(super) fn new(ui: &egui::Ui, labels: &[&str], children: &[&str]) -> Self {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let width = |text: &str| {
+            ui.painter()
+                .layout_no_wrap(text.into(), font.clone(), egui::Color32::PLACEHOLDER)
+                .size()
+                .x
+        };
+        Self {
+            width: labels
+                .iter()
+                .map(|s| width(s))
+                .chain(children.iter().map(|s| width(s) + ui.spacing().indent))
+                .fold(0., f32::max)
+                .ceil(),
+            indent: false,
+            outer_padding: 0.,
+        }
+    }
+
+    pub(super) fn with_outer_padding(self, outer_padding: f32) -> Self {
+        Self {
+            outer_padding,
+            ..self
+        }
+    }
+
+    pub(super) fn indented(self) -> Self {
+        Self {
+            indent: true,
+            ..self
+        }
+    }
+
+    pub(super) fn row_controls(self, label: &str) -> RowControls<'_> {
+        RowControls {
+            indent: self.indent.then_some(self.outer_padding),
+            label: Some((label, self.width)),
+            ..Default::default()
+        }
+    }
+
+    pub(super) fn adjustment<T: egui::emath::Numeric>(
+        self,
+        ui: &mut egui::Ui,
+        label: (&str, &str),
+        value: &mut T,
+        range: RangeInclusive<T>,
+        default: T,
+    ) -> bool {
+        adjustment_row(
+            ui,
+            label.0,
+            value,
+            range,
+            default,
+            if T::INTEGRAL { 1. } else { 0.1 },
+            self.row_controls(label.1),
+        )
+    }
+}
+
 pub fn adjustment<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     label: &str,
@@ -78,6 +254,9 @@ pub(super) struct RowControls<'a> {
     pub(super) automatic: Option<Automatic<'a>>,
     pub(super) enabled: Option<&'a mut bool>,
     pub(super) step: Option<f64>,
+    /// Some includes the containing group's left padding when centering the pipe.
+    pub(super) indent: Option<f32>,
+    pub(super) label: Option<(&'a str, f32)>,
 }
 
 /// Keep automatic selection on the value row rather than in a separate checkbox.
@@ -88,7 +267,7 @@ pub fn automatic_adjustment<T: egui::emath::Numeric>(
     range: RangeInclusive<T>,
     default: T,
     calculated: Option<T>,
-    enabled: Option<&mut bool>,
+    controls: RowControls<'_>,
 ) -> bool {
     let before = manual.map(|v| v.to_f64());
     let mut automatic = manual.is_none();
@@ -105,8 +284,7 @@ pub fn automatic_adjustment<T: egui::emath::Numeric>(
                 active: &mut automatic,
                 resolved: calculated.is_some(),
             }),
-            enabled,
-            step: None,
+            ..controls
         },
     );
     *manual = (!automatic).then_some(value);
@@ -126,12 +304,18 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
         mut automatic,
         enabled,
         step,
+        indent,
+        label: label_override,
     } = controls;
     // The two Highlights rows need separate help and widget IDs.
-    let display_label = match label {
-        "Highlight correction" | "Color-field highlights" => "Highlights",
-        _ => label,
-    };
+    let display_label = label_override.map_or_else(
+        || match label {
+            "Highlight correction" | "Color-field highlights" => "Threshold",
+            _ => label,
+        },
+        |(text, _)| text,
+    );
+    let label_width = label_override.map(|(_, width)| width);
     let before = value.to_f64();
     let mut toggled = false;
     let decimals = if T::INTEGRAL {
@@ -142,13 +326,15 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
             let enabled = if let Some(enabled) = enabled {
-                toggled =
-                    help::control(crate::widgets::checkbox(ui, enabled, display_label), label)
-                        .changed();
+                toggled = help::control(
+                    aligned_label(ui, display_label, indent, Some(&mut *enabled), label_width),
+                    label,
+                )
+                .changed();
                 *enabled
             } else {
                 help::control(
-                    ui.add_sized([92., 20.], egui::Label::new(display_label)),
+                    aligned_label(ui, display_label, indent, None, label_width),
                     label,
                 );
                 true
@@ -159,8 +345,26 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 } else {
                     0.
                 };
-                ui.spacing_mut().slider_width = (ui.available_width() - 62. - auto_width).max(35.);
+                // Fit the widest normal signed value, rather than reserving an
+                // extra em in every numeric field. Return that space to the track.
+                let value_width = (ui
+                    .painter()
+                    .layout_no_wrap(
+                        "-2.00".into(),
+                        egui::TextStyle::Button.resolve(ui.style()),
+                        egui::Color32::PLACEHOLDER,
+                    )
+                    .size()
+                    .x
+                    + 2. * ui.spacing().button_padding.x)
+                    .max(ui.spacing().interact_size.x);
+                ui.spacing_mut().slider_width =
+                    (ui.available_width() - value_width - ui.spacing().item_spacing.x - auto_width)
+                        .max(35.);
                 ui.add_enabled_ui(!automatic.as_ref().is_some_and(|a| *a.active), |ui| {
+                    // Apply to every editing slider while leaving adjacent
+                    // value fields, buttons and group backgrounds unchanged.
+                    ui.visuals_mut().widgets.inactive.bg_fill = crate::widgets::SLIDER_TRACK_FILL;
                     let mut slider = egui::Slider::new(value, range.clone()).show_value(false);
                     if let Some(step) = step {
                         slider = slider.step_by(step);
@@ -185,7 +389,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 let response = ui
                     .add_enabled_ui(!active, |ui| {
                         ui.allocate_ui_with_layout(
-                            egui::vec2(54., 20.),
+                            egui::vec2(value_width, ROW_HEIGHT),
                             egui::Layout::centered_and_justified(ui.layout().main_dir()),
                             |ui| {
                                 if unresolved {
@@ -235,10 +439,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
 pub(super) fn rendering(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        help::control(
-            ui.add_sized([92., 20.], egui::Label::new("Rendering")),
-            "Rendering",
-        );
+        help::control(label(ui, "Rendering"), "Rendering");
         for (value, label) in [
             (Rendering::Color, "Color"),
             (Rendering::Monochrome, "Monochrome"),
@@ -304,7 +505,7 @@ pub(super) fn presets(
         // Keep the same rows while metadata is loading so later controls do not
         // jump when the first processed frame supplies the camera's choices.
         ui.horizontal(|ui| {
-            help::control(ui.add_sized([92., 20.], egui::Label::new(title)), title);
+            help::control(label(ui, title), title);
             let response = ui
                 .add_enabled_ui(
                     (title != "White balance" || controls.white_balance)
@@ -352,22 +553,44 @@ pub(super) fn tone_with_exposure_range(
     exposure_range: RangeInclusive<f32>,
 ) -> bool {
     let mut changed = false;
-    ui.weak(if mono { "Tone" } else { "Tone and Color" });
-    for (label, value, range, default) in [
-        ("Exposure", &mut settings.exposure, exposure_range, 0.),
-        ("Saturation", &mut settings.saturation, 0. ..=2., 1.),
-    ] {
-        if !mono || label != "Saturation" {
-            changed |= adjustment(ui, label, value, range, default);
+    let title = if mono { "Tone" } else { "Tone and Color" };
+    changed |= help::control(
+        crate::widgets::checkbox(
+            ui,
+            &mut settings.tone_enabled,
+            egui::RichText::new(title).weak(),
+        ),
+        title,
+    )
+    .changed();
+    ui.add_enabled_ui(settings.tone_enabled, |ui| {
+        let column = LabelColumn::new(
+            ui,
+            &[
+                "Exposure",
+                "Saturation",
+                "Contrast",
+                "Shadows",
+                "Highlights",
+            ],
+            &[],
+        );
+        for (label, value, range, default) in [
+            ("Exposure", &mut settings.exposure, exposure_range, 0.),
+            ("Saturation", &mut settings.saturation, 0. ..=2., 1.),
+        ] {
+            if !mono || label != "Saturation" {
+                changed |= column.adjustment(ui, (label, label), value, range, default);
+            }
         }
-    }
-    for (label, value) in [
-        ("Contrast", &mut settings.tone.contrast),
-        ("Shadows", &mut settings.tone.shadows),
-        ("Highlights", &mut settings.tone.highlights),
-    ] {
-        changed |= adjustment(ui, label, value, -2. ..=2., 0.);
-    }
+        for (label, value) in [
+            ("Contrast", &mut settings.tone.contrast),
+            ("Shadows", &mut settings.tone.shadows),
+            ("Highlights", &mut settings.tone.highlights),
+        ] {
+            changed |= column.adjustment(ui, (label, label), value, -2. ..=2., 0.);
+        }
+    });
     changed
 }
 
@@ -377,21 +600,33 @@ pub(super) fn refinement(
     metadata: Option<&Metadata>,
 ) -> bool {
     let mut changed = false;
-    ui.weak("Refinement");
+    changed |= help::control(
+        crate::widgets::checkbox(
+            ui,
+            &mut settings.refinement_enabled,
+            egui::RichText::new("Refinement").weak(),
+        ),
+        "Refinement",
+    )
+    .changed();
     let calculated = metadata.and_then(|metadata| {
         let mut automatic = settings.clone();
         automatic.sharpen_amount = None;
+        automatic.refinement_enabled = true;
         automatic.effective_sharpen_amount(metadata).ok()
     });
-    changed |= automatic_adjustment(
-        ui,
-        "Sharpen",
-        &mut settings.sharpen_amount,
-        0. ..=2_f32.max(calculated.unwrap_or(0.)),
-        0.,
-        calculated,
-        None,
-    );
+    ui.add_enabled_ui(settings.refinement_enabled, |ui| {
+        let column = LabelColumn::new(ui, &["Sharpen"], &[]);
+        changed |= automatic_adjustment(
+            ui,
+            "Sharpen",
+            &mut settings.sharpen_amount,
+            0. ..=2_f32.max(calculated.unwrap_or(0.)),
+            0.,
+            calculated,
+            column.row_controls("Sharpen"),
+        );
+    });
     changed
 }
 

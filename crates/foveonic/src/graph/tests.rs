@@ -47,7 +47,15 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
         )
         .unwrap();
     let base = graph.add(Operation::NoiseBase(params), &[raw]).unwrap();
-    let conditioned = graph.add(Operation::Column(params), &[raw]).unwrap();
+    let conditioned = graph
+        .add(
+            Operation::Column {
+                params,
+                enabled: true,
+            },
+            &[raw],
+        )
+        .unwrap();
     let ratio = graph
         .add(Operation::Ratio(params), &[conditioned, base])
         .unwrap();
@@ -68,7 +76,14 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
         )
         .unwrap();
     let detail = graph
-        .add(Operation::Detail(params), &[conditioned, base, pattern])
+        .add(
+            Operation::Texture {
+                params,
+                prepared: crate::nodes::color::texture::Prepared::new(Default::default(), 1.)
+                    .unwrap(),
+            },
+            &[conditioned, base, pattern],
+        )
         .unwrap();
     let colour = graph
         .add(
@@ -80,22 +95,29 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
                 },
                 space: ColorSpace::Srgb,
             },
-            &[base],
+            &[detail],
         )
         .unwrap();
     let restored = graph
         .add(
-            Operation::Reconstruct {
+            Operation::ProjectColorTiles {
                 params,
                 space: ColorSpace::Srgb,
             },
-            &[colour, detail, pattern],
+            &[colour],
         )
         .unwrap();
-    let signal = graph.named_output(restored, "detail.signal").unwrap();
+    let signal = graph
+        .add(
+            Operation::SharpSignal {
+                space: ColorSpace::Srgb,
+            },
+            &[restored],
+        )
+        .unwrap();
     let required = graph.required(&[signal]).unwrap();
     assert!(required[raw] && required[base] && required[colour] && required[pattern]);
-    assert!(!required[detail] && !required[restored]);
+    assert!(required[detail] && required[restored]);
     assert_eq!(graph.outputs[signal].data, DataType::SignedDetail);
     let mask = graph.named_output(pattern, "pattern.mask").unwrap();
     let masks = graph.required(&[mask]).unwrap();
@@ -366,7 +388,6 @@ fn image_signals_round_trip_with_their_canonical_layout_and_extent() {
         DataType::ConditionedTiles,
         DataType::PatternSeedTiles,
         DataType::UnconditionedRatioTiles,
-        DataType::ResidualTiles,
         DataType::RatioTiles,
         DataType::ColorTiles(ColorSpace::Srgb),
         DataType::File,

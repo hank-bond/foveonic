@@ -1,4 +1,4 @@
-//! Checks exact editing recipes, named override linkage, bounded malformed inputs and atomic preservation.
+//! Checks editing recipe migration, exact persistence, bounded malformed inputs, and atomic preservation.
 
 use super::*;
 use crate::{noise, render::RepairThreshold};
@@ -50,10 +50,10 @@ fn edited() -> Settings {
         detail: 0.42,
         ..Default::default()
     };
-    controls
-        .overrides
-        .set(noise::Parameter::MeanDecay, Some(0.7));
-    controls.overrides.set(noise::Parameter::LayerMix, Some(0.));
+    controls.texture.fine = 0.8;
+    controls.texture.coarse = 0.25;
+    controls.texture.fine_size = 0.75;
+    controls.texture.coarse_size = 1.6;
     settings.reconstruction = Some(controls);
     settings
 }
@@ -77,11 +77,12 @@ fn recipes_round_trip_all_settings_and_named_automatic_choices_exactly() {
     }
     let value: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
     assert!(value["settings"]["color_dq_gain"].is_null());
-    assert!(value["settings"]["reconstruction"]["overrides"]["base-blend"].is_null());
-    assert_eq!(
-        value["settings"]["reconstruction"]["overrides"]["layer-mix"],
-        0.
-    );
+    assert!(value["settings"]["reconstruction"]
+        .get("overrides")
+        .is_none());
+    assert!(value["settings"]["reconstruction"]["texture"]
+        .get("enabled")
+        .is_none());
     assert!(value["settings"].get("viewport").is_none());
     assert!(value["settings"].get("sensor_gain").is_none());
     let mut retired = value;
@@ -100,11 +101,10 @@ fn missing_edit_fields_use_shared_defaults_and_preserve_supplied_values() {
     expected.exposure = 1.25;
     expected.repair = None;
     expected.tone.shadows = -0.5;
-    let mut noise = noise::Controls {
+    let noise = noise::Controls {
         chroma: 4,
         ..Default::default()
     };
-    noise.overrides.set(noise::Parameter::MeanDecay, Some(0.7));
     expected.reconstruction = Some(noise);
     assert_eq!(decode(partial).unwrap(), expected);
     assert_eq!(decode(&encode(&expected).unwrap()).unwrap(), expected);
@@ -304,12 +304,7 @@ fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
     invalid.tone.highlights = f64::NAN;
     assert!(encode(&invalid).is_err());
     invalid = edited();
-    invalid
-        .reconstruction
-        .as_mut()
-        .unwrap()
-        .overrides
-        .set(noise::Parameter::MeanDecay, Some(2.));
+    invalid.reconstruction.as_mut().unwrap().texture.fine_size = 2.1;
     assert!(encode(&invalid).is_err());
     let bytes = String::from_utf8(encode(&edited()).unwrap()).unwrap();
     let duplicate = bytes.replace("\"version\": 1,", "\"version\": 1, \"version\": 1,");
@@ -321,13 +316,8 @@ fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
     assert!(decode(duplicate_setting.as_bytes()).is_err());
     let invalid_setting = bytes.replace("\"saturation\": 0.8,", "\"saturation\": null,");
     assert!(decode(invalid_setting.as_bytes()).is_err());
-    let duplicate_override = bytes.replace(
-        "\"base-blend\": null,",
-        "\"base-blend\": null, \"base-blend\": 0.5,",
-    );
-    assert!(decode(duplicate_override.as_bytes()).is_err());
-    let missing_override = bytes.replace("\"base-blend\": null,", "");
-    assert_eq!(decode(missing_override.as_bytes()).unwrap(), edited());
+    let duplicate_texture = bytes.replace("\"fine\": 0.8,", "\"fine\": 0.8, \"fine\": 0.5,");
+    assert!(decode(duplicate_texture.as_bytes()).is_err());
     for (field, invalid) in [
         ("banding", serde_json::json!(5)),
         ("banding", serde_json::json!(1.5)),
@@ -488,6 +478,9 @@ fn restored_recipe_replays_exact_photographic_pixels() {
     settings.color_mode = "Standard".into();
     settings.output_size = Some([96, 144]);
     settings.highlight_restoration = true;
+    crate::render::ControlCapabilities::from_metadata(&source.metadata)
+        .unwrap()
+        .normalize(&mut settings);
     let restored = decode(&encode(&settings).unwrap()).unwrap();
     let original = engine
         .render(&source, &settings, &mut Profile::default())
@@ -510,4 +503,49 @@ fn restored_recipe_replays_exact_photographic_pixels() {
         engine.readback_image(&original).unwrap() == engine.readback_image(&replayed).unwrap(),
         "recipe replay changes photographic samples"
     );
+}
+
+#[test]
+fn retired_merrill_settings_load_without_rewriting_and_save_only_supported_controls() {
+    let fixture = Directory::new();
+    let input = fixture.input();
+    fs::write(&input, b"source photograph").unwrap();
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
+    stored["settings"]["reconstruction"]["texture"]["enabled"] = serde_json::json!(false);
+    stored["settings"]["reconstruction"]["overrides"] =
+        serde_json::json!({"mean-decay":0.8,"brightness-mix":0.3});
+    let bytes = serde_json::to_vec_pretty(&stored).unwrap();
+    let file = path(&input);
+    fs::write(&file, &bytes).unwrap();
+    let migrated = load(&input).unwrap().unwrap();
+    assert_eq!(migrated, edited());
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    save(&input, &migrated).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert!(saved["settings"]["reconstruction"]
+        .get("overrides")
+        .is_none());
+    assert!(saved["settings"]["reconstruction"]["texture"]
+        .get("enabled")
+        .is_none());
+    assert_eq!(load(&input).unwrap().unwrap(), migrated);
+    assert_eq!(fs::read(&input).unwrap(), b"source photograph");
+
+    stored["settings"]["reconstruction"]
+        .as_object_mut()
+        .unwrap()
+        .remove("texture");
+    let older = decode(&serde_json::to_vec(&stored).unwrap()).unwrap();
+    assert_eq!(
+        older.reconstruction.unwrap().texture,
+        noise::TextureControls::default()
+    );
+    assert_eq!(older.exposure, edited().exposure);
+    assert_eq!(older.color_dq_gain, edited().color_dq_gain);
+    stored["settings"]["reconstruction"] = serde_json::Value::Null;
+    assert!(decode(&serde_json::to_vec(&stored).unwrap())
+        .unwrap()
+        .reconstruction
+        .is_none());
 }

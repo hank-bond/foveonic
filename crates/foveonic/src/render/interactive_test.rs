@@ -228,7 +228,7 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
         drop(warm);
         for step in 0..15 {
             match step {
-                0..=4 => settings.reconstruction.as_mut().unwrap().detail = step as f32 * 0.4,
+                0..=4 => settings.reconstruction.as_mut().unwrap().texture.fine = step as f32 * 0.4,
                 5 => settings.exposure = 0.7,
                 6 => settings.tone.shadows = 0.2,
                 7 => settings.saturation = 0.8,
@@ -304,17 +304,12 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
             &engine.gpu.readback(&resumed.buffer).unwrap(),
             &engine.gpu.readback(&fresh.buffer).unwrap(),
         );
-        eprintln!(
-            "CACHE-EQUALITY {name} passed bytes={}",
-            session.cached_bytes()
-        );
     }
 }
 
 #[test]
-#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; checks coupled noise recipes and every advanced override"]
-fn noise_and_override_inputs_match_fresh_outputs() {
-    use crate::noise::Parameter;
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; checks independent cleanup and texture edits"]
+fn noise_and_texture_inputs_match_fresh_outputs() {
     let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
     let engine = Engine::new().unwrap();
@@ -336,22 +331,16 @@ fn noise_and_override_inputs_match_fresh_outputs() {
         banding.reconstruction.as_mut().unwrap().banding = choice;
         cases.push((format!("banding-{choice}"), banding));
     }
-    for parameter in Parameter::ALL {
-        for fraction in [0.25, 0.75] {
-            let mut changed = settings.clone();
-            let bounds = parameter.bounds();
-            changed.reconstruction.as_mut().unwrap().overrides.set(
-                parameter,
-                Some(*bounds.start() + (*bounds.end() - *bounds.start()) * fraction),
-            );
-            cases.push((format!("{}-{fraction}", parameter.key()), changed));
-        }
+    for amount in [0.25, 1.75] {
+        let mut changed = settings.clone();
+        changed.reconstruction.as_mut().unwrap().texture.coarse = amount;
+        cases.push((format!("coarse-{amount}"), changed));
     }
     for (label, settings) in cases {
         for movement in 0..2 {
             let mut edited = settings.clone();
             if movement == 1 {
-                edited.reconstruction.as_mut().unwrap().detail = 1.4;
+                edited.reconstruction.as_mut().unwrap().texture.fine = 1.4;
             }
             let cached = session_image(&engine, &mut session, &edited);
             let bytes = engine.gpu.readback(&cached.buffer).unwrap();
@@ -365,62 +354,11 @@ fn noise_and_override_inputs_match_fresh_outputs() {
             );
             assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
         }
-        eprintln!("NOISE-CACHE {label} exact");
     }
     assert_same_pixels(
-        "retained noise/override input",
+        "retained noise/texture input",
         &original,
         &engine.gpu.readback(&retained.buffer).unwrap(),
-    );
-}
-
-#[test]
-#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; prints matched completed Detail feedback"]
-fn detail_feedback_profile() {
-    let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
-        .join("blue-parking-sign.x3f");
-    let mut session = RenderSession::new(Source::open(path).unwrap());
-    let engine = Engine::new().unwrap();
-    let mut settings = Settings::new("Sunlight", "Standard");
-    settings.reconstruction = Some(Default::default());
-    settings.sharpen_amount = Some(0.75);
-    let _warm = session_image(&engine, &mut session, &settings);
-    engine.device().poll(wgpu::Maintain::Wait);
-    for iteration in 0..6 {
-        settings.reconstruction.as_mut().unwrap().detail = iteration as f32 * 0.2;
-        let start = std::time::Instant::now();
-        let fresh = engine
-            .render(&session.source, &settings, &mut Profile::default())
-            .unwrap();
-        let texture = engine
-            .view_texture(&fresh, None, &mut Profile::default())
-            .unwrap();
-        engine.device().poll(wgpu::Maintain::Wait);
-        let fresh_ms = start.elapsed().as_secs_f64() * 1000.;
-        drop(texture);
-        drop(fresh);
-        let start = std::time::Instant::now();
-        let before = engine.gpu_activity();
-        let cached = session_image(&engine, &mut session, &settings);
-        let texture = engine
-            .view_texture(&cached, None, &mut Profile::default())
-            .unwrap();
-        engine.device().poll(wgpu::Maintain::Wait);
-        eprintln!(
-            "DETAIL iteration={iteration} fresh_image_ms={fresh_ms:.3} cached_image_ms={:.3} cache_bytes={} dispatches={}",
-            start.elapsed().as_secs_f64() * 1000.,
-            session.cached_bytes(),
-            engine.gpu_activity().since(before).dispatches
-        );
-        drop(texture);
-    }
-    let mut profile = Profile::new(crate::profile::Mode::Gpu);
-    let _ = engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
-        .unwrap();
-    eprintln!(
-        "DETAIL-PROFILE {}",
-        serde_json::to_string(&profile).unwrap()
     );
 }
 
@@ -531,6 +469,124 @@ fn first_exposure_edit_reuses_finishing_input_and_matches_fresh() {
             &engine.readback_image(&fresh).unwrap(),
         );
         assert_eq!(engine.readback_image(&retained).unwrap(), retained_pixels);
-        eprintln!("EXPOSURE exposure={exposure} initial_cache_bytes={initial_bytes} active_cache_bytes={} gpu={:?} host={:?}", session.cached_bytes(), profile.gpu, profile.host);
     }
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn texture_edits_reuse_filtering_and_match_fresh_images() {
+    let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+        .join("blue-parking-sign.x3f");
+    let source = std::sync::Arc::new(Source::open(path).unwrap());
+    let engine = Engine::new().unwrap();
+    let mut session = RenderSession::new(source.clone());
+    let mut settings = Settings::new("Sunlight", "Standard");
+    let c = crate::noise::Controls::default();
+    settings.reconstruction = Some(c);
+    let base = crate::noise::prepare(&source.metadata, "Sunlight", c).unwrap();
+    let pattern = crate::noise::pattern_parameters(&source.metadata, base)
+        .unwrap()
+        .key();
+    for choice in 0..=4 {
+        let selected = crate::noise::Controls {
+            chroma: choice,
+            luminance: 4 - choice,
+            ..c
+        };
+        let parameters = crate::noise::prepare(&source.metadata, "Sunlight", selected).unwrap();
+        assert_eq!(bytemuck::bytes_of(&parameters), bytemuck::bytes_of(&base));
+        assert!(
+            crate::noise::pattern_parameters(&source.metadata, parameters)
+                .unwrap()
+                .key()
+                == pattern
+        );
+    }
+    let retained = session_image(&engine, &mut session, &settings);
+    let retained_bytes = engine.readback_image(&retained).unwrap();
+    for (fine, coarse, chroma, luma, fine_size, coarse_size) in [
+        (1., 0.25, 2, 2, 1., 1.),
+        (1., 0.25, 2, 2, 0.83, 1.37),
+        (1., 0.25, 2, 2, 2., 2.),
+        (0., 0., 4, 4, 1., 1.),
+        (1., 1., 0, 0, 1., 1.),
+    ] {
+        let c = settings.reconstruction.as_mut().unwrap();
+        c.texture.fine = fine;
+        c.texture.coarse = coarse;
+        c.texture.fine_size = fine_size;
+        c.texture.coarse_size = coarse_size;
+        c.chroma = chroma;
+        c.luminance = luma;
+        let mut profile = Profile::new(crate::profile::Mode::Wall);
+        let mut result = engine
+            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+            .unwrap()
+            .unwrap();
+        let crate::inspection::Content::Image(cached) = result.pop().unwrap().content else {
+            panic!("expected image")
+        };
+        engine.device().poll(wgpu::Maintain::Wait);
+        assert!(!profile.host.iter().any(|p| matches!(
+            p.stage,
+            "submit reference noise base"
+                | "submit reference column conditioning"
+                | "submit reference luminance ratio"
+                | "submit reference pattern conditioning"
+        )));
+        let bytes = engine.readback_image(&cached).unwrap();
+        assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
+            .iter()
+            .all(|v| v.is_finite()));
+        let fresh = engine
+            .render(&source, &settings, &mut Profile::default())
+            .unwrap();
+        assert_same_pixels(
+            "texture cached/fresh",
+            &bytes,
+            &engine.readback_image(&fresh).unwrap(),
+        );
+    }
+    let names = ["texture.change"];
+    let mut mask_profile = Profile::new(crate::profile::Mode::Wall);
+    let artifacts = engine
+        .render_session(&mut session, &settings, &names, || false, &mut mask_profile)
+        .unwrap()
+        .unwrap();
+    assert_eq!(artifacts.len(), names.len());
+    assert!(!mask_profile
+        .host
+        .iter()
+        .any(|p| p.stage == "submit tiled camera color"));
+    for artifact in artifacts {
+        let crate::inspection::Content::Image(image) = artifact.content else {
+            panic!("expected band image")
+        };
+        assert_eq!(image.description.space, crate::image::Space::LuminanceRatio);
+        assert_eq!(
+            image.description.extent,
+            [source.metadata.width as u32, source.metadata.height as u32]
+        );
+        let bytes = engine.readback_image(&image).unwrap();
+        assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
+            .iter()
+            .all(|v| v.is_finite()));
+        if artifact.name == "texture.change" {
+            assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
+                .iter()
+                .all(|v| *v == 1.));
+        }
+    }
+    settings.rendering = crate::render::Rendering::Monochrome;
+    let mono_auto = settings.effective_sharpen_amount(&source.metadata).unwrap();
+    settings.reconstruction.as_mut().unwrap().texture.fine = 0.4;
+    assert_eq!(
+        settings.effective_sharpen_amount(&source.metadata).unwrap(),
+        mono_auto
+    );
+    assert_same_pixels(
+        "immutable prior texture image",
+        &retained_bytes,
+        &engine.readback_image(&retained).unwrap(),
+    );
 }

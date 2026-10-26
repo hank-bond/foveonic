@@ -179,7 +179,7 @@ pub(super) fn build(
     // requested controls on its reduced grid without changing the saved edits.
     let draft =
         preview.is_some() && settings.preview_quality == crate::render::PreviewQuality::Draft;
-    let noise_controls = settings.reconstruction.filter(|_| !draft);
+    let noise_controls = settings.merrill_reconstruction().filter(|_| !draft);
     if let Some(region) = &region {
         graph.retain_for_session(calibrated);
         if noise_controls.is_none() {
@@ -198,6 +198,7 @@ pub(super) fn build(
         }
     }
     let reconstruction = if let Some(controls) = noise_controls {
+        let effects = controls.merrill_effects();
         let native_params = profile.measure("prepare reference noise", || {
             crate::noise::prepare(&source.metadata, &settings.white_balance, controls)
         })?;
@@ -221,29 +222,64 @@ pub(super) fn build(
         };
         let base = graph.add(Operation::NoiseBase(params), &base_inputs)?;
         finish!();
-        let column_params = profile.measure("prepare column cuts", || {
-            if let Some(grid) = &preview {
-                grid.noise(crate::noise::column_parameters(
-                    &source.metadata,
-                    native_params,
-                )?)
-            } else {
-                crate::noise::column_parameters(&source.metadata, params)
-            }
-        })?;
-        let conditioned = graph.add(Operation::Column(column_params), &[calibrated])?;
+        let column_params = if effects.noise {
+            profile.measure("prepare column cuts", || {
+                if let Some(grid) = &preview {
+                    grid.noise(crate::noise::column_parameters(
+                        &source.metadata,
+                        native_params,
+                    )?)
+                } else {
+                    crate::noise::column_parameters(&source.metadata, params)
+                }
+            })?
+        } else {
+            params
+        };
+        let conditioned = graph.add(
+            Operation::Column {
+                params: column_params,
+                enabled: effects.noise,
+            },
+            &[calibrated],
+        )?;
         finish!();
-        let ratio = graph.add(Operation::Ratio(params), &[conditioned, base])?;
+        let prepared = crate::nodes::color::texture::Prepared::new(
+            controls,
+            params.source[0] as f32 / source.metadata.width as f32,
+        )?;
+        let inspect_ratio = names
+            .iter()
+            .any(|name| matches!(*name, "detail.raw-ratio" | "detail.ratio" | "pattern.mask"));
+        let ratio = if prepared.needs_ratio() || inspect_ratio {
+            let ratio = graph.add(Operation::Ratio(params), &[conditioned, base])?;
+            finish!();
+            let pattern_recipe = profile.measure("prepare pattern recipe", || {
+                crate::noise::pattern_parameters(&source.metadata, params)
+            })?;
+            let seed = graph.named_output(base, "noise.pattern-seed-tiles")?;
+            let pattern = graph.add(
+                Operation::Pattern {
+                    params,
+                    prepared: pattern_recipe,
+                },
+                &[ratio, seed],
+            )?;
+            finish!();
+            Some(pattern)
+        } else {
+            None
+        };
+        let mut texture_inputs = vec![conditioned];
+        if prepared.needs_base() {
+            texture_inputs.push(base);
+        }
+        if prepared.needs_ratio() {
+            texture_inputs.push(ratio.ok_or("missing luminance conditioning")?);
+        }
+        let restored = graph.add(Operation::Texture { params, prepared }, &texture_inputs)?;
         finish!();
-        let prepared = profile.measure("prepare pattern recipe", || {
-            crate::noise::pattern_parameters(&source.metadata, params, controls)
-        })?;
-        let seed = graph.named_output(base, "noise.pattern-seed-tiles")?;
-        let pattern = graph.add(Operation::Pattern { params, prepared }, &[ratio, seed])?;
-        finish!();
-        let detail = graph.add(Operation::Detail(params), &[conditioned, base, pattern])?;
-        finish!();
-        Some((params, base, detail, pattern))
+        Some((params, restored))
     } else {
         None
     };
@@ -259,14 +295,14 @@ pub(super) fn build(
     if preview.is_some() || region.is_some() {
         color.source[..2].copy_from_slice(&params.source[..2]);
     }
-    let mut linear = if let Some((params, base, _, _)) = reconstruction {
+    let mut linear = if let Some((params, restored)) = reconstruction {
         graph.add(
             Operation::TiledColor {
                 params,
                 color,
                 space,
             },
-            &[base],
+            &[restored],
         )?
     } else {
         graph.add(
@@ -288,7 +324,7 @@ pub(super) fn build(
                     crate::noise::couplings(
                         &source.metadata,
                         &settings.white_balance,
-                        settings.reconstruction.unwrap_or_default(),
+                        settings.sensor_noise_controls(),
                     )
                 })?,
             };
@@ -299,7 +335,7 @@ pub(super) fn build(
         let table = profile.measure("prepare ColorDQ", || {
             color_dq::prepare(&source.metadata, gain)
         })?;
-        linear = if let Some((params, _, _, _)) = reconstruction {
+        linear = if let Some((params, _)) = reconstruction {
             graph.add(
                 Operation::TiledColorDq {
                     params,
@@ -313,24 +349,24 @@ pub(super) fn build(
         };
         finish!();
     }
-    if let Some((params, _, detail, ratio)) = reconstruction {
-        linear = graph.add(
-            Operation::Reconstruct { params, space },
-            &[linear, detail, ratio],
-        )?;
+    if let Some((params, _)) = reconstruction {
+        linear = graph.add(Operation::ProjectColorTiles { params, space }, &[linear])?;
         finish!();
     }
+    // Final sharpening uses the actual reconstructed RGB, independently of
+    // denoising and texture restoration. Inspection can request it without sharpening.
+    let signal = if settings.sharpen_selected() || names.contains(&"detail.signal") {
+        let signal = graph.add(Operation::SharpSignal { space }, &[linear])?;
+        finish!();
+        Some(signal)
+    } else {
+        None
+    };
     if settings.sharpen_selected() {
         let amount = profile.measure("prepare sharpening amount", || {
             settings.effective_sharpen_amount(&source.metadata)
         })?;
-        let signal = if reconstruction.is_some() {
-            graph.named_output(linear, "detail.signal")?
-        } else {
-            let signal = graph.add(Operation::SharpSignal { space }, &[linear])?;
-            finish!();
-            signal
-        };
+        let signal = signal.ok_or("missing sharpening signal")?;
         linear = graph.add(Operation::Sharpen { amount, space }, &[linear, signal])?;
         finish!();
     }

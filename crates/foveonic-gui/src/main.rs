@@ -1,6 +1,5 @@
 //! Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
-mod advanced;
 mod application_settings;
 mod batch;
 mod browser;

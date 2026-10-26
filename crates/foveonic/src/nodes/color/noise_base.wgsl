@@ -202,6 +202,27 @@ fn edge_map(@builtin(global_invocation_id) id: vec3<u32>) {
     scalar_work[tile_pixel(p, params)] = value;
 }
 
+// The recursive horizontal scan reads adjacent rows in adjacent lanes. Pack
+// each tile transposed so those reads are contiguous, preserving every sample
+// and the serial recurrence order. The vertical scan keeps its native layout.
+fn transposed_pixel(p: vec3<u32>) -> u32 {
+    return (p.z * params.tile.x + p.x) * params.tile.y + p.y;
+}
+@compute @workgroup_size(8, 8)
+fn transpose_mean_input(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
+    let p = atlas_position(id.xy, params);
+    let src = tile_pixel(p, params);
+    let dst = transposed_pixel(p);
+    put(dst, rgb(src));
+    scalar_work[dst] = edges[src];
+}
+@compute @workgroup_size(8, 8)
+fn transpose_mean_output(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
+    let p = atlas_position(id.xy, params);
+    put(transposed_pixel(p), rgb(tile_pixel(p, params)));
+}
 fn line_pixel(line: u32, position: u32, vertical: bool) -> u32 {
     let lines = select(params.tile.y, params.tile.x, vertical);
     let tile = line / lines;

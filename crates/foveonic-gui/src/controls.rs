@@ -5,7 +5,6 @@ mod common;
 mod merrill;
 mod quattro;
 
-pub use common::{adjustment_with_nudge, automatic_adjustment};
 use eframe::egui;
 use foveonic::{
     render::{ControlCapabilities, Settings},

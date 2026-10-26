@@ -121,19 +121,35 @@ impl Settings {
             self.tiff_color_space != next.tiff_color_space,
             "tiff-color-space"
         );
+        changed!(self.tone_enabled != next.tone_enabled, "tone-enabled");
+        changed!(
+            self.refinement_enabled != next.refinement_enabled,
+            "refinement-enabled"
+        );
         match (self.reconstruction, next.reconstruction) {
             (Some(a), Some(b)) => {
+                changed!(a.noise_enabled != b.noise_enabled, "noise-enabled");
+                changed!(a.detail_enabled != b.detail_enabled, "detail-enabled");
                 changed!(a.detail.to_bits() != b.detail.to_bits(), "detail");
+                changed!(
+                    a.texture.fine_size.to_bits() != b.texture.fine_size.to_bits(),
+                    "fine-size"
+                );
+                changed!(
+                    a.texture.coarse_size.to_bits() != b.texture.coarse_size.to_bits(),
+                    "coarse-size"
+                );
+                changed!(
+                    a.texture.fine.to_bits() != b.texture.fine.to_bits(),
+                    "fine-detail"
+                );
+                changed!(
+                    a.texture.coarse.to_bits() != b.texture.coarse.to_bits(),
+                    "coarse-detail"
+                );
                 changed!(a.chroma != b.chroma, "chroma-noise");
                 changed!(a.luminance != b.luminance, "luma-noise");
                 changed!(a.banding != b.banding, "banding-noise");
-                for p in crate::noise::Parameter::ALL {
-                    changed!(
-                        a.overrides.get(p).map(f32::to_bits)
-                            != b.overrides.get(p).map(f32::to_bits),
-                        p.key()
-                    );
-                }
             }
             (None, None) => {}
             _ => changes.push("reconstruction"),
@@ -242,7 +258,7 @@ impl Cache {
                 .find(|node| {
                     matches!(
                         node.operation,
-                        crate::graph::Operation::Detail(_)
+                        crate::graph::Operation::Texture { .. }
                             | crate::graph::Operation::BlueGuidedReconstruct(_)
                     ) && required[node.outputs[0]]
                 })
@@ -400,7 +416,6 @@ mod tests {
         p.tile = [64, 64, 0, 3];
         p.reduction[0] = 1.;
         p = p.full_frame();
-        p.residual[3] = amount;
         let mut graph = Graph::default();
         let input = graph
             .add(
@@ -411,7 +426,15 @@ mod tests {
             )
             .unwrap();
         let base = graph.add(O::NoiseBase(p), &[input]).unwrap();
-        let raw = graph.add(O::Column(p), &[input]).unwrap();
+        let raw = graph
+            .add(
+                O::Column {
+                    params: p,
+                    enabled: true,
+                },
+                &[input],
+            )
+            .unwrap();
         let ratio = graph.add(O::Ratio(p), &[raw, base]).unwrap();
         let prepared =
             crate::nodes::color::pattern::Prepared::new([64, 64, 1, 0], [0.; 4]).unwrap();
@@ -424,7 +447,25 @@ mod tests {
                 &[ratio, base + 3],
             )
             .unwrap();
-        let detail = graph.add(O::Detail(p), &[raw, base, pattern]).unwrap();
+        let detail = graph
+            .add(
+                O::Texture {
+                    params: p,
+                    prepared: crate::nodes::color::texture::Prepared::new(
+                        crate::noise::Controls {
+                            texture: crate::noise::TextureControls {
+                                fine: amount,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        1.,
+                    )
+                    .unwrap(),
+                },
+                &[raw, base, pattern],
+            )
+            .unwrap();
         (graph, detail)
     }
     #[test]
@@ -456,52 +497,52 @@ mod tests {
                 )
             })
             .collect();
-        let previous = cache.versions["detail.gain-tiles"].generation;
+        let previous = cache.versions["texture.layers-tiles"].generation;
         let (second, root) = graph_for_detail(1.2);
         cache.plan(&second, &[root]).unwrap();
         for (name, version) in inputs {
             assert_eq!(cache.versions[name].generation, version);
         }
-        assert_ne!(cache.versions["detail.gain-tiles"].generation, previous);
+        assert_ne!(cache.versions["texture.layers-tiles"].generation, previous);
     }
     #[test]
-    fn continuation_boundary_includes_unchanged_colour_and_signed_signal() {
+    fn texture_edits_invalidate_color_and_sharpening_but_reuse_filtering() {
         use crate::{graph::Operation as O, image::ColorSpace as C};
         use bytemuck::Zeroable;
         let (mut graph, detail) = graph_for_detail(1.);
         let detail_node = graph.outputs[detail].producer;
-        let params = match graph.nodes[detail_node].operation {
-            O::Detail(p) => p,
-            _ => unreachable!(),
+        let O::Texture { params, .. } = graph.nodes[detail_node].operation else {
+            unreachable!()
         };
-        let base = graph.nodes[detail_node].inputs[1];
-        let ratio = graph.nodes[detail_node].inputs[2];
-        let colour = graph
+        let color = graph
             .add(
                 O::TiledColor {
                     params,
                     color: crate::nodes::sensor::calibration::ColorParams::zeroed(),
                     space: C::Srgb,
                 },
-                &[base],
+                &[detail],
             )
             .unwrap();
         let rgb = graph
             .add(
-                O::Reconstruct {
+                O::ProjectColorTiles {
                     params,
                     space: C::Srgb,
                 },
-                &[colour, detail, ratio],
+                &[color],
             )
             .unwrap();
-        let root = graph
+        let signal = graph
+            .add(O::SharpSignal { space: C::Srgb }, &[rgb])
+            .unwrap();
+        let sharpened = graph
             .add(
                 O::Sharpen {
                     amount: 0.75,
                     space: C::Srgb,
                 },
-                &[rgb, rgb + 1],
+                &[rgb, signal],
             )
             .unwrap();
         let final_id = graph
@@ -511,39 +552,37 @@ mod tests {
                     exposure: 0.,
                     space: C::Srgb,
                 },
-                &[root],
+                &[sharpened],
             )
             .unwrap();
         let mut cache = Cache::default();
+        let inputs = graph.nodes[detail_node].inputs.clone();
         let frontier = cache.plan(&graph, &[final_id]).unwrap();
-        assert_eq!(frontier.len(), 6);
-        assert!(frontier.contains(&root));
-        assert!(frontier.contains(&colour));
-        assert!(frontier.contains(&(rgb + 1)));
-        let signal_version = cache.versions[graph.outputs[rgb + 1].name].generation;
-        let rgb_version = cache.versions[graph.outputs[rgb].name].generation;
-        let mut changed = params;
-        changed.residual[3] = 1.4;
-        graph.nodes[detail_node].operation = O::Detail(changed);
-        let reconstruction_frontier = cache.plan(&graph, &[final_id]).unwrap();
-        assert_eq!(reconstruction_frontier.len(), 5);
-        assert!(!reconstruction_frontier.contains(&root));
-        assert_eq!(
-            signal_version,
-            cache.versions[graph.outputs[rgb + 1].name].generation
-        );
-        assert_ne!(
-            rgb_version,
-            cache.versions[graph.outputs[rgb].name].generation
-        );
-        let mut first_edit = Cache::default();
-        first_edit.plan(&graph, &[final_id]).unwrap();
+        assert!(inputs.iter().all(|id| frontier.contains(id)));
+        let old_signal = cache.versions["detail.signal"].generation;
+        graph.nodes[detail_node].operation = O::Texture {
+            params,
+            prepared: crate::nodes::color::texture::Prepared::new(
+                crate::noise::Controls {
+                    texture: crate::noise::TextureControls {
+                        fine: 1.4,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                1.,
+            )
+            .unwrap(),
+        };
+        let frontier = cache.plan(&graph, &[final_id]).unwrap();
+        assert!(inputs.iter().all(|id| frontier.contains(id)));
+        assert_ne!(old_signal, cache.versions["detail.signal"].generation);
         graph.nodes[graph.outputs[final_id].producer].operation = O::Tone {
             curve: vec![0., 1.],
             exposure: 0.5,
             space: C::Srgb,
         };
-        assert_eq!(first_edit.plan(&graph, &[final_id]).unwrap(), vec![root]);
+        assert_eq!(cache.plan(&graph, &[final_id]).unwrap(), vec![sharpened]);
     }
     #[test]
     fn guided_reconstruction_keeps_both_planes_and_the_later_mask_branch() {
@@ -626,12 +665,6 @@ mod tests {
         use bytemuck::Zeroable;
         let a = Parameters::zeroed();
         let mut b = a;
-        b.residual[3] = 1.;
-        for stage in [S::Base, S::Column, S::Ratio, S::Geometry, S::Signal] {
-            assert!(a.key(stage) == b.key(stage));
-        }
-        assert!(a.key(S::Detail) != b.key(S::Detail));
-        b = a;
         b.filter[3] = 0.9;
         assert!(a.key(S::Base) != b.key(S::Base));
         assert!(a.key(S::Column) == b.key(S::Column));
@@ -639,10 +672,6 @@ mod tests {
         b.mono[0] = 2.;
         assert!(a.key(S::Ratio) != b.key(S::Ratio));
         assert!(a.key(S::Base) == b.key(S::Base));
-        b = a;
-        b.residual[0] = 0.3;
-        assert!(a.key(S::Detail) != b.key(S::Detail));
-        assert!(a.key(S::Ratio) == b.key(S::Ratio));
     }
 
     #[test]
@@ -664,6 +693,31 @@ mod tests {
         assert!(O::NoiseBase(a).key("noise.tiles") == O::NoiseBase(b).key("noise.tiles"));
         assert!(O::NoiseBase(a).key("noise.layers") != O::NoiseBase(b).key("noise.layers"));
         assert!(O::NoiseBase(a).key("noise.tiles") != O::NoiseBase(distant).key("noise.tiles"));
+        let prepared = crate::nodes::color::texture::Prepared::new(Default::default(), 1.).unwrap();
+        assert!(
+            O::Texture {
+                params: a,
+                prepared
+            }
+            .key("texture.layers-tiles")
+                == O::Texture {
+                    params: b,
+                    prepared
+                }
+                .key("texture.layers-tiles")
+        );
+        assert!(
+            O::Texture {
+                params: a,
+                prepared
+            }
+            .key("texture.change")
+                != O::Texture {
+                    params: b,
+                    prepared
+                }
+                .key("texture.change")
+        );
     }
     #[test]
     fn coalescing_tracks_parameter_identity_not_recipe_invalidation() {
