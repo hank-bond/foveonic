@@ -5,6 +5,25 @@ kind: reference
 
 # Changelog
 
+## 0.4.1
+
+<!-- Add your release introduction here. -->
+
+### Changes
+
+- Merrill Noise and Detail now have independent controls. Fine and Coarse detail each have an amount and size, with neutral defaults tuned for a gentler portrait rendering. Chroma and Luma cleanup no longer add the earlier detail contrast effect.
+- Faster Merrill noise filtering and detail edits, with unnecessary filtering skipped for neutral or disabled controls. The same reconstruction serves Full, Fast, Smart viewport refinement, TIFF and DNG processing.
+- One Detail change inspection view shows the combined Fine/Coarse brightness adjustment. Merrill Auto sharpening now starts at zero, with manual sharpening kept separate.
+- Noise, Detail, Tone and Color, and Refinement can be bypassed while retaining their settings. Disabled controls stay visible. Compact label columns, brighter slider tracks, and grouped detail controls give sliders more room.
+- Existing Merrill recipes retain their cleanup settings and use neutral detail defaults when the new texture controls are absent. Quattro retains its own reconstruction controls.
+- Hold Shift while navigating the browser with arrow keys to retain the zoom and viewport position across photographs.
+- Browse processing handles all highlighted photographs with frozen edits. Processing settings offer Overwrite or Rename on conflicts, defaulting to Overwrite for rendered files, copied originals and their sidecars.
+- DNG exports preserve available capture details, including date, camera, lens, exposure, aperture and ISO.
+- Background cache decoding cancels obsolete queued work when the selection moves. Interactive work and submitted processing take priority over cache maintenance, and batches avoid filling the decode cache unnecessarily.
+- Support X3F 3.1 headers consistently across RAW decoding, metadata and preview reads.
+
+Apple Silicon downloads target macOS 15 or later. They are Developer ID signed and unnotarized. First launch may require **Open Anyway** in macOS Privacy & Security settings. Interactive display behavior on macOS 15 and across multiple monitors still needs user testing.
+
 ## 0.4.0
 
 <!-- Add your release introduction here. -->
