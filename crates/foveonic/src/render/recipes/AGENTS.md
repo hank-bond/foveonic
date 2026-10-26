@@ -23,6 +23,7 @@ Rendering mode and export format are separate choices. Photographic recipes appl
 ### Source files
 
 - **[classic.rs](./classic.rs)** Composes equal-resolution photographic and editable DNG recipes from signed-code operations.
+- **[finishing.rs](./finishing.rs)** Composes shared photographic edits after each camera's base appearance.
 - **[merrill.rs](./merrill.rs)** Selects Merrill photographic and editable DNG recipes over their shared technical stages.
 - **[mod.rs](./mod.rs)** Selects authored photographic and DNG-base graphs before shared execution.
 - **[quattro.rs](./quattro.rs)** Shares Quattro technical reconstruction between photographic and editable DNG output.

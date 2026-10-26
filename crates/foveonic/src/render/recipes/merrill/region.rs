@@ -4,14 +4,33 @@ use crate::{nodes::sensor::calibration::EncodeParams, source::Result};
 
 // The ordinary sharpening signal reads one neighboring pixel and suppresses
 // two border pixels. Keep four pixels so the requested view never sees that edge.
-const FINISH_SUPPORT: u32 = 4;
+pub(super) const FINISH_SUPPORT: u32 = 4;
 
 pub(super) struct Prepared {
     pub physical: [u32; 4],
     pub encode: EncodeParams,
 }
 impl Prepared {
-    pub fn new(mut encode: EncodeParams, output: [u32; 4]) -> Result<Self> {
+    pub fn new(encode: EncodeParams, output: [u32; 4]) -> Result<Self> {
+        Self::with_finish_support(encode, output, FINISH_SUPPORT, 1)
+    }
+
+    pub fn with_tonal_support(encode: EncodeParams, output: [u32; 4]) -> Result<Self> {
+        use crate::nodes::finish::tone_equalizer;
+        Self::with_finish_support(
+            encode,
+            output,
+            tone_equalizer::support() + FINISH_SUPPORT,
+            tone_equalizer::GUIDE_ALIGNMENT,
+        )
+    }
+
+    pub(super) fn with_finish_support(
+        mut encode: EncodeParams,
+        output: [u32; 4],
+        support: u32,
+        alignment: u32,
+    ) -> Result<Self> {
         let [left, top, right, bottom] = encode.crop;
         let [x0, y0, x1, y1] = output;
         if x0 >= x1 || y0 >= y1 || x1 > encode.output[0] || y1 > encode.output[1] {
@@ -34,10 +53,18 @@ impl Prepared {
             _ => return Err("invalid Merrill preview rotation".into()),
         };
         let physical = [
-            crop[0].saturating_sub(FINISH_SUPPORT),
-            crop[1].saturating_sub(FINISH_SUPPORT),
-            crop[2].saturating_add(FINISH_SUPPORT).min(encode.source[0]),
-            crop[3].saturating_add(FINISH_SUPPORT).min(encode.source[1]),
+            crop[0].saturating_sub(support) / alignment * alignment,
+            crop[1].saturating_sub(support) / alignment * alignment,
+            crop[2]
+                .saturating_add(support)
+                .div_ceil(alignment)
+                .saturating_mul(alignment)
+                .min(encode.source[0]),
+            crop[3]
+                .saturating_add(support)
+                .div_ceil(alignment)
+                .saturating_mul(alignment)
+                .min(encode.source[1]),
         ];
         encode.source[..2].copy_from_slice(&[physical[2] - physical[0], physical[3] - physical[1]]);
         encode.crop = std::array::from_fn(|i| crop[i] - physical[i % 2]);

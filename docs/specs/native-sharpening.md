@@ -7,6 +7,8 @@ implementation: incomplete
 
 # Native sharpening
 
+This document specifies the Reference method. The [shared photographic finishing](./photographic-finishing.md) specification adds a selectable Universal method alongside the camera-derived Reference method.
+
 ## Requirements
 
 - Selected sharpening **must** apply native signed mono high-pass arithmetic before Exposure/tone and photographic resizing, not Gaussian per-channel unsharp masking after tone.
@@ -14,9 +16,9 @@ implementation: incomplete
 - [Monochrome rendering](./monochrome-rendering.md) must instead derive signed high-pass from its filtered mono plane, apply processing gain before ISO-specific magnitude and ±35% limits, and add the quarter-code packed detail equally to neutral channels. It must not apply color brightness-proportional sharpening.
 - Color application **must** retain upper-only 8191 signal ceiling, quarter-code packing by `signal*4+0.5` → truncating i32 → wrapping i16, nonnegative RGB brightness proportions, absolute ±1000 and relative ±35% limits, and output ceiling 32767.
 - Inputs and retained artifacts **must** remain immutable. Photographic signal generation, packing, and application **must** run on GPU.
-- Sharpening **must** offer Off, Auto, and a finite nonnegative manual amount, defaulting to Off. Merrill color Auto must resolve to zero. Monochrome Auto retains the camera/noise recipe's nonnegative sharpening base. Color and monochrome **must** retain their distinct applications. Final export dimensions **must not** scale the amount.
-- GUI, CLI, sidecars, inspection, interactive reuse, and DNG technical processing **must** share this interpretation. Numeric sidecar amounts **must** retain their manual meaning. Explicit null **must** select Auto. Omitted values **must** retain default Off. Final sharpening must remain independent of Fine/Coarse detail amounts and sizes.
-- Gaussian radius, blur operations, blur inspection roots, and `--sharpen-radius` **must** be removed rather than retained as a second photographic path.
+- Sharpening **must** offer Off, Auto, and a finite nonnegative manual amount, defaulting to Auto. Merrill color Auto must resolve to zero. Monochrome Auto retains the camera/noise recipe's nonnegative sharpening base. Color and monochrome **must** retain their distinct applications. Final export dimensions **must not** scale the amount.
+- GUI, CLI, sidecars, inspection, interactive reuse, and DNG technical processing **must** share this interpretation. Numeric sidecar amounts **must** retain their manual meaning. Explicit null **must** select Auto. Omitted values **must** select Auto. Final sharpening must remain independent of Fine/Coarse detail amounts and sizes.
+- Reference sharpening retains its fixed native support. Universal sharpening owns its separate radius and threshold controls through shared photographic finishing.
 
 ## Implementation and evidence
 

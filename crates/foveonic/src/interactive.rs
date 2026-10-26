@@ -58,6 +58,7 @@ impl Settings {
         );
         changed!(self.preview_region != next.preview_region, "preview-region");
         changed!(self.rendering != next.rendering, "rendering");
+        changed!(self.photographic != next.photographic, "photographic");
         changed!(self.monochrome.mix != next.monochrome.mix, "mono-mix");
         changed!(self.monochrome.noise != next.monochrome.noise, "mono-noise");
         changed!(
@@ -116,6 +117,22 @@ impl Settings {
             self.tone.highlights.to_bits() != next.tone.highlights.to_bits(),
             "highlights"
         );
+        changed!(
+            self.tonal_ranges.blacks != next.tonal_ranges.blacks,
+            "tonal-blacks"
+        );
+        changed!(
+            self.tonal_ranges.shadows != next.tonal_ranges.shadows,
+            "tonal-shadows"
+        );
+        changed!(
+            self.tonal_ranges.highlights != next.tonal_ranges.highlights,
+            "tonal-highlights"
+        );
+        changed!(
+            self.tonal_ranges.whites != next.tonal_ranges.whites,
+            "tonal-whites"
+        );
         changed!(self.output_size != next.output_size, "output-size");
         changed!(
             self.tiff_color_space != next.tiff_color_space,
@@ -123,7 +140,7 @@ impl Settings {
         );
         changed!(self.tone_enabled != next.tone_enabled, "tone-enabled");
         changed!(
-            self.refinement_enabled != next.refinement_enabled,
+            self.sharpening_enabled != next.sharpening_enabled,
             "refinement-enabled"
         );
         match (self.reconstruction, next.reconstruction) {
@@ -163,24 +180,24 @@ struct Recipe {
     operation: std::mem::Discriminant<crate::graph::Operation>,
     parameters: Key,
     data: DataType,
-    inputs: Vec<(&'static str, u64)>,
+    inputs: Vec<(String, u64)>,
 }
 struct Version {
     recipe: Recipe,
     generation: u64,
 }
 struct Entry {
-    name: &'static str,
+    name: String,
     generation: u64,
     value: Value,
 }
 #[derive(Default)]
 pub(crate) struct Cache {
     owner: Option<Arc<()>>,
-    versions: HashMap<&'static str, Version>,
+    versions: HashMap<String, Version>,
     counter: u64,
     entries: Vec<Entry>,
-    selected: Vec<&'static str>,
+    selected: Vec<String>,
 }
 impl Cache {
     const LIMIT: u64 = 1024 * 1024 * 1024;
@@ -199,8 +216,20 @@ impl Cache {
     fn bytes(&self) -> u64 {
         self.entries
             .iter()
-            .map(|entry| entry.value.buffer.size())
+            .enumerate()
+            .filter(|(i, entry)| {
+                !self.entries[..*i]
+                    .iter()
+                    .any(|prior| prior.value.buffer.shares_storage(&entry.value.buffer))
+            })
+            .map(|(_, entry)| entry.value.buffer.size())
             .sum()
+    }
+    fn room_for(&self, value: &Value) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.value.buffer.shares_storage(&value.buffer))
+            || self.bytes() + value.buffer.size() <= Self::LIMIT
     }
     /// Track changed operations and their inputs rather than graph positions,
     /// because those positions may change between renders.
@@ -214,8 +243,8 @@ impl Cache {
                 .dependencies
                 .iter()
                 .map(|input| {
-                    let name = graph.outputs[*input].name;
-                    (name, self.versions[name].generation)
+                    let name = graph.outputs[*input].cache_name();
+                    (name.clone(), self.versions[&name].generation)
                 })
                 .collect();
             let recipe = Recipe {
@@ -224,7 +253,7 @@ impl Cache {
                 data: output.data,
                 inputs,
             };
-            let old = self.versions.get(output.name);
+            let old = self.versions.get(&output.cache_name());
             let local_changed = old.is_none_or(|old| {
                 old.recipe.operation != recipe.operation
                     || old.recipe.parameters != recipe.parameters
@@ -233,8 +262,8 @@ impl Cache {
                         .recipe
                         .inputs
                         .iter()
-                        .map(|i| i.0)
-                        .eq(recipe.inputs.iter().map(|i| i.0))
+                        .map(|i| &i.0)
+                        .eq(recipe.inputs.iter().map(|i| &i.0))
             });
             dirty[id] = local_changed || output.dependencies.iter().any(|input| dirty[*input]);
             if local_changed && required[id] {
@@ -247,7 +276,7 @@ impl Cache {
                 self.counter
             };
             self.versions
-                .insert(output.name, Version { recipe, generation });
+                .insert(output.cache_name(), Version { recipe, generation });
         }
         if initial {
             // Keep the inputs of adjustable reconstruction ready for its first edit.
@@ -282,9 +311,9 @@ impl Cache {
                 for &input in &output.dependencies {
                     if !dirty[input]
                         && required[input]
-                        && !frontier.contains(&graph.outputs[input].name)
+                        && !frontier.contains(&graph.outputs[input].cache_name())
                     {
-                        frontier.push(graph.outputs[input].name);
+                        frontier.push(graph.outputs[input].cache_name());
                     }
                 }
             }
@@ -296,12 +325,13 @@ impl Cache {
                     if matches!(
                         node.operation,
                         crate::graph::Operation::Tone { .. }
+                            | crate::graph::Operation::TonalRanges { .. }
                             | crate::graph::Operation::SignedPhotographic(_)
                             | crate::graph::Operation::CodeResponse { .. }
                     ) && required[node.outputs[0]]
                     {
                         for &input in &node.inputs {
-                            let name = graph.outputs[input].name;
+                            let name = graph.outputs[input].cache_name();
                             if !frontier.contains(&name) {
                                 frontier.push(name);
                             }
@@ -312,21 +342,42 @@ impl Cache {
             self.selected = frontier;
         }
         for &id in &graph.session_outputs {
-            let name = graph.outputs[id].name;
-            if required[id] && !self.selected.contains(&name) {
+            let name = graph.outputs[id].cache_name();
+            if required[id] && !self.selected.iter().any(|n| n == &name) {
                 self.selected.push(name);
             }
         }
+        // Explicit downstream editing boundaries take admission priority over
+        // speculative initial frontiers. Later declarations are closer to the edit.
+        self.selected.sort_by_key(|name| {
+            graph
+                .session_outputs
+                .iter()
+                .rev()
+                .position(|id| graph.outputs[*id].cache_name() == *name)
+                .unwrap_or(usize::MAX)
+        });
         self.entries.retain(|entry| {
             self.versions
-                .get(entry.name)
+                .get(&entry.name)
                 .is_some_and(|version| version.generation == entry.generation)
         });
+        // An editing boundary can make earlier checkpoints unnecessary. If an
+        // earlier entry was evicted, asking for it as another root would rerun
+        // upstream processing just to refill a cache that already serves this edit.
+        let cached: Vec<_> = graph
+            .outputs
+            .iter()
+            .map(|o| self.get(&o.cache_name()).is_some())
+            .collect();
+        let needed = graph.required_until(targets, &cached)?;
         Ok(graph
             .outputs
             .iter()
             .enumerate()
-            .filter_map(|(id, output)| self.selected.contains(&output.name).then_some(id))
+            .filter_map(|(id, output)| {
+                (needed[id] && self.selected.contains(&output.cache_name())).then_some(id)
+            })
             .collect())
     }
     fn get(&self, name: &str) -> Option<Value> {
@@ -336,8 +387,8 @@ impl Cache {
             .find(|entry| entry.name == name && entry.generation == generation)
             .map(|entry| entry.value.clone())
     }
-    fn put(&mut self, name: &'static str, value: &Value) {
-        if !self.selected.contains(&name) {
+    fn put(&mut self, name: &str, value: &Value) {
+        if !self.selected.iter().any(|n| n == name) {
             return;
         }
         let generation = self.versions[name].generation;
@@ -348,13 +399,34 @@ impl Cache {
         {
             return;
         }
-        if self.bytes() + value.buffer.size() > Self::LIMIT {
+        if !self.room_for(value) {
             self.entries
                 .retain(|entry| self.selected.contains(&entry.name));
         }
-        if self.bytes() + value.buffer.size() <= Self::LIMIT {
+        if !self.room_for(value) {
+            let priority = self.selected.iter().position(|n| n == name).unwrap();
+            while !self.room_for(value) {
+                let candidate = self
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, entry)| {
+                        self.selected
+                            .iter()
+                            .position(|n| *n == entry.name)
+                            .filter(|rank| *rank > priority)
+                            .map(|rank| (i, rank))
+                    })
+                    .max_by_key(|(_, rank)| *rank);
+                let Some((index, _)) = candidate else {
+                    break;
+                };
+                self.entries.remove(index);
+            }
+        }
+        if self.room_for(value) {
             self.entries.push(Entry {
-                name,
+                name: name.to_owned(),
                 generation,
                 value: value.clone(),
             });
@@ -398,7 +470,7 @@ impl Execution<'_> {
     pub fn seed(&self, name: &str) -> Option<Value> {
         self.cache.as_ref()?.get(name)
     }
-    pub fn store(&mut self, name: &'static str, value: &Value) {
+    pub fn store(&mut self, name: &str, value: &Value) {
         if let Some(cache) = &mut self.cache {
             cache.put(name, value);
         }
@@ -731,5 +803,91 @@ mod tests {
         let mut c = b.clone();
         c.reconstruction.as_mut().unwrap().detail = 1.1;
         assert_eq!(b.changed_parameters(&c), vec!["detail"]);
+    }
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn cached_aliases_count_one_allocation() {
+        let gpu = crate::gpu::Gpu::new().unwrap();
+        let buffer = gpu.upload("cache alias", &[0_f32; 16]).unwrap();
+        let value = Value {
+            buffer,
+            description: None,
+        };
+        let cache = Cache {
+            entries: vec![
+                Entry {
+                    name: "original".into(),
+                    generation: 0,
+                    value: value.clone(),
+                },
+                Entry {
+                    name: "alias".into(),
+                    generation: 0,
+                    value: value.clone(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(cache.bytes(), value.buffer.size());
+        assert!(cache.room_for(&value));
+    }
+
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn cached_edit_boundary_does_not_refill_evicted_upstream_checkpoints() {
+        use crate::{
+            color_space::ColorSpace, graph::Operation, nodes::finish::photographic::Params,
+        };
+        let gpu = crate::gpu::Gpu::new().unwrap();
+        let recipe = |amount| {
+            let mut graph = Graph::default();
+            let input = graph
+                .add(
+                    Operation::RenderedInput {
+                        data: DataType::ToneMappedRgb(ColorSpace::Srgb),
+                    },
+                    &[],
+                )
+                .unwrap();
+            let mut params = Params::new([1, 1], ColorSpace::Srgb);
+            let base = graph
+                .add(
+                    Operation::ImageAlias {
+                        data: DataType::ToneMappedRgb(ColorSpace::Srgb),
+                        output: "finish.base",
+                    },
+                    &[input],
+                )
+                .unwrap();
+            params.values = [amount, 1., 0., 0.];
+            let target = graph
+                .add(
+                    Operation::PhotographicTone {
+                        params,
+                        space: ColorSpace::Srgb,
+                    },
+                    &[base],
+                )
+                .unwrap();
+            graph.retain_for_session(input);
+            graph.retain_for_session(base);
+            (graph, input, base, target)
+        };
+        let mut cache = Cache::default();
+        let (graph, input, base, target) = recipe(0.4);
+        assert!(cache.plan(&graph, &[target]).unwrap().contains(&input));
+        cache.put(
+            "finish.base",
+            &Value {
+                buffer: gpu.upload("retained edit input", &[0.3_f32; 3]).unwrap(),
+                description: None,
+            },
+        );
+        let (graph, _, _, target) = recipe(0.5);
+        let checkpoints = cache.plan(&graph, &[target]).unwrap();
+        assert!(checkpoints.contains(&base));
+        assert!(!checkpoints.contains(&input), "an uncached input behind the retained boundary should not become another execution root");
+        // Switching roots can need that upstream work again.
+        assert!(cache.plan(&graph, &[input]).unwrap().contains(&input));
     }
 }

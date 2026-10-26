@@ -125,7 +125,18 @@ pub struct Output {
     pub producer: usize,
     pub data: DataType,
     pub name: &'static str,
+    cache_scope: String,
     pub dependencies: Vec<usize>,
+}
+
+impl Output {
+    pub(crate) fn cache_name(&self) -> String {
+        if self.cache_scope.is_empty() {
+            self.name.to_owned()
+        } else {
+            format!("{}/{}", self.cache_scope, self.name)
+        }
+    }
 }
 
 #[derive(Default)]
@@ -167,6 +178,7 @@ impl Graph {
             producer,
             data: output,
             name: operation.output_name(),
+            cache_scope: String::new(),
             dependencies: inputs.to_vec(),
         });
         let mut outputs = vec![id];
@@ -176,6 +188,7 @@ impl Graph {
                 producer,
                 data,
                 name,
+                cache_scope: String::new(),
                 dependencies: slots.iter().map(|slot| inputs[*slot]).collect(),
             });
         }
@@ -185,6 +198,64 @@ impl Graph {
             outputs,
         });
         Ok(id)
+    }
+
+    /// Append an independently authored branch with separate cache identities.
+    /// Its public inspection names remain local to the original recipe.
+    pub(crate) fn append(&mut self, branch: Graph, scope: &str) -> Vec<usize> {
+        let mut mapping = vec![0; branch.outputs.len()];
+        for node in branch.nodes {
+            let inputs: Vec<_> = node.inputs.iter().map(|id| mapping[*id]).collect();
+            // Reuse identical technical prefixes, including the original upload.
+            // Different parameters or inputs retain independently scoped outputs.
+            let same = self.nodes.iter().find(|candidate| {
+                std::mem::discriminant(&candidate.operation)
+                    == std::mem::discriminant(&node.operation)
+                    && candidate.inputs == inputs
+                    && candidate.outputs.len() == node.outputs.len()
+                    && candidate.outputs.iter().zip(&node.outputs).all(|(a, b)| {
+                        let a = &self.outputs[*a];
+                        let b = &branch.outputs[*b];
+                        a.data == b.data
+                            && a.name == b.name
+                            && candidate.operation.key(a.name) == node.operation.key(b.name)
+                    })
+            });
+            if let Some(same) = same {
+                for (old, new) in node.outputs.iter().zip(&same.outputs) {
+                    mapping[*old] = *new;
+                }
+                continue;
+            }
+            let producer = self.nodes.len();
+            let mut outputs = Vec::new();
+            for old in node.outputs {
+                let output = &branch.outputs[old];
+                let id = self.outputs.len();
+                mapping[old] = id;
+                outputs.push(id);
+                self.outputs.push(Output {
+                    producer,
+                    data: output.data,
+                    name: output.name,
+                    cache_scope: if output.cache_scope.is_empty() {
+                        scope.to_owned()
+                    } else {
+                        format!("{scope}/{}", output.cache_scope)
+                    },
+                    dependencies: output.dependencies.iter().map(|id| mapping[*id]).collect(),
+                });
+            }
+            self.nodes.push(Node {
+                operation: node.operation,
+                inputs,
+                outputs,
+            });
+        }
+        for id in branch.session_outputs {
+            self.retain_for_session(mapping[id]);
+        }
+        mapping
     }
 
     /// Finds a named output of the node that produced `output`.

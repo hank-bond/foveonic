@@ -156,6 +156,45 @@ pub enum Operation {
         amount: f32,
         space: ColorSpace,
     },
+    /// Retain an image under a recipe-owned inspection name without copying it.
+    ImageAlias {
+        data: DataType,
+        output: &'static str,
+    },
+    PhotographicTone {
+        params: crate::nodes::finish::photographic::Params,
+        space: ColorSpace,
+    },
+    MonochromeSensitivity {
+        params: crate::nodes::finish::photographic::Params,
+        space: ColorSpace,
+        guide_space: ColorSpace,
+    },
+    UniversalSharpen {
+        params: crate::nodes::finish::photographic::Params,
+        space: ColorSpace,
+    },
+    LocalContrast {
+        params: crate::nodes::finish::photographic::Params,
+        space: ColorSpace,
+    },
+    PhotographicHdrMask {
+        guide: crate::nodes::finish::tone_equalizer::Guide,
+        space: ColorSpace,
+    },
+    PhotographicHdr {
+        controls: crate::render::TonalRanges,
+        space: ColorSpace,
+    },
+    ToneMask {
+        guide: crate::nodes::finish::tone_equalizer::Guide,
+        space: ColorSpace,
+    },
+    TonalRanges {
+        controls: crate::render::TonalRanges,
+        pivot: f32,
+        space: ColorSpace,
+    },
     Tone {
         curve: Vec<f32>,
         exposure: f32,
@@ -276,6 +315,17 @@ impl Operation {
             Self::TiledColorDq { params, table, .. } => params.key(N::Geometry).join(table.key()),
             Self::ColorDq { table, .. } => table.key(),
             Self::Sharpen { amount, .. } => Key::pod(amount),
+            Self::ImageAlias { .. } => Key::default(),
+            Self::PhotographicTone { params, .. }
+            | Self::MonochromeSensitivity { params, .. }
+            | Self::UniversalSharpen { params, .. }
+            | Self::LocalContrast { params, .. } => params.key(),
+            Self::PhotographicHdrMask { guide, .. } => guide.key(),
+            Self::PhotographicHdr { controls, .. } => Key::pod(&controls.amounts()),
+            Self::ToneMask { guide, .. } => guide.key(),
+            Self::TonalRanges {
+                controls, pivot, ..
+            } => Key::pod(&controls.amounts()).with(pivot),
             Self::Tone {
                 curve, exposure, ..
             } => Key::pod(exposure).slice(curve),
@@ -400,6 +450,15 @@ impl Operation {
             Self::Saturation { .. } => "submit saturation",
             Self::SharpSignal { .. } => "submit native high-pass",
             Self::Sharpen { .. } => "submit sharpen",
+            Self::ImageAlias { .. } => "retain image alias",
+            Self::PhotographicTone { .. } => "finish.tone",
+            Self::MonochromeSensitivity { .. } => "finish.monochrome",
+            Self::UniversalSharpen { .. } => "finish.sharpen",
+            Self::LocalContrast { .. } => "finish.local-contrast",
+            Self::PhotographicHdrMask { .. } => "submit photographic HDR mask",
+            Self::PhotographicHdr { .. } => "submit photographic HDR",
+            Self::ToneMask { .. } => "submit tonal brightness mask",
+            Self::TonalRanges { .. } => "submit tonal range exposure",
             Self::Tone { .. } => "submit tone",
             Self::Encode { .. } => "submit encode",
             Self::Tiff { .. } => "TIFF",
@@ -592,6 +651,27 @@ impl Operation {
             Self::SharpSignal { space } => (vec![LinearRgb(*space)], SignedDetail),
             Self::Sharpen { space, .. } => {
                 (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
+            }
+            Self::ImageAlias { data, .. } => (vec![*data], *data),
+            Self::PhotographicTone { space, .. }
+            | Self::UniversalSharpen { space, .. }
+            | Self::LocalContrast { space, .. } => {
+                (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space))
+            }
+            Self::MonochromeSensitivity {
+                space, guide_space, ..
+            } => (
+                vec![ToneMappedRgb(*space), ToneMappedRgb(*guide_space)],
+                ToneMappedRgb(*space),
+            ),
+            Self::PhotographicHdrMask { space, .. } => (vec![ToneMappedRgb(*space)], ScalarField),
+            Self::PhotographicHdr { space, .. } => (
+                vec![ToneMappedRgb(*space), ScalarField],
+                ToneMappedRgb(*space),
+            ),
+            Self::ToneMask { space, .. } => (vec![LinearRgb(*space)], ScalarField),
+            Self::TonalRanges { space, .. } => {
+                (vec![LinearRgb(*space), ScalarField], LinearRgb(*space))
             }
             Self::Tone { space, .. } => (vec![LinearRgb(*space)], ToneMappedRgb(*space)),
             Self::Encode {
@@ -823,6 +903,15 @@ impl Operation {
             Self::TiledColorDq { .. } => "color-dq.tiles",
             Self::Color { .. } => "color.rgb",
             Self::ColorDq { .. } => "color-dq.rgb",
+            Self::ImageAlias { output, .. } => output,
+            Self::PhotographicTone { .. } => "finish.tone",
+            Self::MonochromeSensitivity { .. } => "finish.monochrome",
+            Self::UniversalSharpen { .. } => "finish.sharpen",
+            Self::LocalContrast { .. } => "finish.local-contrast",
+            Self::PhotographicHdrMask { .. } => "finish.hdr-mask",
+            Self::PhotographicHdr { .. } => "finish.hdr",
+            Self::ToneMask { .. } => "tonal-ranges.mask",
+            Self::TonalRanges { .. } => "tonal-ranges.rgb",
             Self::Tone { .. } => "tone.rgb",
             Self::Saturation { .. } => "saturation.rgb",
             Self::SharpSignal { .. } => "detail.signal",

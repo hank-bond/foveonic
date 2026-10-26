@@ -46,9 +46,12 @@ pub(super) fn show(
             );
             ui.separator();
         }
+        if mono {
+            changed |= common::monochrome_sensitivity(ui, settings);
+        }
         changed |= common::tone_with_exposure_range(ui, settings, mono, -2. ..=2.);
         ui.separator();
-        ui.weak("Noise and Detail");
+        common::section_header(ui, "Noise and Detail", None, common::Formats::DngTiff);
         let noise_defaults = defaults
             .reconstruction
             .unwrap_or_else(|| capabilities.default_noise_controls());
@@ -107,23 +110,9 @@ pub(super) fn show(
             }
         }
         ui.separator();
-        let sharp_default = defaults.sharpen_amount.unwrap_or(0.);
-        let mut sharpness = settings.sharpen_amount.unwrap_or(sharp_default);
-        if common::stepped_adjustment(
-            ui,
-            "Sharpness",
-            &mut sharpness,
-            -2. ..=2.,
-            sharp_default,
-            0.1,
-        ) {
-            settings.sharpen_amount = if sharpness == sharp_default {
-                None
-            } else {
-                Some(sharpness)
-            };
-            changed = true;
-        }
+        changed |= common::sharpening_with_range(ui, settings, Some(source), -2. ..=2.);
+        ui.separator();
+        common::section_header(ui, "Corrections", None, common::Formats::DngTiff);
         let highlight_default = defaults.highlight_amount.unwrap_or(1.);
         let mut highlight = settings.highlight_amount.unwrap_or(highlight_default);
         if common::stepped_adjustment(

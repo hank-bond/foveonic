@@ -39,6 +39,15 @@ pub fn automatic(label: &str) -> Option<&'static str> {
 
 pub fn editing(label: &str) -> Option<&'static str> {
     Some(match label {
+        "Tone method" => "Reference retains the camera family's tone and saturation response. Universal keeps its base camera appearance and RAW exposure, then applies shared contrast and saturation. Reference uses the original Shadows/Highlights across camera families. Universal instead enables the four HDR ranges and Local Contrast. Inactive settings are retained and bypassed. Positive saturation protects already vivid colors. New finishing affects preview and TIFF. DNG retains the Reference recipe.",
+        "Local contrast" => "Adjusts texture contrast independently of Noise, Fine/Coarse Detail and sharpening. Negative smooths tonal texture. Positive adds definition. Zero is unchanged and skips filtering. Preview and TIFF only.",
+        "Sharpening method" => "Reference retains the camera family's sharpening response. Universal replaces its creative sharpening with shared Amount, Radius, Threshold and Halo suppression controls, while sensor reconstruction remains active. The two methods keep independent amounts. Preview and TIFF only. DNG uses Reference.",
+        "Universal amount" => "Strengthens edges in the finished color or monochrome image. Zero turns it off. Universal replaces reference sharpening instead of adding another sharpening pass. Preview and TIFF only.",
+        "Universal radius" => "Controls the spatial size of sharpened edges in native-image pixels. Small values emphasize fine edges. Larger values create broader definition and can make outlines visible.",
+        "Sharpen threshold" => "Excludes weak brightness differences from sharpening. Increase it to leave smooth skin and noise alone. Zero sharpens all differences.",
+        "Halo suppression" => "Restrains bright and dark outlines introduced near strong edges. Higher values limit overshoot more strongly and can soften the sharpening effect.",
+        "Red" | "Yellow" | "Green" | "Cyan" | "Blue" | "Magenta" => "Changes monochrome brightness according to the subject's original white-balanced color. Positive brightens and negative darkens. The color selection stays independent of the layer mixture. Nearly gray subjects are protected. Preview and TIFF only. Changing these edits later requires the original X3F.",
+
         "White balance" => {
             "Corrects the color cast of the light so whites and grays look neutral. Choose a preset close to the lighting, then judge skin tones and neutral objects. It also affects how color noise is treated."
         }
@@ -69,6 +78,9 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Contrast" => {
             "Changes the separation between dark and light tones. Higher values give a punchier look. Lower values give a softer look. Strong contrast can hide detail in shadows and highlights. 0 keeps the starting contrast for the selected rendering mode."
         }
+        "Tonal ranges" => {
+            "HDR adjustments for Blacks, Shadows, Highlights and Whites. Positive values brighten and negative values darken. Zero preserves the camera look. Surrounding brightness across several scales preserves texture. Values range from -1 to +1. The range pivot follows the camera curve and Exposure. These edits support preview and TIFF. DNG exports leave these HDR preview adjustments out and keep the existing DNG rendering."
+        }
         "Shadows" => {
             "Shapes the darker part of the tone curve. Use it to change how much detail you see in dark areas without relying only on Exposure. Opening shadows can reveal grain and color noise. This is a tone adjustment, not local shadow recovery. 0 leaves it unchanged."
         }
@@ -78,7 +90,7 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Tone" | "Tone and Color" => {
             "Temporarily bypasses exposure, saturation and tonal edits while preserving their values. The selected camera color mode and its base tone curve remain active. Neutral slider values already leave those edits unchanged."
         }
-        "Refinement" => {
+        "Sharpening" => {
             "Temporarily bypasses final sharpening while preserving its amount and Auto selection. Zero sharpening is already neutral."
         }
         "Noise" => {
@@ -310,6 +322,16 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "detail.signal" => {
             "A diagnostic view of fine brightness variation used by the detail processing. Middle gray means no variation. Lighter and darker marks show bright and dark detail. It can contain grain as well as real texture, and is not the finished photo or an exact preview of the Detail slider."
         }
+        "finish.base" => "The camera's base photographic image before shared finishing edits. Reference sharpening is included only when that method is selected.",
+        "finish.color-guide" => "Independent white-balanced color used to select monochrome sensitivity ranges. It ignores the monochrome layer mixture and creative saturation.",
+        "finish.monochrome" => "Monochrome brightness after the six color-sensitivity adjustments. Compare with Input to see which subject colors are being changed.",
+        "finish.local-contrast" => "Photographic RGB after the shared six-scale local-contrast adjustment. It is independent of sensor detail restoration.",
+        "finish.hdr-mask" => "Multiscale spatial brightness base used by shared HDR. The guide uses normalized photographic RGB and retains edges while smoothing texture.",
+        "finish.hdr" => "Photographic RGB after shared Blacks, Shadows, Highlights and Whites adjustments. These edits are omitted from DNG.",
+        "finish.tone" => "Photographic RGB after universal contrast and saturation. The base camera look remains present.",
+        "finish.sharpen" => "Photographic RGB after universal sharpening. Compare smooth skin, fine hair and strong edges with Input and Difference.",
+        "tonal-ranges.mask" => "Brightness used to select the tonal ranges. Black represents -8 stops below nominal white and white represents nominal white. A multiscale spatial base smooths small details while respecting strong edges.",
+        "tonal-ranges.rgb" => "Linear working RGB after the tonal exposure gains, before the camera tone curve. Input/Output and Difference compare it with the actual linear input. Zero adjustments are unchanged.",
         "tone.rgb" => {
             "The photo after Exposure and the selected rendering mode's tone curve, including Contrast, Shadows, and Highlights. Classic also includes its saturation adjustment here. Merrill exposes saturation as a later stage. Sharpening is already included."
         }

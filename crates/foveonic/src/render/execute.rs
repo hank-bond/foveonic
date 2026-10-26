@@ -74,7 +74,7 @@ impl Engine {
         let mut values: Vec<Option<Value>> = graph
             .outputs
             .iter()
-            .map(|output| execution.seed(output.name))
+            .map(|output| execution.seed(&output.cache_name()))
             .collect();
         let cached: Vec<bool> = values.iter().map(Option::is_some).collect();
         let required = if cached.iter().any(|cached| *cached) {
@@ -152,6 +152,8 @@ impl Engine {
                 });
             let extent = match &node.operation {
                 Operation::ReduceLayers(prepared) => prepared.output_extent(),
+                Operation::ToneMask { guide, .. }
+                | Operation::PhotographicHdrMask { guide, .. } => guide.extent(),
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
                 Operation::ProjectColorTiles { params, .. } => params.output_extent(),
                 Operation::NoiseContext(p) => reconstruction::context_extent(*p),
@@ -1232,6 +1234,94 @@ impl Engine {
                     );
                     Some(output)
                 }
+                Operation::ImageAlias { .. } => Some(input(0).buffer.clone()),
+                Operation::MonochromeSensitivity { params, .. } => {
+                    if input(0).description.unwrap().extent != input(1).description.unwrap().extent
+                    {
+                        return Err("monochrome guide and image have different extents".into());
+                    }
+                    Some(crate::nodes::finish::photographic::sensitivity::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        *params,
+                        inherited,
+                        profile,
+                    )?)
+                }
+                Operation::PhotographicTone { params, .. } => {
+                    Some(crate::nodes::finish::photographic::tone::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        inherited,
+                        profile,
+                    )?)
+                }
+                Operation::UniversalSharpen { params, .. } => {
+                    Some(crate::nodes::finish::photographic::sharpen::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        inherited,
+                        profile,
+                    )?)
+                }
+                Operation::LocalContrast { params, .. } => {
+                    Some(crate::nodes::finish::photographic::local_contrast::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        inherited,
+                        profile,
+                    )?)
+                }
+                Operation::PhotographicHdrMask { guide, .. } => {
+                    Some(crate::nodes::finish::tone_equalizer::mask(
+                        gpu,
+                        &input(0).buffer,
+                        *guide,
+                        profile,
+                    )?)
+                }
+                Operation::PhotographicHdr { controls, space } => {
+                    Some(crate::nodes::finish::tone_equalizer::apply_photographic(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        inherited,
+                        crate::nodes::finish::tone_equalizer::Response {
+                            controls: *controls,
+                            pivot: (0.18_f32).log2(),
+                            space: *space,
+                        },
+                        profile,
+                    )?)
+                }
+                Operation::ToneMask { guide, .. } => {
+                    Some(crate::nodes::finish::tone_equalizer::mask(
+                        gpu,
+                        &input(0).buffer,
+                        *guide,
+                        profile,
+                    )?)
+                }
+                Operation::TonalRanges {
+                    controls,
+                    pivot,
+                    space,
+                } => Some(crate::nodes::finish::tone_equalizer::apply(
+                    gpu,
+                    &input(0).buffer,
+                    &input(1).buffer,
+                    inherited,
+                    crate::nodes::finish::tone_equalizer::Response {
+                        controls: *controls,
+                        pivot: *pivot,
+                        space: *space,
+                    },
+                    profile,
+                )?),
                 Operation::Tone {
                     curve, exposure, ..
                 } => {
@@ -1366,7 +1456,7 @@ impl Engine {
             }
             for &id in &node.outputs {
                 if let Some(value) = values[id].as_ref() {
-                    execution.store(graph.outputs[id].name, value);
+                    execution.store(&graph.outputs[id].cache_name(), value);
                 }
             }
             // Queuing a whole outdated render would delay both drawing and newer edits.

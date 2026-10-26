@@ -8,6 +8,7 @@ pub(crate) mod resample;
 pub(crate) mod resize;
 pub(crate) mod signed_response;
 pub(crate) mod tone;
+pub(crate) mod tone_equalizer;
 
 pub(crate) mod root_detail;
 
@@ -22,3 +23,5 @@ pub(crate) mod box_contrast;
 pub(crate) mod color_sharpen;
 
 pub(crate) mod code_channel_map;
+
+pub(crate) mod photographic;

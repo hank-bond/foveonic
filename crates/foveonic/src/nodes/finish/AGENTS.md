@@ -10,6 +10,10 @@ Preserve signed samples and headroom until the selected operation requires encod
 
 <!-- Generated from source summaries and document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+### Directories
+
+- **[photographic/](./photographic/AGENTS.md)** Shared finishing operations own tone, hue-guided monochrome sensitivity, local contrast and sharpening over normalized RGB.
+
 ### Source files
 
 - **[box_contrast.rs](./box_contrast.rs)** Applies ordered box-mean local contrast to integral RGB codes with explicit noise and gain bounds.
@@ -20,12 +24,14 @@ Preserve signed samples and headroom until the selected operation requires encod
 - **[image_region.rs](./image_region.rs)** Copies a rectangular numerical signal on the GPU while preserving every component bit.
 - **[mask_image.rs](./mask_image.rs)** Converts integer processing flags into a binary floating image for inspection.
 - **[mod.rs](./mod.rs)** Prepares tone and resampling with shaders for sharpening and final encoding.
+- **[photographic.rs](./photographic.rs)** Defines shared photographic controls and the GPU parameter layout for normalized RGB finishing.
 - **[proportional_sharpen.rs](./proportional_sharpen.rs)** Sharpens integral RGB codes from signed quarter-code detail and an adaptive amount table.
 - **[resample.rs](./resample.rs)** Prepares camera resampling weights and leaves image calculations on the GPU.
 - **[resize.rs](./resize.rs)** Prepares reference photographic resize kernels and samples owned floating RGB on the GPU.
 - **[root_detail.rs](./root_detail.rs)** Maps signed linear codes into root space and extracts detail with a signed separable filter.
 - **[signed_response.rs](./signed_response.rs)** Restores linear detail or applies photographic response to signed root-domain samples.
 - **[tone.rs](./tone.rs)** Prepares a camera-derived color-mode tone table for application in a shader.
+- **[tone_equalizer.rs](./tone_equalizer.rs)** Prepares coordinated HDR ranges and a reusable multiscale log-brightness base.
 - **[wavelet_contrast.rs](./wavelet_contrast.rs)** Adjusts packed-Lab lightness through six lifting levels and bounded detail gains.
 
 <!-- INDEX:END -->

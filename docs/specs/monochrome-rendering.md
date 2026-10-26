@@ -25,6 +25,10 @@ This specification describes the Merrill monochrome recipe. Classic uses its [re
 - Show only controls relevant to the selected mode. Hide color mode, saturation, chroma/detail reconstruction, and ColorDQ controls in Monochrome. Hide the layer mixer and mono noise/column-banding controls in Color. Preserve all hidden values. White balance, exposure, tone, corrections, output sizing, and sharpening remain available in both modes.
 - GUI, CLI, sidecars, inspection, interactive caching, TIFF, and DNG must use the same interpretation. Mode/mix changes must invalidate the appropriate cached stages without overwriting retained images. Inspection must list only supported outputs for the selected mode.
 
+## Shared finishing
+
+[Photographic finishing](./photographic-finishing.md) may request an independent color-guide branch for six hue-sensitivity controls. The native monochrome mixture and filtering remain authoritative for texture and brightness. Guide generation must not depend on that mixture, creative saturation or tonal edits. Existing DNG behavior remains unchanged while these photographic controls are evaluated.
+
 ## DNG
 
 - Monochrome DNG must bake the selected layer mix and technical mono reconstruction into linear samples. Exposure and tone presentation must remain separate metadata, retaining tonal editing latitude.

@@ -662,14 +662,14 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
     settings.tone.contrast = 0.3;
     settings.sharpen_amount = Some(0.75);
     settings.tone_enabled = false;
-    settings.refinement_enabled = false;
+    settings.sharpening_enabled = false;
     let image = engine
         .render(&source, &settings, &mut Profile::default())
         .unwrap();
     assert_eq!(image.settings(), &settings);
     let mut neutral = settings.processing_settings().into_owned();
     neutral.tone_enabled = true;
-    neutral.refinement_enabled = true;
+    neutral.sharpening_enabled = true;
     let expected = engine
         .render(&source, &neutral, &mut Profile::default())
         .unwrap();

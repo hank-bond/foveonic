@@ -89,6 +89,12 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
     presentation.tone.shadows = 0.4;
     presentation.tone.highlights = -0.3;
     presentation.saturation = 0.25;
+    presentation.tonal_ranges.shadows = 0.5;
+    presentation.tonal_ranges.highlights = -0.5;
+    presentation.photographic.tone_method = crate::render::PhotographicMethod::Universal;
+    presentation.photographic.local_contrast = 0.5;
+    presentation.photographic.sharpening.method = crate::render::PhotographicMethod::Universal;
+    presentation.photographic.sharpening.amount = 1.2;
     let changed = prepare_base(&engine, &source, &presentation, &mut Profile::default()).unwrap();
     assert_eq!(changed.settings(), &presentation);
     assert_eq!(changed.view(), base.view());
@@ -97,6 +103,21 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
         "deferred RGB presentation changed the technical pixels"
     );
     drop(changed);
+
+    let mut without_hdr = presentation.clone();
+    without_hdr.tonal_ranges = Default::default();
+    without_hdr.photographic = Default::default();
+    let before = appearance::Prepared::new(&source.metadata, &without_hdr).unwrap();
+    let after = appearance::Prepared::new(&source.metadata, &presentation).unwrap();
+    assert_eq!(after.mapping.0, before.mapping.0);
+    assert_eq!(after.neutral, before.neutral);
+    assert_eq!(after.forward.0, before.forward.0);
+    assert_eq!(after.color.0, before.color.0);
+    let before = before.finish(1.).unwrap();
+    let after = after.finish(1.).unwrap();
+    assert_eq!(after.curve, before.curve);
+    assert_eq!(after.look, before.look);
+    assert_eq!(after.baseline, before.baseline);
 
     let mut signal = presentation.clone();
     signal.highlight_threshold_ev = Some(1.);

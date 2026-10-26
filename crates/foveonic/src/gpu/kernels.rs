@@ -83,6 +83,23 @@ pub enum Kernel {
     Calibration,
     Color,
     Tone,
+    PhotographicTone,
+    MonoSensitivity,
+    UniversalSharpExtract,
+    UniversalSharpBlur,
+    UniversalSharpen,
+    LocalContrastExtract,
+    LocalContrastBlur,
+    LocalContrastApply,
+    ToneMaskReduce,
+    ToneMaskHorizontal,
+    ToneMaskStatistics,
+    ToneMaskCoefficients,
+    ToneMaskVertical,
+    ToneMaskUpdate,
+    ToneMaskFinish,
+    ToneEqualizerGain,
+    ToneEqualizerApply,
     Encode,
     Repair,
     Sharpen,
@@ -335,6 +352,24 @@ impl Kernel {
             Self::Calibration => "calibration",
             Self::Color => "color matrix",
             Self::Tone => "tone",
+            Self::PhotographicTone => "photographic tone",
+            Self::MonoSensitivity => "mono sensitivity",
+            Self::UniversalSharpExtract => "sharp extract",
+            Self::UniversalSharpBlur => "sharp blur",
+            Self::UniversalSharpen => "universal sharpen",
+            Self::LocalContrastExtract => "local extract",
+            Self::LocalContrastBlur => "local blur",
+            Self::LocalContrastApply => "local apply",
+
+            Self::ToneMaskReduce => "reduced tonal guide",
+            Self::ToneMaskHorizontal => "tonal guide horizontal mean",
+            Self::ToneMaskStatistics => "HDR local moments and residual",
+            Self::ToneMaskCoefficients => "tonal guided coefficients",
+            Self::ToneMaskVertical => "tonal coefficient vertical mean",
+            Self::ToneMaskUpdate => "HDR multiscale base update",
+            Self::ToneMaskFinish => "spatial tonal brightness mask",
+            Self::ToneEqualizerGain => "HDR coordinated gains",
+            Self::ToneEqualizerApply => "apply tonal range exposure",
             Self::Encode => "encode",
             Self::Repair => "repair",
             Self::Sharpen => "sharpen",
@@ -506,6 +541,26 @@ impl Gpu {
         let sharpen = include_str!("../nodes/finish/sharpen.wgsl");
         let dng = include_str!("../dng/dng.wgsl");
         let mono = include_str!("../nodes/monochrome/mono.wgsl");
+        let photographic_tone = format!(
+            "{}\n{}",
+            include_str!("../nodes/finish/photographic/common.wgsl"),
+            include_str!("../nodes/finish/photographic/tone.wgsl")
+        );
+        let photographic_sensitivity = format!(
+            "{}\n{}",
+            include_str!("../nodes/finish/photographic/common.wgsl"),
+            include_str!("../nodes/finish/photographic/sensitivity.wgsl")
+        );
+        let photographic_sharpen = format!(
+            "{}\n{}",
+            include_str!("../nodes/finish/photographic/common.wgsl"),
+            include_str!("../nodes/finish/photographic/sharpen.wgsl")
+        );
+        let photographic_local_contrast = format!(
+            "{}\n{}",
+            include_str!("../nodes/finish/photographic/common.wgsl"),
+            include_str!("../nodes/finish/photographic/local_contrast.wgsl")
+        );
         let kernels = [
             (
                 include_str!("../nodes/finish/code_channel_map.wgsl"),
@@ -789,6 +844,50 @@ impl Gpu {
             (include_str!("../nodes/sensor/calibrate.wgsl"), "main"),
             (include_str!("../nodes/color/color.wgsl"), "main"),
             (include_str!("../nodes/finish/tone.wgsl"), "main"),
+            (photographic_tone.as_str(), "photographic_tone"),
+            (photographic_sensitivity.as_str(), "mono_sensitivity"),
+            (photographic_sharpen.as_str(), "sharp_extract"),
+            (photographic_sharpen.as_str(), "sharp_blur"),
+            (photographic_sharpen.as_str(), "universal_sharpen"),
+            (photographic_local_contrast.as_str(), "local_extract"),
+            (photographic_local_contrast.as_str(), "local_blur"),
+            (photographic_local_contrast.as_str(), "local_apply"),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "reduce_guide",
+            ),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "mean_horizontal",
+            ),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "statistics",
+            ),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "coefficients",
+            ),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "mean_vertical",
+            ),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "update_base",
+            ),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "finish_mask",
+            ),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "calculate_gain",
+            ),
+            (
+                include_str!("../nodes/finish/tone_equalizer.wgsl"),
+                "apply_ranges",
+            ),
             (include_str!("../nodes/finish/encode.wgsl"), "main"),
             (include_str!("../nodes/sensor/repair.wgsl"), "main"),
             (sharpen, "main"),

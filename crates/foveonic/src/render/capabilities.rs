@@ -171,6 +171,7 @@ impl ControlCapabilities {
             settings.row_correction,
             settings.repair,
             settings.color_dq_gain,
+            settings.tonal_ranges,
         );
         if !self.monochrome {
             settings.rendering = Rendering::Color;
@@ -219,6 +220,7 @@ impl ControlCapabilities {
                 settings.row_correction,
                 settings.repair,
                 settings.color_dq_gain,
+                settings.tonal_ranges,
             )
     }
 

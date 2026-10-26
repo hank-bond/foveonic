@@ -420,3 +420,46 @@ fn linear_code_base_requires_an_explicit_unsigned_code_input() {
         .unwrap();
     assert!(graph.add(Operation::LinearCodeBase, &[display]).is_err());
 }
+
+#[test]
+fn companion_branches_share_inputs_but_keep_distinct_edit_identities() {
+    use crate::{color_space::ColorSpace, nodes::finish::photographic::Params};
+    let mut graph = Graph::default();
+    let data = DataType::ToneMappedRgb(ColorSpace::Srgb);
+    let input = graph.add(Operation::RenderedInput { data }, &[]).unwrap();
+    let mut p = Params::new([8, 8], ColorSpace::Srgb);
+    p.values = [0., 1., 0., 0.];
+    let main = graph
+        .add(
+            Operation::PhotographicTone {
+                params: p,
+                space: ColorSpace::Srgb,
+            },
+            &[input],
+        )
+        .unwrap();
+    let mut branch = Graph::default();
+    let guide_input = branch.add(Operation::RenderedInput { data }, &[]).unwrap();
+    p.values[0] = 0.5;
+    let guide = branch
+        .add(
+            Operation::PhotographicTone {
+                params: p,
+                space: ColorSpace::Srgb,
+            },
+            &[guide_input],
+        )
+        .unwrap();
+    branch.retain_for_session(guide);
+    let mapping = graph.append(branch, "guide");
+    assert_eq!(mapping[guide_input], input);
+    assert_ne!(mapping[guide], main);
+    assert_eq!(graph.nodes.len(), 3);
+    assert_eq!(graph.outputs[main].cache_name(), "finish.tone");
+    assert_eq!(
+        graph.outputs[mapping[guide]].cache_name(),
+        "guide/finish.tone"
+    );
+    assert!(graph.session_outputs.contains(&mapping[guide]));
+    graph.required(&[main, mapping[guide]]).unwrap();
+}

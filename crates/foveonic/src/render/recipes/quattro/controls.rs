@@ -50,9 +50,11 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
     supported.monochrome.mix = settings.monochrome.mix;
     supported.monochrome_smoothness = settings.monochrome_smoothness;
     supported.tone_enabled = settings.tone_enabled;
-    supported.refinement_enabled = settings.refinement_enabled;
+    supported.sharpening_enabled = settings.sharpening_enabled;
     supported.exposure = settings.exposure.clamp(-2., 2.);
     supported.tone = settings.tone;
+    supported.photographic = settings.photographic;
+    supported.tonal_ranges = settings.tonal_ranges;
     supported.saturation = settings.saturation;
     supported.sharpen_amount = settings.sharpen_amount.map(|v| v.clamp(-2., 2.));
     supported.highlight_amount = settings.highlight_amount;

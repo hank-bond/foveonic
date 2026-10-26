@@ -89,8 +89,7 @@ fn merrill_color_auto_sharpening_is_zero_and_monochrome_keeps_camera_coefficient
         .properties
         .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
     let mut settings = Settings::new("Sunlight", "Standard");
-    assert_eq!(settings.sharpen_amount, Some(0.));
-    settings.sharpen_amount = None;
+    assert_eq!(settings.sharpen_amount, None);
     for choice in 0..=4 {
         settings.reconstruction = Some(crate::noise::Controls {
             chroma: choice,
@@ -164,9 +163,28 @@ fn automatic_manual_and_export_choices_round_trip_without_changing_numeric_recip
         );
         assert!(crate::sidecar::decode(json.as_bytes()).is_err());
     }
+    let unspecified = br#"{"format":"foveonic-editing","version":1,"settings":{}}"#;
+    assert_eq!(
+        crate::sidecar::decode(unspecified).unwrap().sharpen_amount,
+        None
+    );
+    let manual_off =
+        br#"{"format":"foveonic-editing","version":1,"settings":{"sharpen_amount":0}}"#;
+    assert_eq!(
+        crate::sidecar::decode(manual_off).unwrap().sharpen_amount,
+        Some(0.)
+    );
+    let bypass =
+        br#"{"format":"foveonic-editing","version":1,"settings":{"refinement_enabled":false}}"#;
+    let bypass = crate::sidecar::decode(bypass).unwrap();
+    assert!(!bypass.sharpening_enabled);
+    let saved: serde_json::Value =
+        serde_json::from_slice(&crate::sidecar::encode(&bypass).unwrap()).unwrap();
+    assert_eq!(saved["settings"]["refinement_enabled"], false);
+    assert!(saved["settings"].get("sharpening_enabled").is_none());
     let settings = Settings::default();
     let mut edited = settings.clone();
-    edited.sharpen_amount = None;
+    edited.sharpen_amount = Some(0.);
     assert_eq!(settings.changed_parameters(&edited), ["sharpen"]);
     edited = settings.clone();
     edited.tiff_color_space = Some(TiffColorSpace::ProPhotoRgb);
@@ -264,14 +282,16 @@ fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
     settings.exposure = 0.7;
     settings.saturation = 1.3;
     settings.tone.contrast = 0.4;
+    settings.tonal_ranges.shadows = 0.5;
     settings.sharpen_amount = None;
     settings.tone_enabled = false;
-    settings.refinement_enabled = false;
+    settings.sharpening_enabled = false;
     let saved = settings.clone();
     let effective = settings.processing_settings();
     assert_eq!(effective.exposure, 0.);
     assert_eq!(effective.saturation, 1.);
     assert_eq!(effective.tone, ToneControls::default());
+    assert!(effective.tonal_ranges.is_neutral());
     assert_eq!(effective.sharpen_amount, Some(0.));
     assert_eq!(effective.color_mode, "Vivid");
     assert_eq!(settings, saved);
@@ -281,7 +301,7 @@ fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
         saved
     );
     settings.tone_enabled = true;
-    settings.refinement_enabled = true;
+    settings.sharpening_enabled = true;
     assert!(matches!(
         settings.processing_settings(),
         std::borrow::Cow::Borrowed(_)

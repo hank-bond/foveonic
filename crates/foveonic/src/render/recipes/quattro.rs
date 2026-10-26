@@ -559,7 +559,17 @@ fn compose(
             region: region.as_ref().map(|r| r.physical),
         }
     };
-    let sharpened = if settings.is_monochrome() {
+    let sharpened = if settings.photographic.sharpening.method
+        == crate::render::PhotographicMethod::Universal
+    {
+        stage3::build_contrast(
+            &mut graph,
+            &source.metadata,
+            spatial_input,
+            color_mode,
+            spatial_controls,
+        )?
+    } else if settings.is_monochrome() {
         monochrome::build_stage3(
             &mut graph,
             &source.metadata,
@@ -591,7 +601,10 @@ fn compose(
     } else {
         amount
     };
-    let sharpened = if amount > 0. && !settings.is_monochrome() {
+    let sharpened = if amount > 0.
+        && !settings.is_monochrome()
+        && settings.photographic.sharpening.method == crate::render::PhotographicMethod::Reference
+    {
         graph.add(
             Operation::ColorSharpen(crate::nodes::finish::color_sharpen::Params::new(
                 [params.source[0], params.source[1]],

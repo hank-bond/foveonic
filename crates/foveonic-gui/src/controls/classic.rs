@@ -26,13 +26,16 @@ pub(super) fn show(
         },
     );
     ui.separator();
+    if mono {
+        changed |= common::monochrome_sensitivity(ui, settings);
+    }
     changed |= common::tone(ui, settings, mono);
     ui.separator();
     changed |= common::reconstruction(ui, settings);
     ui.separator();
-    changed |= common::refinement(ui, settings, metadata);
+    changed |= common::sharpening(ui, settings, metadata);
     ui.separator();
-    ui.weak("Corrections");
+    common::section_header(ui, "Corrections", None, common::Formats::DngTiff);
     changed |= ui
         .add_enabled_ui(capabilities.highlights_active(settings), |ui| {
             crate::widgets::checkbox(ui, &mut settings.highlight_restoration, "Highlights")

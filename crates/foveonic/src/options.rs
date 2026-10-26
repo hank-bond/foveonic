@@ -36,9 +36,10 @@ pub(crate) fn parse_settings_for_camera(
                 Some("monochrome") => initial.rendering = Rendering::Monochrome,
                 _ => {}
             },
-            Some("--mono-mix" | "--mono-noise" | "--mono-banding" | "--mono-smoothness") => {
-                initial.rendering = Rendering::Monochrome
-            }
+            Some(
+                "--mono-mix" | "--mono-noise" | "--mono-banding" | "--mono-smoothness"
+                | "--mono-sensitivity",
+            ) => initial.rendering = Rendering::Monochrome,
             _ => {}
         }
     }
@@ -136,6 +137,28 @@ fn parse_settings_with_noise_defaults(
                 settings.rendering = Rendering::Monochrome;
             }
             "--exposure" => settings.exposure = value.parse()?,
+            "--blacks" => settings.tonal_ranges.blacks = value.parse()?,
+            "--hdr-shadows" => settings.tonal_ranges.shadows = value.parse()?,
+            "--hdr-highlights" => settings.tonal_ranges.highlights = value.parse()?,
+            "--whites" => settings.tonal_ranges.whites = value.parse()?,
+            "--tone-method" => settings.photographic.tone_method = parse_method(&value)?,
+            "--sharpen-method" => settings.photographic.sharpening.method = parse_method(&value)?,
+            "--universal-sharpen" => settings.photographic.sharpening.amount = value.parse()?,
+            "--sharpen-radius" => settings.photographic.sharpening.radius = value.parse()?,
+            "--sharpen-threshold" => settings.photographic.sharpening.threshold = value.parse()?,
+            "--halo-suppression" => {
+                settings.photographic.sharpening.halo_suppression = value.parse()?
+            }
+            "--local-contrast" => settings.photographic.local_contrast = value.parse()?,
+            "--mono-sensitivity" => {
+                settings.photographic.monochrome_sensitivity = value
+                    .split(',')
+                    .map(str::parse)
+                    .collect::<std::result::Result<Vec<f32>, _>>()?
+                    .try_into()
+                    .map_err(|_| "mono sensitivity requires Red,Yellow,Green,Cyan,Blue,Magenta")?;
+                settings.rendering = Rendering::Monochrome;
+            }
             "--contrast" => settings.tone.contrast = value.parse()?,
             "--shadows" => settings.tone.shadows = value.parse()?,
             "--highlights" => settings.tone.highlights = value.parse()?,
@@ -234,6 +257,14 @@ fn parse_settings_with_noise_defaults(
         settings.validate()?;
     }
     Ok((settings, paths, profiling))
+}
+
+fn parse_method(value: &str) -> Result<foveonic::render::PhotographicMethod> {
+    match value {
+        "reference" => Ok(foveonic::render::PhotographicMethod::Reference),
+        "universal" => Ok(foveonic::render::PhotographicMethod::Universal),
+        _ => Err("method must be reference or universal".into()),
+    }
 }
 
 #[cfg(test)]

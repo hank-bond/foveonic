@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub(super) mod classic;
+mod finishing;
 pub(super) mod merrill;
 pub(super) mod quattro;
 
@@ -50,32 +51,40 @@ impl Engine {
         if names.is_empty() {
             return Ok(Vec::new());
         }
-        let effective = settings.processing_settings();
+        let dng_settings;
+        let input = if matches!(recipe, Recipe::DngBase) {
+            dng_settings = settings.dng_settings();
+            &dng_settings
+        } else {
+            settings
+        };
+        let effective = input.processing_settings();
         let built = match recipe {
-            Recipe::Photographic(_) => match source.metadata.processing_family()? {
-                crate::source::ProcessingFamily::Merrill => {
-                    merrill::build(self, source, &effective, names, profile, execution)?
-                }
-                crate::source::ProcessingFamily::Classic => {
-                    classic::build(self, source, &effective, names, profile, execution)?
-                }
-                crate::source::ProcessingFamily::Quattro => profile
-                    .measure("prepare recipe", || {
-                        quattro::build(self, source, &effective, names, execution)
-                    })?,
-            },
-            Recipe::DngBase => match source.metadata.processing_family()? {
-                crate::source::ProcessingFamily::Merrill => {
-                    merrill::build_dng(self, source, &effective, profile, execution)?
-                }
-                crate::source::ProcessingFamily::Classic => {
-                    classic::build_dng(self, source, &effective, profile, execution)?
-                }
-                crate::source::ProcessingFamily::Quattro => profile
-                    .measure("prepare Quattro DNG recipe", || {
-                        quattro::build_dng(self, source, &effective, execution)
-                    })?,
-            },
+            Recipe::Photographic(_) => {
+                let effective = effective.active_tone_settings();
+                let mut camera = finishing::camera_settings(&effective);
+                let region = finishing::expand_region(source, &mut camera, names)?;
+                let built = build_camera(
+                    self,
+                    source,
+                    &camera,
+                    Recipe::Photographic(names),
+                    profile,
+                    execution,
+                )?;
+                let mut built =
+                    finishing::build(self, source, &effective, built, names, profile, execution)?;
+                finishing::crop_region(&mut built, region)?;
+                built
+            }
+            Recipe::DngBase => build_camera(
+                self,
+                source,
+                &effective,
+                Recipe::DngBase,
+                profile,
+                execution,
+            )?,
         };
         if let Some(progress) = execution.progress {
             progress(super::RenderProgress::Prepared);
@@ -91,6 +100,47 @@ impl Engine {
             execution,
         )
     }
+}
+
+fn build_camera(
+    engine: &Engine,
+    source: &Source,
+    settings: &Settings,
+    recipe: Recipe<'_>,
+    profile: &mut Profile,
+    execution: &mut Execution<'_>,
+) -> Result<BuiltRecipe> {
+    let names = match recipe {
+        Recipe::Photographic(names) if !names.iter().any(|n| n.starts_with("finish.")) => names,
+        _ => &["final"],
+    };
+    let built = match recipe {
+        Recipe::Photographic(_) => match source.metadata.processing_family()? {
+            crate::source::ProcessingFamily::Merrill => {
+                merrill::build(engine, source, settings, names, profile, execution)?
+            }
+            crate::source::ProcessingFamily::Classic => {
+                classic::build(engine, source, settings, names, profile, execution)?
+            }
+            crate::source::ProcessingFamily::Quattro => profile
+                .measure("prepare recipe", || {
+                    quattro::build(engine, source, settings, names, execution)
+                })?,
+        },
+        Recipe::DngBase => match source.metadata.processing_family()? {
+            crate::source::ProcessingFamily::Merrill => {
+                merrill::build_dng(engine, source, settings, profile, execution)?
+            }
+            crate::source::ProcessingFamily::Classic => {
+                classic::build_dng(engine, source, settings, profile, execution)?
+            }
+            crate::source::ProcessingFamily::Quattro => profile
+                .measure("prepare Quattro DNG recipe", || {
+                    quattro::build_dng(engine, source, settings, execution)
+                })?,
+        },
+    };
+    Ok(built)
 }
 
 pub(in crate::render) fn saturation(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
@@ -117,7 +167,8 @@ pub(super) fn prepare_dng_appearance(
     statistics: super::WhiteBalanceStats,
 ) -> Result<crate::dng::appearance::Prepared> {
     use crate::{dng::appearance::Prepared, source::ProcessingFamily};
-    let effective = settings.processing_settings();
+    let dng = settings.dng_settings();
+    let effective = dng.processing_settings();
     let settings = &effective;
     let family = metadata.processing_family()?;
     let mut prepared = match family {

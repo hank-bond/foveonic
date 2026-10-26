@@ -17,6 +17,84 @@ const COLUMN_LABELS: &[&str] = &[
     "ColorDQ gain",
 ];
 const ROW_HEIGHT: f32 = 20.;
+const VALUE_SIGNIFICANT_DIGITS: usize = 3;
+
+#[derive(Clone, Copy)]
+pub(super) enum Formats {
+    DngTiff,
+    Tiff,
+}
+impl Formats {
+    fn label(self) -> &'static str {
+        match self {
+            Self::DngTiff => "DNG | TIFF",
+            Self::Tiff => "TIFF",
+        }
+    }
+    fn help(self) -> &'static str {
+        match self {
+            Self::DngTiff => "These adjustments are supported in DNG and TIFF.",
+            Self::Tiff => {
+                "Applies to the preview and TIFF. DNG uses its existing Reference recipe."
+            }
+        }
+    }
+}
+
+/// Keep the section's action and export support on one stable, full-width row.
+pub(super) fn section_header(
+    ui: &mut egui::Ui,
+    title: &str,
+    enabled: Option<&mut bool>,
+    formats: Formats,
+) -> bool {
+    ui.horizontal(|ui| {
+        let response = if let Some(enabled) = enabled {
+            crate::widgets::checkbox(ui, enabled, egui::RichText::new(title).weak())
+        } else {
+            ui.weak(title)
+        };
+        let changed = help::control(response, title).changed();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(formats.label()).small().weak())
+                .on_hover_text(formats.help());
+        });
+        changed
+    })
+    .inner
+}
+
+/// Compact photographic readouts retain up to three significant digits.
+/// Small or large magnitudes use scientific notation instead of long zero runs.
+pub(super) fn format_parameter_value(value: f64) -> String {
+    if value == 0. {
+        return "0.00".into();
+    }
+    if !value.is_finite() {
+        return value.to_string();
+    }
+    // Read the exponent after rounding so carries such as 9.999 -> 10.0
+    // choose the correct number of decimal places too.
+    let scientific = format!(
+        "{value:.precision$e}",
+        precision = VALUE_SIGNIFICANT_DIGITS - 1
+    );
+    let (mantissa, exponent) = scientific.split_once('e').expect("formatted exponent");
+    let exponent: i32 = exponent.parse().expect("numeric exponent");
+    if !(-3..VALUE_SIGNIFICANT_DIGITS as i32).contains(&exponent) {
+        return format!(
+            "{}e{exponent}",
+            mantissa.trim_end_matches('0').trim_end_matches('.')
+        );
+    }
+    let mut decimals = (VALUE_SIGNIFICANT_DIGITS as i32 - 1 - exponent) as usize;
+    let mut text = format!("{value:.decimals$}");
+    while decimals > 2 && text.ends_with('0') {
+        text.pop();
+        decimals -= 1;
+    }
+    text
+}
 
 fn label_width(ui: &egui::Ui) -> f32 {
     let font = egui::TextStyle::Body.resolve(ui.style());
@@ -59,7 +137,19 @@ fn aligned_label(
     if indent.is_some() {
         job.sections[0].leading_space = ui.spacing().indent;
     }
-    let mut galley = ui.painter().layout_job(job);
+    let mut galley = ui.painter().layout_job(job.clone());
+    let ink_left = |galley: &egui::Galley| {
+        galley
+            .rows
+            .first()
+            .map_or(0., |row| row.visuals.mesh_bounds.left())
+    };
+    let pipe = indent.map(|padding| (ink_left(&galley) - padding) * 0.5);
+    if let Some(pipe) = pipe {
+        // Keep the established pipe position. Only halve the gap after it.
+        job.sections[0].leading_space -= (ink_left(&galley) - pipe) * 0.5;
+        galley = ui.painter().layout_job(job);
+    }
     let reference = ui
         .painter()
         .layout_no_wrap("x".into(), font, egui::Color32::PLACEHOLDER);
@@ -75,10 +165,6 @@ fn aligned_label(
         .first()
         .and_then(|row| row.glyphs.first())
         .map_or(galley.size().y * 0.5, |g| g.pos.y);
-    let ink_left = galley
-        .rows
-        .first()
-        .map_or(0., |row| row.visuals.mesh_bounds.left());
     let column = std::sync::Arc::make_mut(&mut galley);
     // Native widgets center this box. Putting its midpoint at baseline minus
     // half the x-height aligns the visible letter body, independent of g/p/h.
@@ -91,10 +177,8 @@ fn aligned_label(
     } else {
         ui.add_sized([width, ROW_HEIGHT], egui::Label::new(galley))
     };
-    if let Some(outer_padding) = indent {
-        // Center on the actual visible glyph edge, including the group's
-        // padding to the left of this row. Font side bearings count too.
-        let x = response.rect.left() + (ink_left - outer_padding) * 0.5;
+    if let Some(pipe) = pipe {
+        let x = response.rect.left() + pipe;
         ui.painter().line_segment(
             [
                 egui::pos2(x, response.rect.top()),
@@ -108,10 +192,6 @@ fn aligned_label(
 
 pub(super) fn label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     aligned_label(ui, text, None, None, None)
-}
-
-pub(super) fn label_toggle(ui: &mut egui::Ui, text: &str, enabled: &mut bool) -> egui::Response {
-    aligned_label(ui, text, None, Some(enabled), None)
 }
 
 /// A section's labels share only the space needed by that section.
@@ -147,6 +227,25 @@ impl LabelColumn {
             outer_padding,
             ..self
         }
+    }
+
+    pub(super) fn with_toggle(self, ui: &egui::Ui, label: &str) -> Self {
+        let text = Self::new(ui, &[label], &[]).width;
+        Self {
+            width: self
+                .width
+                .max(text + ui.spacing().icon_width + ui.spacing().icon_spacing),
+            ..self
+        }
+    }
+
+    pub(super) fn toggle(
+        self,
+        ui: &mut egui::Ui,
+        label: &str,
+        enabled: &mut bool,
+    ) -> egui::Response {
+        aligned_label(ui, label, None, Some(enabled), Some(self.width))
     }
 
     pub(super) fn indented(self) -> Self {
@@ -323,6 +422,13 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
     } else {
         (-nudge.abs().log10()).ceil().clamp(2., 15.) as usize
     };
+    let format_value = |value: f64| {
+        if T::INTEGRAL {
+            format!("{value:.0}")
+        } else {
+            format_parameter_value(value)
+        }
+    };
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
             let enabled = if let Some(enabled) = enabled {
@@ -345,18 +451,21 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 } else {
                     0.
                 };
-                // Fit the widest normal signed value, rather than reserving an
-                // extra em in every numeric field. Return that space to the track.
-                let value_width = (ui
-                    .painter()
-                    .layout_no_wrap(
-                        "-2.00".into(),
-                        egui::TextStyle::Button.resolve(ui.style()),
-                        egui::Color32::PLACEHOLDER,
-                    )
-                    .size()
-                    .x
-                    + 2. * ui.spacing().button_padding.x)
+                // Measure the same formatted values and font as DragValue.
+                // Reserve any extra space from the slider, so a numeric readout
+                // never expands the enclosing resizable panel.
+                let value_font = ui.style().drag_value_text_style.resolve(ui.style());
+                let text_width = [range.start().to_f64(), range.end().to_f64(), value.to_f64()]
+                    .into_iter()
+                    .map(|v| {
+                        let text = format_value(v);
+                        ui.painter()
+                            .layout_no_wrap(text, value_font.clone(), egui::Color32::PLACEHOLDER)
+                            .size()
+                            .x
+                    })
+                    .fold(0., f32::max);
+                let value_width = (text_width + 2. * ui.spacing().button_padding.x)
                     .max(ui.spacing().interact_size.x);
                 ui.spacing_mut().slider_width =
                     (ui.available_width() - value_width - ui.spacing().item_spacing.x - auto_width)
@@ -407,7 +516,8 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                                         } else {
                                             0.01
                                         })
-                                        .fixed_decimals(decimals),
+                                        .fixed_decimals(decimals)
+                                        .custom_formatter(|v, _| format_value(v)),
                                 )
                             },
                         )
@@ -554,27 +664,43 @@ pub(super) fn tone_with_exposure_range(
 ) -> bool {
     let mut changed = false;
     let title = if mono { "Tone" } else { "Tone and Color" };
-    changed |= help::control(
-        crate::widgets::checkbox(
-            ui,
-            &mut settings.tone_enabled,
-            egui::RichText::new(title).weak(),
-        ),
-        title,
-    )
-    .changed();
+    let formats =
+        if settings.photographic.tone_method == foveonic::render::PhotographicMethod::Reference {
+            Formats::DngTiff
+        } else {
+            Formats::Tiff
+        };
+    changed |= section_header(ui, title, Some(&mut settings.tone_enabled), formats);
     ui.add_enabled_ui(settings.tone_enabled, |ui| {
-        let column = LabelColumn::new(
+        changed |= method_choice(
             ui,
+            "Tone method",
+            "Tone method",
+            &mut settings.photographic.tone_method,
+        );
+        let universal =
+            settings.photographic.tone_method == foveonic::render::PhotographicMethod::Universal;
+        let labels: &[&str] = if universal {
             &[
                 "Exposure",
                 "Saturation",
                 "Contrast",
                 "Shadows",
                 "Highlights",
-            ],
-            &[],
-        );
+                "Blacks",
+                "Whites",
+                "Local contrast",
+            ]
+        } else {
+            &[
+                "Exposure",
+                "Saturation",
+                "Contrast",
+                "Shadows",
+                "Highlights",
+            ]
+        };
+        let column = LabelColumn::new(ui, labels, &[]);
         for (label, value, range, default) in [
             ("Exposure", &mut settings.exposure, exposure_range, 0.),
             ("Saturation", &mut settings.saturation, 0. ..=2., 1.),
@@ -583,48 +709,144 @@ pub(super) fn tone_with_exposure_range(
                 changed |= column.adjustment(ui, (label, label), value, range, default);
             }
         }
-        for (label, value) in [
-            ("Contrast", &mut settings.tone.contrast),
-            ("Shadows", &mut settings.tone.shadows),
-            ("Highlights", &mut settings.tone.highlights),
-        ] {
-            changed |= column.adjustment(ui, (label, label), value, -2. ..=2., 0.);
+        changed |= column.adjustment(
+            ui,
+            ("Contrast", "Contrast"),
+            &mut settings.tone.contrast,
+            -2. ..=2.,
+            0.,
+        );
+        if universal {
+            changed |= column.adjustment(
+                ui,
+                ("Local contrast", "Local contrast"),
+                &mut settings.photographic.local_contrast,
+                -1. ..=1.,
+                0.,
+            );
+            for (label, value) in [
+                ("Blacks", &mut settings.tonal_ranges.blacks),
+                ("Shadows", &mut settings.tonal_ranges.shadows),
+                ("Highlights", &mut settings.tonal_ranges.highlights),
+                ("Whites", &mut settings.tonal_ranges.whites),
+            ] {
+                changed |= ui
+                    .push_id(("tonal-ranges", label), |ui| {
+                        column.adjustment(
+                            ui,
+                            ("Tonal ranges", label),
+                            value,
+                            -foveonic::render::TonalRanges::MAX_AMOUNT
+                                ..=foveonic::render::TonalRanges::MAX_AMOUNT,
+                            0.,
+                        )
+                    })
+                    .inner;
+            }
+        } else {
+            for (label, value) in [
+                ("Shadows", &mut settings.tone.shadows),
+                ("Highlights", &mut settings.tone.highlights),
+            ] {
+                changed |= column.adjustment(ui, (label, label), value, -2. ..=2., 0.);
+            }
         }
     });
     changed
 }
 
-pub(super) fn refinement(
+pub(super) fn sharpening(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
 ) -> bool {
+    sharpening_with_range(ui, settings, metadata, 0. ..=2.)
+}
+
+pub(super) fn sharpening_with_range(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    metadata: Option<&Metadata>,
+    reference_range: RangeInclusive<f32>,
+) -> bool {
     let mut changed = false;
-    changed |= help::control(
-        crate::widgets::checkbox(
-            ui,
-            &mut settings.refinement_enabled,
-            egui::RichText::new("Refinement").weak(),
-        ),
-        "Refinement",
-    )
-    .changed();
+    let formats = if settings.photographic.sharpening.method
+        == foveonic::render::PhotographicMethod::Reference
+    {
+        Formats::DngTiff
+    } else {
+        Formats::Tiff
+    };
+    changed |= section_header(
+        ui,
+        "Sharpening",
+        Some(&mut settings.sharpening_enabled),
+        formats,
+    );
     let calculated = metadata.and_then(|metadata| {
         let mut automatic = settings.clone();
         automatic.sharpen_amount = None;
-        automatic.refinement_enabled = true;
+        automatic.sharpening_enabled = true;
         automatic.effective_sharpen_amount(metadata).ok()
     });
-    ui.add_enabled_ui(settings.refinement_enabled, |ui| {
-        let column = LabelColumn::new(ui, &["Sharpen"], &[]);
+    ui.add_enabled_ui(settings.sharpening_enabled, |ui| {
+        changed |= method_choice(
+            ui,
+            "Sharpening method",
+            "Method",
+            &mut settings.photographic.sharpening.method,
+        );
+        if settings.photographic.sharpening.method
+            == foveonic::render::PhotographicMethod::Universal
+        {
+            let sharp = &mut settings.photographic.sharpening;
+            let column = LabelColumn::new(ui, &["Amount", "Radius"], &[]);
+            changed |= column.adjustment(
+                ui,
+                ("Universal amount", "Amount"),
+                &mut sharp.amount,
+                0. ..=4.,
+                0.,
+            );
+            changed |= column.adjustment(
+                ui,
+                ("Universal radius", "Radius"),
+                &mut sharp.radius,
+                0.3..=4.,
+                0.8,
+            );
+            egui::CollapsingHeader::new("Advanced")
+                .id_salt("universal-sharpening")
+                .show(ui, |ui| {
+                    let column = LabelColumn::new(ui, &["Threshold", "Halos"], &[]);
+                    changed |= adjustment_row(
+                        ui,
+                        "Sharpen threshold",
+                        &mut sharp.threshold,
+                        0. ..=0.2,
+                        0.01,
+                        0.001,
+                        column.row_controls("Threshold"),
+                    );
+                    changed |= column.adjustment(
+                        ui,
+                        ("Halo suppression", "Halos"),
+                        &mut sharp.halo_suppression,
+                        0. ..=1.,
+                        0.5,
+                    );
+                });
+            return;
+        }
+        let column = LabelColumn::new(ui, &["Amount"], &[]);
         changed |= automatic_adjustment(
             ui,
             "Sharpen",
             &mut settings.sharpen_amount,
-            0. ..=2_f32.max(calculated.unwrap_or(0.)),
+            *reference_range.start()..=reference_range.end().max(calculated.unwrap_or(0.)),
             0.,
             calculated,
-            column.row_controls("Sharpen"),
+            column.row_controls("Amount"),
         );
     });
     changed
@@ -653,14 +875,68 @@ pub(super) fn pixel_corrections(ui: &mut egui::Ui, settings: &mut Settings) -> b
 pub(super) fn reconstruction(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = false;
     let mut reconstruction = settings.reconstruction.is_some();
-    if help::control(
-        crate::widgets::checkbox(ui, &mut reconstruction, "Noise and Detail"),
+    if section_header(
+        ui,
         "Noise and Detail",
-    )
-    .changed()
-    {
+        Some(&mut reconstruction),
+        Formats::DngTiff,
+    ) {
         settings.reconstruction = reconstruction.then(Default::default);
         changed = true;
     }
+    changed
+}
+
+/// Shared method selection keeps family interpretation out of editing widgets.
+pub(super) fn method_choice(
+    ui: &mut egui::Ui,
+    key: &str,
+    label: &str,
+    value: &mut foveonic::render::PhotographicMethod,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        help::control(ui.label(label), key);
+        let combo = egui::ComboBox::from_id_salt(key)
+            .width((ui.available_width() - 8.).max(80.))
+            .selected_text(value.label());
+        let response = crate::widgets::dropdown(ui, combo, |ui| {
+            for method in [
+                foveonic::render::PhotographicMethod::Reference,
+                foveonic::render::PhotographicMethod::Universal,
+            ] {
+                changed |= crate::widgets::menu_value(ui, value, method, method.label()).changed();
+            }
+        });
+        help::control(response.response, key);
+    });
+    changed
+}
+
+pub(super) fn monochrome_sensitivity(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let mut changed = false;
+    let response = egui::CollapsingHeader::new("Color sensitivity")
+        .id_salt("monochrome-sensitivity")
+        .show(ui, |ui| {
+            let labels = ["Red", "Yellow", "Green", "Cyan", "Blue", "Magenta"];
+            let column = LabelColumn::new(ui, &labels, &[]);
+            for (label, value) in labels
+                .into_iter()
+                .zip(&mut settings.photographic.monochrome_sensitivity)
+            {
+                changed |= column.adjustment(ui, (label, label), value, -1. ..=1., 0.);
+            }
+        });
+    let galley = ui.painter().layout_no_wrap(
+        "TIFF".into(),
+        egui::TextStyle::Small.resolve(ui.style()),
+        ui.visuals().weak_text_color(),
+    );
+    let pos = egui::pos2(
+        response.header_response.rect.right() - ui.spacing().button_padding.x - galley.size().x,
+        response.header_response.rect.center().y - galley.size().y * 0.5,
+    );
+    ui.painter()
+        .galley(pos, galley, ui.visuals().weak_text_color());
     changed
 }

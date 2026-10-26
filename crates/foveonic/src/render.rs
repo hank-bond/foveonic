@@ -25,8 +25,9 @@ use execute::Input;
 pub(crate) use execute::Value;
 use recipes::Recipe;
 pub use settings::{
-    ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls, PreviewQuality,
-    Rendering, RepairThreshold, Settings, TiffColorSpace, ToneControls,
+    ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls,
+    PhotographicControls, PhotographicMethod, PreviewQuality, Rendering, RepairThreshold, Settings,
+    TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening,
 };
 
 /// Completed recipe preparation and execution boundaries for an interactive render.

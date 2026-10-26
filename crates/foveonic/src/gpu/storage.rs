@@ -65,6 +65,10 @@ impl ReadGuard {
     pub fn identity(&self) -> (u64, u64) {
         (self.0.id, self.0.generation)
     }
+    /// Aliases retain one allocation and consume the cache budget only once.
+    pub(crate) fn shares_storage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     pub fn readers(&self) -> usize {
         Arc::strong_count(&self.0)
     }

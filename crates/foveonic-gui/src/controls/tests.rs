@@ -123,7 +123,6 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
     for label in [
         "Color mode",
         "Saturation",
-        "Noise",
         "Chroma",
         "Luma",
         "Banding",
@@ -206,7 +205,6 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
         for label in [
             "Color mode",
             "Saturation",
-            "Noise",
             "Chroma",
             "Luma",
             "Banding",
@@ -221,6 +219,7 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
                 "{rendering:?}: {label}"
             );
         }
+        assert_eq!(text_centers(&output, "Noise").len(), 1);
         for label in ["Color Mix", "Mono noise", "Mono banding"] {
             assert_eq!(
                 text_centers(&output, label).len(),
@@ -233,7 +232,7 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             "Exposure",
             "Contrast",
             "Shadows",
-            "Sharpen",
+            "Amount",
             "Speckles",
             "Bad pixels",
             "Row banding",
@@ -540,9 +539,9 @@ fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() 
             assert_eq!(current, initial);
             let labels: &[&str] = if initial.is_monochrome() {
                 assert!(text_centers(&output, "Color mode").is_empty());
-                &["White balance", "Exposure", "Refinement"]
+                &["White balance", "Exposure", "Sharpening"]
             } else {
-                &["White balance", "Color mode", "Exposure", "Refinement"]
+                &["White balance", "Color mode", "Exposure", "Sharpening"]
             };
             let positions: Vec<_> = labels
                 .iter()
@@ -657,6 +656,7 @@ fn all_visible_editing_controls_have_explanations() {
             "Fine detail" => "Fine",
             "Coarse detail" => "Coarse",
             "Fine size" | "Coarse size" => "Size",
+            "Sharpen" => "Amount",
             _ => key,
         };
         assert!(
@@ -1027,7 +1027,7 @@ fn colordq_stays_inside_collapsed_noise_advanced_and_repair_has_no_parameter_row
                 let y = position("Advanced").unwrap();
                 assert!(y > position("Banding").unwrap());
                 assert!(y < position("Detail").unwrap());
-                assert!(y < position("Refinement").unwrap());
+                assert!(y < position("Sharpening").unwrap());
             }
         }
     }
@@ -1211,8 +1211,8 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
         let ordered = [
             "Tone and Color",
             "Noise",
-            "Refinement",
-            "Sharpen",
+            "Sharpening",
+            "Amount",
             "Corrections",
             "Highlights",
             "Advanced",
@@ -1247,6 +1247,7 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
 fn tone_and_correction_highlights_have_independent_controls() {
     let ctx = egui::Context::default();
     let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.tone_method = foveonic::render::PhotographicMethod::Universal;
     let mut frame = |time, events| {
         let mut changed = false;
         let output = ctx.run(
@@ -1311,7 +1312,8 @@ fn tone_and_correction_highlights_have_independent_controls() {
         ],
     );
     let (_, _, tone) = frame(1.1, vec![event(tone_slider, false)]);
-    assert_ne!(tone.tone.highlights, 0.);
+    assert_ne!(tone.tonal_ranges.highlights, 0.);
+    assert_eq!(tone.tone.highlights, 0.);
     assert_eq!(tone.highlight_threshold_ev, None);
     assert!(tone.highlight_restoration);
     frame(2., vec![egui::Event::PointerMoved(auto), event(auto, true)]);
@@ -1331,6 +1333,7 @@ fn tone_and_correction_highlights_have_independent_controls() {
     let (_, _, edited) = frame(3.1, vec![event(correction_slider, false)]);
     assert!(edited.highlight_threshold_ev.unwrap() > 0.);
     assert_eq!(edited.tone, tone.tone);
+    assert_eq!(edited.tonal_ranges, tone.tonal_ranges);
     frame(
         4.,
         vec![
@@ -1345,6 +1348,67 @@ fn tone_and_correction_highlights_have_independent_controls() {
         disabled.highlight_threshold_ev,
         edited.highlight_threshold_ev
     );
+}
+
+#[test]
+fn tone_methods_show_only_their_active_controls_and_preserve_edits() {
+    use foveonic::render::PhotographicMethod;
+    let ctx = egui::Context::default();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.tone.shadows = 0.4;
+    settings.tone.highlights = -0.3;
+    settings.tonal_ranges.shadows = 0.6;
+    settings.photographic.local_contrast = 0.2;
+    for method in [
+        PhotographicMethod::Reference,
+        PhotographicMethod::Universal,
+        PhotographicMethod::Reference,
+    ] {
+        settings.photographic.tone_method = method;
+        let before = settings.clone();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 900.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(!common::tone(ui, &mut settings, false));
+                });
+            },
+        );
+        for label in [
+            "Exposure",
+            "Saturation",
+            "Contrast",
+            "Shadows",
+            "Highlights",
+        ] {
+            assert_eq!(text_centers(&output, label).len(), 1, "{method:?}: {label}");
+        }
+        for label in ["Blacks", "Whites", "Local contrast"] {
+            assert_eq!(
+                !text_centers(&output, label).is_empty(),
+                method == PhotographicMethod::Universal,
+                "{method:?}: {label}"
+            );
+        }
+        assert!(text_centers(&output, "Camera curve").is_empty());
+        let badge = if method == PhotographicMethod::Reference {
+            "DNG | TIFF"
+        } else {
+            "TIFF"
+        };
+        let header = text_centers(&output, "Tone and Color")[0];
+        let badge = text_centers(&output, badge);
+        assert_eq!(badge.len(), 1);
+        assert!(badge[0].x > header.x);
+        assert!((badge[0].y - header.y).abs() < 2.);
+        assert_eq!(settings, before);
+    }
 }
 
 #[test]
@@ -2334,7 +2398,7 @@ fn family_panels_show_supported_controls_without_mutating_edits() {
             "Color mode",
             "Exposure",
             if classic { "Noise and Detail" } else { "Noise" },
-            "Sharpen",
+            "Amount",
             "Speckles",
             "Bad pixels",
         ] {
@@ -2640,7 +2704,7 @@ fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
                 "Monochrome",
                 "Exposure",
                 "Smooth / Crisp",
-                "Sharpness",
+                "Amount",
                 "Highlight recovery",
             ] {
                 assert_eq!(text_centers(&output, label).len(), 1, "{model}: {label}");
@@ -2718,7 +2782,7 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         "Chroma noise",
         "Luma noise",
         "Smooth / Crisp",
-        "Sharpness",
+        "Amount",
         "Highlight recovery",
         "Monochrome",
     ] {
@@ -2749,7 +2813,7 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         },
     );
     assert_eq!(settings, before);
-    for label in ["Color Mix", "Mono noise", "Smooth / Crisp", "Sharpness"] {
+    for label in ["Color Mix", "Mono noise", "Smooth / Crisp", "Amount"] {
         assert_eq!(text_centers(&output, label).len(), 1, "{label}");
     }
     for label in ["Saturation", "Chroma noise", "Luma noise", "Mono banding"] {
@@ -2962,10 +3026,19 @@ fn label_alignment_preserves_controls_across_fonts_and_scales() {
             assert_eq!(values.len(), 3);
             let ink_left =
                 |t: &egui::epaint::TextShape| t.pos.x + t.galley.rows[0].visuals.mesh_bounds.left();
-            assert!(
-                (ink_left(labels[1]) - ink_left(labels[0]) - ctx.style().spacing.indent).abs()
-                    < 0.1
-            );
+            let pipe = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::LineSegment { points, .. } if points[0].x == points[1].x => {
+                        Some(points[0].x)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let original_child = ink_left(labels[0]) + ctx.style().spacing.indent;
+            let expected = pipe + (original_child - pipe) * 0.5;
+            assert!((ink_left(labels[1]) - expected).abs() <= 1. / density);
             for row in 0..3 {
                 assert!(
                     (knobs[row].x - knobs[0].x).abs() < 0.1,
@@ -3118,8 +3191,8 @@ fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edit
         "Fine",
         "Size",
         "Coarse",
-        "Refinement",
-        "Sharpen",
+        "Sharpening",
+        "Amount",
         "Corrections",
         "Threshold",
     ];
@@ -3134,7 +3207,7 @@ fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edit
         ("Tone and Color", "Exposure"),
         ("Noise", "Chroma"),
         ("Detail", "Fine"),
-        ("Refinement", "Sharpen"),
+        ("Sharpening", "Amount"),
     ]
     .into_iter()
     .enumerate()
@@ -3154,7 +3227,7 @@ fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edit
         let mut expected = original.clone();
         match label {
             "Tone and Color" => expected.tone_enabled = false,
-            "Refinement" => expected.refinement_enabled = false,
+            "Sharpening" => expected.sharpening_enabled = false,
             "Noise" => expected.reconstruction.as_mut().unwrap().noise_enabled = false,
             "Detail" => expected.reconstruction.as_mut().unwrap().detail_enabled = false,
             _ => unreachable!(),
@@ -3187,7 +3260,7 @@ fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edit
 }
 
 #[test]
-fn parameter_group_padding_and_child_pipe_have_balanced_visible_gaps() {
+fn parameter_group_pipe_keeps_left_spacing_and_halves_text_gap() {
     let ctx = egui::Context::default();
     crate::widgets::install_style(&ctx);
     let mut group = egui::Rect::NOTHING;
@@ -3241,7 +3314,11 @@ fn parameter_group_padding_and_child_pipe_have_balanced_visible_gaps() {
             _ => None,
         })
         .unwrap();
-    assert!(((pipe - group.left()) - (glyph_left - pipe)).abs() < 0.1);
+    assert!(
+        ((pipe - group.left()) - 2. * (glyph_left - pipe)).abs() <= 1. / ctx.pixels_per_point(),
+        "group {}, pipe {pipe}, glyph {glyph_left}",
+        group.left()
+    );
     let padding = f32::from(crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING);
     assert_eq!(text("Coarse").pos.x - group.left(), padding);
     for value in output.shapes.iter().filter_map(|shape| match &shape.shape {
@@ -3259,5 +3336,148 @@ fn parameter_group_padding_and_child_pipe_have_balanced_visible_gaps() {
             .min_by(|a, b| a.area().total_cmp(&b.area()))
             .unwrap();
         assert_eq!(group.right() - field.right(), padding);
+    }
+}
+
+#[test]
+fn hdr_edits_and_pointer_hover_keep_the_editor_panel_width_stable() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.tone_method = foveonic::render::PhotographicMethod::Universal;
+    let mut frame = |time, amount, pointer| {
+        settings.tonal_ranges.highlights = amount;
+        let mut width = 0.;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400., 800.),
+                )),
+                time: Some(time),
+                events: vec![egui::Event::PointerMoved(pointer)],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::SidePanel::left("organizer")
+                    .default_width(300.)
+                    .show(ctx, |ui| {
+                        ui.label("Photos");
+                    });
+                width = egui::SidePanel::right("settings")
+                    .default_width(330.)
+                    .width_range(300. ..=600.)
+                    .resizable(true)
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            processing(ui, &mut settings, None);
+                        });
+                    })
+                    .response
+                    .rect
+                    .width();
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label("Image");
+                });
+            },
+        );
+        width
+    };
+    for i in 0..5 {
+        frame(i as f64 * 0.1, 0., egui::pos2(500., 100.));
+    }
+    let expected = frame(0.5, 0., egui::pos2(500., 100.));
+    for (i, amount) in [0.1, -0.1, 0.5, -0.5, 1., -1., 0.].into_iter().enumerate() {
+        for j in 0..12 {
+            let pointer = egui::pos2(1100. + j as f32 * 23., 180. + (j % 4) as f32 * 100.);
+            let width = frame(1. + (i * 12 + j) as f64 * 0.1, amount, pointer);
+            assert!(
+                (width - expected).abs() < 1.,
+                "amount {amount}, hover {pointer:?}: editor width {width}, expected {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn universal_sharpening_values_fit_the_reserved_field_and_keep_panel_width_stable() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    ctx.memory_mut(|m| m.set_everything_is_visible(true));
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.sharpening.method = foveonic::render::PhotographicMethod::Universal;
+    for (i, threshold) in [0.01, 0.123, 0.2, 0.001, 0.00123456, 1.23456e-10, 0.]
+        .into_iter()
+        .enumerate()
+    {
+        settings.photographic.sharpening.threshold = threshold;
+        settings.photographic.sharpening.radius = 0.3123456;
+        let mut width = 0.;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400., 800.),
+                )),
+                time: Some(i as f64 * 0.1),
+                events: vec![egui::Event::PointerMoved(egui::pos2(
+                    1100. + i as f32 * 20.,
+                    110.,
+                ))],
+                ..Default::default()
+            },
+            |ctx| {
+                width = egui::SidePanel::right("settings")
+                    .default_width(330.)
+                    .width_range(300. ..=600.)
+                    .show(ctx, |ui| {
+                        common::sharpening(ui, &mut settings, None);
+                    })
+                    .response
+                    .rect
+                    .width();
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label("Image");
+                });
+            },
+        );
+        assert!(
+            (width - 330.).abs() < 1.,
+            "threshold {threshold}: panel grew to {width}"
+        );
+        assert_eq!(
+            text_centers(&output, "0.312").len(),
+            1,
+            "radius readout should use three significant digits"
+        );
+        assert_eq!(
+            settings.photographic.sharpening.radius, 0.3123456,
+            "formatting should preserve the stored setting"
+        );
+    }
+}
+
+#[test]
+fn photographic_value_readouts_limit_significant_digits_and_round_carries() {
+    for (value, expected) in [
+        (0., "0.00"),
+        (-0., "0.00"),
+        (1., "1.00"),
+        (1.23456, "1.23"),
+        (-1.23456, "-1.23"),
+        (12.3456, "12.3"),
+        (123.456, "123"),
+        (0.123456, "0.123"),
+        (0.0123456, "0.0123"),
+        (0.00123456, "0.00123"),
+        (0.01, "0.01"),
+        (0.8, "0.80"),
+        (9.999, "10.0"),
+        (0.9999, "1.00"),
+        (999.9, "1e3"),
+        (1.23456e-10, "1.23e-10"),
+        (-1.23456e10, "-1.23e10"),
+    ] {
+        assert_eq!(common::format_parameter_value(value), expected, "{value}");
     }
 }

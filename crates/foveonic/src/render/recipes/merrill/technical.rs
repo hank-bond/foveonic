@@ -49,7 +49,29 @@ pub(super) fn build(
     let region = settings
         .preview_region
         .filter(|_| mode.is_some() && !settings.is_monochrome() && names == ["final"])
-        .map(|rect| region::Prepared::new(params, rect))
+        .map(|rect| {
+            let shared = super::super::finishing::support(settings);
+            if shared > 0 {
+                let (tonal, alignment) = if settings.tonal_ranges.is_neutral() {
+                    (0, 1)
+                } else {
+                    (
+                        crate::nodes::finish::tone_equalizer::support(),
+                        crate::nodes::finish::tone_equalizer::GUIDE_ALIGNMENT,
+                    )
+                };
+                region::Prepared::with_finish_support(
+                    params,
+                    rect,
+                    shared + tonal + region::FINISH_SUPPORT,
+                    alignment,
+                )
+            } else if !settings.tonal_ranges.is_neutral() {
+                region::Prepared::with_tonal_support(params, rect)
+            } else {
+                region::Prepared::new(params, rect)
+            }
+        })
         .transpose()?;
     if let Some(region) = &region {
         params = region.encode;

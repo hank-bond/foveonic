@@ -54,15 +54,12 @@ fn noise_and_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         detail_enabled: false,
         ..Default::default()
     });
-    changed |= help::control(
-        crate::widgets::checkbox(
-            ui,
-            &mut controls.noise_enabled,
-            egui::RichText::new("Noise").weak(),
-        ),
+    changed |= common::section_header(
+        ui,
         "Noise",
-    )
-    .changed();
+        Some(&mut controls.noise_enabled),
+        common::Formats::DngTiff,
+    );
     ui.add_enabled_ui(controls.noise_enabled, |ui| {
         let column = common::LabelColumn::new(ui, &["Chroma", "Luma", "Banding"], &[]);
         changed |= column.adjustment(
@@ -101,15 +98,12 @@ fn noise_and_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             });
     });
     ui.separator();
-    changed |= help::control(
-        crate::widgets::checkbox(
-            ui,
-            &mut controls.detail_enabled,
-            egui::RichText::new("Detail").weak(),
-        ),
+    changed |= common::section_header(
+        ui,
         "Detail",
-    )
-    .changed();
+        Some(&mut controls.detail_enabled),
+        common::Formats::DngTiff,
+    );
     ui.add_enabled_ui(controls.detail_enabled, |ui| {
         let column = common::LabelColumn::new(ui, &["Fine", "Coarse"], &["Size"])
             .with_outer_padding(f32::from(
@@ -176,6 +170,7 @@ pub(super) fn show(
     ui.separator();
     if mono {
         changed |= crate::mixer::show(ui, &mut settings.monochrome.mix);
+        changed |= common::monochrome_sensitivity(ui, settings);
         ui.separator();
     }
     changed |= common::tone(ui, settings, mono);
@@ -183,6 +178,7 @@ pub(super) fn show(
     if !mono {
         changed |= noise_and_detail(ui, settings);
     } else {
+        common::section_header(ui, "Noise", None, common::Formats::DngTiff);
         changed |= adjustment(ui, "Mono noise", &mut settings.monochrome.noise, 0..=4, 2);
         changed |= adjustment(
             ui,
@@ -193,13 +189,18 @@ pub(super) fn show(
         );
     }
     ui.separator();
-    changed |= common::refinement(ui, settings, metadata);
+    changed |= common::sharpening(ui, settings, metadata);
     ui.separator();
-    ui.weak("Corrections");
-    ui.scope(|ui| {
+    common::section_header(ui, "Corrections", None, common::Formats::DngTiff);
+    crate::widgets::parameter_group(ui, |ui| {
+        let column = common::LabelColumn::new(ui, &["Highlights"], &["Threshold"])
+            .with_toggle(ui, "Highlights")
+            .with_outer_padding(f32::from(
+                crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING,
+            ));
         ui.horizontal(|ui| {
             changed |= help::control(
-                common::label_toggle(ui, "Highlights", &mut settings.highlight_restoration),
+                column.toggle(ui, "Highlights", &mut settings.highlight_restoration),
                 "Highlight correction",
             )
             .changed();
@@ -223,29 +224,29 @@ pub(super) fn show(
                 help::control(response.response, "Highlight method");
             });
         });
-    });
-    ui.add_enabled_ui(settings.highlight_restoration, |ui| {
-        if settings.highlight_mode == HighlightMode::Classic {
-            changed |= automatic_adjustment(
-                ui,
-                "Highlight correction",
-                &mut settings.highlight_threshold_ev,
-                -2. ..=2.,
-                0.,
-                Some(0.),
-                RowControls::default(),
-            );
-        } else {
-            changed |= adjustment_row(
-                ui,
-                "Color-field highlights",
-                &mut settings.color_field.selectivity,
-                0. ..=1.,
-                0.,
-                0.1,
-                RowControls::default(),
-            );
-        }
+        ui.add_enabled_ui(settings.highlight_restoration, |ui| {
+            if settings.highlight_mode == HighlightMode::Classic {
+                changed |= automatic_adjustment(
+                    ui,
+                    "Highlight correction",
+                    &mut settings.highlight_threshold_ev,
+                    -2. ..=2.,
+                    0.,
+                    Some(0.),
+                    column.indented().row_controls("Threshold"),
+                );
+            } else {
+                changed |= adjustment_row(
+                    ui,
+                    "Color-field highlights",
+                    &mut settings.color_field.selectivity,
+                    0. ..=1.,
+                    0.,
+                    0.1,
+                    column.indented().row_controls("Threshold"),
+                );
+            }
+        });
     });
     let advanced = egui::CollapsingHeader::new("Advanced")
         .id_salt("advanced-corrections")

@@ -250,3 +250,89 @@ pub(crate) fn apply(
 #[cfg(test)]
 #[path = "wavelet_contrast_test.rs"]
 mod tests;
+
+// Fifth-degree gain corrections in log spatial scale, one row per LCE level.
+const LEVEL_POLYNOMIALS: [[f64; 6]; 7] = [
+    [
+        0.994647332,
+        0.113350012,
+        -0.032330066,
+        0.00445408,
+        -0.000281684,
+        0.00000681,
+    ],
+    [
+        1.099293936,
+        0.358326532,
+        -0.668526998,
+        0.635982596,
+        -0.279390474,
+        0.046667511,
+    ],
+    [
+        1.121630917,
+        0.459364101,
+        -0.8892682,
+        0.865612984,
+        -0.385829071,
+        0.064953153,
+    ],
+    [
+        1.144235149,
+        0.56701199,
+        -1.129763281,
+        1.120466442,
+        -0.505730121,
+        0.085778859,
+    ],
+    [
+        1.156549415,
+        0.662350458,
+        -1.403245496,
+        1.473314702,
+        -0.693200928,
+        0.12130233,
+    ],
+    [
+        1.167312141,
+        0.717966942,
+        -1.537551333,
+        1.626538431,
+        -0.769130554,
+        0.135002203,
+    ],
+    [
+        1.176575234,
+        0.766115226,
+        -1.653807682,
+        1.759424184,
+        -0.83512344,
+        0.146938793,
+    ],
+];
+
+/// Camera-independent response gains ordered from the coarsest lifting band
+/// to the finest, matching the packed transform's gain pass.
+pub(crate) fn level_gains(level: usize, portrait: bool) -> crate::source::Result<[f32; 6]> {
+    let polynomial = *LEVEL_POLYNOMIALS
+        .get(level)
+        .ok_or("unsupported local contrast level")?;
+    Ok(std::array::from_fn(|i| {
+        let x = (2. * ((1_u32 << (i + 1)) - 1) as f64).sqrt().ln();
+        let mut correction = polynomial[0];
+        for (power, coefficient) in polynomial.iter().enumerate().skip(1) {
+            correction = x.powf(power as f64).mul_add(*coefficient, correction);
+        }
+        let correction = correction as f32;
+        let correction = if portrait {
+            (correction - 1.).mul_add(if i < 5 { 0.9 } else { 0.5 }, 1.)
+        } else {
+            correction
+        };
+        correction.clamp(1., 10.)
+    }))
+}
+pub(crate) fn photographic_gains() -> [f32; 6] {
+    // The final reference level is a validated entry, independent of metadata.
+    level_gains(6, false).expect("constant local contrast level")
+}

@@ -18,6 +18,83 @@ pub enum Content {
 
 /// Named outputs available for the selected recipe, independent of transient graph indexes.
 pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'static str> {
+    let mut names = camera_output_names(settings, metadata);
+    if settings.photographic.tone_method == crate::render::PhotographicMethod::Universal {
+        names.retain(|n| *n != "saturation.rgb");
+    }
+    names.extend(
+        finishing_outputs(settings, metadata)
+            .into_iter()
+            .map(|o| o.name),
+    );
+    names
+}
+
+fn finishing_outputs(settings: &Settings, metadata: Option<&Metadata>) -> Vec<ImageOutput> {
+    use crate::{nodes::finish::photographic::Method, source::ProcessingFamily};
+    let Some(metadata) = metadata else {
+        return Vec::new();
+    };
+    let active = settings.active_tone_settings();
+    let settings = active.as_ref();
+    if !camera_output_names(settings, Some(metadata)).contains(&"final") {
+        return Vec::new();
+    }
+    let family = metadata.processing_family().ok();
+    let mut out = vec![ImageOutput {
+        name: "finish.base",
+        channels: Channels::Rgb,
+    }];
+    if settings.is_monochrome() && settings.photographic.sensitivity_active() {
+        out.extend([
+            ImageOutput {
+                name: "finish.color-guide",
+                channels: Channels::Rgb,
+            },
+            ImageOutput {
+                name: "finish.monochrome",
+                channels: Channels::Rgb,
+            },
+        ]);
+    }
+    if settings.tone_enabled && settings.photographic.local_contrast != 0. {
+        out.push(ImageOutput {
+            name: "finish.local-contrast",
+            channels: Channels::Rgb,
+        });
+    }
+    if family != Some(ProcessingFamily::Merrill) {
+        out.extend([
+            ImageOutput {
+                name: "finish.hdr-mask",
+                channels: Channels::Scalar,
+            },
+            ImageOutput {
+                name: "finish.hdr",
+                channels: Channels::Rgb,
+            },
+        ]);
+    }
+    if settings.tone_enabled
+        && settings.photographic.tone_method == Method::Universal
+        && (settings.tone.contrast != 0.
+            || (!settings.is_monochrome() && settings.saturation != 1.))
+    {
+        out.push(ImageOutput {
+            name: "finish.tone",
+            channels: Channels::Rgb,
+        });
+    }
+    if settings.sharpening_enabled && settings.photographic.sharpening.is_active() {
+        out.push(ImageOutput {
+            name: "finish.sharpen",
+            channels: Channels::Rgb,
+        });
+    }
+    out
+}
+
+fn camera_output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'static str> {
     if metadata.is_some_and(|m| {
         m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro)
     }) {
@@ -62,7 +139,7 @@ pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'s
         if settings.sharpen_selected() {
             names.push("sharpen.rgb");
         }
-        names.push("tone.rgb");
+        names.extend(["tonal-ranges.mask", "tonal-ranges.rgb", "tone.rgb"]);
         return names;
     }
     if settings.merrill_reconstruction().is_some() {
@@ -83,7 +160,7 @@ pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'s
     if settings.merrill_reconstruction().is_some() {
         names.extend(["reconstruction.rgb", "detail.signal"]);
     }
-    names.push("tone.rgb");
+    names.extend(["tonal-ranges.mask", "tonal-ranges.rgb", "tone.rgb"]);
     if settings.tone_enabled && settings.saturation != 1. {
         names.push("saturation.rgb");
     }
@@ -127,7 +204,9 @@ pub fn image_outputs_with_family(
         family
     };
     if family == Some(ProcessingFamily::Quattro) {
-        return crate::render::quattro_inspection_outputs(metadata);
+        let mut outputs = crate::render::quattro_inspection_outputs(metadata);
+        outputs.extend(finishing_outputs(settings, metadata));
+        return outputs;
     }
     let names = output_names(settings, metadata);
     names
@@ -147,11 +226,10 @@ pub fn image_outputs_with_family(
                 | "chroma.small-layers"
                 | "chroma.layers"
                 | "color.corrected-layers" => Channels::Layers,
-                "noise.edges" | "detail.ratio" | "detail.raw-ratio" | "pattern.mask"
-                | "detail.signal" | "texture.change" | "highlight.density" | "mono.mix"
-                | "mono.directional" | "mono.column" | "mono.filtered" | "mono.despeckle" => {
-                    Channels::Scalar
-                }
+                "finish.hdr-mask" | "tonal-ranges.mask" | "noise.edges" | "detail.ratio"
+                | "detail.raw-ratio" | "pattern.mask" | "detail.signal" | "texture.change"
+                | "highlight.density" | "mono.mix" | "mono.directional" | "mono.column"
+                | "mono.filtered" | "mono.despeckle" => Channels::Scalar,
                 _ => Channels::Rgb,
             };
             Some(ImageOutput { name, channels })
@@ -168,6 +246,27 @@ pub fn comparison_input(
     output: &str,
     metadata: Option<&Metadata>,
 ) -> Option<&'static str> {
+    if output.starts_with("finish.") {
+        if matches!(
+            output,
+            "finish.base" | "finish.color-guide" | "finish.hdr-mask"
+        ) {
+            return None;
+        }
+        let mut input = "finish.base";
+        for candidate in finishing_outputs(settings, metadata) {
+            if candidate.name == output {
+                return Some(input);
+            }
+            if candidate.name == "finish.hdr" && settings.tonal_ranges.is_neutral() {
+                continue;
+            }
+            if !matches!(candidate.name, "finish.hdr-mask" | "finish.color-guide") {
+                input = candidate.name;
+            }
+        }
+        return None;
+    }
     if let Some(metadata) = metadata
         .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro))
     {
@@ -177,6 +276,19 @@ pub fn comparison_input(
         .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Classic))
     {
         return crate::render::classic_inspection_comparison(metadata, settings, output);
+    }
+    if output == "tonal-ranges.rgb" {
+        return Some(if settings.sharpen_selected() {
+            "sharpen.rgb"
+        } else if settings.is_monochrome() {
+            "monochrome.rgb"
+        } else if settings.merrill_reconstruction().is_some() {
+            "reconstruction.rgb"
+        } else if settings.color_dq_selected() {
+            "color-dq.rgb"
+        } else {
+            "color.rgb"
+        });
     }
     let mut input = "sensor.layers";
     for (name, enabled) in [
@@ -242,6 +354,23 @@ pub struct Artifact {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn merrill_catalogue_omits_bypassed_local_contrast() {
+        let metadata = crate::source::Metadata {
+            width: 4928,
+            height: 3264,
+            rotation: 0,
+            processing_version: None,
+            properties: [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        };
+        let mut settings = crate::render::Settings::new("Sunlight", "Standard");
+        settings.photographic.local_contrast = 0.4;
+        assert!(!super::output_names(&settings, Some(&metadata)).contains(&"finish.local-contrast"));
+        settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
+        assert!(super::output_names(&settings, Some(&metadata)).contains(&"finish.local-contrast"));
+    }
     #[test]
     fn monochrome_outputs_ignore_retained_color_controls() {
         let mut s = crate::render::Settings::new("Sunlight", "Vivid");
@@ -395,6 +524,7 @@ mod tests {
     #[test]
     fn visual_catalog_excludes_tables_and_keeps_enabled_image_stages() {
         let mut settings = crate::render::Settings::new("Sunlight", "Standard");
+        settings.sharpen_amount = Some(0.);
         assert_eq!(
             super::image_outputs(&settings, None)
                 .iter()
@@ -410,6 +540,8 @@ mod tests {
                 "despeckle.layers",
                 "banding.layers",
                 "color.rgb",
+                "tonal-ranges.mask",
+                "tonal-ranges.rgb",
                 "tone.rgb"
             ]
         );

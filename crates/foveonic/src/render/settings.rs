@@ -1,6 +1,11 @@
 //! Defines shared photographic settings and validates their values.
 
 pub use crate::color_space::TiffColorSpace;
+pub use crate::nodes::finish::photographic::{
+    Controls as PhotographicControls, Method as PhotographicMethod,
+    Sharpening as UniversalSharpening,
+};
+pub use crate::nodes::finish::tone_equalizer::Controls as TonalRanges;
 pub use crate::nodes::monochrome::Controls as MonochromeControls;
 pub use crate::nodes::sensor::color_field::{
     Approach as ColorFieldApproach, Controls as ColorFieldControls, HighlightMode,
@@ -57,11 +62,16 @@ pub struct Settings {
     pub exposure: f32,
     /// Bypass tone/color edits without changing their saved values or camera look.
     pub tone_enabled: bool,
-    /// Bypass optional final refinement while retaining its amount and Auto choice.
-    pub refinement_enabled: bool,
+    /// Bypass final sharpening while retaining its amount and Auto choice.
+    // Keep the established sidecar field name while the UI calls this Sharpening.
+    #[serde(rename = "refinement_enabled")]
+    pub sharpening_enabled: bool,
     pub tone: ToneControls,
+    /// Spatial photographic HDR ranges. These preview/TIFF edits are omitted from DNG.
+    pub tonal_ranges: TonalRanges,
     /// Color saturation after tone. Zero is grayscale and one leaves it unchanged.
     pub saturation: f32,
+    pub photographic: PhotographicControls,
     /// ColorDQ gain after camera color conversion. Zero skips this correction.
     /// None chooses the camera's automatic gain when noise cleanup is on.
     /// Some keeps an explicit override, including zero for Off.
@@ -105,9 +115,11 @@ impl Default for Settings {
             color_mode: String::new(),
             exposure: 0.,
             tone_enabled: true,
-            refinement_enabled: true,
+            sharpening_enabled: true,
             tone: ToneControls::default(),
+            tonal_ranges: TonalRanges::default(),
             saturation: 1.,
+            photographic: PhotographicControls::default(),
             color_dq_gain: None,
             repair: Some(RepairThreshold::Camera),
             despeckle: true,
@@ -118,7 +130,7 @@ impl Default for Settings {
             color_field: ColorFieldControls::default(),
             row_correction: true,
             reconstruction: None,
-            sharpen_amount: Some(0.),
+            sharpen_amount: None,
             tiff_color_space: None,
             output_size: None,
         }
@@ -180,7 +192,9 @@ impl Settings {
     }
 
     fn processing_sharpen_amount(&self) -> Option<f32> {
-        if self.refinement_enabled {
+        if self.photographic.sharpening.method == PhotographicMethod::Universal {
+            Some(0.)
+        } else if self.sharpening_enabled {
             self.sharpen_amount
         } else {
             Some(0.)
@@ -205,7 +219,7 @@ impl Settings {
     /// Resolve section bypasses at the recipe boundary. Artifacts and sidecars
     /// keep the requested values, including inactive edits.
     pub(crate) fn processing_settings(&self) -> std::borrow::Cow<'_, Self> {
-        if self.tone_enabled && self.refinement_enabled {
+        if self.tone_enabled && self.sharpening_enabled {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut effective = self.clone();
@@ -213,9 +227,40 @@ impl Settings {
             effective.exposure = 0.;
             effective.saturation = 1.;
             effective.tone = Default::default();
+            effective.tonal_ranges = TonalRanges::default();
+            effective.photographic.local_contrast = 0.;
         }
         effective.sharpen_amount = self.processing_sharpen_amount();
+        if !self.sharpening_enabled {
+            effective.photographic.sharpening.amount = 0.;
+        }
         std::borrow::Cow::Owned(effective)
+    }
+
+    /// Each method selects a complete set of tone controls. Resolve the active
+    /// values without overwriting the recipe kept in sidecars or the clipboard.
+    pub(crate) fn active_tone_settings(&self) -> std::borrow::Cow<'_, Settings> {
+        let settings = self;
+        let mut effective = std::borrow::Cow::Borrowed(settings);
+        match settings.photographic.tone_method {
+            PhotographicMethod::Reference
+                if !settings.tonal_ranges.is_neutral()
+                    || settings.photographic.local_contrast != 0. =>
+            {
+                let active = effective.to_mut();
+                active.tonal_ranges = Default::default();
+                active.photographic.local_contrast = 0.;
+            }
+            PhotographicMethod::Universal
+                if settings.tone.shadows != 0. || settings.tone.highlights != 0. =>
+            {
+                let active = effective.to_mut();
+                active.tone.shadows = 0.;
+                active.tone.highlights = 0.;
+            }
+            _ => {}
+        }
+        effective
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -244,6 +289,13 @@ impl Settings {
         Ok(())
     }
 
+    /// Shared photographic finishing leaves the established DNG recipe unchanged.
+    pub(crate) fn dng_settings(&self) -> Self {
+        let mut settings = self.clone();
+        settings.photographic = PhotographicControls::default();
+        settings
+    }
+
     /// Inspection can show sensor data before WB or mode is known. Check numbers
     /// here and let stages that use those camera choices resolve them later.
     pub fn validate_values(&self) -> Result<()> {
@@ -253,6 +305,8 @@ impl Settings {
         {
             return Err("monochrome Smooth/Crisp must be between zero and one".into());
         }
+        self.tonal_ranges.validate()?;
+        self.photographic.validate()?;
         self.monochrome.validate()?;
         self.color_field.validate()?;
         if !self.exposure.is_finite()

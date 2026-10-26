@@ -28,6 +28,19 @@ Quattro supports white balance, camera color modes, tone, saturation,
 chroma and luminance noise, native Smooth/Crisp detail and sharpening, with camera-derived ISO controls.
 
 Options (also available for batch):
+  --tone-method METHOD      reference (default) or universal contrast/saturation
+  --blacks VALUE            Shared HDR -1..1, default 0
+  --hdr-shadows VALUE       Shared HDR -1..1, default 0
+  --hdr-highlights VALUE    Shared HDR -1..1, default 0
+  --whites VALUE            Shared HDR -1..1, default 0
+  --local-contrast VALUE    -1..1, default 0. Shared multiscale contrast
+  --mono-sensitivity VALUES Six amounts -1..1: Red,Yellow,Green,Cyan,Blue,Magenta
+  --sharpen-method METHOD   reference (default) or universal
+  --universal-sharpen VALUE 0..4, default 0
+  --sharpen-radius PIXELS   Universal Gaussian sigma 0.3..4, default 0.8
+  --sharpen-threshold VALUE Universal threshold 0..0.2, default 0.01
+  --halo-suppression VALUE  Universal halo suppression 0..1, default 0.5
+                            New photographic finishing applies to preview/TIFF only
   --exposure STOPS           Default 0
   --contrast VALUE          -2..2, default 0
   --shadows VALUE           -2..2, default 0
@@ -379,7 +392,7 @@ mod tests {
         assert_eq!(neutral.saturation, 1.);
         assert_eq!(neutral.color_dq_gain, None);
         assert_eq!(neutral.highlight_threshold_ev, None);
-        assert_eq!(neutral.sharpen_amount, Some(0.));
+        assert_eq!(neutral.sharpen_amount, None);
         assert_eq!(neutral.repair, Some(RepairThreshold::Camera));
         assert!(neutral.despeckle && neutral.highlight_restoration && neutral.row_correction);
         let rows_off = parse("--wb Sunlight --mode Standard --no-row-correction")
@@ -551,7 +564,6 @@ mod tests {
             "--banding-noise 5",
             "--banding-noise -1",
             "--banding-noise 1.5",
-            "--sharpen-radius 1.5", // retired Gaussian control
             "--sharpen NaN",
             "--size 0x400",
             "--chroma-noise 5",
