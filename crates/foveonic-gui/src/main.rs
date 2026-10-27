@@ -710,6 +710,7 @@ impl App {
                         &mut self.settings,
                         self.metadata.as_deref(),
                         self.capture.properties.as_ref(),
+                        &mut self.preferences.editing_sections,
                     );
                 });
                 changed

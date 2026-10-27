@@ -135,7 +135,8 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
         settings.photographic.sharpening.method = PhotographicMethod::Universal;
         settings.photographic.sharpening.amount = 0.6;
         if rendering == Rendering::Monochrome {
-            settings.photographic.color_sensitivity = [0.3, 0.1, -0.2, 0., -0.4, 0.];
+            settings.photographic.color_editor =
+                crate::render::ColorEditorControls::from_lightness([0.3, 0.1, -0.2, 0., -0.4, 0.]);
         }
         settings.validate_for_camera(&source.metadata).unwrap();
         let mut session = RenderSession::new(source.clone());
@@ -168,7 +169,7 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
         drop(fresh);
         drop(cached);
         if rendering == Rendering::Monochrome {
-            settings.photographic.color_sensitivity[0] = 0.5;
+            settings.photographic.color_editor.bands[0].lightness = 0.5;
             let mut profile = Profile::new(crate::profile::Mode::Wall);
             let image = session_image(&engine, &mut session, &settings, &mut profile);
             drop(image);
@@ -185,7 +186,7 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
         settings.tone = ordinary.tone;
         settings.saturation = ordinary.saturation;
         settings.tonal_ranges = ordinary.tonal_ranges;
-        settings.photographic.color_sensitivity = [0.; 6];
+        settings.photographic.color_editor = Default::default();
         settings.photographic.local_contrast = 0.;
         settings.photographic.sharpening = ordinary.photographic.sharpening;
         let dng = engine
@@ -239,8 +240,11 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
     if settings.color_mode.is_empty() {
         settings.color_mode = capabilities.default_color_mode(&source.metadata).unwrap();
     }
-    settings.photographic.color_sensitivity = [0.2, 0., -0.1, 0., 0.15, 0.];
+    settings.photographic.color_editor =
+        crate::render::ColorEditorControls::from_lightness([0.2, 0., -0.1, 0., 0.15, 0.]);
     settings.photographic.tone_method = PhotographicMethod::Universal;
+    settings.photographic.color_editor.master.hue = 0.3;
+    settings.photographic.color_editor.master.saturation = -0.2;
     settings.photographic.local_contrast = 0.4;
     settings.photographic.sharpening.method = PhotographicMethod::Universal;
     settings.photographic.sharpening.amount = 0.8;
@@ -359,11 +363,12 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
             .unwrap();
         let plain_bytes = engine.readback_image(&plain).unwrap();
         drop(plain);
-        settings.photographic.color_sensitivity = [0.3, -0.1, 0.1, 0., -0.2, 0.1];
+        settings.photographic.color_editor =
+            crate::render::ColorEditorControls::from_lightness([0.3, -0.1, 0.1, 0., -0.2, 0.1]);
         let names = [
-            "sensitivity.input",
-            "sensitivity.rgb",
-            "sensitivity.color-guide",
+            "color-editor.input",
+            "color-editor.rgb",
+            "color-editor.guide",
         ];
         let mut artifacts = engine
             .render_artifacts(&source, &settings, &names, &mut Profile::default())
@@ -408,7 +413,7 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
         }
         let mut session = RenderSession::new(source.clone());
         let _ = session_image(&engine, &mut session, &settings, &mut Profile::default());
-        settings.photographic.color_sensitivity[0] = 0.5;
+        settings.photographic.color_editor.bands[0].lightness = 0.5;
         let mut profile = Profile::new(crate::profile::Mode::Wall);
         let cached = session_image(&engine, &mut session, &settings, &mut profile);
         assert!(

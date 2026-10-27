@@ -64,6 +64,9 @@ pub fn show_with_help(
         {
             *mix = default;
         }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::sections::editing_handle(ui, crate::preferences::EditingSection::Mix);
+        });
     });
     let width = ui.available_width().min(280.);
     let (rect, mut response) =

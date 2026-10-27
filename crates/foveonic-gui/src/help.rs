@@ -39,7 +39,11 @@ pub fn automatic(label: &str) -> Option<&'static str> {
 
 pub fn editing(label: &str) -> Option<&'static str> {
     Some(match label {
-        "Tone method" => "Reference retains the camera family's tone and saturation response. Universal keeps its base camera appearance and RAW exposure, then applies shared contrast and saturation. Reference uses the original Shadows/Highlights across camera families. Universal instead enables the four HDR ranges and Local Contrast. Inactive settings are retained and bypassed. Positive saturation protects already vivid colors. DNG bakes active sensitivity, HDR, Local Contrast and Universal sharpening while retaining camera appearance in metadata. Global tone presentation keeps its existing DNG interpretation. Processing settings can omit sections for each output format.",
+        "Color Editor" => "The checkbox bypasses this editor while retaining its values. Select a color swatch, then adjust Hue, Saturation or Lightness. The rainbow swatch adjusts all colors. Lightness also works in Monochrome without replacing the sensor mixture. These edits are baked into DNG and TIFF. Double-click a slider to reset it.",
+        "Color Editor Hue" => "Rotates the selected colors by up to 30 degrees in perceptual hue. Zero leaves hue unchanged. Inactive in Monochrome.",
+        "Color Editor Saturation" => "Adjusts chroma in the selected original subject-color range. Minus one removes chroma; zero is unchanged. Inactive in Monochrome.",
+        "Color Editor Lightness" => "Brightens or darkens the selected original subject colors using the same stabilized gain in Color and Monochrome. Zero leaves brightness unchanged.",
+        "Tone method" => "Reference retains the camera family's tone and saturation response. Universal keeps its base camera appearance and RAW exposure, then applies shared contrast and saturation. Reference uses the original Shadows/Highlights across camera families. Universal instead enables the four HDR ranges and Local Contrast. Inactive settings are retained and bypassed. Positive saturation protects already vivid colors. DNG bakes active Color Editor, HDR, Local Contrast and Universal sharpening while retaining camera appearance in metadata. Global tone presentation keeps its existing DNG interpretation. Processing settings can omit sections for each output format.",
         "Local contrast" => "Adjusts texture contrast independently of Noise, Fine/Coarse Detail and sharpening. Negative smooths tonal texture. Positive adds definition. Zero is unchanged and skips filtering. Runs before the camera tone response and bakes into DNG. Keep the X3F and sidecar to change the adjustment.",
         "Sharpening method" => "Reference retains the camera family's sharpening response. Universal replaces its creative sharpening with shared Amount, Radius, Threshold and Halo suppression controls, while sensor reconstruction remains active. The two methods keep independent amounts. Universal runs before the camera tone response and is baked into DNG.",
         "Universal amount" => "Strengthens edges in the finished color or monochrome image. Zero turns it off. Universal replaces reference sharpening instead of adding another sharpening pass. Applies to preview, TIFF and DNG samples.",
@@ -261,8 +265,8 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "mono.filtered" => {
             "Dedicated 19-square histogram-weighted monochrome noise filtering. No color denoising is applied."
         }
-        "sensitivity.color-guide" => "Clean white-balanced color used to classify sensitivity ranges and stabilize their brightness adjustment, independently of the rendering mode or sensor mixture.",
-        "sensitivity.rgb" => "Linear color or monochrome after stabilized color sensitivity. Compare with Input to see the brightness correction.",
+        "color-editor.guide" => "Clean white-balanced color used to classify color ranges and stabilize their adjustments, independently of the rendering mode or sensor mixture.",
+        "color-editor.rgb" => "Linear RGB after color-range Hue, Saturation and Lightness. Monochrome applies the same Lightness response to its sensor mixture. Compare with Input to see the combined color and brightness change.",
         "mono.texture" => "Fine and coarse texture adjustments on the cleaned monochrome image. Compare with Input to see the combined detail change.",
         "mono.despeckle" => "Monochrome speckle correction using its dedicated neighborhood plane.",
         "monochrome.rgb" => {

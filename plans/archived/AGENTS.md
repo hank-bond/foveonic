@@ -27,14 +27,17 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[classic-monochrome](./classic-monochrome.md)** _(archived)._ Support reference-derived Classic monochrome rendering and editable DNG with independent color-mode controls.
 - **[classic-pipeline](./classic-pipeline.md)** _(archived)._ Build and validate an isolated end-to-end Classic GPU recipe to evaluate functional operations and shared engine machinery.
 - **[clickable-states](./clickable-states.md)** _(archived)._ Group editing corrections and share rounded clickable states without changing processing defaults.
+- **[color-editor](./color-editor.md)** _(archived)._ Shared eight-range Color Editor, saved-edit migration and chromatic DNG baking are ready for photographic review.
 - **[color-field-bleeding](./color-field-bleeding.md)** _(archived)._ Profile color-field parameters that may reduce yellow bleeding into the 0170 striped skirt without losing genuine highlight color.
 - **[color-field-determinism](./color-field-determinism.md)** _(archived)._ Make color-field GPU solver row ordering deterministic without changing equations, tolerances, Classic processing or per-image controls.
 - **[color-field-selectivity](./color-field-selectivity.md)** _(archived)._ Experiment with local color-evidence acceptance thresholds, without added neutral bias, to reduce bleeding while preserving compatible reconstructed color.
 - **[color-field-speed](./color-field-speed.md)** _(archived)._ Measure simple color-field optimizations while preserving recovery equations, solver limits and numerical acceptance.
 - **[decode-cache-and-smart-preview](./decode-cache-and-smart-preview.md)** _(archived)._ Implement bounded decoded-source disk reuse, app settings and Quattro regional Smart refinement.
+- **[decode-cache-module](./decode-cache-module.md)** _(archived)._ Gather decoded-cache implementation and tests into a directory module for release 0.5.0.
 - **[despeckle](./despeckle.md)** _(archived)._ GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
 - **[detail-and-noise](./detail-and-noise.md)** _(archived)._ The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner.
+- **[editing-section-layout](./editing-section-layout.md)** _(archived)._ Color Editor has an independent checkbox and editing sections persist their visual drag order without changing processing.
 - **[editor-review-focus](./editor-review-focus.md)** _(archived)._ Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
 - **[embedded-thumbnails](./embedded-thumbnails.md)** _(archived)._ Read Classic bitmap thumbnails through an encoding-based embedded-preview path.
 - **[export-toolbar](./export-toolbar.md)** _(archived)._ Move TIFF color selection from Editing to a padded, grouped Open/Export toolbar.
@@ -73,6 +76,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[release-0.4.0](./release-0.4.0.md)** _(archived)._ Prepare and verify the signed v0.4.0 draft with Merrill viewport-first Smart previews and managed display colors.
 - **[release-0.4.1](./release-0.4.1.md)** _(archived)._ Record the verified and published 0.4.1 release with Merrill noise/detail controls and processing fixes.
 - **[release-0.4.2](./release-0.4.2.md)** _(archived)._ Record the verified and published 0.4.2 patch release for thumbnail responsiveness and settings copy/paste.
+- **[release-0.5.0](./release-0.5.0.md)** _(archived)._ Clean up the shared photographic editor and prepare the local 0.5.0 feature release for review.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** _(archived)._ Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.

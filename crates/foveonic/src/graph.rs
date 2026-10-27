@@ -167,9 +167,9 @@ impl Graph {
         if matches!(operation, Operation::LinearCodeRgb { white: 0, .. }) {
             return Err("linear RGB requires a nonzero nominal white".into());
         }
-        if matches!(operation, Operation::TransferLinearGain { data, .. } if !matches!(data, DataType::LinearRgb(_) | DataType::LinearCodeRgb))
+        if matches!(operation, Operation::TransferLinearGain { data, .. } | Operation::LinearBasis { data, .. } if !matches!(data, DataType::LinearRgb(_) | DataType::LinearCodeRgb))
         {
-            return Err("brightness gain transfer requires a linear sample base".into());
+            return Err("linear edit baking requires a linear sample base".into());
         }
         let (expected, output) = operation.types();
         if inputs.len() != expected.len() {

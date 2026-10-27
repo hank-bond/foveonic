@@ -114,6 +114,49 @@ impl Section {
         }
     }
 }
+/// Visual order of editing tools, independent of photographic pipeline order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum EditingSection {
+    Mix,
+    Tone,
+    ColorEditor,
+    Noise,
+    Detail,
+    Sharpening,
+    Corrections,
+}
+impl EditingSection {
+    pub const ALL: [Self; 7] = [
+        Self::Mix,
+        Self::Tone,
+        Self::ColorEditor,
+        Self::Noise,
+        Self::Detail,
+        Self::Sharpening,
+        Self::Corrections,
+    ];
+    pub fn normalize(order: &mut Vec<Self>) {
+        let mut seen = BTreeSet::new();
+        order.retain(|section| seen.insert(*section));
+        for section in Self::ALL {
+            if seen.insert(section) {
+                order.push(section);
+            }
+        }
+    }
+    pub fn move_section(order: &mut Vec<Self>, source: Self, target: Self, after: bool) {
+        if source == target {
+            return;
+        }
+        if !order.contains(&target) {
+            return;
+        }
+        order.retain(|s| *s != source);
+        let index = order.iter().position(|s| *s == target).unwrap() + usize::from(after);
+        order.insert(index, source);
+    }
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -132,6 +175,7 @@ pub struct Preferences {
     pub decode_cache: foveonic::decode_cache::Settings,
     pub display_gamut: crate::preferences::DisplayGamut,
     pub sections: Vec<Section>,
+    pub editing_sections: Vec<EditingSection>,
     pub collapsed: BTreeSet<Section>,
 }
 impl Default for Preferences {
@@ -150,6 +194,7 @@ impl Default for Preferences {
             decode_cache: Default::default(),
             display_gamut: Default::default(),
             sections: Section::ALL.to_vec(),
+            editing_sections: EditingSection::ALL.to_vec(),
             collapsed: BTreeSet::new(),
         }
     }
@@ -164,6 +209,7 @@ impl Preferences {
     }
     fn normalize(&mut self) {
         self.decode_cache.normalize();
+        EditingSection::normalize(&mut self.editing_sections);
         let mut seen = BTreeSet::new();
         self.sections.retain(|s| seen.insert(*s));
         for section in Section::ALL {
@@ -494,6 +540,39 @@ mod preview_tests {
             !String::from_utf8(foveonic::sidecar::encode(&settings).unwrap())
                 .unwrap()
                 .contains("decode_cache")
+        );
+    }
+}
+
+#[cfg(test)]
+mod editing_order_tests {
+    use super::*;
+    #[test]
+    fn editing_order_round_trips_and_restores_missing_hidden_sections() {
+        let mut prefs = Preferences::default();
+        assert_eq!(
+            prefs.editing_sections[1..3],
+            [EditingSection::Tone, EditingSection::ColorEditor]
+        );
+        EditingSection::move_section(
+            &mut prefs.editing_sections,
+            EditingSection::ColorEditor,
+            EditingSection::Corrections,
+            true,
+        );
+        let saved = serde_json::to_vec(&prefs).unwrap();
+        let mut restored: Preferences = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(restored.editing_sections, prefs.editing_sections);
+        restored.editing_sections = vec![
+            EditingSection::ColorEditor,
+            EditingSection::Tone,
+            EditingSection::ColorEditor,
+        ];
+        restored.normalize();
+        assert_eq!(restored.editing_sections.len(), EditingSection::ALL.len());
+        assert_eq!(
+            &restored.editing_sections[..2],
+            &[EditingSection::ColorEditor, EditingSection::Tone]
         );
     }
 }

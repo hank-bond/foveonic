@@ -161,6 +161,8 @@ pub(super) fn prepare_dng_appearance(
     statistics: super::WhiteBalanceStats,
 ) -> Result<crate::dng::appearance::Prepared> {
     use crate::{dng::appearance::Prepared, source::ProcessingFamily};
+    let effective_edits = settings.processing_settings();
+    let baked_color_editor = effective_edits.color_editor_chromatic_active();
     let dng = settings.dng_settings();
     let effective = dng.processing_settings();
     let settings = &effective;
@@ -176,6 +178,9 @@ pub(super) fn prepare_dng_appearance(
     };
     if family != ProcessingFamily::Merrill {
         prepared.baked_color_mode = settings.is_monochrome();
+    }
+    if baked_color_editor {
+        prepared.sample_notes = Some("Selected pre-tone color reconstruction and Color Editor edits are baked through the inverse linear profile basis. Camera response, exposure and global presentation remain in the profile.");
     }
     Ok(prepared)
 }

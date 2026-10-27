@@ -5,10 +5,11 @@ use crate::source::Result;
 
 #[derive(Clone, Copy)]
 pub enum Kernel {
+    LinearBasis,
     TransferLinearGain,
-    ColorSensitivityMap,
-    ColorSensitivityFilter,
-    ColorSensitivityApply,
+    ColorEditorMap,
+    ColorEditorFilter,
+    ColorEditorApply,
     MonoTextureExtract,
     MonoTextureBlur,
     MonoTextureApply,
@@ -270,9 +271,10 @@ impl Kernel {
     pub fn label(self) -> &'static str {
         match self {
             Self::TransferLinearGain => "transfer linear brightness gain",
-            Self::ColorSensitivityMap => "map color sensitivity",
-            Self::ColorSensitivityFilter => "stabilize color sensitivity",
-            Self::ColorSensitivityApply => "apply color sensitivity",
+            Self::LinearBasis => "map linear RGB basis",
+            Self::ColorEditorMap => "map Color Editor",
+            Self::ColorEditorFilter => "stabilize Color Editor",
+            Self::ColorEditorApply => "apply Color Editor",
             Self::MonoTextureExtract => "extract monochrome texture",
             Self::MonoTextureBlur => "filter monochrome texture",
             Self::MonoTextureApply => "apply monochrome texture",
@@ -568,20 +570,24 @@ impl Gpu {
             include_str!("../nodes/finish/photographic/common.wgsl"),
             include_str!("../nodes/finish/photographic/local_contrast.wgsl")
         );
-        let sensitivity = format!(
+        let color_editor = format!(
             "{}\n{}",
-            include_str!("../nodes/finish/sensitivity.wgsl"),
-            include_str!("../nodes/finish/sensitivity_response.wgsl")
+            include_str!("../nodes/finish/color_editor.wgsl"),
+            include_str!("../nodes/finish/color_editor_response.wgsl")
         );
         let texture = include_str!("../nodes/monochrome/texture.wgsl");
         let kernels = [
             (
+                include_str!("../nodes/finish/linear_basis.wgsl"),
+                "linear_basis",
+            ),
+            (
                 include_str!("../nodes/finish/linear_gain.wgsl"),
                 "transfer_linear_gain",
             ),
-            (sensitivity.as_str(), "color_sensitivity_map"),
-            (sensitivity.as_str(), "color_sensitivity_filter"),
-            (sensitivity.as_str(), "color_sensitivity_apply"),
+            (color_editor.as_str(), "color_editor_map"),
+            (color_editor.as_str(), "color_editor_filter"),
+            (color_editor.as_str(), "color_editor_apply"),
             (texture, "mono_texture_extract"),
             (texture, "mono_texture_blur"),
             (texture, "mono_texture_apply"),

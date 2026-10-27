@@ -151,12 +151,14 @@ fn parse_settings_with_noise_defaults(
             }
             "--local-contrast" => settings.photographic.local_contrast = value.parse()?,
             "--mono-sensitivity" | "--color-sensitivity" => {
-                settings.photographic.color_sensitivity = value
+                let lightness = value
                     .split(',')
                     .map(str::parse)
                     .collect::<std::result::Result<Vec<f32>, _>>()?
                     .try_into()
                     .map_err(|_| "color sensitivity requires Red,Yellow,Green,Cyan,Blue,Magenta")?;
+                settings.photographic.color_editor =
+                    foveonic::render::ColorEditorControls::from_lightness(lightness);
                 if flag == "--mono-sensitivity" {
                     settings.rendering = Rendering::Monochrome;
                 }

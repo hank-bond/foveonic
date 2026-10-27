@@ -33,7 +33,8 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
             s.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         }
         s.photographic.tone_method = PhotographicMethod::Universal;
-        s.photographic.color_sensitivity = [0.06, 0.87, 0., 0., 0., 0.];
+        s.photographic.color_editor =
+            crate::render::ColorEditorControls::from_lightness([0.06, 0.87, 0., 0., 0., 0.]);
         s.tonal_ranges = crate::render::TonalRanges {
             blacks: 0.22,
             shadows: -0.5,
@@ -45,7 +46,7 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
         let mut neutral = s.clone();
         neutral.tonal_ranges = Default::default();
         neutral.photographic.local_contrast = 0.;
-        neutral.photographic.color_sensitivity = [0.; 6];
+        neutral.photographic.color_editor = Default::default();
         let plain = engine
             .render_dng_base(&source, &neutral, &mut Profile::default())
             .unwrap();
@@ -112,6 +113,7 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
         }
         let mut hidden = s.clone();
         hidden.tone_enabled = false;
+        hidden.color_editor_enabled = false;
         hidden.sharpening_enabled = false;
         let bypass = engine
             .render_dng_base(&source, &hidden, &mut Profile::default())
@@ -178,7 +180,7 @@ fn original_output_sections_bypass_edits_without_changing_authored_settings() {
         settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         settings.photographic.tone_method = PhotographicMethod::Universal;
-        settings.photographic.color_sensitivity[0] = 0.4;
+        settings.photographic.color_editor.bands[0].lightness = 0.4;
         settings.tonal_ranges.shadows = 0.3;
         settings.photographic.local_contrast = 0.2;
         settings.photographic.sharpening.method = PhotographicMethod::Universal;
@@ -307,5 +309,141 @@ fn original_reference_sharpening_bypass_matches_neutral_universal() {
             .render(&source, &settings, &mut Profile::default())
             .unwrap();
         assert_eq!(engine.readback_image(&image).unwrap(), baseline);
+    }
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
+fn original_hsl_dng_reprojects_to_the_same_pre_curve_rgb() {
+    let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
+    let engine = Engine::new().unwrap();
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut settings = caps
+        .editing_defaults(&source.metadata, Rendering::Color)
+        .unwrap();
+    if settings.white_balance.is_empty() {
+        settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+    }
+    if settings.color_mode.is_empty() {
+        settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    }
+    settings.photographic.color_editor.master.hue = 0.3;
+    settings.photographic.color_editor.master.saturation = -0.2;
+    settings.photographic.color_editor.bands[0].lightness = 0.1;
+    settings.photographic.tone_method = PhotographicMethod::Universal;
+    settings.tonal_ranges.shadows = 0.2;
+    settings.photographic.local_contrast = 0.2;
+    settings.photographic.sharpening.method = PhotographicMethod::Universal;
+    settings.photographic.sharpening.amount = 0.3;
+    let mut artifacts = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["linear.edits"],
+            &mut Profile::default(),
+        )
+        .unwrap();
+    let Content::Image(reference) = artifacts.remove(0).content else {
+        panic!("image")
+    };
+    let white = reference.description().linear_white as f64;
+    let expected = engine.readback_image(&reference).unwrap();
+    drop(reference);
+    let result = engine
+        .render_dng_base(&source, &settings, &mut Profile::default())
+        .unwrap();
+    let extent = result.description().extent;
+    let actual = engine.readback_image(&result).unwrap();
+    drop(result);
+    let statistics =
+        super::super::estimated_white_balance(&engine, &source, &settings, &mut Profile::default())
+            .unwrap();
+    let appearance =
+        super::super::prepare_dng_appearance(&source.metadata, &settings, statistics).unwrap();
+    let project = appearance
+        .technical_from_native()
+        .unwrap()
+        .inverse()
+        .unwrap();
+    let expected: &[[f32; 3]] = bytemuck::cast_slice(&expected);
+    let actual: &[[f32; 3]] = bytemuck::cast_slice(&actual);
+    assert_eq!(expected.len(), actual.len());
+    for i in (0..actual.len()).step_by(13) {
+        let projected = project.apply(actual[i].map(f64::from));
+        for c in 0..3 {
+            let value = projected[c] * white;
+            let target = f64::from(expected[i][c]);
+            assert!(value.is_finite());
+            assert!(
+                (value - target).abs() < 0.02 + target.abs() * 0.00001,
+                "pixel {i} c{c}: {value} vs {target}"
+            );
+        }
+    }
+    settings.preview_quality = PreviewQuality::Draft;
+    settings.preview_region = Some([10, 10, 320, 240]);
+    settings.output_size = Some([120, 80]);
+    let native = engine
+        .render_dng_base(&source, &settings, &mut Profile::default())
+        .unwrap();
+    assert_eq!(native.description().extent, extent);
+    assert_eq!(
+        engine.readback_image(&native).unwrap(),
+        bytemuck::cast_slice::<[f32; 3], u8>(actual)
+    );
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
+fn original_color_editor_bypass_is_independent_in_photos_and_dng() {
+    let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
+    let engine = Engine::new().unwrap();
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut settings = caps
+        .editing_defaults(&source.metadata, Rendering::Color)
+        .unwrap();
+    if settings.white_balance.is_empty() {
+        settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+    }
+    if settings.color_mode.is_empty() {
+        settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    }
+    settings.tone_enabled = false;
+    settings.photographic.color_editor.master.hue = 0.4;
+    settings.photographic.color_editor.master.saturation = -0.2;
+    settings.photographic.color_editor.bands[0].lightness = 0.2;
+    let authored = settings.photographic.color_editor;
+    for dng in [false, true] {
+        let render = |s: &Settings| {
+            let mut profile = Profile::new(Mode::Wall);
+            let image = if dng {
+                engine.render_dng_base(&source, s, &mut profile)
+            } else {
+                engine.render(&source, s, &mut profile)
+            }
+            .unwrap();
+            (engine.readback_image(&image).unwrap(), profile)
+        };
+        let mut neutral = settings.clone();
+        neutral.photographic.color_editor = Default::default();
+        let expected = render(&neutral).0;
+        let mut disabled = settings.clone();
+        disabled.color_editor_enabled = false;
+        let (off, profile) = render(&disabled);
+        assert_eq!(off, expected);
+        assert!(!profile
+            .host
+            .iter()
+            .any(|t| t.stage == "submit linear Color Editor"));
+        assert_ne!(
+            render(&settings).0,
+            expected,
+            "Tone bypass must leave Color Editor active"
+        );
+        let mut excluded = settings.clone();
+        excluded.processing_sections.color_editor = false;
+        assert_eq!(render(&excluded).0, expected);
+        assert_eq!(disabled.photographic.color_editor, authored);
+        assert_eq!(excluded.photographic.color_editor, authored);
     }
 }

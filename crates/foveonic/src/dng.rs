@@ -15,12 +15,14 @@ use crate::{
 ///
 /// Rebuild from the original source and frozen output settings. WB-dependent
 /// calibration, repair, highlight recovery, noise, detail, ColorDQ and selected
-/// sharpening stay baked, along with active sensitivity, HDR and Local Contrast.
-/// Camera mode, exposure, global tone and saturation remain presentation metadata.
+/// sharpening stay baked, along with active Color Editor, HDR and Local Contrast.
+/// Camera response, exposure, global tone and saturation remain presentation metadata.
+/// Active chromatic Color Editor edits also bake selected pre-tone color reconstruction,
+/// mapping it back through the profile's inverse linear basis.
 /// Classic monochrome
 /// also bakes the selected color-mode mixture because it collapses the sensor
 /// channels before reconstruction. Its tone and exposure remain editable.
-/// Quattro uses a canonical Standard technical color recipe. Its adaptive color
+/// With scalar-only edits, Quattro uses a canonical Standard technical color recipe. Its adaptive color
 /// and spatial corrections stay baked, while the embedded selected mode is an
 /// approximation. Existing reconstruction clamps cannot be undone by export.
 ///

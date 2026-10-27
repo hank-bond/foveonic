@@ -407,5 +407,5 @@ fn write_checked(
 }
 
 #[cfg(test)]
-#[path = "decode_cache_preview_test.rs"]
+#[path = "previews_test.rs"]
 mod tests;

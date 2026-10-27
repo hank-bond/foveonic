@@ -1,10 +1,13 @@
 //! Selects the camera family's editing panel and shares numerical editing widgets.
 
 mod classic;
+mod color_editor;
 mod common;
 mod merrill;
 mod quattro;
+mod sections;
 
+use crate::preferences::EditingSection;
 use eframe::egui;
 use foveonic::{
     render::{ControlCapabilities, Settings},
@@ -50,11 +53,12 @@ pub fn processing(
     settings: &mut Settings,
     metadata: Option<&Metadata>,
     capture: Option<&std::collections::BTreeMap<String, String>>,
+    order: &mut Vec<EditingSection>,
 ) -> bool {
     match capabilities(metadata, capture).map(|c| c.family) {
-        Some(ProcessingFamily::Classic) => classic::show(ui, settings, metadata),
-        Some(ProcessingFamily::Merrill) => merrill::show(ui, settings, metadata),
-        Some(ProcessingFamily::Quattro) => quattro::show(ui, settings, metadata, capture),
+        Some(ProcessingFamily::Classic) => classic::show(ui, settings, metadata, order),
+        Some(ProcessingFamily::Merrill) => merrill::show(ui, settings, metadata, order),
+        Some(ProcessingFamily::Quattro) => quattro::show(ui, settings, metadata, capture, order),
         None => {
             let mut changed = common::presets(
                 ui,

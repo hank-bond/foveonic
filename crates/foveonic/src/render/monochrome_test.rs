@@ -439,7 +439,7 @@ fn mono_sensitivity_and_detail_preserve_mix_cache_and_dng_boundaries() {
         (0.5, 1.2, [0., 0., 1.]),
         (0.5, 1.2, [0.5, 0., 0.5]),
     ] {
-        s.photographic.color_sensitivity[0] = sensitivity;
+        s.photographic.color_editor.bands[0].lightness = sensitivity;
         s.monochrome.texture.fine = fine;
         s.monochrome.mix = mix;
         let cached = session_image(&engine, &mut session, &s);
@@ -458,9 +458,9 @@ fn mono_sensitivity_and_detail_preserve_mix_cache_and_dng_boundaries() {
         last = Some(cached_bytes);
     }
     let outputs = [
-        "sensitivity.color-guide",
-        "sensitivity.rgb",
-        "sensitivity.input",
+        "color-editor.guide",
+        "color-editor.rgb",
+        "color-editor.input",
         "mono.texture",
         "mono.despeckle",
     ];
@@ -486,7 +486,7 @@ fn mono_sensitivity_and_detail_preserve_mix_cache_and_dng_boundaries() {
         .unwrap();
     let dng_bytes = engine.readback_image(&dng).unwrap();
     drop(dng);
-    s.photographic.color_sensitivity = [0.; 6];
+    s.photographic.color_editor = Default::default();
     let plain = engine
         .render_dng_base(&source, &s, &mut Profile::default())
         .unwrap();

@@ -27,11 +27,11 @@ This specification describes the Merrill monochrome recipe. Classic uses its [re
 
 ## Shared finishing
 
-[Photographic finishing](./photographic-finishing.md) may request an independent color-guide branch for six hue-sensitivity controls. The native monochrome mixture and filtering remain authoritative for the detailed base. Guide generation must not depend on that mixture, creative saturation or tonal edits. Sensitivity uses a cleaned linear color guide to derive a spatially stabilized brightness correction before tone. Zero sensitivity is an exact bypass. The same sensitivity gain is used for Merrill Color and Monochrome, and active sensitivity is baked into DNG linear samples. Independent monochrome reconstruction Detail is technical processing and applies to DNG samples.
+[Photographic finishing](./photographic-finishing.md) may request an independent color-guide branch for the eight-range [Color Editor](./color-editor.md). The native monochrome mixture and filtering remain authoritative for the detailed base. Guide generation must not depend on that mixture, creative saturation or tonal edits. Color Editor Lightness uses a cleaned linear color guide to derive a spatially stabilized brightness correction before tone. Neutral Lightness is an exact bypass. Hue and Saturation remain inactive in Monochrome. The same Lightness gain is used for Merrill Color and Monochrome, and active Lightness is baked into DNG linear samples. Independent monochrome reconstruction Detail is technical processing and applies to DNG samples.
 
 ## DNG
 
-- Monochrome DNG must bake the selected layer mix, technical mono reconstruction and active pre-curve sensitivity, HDR, Local Contrast and Universal sharpening into linear samples. Exposure and global tone presentation must remain separate metadata, retaining tonal editing latitude. Spatial edits use the same gain as photographic rendering and preserve equal RGB channels.
+- Monochrome DNG must bake the selected layer mix, technical mono reconstruction and active pre-curve Color Editor Lightness, HDR, Local Contrast and Universal sharpening into linear samples. Exposure and global tone presentation must remain separate metadata, retaining tonal editing latitude. Spatial edits use the same gain as photographic rendering and preserve equal RGB channels.
 - Changing the layer mix or restoring color requires regeneration from the original X3F and sidecar. Exported metadata documents the baked processing.
 - Storage may use equal neutral RGB channels for reader interoperability. No source color can be recovered from that rank-one sample content. Single-channel container optimization is not required.
 

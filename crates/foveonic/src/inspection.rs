@@ -64,8 +64,8 @@ fn camera_output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<
     }
     let mut linear = Vec::new();
     let active = settings.active_tone_settings();
-    if active.tone_enabled && active.photographic.sensitivity_active() {
-        linear.extend(["sensitivity.color-guide", "sensitivity.rgb"]);
+    if active.color_editor_active() {
+        linear.extend(["color-editor.guide", "color-editor.rgb"]);
     }
     linear.extend(["tonal-ranges.mask", "tonal-ranges.rgb"]);
     if active.tone_enabled && active.photographic.local_contrast != 0. {
@@ -256,20 +256,18 @@ pub fn comparison_input(
     if output == "linear.local-contrast" {
         return Some("local-contrast.input");
     }
-    if output == "sensitivity.rgb" {
-        return Some("sensitivity.input");
+    if output == "color-editor.rgb" {
+        return Some("color-editor.input");
     }
     if output == "linear.sharpen" {
         return Some("linear.sharpen-input");
     }
     if output == "tonal-ranges.rgb" {
-        return Some(
-            if settings.tone_enabled && settings.photographic.sensitivity_active() {
-                "sensitivity.rgb"
-            } else {
-                "linear.edits-input"
-            },
-        );
+        return Some(if settings.color_editor_active() {
+            "color-editor.rgb"
+        } else {
+            "linear.edits-input"
+        });
     }
     if let Some(metadata) = metadata
         .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro))
@@ -358,34 +356,36 @@ mod tests {
         let mut s = Settings::new("Sunlight", "Standard");
         s.rendering = Rendering::Monochrome;
         s.monochrome.texture.fine = 1.3;
-        s.photographic.color_sensitivity[0] = 0.3;
+        s.photographic.color_editor.bands[0].lightness = 0.3;
         let outputs = super::image_outputs(&s, None);
         assert!(outputs
             .iter()
             .any(|o| o.name == "mono.texture" && o.channels == super::Channels::Scalar));
         assert!(outputs
             .iter()
-            .any(|o| o.name == "sensitivity.rgb" && o.channels == super::Channels::Rgb));
+            .any(|o| o.name == "color-editor.rgb" && o.channels == super::Channels::Rgb));
         assert_eq!(
             super::comparison_input(&s, "mono.texture", None),
             Some("mono.despeckle")
         );
         assert_eq!(
-            super::comparison_input(&s, "sensitivity.rgb", None),
-            Some("sensitivity.input")
+            super::comparison_input(&s, "color-editor.rgb", None),
+            Some("color-editor.input")
         );
         assert_eq!(
             super::comparison_input(&s, "tonal-ranges.rgb", None),
-            Some("sensitivity.rgb")
+            Some("color-editor.rgb")
         );
         s.rendering = Rendering::Color;
-        assert!(super::output_names(&s, None).contains(&"sensitivity.rgb"));
+        assert!(super::output_names(&s, None).contains(&"color-editor.rgb"));
         assert_eq!(
-            super::comparison_input(&s, "sensitivity.rgb", None),
-            Some("sensitivity.input")
+            super::comparison_input(&s, "color-editor.rgb", None),
+            Some("color-editor.input")
         );
         s.tone_enabled = false;
-        assert!(!super::output_names(&s, None).contains(&"sensitivity.rgb"));
+        assert!(super::output_names(&s, None).contains(&"color-editor.rgb"));
+        s.color_editor_enabled = false;
+        assert!(!super::output_names(&s, None).contains(&"color-editor.rgb"));
         s.rendering = Rendering::Color;
         assert!(!super::output_names(&s, None)
             .iter()

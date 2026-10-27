@@ -145,6 +145,10 @@ impl Settings {
         );
         changed!(self.tone_enabled != next.tone_enabled, "tone-enabled");
         changed!(
+            self.color_editor_enabled != next.color_editor_enabled,
+            "color-editor-enabled"
+        );
+        changed!(
             self.sharpening_enabled != next.sharpening_enabled,
             "refinement-enabled"
         );

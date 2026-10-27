@@ -311,9 +311,10 @@ fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
 }
 
 #[test]
-fn sensitivity_retains_saved_key_and_stays_separate_from_technical_dng_settings() {
+fn color_editor_migrates_saved_sensitivity_and_stays_separate_from_technical_dng_settings() {
     let mut settings = Settings::new("Sunlight", "Standard");
-    settings.photographic.color_sensitivity = [0.2, 0., -0.3, 0., 0., 0.1];
+    settings.photographic.color_editor =
+        crate::render::ColorEditorControls::from_lightness([0.2, 0., -0.3, 0., 0., 0.1]);
     settings.photographic.local_contrast = 0.4;
     settings.photographic.tone_method = super::PhotographicMethod::Universal;
     settings.tone.shadows = 0.3;
@@ -321,19 +322,23 @@ fn sensitivity_retains_saved_key_and_stays_separate_from_technical_dng_settings(
     settings.preview_quality = super::PreviewQuality::Draft;
     settings.preview_region = Some([10, 10, 200, 200]);
     let stored = serde_json::to_value(&settings).unwrap();
-    assert_eq!(
-        stored["photographic"]["monochrome_sensitivity"],
-        serde_json::json!([0.2_f32, 0., -0.3_f32, 0., 0., 0.1_f32])
-    );
-    assert!(stored["photographic"].get("color_sensitivity").is_none());
+    assert!(stored["photographic"]
+        .get("monochrome_sensitivity")
+        .is_none());
     assert_eq!(
         serde_json::from_value::<Settings>(stored)
             .unwrap()
             .photographic,
         settings.photographic
     );
+    let legacy = serde_json::json!({"photographic": {"monochrome_sensitivity": [0.2_f32,0.,-0.3_f32,0.,0.,0.1_f32]}});
+    let migrated: Settings = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        migrated.photographic.color_editor,
+        settings.photographic.color_editor
+    );
     let dng = settings.dng_settings();
-    assert_eq!(dng.photographic.color_sensitivity, [0.; 6]);
+    assert_eq!(dng.photographic.color_editor, Default::default());
     assert_eq!(dng.photographic.local_contrast, 0.);
     assert_eq!(dng.tone.shadows, 0.);
     assert_eq!(dng.tone.highlights, 0.);
@@ -349,13 +354,14 @@ fn batch_section_exclusions_leave_authored_sidecars_and_values_unchanged() {
     settings.exposure = 0.5;
     settings.tonal_ranges.shadows = 0.4;
     settings.photographic.local_contrast = 0.6;
-    settings.photographic.color_sensitivity[2] = 0.8;
+    settings.photographic.color_editor.bands[3].lightness = 0.8;
     settings.photographic.sharpening.method = PhotographicMethod::Universal;
     settings.photographic.sharpening.amount = 1.2;
     settings.reconstruction = Some(Default::default());
     let authored = serde_json::to_vec(&settings).unwrap();
     settings.processing_sections = ProcessingSections {
         tone: false,
+        color_editor: false,
         noise: false,
         detail: false,
         sharpening: false,
@@ -375,4 +381,39 @@ fn batch_section_exclusions_leave_authored_sidecars_and_values_unchanged() {
     assert_eq!(serde_json::to_vec(&settings).unwrap(), authored);
     assert_eq!(settings.exposure, 0.5);
     assert_eq!(settings.photographic.sharpening.amount, 1.2);
+}
+
+#[test]
+fn color_editor_bypass_is_independent_and_retains_authored_values() {
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.color_editor.bands[0].hue = 0.5;
+    settings.tone_enabled = false;
+    let effective = settings.processing_settings();
+    assert!(effective.color_editor_enabled);
+    assert_eq!(
+        effective.photographic.color_editor,
+        settings.photographic.color_editor
+    );
+    settings.processing_sections.color_editor = false;
+    let effective = settings.processing_settings();
+    assert!(!effective.color_editor_enabled);
+    assert_eq!(
+        effective.photographic.color_editor,
+        settings.photographic.color_editor
+    );
+    settings.processing_sections = Default::default();
+    settings.tone_enabled = true;
+    settings.color_editor_enabled = false;
+    let stored = serde_json::to_value(&settings).unwrap();
+    let restored: Settings = serde_json::from_value(stored).unwrap();
+    assert!(!restored.color_editor_enabled && restored.tone_enabled);
+    assert_eq!(
+        restored.photographic.color_editor,
+        settings.photographic.color_editor
+    );
+    assert!(
+        serde_json::from_str::<Settings>("{}")
+            .unwrap()
+            .color_editor_enabled
+    );
 }

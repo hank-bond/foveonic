@@ -4,7 +4,7 @@ use super::*;
 fn defaults_are_reference_and_neutral() {
     let c = Controls::default();
     assert_eq!(c.tone_method, Method::Reference);
-    assert!(!c.sensitivity_active());
+    assert!(!c.color_editor.is_active(false));
     assert!(!c.sharpening.is_active());
     c.validate().unwrap();
 }
@@ -18,7 +18,7 @@ fn invalid_values_are_rejected() {
         assert!(c.validate().is_err());
     }
     let mut c = Controls::default();
-    c.color_sensitivity[3] = f32::NAN;
+    c.color_editor.bands[4].lightness = f32::NAN;
     assert!(c.validate().is_err());
 }
 

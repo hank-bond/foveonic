@@ -69,26 +69,17 @@ impl Sharpening {
 #[serde(default, deny_unknown_fields)]
 pub struct Controls {
     pub tone_method: Method,
-    /// Red, Yellow, Green, Cyan, Blue and Magenta brightness in normalized amounts.
-    // Retain the established sidecar key when switching between rendering modes.
-    #[serde(rename = "monochrome_sensitivity")]
-    pub color_sensitivity: [f32; 6],
+    #[serde(alias = "monochrome_sensitivity")]
+    pub color_editor: super::color_editor::Controls,
     /// Neutral-centered multiscale local contrast, independent of reconstruction.
     pub local_contrast: f32,
     pub sharpening: Sharpening,
 }
 impl Controls {
-    pub fn sensitivity_active(self) -> bool {
-        self.color_sensitivity != [0.; 6]
-    }
     pub(crate) fn validate(self) -> Result<()> {
-        if self
-            .color_sensitivity
-            .iter()
-            .chain([&self.local_contrast])
-            .any(|v| !(-1. ..=1.).contains(v))
-        {
-            return Err("photographic sensitivity and local contrast must be in -1..1".into());
+        self.color_editor.validate()?;
+        if !(-1. ..=1.).contains(&self.local_contrast) {
+            return Err("local contrast must be in -1..1".into());
         }
         self.sharpening.validate()
     }

@@ -57,6 +57,7 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
     supported.monochrome.mix = settings.monochrome.mix;
     supported.monochrome_smoothness = settings.monochrome_smoothness;
     supported.tone_enabled = settings.tone_enabled;
+    supported.color_editor_enabled = settings.color_editor_enabled;
     supported.sharpening_enabled = settings.sharpening_enabled;
     supported.exposure = settings.exposure.clamp(-2., 2.);
     supported.tone = settings.tone;

@@ -66,7 +66,7 @@ Display and TIFF use shared primary conversion and destination encoding. A wider
 
 Classic and Merrill tone generation and saturation mathematics remain distinct where their equations differ. Sharing output machinery does not require substituting Merrill's photographic appearance. Numerical profile and rounding differences from the reference implementation must remain measured and explicit.
 
-Shared pre-curve sensitivity, HDR, Local Contrast and Universal sharpening follow the [photographic finishing contract](./photographic-finishing.md). The adapter retains the native combined reference operation when these edits are neutral.
+Shared pre-curve Color Editor, HDR, Local Contrast and Universal sharpening follow the [photographic finishing contract](./photographic-finishing.md). The adapter retains the native combined reference operation when these edits are neutral.
 
 ## Editable color DNG
 

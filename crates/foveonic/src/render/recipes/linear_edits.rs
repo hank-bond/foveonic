@@ -1,4 +1,4 @@
-//! Composes pre-curve brightness edits and DNG baking using camera-supplied signal context.
+//! Composes shared pre-curve edits and DNG baking using camera-supplied signal context.
 
 use super::{requested, BuiltRecipe};
 use crate::{
@@ -6,8 +6,9 @@ use crate::{
     graph::{DataType, Graph, Operation},
     interactive::Execution,
     nodes::finish::{
+        color_editor,
         photographic::{local_contrast, Params},
-        sensitivity, tone_equalizer,
+        tone_equalizer,
     },
     profile::Profile,
     render::{Engine, PreviewQuality, Rendering, Settings},
@@ -36,10 +37,9 @@ pub(super) fn pivot_from_response(white: f32, response: impl Fn(f64) -> f64) -> 
 }
 
 pub(super) fn active(settings: &Settings) -> bool {
-    (settings.tone_enabled
-        && (settings.photographic.sensitivity_active()
-            || !settings.tonal_ranges.is_neutral()
-            || settings.photographic.local_contrast != 0.))
+    settings.color_editor_active()
+        || (settings.tone_enabled
+            && (!settings.tonal_ranges.is_neutral() || settings.photographic.local_contrast != 0.))
         || (settings.sharpening_enabled && settings.photographic.sharpening.is_active())
 }
 
@@ -49,9 +49,9 @@ pub(super) fn requested_output(name: &str) -> bool {
         "linear.base"
             | "linear.edits-input"
             | "linear.edits"
-            | "sensitivity.input"
-            | "sensitivity.color-guide"
-            | "sensitivity.rgb"
+            | "color-editor.input"
+            | "color-editor.guide"
+            | "color-editor.rgb"
             | "tonal-ranges.mask"
             | "tonal-ranges.rgb"
             | "local-contrast.input"
@@ -99,7 +99,7 @@ pub(super) fn build(
     if requested(&recipe.graph, names) {
         return Ok(());
     }
-    if settings.tone_enabled && settings.photographic.sensitivity_active() {
+    if settings.color_editor_active() {
         let guide = color_guide(engine, source, settings, profile, execution)?;
         let DataType::LinearRgb(guide_space) = guide.graph.outputs[guide.final_id].data else {
             return Err("color guide must be linear RGB".into());
@@ -110,30 +110,32 @@ pub(super) fn build(
             || guide.params.output[..2] != recipe.params.output[..2]
             || guide.params.crop != recipe.params.crop
         {
-            return Err("sensitivity guide framing mismatch".into());
+            return Err("Color Editor guide framing mismatch".into());
         }
         let guide_final = guide.final_id;
-        let mapping = recipe.graph.append(guide.graph, "sensitivity-guide");
+        let mapping = recipe.graph.append(guide.graph, "color-editor-guide");
         let guide_id = recipe.graph.add(
             Operation::ImageAlias {
                 data: DataType::LinearRgb(space),
-                output: "sensitivity.color-guide",
+                output: "color-editor.guide",
             },
             &[mapping[guide_final]],
         )?;
         if requested(&recipe.graph, names) {
             return Ok(());
         }
-        alias(recipe, space, "sensitivity.input")?;
-        let params = sensitivity::Params::new(
+        alias(recipe, space, "color-editor.input")?;
+        let params = color_editor::Params::new(
             extent,
-            settings.photographic.color_sensitivity,
+            settings.photographic.color_editor,
             space,
+            white,
             guide_white,
             scale,
+            settings.is_monochrome(),
         );
         recipe.final_id = recipe.graph.add(
-            Operation::LinearSensitivity { params, space },
+            Operation::LinearColorEditor { params, space },
             &[recipe.final_id, guide_id],
         )?;
         execution.check()?;
@@ -264,13 +266,13 @@ pub(super) fn prioritize_cache(graph: &mut Graph) {
         })
         .flat_map(|node| node.inputs.iter().copied())
         .collect();
-    let sensitivity_inputs: Vec<_> = graph
+    let editor_inputs: Vec<_> = graph
         .nodes
         .iter()
-        .filter(|node| matches!(node.operation, Operation::LinearSensitivity { .. }))
+        .filter(|node| matches!(node.operation, Operation::LinearColorEditor { .. }))
         .flat_map(|node| node.inputs.iter().copied())
         .collect();
-    for input in boundaries.into_iter().chain(sensitivity_inputs) {
+    for input in boundaries.into_iter().chain(editor_inputs) {
         graph.prioritize_for_session(input);
     }
 }
@@ -287,12 +289,12 @@ pub(super) fn support(settings: &Settings) -> u32 {
     } else {
         0
     };
-    let sensitivity = if settings.tone_enabled && settings.photographic.sensitivity_active() {
-        sensitivity::NATIVE_RADIUS
+    let editor = if settings.color_editor_active() {
+        color_editor::NATIVE_RADIUS
     } else {
         0
     };
-    sharp + local + sensitivity
+    sharp + local + editor
 }
 
 pub(super) fn bake(
@@ -340,10 +342,29 @@ pub(super) fn bake(
     };
     let data = recipe.graph.outputs[recipe.final_id].data;
     let mapping = recipe.graph.append(reference.graph, "dng-edit-reference");
-    recipe.final_id = recipe.graph.add(
-        Operation::TransferLinearGain { data, space },
-        &[recipe.final_id, mapping[before], mapping[after]],
-    )?;
+    recipe.final_id = if active.color_editor_chromatic_active() {
+        let statistics = super::estimated_white_balance(engine, source, &active, profile)?;
+        let appearance = super::prepare_dng_appearance(&source.metadata, &active, statistics)?;
+        let matrix = appearance.technical_from_native()?;
+        let rows = std::array::from_fn(|r| {
+            std::array::from_fn(|c| {
+                if c < 3 {
+                    matrix.0[r * 3 + c] as f32
+                } else {
+                    0.
+                }
+            })
+        });
+        recipe.graph.add(
+            Operation::LinearBasis { rows, space, data },
+            &[mapping[after]],
+        )?
+    } else {
+        recipe.graph.add(
+            Operation::TransferLinearGain { data, space },
+            &[recipe.final_id, mapping[before], mapping[after]],
+        )?
+    };
     execution.check()
 }
 

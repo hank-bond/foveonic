@@ -636,7 +636,7 @@ fn color_sensitivity_cli_preserves_the_selected_rendering() {
     let (settings, _, _) = parse_settings(args).unwrap();
     assert_eq!(settings.rendering, foveonic::render::Rendering::Color);
     assert_eq!(
-        settings.photographic.color_sensitivity,
-        [0.2, 0., -0.3, 0., 0., 0.1]
+        settings.photographic.color_editor,
+        foveonic::render::ColorEditorControls::from_lightness([0.2, 0., -0.3, 0., 0., 0.1])
     );
 }

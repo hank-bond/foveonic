@@ -1,6 +1,7 @@
 //! Defines shared photographic settings and validates their values.
 
 pub use crate::color_space::TiffColorSpace;
+pub use crate::nodes::finish::color_editor::Controls as ColorEditorControls;
 pub use crate::nodes::finish::photographic::{
     Controls as PhotographicControls, Method as PhotographicMethod,
     Sharpening as UniversalSharpening,
@@ -48,6 +49,7 @@ impl PreviewQuality {
 #[serde(default)]
 pub struct ProcessingSections {
     pub tone: bool,
+    pub color_editor: bool,
     pub noise: bool,
     pub detail: bool,
     pub sharpening: bool,
@@ -57,6 +59,7 @@ impl Default for ProcessingSections {
     fn default() -> Self {
         Self {
             tone: true,
+            color_editor: true,
             noise: true,
             detail: true,
             sharpening: true,
@@ -87,6 +90,8 @@ pub struct Settings {
     pub exposure: f32,
     /// Bypass tone/color edits without changing their saved values or camera look.
     pub tone_enabled: bool,
+    /// Bypass Color Editor without changing its saved range adjustments.
+    pub color_editor_enabled: bool,
     /// Bypass final sharpening while retaining its amount and Auto choice.
     // Keep the established sidecar field name while the UI calls this Sharpening.
     #[serde(rename = "refinement_enabled")]
@@ -150,6 +155,7 @@ impl Default for Settings {
             color_mode: String::new(),
             exposure: 0.,
             tone_enabled: true,
+            color_editor_enabled: true,
             sharpening_enabled: true,
             tone: ToneControls::default(),
             tonal_ranges: TonalRanges::default(),
@@ -237,6 +243,21 @@ impl Settings {
         }
     }
 
+    /// Effective Color Editor state, after output-section policy is resolved.
+    pub(crate) fn color_editor_active(&self) -> bool {
+        self.color_editor_enabled
+            && self
+                .photographic
+                .color_editor
+                .is_active(self.is_monochrome())
+    }
+
+    pub(crate) fn color_editor_chromatic_active(&self) -> bool {
+        self.color_editor_enabled
+            && !self.is_monochrome()
+            && self.photographic.color_editor.chromatic_active()
+    }
+
     pub fn color_dq_selected(&self) -> bool {
         !self.is_monochrome()
             && self.color_dq_gain.map_or(
@@ -264,6 +285,7 @@ impl Settings {
         let mut effective = self.clone();
         let sections = self.processing_sections;
         effective.tone_enabled &= sections.tone;
+        effective.color_editor_enabled &= sections.color_editor;
         effective.sharpening_enabled &= sections.sharpening;
         if let Some(noise) = &mut effective.reconstruction {
             noise.noise_enabled &= sections.noise;

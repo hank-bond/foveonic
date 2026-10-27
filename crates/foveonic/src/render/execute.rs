@@ -1260,8 +1260,8 @@ impl Engine {
                     );
                     Some(output)
                 }
-                Operation::LinearSensitivity { params, .. } => {
-                    Some(crate::nodes::finish::sensitivity::apply(
+                Operation::LinearColorEditor { params, .. } => {
+                    Some(crate::nodes::finish::color_editor::apply(
                         gpu,
                         &input(0).buffer,
                         &input(1).buffer,
@@ -1277,6 +1277,16 @@ impl Engine {
                     inherited,
                     profile,
                 )?),
+                Operation::LinearBasis { rows, .. } => {
+                    Some(crate::nodes::finish::linear_basis::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *rows,
+                        inherited,
+                        input(0).description.unwrap().linear_white,
+                        profile,
+                    )?)
+                }
                 Operation::TransferLinearGain { .. } => {
                     Some(crate::nodes::finish::linear_gain::apply(
                         gpu,

@@ -180,9 +180,14 @@ pub enum Operation {
         params: crate::nodes::finish::photographic::Params,
         space: ColorSpace,
     },
-    LinearSensitivity {
-        params: crate::nodes::finish::sensitivity::Params,
+    LinearColorEditor {
+        params: crate::nodes::finish::color_editor::Params,
         space: ColorSpace,
+    },
+    LinearBasis {
+        rows: [[f32; 4]; 3],
+        space: ColorSpace,
+        data: DataType,
     },
     TransferLinearGain {
         data: DataType,
@@ -234,6 +239,7 @@ impl Operation {
                 .key()
                 .slice(format!("{data:?}").as_bytes())
                 .slice(output.as_bytes()),
+            Self::LinearBasis { rows, .. } => Key::pod(rows),
             Self::LinearCodeBase => Key::default(),
             Self::LinearCodeRgb { white, .. } => Key::default().with(white),
             Self::BoxContrast(p) => p.key(),
@@ -324,7 +330,7 @@ impl Operation {
             Self::TiledColorDq { params, table, .. } => params.key(N::Geometry).join(table.key()),
             Self::ColorDq { table, .. } => table.key(),
             Self::Sharpen { amount, .. } => Key::pod(amount),
-            Self::LinearSensitivity { params, .. } => params.key(),
+            Self::LinearColorEditor { params, .. } => params.key(),
             Self::MonoTexture(c) => Key::pod(&[c.fine, c.coarse, c.fine_size, c.coarse_size]),
             Self::ImageAlias { .. } | Self::TransferLinearGain { .. } => Key::default(),
             Self::PhotographicTone { params, .. }
@@ -465,9 +471,10 @@ impl Operation {
             Self::Saturation { .. } => "submit saturation",
             Self::SharpSignal { .. } => "submit native high-pass",
             Self::Sharpen { .. } => "submit sharpen",
-            Self::LinearSensitivity { .. } => "submit color sensitivity",
+            Self::LinearColorEditor { .. } => "submit linear Color Editor",
             Self::MonoTexture(_) => "submit monochrome texture",
             Self::ImageAlias { .. } => "retain image alias",
+            Self::LinearBasis { .. } => "bake linear color edits",
             Self::TransferLinearGain { .. } => "bake linear brightness edits",
             Self::PhotographicTone { .. } => "finish.tone",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",
@@ -666,10 +673,11 @@ impl Operation {
             Self::Sharpen { space, .. } => {
                 (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
             }
-            Self::LinearSensitivity { space, .. } => {
+            Self::LinearColorEditor { space, .. } => {
                 (vec![LinearRgb(*space); 2], LinearRgb(*space))
             }
             Self::MonoTexture(_) => (vec![Monochrome], Monochrome),
+            Self::LinearBasis { data, space, .. } => (vec![LinearRgb(*space)], *data),
             Self::TransferLinearGain { data, space } => {
                 (vec![*data, LinearRgb(*space), LinearRgb(*space)], *data)
             }
@@ -928,9 +936,10 @@ impl Operation {
             Self::TiledColorDq { .. } => "color-dq.tiles",
             Self::Color { .. } => "color.rgb",
             Self::ColorDq { .. } => "color-dq.rgb",
-            Self::LinearSensitivity { .. } => "sensitivity.rgb",
+            Self::LinearColorEditor { .. } => "color-editor.rgb",
             Self::MonoTexture(_) => "mono.texture",
             Self::ImageAlias { output, .. } => output,
+            Self::LinearBasis { .. } => "dng.linear-color-edits",
             Self::TransferLinearGain { .. } => "dng.linear-edits",
             Self::PhotographicTone { .. } => "finish.tone",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",

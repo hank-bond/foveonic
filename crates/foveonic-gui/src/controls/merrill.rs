@@ -1,7 +1,7 @@
 //! Composes Merrill color, monochrome, reconstruction and correction controls.
 
 use super::common::{self, adjustment, adjustment_row, automatic_adjustment, RowControls};
-use crate::help;
+use crate::{help, preferences::EditingSection};
 use eframe::egui;
 use foveonic::{
     render::{ColorFieldApproach, HighlightMode, Settings},
@@ -46,7 +46,7 @@ pub(super) fn select_highlight(
     before != (settings.highlight_mode, settings.color_field)
 }
 
-fn noise_and_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+fn noise(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = false;
     let before = settings.reconstruction;
     let mut controls = before.unwrap_or(foveonic::noise::Controls {
@@ -54,7 +54,12 @@ fn noise_and_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         detail_enabled: false,
         ..Default::default()
     });
-    changed |= common::section_header(ui, "Noise", Some(&mut controls.noise_enabled));
+    changed |= common::section_header(
+        ui,
+        EditingSection::Noise,
+        "Noise",
+        Some(&mut controls.noise_enabled),
+    );
     ui.add_enabled_ui(controls.noise_enabled, |ui| {
         let column = common::LabelColumn::new(ui, &["Chroma", "Luma", "Banding"], &[]);
         changed |= column.adjustment(
@@ -92,8 +97,6 @@ fn noise_and_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 );
             });
     });
-    ui.separator();
-    changed |= detail(ui, &mut controls.detail_enabled, &mut controls.texture);
     // Keep both groups' inactive values. Loading an older explicit off
     // recipe must not create settings merely by drawing the panel.
     if before.is_some() || (controls.noise_enabled || controls.detail_enabled) {
@@ -108,7 +111,7 @@ fn detail(
     texture: &mut foveonic::noise::TextureControls,
 ) -> bool {
     let mut changed = false;
-    changed |= common::section_header(ui, "Detail", Some(enabled));
+    changed |= common::section_header(ui, EditingSection::Detail, "Detail", Some(enabled));
     ui.add_enabled_ui(*enabled, |ui| {
         let column = common::LabelColumn::new(ui, &["Fine", "Coarse"], &["Size"])
             .with_outer_padding(f32::from(
@@ -154,6 +157,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
+    order: &mut Vec<EditingSection>,
 ) -> bool {
     let mut changed = common::rendering(ui, settings);
     let mono = settings.is_monochrome();
@@ -166,40 +170,76 @@ pub(super) fn show(
             color_mode: !mono,
         },
     );
-    ui.separator();
-    if mono {
-        changed |= crate::mixer::show(ui, &mut settings.monochrome.mix);
-        ui.separator();
-    }
-    ui.add_enabled_ui(settings.tone_enabled, |ui| {
-        changed |= common::color_sensitivity(ui, settings);
-    });
-    ui.separator();
-    changed |= common::tone_with_exposure_range(ui, settings, mono, -4. ..=4.);
-    ui.separator();
-    if !mono {
-        changed |= noise_and_detail(ui, settings);
+    let available = if mono {
+        EditingSection::ALL.as_slice()
     } else {
-        common::section_header(ui, "Noise", None);
-        changed |= adjustment(ui, "Mono noise", &mut settings.monochrome.noise, 0..=4, 2);
-        changed |= adjustment(
-            ui,
-            "Mono banding",
-            &mut settings.monochrome.banding,
-            0..=4,
-            2,
-        );
-        ui.separator();
-        changed |= detail(
-            ui,
-            &mut settings.monochrome.detail_enabled,
-            &mut settings.monochrome.texture,
-        );
+        &[
+            EditingSection::Tone,
+            EditingSection::ColorEditor,
+            EditingSection::Noise,
+            EditingSection::Detail,
+            EditingSection::Sharpening,
+            EditingSection::Corrections,
+        ]
+    };
+    changed |= super::sections::show(ui, order, available, |ui, section| match section {
+        EditingSection::Mix => crate::mixer::show(ui, &mut settings.monochrome.mix),
+        EditingSection::Tone => common::tone_with_exposure_range(ui, settings, mono, -4. ..=4.),
+        EditingSection::ColorEditor => super::color_editor::show(ui, settings),
+        EditingSection::Noise => {
+            if mono {
+                mono_noise(ui, settings)
+            } else {
+                noise(ui, settings)
+            }
+        }
+        EditingSection::Detail => {
+            if mono {
+                detail(
+                    ui,
+                    &mut settings.monochrome.detail_enabled,
+                    &mut settings.monochrome.texture,
+                )
+            } else {
+                color_detail(ui, settings)
+            }
+        }
+        EditingSection::Sharpening => common::sharpening(ui, settings, metadata),
+        EditingSection::Corrections => corrections(ui, settings),
+    });
+    changed
+}
+
+fn color_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let before = settings.reconstruction;
+    let mut controls = before.unwrap_or(foveonic::noise::Controls {
+        noise_enabled: false,
+        detail_enabled: false,
+        ..Default::default()
+    });
+    let changed = detail(ui, &mut controls.detail_enabled, &mut controls.texture);
+    if before.is_some() || controls.noise_enabled || controls.detail_enabled {
+        settings.reconstruction = Some(controls);
     }
-    ui.separator();
-    changed |= common::sharpening(ui, settings, metadata);
-    ui.separator();
-    common::section_header(ui, "Corrections", None);
+    changed
+}
+
+fn mono_noise(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    common::section_header(ui, EditingSection::Noise, "Noise", None);
+    let mut changed = adjustment(ui, "Mono noise", &mut settings.monochrome.noise, 0..=4, 2);
+    changed |= adjustment(
+        ui,
+        "Mono banding",
+        &mut settings.monochrome.banding,
+        0..=4,
+        2,
+    );
+    changed
+}
+
+fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let mut changed = false;
+    common::section_header(ui, EditingSection::Corrections, "Corrections", None);
     crate::widgets::parameter_group(ui, |ui| {
         let column = common::LabelColumn::new(ui, &["Highlights"], &["Threshold"])
             .with_toggle(ui, "Highlights")

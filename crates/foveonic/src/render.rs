@@ -25,7 +25,7 @@ use execute::Input;
 pub(crate) use execute::Value;
 use recipes::Recipe;
 pub use settings::{
-    ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls,
+    ColorEditorControls, ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls,
     PhotographicControls, PhotographicMethod, PreviewQuality, ProcessingSections, Rendering,
     RepairThreshold, Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening,
 };

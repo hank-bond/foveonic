@@ -1,19 +1,13 @@
 //! Reuses decoded sources, original bytes, selection metadata and previews in a bounded temporary disk LRU.
 
 pub use crate::background::Activity;
-#[path = "decode_cache_lru.rs"]
 mod lru;
-#[path = "decode_cache_window.rs"]
 mod window;
 use lru::prune;
-#[path = "decode_cache_original.rs"]
 mod original;
-#[path = "decode_cache_preview.rs"]
 mod previews;
-#[path = "decode_cache_selection.rs"]
 mod selection;
 pub use selection::Selection;
-#[path = "decode_cache_worker.rs"]
 mod worker;
 use crate::source::{LoadStage, Metadata, ProcessingFamily, Result, Source, SourceStorage};
 pub use previews::MAX_SIDE as PREVIEW_MAX_SIDE;
@@ -682,5 +676,4 @@ fn boot_key() -> String {
 }
 
 #[cfg(test)]
-#[path = "decode_cache_test.rs"]
 mod tests;

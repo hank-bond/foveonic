@@ -5,6 +5,21 @@ kind: reference
 
 # Changelog
 
+## 0.5.0
+
+<!-- Add your release introduction here. -->
+
+### Changes
+
+- Color Editor offers eight color ranges plus All Colors, with Hue, Saturation and Lightness controls. Monochrome shares the Lightness response while retaining its sensor-layer mixture. Existing six-color sensitivity edits migrate automatically.
+- Shared photographic controls across Classic, Merrill and Quattro, including Quattro H: spatial HDR ranges, Local Contrast and selectable Universal sharpening. Reference methods remain available and retain their defaults.
+- Merrill Monochrome now offers independent Fine and Coarse detail with size controls. Fix flat, patchy recovered highlights in its noise filtering while preserving bright texture.
+- DNG can bake active Color Editor, HDR, Local Contrast and Universal sharpening while retaining camera tone presentation in its profile. Chromatic edits use the selected pre-tone rendition. Keep the X3F and sidecar to revise baked edits.
+- Processing settings can include or omit each editing section, remembered independently for Browse/Import and DNG/TIFF. Submitted batches retain their frozen settings, and copied sidecars retain the full authored recipe.
+- Editing sections can be reordered with compact drag handles. Color Editor has an independent checkbox below Tone and Color by default. Disabled controls retain their values, and section order is saved separately from photo edits.
+- Correct linear inspection brightness and scopes across camera code scales, improve interactive checkpoint reuse, and keep numeric readouts within three significant digits.
+- Group decoded-cache storage, previews and scheduling into one source module, preserving cache behavior and compatibility.
+
 ## 0.4.2
 
 Usability improvements to make importing a better experience.

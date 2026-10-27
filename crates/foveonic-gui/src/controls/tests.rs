@@ -11,7 +11,13 @@ use std::ops::RangeInclusive;
 // metadata is absent. Capture-only and unidentified states are checked separately.
 fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
     let capture = [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into();
-    super::processing(ui, settings, metadata, Some(&capture))
+    super::processing(
+        ui,
+        settings,
+        metadata,
+        Some(&capture),
+        &mut EditingSection::ALL.to_vec(),
+    )
 }
 
 fn processing_expanded(
@@ -131,14 +137,7 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
     for label in ["Color Mix", "Mono noise", "Mono banding"] {
         assert_eq!(text_centers(&output, label).len(), 1);
     }
-    for label in [
-        "Color mode",
-        "Saturation",
-        "Chroma",
-        "Luma",
-        "Banding",
-        "ColorDQ gain",
-    ] {
+    for label in ["Color mode", "Chroma", "Luma", "Banding", "ColorDQ gain"] {
         assert!(
             text_centers(&output, label).is_empty(),
             "{label} must be hidden in monochrome"
@@ -162,7 +161,8 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
     );
     let (_, output, after) = frame(5.1, vec![pointer_button(color, false)]);
     assert!(!after.is_monochrome());
-    for label in ["Color mode", "Saturation", "Noise", "Detail"] {
+    assert_eq!(text_centers(&output, "Saturation").len(), 2);
+    for label in ["Color mode", "Noise", "Detail"] {
         assert_eq!(text_centers(&output, label).len(), 1);
     }
     for label in ["Color Mix", "Mono noise", "Mono banding"] {
@@ -210,20 +210,17 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             },
         );
         assert_eq!(settings, before);
-        for label in [
-            "Color mode",
-            "Saturation",
-            "Chroma",
-            "Luma",
-            "Banding",
-            "ColorDQ gain",
-        ] {
+        for label in ["Color mode", "Chroma", "Luma", "Banding", "ColorDQ gain"] {
             assert_eq!(
                 panel_text_centers(&output, label).len(),
                 usize::from(rendering == Rendering::Color),
                 "{rendering:?}: {label}"
             );
         }
+        assert_eq!(
+            panel_text_centers(&output, "Saturation").len(),
+            1 + usize::from(rendering == Rendering::Color)
+        );
         assert_eq!(panel_text_centers(&output, "Noise").len(), 1);
         for (label, count) in [("Fine", 1), ("Coarse", 1), ("Size", 2)] {
             assert_eq!(panel_text_centers(&output, label).len(), count);
@@ -2513,7 +2510,13 @@ fn capture_properties_select_classic_before_a_render_completes() {
         let ctx = egui::Context::default();
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!super::processing(ui, &mut settings, None, capture));
+                assert!(!super::processing(
+                    ui,
+                    &mut settings,
+                    None,
+                    capture,
+                    &mut EditingSection::ALL.to_vec()
+                ));
             });
         });
         assert_eq!(
@@ -2575,7 +2578,7 @@ fn classic_monochrome_keeps_color_modes_and_preserves_disabled_preferences() {
         (changed, output, settings.clone())
     };
     let (_, output, _) = frame(vec![]);
-    for hidden in ["Saturation", "Mono noise", "Mono banding", "Sensor mix"] {
+    for hidden in ["Mono noise", "Mono banding", "Sensor mix"] {
         assert!(text_centers(&output, hidden).is_empty());
     }
     for visible in [
@@ -2640,7 +2643,8 @@ fn unsupported_tiger_geometry_keeps_inspection_without_photographic_controls() {
                 ui,
                 &mut settings,
                 Some(&metadata),
-                Some(&capture)
+                Some(&capture),
+                &mut EditingSection::ALL.to_vec()
             ));
         });
     });
@@ -2686,7 +2690,13 @@ fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        assert!(!super::processing(ui, &mut settings, None, Some(&capture)));
+                        assert!(!super::processing(
+                            ui,
+                            &mut settings,
+                            None,
+                            Some(&capture),
+                            &mut EditingSection::ALL.to_vec()
+                        ));
                     });
                 },
             );
@@ -2757,7 +2767,13 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!super::processing(ui, &mut settings, Some(&metadata), None));
+                assert!(!super::processing(
+                    ui,
+                    &mut settings,
+                    Some(&metadata),
+                    None,
+                    &mut EditingSection::ALL.to_vec()
+                ));
             });
         },
     );
@@ -2769,7 +2785,6 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         "Contrast",
         "Shadows",
         "Highlights",
-        "Saturation",
         "Noise and Detail",
         "Chroma noise",
         "Luma noise",
@@ -2782,6 +2797,7 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
     }
     assert!(text_centers(&output, "Banding noise").is_empty());
 
+    assert_eq!(text_centers(&output, "Saturation").len(), 2);
     settings.rendering = Rendering::Monochrome;
     settings.monochrome_smoothness = Some(1. / 6.);
     settings.reconstruction = Some(foveonic::noise::Controls {
@@ -2800,7 +2816,13 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!super::processing(ui, &mut settings, Some(&metadata), None));
+                assert!(!super::processing(
+                    ui,
+                    &mut settings,
+                    Some(&metadata),
+                    None,
+                    &mut EditingSection::ALL.to_vec()
+                ));
             });
         },
     );
@@ -2808,7 +2830,7 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
     for label in ["Color Mix", "Mono noise", "Smooth / Crisp", "Amount"] {
         assert_eq!(text_centers(&output, label).len(), 1, "{label}");
     }
-    for label in ["Saturation", "Chroma noise", "Luma noise", "Mono banding"] {
+    for label in ["Chroma noise", "Luma noise", "Mono banding"] {
         assert!(text_centers(&output, label).is_empty(), "{label}");
     }
 }
@@ -2861,7 +2883,13 @@ fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        assert!(!super::processing(ui, &mut settings, full, Some(&capture)));
+                        assert!(!super::processing(
+                            ui,
+                            &mut settings,
+                            full,
+                            Some(&capture),
+                            &mut EditingSection::ALL.to_vec()
+                        ));
                     });
                 },
             );
@@ -3483,7 +3511,8 @@ fn merrill_color_sensitivity_is_shared_without_changing_values_on_mode_switch() 
     use foveonic::render::Rendering;
     let context = egui::Context::default();
     let mut settings = Settings::new("Sunlight", "Standard");
-    settings.photographic.color_sensitivity = [0.2, 0., -0.3, 0., 0., 0.1];
+    settings.photographic.color_editor =
+        foveonic::render::ColorEditorControls::from_lightness([0.2, 0., -0.3, 0., 0., 0.1]);
     for rendering in [Rendering::Color, Rendering::Monochrome, Rendering::Color] {
         settings.rendering = rendering;
         let before = settings.clone();
@@ -3501,7 +3530,7 @@ fn merrill_color_sensitivity_is_shared_without_changing_values_on_mode_switch() 
                 });
             },
         );
-        assert_eq!(panel_text_centers(&output, "Color sensitivity").len(), 1);
+        assert_eq!(panel_text_centers(&output, "Color Editor").len(), 1);
         assert_eq!(settings.photographic, before.photographic);
     }
 }
@@ -3512,9 +3541,9 @@ fn sensitivity_readouts_and_slider_tooltips_share_three_significant_digits() {
     crate::widgets::install_style(&ctx);
     ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
     let mut settings = Settings::new("Sunlight", "Standard");
-    settings.photographic.color_sensitivity = [
-        0.123456, -0.234567, 0.345678, -0.456789, 0.567891, -0.678912,
-    ];
+    settings.photographic.color_editor.bands[0].hue = 0.123456;
+    settings.photographic.color_editor.bands[0].saturation = -0.234567;
+    settings.photographic.color_editor.bands[0].lightness = 0.345678;
     let saved = settings.clone();
     let output = ctx.run(
         egui::RawInput {
@@ -3526,11 +3555,12 @@ fn sensitivity_readouts_and_slider_tooltips_share_three_significant_digits() {
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                common::color_sensitivity(ui, &mut settings);
+                super::color_editor::show(ui, &mut settings);
             });
         },
     );
-    for value in saved.photographic.color_sensitivity {
+    let band = saved.photographic.color_editor.bands[0];
+    for value in [band.hue, band.saturation, band.lightness] {
         let text = crate::widgets::format_parameter_value(f64::from(value));
         assert_eq!(text_centers(&output, &text).len(), 1, "{value}: {text}");
         assert_eq!(
@@ -3540,5 +3570,64 @@ fn sensitivity_readouts_and_slider_tooltips_share_three_significant_digits() {
             text
         );
     }
+    assert_eq!(settings, saved);
+}
+
+#[test]
+fn color_swatch_selection_changes_visible_values_without_editing_or_rendering() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.color_editor.bands[0].lightness = 0.11;
+    settings.photographic.color_editor.bands[5].lightness = 0.22;
+    let saved = settings.clone();
+    let mut frame = |events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(350., 800.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(!super::color_editor::show(ui, &mut settings));
+                });
+            },
+        )
+    };
+    frame(vec![]);
+    let first = frame(vec![]);
+    assert_eq!(text_centers(&first, "0.11").len(), 1);
+    let blue = first
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) if rect.fill == egui::Color32::from_rgb(66, 105, 178) => {
+                Some(rect.rect.center())
+            }
+            _ => None,
+        })
+        .expect("blue swatch");
+    frame(vec![egui::Event::PointerMoved(blue)]);
+    frame(vec![
+        egui::Event::PointerMoved(blue),
+        egui::Event::PointerButton {
+            pos: blue,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        },
+    ]);
+    let selected = frame(vec![egui::Event::PointerButton {
+        pos: blue,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    }]);
+    assert_eq!(text_centers(&selected, "0.22").len(), 1);
+    assert!(text_centers(&selected, "0.11").is_empty());
     assert_eq!(settings, saved);
 }

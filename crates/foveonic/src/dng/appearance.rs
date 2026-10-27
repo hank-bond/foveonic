@@ -183,6 +183,13 @@ pub(crate) struct ProfileData {
 }
 
 impl Prepared {
+    /// Invert the same normalized pre-tone interpretation used by the DNG profile.
+    /// This removes its linear selected-look mapping before storage, so the reader
+    /// can restore it once without copying photographic tone into the samples.
+    pub(crate) fn technical_from_native(&self) -> Result<Matrix> {
+        self.mapping.then(self.camera_to_native).inverse()
+    }
+
     #[cfg(test)]
     pub fn new(m: &crate::source::Metadata, settings: &crate::render::Settings) -> Result<Self> {
         crate::render::dng_appearance(m, settings, Default::default())

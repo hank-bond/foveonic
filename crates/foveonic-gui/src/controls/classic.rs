@@ -1,7 +1,8 @@
 //! Composes Classic controls using the camera's built-in reconstruction and corrections.
 
-use super::common;
+use super::{common, sections};
 use crate::help;
+use crate::preferences::EditingSection;
 use eframe::egui;
 use foveonic::{
     render::{ControlCapabilities, Settings},
@@ -12,6 +13,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
+    order: &mut Vec<EditingSection>,
 ) -> bool {
     let mut changed = common::rendering(ui, settings);
     let capabilities = ControlCapabilities::from_family(ProcessingFamily::Classic);
@@ -25,19 +27,35 @@ pub(super) fn show(
             color_mode: capabilities.color_mode_active(settings),
         },
     );
-    ui.separator();
-    changed |= ui
-        .add_enabled_ui(settings.tone_enabled, |ui| {
-            common::color_sensitivity(ui, settings)
-        })
-        .inner;
-    changed |= common::tone(ui, settings, mono);
-    ui.separator();
-    changed |= common::reconstruction(ui, settings);
-    ui.separator();
-    changed |= common::sharpening(ui, settings, metadata);
-    ui.separator();
-    common::section_header(ui, "Corrections", None);
+    changed |= sections::show(
+        ui,
+        order,
+        &[
+            EditingSection::Tone,
+            EditingSection::ColorEditor,
+            EditingSection::Noise,
+            EditingSection::Sharpening,
+            EditingSection::Corrections,
+        ],
+        |ui, section| match section {
+            EditingSection::Tone => common::tone(ui, settings, mono),
+            EditingSection::ColorEditor => super::color_editor::show(ui, settings),
+            EditingSection::Noise => common::reconstruction(ui, settings),
+            EditingSection::Sharpening => common::sharpening(ui, settings, metadata),
+            EditingSection::Corrections => corrections(ui, settings, capabilities),
+            _ => false,
+        },
+    );
+    changed
+}
+
+fn corrections(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    capabilities: ControlCapabilities,
+) -> bool {
+    let mut changed = false;
+    common::section_header(ui, EditingSection::Corrections, "Corrections", None);
     changed |= ui
         .add_enabled_ui(capabilities.highlights_active(settings), |ui| {
             crate::widgets::checkbox(ui, &mut settings.highlight_restoration, "Highlights")

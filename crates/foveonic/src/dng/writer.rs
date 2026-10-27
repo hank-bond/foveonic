@@ -251,8 +251,8 @@ pub(super) fn write<W: Write + Seek>(
     let mut baked_controls = baked_controls.to_vec();
     let effective = settings.processing_settings();
     let active = effective.active_tone_settings();
-    if active.tone_enabled && active.photographic.sensitivity_active() {
-        baked_controls.push("color_sensitivity");
+    if active.color_editor_active() {
+        baked_controls.push("color_editor");
     }
     if !active.tonal_ranges.is_neutral() {
         baked_controls.push("hdr");

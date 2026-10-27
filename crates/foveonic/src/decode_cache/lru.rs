@@ -141,5 +141,5 @@ fn evictions(
 }
 
 #[cfg(test)]
-#[path = "decode_cache_lru_test.rs"]
+#[path = "lru_test.rs"]
 mod tests;

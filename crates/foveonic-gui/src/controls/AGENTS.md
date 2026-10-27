@@ -8,6 +8,8 @@ Choose the processing family once in the parent dispatcher. Each family panel ow
 
 All numeric slider readouts use the shared widget formatter with at most three significant digits. Preserve the stored precision and measure the same formatted text when reserving value-field width.
 
+Editing tool order lives in application preferences. Family panels declare supported tools, and the shared section arranger supplies stable tool identities and accepts typed editing-tool drops. Reordering must not report an image edit or alter pipeline order. Tool headers share the scaled workspace grip.
+
 Camera metadata supplies white-balance and color-mode choices. Normalize unsupported settings through the processor's control contract when metadata arrives. Adding a family should add a panel without adding family switches to shared widgets.
 
 <!-- INDEX:START -->
@@ -17,8 +19,10 @@ Camera metadata supplies white-balance and color-mode choices. Normalize unsuppo
 ### Source files
 
 - **[classic.rs](./classic.rs)** Composes Classic controls using the camera's built-in reconstruction and corrections.
+- **[color_editor.rs](./color_editor.rs)** Selects color ranges for shared linear Hue, Saturation and Lightness adjustments.
 - **[common.rs](./common.rs)** Shares editing rows and photographic controls used by family panels.
 - **[merrill.rs](./merrill.rs)** Composes Merrill color, monochrome, reconstruction and correction controls.
 - **[quattro.rs](./quattro.rs)** Composes Quattro color and monochrome controls using file-derived defaults.
+- **[sections.rs](./sections.rs)** Arranges supported editing tools without changing their processing or saved image settings.
 
 <!-- INDEX:END -->

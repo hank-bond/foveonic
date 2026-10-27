@@ -46,6 +46,8 @@ implementation: conforming
 - UI settings **must** save the last successfully opened organizer folder and reopen it on application startup. An explicit launch path **must** take precedence. Opening a file remembers its containing folder; unavailable saved folders **must** report the error without opening a different folder or blocking use of the app.
 - Photographic-settings persistence **must** follow [editing sidecars](./editing-sidecars.md). UI-preference storage **must** retain workspace choices, geometry, and mode-specific processing preferences separately from photo edits.
 
+Within Editing, tool headers must offer a smaller version of the existing six-dot drag grip at the right. Dragging reorders supported editing sections and persists their order in application preferences, separately from photograph sidecars. Color Editor uses a checkbox header and appears below Tone and Color by default. Reordering must not change image settings, trigger processing, or change pipeline order. Keep widget identities tied to their section, and retain the relative order of temporarily unavailable sections across camera/rendering-mode changes. Editing-tool drops must remain separate from outer workspace-section drops. Show one insertion indicator at the actual divider between tools, regardless of which side of that divider is hovered. Do not advertise drops that leave the visible order unchanged, including moves across temporarily hidden tools.
+
 ## Implementation direction
 
 Editing, inspection, and scope explanations follow [photographic control help](./photographic-help.md).

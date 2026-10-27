@@ -7,4 +7,4 @@ exclude = ["vendor/egui-wgpu"]
 egui-wgpu = { path = "vendor/egui-wgpu" }
 
 [workspace.package]
-version = "0.4.2"
+version = "0.5.0"

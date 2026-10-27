@@ -1,6 +1,6 @@
 //! Shares editing rows and photographic controls used by family panels.
 
-use crate::help;
+use crate::{help, preferences::EditingSection};
 use eframe::egui;
 use foveonic::{
     render::{Rendering, RepairThreshold, Settings},
@@ -19,14 +19,23 @@ const COLUMN_LABELS: &[&str] = &[
 const ROW_HEIGHT: f32 = 20.;
 
 /// Keep the section title and optional bypass on one stable row.
-pub(super) fn section_header(ui: &mut egui::Ui, title: &str, enabled: Option<&mut bool>) -> bool {
+pub(super) fn section_header(
+    ui: &mut egui::Ui,
+    section: EditingSection,
+    title: &str,
+    enabled: Option<&mut bool>,
+) -> bool {
     ui.horizontal(|ui| {
         let response = if let Some(enabled) = enabled {
             crate::widgets::checkbox(ui, enabled, egui::RichText::new(title).weak())
         } else {
             ui.weak(title)
         };
-        help::control(response, title).changed()
+        let changed = help::control(response, title).changed();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::sections::editing_handle(ui, section);
+        });
+        changed
     })
     .inner
 }
@@ -601,7 +610,12 @@ pub(super) fn tone_with_exposure_range(
 ) -> bool {
     let mut changed = false;
     let title = if mono { "Tone" } else { "Tone and Color" };
-    changed |= section_header(ui, title, Some(&mut settings.tone_enabled));
+    changed |= section_header(
+        ui,
+        EditingSection::Tone,
+        title,
+        Some(&mut settings.tone_enabled),
+    );
     ui.add_enabled_ui(settings.tone_enabled, |ui| {
         changed |= method_choice(
             ui,
@@ -701,7 +715,12 @@ pub(super) fn sharpening_with_range(
     reference_range: RangeInclusive<f32>,
 ) -> bool {
     let mut changed = false;
-    changed |= section_header(ui, "Sharpening", Some(&mut settings.sharpening_enabled));
+    changed |= section_header(
+        ui,
+        EditingSection::Sharpening,
+        "Sharpening",
+        Some(&mut settings.sharpening_enabled),
+    );
     let calculated = metadata.and_then(|metadata| {
         let mut automatic = settings.clone();
         automatic.sharpen_amount = None;
@@ -794,7 +813,12 @@ pub(super) fn pixel_corrections(ui: &mut egui::Ui, settings: &mut Settings) -> b
 pub(super) fn reconstruction(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = false;
     let mut reconstruction = settings.reconstruction.is_some();
-    if section_header(ui, "Noise and Detail", Some(&mut reconstruction)) {
+    if section_header(
+        ui,
+        EditingSection::Noise,
+        "Noise and Detail",
+        Some(&mut reconstruction),
+    ) {
         settings.reconstruction = reconstruction.then(Default::default);
         changed = true;
     }
@@ -824,23 +848,5 @@ pub(super) fn method_choice(
         });
         help::control(response.response, key);
     });
-    changed
-}
-
-pub(super) fn color_sensitivity(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = false;
-    let response = egui::CollapsingHeader::new("Color sensitivity")
-        .id_salt("color-sensitivity")
-        .show(ui, |ui| {
-            let labels = ["Red", "Yellow", "Green", "Cyan", "Blue", "Magenta"];
-            let column = LabelColumn::new(ui, &labels, &[]);
-            for (label, value) in labels
-                .into_iter()
-                .zip(&mut settings.photographic.color_sensitivity)
-            {
-                changed |= column.adjustment(ui, (label, label), value, -1. ..=1., 0.);
-            }
-        });
-    help::control(response.header_response, "Color sensitivity");
     changed
 }
