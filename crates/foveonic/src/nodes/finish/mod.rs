@@ -25,3 +25,7 @@ pub(crate) mod color_sharpen;
 pub(crate) mod code_channel_map;
 
 pub(crate) mod photographic;
+
+pub(crate) mod sensitivity;
+
+pub(crate) mod linear_gain;

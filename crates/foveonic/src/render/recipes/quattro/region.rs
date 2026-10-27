@@ -3,7 +3,8 @@
 use super::stage2::Signals;
 use crate::{
     graph::{Graph, Operation},
-    nodes::finish::{code_crop, image_region},
+    nodes::finish::{code_crop, image_region, tone_equalizer},
+    render::Settings,
     source::{Metadata, Result},
 };
 
@@ -79,4 +80,74 @@ impl Prepared {
             mask,
         ))
     }
+}
+
+/// Extend the output tile for shared pre-curve filters; sensor context is planned separately.
+pub(super) fn expand_shared_edits(
+    metadata: &Metadata,
+    settings: &mut Settings,
+    names: &[&str],
+) -> Result<Option<[u32; 4]>> {
+    if names != ["final"] {
+        return Ok(None);
+    }
+    let Some(rect) = settings.preview_region else {
+        return Ok(None);
+    };
+    let margin = super::super::linear_edits::support(settings)
+        + if !settings.tonal_ranges.is_neutral() {
+            tone_equalizer::support()
+        } else {
+            0
+        };
+    if margin == 0 {
+        return Ok(None);
+    }
+    let encode =
+        crate::nodes::sensor::calibration::encode(metadata, crate::color_space::ColorSpace::Srgb)?;
+    let alignment = tone_equalizer::GUIDE_ALIGNMENT;
+    let expanded = [
+        rect[0].saturating_sub(margin) / alignment * alignment,
+        rect[1].saturating_sub(margin) / alignment * alignment,
+        rect[2]
+            .saturating_add(margin)
+            .div_ceil(alignment)
+            .saturating_mul(alignment)
+            .min(encode.output[0]),
+        rect[3]
+            .saturating_add(margin)
+            .div_ceil(alignment)
+            .saturating_mul(alignment)
+            .min(encode.output[1]),
+    ];
+    settings.preview_region = Some(expanded);
+    Ok(Some([
+        rect[0] - expanded[0],
+        rect[1] - expanded[1],
+        rect[2] - expanded[0],
+        rect[3] - expanded[1],
+    ]))
+}
+
+pub(super) fn crop_shared_edits(
+    recipe: &mut super::BuiltRecipe,
+    rect: Option<[u32; 4]>,
+) -> Result<()> {
+    let Some(rect) = rect else {
+        return Ok(());
+    };
+    let data = recipe.graph.outputs[recipe.final_id].data;
+    recipe.final_id = recipe.graph.add(
+        Operation::ImageRegion {
+            prepared: image_region::Prepared::new(recipe.rgb_extent, rect, 3)?,
+            data,
+            output: "region.output",
+        },
+        &[recipe.final_id],
+    )?;
+    let extent = [rect[2] - rect[0], rect[3] - rect[1]];
+    recipe.rgb_extent = extent;
+    recipe.params.output[..2].copy_from_slice(&extent);
+    recipe.params.crop = [0, 0, extent[0], extent[1]];
+    Ok(())
 }

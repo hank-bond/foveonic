@@ -1,16 +1,21 @@
-//! Completes photographic RGB with selected camera appearance, exposure, tone, and saturation.
+//! Applies the camera tone curve and saturation after shared linear photographic edits.
 
+use super::super::linear_edits::{self, Context};
 use super::super::{requested, BuiltRecipe};
 use super::technical;
-use crate::color_space::ColorSpace;
 use crate::{
+    color_space::ColorSpace,
     graph::Operation,
     interactive::Execution,
-    nodes::finish::{tone, tone_equalizer},
     profile::Profile,
     render::{Engine, Settings},
     source::{Result, Source},
 };
+
+// Camera tone tables use 4095 as nominal white. The sensitivity model uses
+// the reconstruction's Q12 signal unit, preserving its established response.
+const LINEAR_CODE_WHITE: f32 = 4095.;
+const CLASSIFIER_CODE_UNIT: f32 = 4096.;
 
 pub(in crate::render::recipes) fn build(
     engine: &Engine,
@@ -33,54 +38,54 @@ pub(in crate::render::recipes) fn build(
         technical::Prepared::Linear(recipe, mode) => (recipe, mode),
     };
     let space = ColorSpace::from_metadata(&source.metadata)?;
-    let tonal = if !settings.tonal_ranges.is_neutral()
-        || names
-            .iter()
-            .any(|n| matches!(*n, "tonal-ranges.mask" | "tonal-ranges.rgb"))
-    {
-        let extent = [recipe.params.source[0], recipe.params.source[1]];
-        let guide = tone_equalizer::Guide::new(
-            extent,
-            tone_equalizer::radius(settings.preview_quality.is_reduced()),
-            space,
-        )?;
-        let linear = recipe.final_id;
-        // A Fast/Full transition changes the upstream grid. Keep the new linear
-        // boundary immediately so the next tonal edit never warms up denoising.
-        recipe.graph.retain_for_session(linear);
-        let mask = recipe
-            .graph
-            .add(Operation::ToneMask { guide, space }, &[linear])?;
-        recipe.graph.retain_for_session(mask);
-        execution.check()?;
-        if requested(&recipe.graph, names) {
-            return Ok(recipe);
-        }
-        Some((linear, mask))
-    } else {
-        None
-    };
-    let curve = profile.measure("prepare tone curve", || {
-        if settings.is_monochrome() {
-            tone::prepare_monochrome(&source.metadata, settings.tone)
-        } else {
-            tone::prepare(&source.metadata, &mode, settings.tone)
-        }
-    })?;
-    if let Some((linear, mask)) = tonal {
-        recipe.final_id = recipe.graph.add(
-            Operation::TonalRanges {
-                controls: settings.tonal_ranges,
-                pivot: tone_equalizer::pivot(&curve, settings.exposure)?,
-                space,
-            },
-            &[linear, mask],
-        )?;
-        execution.check()?;
-        if requested(&recipe.graph, names) {
-            return Ok(recipe);
-        }
+    linear_edits::alias(&mut recipe, space, "linear.base")?;
+    if requested(&recipe.graph, names) {
+        return Ok(recipe);
     }
+    let mut prepared_curve = None;
+    let prepare_curve = |profile: &mut Profile| {
+        profile.measure("prepare tone curve", || {
+            if settings.is_monochrome() {
+                crate::nodes::finish::tone::prepare_monochrome(&source.metadata, settings.tone)
+            } else {
+                crate::nodes::finish::tone::prepare(&source.metadata, &mode, settings.tone)
+            }
+        })
+    };
+    let context = Context {
+        space,
+        white: LINEAR_CODE_WHITE,
+        guide_white: CLASSIFIER_CODE_UNIT,
+        scale: if settings.preview_region.is_some() {
+            1.
+        } else {
+            (recipe.params.source[0] as f32 / source.metadata.width as f32)
+                .min(recipe.params.source[1] as f32 / source.metadata.height as f32)
+        },
+    };
+    linear_edits::build(
+        engine,
+        source,
+        settings,
+        &mut recipe,
+        names,
+        context,
+        |profile| {
+            let curve = prepare_curve(profile)?;
+            let pivot = crate::nodes::finish::tone_equalizer::pivot(&curve, settings.exposure)?;
+            prepared_curve = Some(curve);
+            Ok(pivot)
+        },
+        profile,
+        execution,
+    )?;
+    if requested(&recipe.graph, names) {
+        return Ok(recipe);
+    }
+    let curve = match prepared_curve {
+        Some(curve) => curve,
+        None => prepare_curve(profile)?,
+    };
     recipe.final_id = recipe.graph.add(
         Operation::Tone {
             curve,

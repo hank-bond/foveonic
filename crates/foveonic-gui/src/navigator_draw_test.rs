@@ -107,6 +107,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
                             channel: 1,
                             input: false,
                             difference_gain: gain,
+                            signal_scale: 1.,
                         },
                         Some(&input),
                     );

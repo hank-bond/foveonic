@@ -156,8 +156,21 @@ impl Graph {
         }
     }
 
+    /// Prefer an expensive editing boundary when the session cannot retain every stage.
+    pub(crate) fn prioritize_for_session(&mut self, output: usize) {
+        self.session_outputs.retain(|id| *id != output);
+        self.retain_for_session(output);
+    }
+
     /// Requiring existing inputs prevents cycles and keeps execution order clear.
     pub fn add(&mut self, operation: Operation, inputs: &[usize]) -> Result<usize> {
+        if matches!(operation, Operation::LinearCodeRgb { white: 0, .. }) {
+            return Err("linear RGB requires a nonzero nominal white".into());
+        }
+        if matches!(operation, Operation::TransferLinearGain { data, .. } if !matches!(data, DataType::LinearRgb(_) | DataType::LinearCodeRgb))
+        {
+            return Err("brightness gain transfer requires a linear sample base".into());
+        }
         let (expected, output) = operation.types();
         if inputs.len() != expected.len() {
             return Err("wrong number of node inputs".into());
@@ -197,6 +210,22 @@ impl Graph {
             inputs: inputs.to_vec(),
             outputs,
         });
+        Ok(id)
+    }
+
+    /// Distinguish repeated numerical operations at different recipe boundaries.
+    /// Public inspection names stay independent of their stable cache scope.
+    pub(crate) fn add_scoped(
+        &mut self,
+        operation: Operation,
+        inputs: &[usize],
+        scope: &str,
+    ) -> Result<usize> {
+        let id = self.add(operation, inputs)?;
+        let producer = self.outputs[id].producer;
+        for output in &self.nodes[producer].outputs {
+            self.outputs[*output].cache_scope = scope.to_owned();
+        }
         Ok(id)
     }
 

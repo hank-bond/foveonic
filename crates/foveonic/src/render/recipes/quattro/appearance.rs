@@ -8,7 +8,8 @@ use crate::{
 // These profiles are the reference implementation's ordinary color responses.
 // Its lattice is sampled at quarter-code resolution, with a control every fifty
 // samples. Preserve the discrete join and Float32 interpolation boundaries.
-const SATURATION_CODE: usize = 16384;
+pub(super) const LINEAR_CODE_WHITE: u32 = 16384;
+const SATURATION_CODE: usize = LINEAR_CODE_WHITE as usize;
 const CONTROL_SPACING: usize = 50;
 const PROFILE_GAMMA: f64 = 2.222_222_222_222_222_3;
 pub(super) const MODES: [&str; 10] = [

@@ -548,6 +548,7 @@ fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
     RenderedImage {
         buffer: engine.gpu.upload("Retained fixture", pixels).unwrap(),
         description: Description {
+            linear_white: 4095,
             view_baked: false,
             extent: [3, 2],
             layout: Layout::Rgb32Float,

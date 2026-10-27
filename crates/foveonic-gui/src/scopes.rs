@@ -264,7 +264,10 @@ pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Optio
                 ui.painter()
                     .add(egui::Shape::line(points, egui::Stroke::new(1_f32, color)));
             }
-            let high = if matches!(
+            let linear_white = data.linear_white.to_string();
+            let high = if matches!(data.space, Space::LinearRgb(_)) {
+                linear_white.as_str()
+            } else if matches!(
                 data.space,
                 Space::SensorLayers | Space::CalibratedLayers | Space::LinearRgb(_)
             ) {
@@ -391,6 +394,7 @@ mod tests {
     #[test]
     fn density_weights_use_sample_units_for_the_existing_brightness_mapping() {
         let mut data = Scopes {
+            linear_white: 4095,
             space: Space::SensorLayers,
             samples: [4, 1],
             counts: vec![0; 4 * BINS + 4 * BINS * BINS + 12],
@@ -410,6 +414,7 @@ mod tests {
     fn display_resampling_preserves_counts_and_reuses_its_texture() {
         let ctx = egui::Context::default();
         let mut data = Scopes {
+            linear_white: 4095,
             space: Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb),
             samples: [512, 512],
             counts: vec![0; 4 * BINS + 4 * BINS * BINS + 12],
@@ -429,6 +434,7 @@ mod tests {
 
     fn scope_height(space: Option<Space>) -> f32 {
         let data = space.map(|space| Scopes {
+            linear_white: 4095,
             space,
             samples: [1, 1],
             counts: vec![0; 4 * BINS + 4 * BINS * BINS + 12],

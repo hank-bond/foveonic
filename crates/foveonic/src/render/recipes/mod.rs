@@ -11,6 +11,7 @@ use crate::{
 
 pub(super) mod classic;
 mod finishing;
+mod linear_edits;
 pub(super) mod merrill;
 pub(super) mod quattro;
 
@@ -23,6 +24,8 @@ struct BuiltRecipe {
     graph: Graph,
     final_id: usize,
     params: calibration::EncodeParams,
+    /// Working RGB grid at the shared photographic boundary, before output encoding.
+    rgb_extent: [u32; 2],
 }
 
 fn requested(graph: &Graph, names: &[&str]) -> bool {
@@ -59,33 +62,16 @@ impl Engine {
             settings
         };
         let effective = input.processing_settings();
-        let built = match recipe {
+        let mut built = match recipe {
             Recipe::Photographic(_) => {
                 let effective = effective.active_tone_settings();
-                let mut camera = finishing::camera_settings(&effective);
-                let region = finishing::expand_region(source, &mut camera, names)?;
-                let built = build_camera(
-                    self,
-                    source,
-                    &camera,
-                    Recipe::Photographic(names),
-                    profile,
-                    execution,
-                )?;
-                let mut built =
-                    finishing::build(self, source, &effective, built, names, profile, execution)?;
-                finishing::crop_region(&mut built, region)?;
-                built
+                let camera = finishing::camera_settings(&effective);
+                let built = build_camera(self, source, &camera, names, profile, execution)?;
+                finishing::build(&effective, built, names, execution)?
             }
-            Recipe::DngBase => build_camera(
-                self,
-                source,
-                &effective,
-                Recipe::DngBase,
-                profile,
-                execution,
-            )?,
+            Recipe::DngBase => build_dng(self, source, &effective, settings, profile, execution)?,
         };
+        linear_edits::prioritize_cache(&mut built.graph);
         if let Some(progress) = execution.progress {
             progress(super::RenderProgress::Prepared);
         }
@@ -106,41 +92,49 @@ fn build_camera(
     engine: &Engine,
     source: &Source,
     settings: &Settings,
-    recipe: Recipe<'_>,
+    names: &[&str],
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
-    let names = match recipe {
-        Recipe::Photographic(names) if !names.iter().any(|n| n.starts_with("finish.")) => names,
-        _ => &["final"],
+    let names = if names.iter().any(|n| n.starts_with("finish.")) {
+        &["final"][..]
+    } else {
+        names
     };
-    let built = match recipe {
-        Recipe::Photographic(_) => match source.metadata.processing_family()? {
-            crate::source::ProcessingFamily::Merrill => {
-                merrill::build(engine, source, settings, names, profile, execution)?
-            }
-            crate::source::ProcessingFamily::Classic => {
-                classic::build(engine, source, settings, names, profile, execution)?
-            }
-            crate::source::ProcessingFamily::Quattro => profile
-                .measure("prepare recipe", || {
-                    quattro::build(engine, source, settings, names, execution)
-                })?,
-        },
-        Recipe::DngBase => match source.metadata.processing_family()? {
-            crate::source::ProcessingFamily::Merrill => {
-                merrill::build_dng(engine, source, settings, profile, execution)?
-            }
-            crate::source::ProcessingFamily::Classic => {
-                classic::build_dng(engine, source, settings, profile, execution)?
-            }
-            crate::source::ProcessingFamily::Quattro => profile
-                .measure("prepare Quattro DNG recipe", || {
-                    quattro::build_dng(engine, source, settings, execution)
-                })?,
-        },
-    };
-    Ok(built)
+    match source.metadata.processing_family()? {
+        crate::source::ProcessingFamily::Merrill => {
+            merrill::build(engine, source, settings, names, profile, execution)
+        }
+        crate::source::ProcessingFamily::Classic => {
+            classic::build(engine, source, settings, names, profile, execution)
+        }
+        crate::source::ProcessingFamily::Quattro => {
+            quattro::build(engine, source, settings, names, profile, execution)
+        }
+    }
+}
+
+fn build_dng(
+    engine: &Engine,
+    source: &Source,
+    technical: &Settings,
+    authored: &Settings,
+    profile: &mut Profile,
+    execution: &mut Execution<'_>,
+) -> Result<BuiltRecipe> {
+    let mut recipe = match source.metadata.processing_family()? {
+        crate::source::ProcessingFamily::Merrill => {
+            merrill::build_dng(engine, source, technical, profile, execution)
+        }
+        crate::source::ProcessingFamily::Classic => {
+            classic::build_dng(engine, source, technical, profile, execution)
+        }
+        crate::source::ProcessingFamily::Quattro => {
+            quattro::build_dng(engine, source, technical, profile, execution)
+        }
+    }?;
+    linear_edits::bake(engine, source, authored, &mut recipe, profile, execution)?;
+    Ok(recipe)
 }
 
 pub(in crate::render) fn saturation(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {

@@ -170,6 +170,7 @@ fn mono_mix_noise_sharpen_and_mode_switches_match_fresh_and_retain_snapshots() {
             mix,
             noise,
             banding,
+            ..Default::default()
         };
         s.sharpen_amount = Some(sharpen);
         let cached = session_image(&engine, &mut session, &s);
@@ -415,4 +416,92 @@ fn mono_tiff_and_dng_keep_neutral_samples_and_defer_only_presentation() {
     assert_ne!(engine.readback_image(&changed).unwrap(), original);
     assert_eq!(engine.readback_image(&base).unwrap(), original);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a Merrill X3F"]
+fn mono_sensitivity_and_detail_preserve_mix_cache_and_dng_boundaries() {
+    let source = std::sync::Arc::new(
+        Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap(),
+    );
+    let engine = Engine::new().unwrap();
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut s = caps
+        .editing_defaults(&source.metadata, Rendering::Monochrome)
+        .unwrap();
+    s.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+    s.monochrome.mix = [0., 0., 1.];
+    let mut session = RenderSession::new(source.clone());
+    let mut last = None;
+    for (sensitivity, fine, mix) in [
+        (0., 1., [0., 0., 1.]),
+        (0.3, 1., [0., 0., 1.]),
+        (0.5, 1.2, [0., 0., 1.]),
+        (0.5, 1.2, [0.5, 0., 0.5]),
+    ] {
+        s.photographic.color_sensitivity[0] = sensitivity;
+        s.monochrome.texture.fine = fine;
+        s.monochrome.mix = mix;
+        let cached = session_image(&engine, &mut session, &s);
+        let cached_bytes = engine.readback_image(&cached).unwrap();
+        neutral(&cached_bytes);
+        drop(cached);
+        let fresh = engine.render(&source, &s, &mut Profile::default()).unwrap();
+        same(
+            &cached_bytes,
+            &engine.readback_image(&fresh).unwrap(),
+            "mono sensitivity/detail cache",
+        );
+        if let Some(previous) = last {
+            assert!(previous != cached_bytes);
+        }
+        last = Some(cached_bytes);
+    }
+    let outputs = [
+        "sensitivity.color-guide",
+        "sensitivity.rgb",
+        "sensitivity.input",
+        "mono.texture",
+        "mono.despeckle",
+    ];
+    let mut artifacts = engine
+        .render_artifacts(&source, &s, &outputs, &mut Profile::default())
+        .unwrap();
+    for artifact in artifacts.drain(..) {
+        let name = artifact.name;
+        let img = image(artifact);
+        if name == "mono.texture" || name == "mono.despeckle" {
+            assert_eq!(img.description().layout, Layout::Scalar32Float);
+        } else {
+            assert_eq!(img.description().layout, Layout::Rgb32Float);
+        }
+        assert!(
+            bytemuck::cast_slice::<u8, f32>(&engine.readback_image(&img).unwrap())
+                .iter()
+                .all(|v| v.is_finite())
+        );
+    }
+    let dng = engine
+        .render_dng_base(&source, &s, &mut Profile::default())
+        .unwrap();
+    let dng_bytes = engine.readback_image(&dng).unwrap();
+    drop(dng);
+    s.photographic.color_sensitivity = [0.; 6];
+    let plain = engine
+        .render_dng_base(&source, &s, &mut Profile::default())
+        .unwrap();
+    let neutral_sensitivity_bytes = engine.readback_image(&plain).unwrap();
+    assert!(
+        dng_bytes != neutral_sensitivity_bytes,
+        "DNG bakes sensitivity"
+    );
+    drop(plain);
+    s.monochrome.detail_enabled = false;
+    let plain = engine
+        .render_dng_base(&source, &s, &mut Profile::default())
+        .unwrap();
+    assert!(
+        neutral_sensitivity_bytes != engine.readback_image(&plain).unwrap(),
+        "DNG retains technical detail"
+    );
 }

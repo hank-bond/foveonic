@@ -98,14 +98,11 @@ impl TryFrom<SavedControls> for Controls {
     }
 }
 
-/// Render scale changes the spatial radius, rather than the meaning of the
-/// selected tone ranges. A regional Full request still uses the native radius.
-pub(crate) fn radius(reduced: bool) -> u32 {
-    if reduced {
-        NATIVE_RADIUS / 2
-    } else {
-        NATIVE_RADIUS
-    }
+/// Match spatial support to the actual working grid, including arbitrary output sizing.
+pub(crate) fn radius_for_scale(scale: f32) -> u32 {
+    (NATIVE_RADIUS as f32 * scale)
+        .round()
+        .clamp(1., NATIVE_RADIUS as f32) as u32
 }
 
 /// Coefficients depend on the unchanged guide, so support is the largest
@@ -130,6 +127,18 @@ pub(crate) fn pivot(curve: &[f32], exposure: f32) -> Result<f32> {
     if curve.len() < 2 || !exposure.is_finite() || curve.iter().any(|v| !v.is_finite()) {
         return Err("invalid HDR pivot curve or exposure".into());
     }
+    pivot_with_white(curve, exposure, NOMINAL_WHITE)
+}
+
+pub(crate) fn pivot_with_white(curve: &[f32], exposure: f32, white: f32) -> Result<f32> {
+    if curve.len() < 2
+        || white <= 0.
+        || !white.is_finite()
+        || !exposure.is_finite()
+        || curve.iter().any(|v| !v.is_finite())
+    {
+        return Err("invalid HDR pivot context".into());
+    }
     let upper = curve
         .partition_point(|v| *v < PIVOT_OUTPUT)
         .clamp(1, curve.len() - 1);
@@ -140,7 +149,7 @@ pub(crate) fn pivot(curve: &[f32], exposure: f32) -> Result<f32> {
     } else {
         0.
     };
-    Ok(((lower as f32 + fraction) / NOMINAL_WHITE)
+    Ok(((lower as f32 + fraction) / white)
         .max(2_f32.powi(-16))
         .log2()
         - exposure)
@@ -180,10 +189,12 @@ impl Guide {
             luma: luminance(space)?,
         })
     }
-    pub(crate) fn photographic(extent: [u32; 2], radius: u32, space: ColorSpace) -> Result<Self> {
-        let mut guide = Self::new(extent, radius, space)?;
-        guide.luma = guide.luma.map(|v| v * NOMINAL_WHITE);
-        Ok(guide)
+    pub(crate) fn with_white(mut self, white: f32) -> Self {
+        if white == NOMINAL_WHITE {
+            return self;
+        }
+        self.luma = self.luma.map(|v| v * NOMINAL_WHITE / white);
+        self
     }
     pub(crate) fn extent(self) -> [u32; 2] {
         [self.shape[0], self.shape[1]]
@@ -380,29 +391,7 @@ pub(crate) struct Response {
     pub space: ColorSpace,
 }
 
-pub(crate) fn apply(
-    gpu: &Gpu,
-    input: &ReadGuard,
-    mask: &ReadGuard,
-    extent: [u32; 2],
-    response: Response,
-    profile: &mut Profile,
-) -> Result<ReadGuard> {
-    apply_with_white(gpu, input, mask, extent, response, NOMINAL_WHITE, profile)
-}
-
-pub(crate) fn apply_photographic(
-    gpu: &Gpu,
-    input: &ReadGuard,
-    mask: &ReadGuard,
-    extent: [u32; 2],
-    response: Response,
-    profile: &mut Profile,
-) -> Result<ReadGuard> {
-    apply_with_white(gpu, input, mask, extent, response, 1., profile)
-}
-
-fn apply_with_white(
+pub(crate) fn apply_with_white(
     gpu: &Gpu,
     input: &ReadGuard,
     mask: &ReadGuard,

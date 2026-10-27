@@ -70,6 +70,7 @@ fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() 
         let mut image = RenderedImage {
             buffer: engine.gpu.upload("Destination fixture", &pixels).unwrap(),
             description: Description {
+                linear_white: 4095,
                 view_baked: false,
                 extent: [10, 1],
                 layout: Layout::Rgb32Float,
@@ -194,6 +195,7 @@ fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
             .upload("Zero sharpening fixture", &pixels)
             .unwrap(),
         description: Description {
+            linear_white: 4095,
             view_baked: false,
             extent: [5, 5],
             layout: Layout::Rgb32Float,

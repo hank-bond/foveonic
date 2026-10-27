@@ -43,9 +43,34 @@ impl PreviewQuality {
     }
 }
 
+/// Frozen output switches. These preferences do not become per-image edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ProcessingSections {
+    pub tone: bool,
+    pub noise: bool,
+    pub detail: bool,
+    pub sharpening: bool,
+    pub corrections: bool,
+}
+impl Default for ProcessingSections {
+    fn default() -> Self {
+        Self {
+            tone: true,
+            noise: true,
+            detail: true,
+            sharpening: true,
+            corrections: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// Batch-only section choices, excluded from editing sidecars.
+    #[serde(skip)]
+    pub processing_sections: ProcessingSections,
     /// Transient preview policy, excluded from per-photo editing sidecars.
     #[serde(skip)]
     pub preview_quality: PreviewQuality,
@@ -67,11 +92,20 @@ pub struct Settings {
     #[serde(rename = "refinement_enabled")]
     pub sharpening_enabled: bool,
     pub tone: ToneControls,
-    /// Spatial photographic HDR ranges. These preview/TIFF edits are omitted from DNG.
+    /// Spatial photographic HDR ranges, applied before camera tone and baked into DNG.
     pub tonal_ranges: TonalRanges,
     /// Color saturation after tone. Zero is grayscale and one leaves it unchanged.
     pub saturation: f32,
     pub photographic: PhotographicControls,
+    /// Discard retired pre-release layer experiments while retaining other edits.
+    #[doc(hidden)]
+    #[serde(
+        default,
+        rename = "layers",
+        skip_serializing,
+        deserialize_with = "discard_retired_layers"
+    )]
+    pub retired_layers: (),
     /// ColorDQ gain after camera color conversion. Zero skips this correction.
     /// None chooses the camera's automatic gain when noise cleanup is on.
     /// Some keeps an explicit override, including zero for Off.
@@ -105,6 +139,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            processing_sections: Default::default(),
             preview_quality: PreviewQuality::Full,
             preview_region: None,
             rendering: Rendering::Color,
@@ -120,6 +155,7 @@ impl Default for Settings {
             tonal_ranges: TonalRanges::default(),
             saturation: 1.,
             photographic: PhotographicControls::default(),
+            retired_layers: (),
             color_dq_gain: None,
             repair: Some(RepairThreshold::Camera),
             despeckle: true,
@@ -219,19 +255,38 @@ impl Settings {
     /// Resolve section bypasses at the recipe boundary. Artifacts and sidecars
     /// keep the requested values, including inactive edits.
     pub(crate) fn processing_settings(&self) -> std::borrow::Cow<'_, Self> {
-        if self.tone_enabled && self.sharpening_enabled {
+        if self.tone_enabled
+            && self.sharpening_enabled
+            && self.processing_sections == ProcessingSections::default()
+        {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut effective = self.clone();
-        if !self.tone_enabled {
+        let sections = self.processing_sections;
+        effective.tone_enabled &= sections.tone;
+        effective.sharpening_enabled &= sections.sharpening;
+        if let Some(noise) = &mut effective.reconstruction {
+            noise.noise_enabled &= sections.noise;
+            noise.detail_enabled &= sections.detail;
+        }
+        effective.monochrome.detail_enabled &= sections.detail;
+        if !sections.noise && effective.color_dq_gain.is_some() {
+            effective.color_dq_gain = Some(0.);
+        }
+        if !sections.corrections {
+            effective.repair = None;
+            effective.despeckle = false;
+            effective.highlight_restoration = false;
+        }
+        if !effective.tone_enabled {
             effective.exposure = 0.;
             effective.saturation = 1.;
             effective.tone = Default::default();
             effective.tonal_ranges = TonalRanges::default();
             effective.photographic.local_contrast = 0.;
         }
-        effective.sharpen_amount = self.processing_sharpen_amount();
-        if !self.sharpening_enabled {
+        effective.sharpen_amount = effective.processing_sharpen_amount();
+        if !effective.sharpening_enabled {
             effective.photographic.sharpening.amount = 0.;
         }
         std::borrow::Cow::Owned(effective)
@@ -289,10 +344,21 @@ impl Settings {
         Ok(())
     }
 
-    /// Shared photographic finishing leaves the established DNG recipe unchanged.
+    /// Select native technical DNG processing. Shared linear edits are baked separately.
     pub(crate) fn dng_settings(&self) -> Self {
-        let mut settings = self.clone();
-        settings.photographic = PhotographicControls::default();
+        // Resolve the selected method before removing shared photographic controls,
+        // so inactive Reference Shadows/Highlights cannot reappear in DNG metadata.
+        let mut settings = self.active_tone_settings().into_owned();
+        settings.preview_quality = PreviewQuality::Full;
+        settings.preview_region = None;
+        settings.output_size = None;
+        settings.photographic = PhotographicControls {
+            sharpening: crate::nodes::finish::photographic::Sharpening {
+                method: self.photographic.sharpening.method,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         settings
     }
 
@@ -348,4 +414,11 @@ impl Settings {
         }
         Ok(())
     }
+}
+
+fn discard_retired_layers<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<(), D::Error> {
+    <serde::de::IgnoredAny as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(())
 }

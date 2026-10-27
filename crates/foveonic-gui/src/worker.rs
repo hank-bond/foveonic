@@ -515,6 +515,7 @@ mod tests {
                     path: destination.clone(),
                     format: super::ExportFormat::Dng,
                     tiff_color_space: settings.tiff_color_space,
+                    sections: Default::default(),
                     conflict: foveonic::importing::ConflictPolicy::Rename,
                 }),
             });
@@ -1204,6 +1205,7 @@ mod preview_tests {
                 path: "export.output".into(),
                 format,
                 tiff_color_space: None,
+                sections: Default::default(),
                 conflict: foveonic::importing::ConflictPolicy::Rename,
             });
             resolve_preview(&request, &mut resolved, &metadata);
@@ -1256,6 +1258,7 @@ mod preview_tests {
                 path: "test.output".into(),
                 format,
                 tiff_color_space: None,
+                sections: Default::default(),
                 conflict: foveonic::importing::ConflictPolicy::Rename,
             });
             assert_eq!(
@@ -1375,6 +1378,7 @@ mod preview_tests {
                     path: destination.clone(),
                     format,
                     tiff_color_space: settings.tiff_color_space,
+                    sections: Default::default(),
                     conflict: foveonic::importing::ConflictPolicy::Rename,
                 }),
             });

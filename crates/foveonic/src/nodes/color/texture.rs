@@ -14,8 +14,8 @@ use crate::{
 // Two binomial steps define the fine/coarse boundary. Two more separate
 // broad shading, which is always restored. Size controls can double the
 // native 30-pixel support, staying inside the existing 64-pixel tile context.
-const NATIVE_STEPS: [u32; 4] = [1, 2, 4, 8];
-const FINE_BOUNDARY_STEP: usize = 1;
+pub(crate) const NATIVE_STEPS: [u32; 4] = [1, 2, 4, 8];
+pub(crate) const FINE_BOUNDARY_STEP: usize = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

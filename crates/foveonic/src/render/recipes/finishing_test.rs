@@ -1,10 +1,11 @@
 //! Checks shared editing across original camera families, caches and export boundaries.
 use super::*;
+use crate::render::Engine;
 use crate::{
     inspection::Content,
     profile::Profile,
     render::{ControlCapabilities, PhotographicMethod, PreviewQuality, RenderSession, Rendering},
-    source::Source,
+    source::{ProcessingFamily, Source},
 };
 use std::sync::Arc;
 
@@ -134,7 +135,7 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
         settings.photographic.sharpening.method = PhotographicMethod::Universal;
         settings.photographic.sharpening.amount = 0.6;
         if rendering == Rendering::Monochrome {
-            settings.photographic.monochrome_sensitivity = [0.3, 0.1, -0.2, 0., -0.4, 0.];
+            settings.photographic.color_sensitivity = [0.3, 0.1, -0.2, 0., -0.4, 0.];
         }
         settings.validate_for_camera(&source.metadata).unwrap();
         let mut session = RenderSession::new(source.clone());
@@ -167,7 +168,7 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
         drop(fresh);
         drop(cached);
         if rendering == Rendering::Monochrome {
-            settings.photographic.monochrome_sensitivity[0] = 0.5;
+            settings.photographic.color_sensitivity[0] = 0.5;
             let mut profile = Profile::new(crate::profile::Mode::Wall);
             let image = session_image(&engine, &mut session, &settings, &mut profile);
             drop(image);
@@ -177,13 +178,16 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
                 profile.host
             );
         }
-        // Reset ordinary edits: new finishing settings alone must not affect DNG.
+        // Neutral spatial edits preserve the established technical DNG base.
         let ordinary = capabilities
             .editing_defaults(&source.metadata, rendering)
             .unwrap();
         settings.tone = ordinary.tone;
         settings.saturation = ordinary.saturation;
         settings.tonal_ranges = ordinary.tonal_ranges;
+        settings.photographic.color_sensitivity = [0.; 6];
+        settings.photographic.local_contrast = 0.;
+        settings.photographic.sharpening = ordinary.photographic.sharpening;
         let dng = engine
             .render_dng_base(&source, &settings, &mut Profile::default())
             .unwrap();
@@ -235,6 +239,7 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
     if settings.color_mode.is_empty() {
         settings.color_mode = capabilities.default_color_mode(&source.metadata).unwrap();
     }
+    settings.photographic.color_sensitivity = [0.2, 0., -0.1, 0., 0.15, 0.];
     settings.photographic.tone_method = PhotographicMethod::Universal;
     settings.photographic.local_contrast = 0.4;
     settings.photographic.sharpening.method = PhotographicMethod::Universal;
@@ -331,6 +336,121 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
                 assert_eq!(
                     view_pixel(&region, &small, x, y),
                     view_pixel(&full, &bytes, w / 2 + x, h / 2 + y)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a Merrill X3F"]
+fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent() {
+    let source =
+        Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
+    let engine = Engine::new().unwrap();
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut canonical_guide = None;
+    for rendering in [Rendering::Color, Rendering::Monochrome] {
+        let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
+        settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+        settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+        let plain = engine
+            .render_dng_base(&source, &settings, &mut Profile::default())
+            .unwrap();
+        let plain_bytes = engine.readback_image(&plain).unwrap();
+        drop(plain);
+        settings.photographic.color_sensitivity = [0.3, -0.1, 0.1, 0., -0.2, 0.1];
+        let names = [
+            "sensitivity.input",
+            "sensitivity.rgb",
+            "sensitivity.color-guide",
+        ];
+        let mut artifacts = engine
+            .render_artifacts(&source, &settings, &names, &mut Profile::default())
+            .unwrap();
+        let mut buffers = Vec::new();
+        for artifact in artifacts.drain(..) {
+            let Content::Image(image) = artifact.content else {
+                panic!("image")
+            };
+            buffers.push(engine.readback_image(&image).unwrap());
+        }
+        if let Some(guide) = &canonical_guide {
+            assert!(
+                *guide == buffers[2],
+                "same classifier in both rendering modes"
+            );
+        } else {
+            canonical_guide = Some(buffers[2].clone());
+        }
+        let before: &[f32] = bytemuck::cast_slice(&buffers[0]);
+        let after: &[f32] = bytemuck::cast_slice(&buffers[1]);
+        let baked = engine
+            .render_dng_base(&source, &settings, &mut Profile::default())
+            .unwrap();
+        let baked_bytes = engine.readback_image(&baked).unwrap();
+        drop(baked);
+        assert!(
+            plain_bytes != baked_bytes,
+            "DNG must bake active sensitivity"
+        );
+        let plain: &[f32] = bytemuck::cast_slice(&plain_bytes);
+        let baked: &[f32] = bytemuck::cast_slice(&baked_bytes);
+        for i in (0..plain.len()).step_by(37) {
+            if before[i].abs() > 0.1 {
+                let expected = plain[i] * (after[i] / before[i]);
+                assert!(
+                    (baked[i] - expected).abs() < 0.02 + expected.abs() * 0.000001,
+                    "preview/DNG gain at {i}: {} vs {expected}",
+                    baked[i]
+                );
+            }
+        }
+        let mut session = RenderSession::new(source.clone());
+        let _ = session_image(&engine, &mut session, &settings, &mut Profile::default());
+        settings.photographic.color_sensitivity[0] = 0.5;
+        let mut profile = Profile::new(crate::profile::Mode::Wall);
+        let cached = session_image(&engine, &mut session, &settings, &mut profile);
+        assert!(
+            !profile.host.iter().any(|t| matches!(
+                t.stage,
+                "submit calibration" | "submit reference noise base"
+            )),
+            "sensitivity edit rebuilt its inputs: {:?}",
+            profile.host
+        );
+        let fresh = engine
+            .render(&source, &settings, &mut Profile::default())
+            .unwrap();
+        assert!(engine.readback_image(&cached).unwrap() == engine.readback_image(&fresh).unwrap());
+        drop(cached);
+        drop(fresh);
+        settings.tone_enabled = false;
+        let bypass = engine
+            .render_dng_base(&source, &settings, &mut Profile::default())
+            .unwrap();
+        assert!(
+            plain_bytes == engine.readback_image(&bypass).unwrap(),
+            "section bypass excludes sensitivity from DNG"
+        );
+        if rendering == Rendering::Color {
+            settings.tone_enabled = true;
+            for quality in [PreviewQuality::Fast, PreviewQuality::Draft] {
+                settings.preview_quality = quality;
+                let image = engine
+                    .render(&source, &settings, &mut Profile::default())
+                    .unwrap();
+                assert!(
+                    bytemuck::cast_slice::<u8, f32>(&engine.readback_image(&image).unwrap())
+                        .iter()
+                        .all(|v| v.is_finite())
+                );
+                let dng = engine
+                    .render_dng_base(&source, &settings, &mut Profile::default())
+                    .unwrap();
+                assert_eq!(
+                    dng.description().extent,
+                    [source.metadata.width as u32, source.metadata.height as u32]
                 );
             }
         }

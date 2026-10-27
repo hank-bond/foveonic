@@ -248,8 +248,24 @@ pub(super) fn write<W: Write + Seek>(
             &["color_mode", "exposure", "tone", "saturation"],
         )
     };
+    let mut baked_controls = baked_controls.to_vec();
+    let effective = settings.processing_settings();
+    let active = effective.active_tone_settings();
+    if active.tone_enabled && active.photographic.sensitivity_active() {
+        baked_controls.push("color_sensitivity");
+    }
+    if !active.tonal_ranges.is_neutral() {
+        baked_controls.push("hdr");
+    }
+    if active.photographic.local_contrast != 0. {
+        baked_controls.push("local_contrast");
+    }
+    if active.sharpening_enabled && active.photographic.sharpening.is_active() {
+        baked_controls.push("universal_sharpening");
+    }
     let mut history = serde_json::json!({
         "format": "foveonic-dng-history", "version": 1, "settings": settings,
+        "processing_sections": settings.processing_sections,
         "baked_controls": baked_controls,
         "metadata_controls": metadata_controls,
         "levels": {"black": 0, "white": 65535, "negative_samples": "clamped", "common_scale": scale},

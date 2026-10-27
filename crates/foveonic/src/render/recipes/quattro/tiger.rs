@@ -226,6 +226,7 @@ mod tests {
                 source,
                 &settings,
                 &["final"],
+                &mut crate::profile::Profile::default(),
                 &mut crate::interactive::Execution::default(),
             )
             .unwrap();

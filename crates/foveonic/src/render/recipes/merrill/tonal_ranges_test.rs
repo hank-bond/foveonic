@@ -1,4 +1,4 @@
-//! Checks experimental tonal edits through fresh, cached, reduced and regional Merrill recipes.
+//! Checks shared tonal edits through fresh, cached, reduced and regional Merrill recipes.
 
 use crate::{
     image::RenderedImage,

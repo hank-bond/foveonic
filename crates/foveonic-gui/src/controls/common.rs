@@ -17,83 +17,18 @@ const COLUMN_LABELS: &[&str] = &[
     "ColorDQ gain",
 ];
 const ROW_HEIGHT: f32 = 20.;
-const VALUE_SIGNIFICANT_DIGITS: usize = 3;
 
-#[derive(Clone, Copy)]
-pub(super) enum Formats {
-    DngTiff,
-    Tiff,
-}
-impl Formats {
-    fn label(self) -> &'static str {
-        match self {
-            Self::DngTiff => "DNG | TIFF",
-            Self::Tiff => "TIFF",
-        }
-    }
-    fn help(self) -> &'static str {
-        match self {
-            Self::DngTiff => "These adjustments are supported in DNG and TIFF.",
-            Self::Tiff => {
-                "Applies to the preview and TIFF. DNG uses its existing Reference recipe."
-            }
-        }
-    }
-}
-
-/// Keep the section's action and export support on one stable, full-width row.
-pub(super) fn section_header(
-    ui: &mut egui::Ui,
-    title: &str,
-    enabled: Option<&mut bool>,
-    formats: Formats,
-) -> bool {
+/// Keep the section title and optional bypass on one stable row.
+pub(super) fn section_header(ui: &mut egui::Ui, title: &str, enabled: Option<&mut bool>) -> bool {
     ui.horizontal(|ui| {
         let response = if let Some(enabled) = enabled {
             crate::widgets::checkbox(ui, enabled, egui::RichText::new(title).weak())
         } else {
             ui.weak(title)
         };
-        let changed = help::control(response, title).changed();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(formats.label()).small().weak())
-                .on_hover_text(formats.help());
-        });
-        changed
+        help::control(response, title).changed()
     })
     .inner
-}
-
-/// Compact photographic readouts retain up to three significant digits.
-/// Small or large magnitudes use scientific notation instead of long zero runs.
-pub(super) fn format_parameter_value(value: f64) -> String {
-    if value == 0. {
-        return "0.00".into();
-    }
-    if !value.is_finite() {
-        return value.to_string();
-    }
-    // Read the exponent after rounding so carries such as 9.999 -> 10.0
-    // choose the correct number of decimal places too.
-    let scientific = format!(
-        "{value:.precision$e}",
-        precision = VALUE_SIGNIFICANT_DIGITS - 1
-    );
-    let (mantissa, exponent) = scientific.split_once('e').expect("formatted exponent");
-    let exponent: i32 = exponent.parse().expect("numeric exponent");
-    if !(-3..VALUE_SIGNIFICANT_DIGITS as i32).contains(&exponent) {
-        return format!(
-            "{}e{exponent}",
-            mantissa.trim_end_matches('0').trim_end_matches('.')
-        );
-    }
-    let mut decimals = (VALUE_SIGNIFICANT_DIGITS as i32 - 1 - exponent) as usize;
-    let mut text = format!("{value:.decimals$}");
-    while decimals > 2 && text.ends_with('0') {
-        text.pop();
-        decimals -= 1;
-    }
-    text
 }
 
 fn label_width(ui: &egui::Ui) -> f32 {
@@ -426,7 +361,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
         if T::INTEGRAL {
             format!("{value:.0}")
         } else {
-            format_parameter_value(value)
+            crate::widgets::format_parameter_value(value)
         }
     };
     ui.push_id(label, |ui| {
@@ -474,7 +409,9 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                     // Apply to every editing slider while leaving adjacent
                     // value fields, buttons and group backgrounds unchanged.
                     ui.visuals_mut().widgets.inactive.bg_fill = crate::widgets::SLIDER_TRACK_FILL;
-                    let mut slider = egui::Slider::new(value, range.clone()).show_value(false);
+                    let mut slider = egui::Slider::new(value, range.clone())
+                        .show_value(false)
+                        .custom_formatter(|v, _| format_value(v));
                     if let Some(step) = step {
                         slider = slider.step_by(step);
                     }
@@ -664,13 +601,7 @@ pub(super) fn tone_with_exposure_range(
 ) -> bool {
     let mut changed = false;
     let title = if mono { "Tone" } else { "Tone and Color" };
-    let formats =
-        if settings.photographic.tone_method == foveonic::render::PhotographicMethod::Reference {
-            Formats::DngTiff
-        } else {
-            Formats::Tiff
-        };
-    changed |= section_header(ui, title, Some(&mut settings.tone_enabled), formats);
+    changed |= section_header(ui, title, Some(&mut settings.tone_enabled));
     ui.add_enabled_ui(settings.tone_enabled, |ui| {
         changed |= method_choice(
             ui,
@@ -770,19 +701,7 @@ pub(super) fn sharpening_with_range(
     reference_range: RangeInclusive<f32>,
 ) -> bool {
     let mut changed = false;
-    let formats = if settings.photographic.sharpening.method
-        == foveonic::render::PhotographicMethod::Reference
-    {
-        Formats::DngTiff
-    } else {
-        Formats::Tiff
-    };
-    changed |= section_header(
-        ui,
-        "Sharpening",
-        Some(&mut settings.sharpening_enabled),
-        formats,
-    );
+    changed |= section_header(ui, "Sharpening", Some(&mut settings.sharpening_enabled));
     let calculated = metadata.and_then(|metadata| {
         let mut automatic = settings.clone();
         automatic.sharpen_amount = None;
@@ -875,12 +794,7 @@ pub(super) fn pixel_corrections(ui: &mut egui::Ui, settings: &mut Settings) -> b
 pub(super) fn reconstruction(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = false;
     let mut reconstruction = settings.reconstruction.is_some();
-    if section_header(
-        ui,
-        "Noise and Detail",
-        Some(&mut reconstruction),
-        Formats::DngTiff,
-    ) {
+    if section_header(ui, "Noise and Detail", Some(&mut reconstruction)) {
         settings.reconstruction = reconstruction.then(Default::default);
         changed = true;
     }
@@ -913,30 +827,20 @@ pub(super) fn method_choice(
     changed
 }
 
-pub(super) fn monochrome_sensitivity(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+pub(super) fn color_sensitivity(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = false;
     let response = egui::CollapsingHeader::new("Color sensitivity")
-        .id_salt("monochrome-sensitivity")
+        .id_salt("color-sensitivity")
         .show(ui, |ui| {
             let labels = ["Red", "Yellow", "Green", "Cyan", "Blue", "Magenta"];
             let column = LabelColumn::new(ui, &labels, &[]);
             for (label, value) in labels
                 .into_iter()
-                .zip(&mut settings.photographic.monochrome_sensitivity)
+                .zip(&mut settings.photographic.color_sensitivity)
             {
                 changed |= column.adjustment(ui, (label, label), value, -1. ..=1., 0.);
             }
         });
-    let galley = ui.painter().layout_no_wrap(
-        "TIFF".into(),
-        egui::TextStyle::Small.resolve(ui.style()),
-        ui.visuals().weak_text_color(),
-    );
-    let pos = egui::pos2(
-        response.header_response.rect.right() - ui.spacing().button_padding.x - galley.size().x,
-        response.header_response.rect.center().y - galley.size().y * 0.5,
-    );
-    ui.painter()
-        .galley(pos, galley, ui.visuals().weak_text_color());
+    help::control(response.header_response, "Color sensitivity");
     changed
 }

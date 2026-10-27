@@ -35,6 +35,7 @@ pub struct Export {
     pub format: ExportFormat,
     pub tiff_color_space: Option<foveonic::render::TiffColorSpace>,
     pub conflict: ConflictPolicy,
+    pub sections: foveonic::render::ProcessingSections,
 }
 
 /// Reprocessing may replace old outputs, while different photos in one batch keep distinct names.
@@ -70,6 +71,7 @@ pub fn write(
     progress: impl Fn(foveonic::render::RenderProgress),
 ) -> foveonic::source::Result<()> {
     let mut settings = settings.clone();
+    settings.processing_sections = export.sections;
     settings.tiff_color_space = export.tiff_color_space;
     settings.preview_quality = PreviewQuality::Full;
     settings.preview_region = None;

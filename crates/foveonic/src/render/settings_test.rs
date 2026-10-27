@@ -309,3 +309,70 @@ fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
     assert_eq!(settings.exposure, saved.exposure);
     assert_eq!(settings.sharpen_amount, None);
 }
+
+#[test]
+fn sensitivity_retains_saved_key_and_stays_separate_from_technical_dng_settings() {
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.color_sensitivity = [0.2, 0., -0.3, 0., 0., 0.1];
+    settings.photographic.local_contrast = 0.4;
+    settings.photographic.tone_method = super::PhotographicMethod::Universal;
+    settings.tone.shadows = 0.3;
+    settings.tone.highlights = -0.2;
+    settings.preview_quality = super::PreviewQuality::Draft;
+    settings.preview_region = Some([10, 10, 200, 200]);
+    let stored = serde_json::to_value(&settings).unwrap();
+    assert_eq!(
+        stored["photographic"]["monochrome_sensitivity"],
+        serde_json::json!([0.2_f32, 0., -0.3_f32, 0., 0., 0.1_f32])
+    );
+    assert!(stored["photographic"].get("color_sensitivity").is_none());
+    assert_eq!(
+        serde_json::from_value::<Settings>(stored)
+            .unwrap()
+            .photographic,
+        settings.photographic
+    );
+    let dng = settings.dng_settings();
+    assert_eq!(dng.photographic.color_sensitivity, [0.; 6]);
+    assert_eq!(dng.photographic.local_contrast, 0.);
+    assert_eq!(dng.tone.shadows, 0.);
+    assert_eq!(dng.tone.highlights, 0.);
+    assert_eq!(settings.tone.shadows, 0.3);
+    assert_eq!(settings.tone.highlights, -0.2);
+    assert_eq!(dng.preview_quality, super::PreviewQuality::Full);
+    assert!(dng.preview_region.is_none());
+}
+
+#[test]
+fn batch_section_exclusions_leave_authored_sidecars_and_values_unchanged() {
+    let mut settings = Settings::new("Sunlight", "Vivid");
+    settings.exposure = 0.5;
+    settings.tonal_ranges.shadows = 0.4;
+    settings.photographic.local_contrast = 0.6;
+    settings.photographic.color_sensitivity[2] = 0.8;
+    settings.photographic.sharpening.method = PhotographicMethod::Universal;
+    settings.photographic.sharpening.amount = 1.2;
+    settings.reconstruction = Some(Default::default());
+    let authored = serde_json::to_vec(&settings).unwrap();
+    settings.processing_sections = ProcessingSections {
+        tone: false,
+        noise: false,
+        detail: false,
+        sharpening: false,
+        corrections: false,
+    };
+    let effective = settings.processing_settings();
+    assert!(!effective.tone_enabled && !effective.sharpening_enabled);
+    assert_eq!(effective.exposure, 0.);
+    assert!(effective.tonal_ranges.is_neutral());
+    assert_eq!(effective.photographic.local_contrast, 0.);
+    assert_eq!(effective.photographic.sharpening.amount, 0.);
+    assert!(!effective.reconstruction.unwrap().noise_enabled);
+    assert!(!effective.reconstruction.unwrap().detail_enabled);
+    assert!(!effective.monochrome.detail_enabled);
+    assert!(effective.repair.is_none());
+    assert!(!effective.despeckle && !effective.highlight_restoration);
+    assert_eq!(serde_json::to_vec(&settings).unwrap(), authored);
+    assert_eq!(settings.exposure, 0.5);
+    assert_eq!(settings.photographic.sharpening.amount, 1.2);
+}

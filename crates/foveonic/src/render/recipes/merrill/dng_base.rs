@@ -1,4 +1,4 @@
-//! Builds a fresh linear technical base while leaving selected appearance to DNG metadata.
+//! Composes Merrill technical DNG samples independently of shared photographic edits.
 
 use super::super::BuiltRecipe;
 use super::technical;

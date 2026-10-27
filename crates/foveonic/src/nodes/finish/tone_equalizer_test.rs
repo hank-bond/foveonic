@@ -2,6 +2,17 @@
 
 use super::*;
 
+fn apply(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    mask: &ReadGuard,
+    extent: [u32; 2],
+    response: Response,
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    apply_with_white(gpu, input, mask, extent, response, NOMINAL_WHITE, profile)
+}
+
 #[test]
 fn neutral_controls_and_saved_choices_are_independent() {
     let mut c = Controls::default();
@@ -318,15 +329,13 @@ fn gpu_regional_mask_matches_full_with_aligned_support() {
 
 #[test]
 #[ignore = "requires a GPU"]
-fn gpu_normalized_photographic_hdr_matches_camera_code_units() {
+fn gpu_hdr_matches_across_declared_linear_code_units() {
     let gpu = Gpu::new().unwrap();
     let extent = [40, 2];
     let normalized: Vec<f32> = (0..80).flat_map(|i| [0.01 + 0.02 * i as f32; 3]).collect();
-    let codes: Vec<f32> = normalized.iter().map(|v| v * 4095.).collect();
     let a = gpu
         .upload("normalized photographic samples", &normalized)
         .unwrap();
-    let b = gpu.upload("camera code samples", &codes).unwrap();
     for space in [
         ColorSpace::Srgb,
         ColorSpace::AdobeRgb,
@@ -335,14 +344,7 @@ fn gpu_normalized_photographic_hdr_matches_camera_code_units() {
         let ma = mask(
             &gpu,
             &a,
-            Guide::photographic(extent, 4, space).unwrap(),
-            &mut Profile::default(),
-        )
-        .unwrap();
-        let mb = mask(
-            &gpu,
-            &b,
-            Guide::new(extent, 4, space).unwrap(),
+            Guide::new(extent, 4, space).unwrap().with_white(1.),
             &mut Profile::default(),
         )
         .unwrap();
@@ -355,20 +357,48 @@ fn gpu_normalized_photographic_hdr_matches_camera_code_units() {
             pivot: -2.,
             space,
         };
-        let oa =
-            apply_photographic(&gpu, &a, &ma, extent, response(), &mut Profile::default()).unwrap();
-        let ob = apply(&gpu, &b, &mb, extent, response(), &mut Profile::default()).unwrap();
+        let oa = apply_with_white(
+            &gpu,
+            &a,
+            &ma,
+            extent,
+            response(),
+            1.,
+            &mut Profile::default(),
+        )
+        .unwrap();
         let aa = gpu.readback(&oa).unwrap();
-        let bb = gpu.readback(&ob).unwrap();
-        for (a, b) in bytemuck::cast_slice::<u8, f32>(&aa)
-            .iter()
-            .zip(bytemuck::cast_slice::<u8, f32>(&bb))
-        {
-            assert!(
-                (a - b / 4095.).abs() < 0.00001,
-                "{space:?}: {a} vs {}",
-                b / 4095.
-            );
+        for white in [4095., 4096., 16384.] {
+            let codes: Vec<f32> = normalized.iter().map(|v| v * white).collect();
+            let b = gpu.upload("camera code samples", &codes).unwrap();
+            let mb = mask(
+                &gpu,
+                &b,
+                Guide::new(extent, 4, space).unwrap().with_white(white),
+                &mut Profile::default(),
+            )
+            .unwrap();
+            let ob = apply_with_white(
+                &gpu,
+                &b,
+                &mb,
+                extent,
+                response(),
+                white,
+                &mut Profile::default(),
+            )
+            .unwrap();
+            let bb = gpu.readback(&ob).unwrap();
+            for (a, b) in bytemuck::cast_slice::<u8, f32>(&aa)
+                .iter()
+                .zip(bytemuck::cast_slice::<u8, f32>(&bb))
+            {
+                assert!(
+                    (a - b / white).abs() < 0.00001,
+                    "{space:?} white {white}: {a} vs {}",
+                    b / white
+                );
+            }
         }
     }
 }

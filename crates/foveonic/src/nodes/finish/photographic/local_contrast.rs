@@ -26,7 +26,7 @@ pub(crate) fn apply(
     p.shape[..2].copy_from_slice(&extent);
     let count = u64::from(extent[0]) * u64::from(extent[1]);
     let groups = [extent[0].div_ceil(8), extent[1].div_ceil(8)];
-    let mut output = gpu.storage("finish.local-contrast", count * 12)?;
+    let mut output = gpu.storage("Local Contrast", count * 12)?;
     let mut trace = gpu.trace(profile.mode.gpu(), 2 * LEVELS + 2);
 
     let mut state = gpu.storage("Local contrast brightness", count * STATE_BYTES)?;

@@ -34,13 +34,14 @@ Options (also available for batch):
   --hdr-highlights VALUE    Shared HDR -1..1, default 0
   --whites VALUE            Shared HDR -1..1, default 0
   --local-contrast VALUE    -1..1, default 0. Shared multiscale contrast
-  --mono-sensitivity VALUES Six amounts -1..1: Red,Yellow,Green,Cyan,Blue,Magenta
+                            HDR, Local Contrast and Universal sharpening bake into DNG
+  --color-sensitivity VALUES Six amounts -1..1: Red,Yellow,Green,Cyan,Blue,Magenta\n                            Color/mono sensitivity is baked into DNG\n  --mono-sensitivity VALUES Same controls, also selects monochrome
   --sharpen-method METHOD   reference (default) or universal
   --universal-sharpen VALUE 0..4, default 0
   --sharpen-radius PIXELS   Universal Gaussian sigma 0.3..4, default 0.8
   --sharpen-threshold VALUE Universal threshold 0..0.2, default 0.01
   --halo-suppression VALUE  Universal halo suppression 0..1, default 0.5
-                            New photographic finishing applies to preview/TIFF only
+                            Universal sharpening runs before camera tone
   --exposure STOPS           Default 0
   --contrast VALUE          -2..2, default 0
   --shadows VALUE           -2..2, default 0
@@ -617,4 +618,25 @@ mod tests {
         assert!(batch_jobs(&[input], &out).is_err());
         assert_eq!(std::fs::read(out.join("a.tiff")).unwrap(), b"keep");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn color_sensitivity_cli_preserves_the_selected_rendering() {
+    let args = [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--color-sensitivity",
+        "0.2,0,-0.3,0,0,0.1",
+    ]
+    .into_iter()
+    .map(OsString::from);
+    let (settings, _, _) = parse_settings(args).unwrap();
+    assert_eq!(settings.rendering, foveonic::render::Rendering::Color);
+    assert_eq!(
+        settings.photographic.color_sensitivity,
+        [0.2, 0., -0.3, 0., 0., 0.1]
+    );
 }

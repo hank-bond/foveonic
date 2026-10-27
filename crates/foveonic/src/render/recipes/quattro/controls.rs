@@ -43,10 +43,17 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
     if settings.color_mode.is_empty() || appearance::MODES.contains(&settings.color_mode.as_str()) {
         supported.color_mode.clone_from(&settings.color_mode);
     }
+    supported.processing_sections = settings.processing_sections;
+    if !settings.processing_sections.corrections {
+        supported.repair = settings.repair;
+        supported.despeckle = settings.despeckle;
+        supported.highlight_restoration = settings.highlight_restoration;
+    }
     supported.preview_quality = settings.preview_quality;
     supported.preview_region = settings.preview_region;
     supported.rendering = settings.rendering;
     supported.monochrome.noise = settings.monochrome.noise;
+    supported.monochrome.detail_enabled = settings.monochrome.detail_enabled;
     supported.monochrome.mix = settings.monochrome.mix;
     supported.monochrome_smoothness = settings.monochrome_smoothness;
     supported.tone_enabled = settings.tone_enabled;
@@ -64,6 +71,8 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
             chroma: controls.chroma,
             luminance: controls.luminance,
             detail: controls.detail.clamp(0., 1.),
+            noise_enabled: controls.noise_enabled,
+            detail_enabled: controls.detail_enabled,
             ..default_noise_controls()
         });
     supported.tiff_color_space = settings.tiff_color_space;

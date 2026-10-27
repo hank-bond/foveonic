@@ -8,7 +8,7 @@ const LUT_LEN: usize = 65536;
 const LUT_MASK: i32 = 65535;
 // Root, linear and tone code domains use 4096 codes per unit of signal (Q12).
 // This is distinct from the final encoded 16-bit range, whose white is 65535.
-const SIGNAL_CODE_UNIT: f64 = 4096.;
+pub(crate) const SIGNAL_CODE_UNIT: f64 = 4096.;
 const ENCODED_WHITE: f64 = 65535.;
 const SATURATION_Q12_UNIT: f64 = 4096.;
 const DETAIL_Q14_UNIT: f64 = 16384.;
@@ -335,6 +335,15 @@ fn build_gamma() -> Vec<i32> {
     out
 }
 
+/// Keep these dispatch modes aligned with signed_response.wgsl.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+enum ResponseMode {
+    Photographic = 0,
+    LinearDetail = 1,
+    LinearPhotographic = 2,
+}
+
 /// Applies detail and photographic response to integral signed root-domain RGB.
 /// Source has three packed components per pixel. Detail has one signed component.
 /// LUT addressing intentionally wraps to 16 bits. Output is normalized linear ROMM,
@@ -355,7 +364,28 @@ pub(crate) fn apply(
         &prepared.tables,
         prepared.saturation,
         prepared.detail_q14,
-        false,
+        ResponseMode::Photographic,
+        profile,
+    )
+}
+
+/// Apply only the photographic response to already-restored linear codes.
+pub(crate) fn apply_linear(
+    gpu: &crate::gpu::Gpu,
+    source: &crate::gpu::ReadGuard,
+    extent: [u32; 2],
+    prepared: &Prepared,
+    profile: &mut crate::profile::Profile,
+) -> crate::source::Result<crate::gpu::ReadGuard> {
+    dispatch_response(
+        gpu,
+        source,
+        source,
+        extent,
+        &prepared.tables,
+        prepared.saturation,
+        0,
+        ResponseMode::LinearPhotographic,
         profile,
     )
 }
@@ -377,7 +407,7 @@ pub(crate) fn apply_linear_detail(
         &exponential(),
         [0; 9],
         prepared.detail_q14,
-        true,
+        ResponseMode::LinearDetail,
         profile,
     )
 }
@@ -391,7 +421,7 @@ fn dispatch_response(
     tables: &[i32],
     saturation: [i32; 9],
     detail_q14: i32,
-    linear: bool,
+    mode: ResponseMode,
     profile: &mut crate::profile::Profile,
 ) -> crate::source::Result<crate::gpu::ReadGuard> {
     use crate::gpu::{
@@ -407,7 +437,15 @@ fn dispatch_response(
     }
     let [w, h] = dimensions;
     let pixels = u64::from(w) * u64::from(h);
-    if w == 0 || h == 0 || tables.len() != if linear { LUT_LEN } else { 6 * LUT_LEN } {
+    if w == 0
+        || h == 0
+        || tables.len()
+            != if mode == ResponseMode::LinearDetail {
+                LUT_LEN
+            } else {
+                6 * LUT_LEN
+            }
+    {
         return Err("invalid signed response geometry or tables".into());
     }
     if [w.div_ceil(8), h.div_ceil(8)]
@@ -416,11 +454,13 @@ fn dispatch_response(
     {
         return Err("signed response exceeds GPU dispatch limits".into());
     }
-    if source.size() != pixels * 12 || detail.size() != pixels * 4 {
+    if source.size() != pixels * 12
+        || (mode != ResponseMode::LinearPhotographic && detail.size() != pixels * 4)
+    {
         return Err("signed response requires matching packed RGB and mono planes".into());
     }
     let params = Params {
-        size: [w, h, u32::from(linear), 0],
+        size: [w, h, mode as u32, 0],
         matrix: std::array::from_fn(|r| {
             std::array::from_fn(|c| if c < 3 { saturation[r * 3 + c] } else { 0 })
         }),

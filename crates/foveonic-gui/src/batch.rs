@@ -51,6 +51,7 @@ pub struct Output {
     pub formats: Vec<ExportFormat>,
     pub tiff_color_space: Option<foveonic::render::TiffColorSpace>,
     pub conflict: ConflictPolicy,
+    pub sections: foveonic::render::ProcessingSections,
 }
 pub enum Operation {
     Browse,
@@ -390,6 +391,7 @@ fn export_photo(
                 path,
                 format,
                 tiff_color_space: output.tiff_color_space,
+                sections: output.sections,
                 conflict: output.conflict,
             },
         )?;
@@ -468,6 +470,7 @@ fn import_photo(
                     path,
                     format,
                     tiff_color_space: output.tiff_color_space,
+                    sections: output.sections,
                     conflict: output.conflict,
                 },
             )?;

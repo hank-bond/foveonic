@@ -5,6 +5,13 @@ use crate::source::Result;
 
 #[derive(Clone, Copy)]
 pub enum Kernel {
+    TransferLinearGain,
+    ColorSensitivityMap,
+    ColorSensitivityFilter,
+    ColorSensitivityApply,
+    MonoTextureExtract,
+    MonoTextureBlur,
+    MonoTextureApply,
     CodeChannelMap,
     ChannelNoiseExtract,
     ChannelNoiseReplace,
@@ -84,7 +91,6 @@ pub enum Kernel {
     Color,
     Tone,
     PhotographicTone,
-    MonoSensitivity,
     UniversalSharpExtract,
     UniversalSharpBlur,
     UniversalSharpen,
@@ -263,6 +269,13 @@ pub enum Kernel {
 impl Kernel {
     pub fn label(self) -> &'static str {
         match self {
+            Self::TransferLinearGain => "transfer linear brightness gain",
+            Self::ColorSensitivityMap => "map color sensitivity",
+            Self::ColorSensitivityFilter => "stabilize color sensitivity",
+            Self::ColorSensitivityApply => "apply color sensitivity",
+            Self::MonoTextureExtract => "extract monochrome texture",
+            Self::MonoTextureBlur => "filter monochrome texture",
+            Self::MonoTextureApply => "apply monochrome texture",
             Self::CodeChannelMap => "map integral color channels",
             Self::ChannelNoiseExtract => "extract a noise guide channel",
             Self::ChannelNoiseReplace => "replace and clamp corrected channels",
@@ -353,7 +366,6 @@ impl Kernel {
             Self::Color => "color matrix",
             Self::Tone => "tone",
             Self::PhotographicTone => "photographic tone",
-            Self::MonoSensitivity => "mono sensitivity",
             Self::UniversalSharpExtract => "sharp extract",
             Self::UniversalSharpBlur => "sharp blur",
             Self::UniversalSharpen => "universal sharpen",
@@ -546,11 +558,6 @@ impl Gpu {
             include_str!("../nodes/finish/photographic/common.wgsl"),
             include_str!("../nodes/finish/photographic/tone.wgsl")
         );
-        let photographic_sensitivity = format!(
-            "{}\n{}",
-            include_str!("../nodes/finish/photographic/common.wgsl"),
-            include_str!("../nodes/finish/photographic/sensitivity.wgsl")
-        );
         let photographic_sharpen = format!(
             "{}\n{}",
             include_str!("../nodes/finish/photographic/common.wgsl"),
@@ -561,7 +568,23 @@ impl Gpu {
             include_str!("../nodes/finish/photographic/common.wgsl"),
             include_str!("../nodes/finish/photographic/local_contrast.wgsl")
         );
+        let sensitivity = format!(
+            "{}\n{}",
+            include_str!("../nodes/finish/sensitivity.wgsl"),
+            include_str!("../nodes/finish/sensitivity_response.wgsl")
+        );
+        let texture = include_str!("../nodes/monochrome/texture.wgsl");
         let kernels = [
+            (
+                include_str!("../nodes/finish/linear_gain.wgsl"),
+                "transfer_linear_gain",
+            ),
+            (sensitivity.as_str(), "color_sensitivity_map"),
+            (sensitivity.as_str(), "color_sensitivity_filter"),
+            (sensitivity.as_str(), "color_sensitivity_apply"),
+            (texture, "mono_texture_extract"),
+            (texture, "mono_texture_blur"),
+            (texture, "mono_texture_apply"),
             (
                 include_str!("../nodes/finish/code_channel_map.wgsl"),
                 "code_channel_map",
@@ -845,7 +868,6 @@ impl Gpu {
             (include_str!("../nodes/color/color.wgsl"), "main"),
             (include_str!("../nodes/finish/tone.wgsl"), "main"),
             (photographic_tone.as_str(), "photographic_tone"),
-            (photographic_sensitivity.as_str(), "mono_sensitivity"),
             (photographic_sharpen.as_str(), "sharp_extract"),
             (photographic_sharpen.as_str(), "sharp_blur"),
             (photographic_sharpen.as_str(), "universal_sharpen"),

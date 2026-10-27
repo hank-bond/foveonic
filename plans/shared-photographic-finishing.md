@@ -19,7 +19,7 @@ The owner authorized implementation, photographic comparisons and cleanup. Commi
 - [x] Evaluate Local Contrast independently of reconstruction detail and sharpening.
 - [x] Make every family's tone selector switch both visible and effective controls without losing inactive values.
 - [x] Limit photographic numeric readouts to three significant digits without changing stored precision or panel width.
-- [x] Record the deferred [monochrome refinement](./monochrome-refinement.md) work.
+- [x] Record the deferred [monochrome refinement](./archived/monochrome-refinement.md) work.
 - [x] Separate numerical operations and immutable aliases, and remove obsolete comparison tools.
 - [x] Complete cleanup verification and rebuild the local app for review.
 - [x] Unify Reference/Universal controls and bypass policy across all families, remove the combined layout, and align section badges and parameter groups.

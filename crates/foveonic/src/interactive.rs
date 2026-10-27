@@ -60,6 +60,11 @@ impl Settings {
         changed!(self.rendering != next.rendering, "rendering");
         changed!(self.photographic != next.photographic, "photographic");
         changed!(self.monochrome.mix != next.monochrome.mix, "mono-mix");
+        changed!(
+            self.monochrome.detail_enabled != next.monochrome.detail_enabled
+                || self.monochrome.texture != next.monochrome.texture,
+            "mono-detail"
+        );
         changed!(self.monochrome.noise != next.monochrome.noise, "mono-noise");
         changed!(
             self.monochrome_smoothness != next.monochrome_smoothness,
@@ -327,6 +332,8 @@ impl Cache {
                         crate::graph::Operation::Tone { .. }
                             | crate::graph::Operation::TonalRanges { .. }
                             | crate::graph::Operation::SignedPhotographic(_)
+                            | crate::graph::Operation::LinearSignedResponse(_)
+                            | crate::graph::Operation::LinearCodeResponse { .. }
                             | crate::graph::Operation::CodeResponse { .. }
                     ) && required[node.outputs[0]]
                     {

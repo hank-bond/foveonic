@@ -150,14 +150,16 @@ fn parse_settings_with_noise_defaults(
                 settings.photographic.sharpening.halo_suppression = value.parse()?
             }
             "--local-contrast" => settings.photographic.local_contrast = value.parse()?,
-            "--mono-sensitivity" => {
-                settings.photographic.monochrome_sensitivity = value
+            "--mono-sensitivity" | "--color-sensitivity" => {
+                settings.photographic.color_sensitivity = value
                     .split(',')
                     .map(str::parse)
                     .collect::<std::result::Result<Vec<f32>, _>>()?
                     .try_into()
-                    .map_err(|_| "mono sensitivity requires Red,Yellow,Green,Cyan,Blue,Magenta")?;
-                settings.rendering = Rendering::Monochrome;
+                    .map_err(|_| "color sensitivity requires Red,Yellow,Green,Cyan,Blue,Magenta")?;
+                if flag == "--mono-sensitivity" {
+                    settings.rendering = Rendering::Monochrome;
+                }
             }
             "--contrast" => settings.tone.contrast = value.parse()?,
             "--shadows" => settings.tone.shadows = value.parse()?,

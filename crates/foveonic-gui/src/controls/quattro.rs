@@ -46,12 +46,14 @@ pub(super) fn show(
             );
             ui.separator();
         }
-        if mono {
-            changed |= common::monochrome_sensitivity(ui, settings);
-        }
+        changed |= ui
+            .add_enabled_ui(settings.tone_enabled, |ui| {
+                common::color_sensitivity(ui, settings)
+            })
+            .inner;
         changed |= common::tone_with_exposure_range(ui, settings, mono, -2. ..=2.);
         ui.separator();
-        common::section_header(ui, "Noise and Detail", None, common::Formats::DngTiff);
+        common::section_header(ui, "Noise and Detail", None);
         let noise_defaults = defaults
             .reconstruction
             .unwrap_or_else(|| capabilities.default_noise_controls());
@@ -112,7 +114,7 @@ pub(super) fn show(
         ui.separator();
         changed |= common::sharpening_with_range(ui, settings, Some(source), -2. ..=2.);
         ui.separator();
-        common::section_header(ui, "Corrections", None, common::Formats::DngTiff);
+        common::section_header(ui, "Corrections", None);
         let highlight_default = defaults.highlight_amount.unwrap_or(1.);
         let mut highlight = settings.highlight_amount.unwrap_or(highlight_default);
         if common::stepped_adjustment(

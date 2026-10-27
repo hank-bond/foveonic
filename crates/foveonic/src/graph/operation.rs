@@ -21,6 +21,11 @@ pub enum Operation {
     },
     /// Publish a recipe-established linear-light interpretation without changing its codes.
     LinearCodeBase,
+    /// Attach declared primaries to pre-curve linear codes without changing units.
+    LinearCodeRgb {
+        space: ColorSpace,
+        white: u32,
+    },
     CodeChannelMap(std::sync::Arc<crate::nodes::finish::code_channel_map::Prepared>),
     ChannelNoise(std::sync::Arc<crate::nodes::color::channel_noise::Prepared>),
     BoxContrast(std::sync::Arc<crate::nodes::finish::box_contrast::Prepared>),
@@ -87,6 +92,11 @@ pub enum Operation {
     RootDetail(crate::nodes::finish::root_detail::Prepared),
     SignedLinearDetail(std::sync::Arc<crate::nodes::finish::signed_response::LinearDetail>),
     SignedPhotographic(std::sync::Arc<crate::nodes::finish::signed_response::Prepared>),
+    LinearSignedResponse(std::sync::Arc<crate::nodes::finish::signed_response::Prepared>),
+    LinearCodeResponse {
+        prepared: std::sync::Arc<crate::nodes::finish::code_response::Prepared>,
+        space: ColorSpace,
+    },
     CodeResponse {
         prepared: std::sync::Arc<crate::nodes::finish::code_response::Prepared>,
         space: ColorSpace,
@@ -108,6 +118,7 @@ pub enum Operation {
         prepared: std::sync::Arc<MonoPrepared>,
         space: ColorSpace,
     },
+    MonoTexture(crate::noise::TextureControls),
     MonoSharpen {
         amount: f32,
         space: ColorSpace,
@@ -165,25 +176,20 @@ pub enum Operation {
         params: crate::nodes::finish::photographic::Params,
         space: ColorSpace,
     },
-    MonochromeSensitivity {
-        params: crate::nodes::finish::photographic::Params,
-        space: ColorSpace,
-        guide_space: ColorSpace,
-    },
-    UniversalSharpen {
+    LinearUniversalSharpen {
         params: crate::nodes::finish::photographic::Params,
         space: ColorSpace,
     },
-    LocalContrast {
+    LinearSensitivity {
+        params: crate::nodes::finish::sensitivity::Params,
+        space: ColorSpace,
+    },
+    TransferLinearGain {
+        data: DataType,
+        space: ColorSpace,
+    },
+    LinearLocalContrast {
         params: crate::nodes::finish::photographic::Params,
-        space: ColorSpace,
-    },
-    PhotographicHdrMask {
-        guide: crate::nodes::finish::tone_equalizer::Guide,
-        space: ColorSpace,
-    },
-    PhotographicHdr {
-        controls: crate::render::TonalRanges,
         space: ColorSpace,
     },
     ToneMask {
@@ -191,6 +197,7 @@ pub enum Operation {
         space: ColorSpace,
     },
     TonalRanges {
+        white: f32,
         controls: crate::render::TonalRanges,
         pivot: f32,
         space: ColorSpace,
@@ -228,6 +235,7 @@ impl Operation {
                 .slice(format!("{data:?}").as_bytes())
                 .slice(output.as_bytes()),
             Self::LinearCodeBase => Key::default(),
+            Self::LinearCodeRgb { white, .. } => Key::default().with(white),
             Self::BoxContrast(p) => p.key(),
             Self::ColumnGain(p) => p.key(),
             Self::BluePattern(p) => p.key(),
@@ -290,7 +298,8 @@ impl Operation {
             Self::SignedDespeckle(p) => p.key(),
             Self::RedDetail(p) => Key::pod(p),
             Self::SignedLinearDetail(p) => p.key(),
-            Self::SignedPhotographic(p) => p.key(),
+            Self::SignedPhotographic(p) | Self::LinearSignedResponse(p) => p.key(),
+            Self::LinearCodeResponse { prepared, .. } => prepared.key(),
             Self::CodeResponse { prepared, space } => prepared.key().with(&(*space as u32)),
             Self::Black(p) => Key::pod(p),
             Self::Calibrate(p) => p.key(),
@@ -315,17 +324,19 @@ impl Operation {
             Self::TiledColorDq { params, table, .. } => params.key(N::Geometry).join(table.key()),
             Self::ColorDq { table, .. } => table.key(),
             Self::Sharpen { amount, .. } => Key::pod(amount),
-            Self::ImageAlias { .. } => Key::default(),
+            Self::LinearSensitivity { params, .. } => params.key(),
+            Self::MonoTexture(c) => Key::pod(&[c.fine, c.coarse, c.fine_size, c.coarse_size]),
+            Self::ImageAlias { .. } | Self::TransferLinearGain { .. } => Key::default(),
             Self::PhotographicTone { params, .. }
-            | Self::MonochromeSensitivity { params, .. }
-            | Self::UniversalSharpen { params, .. }
-            | Self::LocalContrast { params, .. } => params.key(),
-            Self::PhotographicHdrMask { guide, .. } => guide.key(),
-            Self::PhotographicHdr { controls, .. } => Key::pod(&controls.amounts()),
+            | Self::LinearLocalContrast { params, .. }
+            | Self::LinearUniversalSharpen { params, .. } => params.key(),
             Self::ToneMask { guide, .. } => guide.key(),
             Self::TonalRanges {
-                controls, pivot, ..
-            } => Key::pod(&controls.amounts()).with(pivot),
+                controls,
+                pivot,
+                white,
+                ..
+            } => Key::pod(&controls.amounts()).with(pivot).with(white),
             Self::Tone {
                 curve, exposure, ..
             } => Key::pod(exposure).slice(curve),
@@ -359,6 +370,10 @@ impl Operation {
         match self {
             Self::ReduceLayers(_) => "reduce calibrated preview layers",
             Self::LinearCodeBase => "retain linear RGB code base",
+            Self::LinearCodeRgb { .. } => "declare linear RGB primaries",
+            Self::LinearSignedResponse(_) => "linear signed photographic response",
+            Self::LinearCodeResponse { .. } => "linear code photographic response",
+            Self::LinearUniversalSharpen { .. } => "linear.sharpen",
             Self::PackedLab(p) => match p.direction() {
                 crate::nodes::color::packed_lab::Direction::Forward => {
                     "convert RGB codes to packed Lab"
@@ -450,13 +465,12 @@ impl Operation {
             Self::Saturation { .. } => "submit saturation",
             Self::SharpSignal { .. } => "submit native high-pass",
             Self::Sharpen { .. } => "submit sharpen",
+            Self::LinearSensitivity { .. } => "submit color sensitivity",
+            Self::MonoTexture(_) => "submit monochrome texture",
             Self::ImageAlias { .. } => "retain image alias",
+            Self::TransferLinearGain { .. } => "bake linear brightness edits",
             Self::PhotographicTone { .. } => "finish.tone",
-            Self::MonochromeSensitivity { .. } => "finish.monochrome",
-            Self::UniversalSharpen { .. } => "finish.sharpen",
-            Self::LocalContrast { .. } => "finish.local-contrast",
-            Self::PhotographicHdrMask { .. } => "submit photographic HDR mask",
-            Self::PhotographicHdr { .. } => "submit photographic HDR",
+            Self::LinearLocalContrast { .. } => "linear.local-contrast",
             Self::ToneMask { .. } => "submit tonal brightness mask",
             Self::TonalRanges { .. } => "submit tonal range exposure",
             Self::Tone { .. } => "submit tone",
@@ -652,23 +666,29 @@ impl Operation {
             Self::Sharpen { space, .. } => {
                 (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
             }
+            Self::LinearSensitivity { space, .. } => {
+                (vec![LinearRgb(*space); 2], LinearRgb(*space))
+            }
+            Self::MonoTexture(_) => (vec![Monochrome], Monochrome),
+            Self::TransferLinearGain { data, space } => {
+                (vec![*data, LinearRgb(*space), LinearRgb(*space)], *data)
+            }
+            Self::LinearCodeRgb { space, .. } => (vec![LinearCodeRgb], LinearRgb(*space)),
+            Self::LinearSignedResponse(_) => (
+                vec![LinearRgb(ColorSpace::ProPhotoRgb)],
+                ToneMappedRgb(ColorSpace::ProPhotoRgb),
+            ),
+            Self::LinearCodeResponse { space, .. } => {
+                (vec![LinearRgb(*space)], ToneMappedRgb(*space))
+            }
+            Self::LinearUniversalSharpen { space, .. } => {
+                (vec![LinearRgb(*space)], LinearRgb(*space))
+            }
+            Self::LinearLocalContrast { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::ImageAlias { data, .. } => (vec![*data], *data),
-            Self::PhotographicTone { space, .. }
-            | Self::UniversalSharpen { space, .. }
-            | Self::LocalContrast { space, .. } => {
+            Self::PhotographicTone { space, .. } => {
                 (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space))
             }
-            Self::MonochromeSensitivity {
-                space, guide_space, ..
-            } => (
-                vec![ToneMappedRgb(*space), ToneMappedRgb(*guide_space)],
-                ToneMappedRgb(*space),
-            ),
-            Self::PhotographicHdrMask { space, .. } => (vec![ToneMappedRgb(*space)], ScalarField),
-            Self::PhotographicHdr { space, .. } => (
-                vec![ToneMappedRgb(*space), ScalarField],
-                ToneMappedRgb(*space),
-            ),
             Self::ToneMask { space, .. } => (vec![LinearRgb(*space)], ScalarField),
             Self::TonalRanges { space, .. } => {
                 (vec![LinearRgb(*space), ScalarField], LinearRgb(*space))
@@ -819,6 +839,8 @@ impl Operation {
             Self::EmptyDefectFlags(_) => "repair.empty-defects",
             Self::CodeCrop(_) => "crop.rgb",
             Self::LinearCodeBase => "base.linear-codes",
+            Self::LinearCodeRgb { .. } => "linear.codes",
+            Self::LinearUniversalSharpen { .. } => "linear.sharpen",
             Self::PhaseGain(_) => "phase-gain.blue",
             Self::BlueRefresh(_) => "blue-refresh.rgb",
             Self::HlpCalibration(_) => "hlp.rgb",
@@ -882,7 +904,10 @@ impl Operation {
             Self::SignedDespeckle(_) => "despeckle.layers",
             Self::RedDetail(_) => "red-detail.layers",
             Self::SignedLinearDetail(_) => "detail.linear-codes",
-            Self::SignedPhotographic(_) | Self::CodeResponse { .. } => "tone.rgb",
+            Self::SignedPhotographic(_)
+            | Self::CodeResponse { .. }
+            | Self::LinearSignedResponse(_)
+            | Self::LinearCodeResponse { .. } => "tone.rgb",
             Self::Black(_) => "black.levels",
             Self::Calibrate(_) => "calibration.layers",
             Self::Repair(_) => "repair.layers",
@@ -903,13 +928,12 @@ impl Operation {
             Self::TiledColorDq { .. } => "color-dq.tiles",
             Self::Color { .. } => "color.rgb",
             Self::ColorDq { .. } => "color-dq.rgb",
+            Self::LinearSensitivity { .. } => "sensitivity.rgb",
+            Self::MonoTexture(_) => "mono.texture",
             Self::ImageAlias { output, .. } => output,
+            Self::TransferLinearGain { .. } => "dng.linear-edits",
             Self::PhotographicTone { .. } => "finish.tone",
-            Self::MonochromeSensitivity { .. } => "finish.monochrome",
-            Self::UniversalSharpen { .. } => "finish.sharpen",
-            Self::LocalContrast { .. } => "finish.local-contrast",
-            Self::PhotographicHdrMask { .. } => "finish.hdr-mask",
-            Self::PhotographicHdr { .. } => "finish.hdr",
+            Self::LinearLocalContrast { .. } => "linear.local-contrast",
             Self::ToneMask { .. } => "tonal-ranges.mask",
             Self::TonalRanges { .. } => "tonal-ranges.rgb",
             Self::Tone { .. } => "tone.rgb",

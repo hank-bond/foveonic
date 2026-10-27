@@ -1,10 +1,8 @@
-// Shared ABI and RGB access for normalized photographic finishing.
+// Shared ABI and RGB access. Luminance weights declare brightness units.
 struct Params {
     shape: vec4<u32>,
     values: vec4<f32>,
     luma: vec4<f32>,
-    hues: array<vec4<f32>, 2>,
-    guide_matrix: array<vec4<f32>, 3>,
 }
 @group(0) @binding(0) var<storage, read> source: array<f32>;
 @group(0) @binding(1) var<uniform> p: Params;

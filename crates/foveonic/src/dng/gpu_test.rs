@@ -23,6 +23,7 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
     let image = |values: &[f32]| RenderedImage {
         buffer: engine.gpu.upload("DNG encoding fixture", values).unwrap(),
         description: Description {
+            linear_white: 4095,
             view_baked: false,
             extent: [2, 1],
             layout: Layout::Rgb32Float,

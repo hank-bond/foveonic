@@ -768,7 +768,14 @@ impl App {
             .frame
             .as_ref()
             .is_some_and(|frame| frame.output == self.output && frame.comparison.is_some());
-        self.comparison.mapping(channel, has_pair)
+        let mut mapping = self.comparison.mapping(channel, has_pair);
+        if let Some(frame) = &self.frame {
+            let description = frame.texture.description();
+            if matches!(description.space, foveonic::image::Space::LinearRgb(_)) {
+                mapping.signal_scale = 4095. / description.linear_white as f32;
+            }
+        }
+        mapping
     }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
@@ -844,7 +851,7 @@ impl App {
             ) {
                 (16383., "codes")
             } else {
-                (4095., "codes")
+                (frame.texture.description().linear_white as f32, "codes")
             };
             ui.add(
                 egui::Label::new(format!(

@@ -79,6 +79,7 @@ fn compose(
                     graph,
                     final_id,
                     params,
+                    rgb_extent: [params.source[0], params.source[1]],
                 });
             }
         };
@@ -200,7 +201,75 @@ fn compose(
             graph,
             final_id,
             params,
+            rgb_extent: [params.source[0], params.source[1]],
         });
+    }
+    if super::linear_edits::active(settings)
+        || names
+            .iter()
+            .any(|n| super::linear_edits::requested_output(n))
+    {
+        let detail_amount = f64::from(settings.effective_sharpen_amount(metadata)?) - 1.;
+        let linear = crate::nodes::finish::signed_response::prepare_linear_detail(detail_amount)?;
+        final_id = graph.add(
+            Operation::SignedLinearDetail(Arc::new(linear)),
+            &[final_id, detail],
+        )?;
+        let space = crate::color_space::ColorSpace::ProPhotoRgb;
+        final_id = graph.add(
+            Operation::LinearCodeRgb {
+                space,
+                white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as u32,
+            },
+            &[final_id],
+        )?;
+        let mut recipe = BuiltRecipe {
+            graph,
+            final_id,
+            params,
+            rgb_extent: [params.source[0], params.source[1]],
+        };
+        super::linear_edits::alias(&mut recipe, space, "linear.base")?;
+        if requested(&recipe.graph, names) {
+            return Ok(recipe);
+        }
+        let mut response = None;
+        let context = super::linear_edits::Context {
+            space,
+            white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
+            guide_white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
+            scale: 1.,
+        };
+        super::linear_edits::build(
+            engine,
+            source,
+            settings,
+            &mut recipe,
+            names,
+            context,
+            |_| {
+                let prepared = prepare::prepare_photographic(metadata, settings)?;
+                let pivot = super::linear_edits::pivot_from_response(context.white, |code| {
+                    prepared.evaluate_linear([code / f64::from(context.white); 3])[1]
+                })?;
+                response = Some(prepared);
+                Ok(pivot)
+            },
+            profile,
+            execution,
+        )?;
+        if requested(&recipe.graph, names) {
+            return Ok(recipe);
+        }
+        let finish = match response {
+            Some(response) => response,
+            None => prepare::prepare_photographic(metadata, settings)?,
+        };
+        recipe.final_id = recipe.graph.add(
+            Operation::LinearSignedResponse(Arc::new(finish)),
+            &[recipe.final_id],
+        )?;
+        return Ok(recipe);
     }
     let finish = prepare::prepare_photographic(metadata, settings)?;
     final_id = graph.add(
@@ -211,6 +280,7 @@ fn compose(
         graph,
         final_id,
         params,
+        rgb_extent: [params.source[0], params.source[1]],
     })
 }
 

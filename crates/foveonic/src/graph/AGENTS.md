@@ -6,6 +6,8 @@ summary: "Graph operations define supported node parameters, typed ports, cache 
 
 The [graph structure](../graph.rs) validates connections and traverses dependencies. Keep the supported operation enum and its port metadata together. Recipes author connections, while execution stays in [the renderer](../render/AGENTS.md).
 
+Use a stable recipe scope when repeating an operation with the same public output name. This keeps cache versions independent without adding camera identities to numerical operations.
+
 Preserve named output identities and exact parameter keys during organizational changes. Their identities drive inspection and interactive reuse.
 
 <!-- INDEX:START -->

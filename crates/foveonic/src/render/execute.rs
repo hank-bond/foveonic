@@ -152,8 +152,7 @@ impl Engine {
                 });
             let extent = match &node.operation {
                 Operation::ReduceLayers(prepared) => prepared.output_extent(),
-                Operation::ToneMask { guide, .. }
-                | Operation::PhotographicHdrMask { guide, .. } => guide.extent(),
+                Operation::ToneMask { guide, .. } => guide.extent(),
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
                 Operation::ProjectColorTiles { params, .. } => params.output_extent(),
                 Operation::NoiseContext(p) => reconstruction::context_extent(*p),
@@ -182,6 +181,20 @@ impl Engine {
                 .image_description(extent)
                 .map(|mut d| {
                     d.view_baked = view_baked;
+                    if matches!(d.space, crate::image::Space::LinearRgb(_)) {
+                        d.linear_white = match node.operation {
+                            Operation::LinearCodeRgb { white, .. } => white,
+                            Operation::RenderedInput { .. } => match &context {
+                                Input::Rendered(image) => image.description.linear_white,
+                                _ => 4095,
+                            },
+                            _ => reads[node_index]
+                                .first()
+                                .and_then(|id| values[*id].as_ref())
+                                .and_then(|v| v.description)
+                                .map_or(4095, |d| d.linear_white),
+                        };
+                    }
                     d
                 });
             let groups = [inherited[0].div_ceil(8), inherited[1].div_ceil(8)];
@@ -756,6 +769,7 @@ impl Engine {
                         .image_description(image.description.extent)
                         .map(|mut d| {
                             d.view_baked = image.description.view_baked;
+                            d.linear_white = image.description.linear_white;
                             d
                         })
                         != Some(image.description)
@@ -863,8 +877,20 @@ impl Engine {
                         profile,
                     )?)
                 }
-                Operation::LinearCodeBase => Some(input(0).buffer.clone()),
-                Operation::CodeResponse { prepared, .. } => {
+                Operation::LinearCodeBase | Operation::LinearCodeRgb { .. } => {
+                    Some(input(0).buffer.clone())
+                }
+                Operation::LinearSignedResponse(prepared) => {
+                    Some(crate::nodes::finish::signed_response::apply_linear(
+                        gpu,
+                        &input(0).buffer,
+                        inherited,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::CodeResponse { prepared, .. }
+                | Operation::LinearCodeResponse { prepared, .. } => {
                     Some(crate::nodes::finish::code_response::apply(
                         gpu,
                         &input(0).buffer,
@@ -1234,13 +1260,8 @@ impl Engine {
                     );
                     Some(output)
                 }
-                Operation::ImageAlias { .. } => Some(input(0).buffer.clone()),
-                Operation::MonochromeSensitivity { params, .. } => {
-                    if input(0).description.unwrap().extent != input(1).description.unwrap().extent
-                    {
-                        return Err("monochrome guide and image have different extents".into());
-                    }
-                    Some(crate::nodes::finish::photographic::sensitivity::apply(
+                Operation::LinearSensitivity { params, .. } => {
+                    Some(crate::nodes::finish::sensitivity::apply(
                         gpu,
                         &input(0).buffer,
                         &input(1).buffer,
@@ -1249,6 +1270,24 @@ impl Engine {
                         profile,
                     )?)
                 }
+                Operation::MonoTexture(c) => Some(crate::nodes::monochrome::texture::apply(
+                    gpu,
+                    &input(0).buffer,
+                    *c,
+                    inherited,
+                    profile,
+                )?),
+                Operation::TransferLinearGain { .. } => {
+                    Some(crate::nodes::finish::linear_gain::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        &input(2).buffer,
+                        inherited,
+                        profile,
+                    )?)
+                }
+                Operation::ImageAlias { .. } => Some(input(0).buffer.clone()),
                 Operation::PhotographicTone { params, .. } => {
                     Some(crate::nodes::finish::photographic::tone::apply(
                         gpu,
@@ -1258,7 +1297,7 @@ impl Engine {
                         profile,
                     )?)
                 }
-                Operation::UniversalSharpen { params, .. } => {
+                Operation::LinearUniversalSharpen { params, .. } => {
                     Some(crate::nodes::finish::photographic::sharpen::apply(
                         gpu,
                         &input(0).buffer,
@@ -1267,34 +1306,12 @@ impl Engine {
                         profile,
                     )?)
                 }
-                Operation::LocalContrast { params, .. } => {
+                Operation::LinearLocalContrast { params, .. } => {
                     Some(crate::nodes::finish::photographic::local_contrast::apply(
                         gpu,
                         &input(0).buffer,
                         *params,
                         inherited,
-                        profile,
-                    )?)
-                }
-                Operation::PhotographicHdrMask { guide, .. } => {
-                    Some(crate::nodes::finish::tone_equalizer::mask(
-                        gpu,
-                        &input(0).buffer,
-                        *guide,
-                        profile,
-                    )?)
-                }
-                Operation::PhotographicHdr { controls, space } => {
-                    Some(crate::nodes::finish::tone_equalizer::apply_photographic(
-                        gpu,
-                        &input(0).buffer,
-                        &input(1).buffer,
-                        inherited,
-                        crate::nodes::finish::tone_equalizer::Response {
-                            controls: *controls,
-                            pivot: (0.18_f32).log2(),
-                            space: *space,
-                        },
                         profile,
                     )?)
                 }
@@ -1307,10 +1324,11 @@ impl Engine {
                     )?)
                 }
                 Operation::TonalRanges {
+                    white,
                     controls,
                     pivot,
                     space,
-                } => Some(crate::nodes::finish::tone_equalizer::apply(
+                } => Some(crate::nodes::finish::tone_equalizer::apply_with_white(
                     gpu,
                     &input(0).buffer,
                     &input(1).buffer,
@@ -1320,6 +1338,7 @@ impl Engine {
                         pivot: *pivot,
                         space: *space,
                     },
+                    *white,
                     profile,
                 )?),
                 Operation::Tone {

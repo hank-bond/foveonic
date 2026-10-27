@@ -8,7 +8,7 @@ use crate::{
 
 // Native photographic response reaches its nominal white at this code scale.
 // The technical RGB base can retain higher integral values before the response.
-const RESPONSE_WHITE_CODE: f64 = 16384.;
+const RESPONSE_WHITE_CODE: f64 = super::appearance::LINEAR_CODE_WHITE as f64;
 
 pub(crate) fn prepare_appearance(
     metadata: &Metadata,

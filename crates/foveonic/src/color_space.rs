@@ -103,7 +103,7 @@ impl TiffColorSpace {
     // D50 colorants from the embedded CC0 Compact-ICC-Profiles assets. All
     // three already share the ICC connection-space white, so no additional
     // white adaptation belongs between these matrices.
-    fn to_xyz(self) -> [f64; 9] {
+    pub(crate) fn to_xyz(self) -> [f64; 9] {
         match self {
             Self::Srgb => [28576, 25238, 9376, 14578, 46985, 3973, 911, 6362, 46788],
             Self::AdobeRgb => [39960, 13453, 9777, 20389, 41004, 4143, 1276, 3989, 48796],
@@ -129,7 +129,7 @@ impl TiffColorSpace {
     }
 }
 
-fn inverse(m: [f64; 9]) -> [f64; 9] {
+pub(crate) fn inverse(m: [f64; 9]) -> [f64; 9] {
     let [a, b, c, d, e, f, g, h, i] = m;
     let cofactors = [
         e * i - f * h,

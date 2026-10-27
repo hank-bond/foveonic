@@ -80,18 +80,32 @@ pub(super) fn build(
     source: &Source,
     settings: &Settings,
     names: &[&str],
+    profile: &mut crate::profile::Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
-    compose(engine, source, settings, names, execution, false)
+    let mut regional = settings.clone();
+    let crop = region::expand_shared_edits(&source.metadata, &mut regional, names)?;
+    let mut recipe = compose(engine, source, &regional, names, profile, execution, false)?;
+    region::crop_shared_edits(&mut recipe, crop)?;
+    Ok(recipe)
 }
 
 pub(super) fn build_dng(
     engine: &Engine,
     source: &Source,
     settings: &Settings,
+    profile: &mut crate::profile::Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
-    compose(engine, source, settings, &["final"], execution, true)
+    compose(
+        engine,
+        source,
+        settings,
+        &["final"],
+        profile,
+        execution,
+        true,
+    )
 }
 
 fn compose(
@@ -99,16 +113,41 @@ fn compose(
     source: &Source,
     settings: &Settings,
     names: &[&str],
+    profile: &mut crate::profile::Profile,
     execution: &mut Execution<'_>,
     dng: bool,
 ) -> Result<BuiltRecipe> {
+    let mut selected = settings.clone();
+    if !settings.processing_sections.corrections {
+        selected.highlight_amount = Some(0.);
+    }
+    let noise_enabled = settings.processing_sections.noise
+        && settings.reconstruction.is_none_or(|c| c.noise_enabled);
+    let detail_enabled = settings.processing_sections.detail
+        && settings.reconstruction.is_none_or(|c| c.detail_enabled);
+    if !noise_enabled || !detail_enabled {
+        let mut controls = selected
+            .reconstruction
+            .unwrap_or_else(controls::default_noise_controls);
+        if !noise_enabled {
+            controls.chroma = 0;
+            controls.luminance = 0;
+            selected.monochrome.noise = 0;
+        }
+        if !detail_enabled {
+            controls.detail = 0.5;
+            selected.monochrome_smoothness = Some(0.5);
+        }
+        selected.reconstruction = Some(controls);
+    }
+    let settings = &selected;
     if source.storage() != SourceStorage::PackedRgbBluePhases {
         return Err("sensor plane inspection requires six-sample cells".into());
     }
     let fast = settings.preview_quality.is_reduced()
         && !dng
         && !settings.is_monochrome()
-        && names == ["final"]
+        && (names == ["final"] || names == ["linear.base"])
         && settings.preview_region.is_none()
         && fast_available(&source.metadata);
     let grid = if fast {
@@ -117,10 +156,10 @@ fn compose(
         WorkingGrid::Full
     };
     let available = outputs(Some(&source.metadata));
-    if names
-        .iter()
-        .any(|name| !available.iter().any(|output| output.name == *name))
-    {
+    if names.iter().any(|name| {
+        !super::linear_edits::requested_output(name)
+            && !available.iter().any(|output| output.name == *name)
+    }) {
         return Err("requested output is unavailable for this Quattro input".into());
     }
     let [width, height] = source.storage_extent().map(|v| v as u32);
@@ -148,6 +187,7 @@ fn compose(
                     graph,
                     final_id: $output,
                     params,
+                    rgb_extent: [params.output[0], params.output[1]],
                 });
             }
         };
@@ -490,7 +530,7 @@ fn compose(
         .preview_region
         .filter(|_| {
             !dng && !settings.is_monochrome()
-                && names == ["final"]
+                && (names == ["final"] || names == ["linear.base"])
                 && fast_available(&source.metadata)
         })
         .map(|rect| {
@@ -526,7 +566,7 @@ fn compose(
     finish!(reconstructed);
     let detail = graph.named_output(reconstructed, "reconstruction.detail")?;
     let spatial_input = if settings.is_monochrome() {
-        graph.add(
+        graph.add_scoped(
             Operation::CodeChannelMap(std::sync::Arc::new(
                 crate::nodes::finish::code_channel_map::Prepared::mix(
                     [params.source[0], params.source[1]],
@@ -538,6 +578,7 @@ fn compose(
                 )?,
             )),
             &[reconstructed],
+            "mono-mix",
         )?
     } else {
         reconstructed
@@ -559,8 +600,8 @@ fn compose(
             region: region.as_ref().map(|r| r.physical),
         }
     };
-    let sharpened = if settings.photographic.sharpening.method
-        == crate::render::PhotographicMethod::Universal
+    let sharpened = if !settings.sharpening_enabled
+        || settings.photographic.sharpening.method == crate::render::PhotographicMethod::Universal
     {
         stage3::build_contrast(
             &mut graph,
@@ -618,7 +659,7 @@ fn compose(
     };
     finish!(sharpened);
     let sharpened = if settings.is_monochrome() {
-        graph.add(
+        graph.add_scoped(
             Operation::CodeChannelMap(std::sync::Arc::new(
                 crate::nodes::finish::code_channel_map::Prepared::copy_red_to_blue([
                     params.source[0],
@@ -626,6 +667,7 @@ fn compose(
                 ])?,
             )),
             &[sharpened],
+            "mono-detail-channel",
         )?
     } else {
         sharpened
@@ -656,7 +698,7 @@ fn compose(
     finish!(cropped);
     validate_photographic(settings)?;
     let response_input = if settings.is_monochrome() {
-        graph.add(
+        graph.add_scoped(
             Operation::CodeChannelMap(std::sync::Arc::new(
                 crate::nodes::finish::code_channel_map::Prepared::mix(
                     [params.output[0], params.output[1]],
@@ -664,6 +706,7 @@ fn compose(
                 )?,
             )),
             &[cropped],
+            "mono-response-channel",
         )?
     } else {
         cropped
@@ -677,7 +720,103 @@ fn compose(
             graph,
             final_id,
             params,
+            rgb_extent: [params.output[0], params.output[1]],
         });
+    }
+    if super::linear_edits::active(settings)
+        || names
+            .iter()
+            .any(|n| super::linear_edits::requested_output(n))
+    {
+        let codes = graph.add(Operation::LinearCodeBase, &[response_input])?;
+        let space = crate::color_space::ColorSpace::Srgb;
+        let id = graph.add(
+            Operation::LinearCodeRgb {
+                space,
+                white: appearance::LINEAR_CODE_WHITE,
+            },
+            &[codes],
+        )?;
+        let mut recipe = BuiltRecipe {
+            graph,
+            final_id: id,
+            params,
+            rgb_extent: [params.output[0], params.output[1]],
+        };
+        super::linear_edits::alias(&mut recipe, space, "linear.base")?;
+        if requested(&recipe.graph, names) {
+            return Ok(recipe);
+        }
+        let prepare_response = || {
+            if settings.is_monochrome() {
+                appearance::prepare_monochrome(f64::from(settings.exposure), settings.tone)
+            } else {
+                appearance::prepare(
+                    &source.metadata,
+                    color_mode,
+                    f64::from(settings.exposure),
+                    settings.tone,
+                )
+            }
+        };
+        let mut response = None;
+        let context = super::linear_edits::Context {
+            space,
+            white: appearance::LINEAR_CODE_WHITE as f32,
+            guide_white: appearance::LINEAR_CODE_WHITE as f32,
+            scale: if settings.preview_region.is_some() {
+                1.
+            } else {
+                let native = crate::nodes::sensor::calibration::encode(&source.metadata, space)?;
+                (params.output[0] as f32 / native.output[0] as f32)
+                    .min(params.output[1] as f32 / native.output[1] as f32)
+            },
+        };
+        super::linear_edits::build(
+            engine,
+            source,
+            settings,
+            &mut recipe,
+            names,
+            context,
+            |_| {
+                let prepared = prepare_response()?;
+                let pivot = super::linear_edits::pivot_from_response(context.white, |code| {
+                    prepared.evaluate_codes([code; 3])[1]
+                })?;
+                response = Some(prepared);
+                Ok(pivot)
+            },
+            profile,
+            execution,
+        )?;
+        if requested(&recipe.graph, names) {
+            return Ok(recipe);
+        }
+        let response = match response {
+            Some(response) => response,
+            None => prepare_response()?,
+        };
+        recipe.final_id = recipe.graph.add(
+            Operation::LinearCodeResponse {
+                prepared: std::sync::Arc::new(response),
+                space,
+            },
+            &[recipe.final_id],
+        )?;
+        if settings.saturation != 1. && !settings.is_monochrome() {
+            recipe.final_id = recipe.graph.add(
+                Operation::Saturation {
+                    params: super::saturation(
+                        [params.output[0], params.output[1], 0, 0],
+                        settings.saturation,
+                    ),
+                    space,
+                },
+                &[recipe.final_id],
+            )?;
+        }
+        return Ok(recipe);
     }
     let response = if settings.is_monochrome() {
         appearance::prepare_monochrome(f64::from(settings.exposure), settings.tone)?
@@ -712,5 +851,6 @@ fn compose(
         graph,
         final_id,
         params,
+        rgb_extent: [params.output[0], params.output[1]],
     })
 }

@@ -1,4 +1,5 @@
 // Sample a region of the current floating buffer in its oriented view.
+@group(0) @binding(4) var<uniform> signal_white: vec4<f32>;
 @group(0) @binding(3) var<uniform> region: vec4<f32>;
 
 fn sample_region(id: vec2<u32>) -> vec3<f32> {
@@ -38,7 +39,7 @@ fn spread_density(channel: u32, point: vec2<f32>) {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= params.output_size.xy) { return; }
     var rgb = sample_region(id.xy);
-    if params.output_size.z == 1u { rgb /= 4095.; }
+    if params.output_size.z == 1u { rgb /= signal_white.x; }
     if params.output_size.z == 4u { rgb /= 16383.; }
     if params.output_size.z == 5u { rgb /= 65535.; }
     // Shift before scaling so the signed range's endpoints remain exact.

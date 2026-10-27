@@ -34,7 +34,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[native-sharpening](./native-sharpening.md)** _(accepted, incomplete, reference)._ Optional GPU sharpening uses signed high-pass before exposure/tone, with distinct color-proportional and additive monochrome applications.
 - **[output-strategies](./output-strategies.md)** _(accepted, incomplete, reference)._ DNG preserves editing latitude and embeds color-mode presentation, while TIFF bakes the selected rendering.
 - **[pattern-conditioning](./pattern-conditioning.md)** _(accepted, conforming, reference)._ GPU pattern conditioning deterministically permutes selected near-neutral luminance ratios after native grouped min/max masking and before sensor-space texture restoration.
-- **[photographic-finishing](./photographic-finishing.md)** _(accepted, conforming, reference)._ Shared photographic finishing offers universal tone, monochrome sensitivity and sharpening beside existing camera-derived methods.
+- **[photographic-finishing](./photographic-finishing.md)** _(accepted, conforming, reference)._ Shared photographic finishing offers universal tone, color sensitivity and sharpening beside existing camera-derived methods.
 - **[photographic-help](./photographic-help.md)** _(accepted, conforming, reference)._ Control help explains photographic effects in plain English, with reviewed A/B crops where they teach the adjustment clearly.
 - **[pipeline-inspection](./pipeline-inspection.md)** _(accepted, incomplete, reference)._ Pipeline inspection requests named node outputs, executes their dependencies, and retains only selected artifacts and checkpoints.
 - **[processing-graphs](./processing-graphs.md)** _(accepted, incomplete, reference)._ Internal processing DAGs use typed connections, shared metadata, node settings, and selectable algorithms for sensor and tone processing.
@@ -48,6 +48,6 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[row-banding](./row-banding.md)** _(accepted, conforming, reference)._ GPU row-banding correction fits the native geometric patch banks, rejects scene-correlated residuals, and subtracts bounded additive per-row sensor bias before reconstruction.
 - **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Smart preview shows Draft before Full detail, with viewport-first refinement where the recipe supports it.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
-- **[tonal-ranges](./tonal-ranges.md)** _(accepted, conforming, reference)._ Experimental Merrill HDR controls use a multiscale spatial base for preview and TIFF without affecting DNG.
+- **[tonal-ranges](./tonal-ranges.md)** _(accepted, conforming, reference)._ Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG.
 
 <!-- INDEX:END -->

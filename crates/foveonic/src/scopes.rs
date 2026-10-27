@@ -18,6 +18,7 @@ const COUNT: usize = OUTSIDE_OFFSET + 12;
 /// Histograms count samples. Waveforms share each sample's weight across nearby cells.
 /// RGB keeps the buffer's color space and transfer state. Sensor codes use 0–4095.
 pub struct Scopes {
+    pub linear_white: u32,
     pub space: Space,
     pub samples: [u32; 2],
     pub counts: Vec<u32>,
@@ -102,6 +103,16 @@ pub(crate) fn analyze(
         },
     ];
     let uniform = gpu.uniform(&params);
+    let white = gpu.uniform(&[
+        if matches!(space, Space::LinearRgb(_)) {
+            image.description().linear_white as f32
+        } else {
+            4095.
+        },
+        0.,
+        0.,
+        0.,
+    ]);
     let mut counts = gpu.storage("Scope counts", COUNT as u64 * 4)?;
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
@@ -111,6 +122,7 @@ pub(crate) fn analyze(
             (1, Read(&uniform)),
             (2, Write(counts.write())),
             (3, Read(&region)),
+            (4, Read(&white)),
         ],
         [samples[0].div_ceil(16), samples[1].div_ceil(16)],
         &mut trace,
@@ -124,6 +136,7 @@ pub(crate) fn analyze(
         .map(|b| u32::from_le_bytes(*b))
         .collect();
     Ok(Scopes {
+        linear_white: image.description().linear_white,
         space,
         samples,
         counts,
@@ -146,6 +159,7 @@ mod tests {
             (Space::ToneMappedRgb(crate::image::ColorSpace::Srgb), 3),
         ] {
             let scopes = Scopes {
+                linear_white: 4095,
                 space,
                 samples: [1, 1],
                 counts: Vec::new(),

@@ -17,6 +17,7 @@ pub struct Mapping {
     pub channel: i32,
     pub input: bool,
     pub difference_gain: f32,
+    pub signal_scale: f32,
 }
 impl Mapping {
     pub fn normal(channel: i32) -> Self {
@@ -24,9 +25,11 @@ impl Mapping {
             channel,
             input: false,
             difference_gain: 0.,
+            signal_scale: 1.,
         }
     }
     fn apply(self, mut params: Params) -> Params {
+        params.options[1] *= self.signal_scale;
         if self.difference_gain > 0. {
             params.options[1] *= 0.5 * self.difference_gain;
             params.options[2] = -3.;
@@ -1059,6 +1062,7 @@ mod tests {
                 channel: 1,
                 input: false,
                 difference_gain: 32.,
+                signal_scale: 1.,
             }
             .apply(normal);
             assert_eq!(mapped.options, [1., expected, -3., 1.]);
@@ -1992,6 +1996,28 @@ mod preview_quality_tests {
             }
             viewport.reframe(canvas.size(), native);
             assert_eq!(viewport.image_rect(canvas, native), before);
+        }
+    }
+}
+
+#[cfg(test)]
+mod linear_code_scale_tests {
+    use super::*;
+    #[test]
+    fn code_units_and_difference_amplification_share_the_display_scale() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100., 100.));
+        for white in [4095., 4096., 16384.] {
+            let p = Params::new(rect, rect, Space::LinearRgb(ColorSpace::Srgb), 1, true);
+            let mapping = Mapping {
+                signal_scale: 4095. / white,
+                ..Mapping::normal(1)
+            };
+            assert!((mapping.apply(p).options[1] - 1. / white).abs() < 1e-10);
+            let difference = Mapping {
+                difference_gain: 8.,
+                ..mapping
+            };
+            assert!((difference.apply(p).options[1] - 4. / white).abs() < 1e-9);
         }
     }
 }

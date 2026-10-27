@@ -1,4 +1,4 @@
-//! Starts DNG exports from the original photo so display edits never become baked samples.
+//! Exports original-derived linear DNG samples with explicit baked edits and separate camera appearance.
 
 pub(crate) mod appearance;
 mod writer;
@@ -13,10 +13,11 @@ use crate::{
 
 /// Keep technical corrections in the samples and the selected look in metadata.
 ///
-/// Start from the original source so an earlier display render cannot bake in tone
-/// or color edits. WB-dependent calibration, repair, highlight recovery, noise and
-/// detail, ColorDQ, and sharpening stay baked. Mode, exposure, tone, and saturation
-/// stay separate so the exported samples retain editing room. Classic monochrome
+/// Rebuild from the original source and frozen output settings. WB-dependent
+/// calibration, repair, highlight recovery, noise, detail, ColorDQ and selected
+/// sharpening stay baked, along with active sensitivity, HDR and Local Contrast.
+/// Camera mode, exposure, global tone and saturation remain presentation metadata.
+/// Classic monochrome
 /// also bakes the selected color-mode mixture because it collapses the sensor
 /// channels before reconstruction. Its tone and exposure remain editable.
 /// Quattro uses a canonical Standard technical color recipe. Its adaptive color

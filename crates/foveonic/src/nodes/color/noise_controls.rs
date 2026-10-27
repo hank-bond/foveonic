@@ -35,7 +35,7 @@ impl TextureControls {
     // At 2× the four binomial passes need 60 pixels of the 64-pixel tile context.
     pub const SIZE_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.;
 
-    fn is_neutral(self) -> bool {
+    pub(crate) fn is_neutral(self) -> bool {
         self.fine == 1. && self.coarse == 1.
     }
 }

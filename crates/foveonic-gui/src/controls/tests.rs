@@ -26,9 +26,20 @@ fn processing_expanded(
     processing(ui, settings, metadata)
 }
 fn text_centers(output: &egui::FullOutput, label: &str) -> Vec<egui::Pos2> {
+    text_centers_in(output, label, false)
+}
+
+fn panel_text_centers(output: &egui::FullOutput, label: &str) -> Vec<egui::Pos2> {
+    text_centers_in(output, label, true)
+}
+
+fn text_centers_in(output: &egui::FullOutput, label: &str, panel: bool) -> Vec<egui::Pos2> {
     output
         .shapes
         .iter()
+        // Expanded fixtures open help popovers too. The main editing panel
+        // has the screen clip rectangle. Menus are tested separately.
+        .filter(|shape| !panel || shape.clip_rect.min == egui::Pos2::ZERO)
         .filter_map(|shape| match &shape.shape {
             egui::Shape::Text(text) if text.galley.job.text == label => {
                 Some(text.pos + text.galley.size() * 0.5)
@@ -126,9 +137,6 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
         "Chroma",
         "Luma",
         "Banding",
-        "Fine",
-        "Size",
-        "Coarse",
         "ColorDQ gain",
     ] {
         assert!(
@@ -208,21 +216,21 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             "Chroma",
             "Luma",
             "Banding",
-            "Fine",
-            "Size",
-            "Coarse",
             "ColorDQ gain",
         ] {
             assert_eq!(
-                text_centers(&output, label).len(),
-                usize::from(rendering == Rendering::Color) * if label == "Size" { 2 } else { 1 },
+                panel_text_centers(&output, label).len(),
+                usize::from(rendering == Rendering::Color),
                 "{rendering:?}: {label}"
             );
         }
-        assert_eq!(text_centers(&output, "Noise").len(), 1);
+        assert_eq!(panel_text_centers(&output, "Noise").len(), 1);
+        for (label, count) in [("Fine", 1), ("Coarse", 1), ("Size", 2)] {
+            assert_eq!(panel_text_centers(&output, label).len(), count);
+        }
         for label in ["Color Mix", "Mono noise", "Mono banding"] {
             assert_eq!(
-                text_centers(&output, label).len(),
+                panel_text_centers(&output, label).len(),
                 usize::from(rendering == Rendering::Monochrome),
                 "{rendering:?}: {label}"
             );
@@ -238,12 +246,12 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             "Row banding",
         ] {
             assert_eq!(
-                text_centers(&output, label).len(),
+                panel_text_centers(&output, label).len(),
                 1,
                 "{rendering:?}: {label}"
             );
         }
-        assert_eq!(text_centers(&output, "Highlights").len(), 2);
+        assert_eq!(panel_text_centers(&output, "Highlights").len(), 2);
     }
 }
 
@@ -624,8 +632,8 @@ fn all_visible_editing_controls_have_explanations() {
             });
         },
     );
-    assert!(text_centers(&output, "Sensor").is_empty());
-    assert!(text_centers(&output, "Sensor gain").is_empty());
+    assert!(panel_text_centers(&output, "Sensor").is_empty());
+    assert!(panel_text_centers(&output, "Sensor gain").is_empty());
     for key in [
         "White balance",
         "Color mode",
@@ -667,16 +675,7 @@ fn all_visible_editing_controls_have_explanations() {
         );
         assert!(help::editing(key).is_some(), "help missing: {label}");
     }
-    assert_eq!(
-        output
-            .shapes
-            .iter()
-            .filter(|shape| matches!(
-                &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Highlights"
-            ))
-            .count(),
-        2
-    );
+    assert_eq!(panel_text_centers(&output, "Highlights").len(), 2);
     assert!(help::editing("Highlight correction").is_some());
 }
 
@@ -1181,7 +1180,7 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(width, 1200.),
+                    egui::vec2(width, 2400.),
                 )),
                 ..Default::default()
             },
@@ -1196,6 +1195,7 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
                 .shapes
                 .iter()
                 .rev()
+                .filter(|shape| shape.clip_rect.min == egui::Pos2::ZERO)
                 .find_map(|shape| match &shape.shape {
                     egui::Shape::Text(text) if text.galley.job.text == label => {
                         Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
@@ -1397,16 +1397,8 @@ fn tone_methods_show_only_their_active_controls_and_preserve_edits() {
             );
         }
         assert!(text_centers(&output, "Camera curve").is_empty());
-        let badge = if method == PhotographicMethod::Reference {
-            "DNG | TIFF"
-        } else {
-            "TIFF"
-        };
-        let header = text_centers(&output, "Tone and Color")[0];
-        let badge = text_centers(&output, badge);
-        assert_eq!(badge.len(), 1);
-        assert!(badge[0].x > header.x);
-        assert!((badge[0].y - header.y).abs() < 2.);
+        assert!(text_centers(&output, "DNG | TIFF").is_empty());
+        assert!(text_centers(&output, "TIFF").is_empty());
         assert_eq!(settings, before);
     }
 }
@@ -2403,7 +2395,7 @@ fn family_panels_show_supported_controls_without_mutating_edits() {
             "Bad pixels",
         ] {
             assert!(
-                !text_centers(&output, label).is_empty(),
+                !panel_text_centers(&output, label).is_empty(),
                 "{model}: missing {label}"
             );
         }
@@ -2419,13 +2411,13 @@ fn family_panels_show_supported_controls_without_mutating_edits() {
             "Row banding",
         ] {
             assert_eq!(
-                text_centers(&output, label).is_empty(),
+                panel_text_centers(&output, label).is_empty(),
                 classic,
                 "{model}: {label}"
             );
         }
         assert_eq!(
-            text_centers(&output, "Highlights").len(),
+            panel_text_centers(&output, "Highlights").len(),
             2,
             "tone and correction remain separate"
         );
@@ -3478,6 +3470,75 @@ fn photographic_value_readouts_limit_significant_digits_and_round_carries() {
         (1.23456e-10, "1.23e-10"),
         (-1.23456e10, "-1.23e10"),
     ] {
-        assert_eq!(common::format_parameter_value(value), expected, "{value}");
+        assert_eq!(
+            crate::widgets::format_parameter_value(value),
+            expected,
+            "{value}"
+        );
     }
+}
+
+#[test]
+fn merrill_color_sensitivity_is_shared_without_changing_values_on_mode_switch() {
+    use foveonic::render::Rendering;
+    let context = egui::Context::default();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.color_sensitivity = [0.2, 0., -0.3, 0., 0., 0.1];
+    for rendering in [Rendering::Color, Rendering::Monochrome, Rendering::Color] {
+        settings.rendering = rendering;
+        let before = settings.clone();
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(450., 2400.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    processing_expanded(ui, &mut settings, None);
+                });
+            },
+        );
+        assert_eq!(panel_text_centers(&output, "Color sensitivity").len(), 1);
+        assert_eq!(settings.photographic, before.photographic);
+    }
+}
+
+#[test]
+fn sensitivity_readouts_and_slider_tooltips_share_three_significant_digits() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.color_sensitivity = [
+        0.123456, -0.234567, 0.345678, -0.456789, 0.567891, -0.678912,
+    ];
+    let saved = settings.clone();
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(350., 800.),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                common::color_sensitivity(ui, &mut settings);
+            });
+        },
+    );
+    for value in saved.photographic.color_sensitivity {
+        let text = crate::widgets::format_parameter_value(f64::from(value));
+        assert_eq!(text_centers(&output, &text).len(), 1, "{value}: {text}");
+        assert_eq!(
+            ctx.style()
+                .number_formatter
+                .format(f64::from(value), 0..=15),
+            text
+        );
+    }
+    assert_eq!(settings, saved);
 }

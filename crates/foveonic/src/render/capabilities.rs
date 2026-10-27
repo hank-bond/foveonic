@@ -245,6 +245,11 @@ impl ControlCapabilities {
         if self.family == ProcessingFamily::Classic
             && settings.is_monochrome()
             && settings.monochrome != Default::default()
+            && settings.monochrome
+                != (crate::render::MonochromeControls {
+                    detail_enabled: settings.processing_sections.detail,
+                    ..Default::default()
+                })
         {
             return Err("Classic monochrome uses its camera mixture and reconstruction. Merrill monochrome mix, noise and banding overrides are unsupported".into());
         }
@@ -277,9 +282,15 @@ impl ControlCapabilities {
             );
         }
         if !self.noise_adjustments
-            && settings
-                .reconstruction
-                .is_some_and(|controls| controls != crate::noise::Controls::default())
+            && settings.reconstruction.is_some_and(|controls| {
+                controls != crate::noise::Controls::default()
+                    && controls
+                        != crate::noise::Controls {
+                            noise_enabled: settings.processing_sections.noise,
+                            detail_enabled: settings.processing_sections.detail,
+                            ..Default::default()
+                        }
+            })
         {
             return Err(
                 "Classic reconstruction currently supports the reference control defaults".into(),

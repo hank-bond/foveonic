@@ -36,7 +36,7 @@ pub(super) fn build(
     let preview = (settings.preview_quality.is_reduced()
         && mode.is_some()
         && !settings.is_monochrome()
-        && names == ["final"]
+        && (names == ["final"] || names == ["linear.base"])
         && settings.preview_region.is_none())
     .then(|| preview::Grid::new(params, settings.output_size))
     .transpose()?;
@@ -48,9 +48,13 @@ pub(super) fn build(
     }
     let region = settings
         .preview_region
-        .filter(|_| mode.is_some() && !settings.is_monochrome() && names == ["final"])
+        .filter(|_| {
+            mode.is_some()
+                && !settings.is_monochrome()
+                && (names == ["final"] || names == ["linear.base"])
+        })
         .map(|rect| {
-            let shared = super::super::finishing::support(settings);
+            let shared = super::super::linear_edits::support(settings);
             if shared > 0 {
                 let (tonal, alignment) = if settings.tonal_ranges.is_neutral() {
                     (0, 1)
@@ -87,6 +91,7 @@ pub(super) fn build(
                     graph,
                     final_id: input,
                     params,
+                    rgb_extent: [params.source[0], params.source[1]],
                 }));
             }
         };
@@ -165,7 +170,7 @@ pub(super) fn build(
     // Fast and Full share this native boundary. Keep it through refinement so
     // a later edit's Fast response does not repeat sensor repair and highlights.
     if mode.is_some()
-        && names == ["final"]
+        && (names == ["final"] || names == ["linear.base"])
         && !settings.is_monochrome()
         && preview::available(&source.metadata)
     {
@@ -173,7 +178,7 @@ pub(super) fn build(
     }
     // Reduced browsing omits the expensive native row-bias estimate. Keep the
     // requested edit intact so Full and inspection still apply its correction.
-    if settings.row_correction && preview.is_none() {
+    if settings.row_correction && settings.processing_sections.corrections && preview.is_none() {
         let prepared = profile.measure("prepare row correction", || {
             banding::prepare(&source.metadata, calibration_gains)
         })?;
@@ -188,6 +193,7 @@ pub(super) fn build(
                 graph,
                 final_id: calibrated,
                 params,
+                rgb_extent: [params.source[0], params.source[1]],
             },
             names,
             profile,
@@ -397,6 +403,7 @@ pub(super) fn build(
             graph,
             final_id: linear,
             params,
+            rgb_extent: [params.source[0], params.source[1]],
         },
         mode,
     ))

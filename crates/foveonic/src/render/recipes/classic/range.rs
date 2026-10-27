@@ -156,7 +156,7 @@ fn controls(
     // Each inline fallback below is the reference descriptor default for the
     // adjacent CAMF name. Numerical modes remain independent of camera identity.
     Ok(Controls {
-        enabled: settings.reconstruction.is_some(),
+        enabled: settings.processing_sections.noise && settings.reconstruction.is_some(),
         downsample: scalar(
             m,
             "DownSampleFactor",

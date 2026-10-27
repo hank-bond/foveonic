@@ -7,7 +7,11 @@ struct Parameters { source:vec4<u32>, mix:vec4<f32>, filtering:vec4<f32>, area:v
 @group(0) @binding(4) var<storage,read> indexes:array<u32>;
 @group(0) @binding(5) var<storage,read> weights:array<f32>;
 fn valid(id:vec3<u32>)->bool{return id.x<params.source.x && id.y<params.source.y;}
-fn bin(value:f32)->u32{return u32(clamp(i32(value),0,4095))>>2u;}
+// The noise model has 1024 four-code bins. Recovered highlight headroom
+// lies outside that model and must not become an undifferentiated last-bin mean.
+const HISTOGRAM_MAX_CODE: f32 = 4095.;
+fn bin(value:f32)->u32{return u32(clamp(i32(value),0,i32(HISTOGRAM_MAX_CODE)))>>2u;}
+fn histogram_value(value:f32)->f32{return min(value,HISTOGRAM_MAX_CODE);}
 @compute @workgroup_size(8,8)
 fn mixing(@builtin(global_invocation_id)id:vec3<u32>){
     if !valid(id){return;}let p=id.y*params.source.x+id.x;
@@ -62,17 +66,20 @@ fn histogram(@builtin(global_invocation_id)id:vec3<u32>){
         var y=select(last,first,down);
         for(var k=0u;k<1024u;k++){let i=k*columns+id.x;histogram_bins[i].count=0u;histogram_bins[i].sum=0.0;}
         for(var yy=y-9u;yy<=y+9u;yy++){for(var xx=x-9u;xx<=x+9u;xx++){
-            let sample=input_pixels[yy*w+xx];let i=bin(sample)*columns+id.x;histogram_bins[i].sum=sample+histogram_bins[i].sum;histogram_bins[i].count+=1u;
+            let sample=histogram_value(input_pixels[yy*w+xx]);let i=bin(sample)*columns+id.x;histogram_bins[i].sum=sample+histogram_bins[i].sum;histogram_bins[i].count+=1u;
         }}
         loop{
             let center=bin(input_pixels[y*w+x]);let offset=indexes[center*3u];let first_bin=indexes[center*3u+1u];let count=indexes[center*3u+2u];
             var total=0.0;var weight_sum=0.0;
             for(var k=0u;k<count;k++){let i=(first_bin+k)*columns+id.x;if histogram_bins[i].count!=0u{let weight=weights[offset+k];total=fma(weight,histogram_bins[i].sum,total);weight_sum=fma(weight,f32(histogram_bins[i].count),weight_sum);}}
-            output_pixels[y*w+x]=total/weight_sum;
+            // Filter the modeled base and carry each pixel's excess signal through.
+            // Bounding sums as well as bin indexes prevents bright neighbors
+            // from contaminating pixels just below the histogram ceiling.
+            output_pixels[y*w+x]=total/weight_sum+max(input_pixels[y*w+x]-HISTOGRAM_MAX_CODE,0.);
             if (down && y==last) || (!down && y==first){break;}
             let leaving=select(y+9u,y-9u,down);let entering=select(y-10u,y+10u,down);
-            for(var xx=x-9u;xx<=x+9u;xx++){let sample=input_pixels[leaving*w+xx];let i=bin(sample)*columns+id.x;histogram_bins[i].sum-=sample;histogram_bins[i].count-=1u;}
-            for(var xx=x-9u;xx<=x+9u;xx++){let sample=input_pixels[entering*w+xx];let i=bin(sample)*columns+id.x;histogram_bins[i].sum=sample+histogram_bins[i].sum;histogram_bins[i].count+=1u;}
+            for(var xx=x-9u;xx<=x+9u;xx++){let sample=histogram_value(input_pixels[leaving*w+xx]);let i=bin(sample)*columns+id.x;histogram_bins[i].sum-=sample;histogram_bins[i].count-=1u;}
+            for(var xx=x-9u;xx<=x+9u;xx++){let sample=histogram_value(input_pixels[entering*w+xx]);let i=bin(sample)*columns+id.x;histogram_bins[i].sum=sample+histogram_bins[i].sum;histogram_bins[i].count+=1u;}
             y=u32(i32(y)+select(-1,1,down));
         }
     }

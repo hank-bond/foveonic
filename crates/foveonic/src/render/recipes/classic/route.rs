@@ -24,7 +24,7 @@ impl<'a> Route<'a> {
             monochrome: settings.is_monochrome(),
             repair: settings.repair.is_some(),
             despeckle: settings.despeckle,
-            filtering: settings.reconstruction.is_some(),
+            filtering: settings.processing_sections.noise && settings.reconstruction.is_some(),
             highlights: settings.highlight_restoration,
         }
     }

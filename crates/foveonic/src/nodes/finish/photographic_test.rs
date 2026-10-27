@@ -18,7 +18,7 @@ fn invalid_values_are_rejected() {
         assert!(c.validate().is_err());
     }
     let mut c = Controls::default();
-    c.monochrome_sensitivity[3] = f32::NAN;
+    c.color_sensitivity[3] = f32::NAN;
     assert!(c.validate().is_err());
 }
 
@@ -63,37 +63,6 @@ fn gpu_photographic_tone_preserves_neutral_headroom_and_restrains_saturation() {
     let output = tone::apply(&gpu, &input, p, extent, &mut Profile::default()).unwrap();
     assert!(samples(&gpu, &output).iter().all(|v| v.is_finite()));
     assert_eq!(samples(&gpu, &input), values);
-}
-
-#[test]
-#[ignore = "requires a GPU"]
-fn gpu_monochrome_sensitivity_targets_original_hues_and_protects_gray() {
-    use crate::{gpu::Gpu, profile::Profile};
-    let gpu = Gpu::new().unwrap();
-    let extent = [8, 1];
-    let colors: [f32; 24] = [
-        1., 0., 0., 1., 1., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 1., 0., 1., 0.4, 0.4, 0.4, 0.,
-        0., 0.,
-    ];
-    let values = [0.2_f32; 24];
-    let source = gpu.upload("mono", &values).unwrap();
-    let guide = gpu.upload("original colors", &colors).unwrap();
-    for hue in 0..6 {
-        let mut p = Params::new(extent, ColorSpace::Srgb);
-        p.hues[hue / 4][hue % 4] = 0.5;
-        let output =
-            sensitivity::apply(&gpu, &source, &guide, p, extent, &mut Profile::default()).unwrap();
-        let actual = samples(&gpu, &output);
-        for i in 0..8 {
-            let expected = if i == hue { 0.4 } else { 0.2 };
-            for c in 0..3 {
-                assert!(
-                    (actual[i * 3 + c] - expected).abs() < 0.00001,
-                    "hue {hue} pixel {i}"
-                );
-            }
-        }
-    }
 }
 
 #[test]

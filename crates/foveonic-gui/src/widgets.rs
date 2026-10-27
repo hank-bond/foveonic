@@ -2,6 +2,39 @@
 
 use eframe::egui;
 
+const VALUE_SIGNIFICANT_DIGITS: usize = 3;
+/// Compact photographic readouts retain up to three significant digits.
+/// Small or large magnitudes use scientific notation instead of long zero runs.
+pub(crate) fn format_parameter_value(value: f64) -> String {
+    if value == 0. {
+        return "0.00".into();
+    }
+    if !value.is_finite() {
+        return value.to_string();
+    }
+    // Read the exponent after rounding so carries such as 9.999 -> 10.0
+    // choose the correct number of decimal places too.
+    let scientific = format!(
+        "{value:.precision$e}",
+        precision = VALUE_SIGNIFICANT_DIGITS - 1
+    );
+    let (mantissa, exponent) = scientific.split_once('e').expect("formatted exponent");
+    let exponent: i32 = exponent.parse().expect("numeric exponent");
+    if !(-3..VALUE_SIGNIFICANT_DIGITS as i32).contains(&exponent) {
+        return format!(
+            "{}e{exponent}",
+            mantissa.trim_end_matches('0').trim_end_matches('.')
+        );
+    }
+    let mut decimals = (VALUE_SIGNIFICANT_DIGITS as i32 - 1 - exponent) as usize;
+    let mut text = format!("{value:.decimals$}");
+    while decimals > 2 && text.ends_with('0') {
+        text.pop();
+        decimals -= 1;
+    }
+    text
+}
+
 const RADIUS: u8 = 4;
 pub const BUTTON_GROUP_MARGIN: i8 = 4;
 pub const PARAMETER_GROUP_HORIZONTAL_PADDING: i8 = 2 * BUTTON_GROUP_MARGIN;
@@ -67,6 +100,16 @@ pub fn install_style(ctx: &egui::Context) {
     }
     visuals.collapsing_header_frame = true;
     style.visuals = visuals;
+    // Built-in DragValue hints print the full float independently of its
+    // formatter. Domain help stays available through our explicit tooltips.
+    style.explanation_tooltips = false;
+    style.number_formatter = egui::style::NumberFormatter::new(|value, decimals| {
+        if *decimals.end() == 0 && value.abs() < 1000. {
+            format!("{value:.0}")
+        } else {
+            format_parameter_value(value)
+        }
+    });
     style.spacing.item_spacing = egui::vec2(7., 6.);
     style
         .text_styles

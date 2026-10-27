@@ -67,6 +67,7 @@ fn resized_tiff_defaults_to_reference_sampling_before_destination_conversion() {
                 .upload("TIFF reference resize fixture", &pixels)
                 .unwrap(),
             description: Description {
+                linear_white: 4095,
                 view_baked: false,
                 extent: [12, 10],
                 layout: Layout::Rgb32Float,

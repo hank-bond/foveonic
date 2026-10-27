@@ -4,6 +4,7 @@
 
 mod apply;
 mod parameters;
+pub(crate) mod texture;
 pub(crate) use apply::apply;
 pub(crate) use parameters::{Prepared, Stage};
 
@@ -16,6 +17,8 @@ pub struct Controls {
     pub noise: u32,
     /// Five reference column-correction presets.
     pub banding: u32,
+    pub detail_enabled: bool,
+    pub texture: crate::noise::TextureControls,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -23,11 +26,22 @@ impl Default for Controls {
             mix: [1. / 3.; 3],
             noise: 2,
             banding: 2,
+            detail_enabled: true,
+            texture: Default::default(),
         }
     }
 }
 impl Controls {
+    /// Resolve the saved checkbox and neutral amounts at the recipe boundary.
+    pub(crate) fn detail(self) -> Option<crate::noise::TextureControls> {
+        (self.detail_enabled && !self.texture.is_neutral()).then_some(self.texture)
+    }
     pub fn validate(self) -> crate::source::Result<()> {
+        crate::noise::Controls {
+            texture: self.texture,
+            ..Default::default()
+        }
+        .validate()?;
         if self.mix.iter().any(|v| !v.is_finite() || *v < 0.)
             || (self.mix.iter().sum::<f32>() - 1.).abs() > 0.0001
             || self.noise > 4

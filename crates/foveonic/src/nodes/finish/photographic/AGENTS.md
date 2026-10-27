@@ -1,5 +1,5 @@
 ---
-summary: "Shared finishing operations own tone, hue-guided monochrome sensitivity, local contrast and sharpening over normalized RGB."
+summary: "Shared finishing operations own tone, local contrast and sharpening with explicit brightness units."
 ---
 
 # Shared photographic operations
@@ -17,7 +17,6 @@ Inspection names use the graph's immutable image alias. Aliases do not belong in
 ### Source files
 
 - **[local_contrast.rs](./local_contrast.rs)** Adjusts six log-brightness texture bands without coupling noise or sharpening.
-- **[sensitivity.rs](./sensitivity.rs)** Adjusts monochrome brightness using subject hues from an independent color guide.
 - **[sharpen.rs](./sharpen.rs)** Sharpens square-root brightness with independent threshold and halo restraint.
 - **[tone.rs](./tone.rs)** Applies shared contrast and saturation to normalized photographic RGB.
 

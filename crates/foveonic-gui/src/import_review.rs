@@ -232,6 +232,7 @@ impl Review {
                     vec![settings.format]
                 },
                 tiff_color_space: settings.tiff_color_space,
+                sections: settings.sections(),
                 conflict: settings.conflict,
             },
         }) {

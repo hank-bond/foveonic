@@ -5,6 +5,11 @@
 const LUT_LEN: u32 = 65536u;
 const LUT_MASK: i32 = 65535;
 const SIGNED_CODE_MAX: i32 = 32767;
+// Linear response tables cover one negative Q12 signal unit through signed maximum.
+const LINEAR_CODE_MIN: f32 = -4096.;
+// Match ResponseMode on the host. The ordinary photographic mode is zero.
+const MODE_LINEAR_DETAIL: u32 = 1u;
+const MODE_LINEAR_PHOTOGRAPHIC: u32 = 2u;
 const DETAIL_FRACTION_BITS: u32 = 14u;
 const SATURATION_FRACTION_BITS: u32 = 12u;
 const SATURATION_ROUNDING: i32 = 2048;
@@ -24,19 +29,22 @@ fn index16(value: i32) -> u32 { return u32(value & LUT_MASK); }
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.size.x || id.y >= params.size.y { return; }
     let pixel = id.y * params.size.x + id.x;
-    let addition = (i32(detail[pixel]) * params.detail_q14.x) >> DETAIL_FRACTION_BITS;
+    var addition = 0;
+    if params.size.z != MODE_LINEAR_PHOTOGRAPHIC { addition = (i32(detail[pixel]) * params.detail_q14.x) >> DETAIL_FRACTION_BITS; }
     var rgb: vec3<i32>;
     for (var c = 0u; c < 3u; c++) {
         var value = i32(source[pixel * 3u + c]) + addition;
-        value = min(tables[index16(value)], SIGNED_CODE_MAX);
-        if params.size.z != 0u {
+        if params.size.z == MODE_LINEAR_PHOTOGRAPHIC {
+            value = i32(round(clamp(source[pixel * 3u + c], LINEAR_CODE_MIN, f32(SIGNED_CODE_MAX))));
+        } else { value = min(tables[index16(value)], SIGNED_CODE_MAX); }
+        if params.size.z == MODE_LINEAR_DETAIL {
             output_rgb[pixel * 3u + c] = f32(value);
             continue;
         }
         value = tables[LUT_LEN + index16(value)];
         rgb[c] = tables[(2u + c) * LUT_LEN + index16(value)];
     }
-    if params.size.z != 0u { return; }
+    if params.size.z == MODE_LINEAR_DETAIL { return; }
     for (var c = 0u; c < 3u; c++) {
         let m = params.matrix[c].xyz;
         let code = (m.x * rgb.x + m.y * rgb.y + m.z * rgb.z + SATURATION_ROUNDING) >> SATURATION_FRACTION_BITS;

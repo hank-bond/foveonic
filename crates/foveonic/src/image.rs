@@ -47,7 +47,7 @@ pub enum Space {
     SignedCodeRgb,
     /// Unsigned16 RGB codes, represented as integral Float32 values.
     UnsignedCodeRgb,
-    /// Camera-color RGB in code units, with a nominal inspection range of 0..4095.
+    /// Camera-color RGB in linear codes. Description declares their nominal white.
     LinearRgb(ColorSpace),
     /// Tone-mapped components in linear working primaries.
     ToneMappedRgb(ColorSpace),
@@ -94,6 +94,8 @@ impl Space {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Description {
+    /// Nominal white for LinearRgb code buffers. Other spaces ignore this field.
+    pub linear_white: u32,
     /// Physical storage dimensions.
     pub extent: [u32; 2],
     pub layout: Layout,
@@ -106,6 +108,7 @@ impl Description {
     pub(crate) fn new(extent: [u32; 2], space: Space) -> Self {
         Self {
             extent,
+            linear_white: 4095,
             layout: space.buffer_layout(),
             space,
             view_baked: false,

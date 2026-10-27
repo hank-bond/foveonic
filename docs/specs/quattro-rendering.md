@@ -40,3 +40,7 @@ Numerical cropping and resampling precede tone response in the reference route. 
 Check numerical operations against independent bounded fixtures and complete original-image captures. Check the connected graph as well as individual operations, including masks and retained histories. Export a native-size TIFF through shared finishing. Preserve existing Classic and Merrill outputs.
 
 Track exact comparisons, measured approximations and outstanding variants in the [integration plan](../../plans/archived/quattro-integration.md).
+
+## Shared linear edits
+
+Before the camera response, the shared photographic stage applies sensitivity, HDR, Local Contrast and Universal sharpening under the [photographic finishing contract](./photographic-finishing.md). The adapter declares the native code white and working primaries. DNG retains its canonical technical base and receives the same combined scalar edit gain. Sharpening bypass omits native creative sharpening while retaining required reconstruction and native local contrast.

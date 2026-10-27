@@ -196,7 +196,7 @@ fn rolling_histogram(source: &[f32], borders: &[f32], prepared: &Prepared) -> Ve
             let mut sums = [0_f32; 1024];
             for yy in y - 9..=y + 9 {
                 for xx in x - 9..=x + 9 {
-                    let value = source[yy * width + xx];
+                    let value = source[yy * width + xx].min(4095.);
                     let bin = sample_bin(value);
                     sums[bin] += value;
                     counts[bin] += 1;
@@ -217,20 +217,20 @@ fn rolling_histogram(source: &[f32], borders: &[f32], prepared: &Prepared) -> Ve
                         total = weight.mul_add(counts[bin] as f32, total);
                     }
                 }
-                output[y * width + x] = sum / total;
+                output[y * width + x] = sum / total + (source[y * width + x] - 4095.).max(0.);
                 if y == if down { last } else { first } {
                     break;
                 }
                 let leaving = if down { y - 9 } else { y + 9 };
                 let entering = if down { y + 10 } else { y - 10 };
                 for xx in x - 9..=x + 9 {
-                    let value = source[leaving * width + xx];
+                    let value = source[leaving * width + xx].min(4095.);
                     let bin = sample_bin(value);
                     sums[bin] -= value;
                     counts[bin] -= 1;
                 }
                 for xx in x - 9..=x + 9 {
-                    let value = source[entering * width + xx];
+                    let value = source[entering * width + xx].min(4095.);
                     let bin = sample_bin(value);
                     sums[bin] += value;
                     counts[bin] += 1;
@@ -339,4 +339,82 @@ fn pure_layer_mixing_precedes_noise_and_color_conversion() {
         gpu.readback(&input).unwrap(),
         bytemuck::cast_slice::<f32, u8>(&source)
     );
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn histogram_preserves_highlight_headroom_and_matches_bounded_neighborhood_means() {
+    let gpu = Gpu::new().unwrap();
+    let prepared = prepared(64, 64);
+    let samples: Vec<f32> = (0..64 * 64)
+        .map(|i| {
+            let x = i % 64;
+            let y = i / 64;
+            2400. + x as f32 * 100. + (y as f32 * 0.7).sin() * 300.
+        })
+        .collect();
+    let input = gpu
+        .upload("Highlight ramp crossing histogram ceiling", &samples)
+        .unwrap();
+    let filtered = apply(
+        &gpu,
+        Stage::Histogram,
+        &[&input, &input],
+        &prepared,
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let bytes = gpu.readback(&filtered).unwrap();
+    let actual: &[f32] = bytemuck::cast_slice(&bytes);
+    let (indexes, weights) = prepared.table(false);
+    let bin = |sample: f32| (sample.clamp(0., 4095.) as usize) / 4;
+    for y in 9..55 {
+        for x in 9..55 {
+            let center = samples[y * 64 + x];
+            let center_bin = bin(center);
+            let offset = indexes[center_bin * 3] as usize;
+            let first = indexes[center_bin * 3 + 1] as usize;
+            let count = indexes[center_bin * 3 + 2] as usize;
+            let mut total = 0_f64;
+            let mut weight_sum = 0_f64;
+            for yy in y - 9..=y + 9 {
+                for xx in x - 9..=x + 9 {
+                    let sample = samples[yy * 64 + xx].min(4095.);
+                    let sample_bin = bin(sample);
+                    if (first..first + count).contains(&sample_bin) {
+                        let weight = f64::from(weights[offset + sample_bin - first]);
+                        total += f64::from(sample) * weight;
+                        weight_sum += weight;
+                    }
+                }
+            }
+            let expected = (total / weight_sum) as f32 + (center - 4095.).max(0.);
+            assert!(
+                (actual[y * 64 + x] - expected).abs() < 0.02,
+                "({x},{y}) {} vs {expected}",
+                actual[y * 64 + x]
+            );
+            // Every neighbor here exceeds the modeled range. No filtering can
+            // distinguish them, so preserve the original highlight texture.
+            if x >= 30 {
+                assert!((actual[y * 64 + x] - center).abs() < 0.002);
+            }
+        }
+    }
+}
+
+#[test]
+fn monochrome_detail_preserves_values_and_resolves_neutral_once() {
+    let mut controls = Controls::default();
+    assert!(controls.detail().is_none());
+    controls.texture.fine = 1.4;
+    assert_eq!(controls.detail(), Some(controls.texture));
+    controls.detail_enabled = false;
+    assert!(controls.detail().is_none());
+    assert_eq!(controls.texture.fine, 1.4);
+    let restored: Controls = serde_json::from_str(r#"{"mix":[0,0,1]}"#).unwrap();
+    assert!(restored.detail_enabled);
+    assert!(restored.detail().is_none());
+    controls.texture.coarse_size = f32::NAN;
+    assert!(controls.validate().is_err());
 }

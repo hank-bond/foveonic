@@ -31,7 +31,7 @@ pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'s
 }
 
 fn finishing_outputs(settings: &Settings, metadata: Option<&Metadata>) -> Vec<ImageOutput> {
-    use crate::{nodes::finish::photographic::Method, source::ProcessingFamily};
+    use crate::nodes::finish::photographic::Method;
     let Some(metadata) = metadata else {
         return Vec::new();
     };
@@ -40,41 +40,10 @@ fn finishing_outputs(settings: &Settings, metadata: Option<&Metadata>) -> Vec<Im
     if !camera_output_names(settings, Some(metadata)).contains(&"final") {
         return Vec::new();
     }
-    let family = metadata.processing_family().ok();
     let mut out = vec![ImageOutput {
         name: "finish.base",
         channels: Channels::Rgb,
     }];
-    if settings.is_monochrome() && settings.photographic.sensitivity_active() {
-        out.extend([
-            ImageOutput {
-                name: "finish.color-guide",
-                channels: Channels::Rgb,
-            },
-            ImageOutput {
-                name: "finish.monochrome",
-                channels: Channels::Rgb,
-            },
-        ]);
-    }
-    if settings.tone_enabled && settings.photographic.local_contrast != 0. {
-        out.push(ImageOutput {
-            name: "finish.local-contrast",
-            channels: Channels::Rgb,
-        });
-    }
-    if family != Some(ProcessingFamily::Merrill) {
-        out.extend([
-            ImageOutput {
-                name: "finish.hdr-mask",
-                channels: Channels::Scalar,
-            },
-            ImageOutput {
-                name: "finish.hdr",
-                channels: Channels::Rgb,
-            },
-        ]);
-    }
     if settings.tone_enabled
         && settings.photographic.tone_method == Method::Universal
         && (settings.tone.contrast != 0.
@@ -85,16 +54,38 @@ fn finishing_outputs(settings: &Settings, metadata: Option<&Metadata>) -> Vec<Im
             channels: Channels::Rgb,
         });
     }
-    if settings.sharpening_enabled && settings.photographic.sharpening.is_active() {
-        out.push(ImageOutput {
-            name: "finish.sharpen",
-            channels: Channels::Rgb,
-        });
-    }
     out
 }
 
 fn camera_output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'static str> {
+    let mut names = native_camera_output_names(settings, metadata);
+    if !names.contains(&"final") {
+        return names;
+    }
+    let mut linear = Vec::new();
+    let active = settings.active_tone_settings();
+    if active.tone_enabled && active.photographic.sensitivity_active() {
+        linear.extend(["sensitivity.color-guide", "sensitivity.rgb"]);
+    }
+    linear.extend(["tonal-ranges.mask", "tonal-ranges.rgb"]);
+    if active.tone_enabled && active.photographic.local_contrast != 0. {
+        linear.push("linear.local-contrast");
+    }
+    if active.sharpening_enabled && active.photographic.sharpening.is_active() {
+        linear.push("linear.sharpen");
+    }
+    let index = names
+        .iter()
+        .position(|n| *n == "tone.rgb")
+        .unwrap_or(names.len());
+    names.splice(index..index, linear);
+    names
+}
+
+fn native_camera_output_names(
+    settings: &Settings,
+    metadata: Option<&Metadata>,
+) -> Vec<&'static str> {
     if metadata.is_some_and(|m| {
         m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro)
     }) {
@@ -135,11 +126,14 @@ fn camera_output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<
         if settings.despeckle {
             names.push("mono.despeckle");
         }
+        if settings.monochrome.detail().is_some() {
+            names.push("mono.texture");
+        }
         names.extend(["detail.signal", "monochrome.rgb"]);
         if settings.sharpen_selected() {
             names.push("sharpen.rgb");
         }
-        names.extend(["tonal-ranges.mask", "tonal-ranges.rgb", "tone.rgb"]);
+        names.push("tone.rgb");
         return names;
     }
     if settings.merrill_reconstruction().is_some() {
@@ -160,7 +154,7 @@ fn camera_output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<
     if settings.merrill_reconstruction().is_some() {
         names.extend(["reconstruction.rgb", "detail.signal"]);
     }
-    names.extend(["tonal-ranges.mask", "tonal-ranges.rgb", "tone.rgb"]);
+    names.push("tone.rgb");
     if settings.tone_enabled && settings.saturation != 1. {
         names.push("saturation.rgb");
     }
@@ -226,10 +220,10 @@ pub fn image_outputs_with_family(
                 | "chroma.small-layers"
                 | "chroma.layers"
                 | "color.corrected-layers" => Channels::Layers,
-                "finish.hdr-mask" | "tonal-ranges.mask" | "noise.edges" | "detail.ratio"
-                | "detail.raw-ratio" | "pattern.mask" | "detail.signal" | "texture.change"
-                | "highlight.density" | "mono.mix" | "mono.directional" | "mono.column"
-                | "mono.filtered" | "mono.despeckle" => Channels::Scalar,
+                "tonal-ranges.mask" | "noise.edges" | "detail.ratio" | "detail.raw-ratio"
+                | "pattern.mask" | "detail.signal" | "texture.change" | "highlight.density"
+                | "mono.mix" | "mono.directional" | "mono.column" | "mono.filtered"
+                | "mono.despeckle" | "mono.texture" => Channels::Scalar,
                 _ => Channels::Rgb,
             };
             Some(ImageOutput { name, channels })
@@ -247,10 +241,7 @@ pub fn comparison_input(
     metadata: Option<&Metadata>,
 ) -> Option<&'static str> {
     if output.starts_with("finish.") {
-        if matches!(
-            output,
-            "finish.base" | "finish.color-guide" | "finish.hdr-mask"
-        ) {
+        if output == "finish.base" {
             return None;
         }
         let mut input = "finish.base";
@@ -258,14 +249,27 @@ pub fn comparison_input(
             if candidate.name == output {
                 return Some(input);
             }
-            if candidate.name == "finish.hdr" && settings.tonal_ranges.is_neutral() {
-                continue;
-            }
-            if !matches!(candidate.name, "finish.hdr-mask" | "finish.color-guide") {
-                input = candidate.name;
-            }
+            input = candidate.name;
         }
         return None;
+    }
+    if output == "linear.local-contrast" {
+        return Some("local-contrast.input");
+    }
+    if output == "sensitivity.rgb" {
+        return Some("sensitivity.input");
+    }
+    if output == "linear.sharpen" {
+        return Some("linear.sharpen-input");
+    }
+    if output == "tonal-ranges.rgb" {
+        return Some(
+            if settings.tone_enabled && settings.photographic.sensitivity_active() {
+                "sensitivity.rgb"
+            } else {
+                "linear.edits-input"
+            },
+        );
     }
     if let Some(metadata) = metadata
         .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Quattro))
@@ -276,19 +280,6 @@ pub fn comparison_input(
         .filter(|m| m.processing_family().ok() == Some(crate::source::ProcessingFamily::Classic))
     {
         return crate::render::classic_inspection_comparison(metadata, settings, output);
-    }
-    if output == "tonal-ranges.rgb" {
-        return Some(if settings.sharpen_selected() {
-            "sharpen.rgb"
-        } else if settings.is_monochrome() {
-            "monochrome.rgb"
-        } else if settings.merrill_reconstruction().is_some() {
-            "reconstruction.rgb"
-        } else if settings.color_dq_selected() {
-            "color-dq.rgb"
-        } else {
-            "color.rgb"
-        });
     }
     let mut input = "sensor.layers";
     for (name, enabled) in [
@@ -307,6 +298,13 @@ pub fn comparison_input(
     }
     if settings.is_monochrome() {
         return match output {
+            "mono.texture" => Some(if settings.despeckle {
+                "mono.despeckle"
+            } else if settings.monochrome.noise > 0 {
+                "mono.filtered"
+            } else {
+                "mono.column"
+            }),
             "mono.directional" | "mono.column" => Some("mono.mix"),
             "mono.filtered" if settings.monochrome.noise > 0 => Some("mono.column"),
             "mono.despeckle" if settings.despeckle => Some(if settings.monochrome.noise > 0 {
@@ -355,6 +353,46 @@ pub struct Artifact {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn color_sensitivity_and_texture_publish_their_actual_inputs() {
+        use crate::render::{Rendering, Settings};
+        let mut s = Settings::new("Sunlight", "Standard");
+        s.rendering = Rendering::Monochrome;
+        s.monochrome.texture.fine = 1.3;
+        s.photographic.color_sensitivity[0] = 0.3;
+        let outputs = super::image_outputs(&s, None);
+        assert!(outputs
+            .iter()
+            .any(|o| o.name == "mono.texture" && o.channels == super::Channels::Scalar));
+        assert!(outputs
+            .iter()
+            .any(|o| o.name == "sensitivity.rgb" && o.channels == super::Channels::Rgb));
+        assert_eq!(
+            super::comparison_input(&s, "mono.texture", None),
+            Some("mono.despeckle")
+        );
+        assert_eq!(
+            super::comparison_input(&s, "sensitivity.rgb", None),
+            Some("sensitivity.input")
+        );
+        assert_eq!(
+            super::comparison_input(&s, "tonal-ranges.rgb", None),
+            Some("sensitivity.rgb")
+        );
+        s.rendering = Rendering::Color;
+        assert!(super::output_names(&s, None).contains(&"sensitivity.rgb"));
+        assert_eq!(
+            super::comparison_input(&s, "sensitivity.rgb", None),
+            Some("sensitivity.input")
+        );
+        s.tone_enabled = false;
+        assert!(!super::output_names(&s, None).contains(&"sensitivity.rgb"));
+        s.rendering = Rendering::Color;
+        assert!(!super::output_names(&s, None)
+            .iter()
+            .any(|name| name.starts_with("mono.")));
+    }
+
+    #[test]
     fn merrill_catalogue_omits_bypassed_local_contrast() {
         let metadata = crate::source::Metadata {
             width: 4928,
@@ -367,9 +405,9 @@ mod tests {
         };
         let mut settings = crate::render::Settings::new("Sunlight", "Standard");
         settings.photographic.local_contrast = 0.4;
-        assert!(!super::output_names(&settings, Some(&metadata)).contains(&"finish.local-contrast"));
+        assert!(!super::output_names(&settings, Some(&metadata)).contains(&"linear.local-contrast"));
         settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
-        assert!(super::output_names(&settings, Some(&metadata)).contains(&"finish.local-contrast"));
+        assert!(super::output_names(&settings, Some(&metadata)).contains(&"linear.local-contrast"));
     }
     #[test]
     fn monochrome_outputs_ignore_retained_color_controls() {
@@ -483,7 +521,11 @@ mod tests {
         let images = super::image_outputs(&s, None);
         for output in &images {
             if let Some(input) = super::comparison_input(&s, output.name, None) {
-                assert!(images.iter().any(|i| i.name == input), "{input}");
+                // Shared edits compare against private graph aliases, not extra menu entries.
+                assert!(
+                    images.iter().any(|i| i.name == input) || input == "linear.edits-input",
+                    "{input}"
+                );
             }
         }
     }

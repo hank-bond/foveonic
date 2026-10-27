@@ -1,15 +1,10 @@
-//! Defines shared photographic controls and the GPU parameter layout for normalized RGB finishing.
+//! Defines shared photographic controls and luminance-scaled GPU finishing parameters.
 
-use crate::{
-    color_space::{ColorSpace, TiffColorSpace},
-    recipe::Key,
-    source::Result,
-};
+use crate::{color_space::ColorSpace, recipe::Key, source::Result};
 
 // Three Gaussian standard deviations bound the sharpening filter footprint.
 pub(super) const GAUSSIAN_SUPPORT_SIGMAS: f32 = 3.;
 pub(crate) mod local_contrast;
-pub(crate) mod sensitivity;
 pub(crate) mod sharpen;
 pub(crate) mod tone;
 
@@ -75,18 +70,20 @@ impl Sharpening {
 pub struct Controls {
     pub tone_method: Method,
     /// Red, Yellow, Green, Cyan, Blue and Magenta brightness in normalized amounts.
-    pub monochrome_sensitivity: [f32; 6],
+    // Retain the established sidecar key when switching between rendering modes.
+    #[serde(rename = "monochrome_sensitivity")]
+    pub color_sensitivity: [f32; 6],
     /// Neutral-centered multiscale local contrast, independent of reconstruction.
     pub local_contrast: f32,
     pub sharpening: Sharpening,
 }
 impl Controls {
     pub fn sensitivity_active(self) -> bool {
-        self.monochrome_sensitivity != [0.; 6]
+        self.color_sensitivity != [0.; 6]
     }
     pub(crate) fn validate(self) -> Result<()> {
         if self
-            .monochrome_sensitivity
+            .color_sensitivity
             .iter()
             .chain([&self.local_contrast])
             .any(|v| !(-1. ..=1.).contains(v))
@@ -97,8 +94,8 @@ impl Controls {
     }
 }
 
-/// Finishing works in normalized, linear-light photographic RGB. Colorants
-/// preserve brightness and give hue selection a fixed sRGB interpretation.
+/// Luminance weights declare brightness units. Spatial filters use normalized
+/// brightness while scalar gains preserve the input RGB code scale.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Params {
@@ -108,8 +105,6 @@ pub struct Params {
     /// Local contrast: amount/native-grid scale. Unused fields stay zero.
     pub values: [f32; 4],
     pub luma: [f32; 4],
-    pub hues: [[f32; 4]; 2],
-    pub guide_matrix: [[f32; 4]; 3],
 }
 impl Params {
     pub fn new(extent: [u32; 2], space: ColorSpace) -> Self {
@@ -117,8 +112,6 @@ impl Params {
             shape: [extent[0], extent[1], 0, 0],
             values: [0.; 4],
             luma: luminance(space),
-            hues: [[0.; 4]; 2],
-            guide_matrix: TiffColorSpace::Srgb.transform(space),
         }
     }
     pub fn key(self) -> Key {
@@ -135,20 +128,6 @@ impl Params {
         const CONTRAST_CONTROL_SCALE: f32 = 0.5;
         let mut p = Self::new(extent, space);
         p.values = [contrast as f32 * CONTRAST_CONTROL_SCALE, saturation, 0., 0.];
-        p
-    }
-
-    pub(crate) fn sensitivity(
-        extent: [u32; 2],
-        space: ColorSpace,
-        guide_space: ColorSpace,
-        hues: [f32; 6],
-    ) -> Self {
-        let mut p = Self::new(extent, space);
-        p.guide_matrix = TiffColorSpace::Srgb.transform(guide_space);
-        for (i, value) in hues.into_iter().enumerate() {
-            p.hues[i / 4][i % 4] = value;
-        }
         p
     }
 

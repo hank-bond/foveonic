@@ -12,6 +12,7 @@ implementation: incomplete
 - The engine **must** construct and execute an internal directed acyclic graph (DAG) for the selected processing configuration.
 - DNG and TIFF **must** have distinct graph recipes built from the same node library and executor. Color and [Monochrome](./monochrome-rendering.md) are independent rendering choices for either output. Mono branches after shared sensor corrections, before color conversion.
 - Recipes **must** support omitting stages, inserting stages at different positions, and selecting different packaging nodes.
+- Linear RGB code buffers **must** retain their declared nominal white through processing descriptions, materialized textures, inspection, navigators and scopes. Repeated numerical operations at different recipe boundaries **must** have distinct cache identities.
 - Connections **must** identify the supported data format and processing space. The graph **must** reject incompatible connections.
 - Nodes **must** be able to access the input file's metadata.
 - The graph **must** distinguish sensor-signal processing from color and tone processing.

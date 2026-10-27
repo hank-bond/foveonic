@@ -6,6 +6,10 @@ summary: "Implement and evaluate coordinated Merrill HDR controls after research
 
 Requirements: [tonal ranges](../docs/specs/tonal-ranges.md), [processing graphs](../docs/specs/processing-graphs.md), [interactive rendering](../docs/specs/interactive-rendering.md), and [output strategies](../docs/specs/output-strategies.md).
 
+## Current export boundary
+
+The owner subsequently approved baking Merrill HDR and Local Contrast into DNG using the shared pre-curve brightness gain. The [monochrome refinement plan](./archived/monochrome-refinement.md#adopt-pre-curve-spatial-edits-for-dng) records this implementation and checks. Earlier DNG deferrals and omission checks below describe the initial experiment. Current requirements are in the [tonal ranges specification](../docs/specs/tonal-ranges.md#export-boundary).
+
 ## Work
 
 - [x] Study darktable's actual tone-equalizer and fast guided-filter source.

@@ -48,18 +48,32 @@ pub(super) fn build(
     }
     let mix = node!(Stage::Mix, &[recipe.final_id]);
     let directional = node!(Stage::Directional, &[mix]);
-    let column = node!(Stage::Column, &[mix, directional]);
-    let (mono, neighbors) = if prepared.params.filter[1] > 0. {
+    let column = if settings.processing_sections.noise {
+        node!(Stage::Column, &[mix, directional])
+    } else {
+        mix
+    };
+    let (mono, neighbors) = if settings.processing_sections.noise && prepared.params.filter[1] > 0.
+    {
         let filtered = node!(Stage::Histogram, &[column, directional]);
         (filtered, filtered)
     } else {
         (column, directional)
     };
-    let corrected = if settings.despeckle {
+    let mut corrected = if settings.despeckle {
         node!(Stage::Despeckle, &[mono, neighbors])
     } else {
         mono
     };
+    if let Some(texture) = settings.monochrome.detail() {
+        corrected = recipe
+            .graph
+            .add(Operation::MonoTexture(texture), &[corrected])?;
+        execution.check()?;
+        if requested(&recipe.graph, names) {
+            return Ok(Prepared::Requested(recipe));
+        }
+    }
     let signal = node!(Stage::Signal, &[corrected]);
     let mut linear = node!(Stage::Expand, &[corrected]);
     if settings.sharpen_selected() {

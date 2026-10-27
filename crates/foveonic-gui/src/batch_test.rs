@@ -28,6 +28,7 @@ fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_err
     let mut output = Output {
         formats: vec![],
         tiff_color_space: None,
+        sections: Default::default(),
         conflict: ConflictPolicy::Overwrite,
     };
     let error = import_photo(
@@ -263,6 +264,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         output: Output {
             formats: vec![ExportFormat::Tiff, ExportFormat::Dng],
             tiff_color_space: output_space,
+            sections: Default::default(),
             conflict: ConflictPolicy::Rename,
         },
     }));
@@ -338,6 +340,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         &Output {
             formats: vec![],
             tiff_color_space: None,
+            sections: Default::default(),
             conflict: ConflictPolicy::Rename,
         },
         &mut HashSet::new(),
@@ -374,6 +377,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         &Output {
             formats: vec![],
             tiff_color_space: None,
+            sections: Default::default(),
             conflict: ConflictPolicy::Rename,
         },
         &mut HashSet::new(),

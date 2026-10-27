@@ -97,7 +97,15 @@ fn compare_portable_tiger_methods_on_ordinary_quattro() {
         ("combined", true, true),
     ] {
         let mut execution = Execution::default();
-        let built = build(&engine, &source, &settings, &["final"], &mut execution).unwrap();
+        let built = build(
+            &engine,
+            &source,
+            &settings,
+            &["final"],
+            &mut crate::profile::Profile::default(),
+            &mut execution,
+        )
+        .unwrap();
         let built = experiment(built, normalization, recovery, adaptive);
         let mut profile = Profile::new(Mode::Gpu);
         let artifacts = engine

@@ -21,7 +21,7 @@ pub(crate) fn apply(
     p.shape[..2].copy_from_slice(&extent);
     let count = u64::from(extent[0]) * u64::from(extent[1]);
     let groups = [extent[0].div_ceil(8), extent[1].div_ceil(8)];
-    let mut output = gpu.storage("finish.sharpen", count * 12)?;
+    let mut output = gpu.storage("Universal sharpening", count * 12)?;
     let mut trace = gpu.trace(profile.mode.gpu(), 4);
 
     let mut signal = gpu.storage("Sharpen brightness", count * 4)?;

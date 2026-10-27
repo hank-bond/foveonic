@@ -56,6 +56,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[merrill-regional-preview](./merrill-regional-preview.md)** _(archived)._ Deliver Merrill Smart detail from native processing tiles before continuing the whole frame.
 - **[metadata-first-loading](./metadata-first-loading.md)** _(archived)._ Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.
 - **[monochrome-performance](./monochrome-performance.md)** _(archived)._ Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output.
+- **[monochrome-refinement](./monochrome-refinement.md)** _(archived)._ Validated independent monochrome detail and shared color sensitivity while preserving the sensor mixture.
 - **[monochrome-rendering](./monochrome-rendering.md)** _(archived)._ GPU monochrome rendering, a triangular layer mixer, mode-specific editing, and linear monochrome DNG export are implemented and checked.
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** _(archived)._ Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
 - **[pipeline-performance](./pipeline-performance.md)** _(archived)._ Completed full-pipeline profiling and output-equivalent optimization reduced six-photo render latency roughly five to seven times.
@@ -76,6 +77,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
+- **[shared-linear-edits](./shared-linear-edits.md)** _(archived)._ Shared pre-curve edits and DNG baking cover Classic, Merrill and Quattro with per-output section choices.
 - **[signed-releases](./signed-releases.md)** _(archived)._ Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases.
 - **[single-read-cache](./single-read-cache.md)** _(archived)._ Prepare all browsing and rendering inputs from one original read and keep cache hits independent of card I/O.
 - **[thumbnail-and-preview-cache](./thumbnail-and-preview-cache.md)** _(archived)._ Refresh rendered thumbnails, cache sharper asynchronous previews, and collect recipes in a visible source-folder directory.

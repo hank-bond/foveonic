@@ -6,6 +6,8 @@ summary: "Family panels compose shared editing widgets while the processor defin
 
 Choose the processing family once in the parent dispatcher. Each family panel owns its layout and includes the controls that describe its processing. Shared rows own widget behavior and photographic controls. Keep photographic processing and capability/default resolution in `foveonic`.
 
+All numeric slider readouts use the shared widget formatter with at most three significant digits. Preserve the stored precision and measure the same formatted text when reserving value-field width.
+
 Camera metadata supplies white-balance and color-mode choices. Normalize unsupported settings through the processor's control contract when metadata arrives. Adding a family should add a panel without adding family switches to shared widgets.
 
 <!-- INDEX:START -->

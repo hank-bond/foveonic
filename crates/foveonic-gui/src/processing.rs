@@ -2,7 +2,10 @@
 
 use crate::{export::ExportFormat, preferences::FolderMode, widgets};
 use eframe::egui;
-use foveonic::{importing::ConflictPolicy, render::TiffColorSpace};
+use foveonic::{
+    importing::ConflictPolicy,
+    render::{ProcessingSections, TiffColorSpace},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -12,9 +15,24 @@ pub struct Settings {
     pub tiff_color_space: Option<TiffColorSpace>,
     pub copy_only: bool,
     pub conflict: ConflictPolicy,
+    pub dng_sections: ProcessingSections,
+    pub tiff_sections: ProcessingSections,
 }
 
 impl Settings {
+    pub fn sections(&self) -> ProcessingSections {
+        match self.format {
+            ExportFormat::Dng => self.dng_sections,
+            ExportFormat::Tiff => self.tiff_sections,
+        }
+    }
+    fn sections_mut(&mut self) -> &mut ProcessingSections {
+        match self.format {
+            ExportFormat::Dng => &mut self.dng_sections,
+            ExportFormat::Tiff => &mut self.tiff_sections,
+        }
+    }
+
     pub fn formats(&self) -> Vec<ExportFormat> {
         if self.copy_only {
             Vec::new()
@@ -92,6 +110,23 @@ pub fn show(ctx: &egui::Context, open: &mut bool, mode: FolderMode, settings: &m
                 });
             }
         }
+        if mode == FolderMode::Browse || !settings.copy_only {
+            ui.separator();
+            ui.label("Apply image settings");
+            let sections = settings.sections_mut();
+            for (title, value) in [
+                ("Tone and Color", &mut sections.tone),
+                ("Noise", &mut sections.noise),
+                ("Detail", &mut sections.detail),
+                ("Sharpening", &mut sections.sharpening),
+                ("Corrections", &mut sections.corrections),
+            ] {
+                widgets::checkbox(ui, value, title);
+            }
+            ui.weak("Required calibration and reconstruction remain active.");
+            ui.weak("Sidecars retain all image settings.");
+            ui.separator();
+        }
         ui.horizontal(|ui| {
             ui.label("On conflict");
             let label = |policy| match policy {
@@ -107,7 +142,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, mode: FolderMode, settings: &m
                 }
             });
         });
-        ui.weak("Remembered for this mode. Process uses these choices immediately.");
+        ui.weak("Remembered for this mode and format. Process freezes these choices.");
         if mode == FolderMode::Import {
             ui.weak(if settings.copy_only {
                 "Copy X3Fs and edits directly into the destination."
@@ -221,5 +256,34 @@ mod tests {
             restored.import_processing.conflict,
             ConflictPolicy::Overwrite
         );
+    }
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+    #[test]
+    fn each_mode_and_format_remembers_independent_section_choices() {
+        let mut preferences: crate::preferences::Preferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            preferences.browse_processing.sections(),
+            ProcessingSections::default()
+        );
+        preferences.browse_processing.dng_sections.tone = false;
+        preferences.browse_processing.tiff_sections.sharpening = false;
+        preferences.import_processing.dng_sections.detail = false;
+        preferences.import_processing.tiff_sections.corrections = false;
+        let saved = serde_json::to_vec(&preferences).unwrap();
+        let mut restored: crate::preferences::Preferences = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(restored.browse_processing, preferences.browse_processing);
+        assert_eq!(restored.import_processing, preferences.import_processing);
+        assert!(!restored.browse_processing.sections().tone);
+        restored.browse_processing.format = ExportFormat::Tiff;
+        assert!(restored.browse_processing.sections().tone);
+        assert!(!restored.browse_processing.sections().sharpening);
+        assert!(!restored.import_processing.sections().detail);
+        restored.import_processing.format = ExportFormat::Tiff;
+        assert!(restored.import_processing.sections().detail);
+        assert!(!restored.import_processing.sections().corrections);
     }
 }

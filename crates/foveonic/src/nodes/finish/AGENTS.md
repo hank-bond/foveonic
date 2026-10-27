@@ -4,7 +4,9 @@ summary: "Finishing nodes prepare tone and resampling beside sharpening and enco
 
 # Finishing operations
 
-Preserve signed samples and headroom until the selected operation requires encoding or clipping. The polyphase resampler also serves color reconstruction. Keep its existing tile and border behavior unchanged.
+Preserve signed samples and headroom until the selected operation requires encoding or clipping. The polyphase resampler also serves color reconstruction. Keep its existing tile and border behavior unchanged. Linear color sensitivity classifies and stabilizes its gain from the same cleaned neutral color guide in Color and Monochrome. Apply that scalar gain without replacing the main image, and retain the same interpretation when baking DNG samples.
+
+Linear gain transfer accepts a reference pair related by scalar brightness multiplication. Use its strongest absolute RGB component to avoid luminance cancellation in signed samples. Do not use this operation to transfer arbitrary color transforms or reconstruct an inverse camera tone curve.
 
 <!-- INDEX:START -->
 
@@ -12,7 +14,7 @@ Preserve signed samples and headroom until the selected operation requires encod
 
 ### Directories
 
-- **[photographic/](./photographic/AGENTS.md)** Shared finishing operations own tone, hue-guided monochrome sensitivity, local contrast and sharpening over normalized RGB.
+- **[photographic/](./photographic/AGENTS.md)** Shared finishing operations own tone, local contrast and sharpening with explicit brightness units.
 
 ### Source files
 
@@ -22,13 +24,15 @@ Preserve signed samples and headroom until the selected operation requires encod
 - **[code_response.rs](./code_response.rs)** Maps unsigned integral RGB codes through supplied linear photographic response tables.
 - **[color_sharpen.rs](./color_sharpen.rs)** Sharpens integral RGB channels with wrapped neighborhood sums and signal-dependent thresholds.
 - **[image_region.rs](./image_region.rs)** Copies a rectangular numerical signal on the GPU while preserving every component bit.
+- **[linear_gain.rs](./linear_gain.rs)** Transfers a known scalar brightness edit between two linear RGB representations.
 - **[mask_image.rs](./mask_image.rs)** Converts integer processing flags into a binary floating image for inspection.
 - **[mod.rs](./mod.rs)** Prepares tone and resampling with shaders for sharpening and final encoding.
-- **[photographic.rs](./photographic.rs)** Defines shared photographic controls and the GPU parameter layout for normalized RGB finishing.
+- **[photographic.rs](./photographic.rs)** Defines shared photographic controls and luminance-scaled GPU finishing parameters.
 - **[proportional_sharpen.rs](./proportional_sharpen.rs)** Sharpens integral RGB codes from signed quarter-code detail and an adaptive amount table.
 - **[resample.rs](./resample.rs)** Prepares camera resampling weights and leaves image calculations on the GPU.
 - **[resize.rs](./resize.rs)** Prepares reference photographic resize kernels and samples owned floating RGB on the GPU.
 - **[root_detail.rs](./root_detail.rs)** Maps signed linear codes into root space and extracts detail with a signed separable filter.
+- **[sensitivity.rs](./sensitivity.rs)** Applies one stabilized hue-guided brightness response to linear color or monochrome samples.
 - **[signed_response.rs](./signed_response.rs)** Restores linear detail or applies photographic response to signed root-domain samples.
 - **[tone.rs](./tone.rs)** Prepares a camera-derived color-mode tone table for application in a shader.
 - **[tone_equalizer.rs](./tone_equalizer.rs)** Prepares coordinated HDR ranges and a reusable multiscale log-brightness base.

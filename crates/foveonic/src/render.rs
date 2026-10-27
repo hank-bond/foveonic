@@ -26,8 +26,8 @@ pub(crate) use execute::Value;
 use recipes::Recipe;
 pub use settings::{
     ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls,
-    PhotographicControls, PhotographicMethod, PreviewQuality, Rendering, RepairThreshold, Settings,
-    TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening,
+    PhotographicControls, PhotographicMethod, PreviewQuality, ProcessingSections, Rendering,
+    RepairThreshold, Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening,
 };
 
 /// Completed recipe preparation and execution boundaries for an interactive render.
@@ -436,6 +436,7 @@ impl Engine {
         Ok(ImageTexture {
             texture,
             description: Description {
+                linear_white: image.description.linear_white,
                 view_baked: true,
                 extent: size,
                 layout: Layout::Rgba32FloatTexture,
