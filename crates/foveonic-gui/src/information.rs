@@ -7,31 +7,7 @@ use std::collections::BTreeMap;
 pub const HEIGHT: f32 = 26.;
 
 pub fn capture(properties: &BTreeMap<String, String>) -> String {
-    let rows = crate::metadata::property_rows(properties);
-    [
-        "Shutter",
-        "Aperture",
-        "Focal length",
-        "ISO",
-        "Exposure comp.",
-    ]
-    .into_iter()
-    .filter_map(|key| {
-        rows.iter()
-            .find(|(label, _)| *label == key)
-            .map(|(_, value)| match key {
-                "ISO" => format!("ISO {value}"),
-                "Exposure comp." => value
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|v| v.is_finite())
-                    .map(|v| format!("{v:+.1} EV"))
-                    .unwrap_or_else(|| format!("{value} EV")),
-                _ => value.clone(),
-            })
-    })
-    .collect::<Vec<_>>()
-    .join("  ")
+    crate::metadata::capture_values(properties).join("  ")
 }
 pub fn region_text(region: PixelRegion) -> String {
     let [w, h] = region.extent;

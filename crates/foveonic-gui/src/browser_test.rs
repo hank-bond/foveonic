@@ -14,6 +14,7 @@ struct Fixture {
     control_actions: usize,
     number: f64,
     preserve_viewport: Option<bool>,
+    copied: Vec<String>,
 }
 
 #[test]
@@ -248,6 +249,7 @@ struct Frame {
     labels: Vec<String>,
     green_border: bool,
     restore: Option<egui::Pos2>,
+    copy_path: Option<egui::Pos2>,
 }
 impl Fixture {
     fn new(mode: Organizer) -> Self {
@@ -270,6 +272,7 @@ impl Fixture {
             control_actions: 0,
             number: 0.5,
             preserve_viewport: None,
+            copied: Vec::new(),
         }
     }
     fn frame(&mut self, events: Vec<egui::Event>) -> Frame {
@@ -377,10 +380,16 @@ impl Fixture {
                     labels: Vec::new(),
                     green_border: false,
                     restore: None,
+                    copy_path: None,
                 });
             });
         });
         let mut result = result.unwrap();
+        for command in &output.platform_output.commands {
+            if let egui::OutputCommand::CopyText(text) = command {
+                self.copied.push(text.clone());
+            }
+        }
         if self.mode == Organizer::List {
             result.grid.min.y += super::items::LIST_HEADER;
             // Layout indices start below the list header. A negative image
@@ -400,6 +409,12 @@ impl Fixture {
         });
         result.restore = output.shapes.iter().find_map(|shape| match &shape.shape {
             egui::Shape::Text(text) if text.galley.job.text == "Restore for review" => {
+                Some(text.pos + text.galley.size() / 2.)
+            }
+            _ => None,
+        });
+        result.copy_path = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Copy file path" => {
                 Some(text.pos + text.galley.size() / 2.)
             }
             _ => None,
@@ -651,6 +666,41 @@ fn dense_grid_uses_pick_borders_and_can_restore_hidden_photos() {
     fixture.click(frame.restore.expect("restore action in dense grid menu"));
     assert_eq!(fixture.browser.mark(&first), Mark::Unmarked);
     assert_eq!(fixture.selected, active);
+}
+
+#[test]
+fn file_menus_copy_absolute_paths_without_changing_photo_selection_in_every_view() {
+    for mode in [Organizer::Icons, Organizer::List, Organizer::Large] {
+        for import in [false, true] {
+            let mut fixture = Fixture::new(mode);
+            fixture.browser.import_mode = import;
+            let frame = fixture.select_first();
+            let active = fixture.selected.clone();
+            let point = frame.grid.min + egui::vec2(30., 20.);
+            for pressed in [true, false] {
+                fixture.frame(vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+            }
+            let frame = fixture.frame(vec![]);
+            fixture.click(frame.copy_path.expect("file menu in every browser view"));
+            assert_eq!(
+                fixture.copied,
+                vec![std::path::absolute(active.as_ref().unwrap())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()]
+            );
+            assert_eq!(fixture.selected, active);
+            assert!(fixture.browser.marks.is_empty());
+        }
+    }
 }
 
 #[test]

@@ -13,6 +13,8 @@ The compact grid grows thumbnails with the pane until another minimum-width colu
 
 The eye control must retain its existing meaning of concealing or showing imported and manually hidden photographs. The separate view selector uses grid/list/large-preview symbols. Search stays on the main browser header row when it fits and wraps below it in narrower panes.
 
+Hovering a photograph shows its filename followed by available shutter speed, aperture, focal length, ISO and exposure compensation, each on its own line. The tooltip omits folder paths and workflow explanations. Every browser view offers file context actions to copy the absolute source path and, on macOS, reveal the file in Finder. Import review actions remain in that menu in Import mode.
+
 A separate star button beside the eye toggles rating controls in the list and large views. Ratings are hidden by default, and the visibility choice persists as an application preference. Hiding ratings removes the list's rating column and the unused Browse image-caption row. The toggle changes neither stored ratings nor rating filters. Keys 0–5 continue to rate photographs in every view while the controls are hidden.
 
 Photographs can be rated from zero to five stars. Clicking stars on a highlighted photograph rates the highlighted visible set. Clicking elsewhere rates that photograph. Keys 0–5 rate the highlighted visible photographs, falling back to the viewed photograph. Zero clears a rating. Clicking the current star rating also clears it. Text fields and menus retain their ordinary keyboard behavior. Ratings are review metadata, independent of image edits and rendering. Browse saves ratings asynchronously in a versioned `foveonic/ratings.json` file per containing folder, keyed by sibling filenames. Import keeps rating changes in memory and saves the submitted rating alongside copied destination originals. Submitted batches freeze ratings with editing settings. Original X3Fs remain unchanged.
@@ -20,6 +22,8 @@ Photographs can be rated from zero to five stars. Clicking stars on a highlighte
 Hovering a rating row previews the pointed-to rating with outlined stars. A selected rating uses filled stars. Moving away restores the saved rating without changing it.
 
 Sorting must offer filename, capture date, rating and photographic metadata already available from the parser. Missing values sort last in either direction. Stable filename/path tie breaking prevents arbitrary order changes. Folder groups retain their discovery order, with sorting inside each folder.
+
+List columns must fit their longest formatted value across the folder, including off-screen photographs, or their header when it is longer. Reserve only the padding needed for review controls and sort indicators. Headers and values share a font and left alignment; the Name header aligns with filenames after the import-control gutter. Metadata arrivals refresh measurements, while ordinary scrolling reuses them.
 
 Search must perform a case-insensitive contains match against filenames and paths relative to the selected folder. Capture metadata must not contribute hidden text matches. A search popover offers minimum-star filters, including five stars, plus unrated and all ratings. Text and rating filters combine. No color tags or advanced query language are required. Filter changes must not automatically render another photograph. Hidden or filtered photographs are excluded from highlighted processing selections. A viewed photograph may remain displayed while filtered out.
 

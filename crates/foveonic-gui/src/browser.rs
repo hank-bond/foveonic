@@ -54,14 +54,14 @@ const MIN_BROWSER_WIDTH: f32 = 200.;
 pub fn minimum_panel_width(style: &egui::Style) -> f32 {
     MIN_BROWSER_WIDTH + egui::Frame::side_top_panel(style).inner_margin.sum().x
 }
-fn cache_appearance(state: EntryState) -> (egui::Color32, &'static str) {
+fn cache_color(state: EntryState) -> egui::Color32 {
     match state {
-        EntryState::Disabled => (egui::Color32::from_gray(100), "Decode caching is disabled for this source."),
-        EntryState::Unsupported => (egui::Color32::from_gray(100), "Decode caching is unavailable for this source."),
-        EntryState::Unavailable => (egui::Color32::from_gray(100), "Cannot read this source to check cache eligibility."),
-        EntryState::Queued => (egui::Color32::from_rgb(158, 136, 75), "Queued for caching or preparing decoded data."),
-        EntryState::Ready => (egui::Color32::from_rgb(85, 137, 99), "RAW, metadata, thumbnails and original file cached and ready."),
-        EntryState::Uncached => (egui::Color32::from_rgb(155, 91, 88), "Supported, but not cached. The entry may have been cleared, evicted, or unable to fit in the cache."),
+        EntryState::Disabled | EntryState::Unsupported | EntryState::Unavailable => {
+            egui::Color32::from_gray(100)
+        }
+        EntryState::Queued => egui::Color32::from_rgb(158, 136, 75),
+        EntryState::Ready => egui::Color32::from_rgb(85, 137, 99),
+        EntryState::Uncached => egui::Color32::from_rgb(155, 91, 88),
     }
 }
 
@@ -83,19 +83,12 @@ impl Mark {
     pub fn hidden(self) -> bool {
         matches!(self, Self::Hidden | Self::Imported)
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Unmarked => "",
-            Self::Pick => "Pick",
-            Self::Hidden => "Hidden",
-            Self::Imported => "Imported",
-        }
-    }
 }
 pub struct Browser {
     metadata_loader: metadata_loader::Loader,
     metadata_generation: u64,
     records: HashMap<PathBuf, query::Entry>,
+    list_columns: Option<items::ListColumns>,
     metadata_loaded: HashSet<PathBuf>,
     rating_changes: HashMap<PathBuf, foveonic::review::Rating>,
     rating_errors: std::collections::BTreeMap<PathBuf, String>,
@@ -174,6 +167,7 @@ impl Browser {
             metadata_loader,
             metadata_generation: 0,
             records: HashMap::new(),
+            list_columns: None,
             metadata_loaded: HashSet::new(),
             rating_changes: HashMap::new(),
             rating_errors: Default::default(),
@@ -545,15 +539,18 @@ impl Browser {
         }
     }
     fn file_help(&self, path: &Path) -> String {
-        let (_, help) = cache_appearance(self.cache_state(path));
-        if self.import_mode {
-            format!("{}\n{help}\n{} · Space checks highlighted photos. Delete hides without deleting originals.", path.display(), self.mark(path).label())
-        } else {
-            format!("{}\n{help}", path.display())
+        let mut lines = vec![path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()];
+        if let Some(entry) = self.records.get(path) {
+            lines.extend(crate::metadata::capture_values(&entry.properties));
         }
+        lines.join("\n")
     }
     fn cache_badge(&self, ui: &egui::Ui, path: &Path, center: egui::Pos2) {
-        let (color, _) = cache_appearance(self.cache_state(path));
+        let color = cache_color(self.cache_state(path));
         ui.painter().circle_filled(center, STATUS_RADIUS, color);
     }
     pub fn organizer(
@@ -606,8 +603,9 @@ impl Browser {
         let icons = mode == crate::preferences::Organizer::Icons;
         let list = mode == crate::preferences::Organizer::List;
         let columns = if icons { icon_columns(panel_width) } else { 1 };
-        let width = if list {
-            panel_width.max(items::list_width(self.show_ratings))
+        let list_columns = list.then(|| self.list_columns(ui));
+        let width = if let Some(columns) = &list_columns {
+            panel_width.max(columns.width())
         } else {
             panel_width
         };
@@ -701,6 +699,7 @@ impl Browser {
                 self.list_header(
                     ui,
                     egui::Rect::from_min_size(origin, egui::vec2(width, header_height)),
+                    list_columns.as_ref().unwrap(),
                 );
             }
             let origin = origin + egui::vec2(0., header_height);
@@ -773,6 +772,7 @@ impl Browser {
                                     highlighted.contains(path),
                                     selected == Some(path.as_path()),
                                     egui::vec2(width, row.height),
+                                    list_columns.as_ref().unwrap(),
                                 )
                                 .clicked()
                                 && !self.review_clicked
@@ -862,6 +862,34 @@ mod interaction_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_tooltips_show_only_filename_and_available_capture_values() {
+        let mut browser = super::Browser::new(eframe::egui::Context::default());
+        let path = std::path::Path::new("/card/DCIM/photo.X3F");
+        assert_eq!(browser.file_help(path), "photo.X3F");
+        browser.import_mode = true;
+        browser.records.insert(
+            path.into(),
+            super::query::Entry::new(
+                [
+                    ("SHUTTER", "0.00625"),
+                    ("APERTURE", "5.6"),
+                    ("FLENGTH", "19"),
+                    ("ISO", "100"),
+                    ("EXPCOMP", "0"),
+                ]
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+                None,
+                Default::default(),
+            ),
+        );
+        assert_eq!(
+            browser.file_help(path),
+            "photo.X3F\n1/160\nf/5.6\n19 mm\nISO 100\n+0.0 EV"
+        );
+    }
     fn prepared(color: [u8; 3], extent: [u32; 2]) -> super::PreparedPreview {
         super::PreparedPreview::new(
             foveonic::preview::Preview {

@@ -9,7 +9,7 @@ use eframe::egui;
 use std::path::Path;
 
 const STAR_SIDE: f32 = 14.;
-const STAR_WIDTH: f32 = STAR_SIDE * 5.;
+pub(super) const STAR_WIDTH: f32 = STAR_SIDE * 5.;
 const VIEW_ICON_SIDE: f32 = 12.;
 const MIN_SEARCH_WIDTH: f32 = 148.;
 
@@ -58,7 +58,7 @@ impl Browser {
                 + search_width
                 + 3. * (side + gap)
                 + if self.import_mode { side + gap } else { 0. };
-        ui.horizontal(|ui| {
+        widgets::control_row(ui, |ui| {
             let view = icon_menu(ui, |ui| {
                 ui.horizontal(|ui| {
                     for mode in [Organizer::Icons, Organizer::List, Organizer::Large] {
@@ -130,7 +130,7 @@ impl Browser {
             }
         });
         if !inline {
-            ui.horizontal(|ui| self.search_controls(ui));
+            widgets::centered_control_row(ui, |ui| self.search_controls(ui));
         }
         if self.import_mode && !inline {
             let (picked, hidden) = self.review_counts();

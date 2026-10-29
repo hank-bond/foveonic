@@ -5,24 +5,45 @@ use crate::widgets;
 use eframe::egui;
 use std::path::{Path, PathBuf};
 
-const MARK_GUTTER: f32 = 24.;
+pub(super) const MARK_GUTTER: f32 = 24.;
 const MARK_SIDE: f32 = 16.;
 const EYE_STROKE: f32 = 1.3;
 
 impl Browser {
-    pub(super) fn review_menu(&mut self, response: &egui::Response, path: &Path) {
-        if !self.import_mode {
-            return;
-        }
+    pub(super) fn file_menu(&mut self, response: &egui::Response, path: &Path) {
         response.context_menu(|ui| {
-            let label = match self.mark(path) {
-                Mark::Pick => "Uncheck for import",
-                Mark::Unmarked => "Check for import",
-                Mark::Hidden | Mark::Imported => "Restore for review",
-            };
-            if ui.button(label).clicked() {
-                self.toggle_mark(path);
-                self.review_clicked = true;
+            if self.import_mode {
+                let label = match self.mark(path) {
+                    Mark::Pick => "Uncheck for import",
+                    Mark::Unmarked => "Check for import",
+                    Mark::Hidden | Mark::Imported => "Restore for review",
+                };
+                if ui.button(label).clicked() {
+                    self.toggle_mark(path);
+                    self.review_clicked = true;
+                    ui.close_menu();
+                }
+                ui.separator();
+            }
+            let path = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+            if ui.button("Copy file path").clicked() {
+                ui.ctx().copy_text(path.to_string_lossy().into_owned());
+                ui.close_menu();
+            }
+            #[cfg(target_os = "macos")]
+            if ui.button("Show in Finder").clicked() {
+                std::thread::spawn(move || {
+                    match std::process::Command::new("open")
+                        .arg("-R")
+                        .arg(&path)
+                        .status()
+                    {
+                        Ok(status) if status.success() => (),
+                        result => {
+                            eprintln!("Cannot reveal {} in Finder: {result:?}", path.display())
+                        }
+                    }
+                });
                 ui.close_menu();
             }
         });

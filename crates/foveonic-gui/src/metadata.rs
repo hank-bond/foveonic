@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use foveonic::source::Metadata;
+use std::collections::BTreeMap;
 
 fn compact(value: f64) -> String {
     let text = format!("{value:.1}");
@@ -135,6 +136,33 @@ pub fn property_rows(
         rows.push((label, value));
     }
     rows
+}
+
+pub fn capture_values(properties: &BTreeMap<String, String>) -> Vec<String> {
+    let rows = property_rows(properties);
+    [
+        "Shutter",
+        "Aperture",
+        "Focal length",
+        "ISO",
+        "Exposure comp.",
+    ]
+    .into_iter()
+    .filter_map(|key| {
+        rows.iter()
+            .find(|(label, _)| *label == key)
+            .map(|(_, value)| match key {
+                "ISO" => format!("ISO {value}"),
+                "Exposure comp." => value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite())
+                    .map(|v| format!("{v:+.1} EV"))
+                    .unwrap_or_else(|| format!("{value} EV")),
+                _ => value.clone(),
+            })
+    })
+    .collect()
 }
 
 pub fn rows(metadata: &Metadata) -> Vec<(&'static str, String)> {

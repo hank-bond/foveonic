@@ -271,6 +271,7 @@ impl super::Browser {
     }
     pub(super) fn apply_query(&mut self) {
         if self.query_dirty || self.sort != self.applied_sort {
+            self.list_columns = None;
             self.query_dirty = false;
             // Metadata arrivals cannot change a filename sort. Avoid rebuilding
             // the whole decode neighborhood as each thumbnail acquires metadata.

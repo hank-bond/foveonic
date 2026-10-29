@@ -166,11 +166,7 @@ pub(super) fn heading(
     let label = root
         .and_then(|root| directory.strip_prefix(root).ok())
         .unwrap_or(directory);
-    let text = egui::Rect::from_min_max(
-        rect.min + egui::vec2(0., ui.spacing().item_spacing.y),
-        rect.max,
-    );
-    ui.put(text, egui::Label::new(label.to_string_lossy()).truncate())
+    ui.put(rect, egui::Label::new(label.to_string_lossy()).truncate())
         .on_hover_text(directory.display().to_string());
 }
 
