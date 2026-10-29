@@ -14,6 +14,7 @@ implementation: conforming
 - On image selection, capture highlights **must** be read independently of sensor-layer decoding and rendering, so they can appear beside the selected filename while its preview or loading view is shown. Metadata requests **must** retain only the latest pending selection and reject replies from earlier selections, including reselecting the same file. Early properties **must not** be used as complete processing metadata.
 - The middle **must** show the image filename.
 - Capture settings, filename, and visible-region readouts **must** be text selectable and copyable using the normal platform copy shortcut, without making them editable.
+- All three readouts **must** use the standard body text size. Coordinates retain a monospaced font at that size.
 - The right side **must** show viewport dimensions and the visible region's top-left and bottom-right locations, allowing the owner to identify a region from a screenshot.
 - Information **must** describe the image currently shown, including the selected inspection buffer, rather than a newer request still processing.
 - Coordinates **must** refer to the displayed cropped image area, with orientation applied, rather than the full sensor readout. Use image-pixel coordinates relative to that image's top-left origin; panning reports a different visible subset without moving the origin.

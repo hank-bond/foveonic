@@ -1,0 +1,24 @@
+---
+summary: "Editor workflow separates scoped settings, application presets and defaults from authored photos and transient comparisons."
+---
+
+# Editor workflow
+
+Follow the [editor requirements](../../../../docs/specs/editor-workflow.md). Tool identities and recipe scopes share one definition. Applying a tool preset changes only its photographic fields. Application presets/defaults stay in preferences. Authored photo recipes remain in the existing sidecar session.
+
+Reset and comparison baselines must come from the camera adapter. Keep display-only comparison state outside photo settings, processing snapshots and preview publication. Preserve user-authored As Shot choices when render-time camera choices resolve.
+
+<!-- INDEX:START -->
+
+<!-- Generated from source summaries and document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
+
+### Source files
+
+- **[actions.rs](./actions.rs)** Applies queued editor actions through shared recipe scopes and the existing editing session.
+- **[before.rs](./before.rs)** Keeps transient camera/default renditions separate from authored edits and photographic preview publication.
+- **[menus.rs](./menus.rs)** Collects scoped recipe actions from header buttons and a named-preset dialog.
+- **[mod.rs](./mod.rs)** Owns editing-tool identities, scoped recipes and application presets separately from rendered images.
+- **[recipes.rs](./recipes.rs)** Stores named scoped presets and camera-family defaults in application preferences.
+- **[sections.rs](./sections.rs)** Maintains visual editing-tool order using processing-owned photographic section identities.
+
+<!-- INDEX:END -->

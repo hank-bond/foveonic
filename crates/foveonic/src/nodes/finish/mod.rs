@@ -31,3 +31,4 @@ pub(crate) mod color_editor;
 pub(crate) mod linear_gain;
 
 pub(crate) mod linear_basis;
+pub(crate) mod white_balance;

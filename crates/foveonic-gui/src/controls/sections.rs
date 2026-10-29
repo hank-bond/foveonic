@@ -17,7 +17,7 @@ fn reordered(
     after: bool,
 ) -> Option<Vec<EditingSection>> {
     let mut next = order.to_vec();
-    EditingSection::move_section(&mut next, source, target, after);
+    crate::editor::move_section(&mut next, source, target, after);
     let visible = |s: &&EditingSection| available.contains(s);
     if order.iter().filter(visible).eq(next.iter().filter(visible)) {
         None
@@ -30,6 +30,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     order: &mut Vec<EditingSection>,
     available: &[EditingSection],
+    menus: &mut crate::editor::Menus<'_>,
     mut draw: impl FnMut(&mut egui::Ui, EditingSection) -> bool,
 ) -> bool {
     let mut changed = false;
@@ -37,6 +38,11 @@ pub(super) fn show(
     for section in order.iter().copied().filter(|s| available.contains(s)) {
         let divider = ui.separator().rect;
         let response = ui.push_id(section, |ui| draw(ui, section));
+        menus.header(
+            ui,
+            crate::editor::Scope::Tool(section),
+            response.response.rect,
+        );
         changed |= response.inner;
         placements.push(Placement {
             section,

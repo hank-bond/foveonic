@@ -328,6 +328,10 @@ fn original_hsl_dng_reprojects_to_the_same_pre_curve_rgb() {
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
     }
     settings.photographic.color_editor.master.hue = 0.3;
+    settings.white_balance_bias = crate::render::WhiteBalanceBias {
+        warmth: 0.35,
+        tint: -0.2,
+    };
     settings.photographic.color_editor.master.saturation = -0.2;
     settings.photographic.color_editor.bands[0].lightness = 0.1;
     settings.photographic.tone_method = PhotographicMethod::Universal;
@@ -445,5 +449,101 @@ fn original_color_editor_bypass_is_independent_in_photos_and_dng() {
         assert_eq!(render(&excluded).0, expected);
         assert_eq!(disabled.photographic.color_editor, authored);
         assert_eq!(excluded.photographic.color_editor, authored);
+    }
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
+fn original_white_balance_bias_keeps_technical_dng_samples_and_changes_editable_neutral() {
+    let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
+    let engine = Engine::new().unwrap();
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut settings = caps
+        .editing_defaults(&source.metadata, Rendering::Color)
+        .unwrap();
+    settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+    settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    let original = engine
+        .render_dng_base(&source, &settings, &mut Profile::default())
+        .unwrap();
+    let samples = engine.readback_image(&original).unwrap();
+    drop(original);
+    let stats =
+        super::super::estimated_white_balance(&engine, &source, &settings, &mut Profile::default())
+            .unwrap();
+    let original =
+        super::super::prepare_dng_appearance(&source.metadata, &settings, stats).unwrap();
+    let baseline = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["linear.edits"],
+            &mut Profile::default(),
+        )
+        .unwrap()
+        .remove(0);
+    let Content::Image(baseline) = baseline.content else {
+        panic!("image")
+    };
+    let baseline_space = match baseline.description().space {
+        crate::image::Space::LinearRgb(space) => space,
+        _ => panic!("linear RGB"),
+    };
+    let baseline_pixels = engine.readback_image(&baseline).unwrap();
+    drop(baseline);
+    settings.white_balance_bias = crate::render::WhiteBalanceBias {
+        warmth: 0.35,
+        tint: -0.2,
+    };
+    let biased = engine
+        .render_dng_base(&source, &settings, &mut Profile::default())
+        .unwrap();
+    assert_eq!(engine.readback_image(&biased).unwrap(), samples);
+    drop(biased);
+    let stats =
+        super::super::estimated_white_balance(&engine, &source, &settings, &mut Profile::default())
+            .unwrap();
+    let appearance =
+        super::super::prepare_dng_appearance(&source.metadata, &settings, stats).unwrap();
+    assert_ne!(appearance.neutral, original.neutral);
+    assert_eq!(appearance.mapping.0, original.mapping.0);
+    assert_eq!(appearance.forward.0, original.forward.0);
+    let rendered = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["linear.edits"],
+            &mut Profile::default(),
+        )
+        .unwrap()
+        .remove(0);
+    let Content::Image(rendered) = rendered.content else {
+        panic!("image")
+    };
+    let expected = engine.readback_image(&rendered).unwrap();
+    let project = appearance
+        .technical_from_native()
+        .unwrap()
+        .inverse()
+        .unwrap();
+    let technical: &[[f32; 3]] = bytemuck::cast_slice(&samples);
+    let expected: &[[f32; 3]] = bytemuck::cast_slice(&expected);
+    let baseline_pixels: &[[f32; 3]] = bytemuck::cast_slice(&baseline_pixels);
+    let bias = crate::dng::appearance::Matrix(settings.white_balance_bias.matrix(baseline_space));
+    let original_project = original.technical_from_native().unwrap().inverse().unwrap();
+    assert_eq!(technical.len(), expected.len());
+    for i in (0..technical.len()).step_by(97) {
+        let actual = project.apply(technical[i].map(f64::from));
+        let native = bias.apply(original_project.apply(technical[i].map(f64::from)));
+        let filtered = bias.apply(baseline_pixels[i].map(f64::from));
+        for c in 0..3 {
+            assert!((actual[c] - native[c]).abs() < 1e-9 + native[c].abs() * 1e-10);
+            let expected = f64::from(expected[i][c]);
+            assert!(
+                (filtered[c] - expected).abs() < 0.02 + expected.abs() * 0.00001,
+                "{i} c{c}: {} vs {expected}",
+                filtered[c]
+            );
+        }
     }
 }

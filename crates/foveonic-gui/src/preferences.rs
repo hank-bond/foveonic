@@ -46,6 +46,7 @@ pub enum Organizer {
     #[default]
     Icons,
     List,
+    Large,
 }
 /// Source-write policy chosen when opening a folder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,48 +115,7 @@ impl Section {
         }
     }
 }
-/// Visual order of editing tools, independent of photographic pipeline order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum EditingSection {
-    Mix,
-    Tone,
-    ColorEditor,
-    Noise,
-    Detail,
-    Sharpening,
-    Corrections,
-}
-impl EditingSection {
-    pub const ALL: [Self; 7] = [
-        Self::Mix,
-        Self::Tone,
-        Self::ColorEditor,
-        Self::Noise,
-        Self::Detail,
-        Self::Sharpening,
-        Self::Corrections,
-    ];
-    pub fn normalize(order: &mut Vec<Self>) {
-        let mut seen = BTreeSet::new();
-        order.retain(|section| seen.insert(*section));
-        for section in Self::ALL {
-            if seen.insert(section) {
-                order.push(section);
-            }
-        }
-    }
-    pub fn move_section(order: &mut Vec<Self>, source: Self, target: Self, after: bool) {
-        if source == target {
-            return;
-        }
-        if !order.contains(&target) {
-            return;
-        }
-        order.retain(|s| *s != source);
-        let index = order.iter().position(|s| *s == target).unwrap() + usize::from(after);
-        order.insert(index, source);
-    }
-}
+pub use crate::editor::Section as EditingSection;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -168,6 +128,10 @@ pub struct Preferences {
     pub browse_processing: crate::processing::Settings,
     pub import_processing: crate::processing::Settings,
     pub organizer: Organizer,
+    pub browser_sort: crate::browser::Sort,
+    pub browser_show_ratings: bool,
+    #[serde(with = "crate::editor::storage")]
+    pub editor: crate::editor::Library,
     pub scope: Scope,
     pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
@@ -187,6 +151,9 @@ impl Default for Preferences {
             browse_processing: Default::default(),
             import_processing: Default::default(),
             organizer: Organizer::Icons,
+            browser_sort: Default::default(),
+            browser_show_ratings: false,
+            editor: Default::default(),
             scope: Scope::Histogram,
             scope_viewport: true,
             zoom_snap: ZoomPreset::default(),
@@ -209,7 +176,7 @@ impl Preferences {
     }
     fn normalize(&mut self) {
         self.decode_cache.normalize();
-        EditingSection::normalize(&mut self.editing_sections);
+        crate::editor::normalize_sections(&mut self.editing_sections);
         let mut seen = BTreeSet::new();
         self.sections.retain(|s| seen.insert(*s));
         for section in Section::ALL {
@@ -476,6 +443,24 @@ mod tests {
         let text = &store.0[STORAGE_KEY];
         assert!(!text.contains("exposure") && !text.contains("white_balance"));
     }
+
+    #[test]
+    fn browser_view_and_numeric_sort_survive_restart_without_persisting_queries() {
+        assert!(!Preferences::default().browser_show_ratings);
+        let mut store = Storage::default();
+        let prefs = Preferences {
+            organizer: Organizer::Large,
+            browser_show_ratings: true,
+            browser_sort: crate::browser::Sort {
+                field: crate::browser::Field::Iso,
+                reverse: true,
+            },
+            ..Default::default()
+        };
+        prefs.save(&mut store);
+        assert_eq!(Preferences::load(Some(&store)), prefs);
+        assert!(!store.0[STORAGE_KEY].contains("ratings.json"));
+    }
     #[test]
     fn missing_corrupt_or_duplicate_preferences_use_complete_layout() {
         assert_eq!(Preferences::load(None), Preferences::default());
@@ -495,6 +480,31 @@ mod tests {
                 Section::Editing
             ]
         );
+    }
+    #[test]
+    fn named_section_presets_and_family_defaults_survive_application_storage() {
+        let mut prefs = Preferences::default();
+        let recipe = foveonic::render::Settings {
+            exposure: 0.4,
+            ..Default::default()
+        };
+        prefs
+            .editor
+            .save(
+                foveonic::source::ProcessingFamily::Merrill,
+                crate::editor::Scope::All,
+                "Portrait",
+                &recipe,
+            )
+            .unwrap();
+        prefs.editor.defaults.set(
+            foveonic::source::ProcessingFamily::Merrill,
+            crate::editor::Scope::Tool(crate::editor::Section::Tone),
+            &recipe,
+        );
+        let mut storage = Storage::default();
+        prefs.save(&mut storage);
+        assert_eq!(Preferences::load(Some(&storage)), prefs);
     }
 }
 
@@ -551,10 +561,10 @@ mod editing_order_tests {
     fn editing_order_round_trips_and_restores_missing_hidden_sections() {
         let mut prefs = Preferences::default();
         assert_eq!(
-            prefs.editing_sections[1..3],
+            prefs.editing_sections[2..4],
             [EditingSection::Tone, EditingSection::ColorEditor]
         );
-        EditingSection::move_section(
+        crate::editor::move_section(
             &mut prefs.editing_sections,
             EditingSection::ColorEditor,
             EditingSection::Corrections,
@@ -571,8 +581,12 @@ mod editing_order_tests {
         restored.normalize();
         assert_eq!(restored.editing_sections.len(), EditingSection::ALL.len());
         assert_eq!(
-            &restored.editing_sections[..2],
-            &[EditingSection::ColorEditor, EditingSection::Tone]
+            &restored.editing_sections[..3],
+            &[
+                EditingSection::WhiteBalance,
+                EditingSection::ColorEditor,
+                EditingSection::Tone
+            ]
         );
     }
 }

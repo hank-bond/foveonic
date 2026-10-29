@@ -19,7 +19,9 @@ const SENSOR_WIDTH: usize = 4928;
 const SENSOR_HEIGHT: usize = 3264;
 
 /// Processing selection belongs to input and recipes, never pixel operations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum ProcessingFamily {
     Merrill,
     Classic,

@@ -13,6 +13,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
+- **[browser-review](./browser-review.md)** _(archived)._ Add three browser views with independent review ratings, metadata sorting and shared search filters.
 - **[cache-and-smart-cleanup](./cache-and-smart-cleanup.md)** _(archived)._ Organize cache and Smart preview responsibilities and explain constants while preserving processing behavior.
 - **[cache-prefetch-window](./cache-prefetch-window.md)** _(archived)._ Bound background decoding around the selected photograph and retain nearby results under the disk budget.
 - **[cache-status-dots](./cache-status-dots.md)** _(archived)._ Replace the provisional cache checkmark with muted caption dots backed by explicit queue and disk states.
@@ -39,6 +40,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[detail-and-noise](./detail-and-noise.md)** _(archived)._ The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner.
 - **[editing-section-layout](./editing-section-layout.md)** _(archived)._ Color Editor has an independent checkbox and editing sections persist their visual drag order without changing processing.
 - **[editor-review-focus](./editor-review-focus.md)** _(archived)._ Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
+- **[editor-workflow](./editor-workflow.md)** _(archived)._ Implemented section recipes, configurable defaults, white-balance bias and isolated Before rendering through the existing editor paths.
 - **[embedded-thumbnails](./embedded-thumbnails.md)** _(archived)._ Read Classic bitmap thumbnails through an encoding-based embedded-preview path.
 - **[export-toolbar](./export-toolbar.md)** _(archived)._ Move TIFF color selection from Editing to a padded, grouped Open/Export toolbar.
 - **[family-controls](./family-controls.md)** _(archived)._ Separate family editing panels and centralize processing control constraints before reviewing broader organization.

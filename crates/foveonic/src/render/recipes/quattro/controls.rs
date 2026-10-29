@@ -44,6 +44,7 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
         supported.color_mode.clone_from(&settings.color_mode);
     }
     supported.processing_sections = settings.processing_sections;
+    supported.white_balance_bias = settings.white_balance_bias;
     if !settings.processing_sections.corrections {
         supported.repair = settings.repair;
         supported.despeckle = settings.despeckle;

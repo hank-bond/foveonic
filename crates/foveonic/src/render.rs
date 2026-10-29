@@ -15,11 +15,16 @@ mod artifacts;
 mod capabilities;
 #[path = "dng/gpu.rs"]
 mod dng_gpu;
+mod edits;
 mod execute;
 mod recipes;
 mod settings;
 
 pub use capabilities::ControlCapabilities;
+pub use edits::{
+    camera_settings, camera_settings_from_properties, Defaults as RecipeDefaults,
+    Scope as EditScope, Section as EditSection,
+};
 
 use execute::Input;
 pub(crate) use execute::Value;
@@ -28,6 +33,7 @@ pub use settings::{
     ColorEditorControls, ColorFieldApproach, ColorFieldControls, HighlightMode, MonochromeControls,
     PhotographicControls, PhotographicMethod, PreviewQuality, ProcessingSections, Rendering,
     RepairThreshold, Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening,
+    WhiteBalanceBias,
 };
 
 /// Completed recipe preparation and execution boundaries for an interactive render.

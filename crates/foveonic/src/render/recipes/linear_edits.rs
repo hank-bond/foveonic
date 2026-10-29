@@ -37,6 +37,10 @@ pub(super) fn pivot_from_response(white: f32, response: impl Fn(f64) -> f64) -> 
 }
 
 pub(super) fn active(settings: &Settings) -> bool {
+    (!settings.is_monochrome() && !settings.white_balance_bias.is_neutral())
+        || baked_active(settings)
+}
+fn baked_active(settings: &Settings) -> bool {
     settings.color_editor_active()
         || (settings.tone_enabled
             && (!settings.tonal_ranges.is_neutral() || settings.photographic.local_contrast != 0.))
@@ -95,12 +99,13 @@ pub(super) fn build(
         scale,
     } = context;
     let extent = recipe.rgb_extent;
+    white_balance(recipe, settings, space)?;
     alias(recipe, space, "linear.edits-input")?;
     if requested(&recipe.graph, names) {
         return Ok(());
     }
     if settings.color_editor_active() {
-        let guide = color_guide(engine, source, settings, profile, execution)?;
+        let mut guide = color_guide(engine, source, settings, profile, execution)?;
         let DataType::LinearRgb(guide_space) = guide.graph.outputs[guide.final_id].data else {
             return Err("color guide must be linear RGB".into());
         };
@@ -112,6 +117,7 @@ pub(super) fn build(
         {
             return Err("Color Editor guide framing mismatch".into());
         }
+        white_balance(&mut guide, settings, space)?;
         let guide_final = guide.final_id;
         let mapping = recipe.graph.append(guide.graph, "color-editor-guide");
         let guide_id = recipe.graph.add(
@@ -204,6 +210,19 @@ pub(super) fn build(
         }
     }
     alias(recipe, space, "linear.edits")
+}
+
+fn white_balance(recipe: &mut BuiltRecipe, settings: &Settings, space: ColorSpace) -> Result<()> {
+    if !settings.is_monochrome() && !settings.white_balance_bias.is_neutral() {
+        recipe.final_id = recipe.graph.add(
+            Operation::LinearWhiteBalance {
+                rows: settings.white_balance_bias.rows(space),
+                space,
+            },
+            &[recipe.final_id],
+        )?;
+    }
+    Ok(())
 }
 
 fn color_guide(
@@ -311,7 +330,7 @@ pub(super) fn bake(
     settings.output_size = None;
     let effective = settings.processing_settings();
     let active = effective.active_tone_settings();
-    if !self::active(&active) {
+    if !baked_active(&active) {
         return Ok(());
     }
     let camera = super::finishing::camera_settings(&active);

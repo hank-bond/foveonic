@@ -5,9 +5,11 @@ mod application_settings;
 mod batch;
 mod browser;
 mod capture;
+mod comparison_view;
 mod controls;
 mod display;
 mod display_image;
+mod editor;
 mod export;
 mod help;
 mod help_examples;
@@ -54,6 +56,10 @@ struct Opening {
 }
 
 struct App {
+    comparison_selection: Option<PathBuf>,
+    comparison_zoom: f32,
+    editor_ui: editor::State,
+    before: editor::Before,
     actions: Vec<actions::Edit>,
     import: import_review::Review,
     settings_open: bool,
@@ -149,6 +155,10 @@ impl App {
             rs.clone(),
         );
         let mut app = Self {
+            comparison_selection: None,
+            comparison_zoom: 1.,
+            editor_ui: Default::default(),
+            before: Default::default(),
             actions: Vec::new(),
             import,
             settings_open: false,
@@ -193,6 +203,15 @@ impl App {
         app.worker
             .cache
             .configure(app.preferences.decode_cache.clone());
+        app.sidecars.set_defaults(&app.preferences.editor.defaults);
+        app.worker
+            .cache
+            .configure_photo_defaults(&app.preferences.editor.defaults);
+        app.import.set_defaults(
+            &app.preferences.editor.defaults,
+            &mut app.browser,
+            app.preferences.processing_destination.as_deref(),
+        );
         app.viewport.zoom_snap = app.preferences.zoom_snap;
         if let Some((path, mode)) = folder {
             app.open(path, mode);
@@ -239,6 +258,7 @@ impl App {
         }
     }
     fn clear_selection(&mut self) {
+        self.before = Default::default();
         self.browser.invalidate_prefetch();
         self.revision += 1;
         self.selected = None;
@@ -258,6 +278,7 @@ impl App {
         viewport::clear(&self.render_state);
     }
     fn select(&mut self, path: PathBuf, preserve_viewport: bool) {
+        self.before = Default::default();
         self.browser.invalidate_prefetch();
         timing::selected(self.revision + 1, &path);
         let began = std::time::Instant::now();
@@ -285,6 +306,9 @@ impl App {
         viewport::clear(&self.render_state);
     }
     fn submit(&mut self, export: Option<export::Export>) {
+        if export.is_some() {
+            self.exit_before();
+        }
         self.detail = None;
         self.smart.reset();
         self.submit_request(export, None);
@@ -319,15 +343,21 @@ impl App {
                 format!("Loading {}…", self.output)
             };
             timing::requested(self.revision, path, &self.output, &self.settings);
-            let mut requested = self.settings.clone();
+            let mut requested = self.view_settings();
             requested.preview_region = region;
             let request = worker::Request {
+                rendition: self.before.active,
                 revision: self.revision,
                 path: path.clone(),
                 settings: requested,
                 preview_quality: quality,
-                output: self.output.clone(),
-                comparison: self.comparison.requested()
+                output: if self.before.active == editor::Rendition::Current {
+                    self.output.clone()
+                } else {
+                    "final".into()
+                },
+                comparison: self.before.active == editor::Rendition::Current
+                    && self.comparison.requested()
                     && foveonic::inspection::comparison_input(
                         &self.settings,
                         &self.output,
@@ -384,6 +414,9 @@ impl App {
                 }
             };
             let current = reply.revision == self.revision;
+            if reply.rendition != self.before.active {
+                continue;
+            }
             if !current
                 && reply
                     .result
@@ -422,19 +455,22 @@ impl App {
             }
             if let Some(metadata) = reply.metadata {
                 self.metadata = Some(metadata);
-                if current {
+                if current && reply.rendition == editor::Rendition::Current {
+                    // Authored As Shot choices must keep following each photograph.
+                    // Render replies carry concrete camera choices for the GPU recipe.
+                    let white_balance = std::mem::take(&mut self.settings.white_balance);
+                    let color_mode = std::mem::take(&mut self.settings.color_mode);
                     self.settings = reply.settings;
-                } else {
-                    if self.settings.white_balance.is_empty() {
-                        self.settings.white_balance = reply.settings.white_balance;
-                    }
-                    if self.settings.color_mode.is_empty() {
-                        self.settings.color_mode = reply.settings.color_mode;
-                    }
+                    self.settings.white_balance = white_balance;
+                    self.settings.color_mode = color_mode;
                 }
             }
             match reply.result {
                 Ok(Some(frame)) => {
+                    if frame.rendition != editor::Rendition::Current {
+                        self.before
+                            .retain_current(&mut self.frame, &mut self.detail);
+                    }
                     timing::event(frame.revision, "image_received");
                     self.status = if smoke::screenshot_active() {
                         format!("Displaying {}", frame.artifact.name)
@@ -711,6 +747,15 @@ impl App {
                         self.metadata.as_deref(),
                         self.capture.properties.as_ref(),
                         &mut self.preferences.editing_sections,
+                        &mut editor::Menus {
+                            family: self.metadata.as_deref().and_then(|m| {
+                                foveonic::render::ControlCapabilities::from_metadata(m)
+                                    .ok()
+                                    .map(|c| c.family)
+                            }),
+                            library: &self.preferences.editor,
+                            state: &mut self.editor_ui,
+                        },
                     );
                 });
                 changed
@@ -736,6 +781,22 @@ impl App {
                             response = help::attach(response, &help::navigator(ui.ctx().os()));
                         }
                         let header = response.rect;
+                        if section == Section::Editing {
+                            editor::Menus {
+                                family: self
+                                    .metadata
+                                    .as_deref()
+                                    .and_then(|m| {
+                                        foveonic::render::ControlCapabilities::from_metadata(m)
+                                            .ok()
+                                            .map(|c| c.family)
+                                    })
+                                    .filter(|_| !self.exporting && self.sidecars.ready()),
+                                library: &self.preferences.editor,
+                                state: &mut self.editor_ui,
+                            }
+                            .header(ui, editor::Scope::All, header);
+                        }
                         if response.clicked() {
                             self.preferences.toggle(section);
                         }
@@ -752,9 +813,13 @@ impl App {
         if let Some((source, target, after)) = movement {
             self.preferences.move_section(source, target, after);
         }
+        changed |= self.apply_editor_actions();
         changed
     }
     fn displayed_channel(&self) -> i32 {
+        if self.before.active != editor::Rendition::Current {
+            return -1;
+        }
         // The displayed image may belong to an older request. Using the new
         // component choice now could show its samples with the wrong meaning.
         if self.frame.as_ref().is_some_and(|f| f.output == self.output) {
@@ -764,6 +829,9 @@ impl App {
         }
     }
     fn displayed_mapping(&self) -> viewport::Mapping {
+        if self.before.active != editor::Rendition::Current {
+            return viewport::Mapping::normal(-1);
+        }
         let channel = self.displayed_channel();
         let has_pair = self
             .frame
@@ -908,41 +976,22 @@ impl App {
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 ui.set_min_height(height);
-                if let Some(frame) = &self.frame {
-                    self.viewport.show(
-                        ui,
-                        frame.view(mapping.input).clone(),
-                        frame.display_extent(mapping.input),
-                        frame.comparison.as_ref().map(|c| c.texture.clone()),
-                        mapping,
-                        self.srgb_target,
-                        frame.revision,
-                    );
-                    if let Some(detail) = self.smart_detail(ui.ctx().pixels_per_point()) {
-                        self.viewport.show_region(
-                            ui,
-                            detail.texture.clone(),
-                            detail.artifact.settings.preview_region.unwrap(),
-                            frame.display_extent(false),
-                            mapping,
-                            self.srgb_target,
-                            detail.revision,
-                        );
-                    }
-                } else if let Some(path) = &self.selected {
-                    if let Some(preview) = self.browser.preview(path) {
-                        self.viewport
-                            .show_preview(ui, &preview.texture, preview.native_extent);
-                    }
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.weak(if self.browser.files.is_empty() {
-                            "Open a folder of X3F photographs"
-                        } else {
-                            "No visible photographs"
-                        });
-                    });
+                let paths = self.browser.processing_selection(self.selected.as_deref());
+                if paths.len() > 1
+                    && self
+                        .selected
+                        .as_ref()
+                        .is_some_and(|active| paths.contains(active))
+                {
+                    self.comparison_view(ui, &paths);
+                    return;
                 }
+                let canvas = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), height),
+                );
+                self.show_photo(ui, mapping);
+                self.before_badge(ui, canvas);
             },
         );
         let path = self
@@ -962,6 +1011,44 @@ impl App {
             .or(self.capture.properties.as_ref());
         information::show(ui, properties, &filename, self.viewport.visible_pixels());
         changed
+    }
+
+    fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) {
+        if let Some(frame) = &self.frame {
+            self.viewport.show(
+                ui,
+                frame.view(mapping.input).clone(),
+                frame.display_extent(mapping.input),
+                frame.comparison.as_ref().map(|c| c.texture.clone()),
+                mapping,
+                self.srgb_target,
+                frame.revision,
+            );
+            if let Some(detail) = self.smart_detail(ui.ctx().pixels_per_point()) {
+                self.viewport.show_region(
+                    ui,
+                    detail.texture.clone(),
+                    detail.artifact.settings.preview_region.unwrap(),
+                    frame.display_extent(false),
+                    mapping,
+                    self.srgb_target,
+                    detail.revision,
+                );
+            }
+        } else if let Some(path) = &self.selected {
+            if let Some(preview) = self.browser.preview(path) {
+                self.viewport
+                    .show_preview(ui, &preview.texture, preview.native_extent);
+            }
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.weak(if self.browser.files.is_empty() {
+                    "Open a folder of X3F photographs"
+                } else {
+                    "No visible photographs"
+                });
+            });
+        }
     }
 }
 impl eframe::App for App {
@@ -1071,6 +1158,8 @@ impl eframe::App for App {
             .resizable(true)
             .show(ctx, |ui| {
                 let browser_focus = ui.make_persistent_id("organizer focus");
+                self.browser.sort = self.preferences.browser_sort;
+                self.browser.show_ratings = self.preferences.browser_show_ratings;
                 self.browser.header(
                     ui,
                     &mut self.preferences.organizer,
@@ -1085,6 +1174,8 @@ impl eframe::App for App {
                         self.preferences.organizer,
                     );
                 });
+                self.preferences.browser_sort = self.browser.sort;
+                self.preferences.browser_show_ratings = self.browser.show_ratings;
             });
         let actions_changed = self.dispatch_actions(ctx);
         let mut changed = normalized || actions_changed;
@@ -1103,17 +1194,22 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             changed |= self.central(ui);
         });
+        self.browser.finish_previews();
         if previous_selection == self.selected && (normalized || previous_settings != self.settings)
         {
+            self.exit_before();
             self.sidecars.edited(&self.settings);
         }
         if std::mem::take(&mut self.browser.clear_selection) {
             self.clear_selection();
             self.status = "No visible photographs".into();
             self.status_error = false;
+        } else if let Some(path) = self.comparison_selection.take() {
+            self.select(path, true);
         } else if let Some(selection) = select {
             self.select(selection.path, selection.preserve_viewport);
         } else if changed && !self.exporting {
+            self.exit_before();
             self.submit(None);
         }
         if let Some(paths) = self.browser.take_prefetch_order(self.selected.as_deref()) {
@@ -1121,6 +1217,7 @@ impl eframe::App for App {
                 .cache
                 .prefetch_window(paths, self.selected.clone());
         }
+        self.editor_ui.dialog(ctx, &mut self.preferences.editor);
         self.update_smart(ctx);
         self.update_scopes(ctx);
         self.smoke_check_scope_retention();

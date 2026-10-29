@@ -43,6 +43,26 @@ const DISPLAY_COLOR_TARGETS: &[&str] = &[
 ];
 
 const SCREENSHOT_TARGETS: &[&str] = &["preview", "readme"];
+const WORKFLOW_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "workflow-current",
+    "workflow-camera",
+    "workflow-restored",
+    "workflow-defaults",
+    "workflow-restored-again",
+    "workflow-wb",
+    "workflow-default-reset",
+    "workflow-camera-reset",
+];
+const BROWSER_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "browser-grid",
+    "browser-list",
+    "browser-large",
+];
+const COMPARISON_TARGETS: &[&str] = &["preview", "final", "comparison", "comparison-switch"];
 const IMPORT_WIDE_BROWSER_WIDTH: f32 = 600.;
 const IMPORT_TARGETS: &[&str] = &[
     "preview",
@@ -221,13 +241,21 @@ pub struct Smoke {
     fast_region: Option<crate::viewport::PixelRegion>,
     smart_full_revision: Option<u64>,
     display_revision: Option<u64>,
+    authored: Option<foveonic::render::Settings>,
+    current_texture: Option<std::sync::Arc<foveonic::image::ImageTexture>>,
 }
 impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_DISPLAY").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_COMPARISON").is_some() {
+                COMPARISON_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_WORKFLOW").is_some() {
+                WORKFLOW_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DISPLAY").is_some() {
                 DISPLAY_COLOR_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_BROWSER").is_some() {
+                BROWSER_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_IMPORT").is_some() {
                 IMPORT_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
@@ -262,6 +290,8 @@ impl Smoke {
             fast_region: None,
             smart_full_revision: None,
             display_revision: None,
+            authored: None,
+            current_texture: None,
         })
     }
     /// Hold processing replies until the embedded preview has been captured.
@@ -330,6 +360,65 @@ impl App {
             })
         });
         if let Some(image) = screenshot {
+            if smoke.targets == COMPARISON_TARGETS
+                && smoke.targets[smoke.index] == "comparison-switch"
+            {
+                let selected = self.browser.processing_selection(self.selected.as_deref());
+                assert!(selected.len() > 1);
+                assert_eq!(selected.get(1), self.selected.as_ref());
+            }
+            if smoke.targets == WORKFLOW_TARGETS {
+                let frame = self.frame.as_ref();
+                let target = smoke.targets[smoke.index];
+                if target == "workflow-current" {
+                    smoke.authored = Some(self.settings.clone());
+                    smoke.fast_region = self.viewport.visible_pixels();
+                    smoke.display_revision = frame.map(|f| f.revision);
+                    smoke.current_texture = frame.map(|f| f.texture.clone());
+                }
+                if matches!(
+                    target,
+                    "workflow-camera"
+                        | "workflow-defaults"
+                        | "workflow-restored"
+                        | "workflow-restored-again"
+                ) {
+                    assert_eq!(
+                        Some(&self.settings),
+                        smoke.authored.as_ref(),
+                        "Before must preserve authored edits"
+                    );
+                    assert_eq!(
+                        self.viewport.visible_pixels(),
+                        smoke.fast_region,
+                        "Before must preserve viewport geometry"
+                    );
+                    if target.starts_with("workflow-restored") {
+                        assert!(
+                            std::sync::Arc::ptr_eq(
+                                &frame.unwrap().texture,
+                                smoke.current_texture.as_ref().unwrap()
+                            ),
+                            "Restore must reuse current frame"
+                        );
+                    } else {
+                        assert_ne!(frame.unwrap().rendition, crate::editor::Rendition::Current);
+                        assert_ne!(
+                            self.browser.rendered_revision(&frame.unwrap().path),
+                            frame.map(|f| f.revision)
+                        );
+                    }
+                }
+            }
+            if smoke.targets == BROWSER_TARGETS
+                && smoke.targets[smoke.index].starts_with("browser-")
+            {
+                assert_eq!(
+                    self.frame.as_ref().map(|frame| frame.revision),
+                    smoke.display_revision,
+                    "browser changes must not rerender the image"
+                );
+            }
             std::fs::create_dir_all(&smoke.directory).unwrap();
             let bytes: Vec<_> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
             image::save_buffer(
@@ -573,6 +662,82 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "comparison-switch" => {
+                    self.comparison_selection = self
+                        .browser
+                        .processing_selection(self.selected.as_deref())
+                        .get(1)
+                        .cloned();
+                    ctx.request_repaint();
+                }
+                "comparison" => self.browser.set_actions(vec![(
+                    crate::shortcuts::BrowserAction::SelectAll,
+                    egui::Modifiers::COMMAND,
+                )]),
+                "workflow-current" => {
+                    self.settings.exposure = 0.7;
+                    self.settings.photographic.tone_method =
+                        foveonic::render::PhotographicMethod::Universal;
+                    self.preferences.collapsed =
+                        [Section::Navigator, Section::Scopes, Section::Metadata].into();
+                    self.viewport.one_to_one = true;
+                    self.viewport.pan_to(egui::vec2(0.55, 0.4));
+                    self.submit(None);
+                }
+                "workflow-camera" | "workflow-restored" => {
+                    self.toggle_before(crate::editor::Rendition::Camera)
+                }
+                "workflow-defaults" => {
+                    let mut defaults = self.settings.clone();
+                    defaults.exposure = 0.2;
+                    self.preferences.editor.defaults.set(
+                        foveonic::source::ProcessingFamily::Merrill,
+                        crate::editor::Scope::Tool(crate::editor::Section::Tone),
+                        &defaults,
+                    );
+                    self.toggle_before(crate::editor::Rendition::Defaults);
+                }
+                "workflow-restored-again" => self.toggle_before(crate::editor::Rendition::Defaults),
+                "workflow-wb" => {
+                    self.settings.white_balance_bias.warmth = 0.35;
+                    self.settings.white_balance_bias.tint = -0.2;
+                    self.submit(None);
+                }
+                "workflow-default-reset" | "workflow-camera-reset" => {
+                    let camera = smoke.targets[smoke.index] == "workflow-camera-reset";
+                    self.editor_ui.actions.push(crate::editor::Action::Reset(
+                        crate::editor::Scope::Tool(crate::editor::Section::Tone),
+                        camera,
+                    ));
+                    assert!(self.apply_editor_actions());
+                    assert_eq!(self.settings.exposure, if camera { 0. } else { 0.2 });
+                    assert_eq!(self.settings.white_balance_bias.warmth, 0.35);
+                    self.submit(None);
+                }
+                "browser-grid" | "browser-list" | "browser-large" => {
+                    if smoke.display_revision.is_none() {
+                        smoke.display_revision = self.frame.as_ref().map(|frame| frame.revision);
+                    }
+                    self.preferences.organizer = match smoke.targets[smoke.index] {
+                        "browser-grid" => Organizer::Icons,
+                        "browser-list" => Organizer::List,
+                        _ => Organizer::Large,
+                    };
+                    self.preferences.browser_sort = crate::browser::Sort {
+                        field: crate::browser::Field::Date,
+                        reverse: true,
+                    };
+                    self.browser.set_actions(vec![(
+                        crate::shortcuts::BrowserAction::Rate(4),
+                        egui::Modifiers::NONE,
+                    )]);
+                    let id = egui::Id::new("organizer");
+                    if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
+                        state.rect.max.x = state.rect.min.x + IMPORT_WIDE_BROWSER_WIDTH;
+                        ctx.data_mut(|data| data.insert_persisted(id, state));
+                    }
+                    self.browser.reveal_selection();
+                }
                 "gamut-monitor"
                 | "gamut-monitor-again"
                 | "gamut-adobe"
@@ -916,13 +1081,17 @@ impl App {
                             .as_ref()
                             .is_some_and(|snapshot| Some(snapshot.key) == self.scope_key)
                             && self.navigator.ready(frame, mapping)
-                            && (frame.output != "final"
+                            && (frame.rendition != crate::editor::Rendition::Current
+                                || frame.output != "final"
                                 || self.browser.rendered_revision(&frame.path)
                                     == Some(frame.revision))
                     })
             };
             let ready =
                 ready && (smoke.targets != SCREENSHOT_TARGETS || self.browser.thumbnails_ready());
+            let ready = ready
+                && (smoke.targets != BROWSER_TARGETS
+                    || (self.browser.thumbnails_ready() && self.browser.metadata_ready()));
             let ready = ready
                 && (smoke.targets != IMPORT_TARGETS
                     || match smoke.targets[smoke.index] {

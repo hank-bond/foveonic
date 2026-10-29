@@ -14,30 +14,37 @@ pub(super) fn show(
     settings: &mut Settings,
     metadata: Option<&Metadata>,
     order: &mut Vec<EditingSection>,
+    menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
     let mut changed = common::rendering(ui, settings);
     let capabilities = ControlCapabilities::from_family(ProcessingFamily::Classic);
     let mono = settings.is_monochrome();
-    changed |= common::presets(
+    changed |= common::color_mode(
         ui,
         settings,
         metadata,
-        common::PresetControls {
-            white_balance: capabilities.white_balance_active(settings),
-            color_mode: capabilities.color_mode_active(settings),
-        },
+        capabilities.color_mode_active(settings),
     );
     changed |= sections::show(
         ui,
         order,
         &[
+            EditingSection::WhiteBalance,
             EditingSection::Tone,
             EditingSection::ColorEditor,
             EditingSection::Noise,
             EditingSection::Sharpening,
             EditingSection::Corrections,
         ],
+        menus,
         |ui, section| match section {
+            EditingSection::WhiteBalance => common::white_balance(
+                ui,
+                settings,
+                metadata,
+                foveonic::render::ControlCapabilities::from_family(ProcessingFamily::Classic)
+                    .white_balance_active(settings),
+            ),
             EditingSection::Tone => common::tone(ui, settings, mono),
             EditingSection::ColorEditor => super::color_editor::show(ui, settings),
             EditingSection::Noise => common::reconstruction(ui, settings),

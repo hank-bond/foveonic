@@ -7,6 +7,7 @@ pub use crate::nodes::finish::photographic::{
     Sharpening as UniversalSharpening,
 };
 pub use crate::nodes::finish::tone_equalizer::Controls as TonalRanges;
+pub use crate::nodes::finish::white_balance::Controls as WhiteBalanceBias;
 pub use crate::nodes::monochrome::Controls as MonochromeControls;
 pub use crate::nodes::sensor::color_field::{
     Approach as ColorFieldApproach, Controls as ColorFieldControls, HighlightMode,
@@ -85,6 +86,7 @@ pub struct Settings {
     /// Monochrome Smooth/Crisp selection. None follows the file or recipe default.
     pub monochrome_smoothness: Option<f32>,
     pub white_balance: String,
+    pub white_balance_bias: WhiteBalanceBias,
     pub color_mode: String,
     /// Stops applied to linear RGB before the selected rendering mode's tone curve.
     pub exposure: f32,
@@ -152,6 +154,7 @@ impl Default for Settings {
             monochrome_smoothness: None,
             // Camera choices are resolved from the selected X3F, not a global preset.
             white_balance: String::new(),
+            white_balance_bias: Default::default(),
             color_mode: String::new(),
             exposure: 0.,
             tone_enabled: true,
@@ -180,6 +183,11 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Photographic values without viewport or output-job policy.
+    pub fn photographic_recipe(&self) -> Self {
+        super::edits::snapshot(self)
+    }
+
     pub fn new(white_balance: impl Into<String>, color_mode: impl Into<String>) -> Self {
         Self {
             white_balance: white_balance.into(),
@@ -387,6 +395,7 @@ impl Settings {
     /// Inspection can show sensor data before WB or mode is known. Check numbers
     /// here and let stages that use those camera choices resolve them later.
     pub fn validate_values(&self) -> Result<()> {
+        self.white_balance_bias.validate()?;
         if self
             .monochrome_smoothness
             .is_some_and(|v| !v.is_finite() || !(0. ..=1.).contains(&v))

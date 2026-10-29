@@ -8,6 +8,7 @@ pub enum BrowserAction {
     TogglePick,
     Hide,
     Arrow(Key),
+    Rate(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +16,8 @@ pub enum Action {
     Browser(BrowserAction),
     CopySettings,
     PasteSettings,
+    BeforeCamera,
+    BeforeDefaults,
 }
 
 pub struct Invocation {
@@ -63,6 +66,38 @@ impl Binding {
 }
 
 const BINDINGS: &[Binding] = &[
+    Binding::new(Key::Y, Modifiers::NONE, Action::BeforeCamera),
+    Binding::new(Key::Y, Modifiers::SHIFT, Action::BeforeDefaults),
+    Binding::new(
+        Key::Num0,
+        Modifiers::NONE,
+        Action::Browser(BrowserAction::Rate(0)),
+    ),
+    Binding::new(
+        Key::Num1,
+        Modifiers::NONE,
+        Action::Browser(BrowserAction::Rate(1)),
+    ),
+    Binding::new(
+        Key::Num2,
+        Modifiers::NONE,
+        Action::Browser(BrowserAction::Rate(2)),
+    ),
+    Binding::new(
+        Key::Num3,
+        Modifiers::NONE,
+        Action::Browser(BrowserAction::Rate(3)),
+    ),
+    Binding::new(
+        Key::Num4,
+        Modifiers::NONE,
+        Action::Browser(BrowserAction::Rate(4)),
+    ),
+    Binding::new(
+        Key::Num5,
+        Modifiers::NONE,
+        Action::Browser(BrowserAction::Rate(5)),
+    ),
     Binding::new(
         Key::A,
         Modifiers::COMMAND,
@@ -113,7 +148,10 @@ impl Availability {
                     self.browser && self.import
                 }
                 Action::Browser(_) => self.browser,
-                Action::CopySettings | Action::PasteSettings => self.settings,
+                Action::CopySettings
+                | Action::PasteSettings
+                | Action::BeforeCamera
+                | Action::BeforeDefaults => self.settings,
             }
     }
 }

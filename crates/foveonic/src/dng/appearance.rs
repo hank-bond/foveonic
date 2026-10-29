@@ -183,6 +183,27 @@ pub(crate) struct ProfileData {
 }
 
 impl Prepared {
+    /// Keep WB editable in the DNG neutral while fitting the selected pre-tone bias once.
+    /// Storage coordinates and the camera calibration remain unchanged.
+    pub(crate) fn white_balance_bias(&mut self, rows: [f64; 9]) -> Result<()> {
+        let biased = self.camera_to_native.then(Matrix(rows));
+        let neutral = biased
+            .inverse()?
+            .apply(self.camera_to_native.apply(self.neutral));
+        let maximum = neutral.into_iter().fold(0., f64::max);
+        let neutral = neutral.map(|v| (v / maximum * 1_000_000.).round() / 1_000_000.);
+        if neutral.iter().any(|v| !v.is_finite() || *v <= 0.) {
+            return Err("white-balance bias produces an invalid DNG neutral".into());
+        }
+        let reader = self.forward.white_normalized()?;
+        self.neutral = neutral;
+        self.color = reader.inverse()?.then(Matrix::diagonal(neutral));
+        self.camera_to_romm = Matrix::diagonal(neutral.map(|v| 1. / v))
+            .then(reader)
+            .then(ROMM.white_normalized()?.inverse()?);
+        self.camera_to_native = biased;
+        Ok(())
+    }
     /// Invert the same normalized pre-tone interpretation used by the DNG profile.
     /// This removes its linear selected-look mapping before storage, so the reader
     /// can restore it once without copying photographic tone into the samples.

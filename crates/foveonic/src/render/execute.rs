@@ -1287,6 +1287,16 @@ impl Engine {
                         profile,
                     )?)
                 }
+                Operation::LinearWhiteBalance { rows, .. } => {
+                    Some(crate::nodes::finish::linear_basis::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *rows,
+                        inherited,
+                        1,
+                        profile,
+                    )?)
+                }
                 Operation::TransferLinearGain { .. } => {
                     Some(crate::nodes::finish::linear_gain::apply(
                         gpu,

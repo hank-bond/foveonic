@@ -28,6 +28,8 @@ Use the shared processing settings as the version-1 recipe, preserving automatic
 
 Recipe copy/paste uses egui's system clipboard and the existing sidecar encoder/decoder. Highlighted destinations follow the browser's ordinary processing selection, excluding concealed rows, with the viewed photo as fallback. Paste queues unviewed Browse targets on the coalescing writer and retains Import targets in the review recipe map. Only an affected viewed photo requests a rerender. Copied recipes do not change workspace inspection, preview mode, zoom or pan. Existing family normalization applies when a photo is active.
 
+[Editor presets and defaults](./editor-workflow.md) use shared photographic scopes and application storage. Missing recipes receive the applicable user defaults over the camera baseline. Saved recipes take precedence. Authored As Shot WB/mode choices stay unresolved in sidecars and presets, so they follow each source rather than retaining a render reply's resolved name. Before renditions are transient and never become photo recipes.
+
 ## Conformance
 
 Sensor gain was removed before external use. Existing local sidecars were migrated directly by deleting only that field, as recorded in the [removal plan](../../plans/archived/remove-sensor-gain.md). This field has no legacy reader. The adjacent-path reader supports the later sidecar-directory move without changing recipe contents.

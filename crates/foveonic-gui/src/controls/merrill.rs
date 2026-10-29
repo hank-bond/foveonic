@@ -158,22 +158,16 @@ pub(super) fn show(
     settings: &mut Settings,
     metadata: Option<&Metadata>,
     order: &mut Vec<EditingSection>,
+    menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
     let mut changed = common::rendering(ui, settings);
     let mono = settings.is_monochrome();
-    changed |= common::presets(
-        ui,
-        settings,
-        metadata,
-        common::PresetControls {
-            white_balance: true,
-            color_mode: !mono,
-        },
-    );
+    changed |= common::color_mode(ui, settings, metadata, !mono);
     let available = if mono {
         EditingSection::ALL.as_slice()
     } else {
         &[
+            EditingSection::WhiteBalance,
             EditingSection::Tone,
             EditingSection::ColorEditor,
             EditingSection::Noise,
@@ -182,7 +176,16 @@ pub(super) fn show(
             EditingSection::Corrections,
         ]
     };
-    changed |= super::sections::show(ui, order, available, |ui, section| match section {
+    changed |= super::sections::show(ui, order, available, menus, |ui, section| match section {
+        EditingSection::WhiteBalance => common::white_balance(
+            ui,
+            settings,
+            metadata,
+            foveonic::render::ControlCapabilities::from_family(
+                foveonic::source::ProcessingFamily::Merrill,
+            )
+            .white_balance_active(settings),
+        ),
         EditingSection::Mix => crate::mixer::show(ui, &mut settings.monochrome.mix),
         EditingSection::Tone => common::tone_with_exposure_range(ui, settings, mono, -4. ..=4.),
         EditingSection::ColorEditor => super::color_editor::show(ui, settings),

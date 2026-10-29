@@ -9,13 +9,22 @@ use std::{
     sync::{mpsc, Arc},
 };
 
+#[path = "browser_chrome.rs"]
+mod chrome;
 #[path = "browser_folders.rs"]
 mod folders;
+#[path = "browser_items.rs"]
+mod items;
 #[path = "browser_loader.rs"]
 mod loader;
+#[path = "browser_metadata.rs"]
+mod metadata_loader;
+#[path = "browser_query.rs"]
+mod query;
 #[path = "browser_review.rs"]
 mod review;
 use loader::{Kind, Reply, Request, Worker as Loader};
+pub use query::{Field, Sort};
 
 pub struct Selection {
     pub path: PathBuf,
@@ -28,31 +37,22 @@ const STATUS_RADIUS: f32 = 3.;
 const STATUS_INSET: f32 = 10.;
 const STATUS_GUTTER: f32 = 20.;
 const THUMBNAIL_CACHE_ENTRIES: usize = 256;
-const PREVIEW_CACHE_ENTRIES: usize = 2;
+const PREVIEW_CACHE_ENTRIES: usize = 8;
 // Texture uploads must leave time for input and the selected image every frame.
 const REPLIES_PER_FRAME: usize = 4;
 // A miss may become ready after background rendering or folder prefetch.
 const PREVIEW_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-const GRID_TILE_HEIGHT: f32 = 146.;
+#[cfg(test)]
+const GRID_TILE_HEIGHT: f32 = 176.;
 const LIST_ROW_HEIGHT: f32 = 40.;
-// Image padding includes the filename band below each thumbnail.
-const GRID_IMAGE_INSETS: egui::Vec2 = egui::vec2(12., 28.);
-// Preserve the existing grid reflow thresholds independently of the panel minimum.
-const GRID_REFLOW_TILE_WIDTH: f32 = 150.;
-const GRID_REFLOW_GAP: f32 = 8.;
-const LANDSCAPE_ASPECT: f32 = 3. / 2.;
-const GRID_IMAGE_CENTER_OFFSET: egui::Vec2 = egui::vec2(0., 10.);
-const CAPTION_TOP_INSET: f32 = 24.;
-const CAPTION_BOTTOM_INSET: f32 = 2.;
-const CAPTION_FONT_SIZE: f32 = 12.;
+// Start another column only when every grid cell can reach this width.
+const GRID_REFLOW_TILE_WIDTH: f32 = 100.;
+const MIN_BROWSER_WIDTH: f32 = 200.;
 
 /// Keep a native 3:2 landscape thumbnail limited by its height at one column.
 /// List mode shares this bound so switching organizer modes preserves its width.
 pub fn minimum_panel_width(style: &egui::Style) -> f32 {
-    let image_height = GRID_TILE_HEIGHT - GRID_IMAGE_INSETS.y;
-    image_height * LANDSCAPE_ASPECT
-        + GRID_IMAGE_INSETS.x
-        + egui::Frame::side_top_panel(style).inner_margin.sum().x
+    MIN_BROWSER_WIDTH + egui::Frame::side_top_panel(style).inner_margin.sum().x
 }
 fn cache_appearance(state: EntryState) -> (egui::Color32, &'static str) {
     match state {
@@ -93,6 +93,16 @@ impl Mark {
     }
 }
 pub struct Browser {
+    metadata_loader: metadata_loader::Loader,
+    metadata_generation: u64,
+    records: HashMap<PathBuf, query::Entry>,
+    metadata_loaded: HashSet<PathBuf>,
+    rating_changes: HashMap<PathBuf, foveonic::review::Rating>,
+    rating_errors: std::collections::BTreeMap<PathBuf, String>,
+    pub sort: Sort,
+    applied_sort: Sort,
+    filter: query::Filter,
+    query_dirty: bool,
     render_state: Option<eframe::egui_wgpu::RenderState>,
     pub files: Vec<PathBuf>,
     pub root: Option<PathBuf>,
@@ -101,6 +111,7 @@ pub struct Browser {
     pub recorded_marks: HashMap<PathBuf, Mark>,
     pub excluded: HashSet<PathBuf>,
     pub hide_reviewed: bool,
+    pub show_ratings: bool,
     pub clear_selection: bool,
     actions: Vec<(BrowserAction, egui::Modifiers)>,
     highlighted: HashSet<PathBuf>,
@@ -119,7 +130,8 @@ pub struct Browser {
     receiver: mpsc::Receiver<Reply>,
     pending: HashSet<PathBuf>,
     pending_previews: HashSet<PathBuf>,
-    // Complete one larger-preview lookup per thumbnail. The two-entry viewport
+    preview_demand: HashSet<PathBuf>,
+    // Complete one larger-preview lookup per thumbnail. The bounded viewport
     // cache must not make every visible row reload its larger image each second.
     preview_checked: HashSet<PathBuf>,
     cache: HashMap<PathBuf, Option<Thumbnail>>,
@@ -150,6 +162,7 @@ impl Browser {
         render_state: Option<eframe::egui_wgpu::RenderState>,
     ) -> Self {
         let (ready, receiver) = mpsc::sync_channel(loader::REPLY_CAPACITY);
+        let metadata_loader = metadata_loader::Loader::new(context.clone(), cache.clone());
         let thumbnail_worker = Loader::start(
             Kind::Thumbnail,
             cache.clone(),
@@ -158,6 +171,16 @@ impl Browser {
         );
         let preview_worker = Loader::start(Kind::Preview, cache, context, ready);
         Self {
+            metadata_loader,
+            metadata_generation: 0,
+            records: HashMap::new(),
+            metadata_loaded: HashSet::new(),
+            rating_changes: HashMap::new(),
+            rating_errors: Default::default(),
+            sort: Sort::default(),
+            applied_sort: Sort::default(),
+            filter: query::Filter::default(),
+            query_dirty: false,
             render_state,
             files: Vec::new(),
             root: None,
@@ -166,6 +189,7 @@ impl Browser {
             recorded_marks: HashMap::new(),
             excluded: HashSet::new(),
             hide_reviewed: true,
+            show_ratings: false,
             clear_selection: false,
             actions: Vec::new(),
             highlighted: HashSet::new(),
@@ -184,6 +208,7 @@ impl Browser {
             receiver,
             pending: HashSet::new(),
             pending_previews: HashSet::new(),
+            preview_demand: HashSet::new(),
             preview_checked: HashSet::new(),
             cache: HashMap::new(),
             previews: HashMap::new(),
@@ -216,6 +241,13 @@ impl Browser {
         self.thumbnail_pass = true;
         self.visible.clear();
         self.files = files;
+        self.metadata_generation = self.metadata_loader.replace(&self.files);
+        self.records.clear();
+        self.metadata_loaded.clear();
+        query::sort(&mut self.files, &self.records, self.sort);
+        self.rating_changes.clear();
+        self.rating_errors.clear();
+        self.query_dirty = true;
         self.prefetch_dirty = true;
         self.root = Some(dir.to_owned());
         self.marks.clear();
@@ -232,6 +264,7 @@ impl Browser {
         self.versions.clear();
         self.pending.clear();
         self.pending_previews.clear();
+        self.preview_demand.clear();
         self.preview_checked.clear();
         self.preview_attempts.clear();
         self.rendered_revisions.clear();
@@ -240,6 +273,25 @@ impl Browser {
     }
     pub fn set_actions(&mut self, actions: Vec<(BrowserAction, egui::Modifiers)>) {
         self.actions = actions;
+    }
+    pub fn invalidate_previews(&mut self) {
+        for path in &self.files {
+            self.thumbnail_worker.cancel(path);
+            self.preview_worker.cancel(path);
+        }
+        self.sequence += 1;
+        self.versions.clear();
+        self.pending.clear();
+        self.pending_previews.clear();
+        self.preview_demand.clear();
+        self.preview_checked.clear();
+        self.preview_attempts.clear();
+        self.cache.clear();
+        self.previews.clear();
+        self.preview_order.clear();
+        self.rendered_revisions.clear();
+        self.order.clear();
+        self.thumbnail_pass = true;
     }
     pub fn invalidate_prefetch(&mut self) {
         self.prefetch_dirty = true;
@@ -256,6 +308,7 @@ impl Browser {
         })
     }
     pub fn receive(&mut self, ctx: &egui::Context) {
+        self.receive_metadata(ctx);
         for _ in 0..REPLIES_PER_FRAME {
             let Ok(Reply {
                 path,
@@ -307,6 +360,11 @@ impl Browser {
     }
     fn insert(&mut self, ctx: &egui::Context, path: PathBuf, image: PreparedPreview) {
         let native_extent = image.thumbnail.native_extent;
+        let entry = self.records.entry(path.clone()).or_default();
+        if entry.extent != Some(native_extent) {
+            entry.extent = Some(native_extent);
+            self.query_dirty = true;
+        }
         let thumbnail = Thumbnail {
             texture: self.upload(ctx, image.thumbnail.image),
             native_extent,
@@ -369,6 +427,7 @@ impl Browser {
         self.rendered_revisions.get(path).copied()
     }
     pub fn preview(&mut self, path: &Path) -> Option<Thumbnail> {
+        self.preview_demand.insert(path.to_owned());
         if let Some(preview) = self.previews.get(path) {
             return Some(preview.clone());
         }
@@ -414,8 +473,15 @@ impl Browser {
             Kind::Preview => self.preview_worker.request(request),
         }
     }
-    fn schedule_thumbnails(&mut self, visible: Vec<PathBuf>, selected: Option<&Path>) {
+    /// Retire preview work only after every browser and viewport consumer has drawn.
+    pub fn finish_previews(&mut self) {
+        let wanted: Vec<_> = self.preview_demand.drain().collect();
+        self.preview_worker.retain(&wanted);
+        self.pending_previews.retain(|p| wanted.contains(p));
+    }
+    fn schedule_thumbnails(&mut self, visible: Vec<PathBuf>) {
         self.visible = visible;
+        self.metadata_loader.visible(&self.visible);
         if std::mem::take(&mut self.thumbnail_pass) {
             let requests = self
                 .files
@@ -440,12 +506,6 @@ impl Browser {
         } else {
             self.thumbnail_worker.visible(&self.visible);
         }
-        let mut keep = self.visible.clone();
-        if let Some(path) = selected {
-            keep.push(path.to_owned());
-        }
-        self.preview_worker.retain(&keep);
-        self.pending_previews.retain(|p| keep.contains(p));
         for path in self.visible.clone() {
             if self.cache.get(&path).is_some_and(Option::is_some)
                 && !self.preview_checked.contains(&path)
@@ -466,60 +526,6 @@ impl Browser {
         }
         self.request(path, Kind::Thumbnail);
         None
-    }
-    pub fn tile(
-        &mut self,
-        ui: &mut egui::Ui,
-        path: &Path,
-        selected: bool,
-        size: egui::Vec2,
-    ) -> egui::Response {
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::CLICK);
-        crate::widgets::paint(ui, &response, selected);
-        if let Some(image) = ui
-            .is_rect_visible(rect)
-            .then(|| self.thumbnail(path))
-            .flatten()
-        {
-            let intrinsic =
-                egui::vec2(image.native_extent[0] as f32, image.native_extent[1] as f32);
-            let max = rect.size() - GRID_IMAGE_INSETS;
-            let s = (max.x / intrinsic.x).min(max.y / intrinsic.y);
-            let image_rect = egui::Rect::from_center_size(
-                rect.center() - GRID_IMAGE_CENTER_OFFSET,
-                intrinsic * s,
-            );
-            ui.painter().image(
-                image.texture.id(),
-                image_rect,
-                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                egui::Color32::WHITE,
-            );
-        }
-        let caption = egui::Rect::from_min_max(
-            egui::pos2(
-                rect.left() + GRID_IMAGE_INSETS.x / 2.,
-                rect.bottom() - CAPTION_TOP_INSET,
-            ),
-            egui::pos2(
-                rect.right() - STATUS_GUTTER,
-                rect.bottom() - CAPTION_BOTTOM_INSET,
-            ),
-        );
-        let text = self.review_control(ui, path, caption);
-        ui.painter().with_clip_rect(text).text(
-            text.center(),
-            egui::Align2::CENTER_CENTER,
-            path.file_stem().unwrap_or_default().to_string_lossy(),
-            egui::FontId::proportional(CAPTION_FONT_SIZE),
-            egui::Color32::LIGHT_GRAY,
-        );
-        self.cache_badge(
-            ui,
-            path,
-            egui::pos2(rect.right() - STATUS_INSET, caption.center().y),
-        );
-        response.on_hover_text(self.file_help(path))
     }
     pub fn mark(&self, path: &Path) -> Mark {
         self.marks
@@ -556,6 +562,7 @@ impl Browser {
         selected: Option<&Path>,
         mode: crate::preferences::Organizer,
     ) -> Option<Selection> {
+        self.apply_query();
         self.review_clicked = false;
         self.clear_selection = false;
         let focus_requested = std::mem::take(&mut self.focus_requested);
@@ -595,21 +602,37 @@ impl Browser {
             focus.request_focus();
         }
         let mut chosen = None;
-        let width = ui.available_width();
-        let columns = icon_columns(width);
+        let panel_width = ui.available_width();
         let icons = mode == crate::preferences::Organizer::Icons;
-        let height = if icons {
-            GRID_TILE_HEIGHT
+        let list = mode == crate::preferences::Organizer::List;
+        let columns = if icons { icon_columns(panel_width) } else { 1 };
+        let width = if list {
+            panel_width.max(items::list_width(self.show_ratings))
         } else {
-            LIST_ROW_HEIGHT
+            panel_width
         };
+        let header_height = if list { items::LIST_HEADER } else { 0. };
+        let tile_width = width / columns as f32;
+        let tile_height = items::dense_height(tile_width);
         let layout = folders::Layout::new(
             &files,
             self.root.as_deref(),
-            if icons { columns } else { 1 },
-            height,
+            columns,
+            |range| {
+                if icons {
+                    tile_height
+                } else if list {
+                    LIST_ROW_HEIGHT
+                } else {
+                    self.large_height(&files[range.start], width)
+                }
+            },
             ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y,
-            ui.spacing().item_spacing.y,
+            if icons {
+                0.
+            } else {
+                ui.spacing().item_spacing.y
+            },
         );
         let mut active = selected.and_then(|path| files.iter().position(|p| p == path));
         let actions = std::mem::take(&mut self.actions);
@@ -650,36 +673,56 @@ impl Browser {
                             }
                         }
                     }
+                    BrowserAction::Rate(stars) => {
+                        let targets = self.processing_selection(selected);
+                        self.rate(
+                            &targets,
+                            foveonic::review::Rating::try_from(stars).expect("registered rating"),
+                        );
+                    }
                 }
             }
         }
-        let mut scroll = egui::ScrollArea::vertical().id_salt("organizer items");
-        let reveal_selection = std::mem::take(&mut self.reveal_selection);
-        if let Some(active) = active.filter(|_| chosen.is_some() || reveal_selection) {
-            let row = layout.photo_row(active);
-            let top = row.top;
-            let bottom = row.top + row.height;
-            let id = ui.make_persistent_id(egui::Id::new("organizer items"));
-            let offset = egui::scroll_area::State::load(ui.ctx(), id)
-                .unwrap_or_default()
-                .offset
-                .y;
-            let viewport = ui.available_height();
-            let offset = if top < offset {
-                top
-            } else if bottom > offset + viewport {
-                (bottom - viewport).max(0.)
-            } else {
-                offset
-            };
-            scroll = scroll.vertical_scroll_offset(offset);
+        let scroll = if list {
+            egui::ScrollArea::both()
+        } else {
+            egui::ScrollArea::vertical()
         }
+        .id_salt("organizer items")
+        .animated(false);
+        let reveal_selection = std::mem::take(&mut self.reveal_selection);
+        let reveal = active.filter(|_| chosen.is_some() || reveal_selection);
         let highlighted = self.highlighted.clone();
         scroll.show_viewport(ui, |ui, viewport| {
-            ui.set_height(layout.height);
+            ui.set_height(layout.height + header_height);
+            ui.set_width(width);
             let origin = ui.max_rect().min;
+            if list {
+                self.list_header(
+                    ui,
+                    egui::Rect::from_min_size(origin, egui::vec2(width, header_height)),
+                );
+            }
+            let origin = origin + egui::vec2(0., header_height);
+            if let Some(index) = reveal {
+                let row = layout.photo_row(index);
+                let top = if index == 0 { -header_height } else { row.top };
+                ui.scroll_to_rect(
+                    egui::Rect::from_min_max(
+                        origin + egui::vec2(viewport.left(), top),
+                        origin + egui::vec2(viewport.right(), row.top + row.height),
+                    ),
+                    None,
+                );
+            }
+            if files.is_empty() {
+                ui.weak("No matching images");
+            }
             let visible = layout
-                .visible(viewport.top(), viewport.bottom())
+                .visible(
+                    viewport.top() - header_height,
+                    viewport.bottom() - header_height,
+                )
                 .iter()
                 .filter_map(|row| {
                     if let folders::Content::Photos(range) = &row.content {
@@ -690,8 +733,11 @@ impl Browser {
                 })
                 .flat_map(|range| files[range].iter().cloned())
                 .collect();
-            self.schedule_thumbnails(visible, selected);
-            for row in layout.visible(viewport.top(), viewport.bottom()) {
+            self.schedule_thumbnails(visible);
+            for row in layout.visible(
+                viewport.top() - header_height,
+                viewport.bottom() - header_height,
+            ) {
                 let rect = egui::Rect::from_min_size(
                     origin + egui::vec2(0., row.top),
                     egui::vec2(width, row.height),
@@ -718,18 +764,41 @@ impl Browser {
                             }
                             return;
                         };
-                        if icons {
-                            let tile_width = (width
-                                - (columns - 1) as f32 * ui.spacing().item_spacing.x)
-                                / columns as f32;
+                        if list {
+                            let path = &files[range.start];
+                            if self
+                                .list_item(
+                                    ui,
+                                    path,
+                                    highlighted.contains(path),
+                                    selected == Some(path.as_path()),
+                                    egui::vec2(width, row.height),
+                                )
+                                .clicked()
+                                && !self.review_clicked
+                            {
+                                self.highlight(path, &files, ui.input(|input| input.modifiers));
+                                if self.highlighted.contains(path) {
+                                    chosen = Some(Selection {
+                                        path: path.clone(),
+                                        preserve_viewport: false,
+                                    });
+                                }
+                            }
+                        } else {
                             ui.horizontal(|ui| {
+                                if icons {
+                                    ui.spacing_mut().item_spacing.x = 0.;
+                                }
                                 for path in &files[range.clone()] {
                                     if self
                                         .tile(
                                             ui,
                                             path,
                                             highlighted.contains(path),
-                                            egui::vec2(tile_width, GRID_TILE_HEIGHT),
+                                            selected == Some(path.as_path()),
+                                            egui::vec2(tile_width, row.height),
+                                            icons,
                                         )
                                         .clicked()
                                         && !self.review_clicked
@@ -748,62 +817,6 @@ impl Browser {
                                     }
                                 }
                             });
-                        } else {
-                            let path = files[range.start].clone();
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(width, LIST_ROW_HEIGHT),
-                                egui::Sense::CLICK,
-                            );
-                            crate::widgets::paint(ui, &response, highlighted.contains(&path));
-                            if ui.is_rect_visible(rect) {
-                                if let Some(thumb) = self.thumbnail(&path) {
-                                    let size = egui::vec2(
-                                        thumb.native_extent[0] as f32,
-                                        thumb.native_extent[1] as f32,
-                                    );
-                                    let factor = (32. / size.x).min(32. / size.y);
-                                    ui.painter().image(
-                                        thumb.texture.id(),
-                                        egui::Rect::from_center_size(
-                                            egui::pos2(rect.left() + 21., rect.center().y),
-                                            size * factor,
-                                        ),
-                                        egui::Rect::from_min_max(
-                                            egui::Pos2::ZERO,
-                                            egui::pos2(1., 1.),
-                                        ),
-                                        egui::Color32::WHITE,
-                                    );
-                                }
-                                let caption = egui::Rect::from_min_max(
-                                    egui::pos2(rect.left() + 45., rect.top()),
-                                    egui::pos2(rect.right() - STATUS_GUTTER, rect.bottom()),
-                                );
-                                let text = self.review_control(ui, &path, caption);
-                                ui.painter().with_clip_rect(text).text(
-                                    egui::pos2(text.left(), text.center().y),
-                                    egui::Align2::LEFT_CENTER,
-                                    path.file_stem().unwrap_or_default().to_string_lossy(),
-                                    egui::FontId::proportional(CAPTION_FONT_SIZE),
-                                    egui::Color32::LIGHT_GRAY,
-                                );
-                            }
-                            self.cache_badge(
-                                ui,
-                                &path,
-                                rect.right_center() + egui::vec2(-STATUS_INSET, 0.),
-                            );
-                            if response.on_hover_text(self.file_help(&path)).clicked()
-                                && !self.review_clicked
-                            {
-                                self.highlight(&path, &files, ui.input(|input| input.modifiers));
-                                if self.highlighted.contains(&path) {
-                                    chosen = Some(Selection {
-                                        path,
-                                        preserve_viewport: false,
-                                    });
-                                }
-                            }
                         }
                     },
                 );
@@ -841,9 +854,7 @@ impl Browser {
     }
 }
 fn icon_columns(width: f32) -> usize {
-    ((width + GRID_REFLOW_GAP) / (GRID_REFLOW_TILE_WIDTH + GRID_REFLOW_GAP))
-        .floor()
-        .max(1.) as usize
+    (width / GRID_REFLOW_TILE_WIDTH).floor().max(1.) as usize
 }
 #[cfg(test)]
 #[path = "browser_test.rs"]
@@ -902,15 +913,42 @@ mod tests {
     fn larger_previews_are_bounded_independently_of_thumbnails() {
         let context = eframe::egui::Context::default();
         let mut browser = super::Browser::new(context.clone());
-        for name in ["one.x3f", "two.x3f", "three.x3f"] {
-            browser.insert(&context, name.into(), prepared([128; 3], [16, 8]));
+        for index in 0..9 {
+            browser.insert(
+                &context,
+                format!("{index}.x3f").into(),
+                prepared([128; 3], [16, 8]),
+            );
         }
-        assert_eq!(browser.previews.len(), 2);
-        assert_eq!(browser.cache.len(), 3);
-        assert!(!browser
-            .previews
-            .contains_key(std::path::Path::new("one.x3f")));
-        assert!(browser.thumbnail(std::path::Path::new("one.x3f")).is_some());
+        assert_eq!(browser.previews.len(), super::PREVIEW_CACHE_ENTRIES);
+        assert_eq!(browser.cache.len(), 9);
+        assert!(!browser.previews.contains_key(std::path::Path::new("0.x3f")));
+        assert!(browser.thumbnail(std::path::Path::new("0.x3f")).is_some());
+    }
+    #[test]
+    fn sidebar_and_comparison_share_preview_retention_until_both_finish_drawing() {
+        let context = eframe::egui::Context::default();
+        let mut browser = super::Browser::new(context.clone());
+        let sidebar = std::path::PathBuf::from("sidebar.x3f");
+        let comparison = std::path::PathBuf::from("comparison.x3f");
+        browser.files = vec![sidebar.clone(), comparison.clone()];
+        for path in &browser.files.clone() {
+            let mut image = prepared([128; 3], [16, 8]);
+            image.preview = None;
+            browser.insert(&context, path.clone(), image);
+            browser.pending_previews.insert(path.clone());
+        }
+
+        browser.preview(&comparison);
+        browser.schedule_thumbnails(vec![sidebar.clone()]);
+        browser.finish_previews();
+        assert!(browser.pending_previews.contains(&comparison));
+        assert!(browser.pending_previews.contains(&sidebar));
+
+        browser.schedule_thumbnails(vec![sidebar.clone()]);
+        browser.finish_previews();
+        assert!(!browser.pending_previews.contains(&comparison));
+        assert!(browser.pending_previews.contains(&sidebar));
     }
     #[test]
     fn sidebar_preview_lookup_finishes_once_while_the_selected_view_can_retry() {
@@ -933,7 +971,7 @@ mod tests {
         })
         .unwrap();
         browser.receive(&context);
-        browser.schedule_thumbnails(vec![path.clone()], None);
+        browser.schedule_thumbnails(vec![path.clone()]);
         assert!(browser.pending_previews.is_empty());
         assert!(browser.preview(&path).is_some());
         assert!(browser.pending_previews.contains(&path));
@@ -1039,7 +1077,15 @@ mod tests {
     }
     #[test]
     fn pane_width_reflows_icon_columns() {
-        for (width, count) in [(150., 1), (280., 1), (330., 2), (500., 3)] {
+        for (width, count) in [
+            (100., 1),
+            (199., 1),
+            (200., 2),
+            (299., 2),
+            (300., 3),
+            (499., 4),
+            (500., 5),
+        ] {
             assert_eq!(super::icon_columns(width), count);
         }
     }

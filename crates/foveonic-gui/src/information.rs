@@ -57,8 +57,8 @@ pub fn show(
         egui::Stroke::new(1_f32, egui::Color32::from_gray(40)),
     );
     let color = ui.visuals().text_color();
-    let font = egui::FontId::proportional(11.);
-    let right_font = egui::FontId::monospace(10.);
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let right_font = egui::FontId::monospace(font.size);
     let left_width = ui
         .painter()
         .layout_no_wrap(left.clone(), font.clone(), color)

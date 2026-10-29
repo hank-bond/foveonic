@@ -46,6 +46,11 @@ pub struct Previews {
     sent: Option<(PathBuf, u64)>,
 }
 impl Previews {
+    pub fn invalidate(&mut self) {
+        self.sent = None;
+        self.wanted = None;
+        self.pending.0.lock().unwrap().job = None;
+    }
     pub fn new(rs: egui_wgpu::RenderState, context: egui::Context, cache: Arc<Cache>) -> Self {
         let pending = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let worker = pending.clone();
@@ -121,9 +126,11 @@ impl Previews {
     /// Keep one replaceable pending whole-image job. Diagnostics never become
     /// photographic thumbnails, even when they are displayed in the navigator.
     pub fn update(&mut self, frame: Option<&Frame>, busy: bool, context: &egui::Context) {
-        let Some(frame) =
-            frame.filter(|f| f.output == "final" && f.artifact.settings.preview_region.is_none())
-        else {
+        let Some(frame) = frame.filter(|f| {
+            f.rendition == crate::editor::Rendition::Current
+                && f.output == "final"
+                && f.artifact.settings.preview_region.is_none()
+        }) else {
             self.wanted = None;
             return;
         };

@@ -54,21 +54,17 @@ pub fn processing(
     metadata: Option<&Metadata>,
     capture: Option<&std::collections::BTreeMap<String, String>>,
     order: &mut Vec<EditingSection>,
+    menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
     match capabilities(metadata, capture).map(|c| c.family) {
-        Some(ProcessingFamily::Classic) => classic::show(ui, settings, metadata, order),
-        Some(ProcessingFamily::Merrill) => merrill::show(ui, settings, metadata, order),
-        Some(ProcessingFamily::Quattro) => quattro::show(ui, settings, metadata, capture, order),
+        Some(ProcessingFamily::Classic) => classic::show(ui, settings, metadata, order, menus),
+        Some(ProcessingFamily::Merrill) => merrill::show(ui, settings, metadata, order, menus),
+        Some(ProcessingFamily::Quattro) => {
+            quattro::show(ui, settings, metadata, capture, order, menus)
+        }
         None => {
-            let mut changed = common::presets(
-                ui,
-                settings,
-                metadata,
-                common::PresetControls {
-                    white_balance: true,
-                    color_mode: !settings.is_monochrome(),
-                },
-            );
+            let mut changed = common::white_balance(ui, settings, metadata, true);
+            changed |= common::color_mode(ui, settings, metadata, !settings.is_monochrome());
             ui.separator();
             changed |= common::tone(ui, settings, settings.is_monochrome());
             changed

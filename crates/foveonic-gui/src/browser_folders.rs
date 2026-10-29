@@ -62,7 +62,7 @@ impl Layout {
         files: &[PathBuf],
         root: Option<&Path>,
         columns: usize,
-        photo_height: f32,
+        photo_height: impl Fn(Range<usize>) -> f32,
         folder_height: f32,
         gap: f32,
     ) -> Self {
@@ -87,7 +87,7 @@ impl Layout {
                 result
                     .photo_rows
                     .extend(std::iter::repeat_n(result.rows.len(), last - first));
-                result.push(Content::Photos(first..last), photo_height, gap);
+                result.push(Content::Photos(first..last), photo_height(first..last), gap);
             }
             start = end;
         }

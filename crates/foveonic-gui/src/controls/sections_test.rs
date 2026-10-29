@@ -30,6 +30,11 @@ fn frame(
                             EditingSection::ColorEditor,
                             EditingSection::Noise
                         ],
+                        &mut crate::editor::Menus {
+                            family: None,
+                            library: &Default::default(),
+                            state: &mut Default::default()
+                        },
                         |ui, section| {
                             let start = ui.cursor().min;
                             let rect = egui::Rect::from_min_size(

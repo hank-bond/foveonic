@@ -10,6 +10,24 @@ fn available() -> Availability {
         settings: true,
     }
 }
+#[test]
+fn before_keys_select_camera_and_defaults_without_consuming_other_y_combinations() {
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput {
+        events: vec![
+            key(Key::Y, Modifiers::NONE),
+            key(Key::Y, Modifiers::SHIFT),
+            key(Key::Y, Modifiers::ALT),
+        ],
+        ..Default::default()
+    };
+    let actions = capture(&ctx, &mut input, available());
+    assert_eq!(
+        actions.iter().map(|a| a.action).collect::<Vec<_>>(),
+        [Action::BeforeCamera, Action::BeforeDefaults]
+    );
+    assert_eq!(input.events.len(), 1);
+}
 fn key(key: Key, modifiers: Modifiers) -> egui::Event {
     egui::Event::Key {
         key,

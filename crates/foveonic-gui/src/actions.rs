@@ -11,6 +11,7 @@ use foveonic::{render::Settings, sidecar};
 pub enum Edit {
     CopySettings,
     PasteSettings(String),
+    Before(crate::editor::Rendition),
 }
 
 impl App {
@@ -35,6 +36,12 @@ impl App {
                         self.actions.push(Edit::PasteSettings(text));
                     }
                 }
+                Action::BeforeCamera => self
+                    .actions
+                    .push(Edit::Before(crate::editor::Rendition::Camera)),
+                Action::BeforeDefaults => self
+                    .actions
+                    .push(Edit::Before(crate::editor::Rendition::Defaults)),
             }
         }
         self.browser.set_actions(browser);
@@ -54,6 +61,7 @@ impl App {
         let before = self.settings.clone();
         for edit in std::mem::take(&mut self.actions) {
             match edit {
+                Edit::Before(target) => self.toggle_before(target),
                 Edit::CopySettings => {
                     match sidecar::encode(&self.settings)
                         .and_then(|bytes| Ok(String::from_utf8(bytes)?))

@@ -179,6 +179,14 @@ pub(super) fn prepare_dng_appearance(
     if family != ProcessingFamily::Merrill {
         prepared.baked_color_mode = settings.is_monochrome();
     }
+    if !settings.is_monochrome() && !settings.white_balance_bias.is_neutral() {
+        let space = match family {
+            ProcessingFamily::Classic => crate::color_space::ColorSpace::ProPhotoRgb,
+            ProcessingFamily::Merrill => crate::color_space::ColorSpace::from_metadata(metadata)?,
+            ProcessingFamily::Quattro => crate::color_space::ColorSpace::Srgb,
+        };
+        prepared.white_balance_bias(settings.white_balance_bias.matrix(space))?;
+    }
     if baked_color_editor {
         prepared.sample_notes = Some("Selected pre-tone color reconstruction and Color Editor edits are baked through the inverse linear profile basis. Camera response, exposure and global presentation remain in the profile.");
     }

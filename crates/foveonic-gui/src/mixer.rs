@@ -56,14 +56,6 @@ pub fn show_with_help(
     let before = *mix;
     ui.horizontal(|ui| {
         crate::help::control(ui.label("Color Mix"), help);
-        if crate::help::control(
-            crate::widgets::button(ui, "Reset", false, egui::vec2(52., 20.)),
-            help,
-        )
-        .clicked()
-        {
-            *mix = default;
-        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             crate::sections::editing_handle(ui, crate::preferences::EditingSection::Mix);
         });

@@ -17,6 +17,11 @@ fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Meta
         metadata,
         Some(&capture),
         &mut EditingSection::ALL.to_vec(),
+        &mut crate::editor::Menus {
+            family: None,
+            library: &Default::default(),
+            state: &mut Default::default(),
+        },
     )
 }
 
@@ -233,7 +238,7 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             );
         }
         for label in [
-            "White balance",
+            "Mode",
             "Exposure",
             "Contrast",
             "Shadows",
@@ -544,9 +549,9 @@ fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() 
             assert_eq!(current, initial);
             let labels: &[&str] = if initial.is_monochrome() {
                 assert!(text_centers(&output, "Color mode").is_empty());
-                &["White balance", "Exposure", "Sharpening"]
+                &["Mode", "Exposure", "Sharpening"]
             } else {
-                &["White balance", "Color mode", "Exposure", "Sharpening"]
+                &["Mode", "Color mode", "Exposure", "Sharpening"]
             };
             let positions: Vec<_> = labels
                 .iter()
@@ -556,11 +561,15 @@ fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() 
         }
         let (_, output, _) = frame(None, vec![]);
         let value = if initial.white_balance.is_empty() {
-            "Choose…"
+            "As Shot"
         } else {
             "Sunlight"
         };
-        let point = text_centers(&output, value)[0];
+        let mode_y = text_centers(&output, "Mode")[0].y;
+        let point = text_centers(&output, value)
+            .into_iter()
+            .find(|p| (p.y - mode_y).abs() < 2.)
+            .unwrap();
         for pressed in [true, false] {
             let (changed, output, current) = frame(
                 None,
@@ -632,7 +641,7 @@ fn all_visible_editing_controls_have_explanations() {
     assert!(panel_text_centers(&output, "Sensor").is_empty());
     assert!(panel_text_centers(&output, "Sensor gain").is_empty());
     for key in [
-        "White balance",
+        "Mode",
         "Color mode",
         "Exposure",
         "Saturation",
@@ -670,7 +679,10 @@ fn all_visible_editing_controls_have_explanations() {
             )),
             "control missing: {label}"
         );
-        assert!(help::editing(key).is_some(), "help missing: {label}");
+        assert!(
+            help::editing(if key == "Mode" { "White balance" } else { key }).is_some(),
+            "help missing: {label}"
+        );
     }
     assert_eq!(panel_text_centers(&output, "Highlights").len(), 2);
     assert!(help::editing("Highlight correction").is_some());
@@ -2383,7 +2395,7 @@ fn family_panels_show_supported_controls_without_mutating_edits() {
         assert_eq!(settings, before);
         let classic = metadata.processing_family().unwrap() == ProcessingFamily::Classic;
         for label in [
-            "White balance",
+            "Mode",
             "Color mode",
             "Exposure",
             if classic { "Noise and Detail" } else { "Noise" },
@@ -2515,7 +2527,12 @@ fn capture_properties_select_classic_before_a_render_completes() {
                     &mut settings,
                     None,
                     capture,
-                    &mut EditingSection::ALL.to_vec()
+                    &mut EditingSection::ALL.to_vec(),
+                    &mut crate::editor::Menus {
+                        family: None,
+                        library: &Default::default(),
+                        state: &mut Default::default()
+                    }
                 ));
             });
         });
@@ -2581,12 +2598,7 @@ fn classic_monochrome_keeps_color_modes_and_preserves_disabled_preferences() {
     for hidden in ["Mono noise", "Mono banding", "Sensor mix"] {
         assert!(text_centers(&output, hidden).is_empty());
     }
-    for visible in [
-        "Monochrome",
-        "White balance",
-        "Color mode",
-        "Noise and Detail",
-    ] {
+    for visible in ["Monochrome", "Mode", "Color mode", "Noise and Detail"] {
         assert_eq!(text_centers(&output, visible).len(), 1);
     }
     let wb = text_centers(&output, "Sunlight")[0];
@@ -2644,7 +2656,12 @@ fn unsupported_tiger_geometry_keeps_inspection_without_photographic_controls() {
                 &mut settings,
                 Some(&metadata),
                 Some(&capture),
-                &mut EditingSection::ALL.to_vec()
+                &mut EditingSection::ALL.to_vec(),
+                &mut crate::editor::Menus {
+                    family: None,
+                    library: &Default::default(),
+                    state: &mut Default::default()
+                }
             ));
         });
     });
@@ -2654,7 +2671,7 @@ fn unsupported_tiger_geometry_keeps_inspection_without_photographic_controls() {
         1
     );
     for label in [
-        "White balance",
+        "Mode",
         "Color mode",
         "Exposure",
         "Noise and Detail",
@@ -2695,7 +2712,12 @@ fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
                             &mut settings,
                             None,
                             Some(&capture),
-                            &mut EditingSection::ALL.to_vec()
+                            &mut EditingSection::ALL.to_vec(),
+                            &mut crate::editor::Menus {
+                                family: None,
+                                library: &Default::default(),
+                                state: &mut Default::default()
+                            }
                         ));
                     });
                 },
@@ -2772,14 +2794,19 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
                     &mut settings,
                     Some(&metadata),
                     None,
-                    &mut EditingSection::ALL.to_vec()
+                    &mut EditingSection::ALL.to_vec(),
+                    &mut crate::editor::Menus {
+                        family: None,
+                        library: &Default::default(),
+                        state: &mut Default::default()
+                    }
                 ));
             });
         },
     );
     assert_eq!(settings, before);
     for label in [
-        "White balance",
+        "Mode",
         "Color mode",
         "Exposure",
         "Contrast",
@@ -2821,7 +2848,12 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
                     &mut settings,
                     Some(&metadata),
                     None,
-                    &mut EditingSection::ALL.to_vec()
+                    &mut EditingSection::ALL.to_vec(),
+                    &mut crate::editor::Menus {
+                        family: None,
+                        library: &Default::default(),
+                        state: &mut Default::default()
+                    }
                 ));
             });
         },
@@ -2888,7 +2920,12 @@ fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
                             &mut settings,
                             full,
                             Some(&capture),
-                            &mut EditingSection::ALL.to_vec()
+                            &mut EditingSection::ALL.to_vec(),
+                            &mut crate::editor::Menus {
+                                family: None,
+                                library: &Default::default(),
+                                state: &mut Default::default()
+                            }
                         ));
                     });
                 },

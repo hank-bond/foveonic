@@ -1,7 +1,7 @@
 //! Handles browser highlighting, import checkboxes, and shared hidden-photo visibility.
 
 use super::{Browser, Mark};
-use crate::{preferences::Organizer, toolbar, widgets};
+use crate::widgets;
 use eframe::egui;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,23 @@ const MARK_SIDE: f32 = 16.;
 const EYE_STROKE: f32 = 1.3;
 
 impl Browser {
+    pub(super) fn review_menu(&mut self, response: &egui::Response, path: &Path) {
+        if !self.import_mode {
+            return;
+        }
+        response.context_menu(|ui| {
+            let label = match self.mark(path) {
+                Mark::Pick => "Uncheck for import",
+                Mark::Unmarked => "Check for import",
+                Mark::Hidden | Mark::Imported => "Restore for review",
+            };
+            if ui.button(label).clicked() {
+                self.toggle_mark(path);
+                self.review_clicked = true;
+                ui.close_menu();
+            }
+        });
+    }
     /// Export highlights in browser order, with the viewed photo as an empty-selection fallback.
     pub fn processing_selection(&self, active: Option<&Path>) -> Vec<PathBuf> {
         let paths: Vec<_> = self
@@ -41,75 +58,16 @@ impl Browser {
         })
     }
 
-    pub fn header(
-        &mut self,
-        ui: &mut egui::Ui,
-        organizer: &mut Organizer,
-        enabled: bool,
-        focus: egui::Id,
-    ) {
-        let files = format!("{} files", self.files.len());
-        if !self.import_mode {
-            widgets::control_row(ui, |ui| Self::view_controls(ui, organizer, &files));
-            return;
-        }
-        let (picked, hidden) = self.review_counts();
-        let summary = format!("{picked} picked, {hidden} hidden");
-        let text_width = |label: &str, style| {
-            egui::WidgetText::from(label)
-                .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style)
-                .size()
-                .x
-        };
-        let gap = ui.spacing().item_spacing.x;
-        let views_width = text_width(&files, egui::TextStyle::Body)
-            + ["Icons", "List"]
-                .iter()
-                .map(|label| {
-                    text_width(label, egui::TextStyle::Button) + 2. * widgets::button_padding(ui).x
-                })
-                .sum::<f32>()
-            + 2. * gap;
-        let review_width = widgets::control_height(ui)
-            + gap
-            + text_width(&summary, egui::TextStyle::Body)
-            + 2. * f32::from(widgets::BUTTON_GROUP_MARGIN);
-        let divider_width = text_width("|", egui::TextStyle::Body);
-        ui.add_space(ui.spacing().item_spacing.y);
-        if views_width + review_width + divider_width + 2. * gap <= ui.available_width() {
-            toolbar::row(ui, |ui| {
-                Self::view_controls(ui, organizer, &files);
-                ui.weak("|");
-                self.review_summary(ui, &summary, enabled, focus);
-            });
-        } else {
-            widgets::centered_control_row(ui, |ui| Self::view_controls(ui, organizer, &files));
-            self.review_summary(ui, &summary, enabled, focus);
-        }
-    }
-
-    fn view_controls(ui: &mut egui::Ui, organizer: &mut Organizer, files: &str) {
-        ui.label(files);
-        widgets::selectable_value(ui, organizer, Organizer::Icons, "Icons");
-        widgets::selectable_value(ui, organizer, Organizer::List, "List");
-    }
-
-    fn review_summary(&mut self, ui: &mut egui::Ui, summary: &str, enabled: bool, focus: egui::Id) {
-        widgets::button_group(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(enabled, |ui| {
-                    self.visibility_button(ui, focus);
-                });
-                ui.label(summary);
-            });
-        });
-    }
-
     pub fn refresh_filter(&mut self) {
         let excluded = self
             .files
             .iter()
-            .filter(|path| self.import_mode && self.hide_reviewed && self.mark(path).hidden())
+            .filter(|path| {
+                (self.import_mode && self.hide_reviewed && self.mark(path).hidden())
+                    || !self
+                        .filter
+                        .matches(path, self.root.as_deref(), self.records.get(*path))
+            })
             .cloned()
             .collect();
         if self.excluded != excluded {

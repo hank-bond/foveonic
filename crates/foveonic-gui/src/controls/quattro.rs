@@ -13,6 +13,7 @@ pub(super) fn show(
     metadata: Option<&Metadata>,
     capture: Option<&BTreeMap<String, String>>,
     order: &mut Vec<EditingSection>,
+    menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
     let early = capture
         .filter(|_| metadata.is_none())
@@ -29,18 +30,16 @@ pub(super) fn show(
         let defaults = capabilities
             .editing_defaults(source, settings.rendering)
             .unwrap_or_default();
-        changed |= common::presets(
+        changed |= common::color_mode(
             ui,
             settings,
             metadata,
-            common::PresetControls {
-                white_balance: capabilities.white_balance_active(settings),
-                color_mode: capabilities.color_mode_active(settings),
-            },
+            capabilities.color_mode_active(settings),
         );
         let available = if mono {
             &[
                 EditingSection::Mix,
+                EditingSection::WhiteBalance,
                 EditingSection::Tone,
                 EditingSection::ColorEditor,
                 EditingSection::Noise,
@@ -49,6 +48,7 @@ pub(super) fn show(
             ][..]
         } else {
             &[
+                EditingSection::WhiteBalance,
                 EditingSection::Tone,
                 EditingSection::ColorEditor,
                 EditingSection::Noise,
@@ -56,22 +56,32 @@ pub(super) fn show(
                 EditingSection::Corrections,
             ][..]
         };
-        changed |= super::sections::show(ui, order, available, |ui, section| match section {
-            EditingSection::Mix => crate::mixer::show_with_help(
-                ui,
-                &mut settings.monochrome.mix,
-                defaults.monochrome.mix,
-                "RGB Mix",
-            ),
-            EditingSection::Tone => common::tone_with_exposure_range(ui, settings, mono, -2. ..=2.),
-            EditingSection::ColorEditor => super::color_editor::show(ui, settings),
-            EditingSection::Noise => noise_and_detail(ui, settings, &defaults, capabilities),
-            EditingSection::Sharpening => {
-                common::sharpening_with_range(ui, settings, Some(source), -2. ..=2.)
-            }
-            EditingSection::Corrections => corrections(ui, settings, &defaults),
-            _ => false,
-        });
+        changed |=
+            super::sections::show(ui, order, available, menus, |ui, section| match section {
+                EditingSection::WhiteBalance => common::white_balance(
+                    ui,
+                    settings,
+                    metadata,
+                    foveonic::render::ControlCapabilities::from_family(ProcessingFamily::Quattro)
+                        .white_balance_active(settings),
+                ),
+                EditingSection::Mix => crate::mixer::show_with_help(
+                    ui,
+                    &mut settings.monochrome.mix,
+                    defaults.monochrome.mix,
+                    "RGB Mix",
+                ),
+                EditingSection::Tone => {
+                    common::tone_with_exposure_range(ui, settings, mono, -2. ..=2.)
+                }
+                EditingSection::ColorEditor => super::color_editor::show(ui, settings),
+                EditingSection::Noise => noise_and_detail(ui, settings, &defaults, capabilities),
+                EditingSection::Sharpening => {
+                    common::sharpening_with_range(ui, settings, Some(source), -2. ..=2.)
+                }
+                EditingSection::Corrections => corrections(ui, settings, &defaults),
+                _ => false,
+            });
         return changed;
     } else {
         ui.label("Rendering for this camera is not available yet.");

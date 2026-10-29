@@ -189,6 +189,10 @@ pub enum Operation {
         space: ColorSpace,
         data: DataType,
     },
+    LinearWhiteBalance {
+        rows: [[f32; 4]; 3],
+        space: ColorSpace,
+    },
     TransferLinearGain {
         data: DataType,
         space: ColorSpace,
@@ -240,6 +244,7 @@ impl Operation {
                 .slice(format!("{data:?}").as_bytes())
                 .slice(output.as_bytes()),
             Self::LinearBasis { rows, .. } => Key::pod(rows),
+            Self::LinearWhiteBalance { rows, .. } => Key::pod(rows),
             Self::LinearCodeBase => Key::default(),
             Self::LinearCodeRgb { white, .. } => Key::default().with(white),
             Self::BoxContrast(p) => p.key(),
@@ -475,6 +480,7 @@ impl Operation {
             Self::MonoTexture(_) => "submit monochrome texture",
             Self::ImageAlias { .. } => "retain image alias",
             Self::LinearBasis { .. } => "bake linear color edits",
+            Self::LinearWhiteBalance { .. } => "white balance bias",
             Self::TransferLinearGain { .. } => "bake linear brightness edits",
             Self::PhotographicTone { .. } => "finish.tone",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",
@@ -678,6 +684,7 @@ impl Operation {
             }
             Self::MonoTexture(_) => (vec![Monochrome], Monochrome),
             Self::LinearBasis { data, space, .. } => (vec![LinearRgb(*space)], *data),
+            Self::LinearWhiteBalance { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::TransferLinearGain { data, space } => {
                 (vec![*data, LinearRgb(*space), LinearRgb(*space)], *data)
             }
@@ -940,6 +947,7 @@ impl Operation {
             Self::MonoTexture(_) => "mono.texture",
             Self::ImageAlias { output, .. } => output,
             Self::LinearBasis { .. } => "dng.linear-color-edits",
+            Self::LinearWhiteBalance { .. } => "white-balance.rgb",
             Self::TransferLinearGain { .. } => "dng.linear-edits",
             Self::PhotographicTone { .. } => "finish.tone",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",

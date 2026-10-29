@@ -15,7 +15,7 @@ mod tests;
 
 #[derive(Default)]
 struct Pending {
-    load: Option<(u64, PathBuf)>,
+    load: Option<(u64, PathBuf, foveonic::render::RecipeDefaults)>,
     saves: BTreeMap<PathBuf, Settings>,
     stop: bool,
 }
@@ -40,7 +40,12 @@ impl Store {
         let (sender, replies) = mpsc::channel();
         let thread = std::thread::spawn(move || loop {
             enum Job {
-                Load(u64, PathBuf, Option<Settings>),
+                Load(
+                    u64,
+                    PathBuf,
+                    Option<Settings>,
+                    foveonic::render::RecipeDefaults,
+                ),
                 Save(PathBuf, Settings),
             }
             let job = {
@@ -49,9 +54,9 @@ impl Store {
                 while state.load.is_none() && state.saves.is_empty() && !state.stop {
                     state = wake.wait(state).unwrap();
                 }
-                if let Some((generation, path)) = state.load.take() {
+                if let Some((generation, path, defaults)) = state.load.take() {
                     let recent = state.saves.get(&path).cloned();
-                    Job::Load(generation, path, recent)
+                    Job::Load(generation, path, recent, defaults)
                 } else if let Some((path, settings)) = state.saves.pop_first() {
                     Job::Save(path, settings)
                 } else {
@@ -59,7 +64,7 @@ impl Store {
                 }
             };
             let reply = match job {
-                Job::Load(generation, path, recent) => {
+                Job::Load(generation, path, recent, defaults) => {
                     let cached = cache.selection(&path);
                     let result = if enabled {
                         (if let Some(cached) = &cached {
@@ -82,7 +87,13 @@ impl Store {
                             .map(Ok)
                             .unwrap_or_else(|| cache.capture_properties(&path))
                             .ok()
-                            .and_then(|properties| capture_defaults(properties).ok())
+                            .and_then(|properties| {
+                                if defaults.is_empty() {
+                                    capture_defaults(properties).ok()
+                                } else {
+                                    defaults.from_properties(&properties).ok()
+                                }
+                            })
                             .unwrap_or_default()
                     };
                     Reply::Loaded(generation, path, result, Box::new(fresh))
@@ -107,9 +118,9 @@ impl Store {
             thread: Some(thread),
         }
     }
-    fn load(&self, generation: u64, path: PathBuf) {
+    fn load(&self, generation: u64, path: PathBuf, defaults: foveonic::render::RecipeDefaults) {
         let (lock, wake) = &*self.pending;
-        lock.lock().unwrap().load = Some((generation, path));
+        lock.lock().unwrap().load = Some((generation, path, defaults));
         wake.notify_one();
     }
     fn save(&self, path: PathBuf, settings: Settings) {
@@ -135,6 +146,7 @@ impl Drop for Store {
 }
 
 pub struct Session {
+    defaults: foveonic::render::RecipeDefaults,
     store: Store,
     enabled: bool,
     generation: u64,
@@ -155,6 +167,7 @@ impl Session {
         cache: Arc<foveonic::decode_cache::Cache>,
     ) -> Self {
         Self {
+            defaults: Default::default(),
             store: Store::new(ctx, enabled, cache),
             enabled,
             generation: 0,
@@ -176,7 +189,8 @@ impl Session {
         self.writable = false;
         self.dirty = false;
         self.last_queued = None;
-        self.store.load(self.generation, path);
+        self.store
+            .load(self.generation, path, self.defaults.clone());
     }
     pub fn clear(&mut self) {
         self.generation += 1;
@@ -189,6 +203,10 @@ impl Session {
     }
     pub fn ready(&self) -> bool {
         self.ready
+    }
+
+    pub fn set_defaults(&mut self, defaults: &foveonic::render::RecipeDefaults) {
+        self.defaults = defaults.clone();
     }
 
     /// Import review retains requested edits until another folder is opened.
@@ -336,13 +354,14 @@ impl Session {
 pub(crate) fn capture_defaults(
     properties: BTreeMap<String, String>,
 ) -> foveonic::source::Result<Settings> {
-    let metadata = crate::capture::processing_metadata(properties);
-    let mut settings = Settings::default();
-    if let Ok(capabilities) = foveonic::render::ControlCapabilities::from_metadata(&metadata) {
-        settings.rendering = capabilities.default_rendering(&metadata)?;
-        capabilities.apply_capture_defaults(&mut settings, &metadata)?;
+    if properties
+        .get("CAMMODEL")
+        .and_then(|model| foveonic::source::ProcessingFamily::from_camera_model(model))
+        .is_none()
+    {
+        return Ok(Settings::default());
     }
-    Ok(settings)
+    foveonic::render::camera_settings_from_properties(properties)
 }
 
 /// Restored edits must not be replaced by per-photo defaults. Only explicit

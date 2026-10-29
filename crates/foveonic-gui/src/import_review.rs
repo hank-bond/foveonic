@@ -13,6 +13,7 @@ const STATUS_POLL: std::time::Duration = std::time::Duration::from_millis(150);
 const ERROR_PANEL_HEIGHT: f32 = 120.;
 
 pub struct Review {
+    defaults: foveonic::render::RecipeDefaults,
     scan_destination: Option<PathBuf>,
     generation: u64,
     scanning: bool,
@@ -25,6 +26,7 @@ pub struct Review {
 impl Review {
     pub fn new(engine: Engine, cache: Arc<Cache>, context: egui::Context) -> Self {
         Self {
+            defaults: Default::default(),
             scan_destination: None,
             generation: 0,
             scanning: false,
@@ -45,11 +47,28 @@ impl Review {
         browser.recorded_marks.clear();
         if browser.import_mode {
             self.worker.scan(batch::Scan {
+                defaults: self.defaults.clone(),
                 generation: self.generation,
                 destination: self.scan_destination.clone(),
                 files: browser.files.clone(),
             });
         }
+    }
+
+    pub fn set_defaults(
+        &mut self,
+        defaults: &foveonic::render::RecipeDefaults,
+        browser: &mut Browser,
+        destination: Option<&std::path::Path>,
+    ) {
+        if &self.defaults == defaults {
+            return;
+        }
+        self.defaults = defaults.clone();
+        // A default recipe changes future processing snapshots, not import history.
+        let recorded = browser.recorded_marks.clone();
+        self.rescan(browser, destination);
+        browser.recorded_marks = recorded;
     }
     /// Prepare only the highlighted Browse photos, away from the UI thread.
     /// Recipes are ready before Process is enabled so later edits cannot alter a submitted job.
@@ -73,6 +92,7 @@ impl Review {
         self.errors.clear();
         if self.scanning {
             self.worker.scan(batch::Scan {
+                defaults: self.defaults.clone(),
                 generation: self.generation,
                 destination: None,
                 files,
@@ -206,6 +226,7 @@ impl Review {
                         path: path.clone(),
                         identity: source.identity.clone(),
                         settings: settings.clone(),
+                        rating: browser.changed_rating(path).unwrap_or(source.rating),
                     }),
                     Err(error) => self.errors.push(format!("{}: {error}", path.display())),
                 }

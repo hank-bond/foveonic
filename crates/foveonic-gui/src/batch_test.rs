@@ -18,6 +18,7 @@ fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_err
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.exposure = 0.75;
     let mut photo = Photo {
+        rating: foveonic::review::Rating::try_from(4).unwrap(),
         identity: Identity::read(&path).unwrap(),
         path: path.clone(),
         settings: settings.clone(),
@@ -44,6 +45,13 @@ fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_err
     assert!(error.to_string().contains("history could not be saved"));
     assert_eq!(fs::read(&original).unwrap(), fs::read(&path).unwrap());
     assert_eq!(Identity::read(&original).unwrap(), photo.identity);
+    assert_eq!(
+        foveonic::review::load(destination.path())
+            .unwrap()
+            .get(std::path::Path::new(original.file_name().unwrap()))
+            .copied(),
+        Some(photo.rating)
+    );
     assert_eq!(
         foveonic::sidecar::load(&original).unwrap(),
         Some(settings.clone())
@@ -172,6 +180,7 @@ fn scanning_restores_destination_decisions_without_decoding_originals() {
     history.save(destination.path()).unwrap();
     let scan = scan_files(
         Scan {
+            defaults: Default::default(),
             generation: 7,
             destination: Some(destination.path().to_owned()),
             files: vec![path.clone()],
@@ -206,6 +215,7 @@ fn history_matching_and_hidden_identity_do_not_require_a_readable_editing_recipe
     history.save(destination.path()).unwrap();
     let scan = scan_files(
         Scan {
+            defaults: Default::default(),
             generation: 1,
             destination: Some(destination.path().to_owned()),
             files: vec![path.clone()],
@@ -243,6 +253,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     let failed = directory.path().join("missing.x3f");
     fs::write(&failed, b"will disappear").unwrap();
     let missing = Photo {
+        rating: Default::default(),
         path: failed.clone(),
         identity: Identity::read(&failed).unwrap(),
         settings: frozen.clone(),
@@ -252,6 +263,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         destination: destination.clone(),
         photos: vec![
             Photo {
+                rating: Default::default(),
                 path: path.clone(),
                 identity: identity.clone(),
                 settings: requested.clone()
@@ -332,6 +344,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         &engine,
         &cache,
         &Photo {
+            rating: Default::default(),
             path: path.clone(),
             identity: identity.clone(),
             settings: frozen.clone(),
@@ -369,6 +382,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         &engine,
         &cache,
         &Photo {
+            rating: Default::default(),
             path: path.clone(),
             identity,
             settings: frozen,

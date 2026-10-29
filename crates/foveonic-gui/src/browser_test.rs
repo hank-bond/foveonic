@@ -15,11 +15,225 @@ struct Fixture {
     number: f64,
     preserve_viewport: Option<bool>,
 }
+
+#[test]
+fn star_keys_rate_highlighted_photos_without_loading_and_respect_text_fields() {
+    for mode in [Organizer::Icons, Organizer::List, Organizer::Large] {
+        let mut fixture = Fixture::new(mode);
+        fixture.browser.import_mode = true;
+        fixture.select_first();
+        fixture.key(egui::Key::Num4, false);
+        let first = fixture.selected.clone().unwrap();
+        assert_eq!(fixture.browser.rating(&first).stars(), 4);
+        fixture.frame(vec![egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }]);
+        fixture.key(egui::Key::Num2, false);
+        assert!(fixture
+            .browser
+            .files
+            .iter()
+            .all(|path| fixture.browser.rating(path).stars() == 2));
+        assert_eq!(fixture.selected.as_ref(), Some(&first));
+        let frame = fixture.frame(vec![]);
+        fixture.click(frame.field.center());
+        fixture.key(egui::Key::Num5, false);
+        assert_eq!(fixture.browser.rating(&first).stars(), 2);
+        fixture.click(frame.outside.center());
+        fixture.key(egui::Key::Num0, false);
+        assert!(fixture
+            .browser
+            .files
+            .iter()
+            .all(|path| fixture.browser.rating(path).stars() == 0));
+        for (key, stars) in [
+            (egui::Key::Num0, 0),
+            (egui::Key::Num1, 1),
+            (egui::Key::Num2, 2),
+            (egui::Key::Num3, 3),
+            (egui::Key::Num4, 4),
+            (egui::Key::Num5, 5),
+        ] {
+            fixture.key(key, false);
+            assert!(fixture
+                .browser
+                .files
+                .iter()
+                .all(|path| fixture.browser.rating(path).stars() == stars));
+        }
+        assert!(!fixture.browser.show_ratings);
+    }
+}
+
+#[test]
+fn ratings_toggle_is_initially_off_and_preserves_reviews_and_selection_in_every_view() {
+    for mode in [Organizer::Icons, Organizer::List, Organizer::Large] {
+        let mut fixture = Fixture::new(mode);
+        fixture.browser.import_mode = true;
+        let frame = fixture.select_first();
+        assert!(!fixture.browser.show_ratings);
+        assert!(frame.stars.is_empty());
+        if mode == Organizer::List {
+            assert!(!frame.labels.iter().any(|label| label == "Rating"));
+        }
+        fixture.key(egui::Key::Num3, false);
+        let selected = fixture.selected.clone().unwrap();
+        let frame = fixture.frame(vec![]);
+        let visible = fixture.click(frame.controls.ratings.rect.center());
+        assert!(fixture.browser.show_ratings);
+        assert_eq!(visible.stars.is_empty(), mode == Organizer::Icons);
+        assert_eq!(fixture.selected.as_ref(), Some(&selected));
+        if mode == Organizer::List {
+            assert!(visible.labels.iter().any(|label| label == "Rating"));
+        }
+        let hidden = fixture.click(visible.controls.ratings.rect.center());
+        assert!(!fixture.browser.show_ratings);
+        assert!(hidden.stars.is_empty());
+        assert_eq!(fixture.selected.as_ref(), Some(&selected));
+        assert_eq!(fixture.browser.rating(&selected).stars(), 3);
+        assert!(fixture.browser.marks.is_empty());
+    }
+}
+
+#[test]
+fn clicking_stars_rates_the_highlighted_set_without_reopening_or_import_picking() {
+    for mode in [Organizer::List, Organizer::Large] {
+        let mut fixture = Fixture::new(mode);
+        fixture.browser.show_ratings = true;
+        fixture.browser.import_mode = true;
+        fixture.select_first();
+        let frame = fixture.frame(vec![egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::SHIFT,
+        }]);
+        let viewed = fixture.selected.clone();
+        assert_eq!(fixture.browser.highlighted.len(), 2);
+        fixture.click(frame.stars[3]);
+        assert_eq!(fixture.selected, viewed);
+        assert!(fixture
+            .browser
+            .processing_selection(viewed.as_deref())
+            .iter()
+            .all(|path| fixture.browser.rating(path).stars() == 4));
+        assert!(fixture.browser.marks.is_empty());
+        let frame = fixture.frame(vec![]);
+        fixture.click(frame.stars[3]);
+        assert!(fixture
+            .browser
+            .processing_selection(viewed.as_deref())
+            .iter()
+            .all(|path| fixture.browser.rating(path).stars() == 0));
+        assert_eq!(fixture.selected, viewed);
+    }
+}
+
+#[test]
+fn query_order_is_shared_by_processing_navigation_and_prefetch_without_reopening_the_view() {
+    let mut fixture = Fixture::new(Organizer::Icons);
+    fixture.browser.import_mode = true;
+    fixture.select_first();
+    let active = fixture.selected.clone().unwrap();
+    let second = fixture.browser.files[1].clone();
+    fixture.browser.rate(
+        std::slice::from_ref(&second),
+        foveonic::review::Rating::try_from(5).unwrap(),
+    );
+    fixture.browser.filter.rating = query::RatingFilter::AtLeast(3);
+    fixture.browser.sort = Sort {
+        field: Field::Rating,
+        reverse: true,
+    };
+    fixture.browser.query_dirty = true;
+    fixture.frame(vec![]);
+    assert_eq!(fixture.selected.as_ref(), Some(&active));
+    assert!(fixture
+        .browser
+        .processing_selection(Some(&active))
+        .is_empty());
+    let order = fixture.browser.take_prefetch_order(Some(&active)).unwrap();
+    assert_eq!(order, [second.clone(), active]);
+    fixture.key(egui::Key::ArrowRight, false);
+    assert_eq!(fixture.selected.as_ref(), Some(&second));
+    assert_eq!(
+        fixture.browser.processing_selection(Some(&second)),
+        [second]
+    );
+}
+
+#[test]
+fn large_view_rows_follow_oriented_dimensions_instead_of_stretching_images() {
+    let mut fixture = Fixture::new(Organizer::Large);
+    let path = fixture.browser.files[0].clone();
+    fixture
+        .browser
+        .records
+        .entry(path.clone())
+        .or_default()
+        .extent = Some([200, 300]);
+    let portrait = fixture.browser.large_height(&path, 312.);
+    fixture.browser.records.get_mut(&path).unwrap().extent = Some([300, 200]);
+    let landscape = fixture.browser.large_height(&path, 312.);
+    assert_eq!(portrait - landscape, 250.);
+}
+
+#[test]
+fn responsive_header_stays_inside_the_pane_with_long_queries_and_import_counts() {
+    for width in [220., 350., 600.] {
+        for import in [false, true] {
+            let context = egui::Context::default();
+            crate::widgets::install_style(&context);
+            let mut browser = Browser::new(context.clone());
+            browser.files = (0..120)
+                .map(|index| PathBuf::from(format!("photo-{index}.x3f")))
+                .collect();
+            browser.import_mode = import;
+            browser.filter.text =
+                "a long filename query that must scroll within its text field".into();
+            let mut mode = Organizer::Icons;
+            for _ in 0..3 {
+                let _ = context.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000., 600.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::SidePanel::left("browser header bounds")
+                            .exact_width(width)
+                            .show(ctx, |ui| {
+                                let right = ui.max_rect().right();
+                                browser.header(
+                                    ui,
+                                    &mut mode,
+                                    true,
+                                    ui.id().with("organizer focus"),
+                                );
+                                assert!(
+                                    ui.min_rect().right() <= right + 1.,
+                                    "header overflow at width {width}, import {import}: {:?} versus {right}", ui.min_rect()
+                                );
+                            });
+                    },
+                );
+            }
+        }
+    }
+}
 struct ControlFrame {
     button: egui::Response,
     checkbox: egui::Response,
     slider: egui::Response,
     number: egui::Response,
+    ratings: egui::Response,
 }
 struct Frame {
     focus: egui::Id,
@@ -28,9 +242,12 @@ struct Frame {
     field: egui::Rect,
     offset: f32,
     markers: Vec<egui::Pos2>,
+    stars: Vec<egui::Pos2>,
     eye: Option<egui::Rect>,
     controls: ControlFrame,
     labels: Vec<String>,
+    green_border: bool,
+    restore: Option<egui::Pos2>,
 }
 impl Fixture {
     fn new(mode: Organizer) -> Self {
@@ -108,11 +325,13 @@ impl Fixture {
                     let slider =
                         ui.add(egui::Slider::new(&mut self.number, 0.0..=1.0).show_value(false));
                     let number = ui.add(egui::DragValue::new(&mut self.number).speed(0.1));
+                    let ratings = self.browser.ratings_button(ui);
                     controls = Some(ControlFrame {
                         button,
                         checkbox,
                         slider,
                         number,
+                        ratings,
                     });
                 });
             });
@@ -152,13 +371,22 @@ impl Fixture {
                     field,
                     offset,
                     markers: Vec::new(),
+                    stars: Vec::new(),
                     eye,
                     controls: controls.take().unwrap(),
                     labels: Vec::new(),
+                    green_border: false,
+                    restore: None,
                 });
             });
         });
         let mut result = result.unwrap();
+        if self.mode == Organizer::List {
+            result.grid.min.y += super::items::LIST_HEADER;
+            // Layout indices start below the list header. A negative image
+            // offset means part of that header is still visible above them.
+            result.offset -= super::items::LIST_HEADER;
+        }
         result.labels = output
             .shapes
             .iter()
@@ -167,6 +395,15 @@ impl Fixture {
                 _ => None,
             })
             .collect();
+        result.green_border = output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == super::items::PICK_BORDER)
+        });
+        result.restore = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Restore for review" => {
+                Some(text.pos + text.galley.size() / 2.)
+            }
+            _ => None,
+        });
         result.markers = output
             .shapes
             .iter()
@@ -178,6 +415,16 @@ impl Fixture {
                         && result.grid.contains(rect.rect.center()) =>
                 {
                     Some(rect.rect.center())
+                }
+                _ => None,
+            })
+            .collect();
+        result.stars = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if matches!(text.galley.job.text.as_str(), "★" | "·") => {
+                    Some(text.pos + text.galley.size() / 2.)
                 }
                 _ => None,
             })
@@ -244,7 +491,7 @@ fn arrow_geometry_handles_edges_partial_rows_and_empty_folders() {
         let files = (0..count)
             .map(|i| PathBuf::from(format!("{i}.x3f")))
             .collect::<Vec<_>>();
-        let layout = folders::Layout::new(&files, None, columns, GRID_TILE_HEIGHT, 20., 6.);
+        let layout = folders::Layout::new(&files, None, columns, |_| GRID_TILE_HEIGHT, 20., 6.);
         assert_eq!(layout.arrow(current, key), expected);
     }
 }
@@ -331,7 +578,7 @@ fn select_all_and_space_toggle_only_visible_eligible_photos_without_changing_the
 
 #[test]
 fn checkbox_and_eye_clicks_do_not_select_or_reopen_a_photo_and_delete_unchecks_and_advances() {
-    for mode in [Organizer::Icons, Organizer::List] {
+    for mode in [Organizer::List, Organizer::Large] {
         let mut fixture = Fixture::new(mode);
         fixture.browser.import_mode = true;
         let frame = fixture.select_first();
@@ -365,6 +612,45 @@ fn checkbox_and_eye_clicks_do_not_select_or_reopen_a_photo_and_delete_unchecks_a
         assert_eq!(fixture.browser.mark(&first), Mark::Unmarked);
         assert_eq!(fixture.browser.recorded_marks[&first], Mark::Imported);
     }
+}
+
+#[test]
+fn dense_grid_uses_pick_borders_and_can_restore_hidden_photos() {
+    let mut fixture = Fixture::new(Organizer::Icons);
+    fixture.browser.import_mode = true;
+    fixture.browser.show_ratings = true;
+    let frame = fixture.select_first();
+    let first = fixture.selected.clone().unwrap();
+    assert!(frame.stars.is_empty());
+    assert!(frame.markers.is_empty());
+    assert!(!frame.labels.iter().any(|label| label.starts_with("image-")));
+    assert!(!frame.green_border);
+
+    let frame = fixture.key(egui::Key::Space, false);
+    assert_eq!(fixture.browser.mark(&first), Mark::Pick);
+    assert!(frame.green_border);
+    assert_eq!(fixture.selected.as_ref(), Some(&first));
+    fixture.key(egui::Key::Backspace, false);
+    assert_eq!(fixture.browser.mark(&first), Mark::Hidden);
+    let frame = fixture.frame(vec![]);
+    let frame = fixture.click(frame.eye.unwrap().center());
+    let active = fixture.selected.clone();
+    let point = frame.grid.min + egui::vec2(30., 20.);
+    for pressed in [true, false] {
+        fixture.frame(vec![
+            egui::Event::PointerMoved(point),
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+    }
+    let frame = fixture.frame(vec![]);
+    fixture.click(frame.restore.expect("restore action in dense grid menu"));
+    assert_eq!(fixture.browser.mark(&first), Mark::Unmarked);
+    assert_eq!(fixture.selected, active);
 }
 
 #[test]
@@ -469,7 +755,11 @@ fn clicking_an_image_gives_the_whole_organizer_persistent_arrow_focus() {
         let frame = fixture.select_first();
         assert_eq!(fixture.index(), Some(0));
         assert!(fixture.focused(&frame));
-        let stride = if mode == Organizer::Icons { 2 } else { 1 };
+        let stride = if mode == Organizer::Icons {
+            super::icon_columns(frame.grid.width())
+        } else {
+            1
+        };
         for repeat in [false, true, true] {
             let before = fixture.index().unwrap();
             let frame = fixture.key(egui::Key::ArrowDown, repeat);
@@ -516,13 +806,33 @@ fn keyboard_selection_scrolls_beyond_virtualized_rows_and_back() {
         fixture.select_first();
         for _ in 0..60 {
             let frame = fixture.key(egui::Key::ArrowDown, true);
-            let row = fixture.index().unwrap() / if mode == Organizer::Icons { 2 } else { 1 };
-            let height = if mode == Organizer::Icons { 146. } else { 40. };
-            let stride = height + fixture.ctx.style().spacing.item_spacing.y;
+            let columns = if mode == Organizer::Icons {
+                super::icon_columns(frame.grid.width())
+            } else {
+                1
+            };
+            let row = fixture.index().unwrap() / columns;
+            let height = if mode == Organizer::Icons {
+                super::items::dense_height(frame.grid.width() / columns as f32)
+            } else {
+                LIST_ROW_HEIGHT
+            };
+            let stride = height
+                + if mode == Organizer::Icons {
+                    0.
+                } else {
+                    fixture.ctx.style().spacing.item_spacing.y
+                };
             let top = row as f32 * stride;
+            let viewport_height = frame.grid.height()
+                + if mode == Organizer::List {
+                    super::items::LIST_HEADER
+                } else {
+                    0.
+                };
             assert!(top >= frame.offset - 1.);
             assert!(
-                top + height <= frame.offset + frame.grid.height() + 1.,
+                top + height <= frame.offset + viewport_height + 1.,
                 "mode={mode:?} row={row} top={top} height={height} offset={} viewport={}",
                 frame.offset,
                 frame.grid.height()
@@ -531,13 +841,25 @@ fn keyboard_selection_scrolls_beyond_virtualized_rows_and_back() {
         }
         assert_eq!(
             fixture.index(),
-            Some(if mode == Organizer::Icons { 58 } else { 59 })
+            Some(if mode == Organizer::Icons {
+                (59 / super::icon_columns(fixture.frame(vec![]).grid.width()))
+                    * super::icon_columns(fixture.frame(vec![]).grid.width())
+            } else {
+                59
+            })
         );
         for _ in 0..60 {
             fixture.key(egui::Key::ArrowUp, true);
         }
         assert_eq!(fixture.index(), Some(0));
-        assert_eq!(fixture.frame(vec![]).offset, 0.);
+        assert_eq!(
+            fixture.frame(vec![]).offset,
+            if mode == Organizer::List {
+                -super::items::LIST_HEADER
+            } else {
+                0.
+            }
+        );
     }
 }
 
@@ -546,15 +868,15 @@ fn grid_arrows_follow_reflowed_columns_and_list_mode() {
     let mut fixture = Fixture::new(Organizer::Icons);
     fixture.select_first();
     fixture.key(egui::Key::ArrowDown, false);
-    assert_eq!(fixture.index(), Some(2));
+    assert_eq!(fixture.index(), Some(3));
     fixture.width = 520.;
     fixture.frame(vec![]);
     fixture.frame(vec![]);
     fixture.key(egui::Key::ArrowDown, false);
-    assert_eq!(fixture.index(), Some(5));
+    assert_eq!(fixture.index(), Some(8));
     fixture.mode = Organizer::List;
     fixture.key(egui::Key::ArrowDown, false);
-    assert_eq!(fixture.index(), Some(6));
+    assert_eq!(fixture.index(), Some(9));
 }
 
 #[test]
@@ -784,7 +1106,8 @@ fn folder_groups_keep_one_selection_and_keyboard_range_across_directory_boundari
         assert_eq!(fixture.index(), Some(1));
         assert!(frame.labels.iter().any(|label| label == "DCIM/100SIGMA"));
         fixture.key(egui::Key::ArrowRight, false);
-        let frame = fixture.key(egui::Key::ArrowDown, false);
+        fixture.key(egui::Key::ArrowDown, false);
+        let frame = fixture.frame(vec![]);
         assert_eq!(fixture.index(), Some(3));
         assert!(frame.labels.iter().any(|label| label == "DCIM/101SIGMA"));
         fixture.frame(vec![egui::Event::Key {

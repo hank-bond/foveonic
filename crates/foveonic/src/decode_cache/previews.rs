@@ -30,11 +30,17 @@ const PREVIEW_PREFIX_BYTES: u64 = (HEADER_CHECKSUM_OFFSET + size_of::<u32>()) as
 struct Key {
     source: Identity,
     recipe: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_recipe: Option<Vec<u8>>,
 }
 impl Key {
+    fn same_file_recipe(&self, other: &Self) -> bool {
+        self.source == other.source && self.recipe == other.recipe
+    }
     fn read(path: &Path) -> Result<Self> {
         Ok(Self {
             source: Identity::read(path)?,
+            default_recipe: None,
             recipe: sidecar::load(path)?
                 .as_ref()
                 .map(sidecar::encode)
@@ -58,6 +64,25 @@ struct PreviewHeader {
     checksum: u32,
 }
 
+fn default_key(
+    defaults: &crate::render::RecipeDefaults,
+    properties: &std::collections::BTreeMap<String, String>,
+    unedited: bool,
+) -> Result<Option<Vec<u8>>> {
+    if unedited
+        && properties
+            .get("CAMMODEL")
+            .and_then(|model| ProcessingFamily::from_camera_model(model))
+            .is_some_and(|family| defaults.configured(family))
+    {
+        Ok(Some(sidecar::encode(
+            &defaults.from_properties(properties)?,
+        )?))
+    } else {
+        Ok(None)
+    }
+}
+
 pub(super) struct PendingPreview {
     path: PathBuf,
     header: PreviewHeader,
@@ -66,6 +91,7 @@ pub(super) struct PendingPreview {
 
 impl Cache {
     fn preview_key(&self, path: &Path) -> Result<Key> {
+        let defaults = self.control.lock().unwrap().photo_defaults.clone();
         if let Some(selection) = self.selection(path) {
             let source = self
                 .control
@@ -77,6 +103,11 @@ impl Cache {
                 .ok_or("selection invalidated")?;
             return Ok(Key {
                 source,
+                default_recipe: default_key(
+                    &defaults,
+                    &selection.properties,
+                    selection.settings.is_none(),
+                )?,
                 recipe: selection
                     .settings
                     .as_ref()
@@ -84,7 +115,11 @@ impl Cache {
                     .transpose()?,
             });
         }
-        Key::read(path)
+        let mut key = Key::read(path)?;
+        if key.recipe.is_none() && !defaults.is_empty() {
+            key.default_recipe = default_key(&defaults, &self.capture_properties(path)?, true)?;
+        }
+        Ok(key)
     }
     /// Call on a dedicated background thread. Missing, stale,
     /// disabled, or corrupt entries all fall back to the embedded thumbnail.
@@ -138,13 +173,10 @@ impl Cache {
         let key = self.preview_key(path)?;
         let mut expected = match &key.recipe {
             Some(bytes) => sidecar::decode(bytes)?,
-            None => {
-                let mut defaults = crate::render::Settings::default();
-                let capabilities = ControlCapabilities::from_metadata(metadata)?;
-                defaults.rendering = capabilities.default_rendering(metadata)?;
-                capabilities.apply_capture_defaults(&mut defaults, metadata)?;
-                defaults
-            }
+            None => match &key.default_recipe {
+                Some(bytes) => sidecar::decode(bytes)?,
+                None => crate::render::camera_settings(metadata, None)?,
+            },
         };
         let capabilities = ControlCapabilities::from_metadata(metadata)?;
         if expected.white_balance.is_empty() {
@@ -185,6 +217,14 @@ impl Cache {
 }
 
 fn read(path: &Path, key: &Key, settings: &Settings) -> Result<(PreviewHeader, Vec<u8>)> {
+    read_file(path, key, settings, true)
+}
+fn read_file(
+    path: &Path,
+    key: &Key,
+    settings: &Settings,
+    check_defaults: bool,
+) -> Result<(PreviewHeader, Vec<u8>)> {
     let mut file = File::open(path)?;
     let length = file.metadata()?.len();
     if length > MAX_ENCODED || length > settings.max_bytes {
@@ -206,7 +246,9 @@ fn read(path: &Path, key: &Key, settings: &Settings) -> Result<(PreviewHeader, V
         return Err("preview cache metadata checksum mismatch".into());
     }
     let header: PreviewHeader = serde_json::from_slice(&bytes)?;
-    if &header.key != key
+    if header.key.source != key.source
+        || header.key.recipe != key.recipe
+        || (check_defaults && header.rendered && header.key.default_recipe != key.default_recipe)
         || !settings.permits(header.family)
         || header.extent.iter().any(|n| *n == 0 || *n > MAX_SIDE)
         || header.native_extent.contains(&0)
@@ -236,6 +278,7 @@ pub(super) fn prepared(
 ) -> Result<()> {
     let key = Key {
         source: identity,
+        default_recipe: None,
         recipe: recipe.map(sidecar::encode).transpose()?,
     };
     let write = PendingPreview {
@@ -306,17 +349,34 @@ pub(super) fn location(root: &Path, path: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn store(root: &Path, write: PendingPreview, control: &Mutex<Control>) -> Result<()> {
-    let (settings, generation, nearby) = {
+    let (settings, generation, nearby, defaults) = {
         let state = control.lock().unwrap();
         (
             state.settings.clone(),
             state.generation,
             state.nearby.clone(),
+            state.photo_defaults.clone(),
         )
     };
+    if write.header.rendered && write.header.key.recipe.is_none() {
+        let expected = if defaults.configured(write.header.family) {
+            let properties = super::selection::read(root, &write.header.key.source, &settings)
+                .map(|selection| selection.properties)
+                .or_else(|_| crate::source::read_capture_properties(&write.path))?;
+            default_key(&defaults, &properties, true)?
+        } else {
+            None
+        };
+        if expected != write.header.key.default_recipe {
+            return Ok(());
+        }
+    }
     write_checked(root, write, &settings, &nearby, &|| {
         let state = control.lock().unwrap();
-        !state.clear && state.generation == generation && state.settings == settings
+        !state.clear
+            && state.generation == generation
+            && state.settings == settings
+            && state.photo_defaults == defaults
     })
 }
 
@@ -331,12 +391,13 @@ fn write_checked(
         return Ok(());
     }
     crate::background::checkpoint_or_cancel()?;
-    if Key::read(&write.path)? != write.header.key {
+    if !Key::read(&write.path)?.same_file_recipe(&write.header.key) {
         return Ok(());
     }
     let destination = write.header.key.location(root);
     if !write.header.rendered
-        && read(&destination, &write.header.key, settings).is_ok_and(|(h, _)| h.rendered)
+        && read_file(&destination, &write.header.key, settings, false)
+            .is_ok_and(|(h, _)| h.rendered)
     {
         return Ok(());
     }
@@ -397,7 +458,7 @@ fn write_checked(
         file.write_all(&encoded)?;
         drop(file);
         crate::background::checkpoint_or_cancel()?;
-        if current() && Key::read(&write.path)? == write.header.key {
+        if current() && Key::read(&write.path)?.same_file_recipe(&write.header.key) {
             fs::rename(&temporary, destination)?;
         }
         Ok(())

@@ -22,13 +22,16 @@ pub struct Photo {
     pub path: PathBuf,
     pub identity: Identity,
     pub settings: Settings,
+    pub rating: foveonic::review::Rating,
 }
 /// Identity/history remains usable even when a photo's editing recipe is unreadable.
 pub struct SourceInfo {
     pub identity: Identity,
     pub settings: std::result::Result<Settings, String>,
+    pub rating: foveonic::review::Rating,
 }
 pub struct Scan {
+    pub defaults: foveonic::render::RecipeDefaults,
     pub generation: u64,
     pub destination: Option<PathBuf>,
     pub files: Vec<PathBuf>,
@@ -203,6 +206,7 @@ fn scan_files(
             return result;
         }
     };
+    let mut ratings = HashMap::new();
     for path in scan.files {
         checkpoint();
         let identity = match cache
@@ -228,10 +232,11 @@ fn scan_files(
                 selection
                     .settings
                     .map(Ok)
-                    .unwrap_or_else(|| crate::sidecars::capture_defaults(selection.properties))
+                    .unwrap_or_else(|| scan.defaults.from_properties(&selection.properties))
             } else {
                 foveonic::sidecar::load(&path)?.map(Ok).unwrap_or_else(|| {
-                    crate::sidecars::capture_defaults(cache.capture_properties(&path)?)
+                    scan.defaults
+                        .from_properties(&cache.capture_properties(&path)?)
                 })
             }
         })()
@@ -239,9 +244,32 @@ fn scan_files(
         if let Err(error) = &settings {
             result.errors.push(format!("{}: {error}", path.display()));
         }
-        result
-            .sources
-            .insert(path, SourceInfo { identity, settings });
+        let folder = path.parent().unwrap_or(std::path::Path::new(""));
+        let stored =
+            ratings.entry(folder.to_owned()).or_insert_with(|| {
+                match foveonic::review::load(folder) {
+                    Ok(ratings) => ratings,
+                    Err(error) => {
+                        result.errors.push(format!(
+                            "{}: {error}",
+                            foveonic::review::path(folder).display()
+                        ));
+                        Default::default()
+                    }
+                }
+            });
+        let rating = stored
+            .get(std::path::Path::new(path.file_name().unwrap_or_default()))
+            .copied()
+            .unwrap_or_default();
+        result.sources.insert(
+            path,
+            SourceInfo {
+                identity,
+                settings,
+                rating,
+            },
+        );
     }
     result
 }
@@ -443,6 +471,7 @@ fn import_photo(
         fs::write(temporary, &recipe)?;
         Ok(())
     })?;
+    foveonic::review::save(&original, photo.rating)?;
     if !formats.is_empty() {
         // Reuse the source cache after copying. A miss reads the completed local copy.
         let cached = if cache

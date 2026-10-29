@@ -54,7 +54,7 @@ fn partial_grid_rows_end_at_folder_boundaries_and_arrows_skip_the_headings() {
         "DCIM/101SIGMA/b.x3f",
     ]
     .map(|name| root.join(name));
-    let layout = Layout::new(&files, Some(root), 2, 146., 24., 6.);
+    let layout = Layout::new(&files, Some(root), 2, |_| 146., 24., 6.);
     let photo_ranges = layout
         .rows
         .iter()
@@ -79,7 +79,7 @@ fn partial_grid_rows_end_at_folder_boundaries_and_arrows_skip_the_headings() {
     let visible = layout.visible(selected.top, selected.top + selected.height);
     assert_eq!(visible.len(), 1);
     assert!(matches!(&visible[0].content, Content::Photos(range) if range == &(4..6)));
-    let filtered = Layout::new(&files[..4], Some(root), 1, 40., 24., 6.);
+    let filtered = Layout::new(&files[..4], Some(root), 1, |_| 40., 24., 6.);
     let headings = filtered
         .rows
         .iter()

@@ -519,82 +519,111 @@ pub(super) fn rendering(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     changed
 }
 
-/// Families choose which preset controls apply without changing stored selections.
-#[derive(Clone, Copy)]
-pub(super) struct PresetControls {
-    pub white_balance: bool,
-    pub color_mode: bool,
-}
-
-pub(super) fn presets(
+pub(super) fn color_mode(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
-    controls: PresetControls,
+    active: bool,
 ) -> bool {
-    let mut changed = false;
-    for (title, key, value) in [
-        (
-            "White balance",
-            "WhiteBalanceGains",
-            &mut settings.white_balance,
-        ),
-        (
-            "Color mode",
+    active
+        && camera_choice(
+            ui,
+            metadata,
             "ColorModeCompensations",
+            "Color mode",
+            "Color mode",
             &mut settings.color_mode,
-        ),
-    ] {
-        if !controls.color_mode && title == "Color mode" {
-            continue;
+            true,
+        )
+}
+
+pub(super) fn white_balance(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    metadata: Option<&Metadata>,
+    enabled: bool,
+) -> bool {
+    section_header(ui, EditingSection::WhiteBalance, "White Balance", None);
+    let mut changed = camera_choice(
+        ui,
+        metadata,
+        "WhiteBalanceGains",
+        "Mode",
+        "White balance",
+        &mut settings.white_balance,
+        enabled,
+    );
+    ui.add_enabled_ui(!settings.is_monochrome(), |ui| {
+        let column = LabelColumn::new(ui, &["Warmth", "Tint"], &[]);
+        changed |= column.adjustment(
+            ui,
+            ("Warmth", "Warmth"),
+            &mut settings.white_balance_bias.warmth,
+            -1. ..=1.,
+            0.,
+        );
+        changed |= column.adjustment(
+            ui,
+            ("Tint", "Tint"),
+            &mut settings.white_balance_bias.tint,
+            -1. ..=1.,
+            0.,
+        );
+    });
+    changed
+}
+
+fn camera_choice(
+    ui: &mut egui::Ui,
+    metadata: Option<&Metadata>,
+    key: &str,
+    label: &str,
+    help_key: &str,
+    value: &mut String,
+    enabled: bool,
+) -> bool {
+    let choices = metadata.map(|metadata| {
+        if key == "WhiteBalanceGains" {
+            metadata.white_balance_presets()
+        } else {
+            foveonic::render::ControlCapabilities::from_metadata(metadata).map_or_else(
+                |_| metadata.color_mode_presets(),
+                |c| c.color_mode_presets(metadata),
+            )
         }
-        let choices = metadata.map(|metadata| {
-            if key == "WhiteBalanceGains" {
-                metadata.white_balance_presets()
-            } else {
-                foveonic::render::ControlCapabilities::from_metadata(metadata).map_or_else(
-                    |_| metadata.color_mode_presets(),
-                    |c| c.color_mode_presets(metadata),
-                )
-            }
-        });
-        // Keep the same rows while metadata is loading so later controls do not
-        // jump when the first processed frame supplies the camera's choices.
-        ui.horizontal(|ui| {
-            help::control(label(ui, title), title);
-            let response = ui
-                .add_enabled_ui(
-                    (title != "White balance" || controls.white_balance)
-                        && choices.as_ref().is_some_and(|list| !list.is_empty()),
-                    |ui| {
-                        let combo = egui::ComboBox::from_id_salt(key)
-                            .width(ui.available_width() - 8.)
-                            .selected_text(if value.is_empty() {
-                                "Choose…"
-                            } else {
-                                value.as_str()
-                            });
-                        crate::widgets::dropdown(ui, combo, |ui| {
-                            ui.spacing_mut().item_spacing.y = 0.;
-                            if let Some(list) = &choices {
-                                for name in list.iter().copied() {
-                                    changed |= crate::widgets::menu_value(
-                                        ui,
-                                        value,
-                                        name.to_owned(),
-                                        name,
-                                    )
-                                    .changed();
-                                }
+    });
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        help::control(self::label(ui, label), help_key);
+        let response = ui
+            .add_enabled_ui(
+                enabled && choices.as_ref().is_some_and(|list| !list.is_empty()),
+                |ui| {
+                    let combo = egui::ComboBox::from_id_salt(key)
+                        .width(ui.available_width() - 8.)
+                        .selected_text(if value.is_empty() {
+                            "As Shot"
+                        } else {
+                            value.as_str()
+                        });
+                    crate::widgets::dropdown(ui, combo, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.;
+                        changed |= crate::widgets::menu_value(ui, value, String::new(), "As Shot")
+                            .changed();
+                        if let Some(list) = &choices {
+                            for name in list.iter().copied() {
+                                changed |=
+                                    crate::widgets::menu_value(ui, value, name.to_owned(), name)
+                                        .changed();
                             }
-                        })
-                        .response
-                    },
-                )
-                .inner;
-            help::control(response, title);
-        });
-    }
+                        }
+                    })
+                    .response
+                },
+            )
+            .inner;
+        help::control(response, help_key);
+    });
     changed
 }
 

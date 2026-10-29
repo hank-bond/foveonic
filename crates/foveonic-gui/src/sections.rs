@@ -26,10 +26,17 @@ pub fn disclosure_icon(ui: &egui::Ui, center: egui::Pos2, collapsed: bool, color
 }
 
 pub fn header(ui: &mut egui::Ui, section: Section, collapsed: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 29.),
-        egui::Sense::click_and_drag(),
-    );
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 29.), egui::Sense::hover());
+    let response = if section == Section::Editing {
+        let label =
+            egui::Rect::from_min_max(rect.min, egui::pos2(rect.right() - 72., rect.bottom()));
+        let grip = egui::Rect::from_min_max(egui::pos2(rect.right() - 24., rect.top()), rect.max);
+        ui.interact(label, ui.id().with("header"), egui::Sense::click_and_drag())
+            .union(ui.interact(grip, ui.id().with("grip"), egui::Sense::click_and_drag()))
+    } else {
+        ui.interact(rect, ui.id().with("header"), egui::Sense::click_and_drag())
+    };
     crate::widgets::paint(ui, &response, false);
     disclosure_icon(
         ui,
@@ -48,7 +55,7 @@ pub fn header(ui: &mut egui::Ui, section: Section, collapsed: bool) -> egui::Res
     response.dnd_set_drag_payload(section);
     response
 }
-/// Shared six-dot grip, scaled down for editing-tool headers.
+/// Shared six-dot grip for workspace and editing-tool headers.
 pub fn grip_icon(ui: &egui::Ui, center: egui::Pos2, scale: f32) {
     for x in [-2., 2.] {
         for y in [-4., 0., 4.] {
@@ -63,8 +70,9 @@ pub fn grip_icon(ui: &egui::Ui, center: egui::Pos2, scale: f32) {
 
 pub fn editing_handle(ui: &mut egui::Ui, section: EditingSection) {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(20., 20.), egui::Sense::drag());
-    grip_icon(ui, rect.center(), 0.65);
+    grip_icon(ui, rect.center(), 1.);
     response.dnd_set_drag_payload(section);
+    ui.add_space(44.);
     response
         .on_hover_cursor(egui::CursorIcon::Grab)
         .on_hover_text("Drag to reorder editing sections");

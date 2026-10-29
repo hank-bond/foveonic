@@ -156,6 +156,7 @@ struct Header {
 
 struct Control {
     settings: Settings,
+    photo_defaults: crate::render::RecipeDefaults,
     clear: bool,
     watched: Vec<PathBuf>,
     selected: Option<PathBuf>,
@@ -212,6 +213,7 @@ impl Cache {
     }
     fn at(root: PathBuf) -> Self {
         let control = Arc::new(Mutex::new(Control {
+            photo_defaults: Default::default(),
             settings: Settings {
                 enabled: false,
                 ..Settings::default()
@@ -275,6 +277,11 @@ impl Cache {
         drop(status);
         let _ = self.writer.try_send(Command::Maintain);
     }
+
+    /// Unedited previews follow the application recipe without changing saved edits or RAW identities.
+    pub fn configure_photo_defaults(&self, defaults: &crate::render::RecipeDefaults) {
+        self.control.lock().unwrap().photo_defaults = defaults.clone();
+    }
     /// Replace speculative work with a bounded neighborhood of the selected photo.
     /// Paths follow visible browser order and may include an active concealed photo.
     /// Repeating the same request must not restart a completed or cleared pass.
@@ -326,6 +333,16 @@ impl Cache {
     }
     pub fn directory(&self) -> &Path {
         &self.root
+    }
+
+    /// Size from the background-verified identity, without statting the source card.
+    pub fn source_bytes(&self, path: &Path) -> Option<u64> {
+        self.control
+            .lock()
+            .unwrap()
+            .identities
+            .get(path)
+            .map(|identity| identity.length)
     }
 
     /// Reuse verified header metadata before loading the much larger pixel payload.

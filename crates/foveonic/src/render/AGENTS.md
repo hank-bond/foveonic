@@ -18,6 +18,7 @@ The [public renderer](../render.rs) owns the engine and display/export entry poi
 
 - **[artifacts.rs](./artifacts.rs)** Collects requested graph outputs as owned images or diagnostic tables.
 - **[capabilities.rs](./capabilities.rs)** Resolves supported photographic adjustments and compatible defaults at family boundaries.
+- **[edits.rs](./edits.rs)** Shares scoped photographic recipes and user defaults between interactive loading, batch work and preview caching.
 - **[execute.rs](./execute.rs)** Executes typed graph operations with selective outputs and guarded GPU storage.
 - **[settings.rs](./settings.rs)** Defines shared photographic settings and validates their values.
 

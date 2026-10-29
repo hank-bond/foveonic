@@ -75,6 +75,10 @@ impl Settings {
             "mono-banding"
         );
         changed!(self.white_balance != next.white_balance, "white-balance");
+        changed!(
+            self.white_balance_bias != next.white_balance_bias,
+            "white-balance-bias"
+        );
         changed!(self.color_mode != next.color_mode, "color-mode");
         changed!(self.repair != next.repair, "repair");
         changed!(

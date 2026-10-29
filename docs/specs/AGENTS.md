@@ -14,6 +14,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 
 - **[application-workflows](./application-workflows.md)** _(accepted, incomplete, reference)._ A personal Merrill X3F app shares processing settings and one image engine between its GUI and batch CLI.
 - **[browser-previews](./browser-previews.md)** _(accepted, conforming, reference)._ Small embedded thumbnails appear immediately and asynchronous cached previews follow the latest photographic render.
+- **[browser-review](./browser-review.md)** _(accepted, conforming, reference)._ Three browser views share star ratings, metadata sorting and text/rating filters without changing photographic recipes.
 - **[classic-rendering](./classic-rendering.md)** _(accepted, incomplete, reference)._ Classic photographic rendering uses format-selected decoding and family-authored recipes with functional GPU operations and shared engine resources.
 - **[color-editor](./color-editor.md)** _(accepted, conforming, reference)._ A shared linear Color Editor adjusts eight subject-color ranges with Hue, Saturation and Lightness controls.
 - **[color-field](./color-field.md)** _(accepted, incomplete, reference)._ Color-field highlight reconstruction separates brightness and color in GPU passes with immutable source reliability and optional local color-evidence selection.
@@ -23,6 +24,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[detail-and-noise](./detail-and-noise.md)** _(accepted, conforming, reference)._ Merrill GPU reconstruction separates noise cleanup from independently sized Fine and Coarse brightness detail.
 - **[display-color-management](./display-color-management.md)** _(accepted, incomplete, reference)._ Display colors follow each image's declared encoding and the host monitor's active profile.
 - **[editing-sidecars](./editing-sidecars.md)** _(accepted, conforming, reference)._ Original X3Fs and editing recipes in a visible source-folder subdirectory are authoritative.
+- **[editor-workflow](./editor-workflow.md)** _(accepted, conforming, reference)._ Editor tools share As Shot white-balance bias, scoped presets, architecture defaults and transient Before comparisons.
 - **[family-controls](./family-controls.md)** _(accepted, conforming, reference)._ Family-authored editing panels share widgets and use processing-owned capabilities and defaults.
 - **[gui-screenshot](./gui-screenshot.md)** _(accepted, conforming, reference)._ An explicit Cargo task refreshes a lossless WebP README screenshot using the shared local example-photograph cache.
 - **[gui-workspace](./gui-workspace.md)** _(accepted, conforming, reference)._ The GUI uses a persistent three-pane workspace with a reflowing organizer, current-buffer scopes, and reorderable editor sections.

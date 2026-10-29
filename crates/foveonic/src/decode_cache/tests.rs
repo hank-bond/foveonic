@@ -102,6 +102,14 @@ fn complete_selection_uses_only_local_cache_when_the_original_and_sidecar_are_un
     assert!(selection.thumbnail.is_some());
     let preview = cache.preview(&fixture.source).unwrap();
     fs::rename(&fixture.source, fixture.root.join("removed.x3f")).unwrap();
+    assert_eq!(
+        cache.source_bytes(&fixture.source),
+        Some(
+            fs::metadata(fixture.root.join("removed.x3f"))
+                .unwrap()
+                .len()
+        )
+    );
     fs::rename(
         crate::sidecar::path(&fixture.source),
         fixture.root.join("removed.json"),

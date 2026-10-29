@@ -64,7 +64,8 @@ impl App {
         }
         self.detail.as_ref().filter(|detail| {
             self.selected.as_ref() == Some(&detail.path)
-                && same_edits(&detail.artifact.settings, &self.settings)
+                && detail.rendition == self.before.active
+                && same_edits(&detail.requested, &self.view_settings())
         })
     }
 
@@ -85,7 +86,8 @@ impl App {
             f.artifact
                 .settings
                 .fast_preview_available(&f.artifact.metadata)
-                && same_edits(&f.artifact.settings, &self.settings)
+                && f.rendition == self.before.active
+                && same_edits(&f.requested, &self.view_settings())
         }) else {
             return;
         };

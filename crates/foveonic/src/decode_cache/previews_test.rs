@@ -51,6 +51,58 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn user_defaults_invalidate_only_unsaved_rendered_previews_and_protect_them_from_late_jpegs() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("cache");
+    let properties = [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into();
+    let mut defaults = crate::render::RecipeDefaults::default();
+    let recipe = crate::render::Settings {
+        exposure: 0.5,
+        ..Default::default()
+    };
+    defaults.set(
+        ProcessingFamily::Merrill,
+        crate::render::EditScope::All,
+        &recipe,
+    );
+    let fingerprint = default_key(&defaults, &properties, true).unwrap();
+    assert!(fingerprint.is_some());
+    assert!(default_key(&defaults, &properties, false)
+        .unwrap()
+        .is_none());
+    let mut write = fixture.write(true, [110, 150, 210]);
+    write.header.key.default_recipe = fingerprint;
+    let key = write.header.key.clone();
+    write_checked(&root, write, &Settings::default(), &[], &|| true).unwrap();
+    let destination = key.location(&root);
+    assert!(read(&destination, &key, &Settings::default()).is_ok());
+    let bytes = fs::read(&destination).unwrap();
+    write_checked(
+        &root,
+        fixture.write(false, [10, 20, 30]),
+        &Settings::default(),
+        &[],
+        &|| true,
+    )
+    .unwrap();
+    assert_eq!(fs::read(&destination).unwrap(), bytes);
+    let mut changed = key;
+    changed.default_recipe = None;
+    assert!(read(&destination, &changed, &Settings::default()).is_err());
+    fs::remove_file(&destination).unwrap();
+    write_checked(
+        &root,
+        fixture.write(false, [10, 20, 30]),
+        &Settings::default(),
+        &[],
+        &|| true,
+    )
+    .unwrap();
+    changed.default_recipe = Some(vec![1, 2, 3]);
+    assert!(read(&destination, &changed, &Settings::default()).is_ok());
+}
+
+#[test]
 fn preview_storage_retains_sixteen_bit_samples_and_each_declared_gamut() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("cache"));
