@@ -161,6 +161,8 @@ impl Engine {
                 Operation::WaveletContrast(p) => p.extent(),
                 Operation::CodeChannelMap(p) => p.extent(),
                 Operation::ChannelNoise(p) => p.extent(),
+                Operation::Multiscale(p) => p.extent(),
+                Operation::ShieldNoise(p) => p.extent(),
                 Operation::ColorSharpen(p) => p.extent(),
                 Operation::ProportionalSharpen(p) => p.extent(),
                 Operation::Encode { params, .. } => [params.output[0], params.output[1]],
@@ -407,6 +409,36 @@ impl Engine {
                     Some(crate::nodes::sensor::blue_pattern::apply(
                         gpu,
                         &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::Multiscale(prepared) => {
+                    if inherited != prepared.extent()
+                        || input(1).description.map(|d| d.extent) != Some(inherited)
+                    {
+                        return Err("multiscale sensor filter extent mismatch".into());
+                    }
+                    Some(crate::nodes::sensor::multiscale::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        &input(2).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::ShieldNoise(prepared) => {
+                    if inherited != prepared.extent()
+                        || input(1).description.map(|d| d.extent) != Some(inherited)
+                    {
+                        return Err("shield-noise extent mismatch".into());
+                    }
+                    Some(crate::nodes::sensor::shield_noise::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        &input(2).buffer,
                         prepared,
                         profile,
                     )?)

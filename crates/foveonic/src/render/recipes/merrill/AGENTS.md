@@ -16,6 +16,7 @@ Monochrome branches after the same sensor corrections, then uses its dedicated m
 
 - **[appearance.rs](./appearance.rs)** Resolves Merrill camera coordinates and selected photographic appearance for DNG.
 - **[dng_base.rs](./dng_base.rs)** Composes Merrill technical DNG samples independently of shared photographic edits.
+- **[layer_noise.rs](./layer_noise.rs)** Prepares native layer noise and shield correction in camera color coordinates.
 - **[monochrome.rs](./monochrome.rs)** Authors sensor-layer monochrome filtering and finishing without the color reconstruction path.
 - **[photographic.rs](./photographic.rs)** Applies the camera tone curve and saturation after shared linear photographic edits.
 - **[preview.rs](./preview.rs)** Prepares Merrill's half-size calibrated preview grid without changing source metadata.

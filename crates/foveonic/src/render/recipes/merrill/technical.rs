@@ -1,7 +1,7 @@
 //! Builds Merrill sensor corrections and technical color with lazy inspection preparation.
 
 use super::super::{requested, BuiltRecipe};
-use super::{dng_base, preview, region};
+use super::{dng_base, layer_noise, preview, region};
 use crate::color_space::ColorSpace;
 use crate::nodes::{
     color::{color_dq, color_mode},
@@ -114,7 +114,33 @@ pub(super) fn build(
     })?;
     let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
     let calibration_params = calibration.params;
-    let mut calibrated = graph.add(Operation::Calibrate(calibration), &[input, black])?;
+    let multiscale_selected = settings.multiscale_noise_selected()
+        && !(preview.is_some() && settings.preview_quality == crate::render::PreviewQuality::Draft);
+    let corrected = if multiscale_selected {
+        let (shields, filter) = profile.measure("prepare multiscale noise", || {
+            layer_noise::prepare(
+                &source.metadata,
+                &settings.white_balance,
+                calibration_gains,
+                settings.merrill_noise_method
+                    == crate::render::MerrillNoiseMethod::MultiscaleRowsAndColumns,
+            )
+        })?;
+        let corrected = graph.add(
+            Operation::ShieldNoise(Arc::new(shields)),
+            &[input, input, black],
+        )?;
+        finish!();
+        let filtered = graph.add(
+            Operation::Multiscale(Arc::new(filter)),
+            &[corrected, input, black],
+        )?;
+        finish!();
+        filtered
+    } else {
+        input
+    };
+    let mut calibrated = graph.add(Operation::Calibrate(calibration), &[corrected, black])?;
     finish!();
     let unrepaired = calibrated;
     if let Some(threshold) = settings.repair {

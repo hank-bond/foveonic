@@ -111,6 +111,9 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Chroma noise" => {
             "Reduces colored speckles and blotches, especially in shadows. For Merrill, higher positions remove more colored grain independently of texture contrast. Start at 2. The five settings run from 0 to 4. At 0 the added chromatic cleanup is off, while shared sensor corrections remain active. Quattro retains its camera presets. Compare smooth areas and fine color texture: cleanup can also remove real color detail."
         }
+        "Merrill noise method" => {
+            "Reference uses the standard noise cleanup. Multiscale filters the three sensor layers together at several sizes to reduce colored blotches. Rows uses shield measurements for row correction. Rows + Columns includes broader row correction and column correction, which can change shadow tint. Compare shadow color, fine detail, and remaining grain. Switching Noise off preserves the selected method."
+        }
         "Luma noise" => {
             "Reduces grain rather than colored blotches. For Merrill, higher positions use more cleaned brightness evidence without adding contrast gain. Fine and Coarse detail set texture restoration separately. Start at 2. At 0 the added brightness cleanup is off, while shared sensor corrections remain active. Quattro retains its camera presets. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
         }

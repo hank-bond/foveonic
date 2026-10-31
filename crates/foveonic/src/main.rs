@@ -71,6 +71,7 @@ Options (also available for batch):
   --fine-size FACTOR        Fine boundary size 0.5..2, default 1
   --coarse-size FACTOR      Coarse boundary size 0.5..2, default 1
   --chroma-noise CHOICE      Chroma cleanup 0..4, default 2. Enables reconstruction
+  --merrill-noise-method NAME  reference (default), rows, or rows-columns. Enables reconstruction
   --luma-noise CHOICE        Luma cleanup 0..4, default 2. Enables reconstruction
   --banding-noise CHOICE     Column-noise preset 0..4, default 2. Enables reconstruction
   --mono-smoothness VALUE    Quattro monochrome Smooth/Crisp 0..1, default from file or 0.5

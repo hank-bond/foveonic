@@ -107,6 +107,7 @@ impl Scope {
             Self::Tool(Section::Noise) => {
                 if family == ProcessingFamily::Merrill {
                     merge_reconstruction(source, target, false);
+                    target.merrill_noise_method = source.merrill_noise_method;
                 } else {
                     target.reconstruction = source.reconstruction;
                     target.monochrome_smoothness = source.monochrome_smoothness;

@@ -3,8 +3,8 @@
 use foveonic::{
     profile::Mode,
     render::{
-        ColorFieldApproach, HighlightMode, MonochromeControls, Rendering, RepairThreshold,
-        Settings, TiffColorSpace,
+        ColorFieldApproach, HighlightMode, MerrillNoiseMethod, MonochromeControls, Rendering,
+        RepairThreshold, Settings, TiffColorSpace,
     },
     source::Result,
 };
@@ -204,6 +204,19 @@ fn parse_settings_with_noise_defaults(
                     _ => controls.texture.coarse_size = value.parse()?,
                 }
             }
+            "--merrill-noise-method" => {
+                settings.merrill_noise_method = match value.as_str() {
+                    "reference" => MerrillNoiseMethod::Reference,
+                    "rows" => MerrillNoiseMethod::MultiscaleRows,
+                    "rows-columns" => MerrillNoiseMethod::MultiscaleRowsAndColumns,
+                    _ => {
+                        return Err(
+                            "Merrill noise method must be reference, rows, or rows-columns".into(),
+                        )
+                    }
+                };
+                settings.reconstruction.get_or_insert(noise_defaults);
+            }
             "--chroma-noise" => {
                 settings.reconstruction.get_or_insert(noise_defaults).chroma = value.parse()?
             }
@@ -274,6 +287,61 @@ fn parse_method(value: &str) -> Result<foveonic::render::PhotographicMethod> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merrill_noise_method_selects_both_shield_choices_and_preserves_noise_strength() {
+        for (value, method) in [
+            ("reference", MerrillNoiseMethod::Reference),
+            ("rows", MerrillNoiseMethod::MultiscaleRows),
+            ("rows-columns", MerrillNoiseMethod::MultiscaleRowsAndColumns),
+        ] {
+            let (settings, _, _) = parse_settings(
+                [
+                    "--wb",
+                    "Sunlight",
+                    "--mode",
+                    "Standard",
+                    "--chroma-noise",
+                    "3",
+                    "--merrill-noise-method",
+                    value,
+                ]
+                .into_iter()
+                .map(OsString::from),
+            )
+            .unwrap();
+            assert_eq!(settings.merrill_noise_method, method);
+            assert_eq!(settings.reconstruction.unwrap().chroma, 3);
+            assert!(settings.reconstruction.unwrap().noise_enabled);
+            let (method_only, _, _) = parse_settings(
+                [
+                    "--wb",
+                    "Sunlight",
+                    "--mode",
+                    "Standard",
+                    "--merrill-noise-method",
+                    value,
+                ]
+                .into_iter()
+                .map(OsString::from),
+            )
+            .unwrap();
+            assert!(method_only.reconstruction.unwrap().noise_enabled);
+        }
+        for args in [
+            vec!["--merrill-noise-method"],
+            vec!["--merrill-noise-method", "invalid"],
+        ] {
+            assert!(parse_settings(
+                ["--wb", "Sunlight", "--mode", "Standard"]
+                    .into_iter()
+                    .chain(args)
+                    .map(OsString::from)
+            )
+            .is_err());
+        }
+    }
+
     #[test]
     fn three_highlight_presets_select_shared_color_field_configurations() {
         for (name, mode, approach) in [

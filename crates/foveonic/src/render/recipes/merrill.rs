@@ -2,6 +2,7 @@
 
 mod appearance;
 mod dng_base;
+mod layer_noise;
 mod monochrome;
 mod photographic;
 mod preview;
@@ -10,6 +11,9 @@ mod technical;
 
 #[cfg(test)]
 mod tonal_ranges_test;
+
+#[cfg(test)]
+mod noise_test;
 
 pub(super) use dng_base::build as build_dng;
 pub(super) use photographic::build;

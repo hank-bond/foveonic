@@ -33,11 +33,11 @@ Restoration stays in calibrated sensor tiles before camera color conversion and 
 
 ## Controls and inspection
 
-`Settings::reconstruction` stores shared `noise::Controls`. Merrill has independent Noise and Detail section checkboxes, styled with the same subdued text as other section headings. Noise contains Chroma, Luma and Banding rows. Detail contains Fine and Coarse amounts, each paired with its indented Size row inside a padded linked group. Unchecked sections keep their controls visible but disabled so the layout remains stable. Each section sizes its own compact label column. Slider tracks and numeric fields remain aligned within each section. Numeric fields should fit normal signed values without an extra em of unused width. ColorDQ gain remains under Noise → Advanced with its existing automatic/manual toggle. There is one Merrill reconstruction method.
+`Settings::reconstruction` stores shared `noise::Controls`. Merrill has independent Noise and Detail section checkboxes, styled with the same subdued text as other section headings. Noise contains a Method dropdown followed by Chroma, Luma and Banding rows. Reference remains the default method. The optional [multiscale methods](./merrill-multiscale-noise.md) add joint layer filtering with Rows or Rows + Columns shield correction through the same Noise section. Detail contains Fine and Coarse amounts, each paired with its indented Size row inside a padded linked group. Unchecked sections keep their controls visible but disabled so the layout remains stable. Each section sizes its own compact label column. Slider tracks and numeric fields remain aligned within each section. Numeric fields should fit normal signed values without an extra em of unused width. ColorDQ gain remains under Noise → Advanced with its existing automatic/manual toggle.
 
 Disabling a section must preserve all its values. Disabled Detail uses unit Fine/Coarse amounts and skips the spatial detail pyramid. Disabled Noise bypasses chroma/luma cleanup and column correction. Detail can still use the filtered sensor base to separate its frequency bands. Disabling both groups bypasses their tile processing. An enabled neutral Detail section with Noise off takes the same bypass. Automatic ColorDQ follows Noise independently of Detail. Explicit ColorDQ gain remains authoritative, including zero. Shared sensor corrections remain independently selectable. Smart Draft temporarily bypasses both groups without changing these saved selections.
 
-CLI controls are `--reconstruction`, `--chroma-noise`, `--luma-noise`, `--banding-noise`, `--fine-detail`, `--coarse-detail`, `--fine-size`, and `--coarse-size`. Parameter options enable reconstruction. `--smooth-crisp` belongs to Quattro.
+CLI controls are `--reconstruction`, `--merrill-noise-method`, `--chroma-noise`, `--luma-noise`, `--banding-noise`, `--fine-detail`, `--coarse-detail`, `--fine-size`, and `--coarse-size`. Parameter options enable reconstruction. `--smooth-crisp` belongs to Quattro.
 
 Useful inspection roots include:
 
@@ -59,7 +59,7 @@ Useful inspection roots include:
 
 The independent enable flags, four texture amounts and sizes persist with the recipe. Older populated reconstruction settings enable both groups. An older null reconstruction setting leaves both off. Merely displaying an old recipe must not populate or rewrite it. Saved experimental texture values are retained while the retired `enabled` flag is ignored. Earlier sidecars missing texture start at neutral amounts and sizes. The earlier residual multiplier has no equivalent and is reset for Merrill when camera capabilities normalize the recipe. Quattro retains that stored field for its Smooth/Crisp behavior. Retired linked overrides are accepted only while reading older sidecars and are omitted on save. Unknown and duplicate fields remain errors. Loading alone must not rewrite sidecars.
 
-The old linked-control UI, alternate method selector, residual-gain kernels, core-only detail projection and comparison generator are removed. Pattern preparation uses camera metadata and processing geometry independently of cleanup controls. The camera-derived base algorithms and their attribution remain.
+The old linked-control UI, residual-gain kernels, core-only detail projection and comparison generator are removed. Pattern preparation uses camera metadata and processing geometry independently of cleanup controls. The camera-derived base algorithms and their attribution remain.
 
 ## Validation
 

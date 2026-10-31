@@ -1,7 +1,37 @@
 //! Checks scoped recipe isolation, neutral optional reconstruction and family-default precedence.
 
 use super::*;
-use crate::render::{PhotographicMethod, PreviewQuality, TiffColorSpace};
+use crate::render::{MerrillNoiseMethod, PhotographicMethod, PreviewQuality, TiffColorSpace};
+
+#[test]
+fn noise_recipe_copies_merrill_method_without_affecting_detail_or_other_families() {
+    let source = Settings {
+        merrill_noise_method: MerrillNoiseMethod::MultiscaleRowsAndColumns,
+        ..Default::default()
+    };
+    let mut target = Settings {
+        merrill_noise_method: MerrillNoiseMethod::MultiscaleRows,
+        ..Default::default()
+    };
+    Scope::Tool(Section::Detail).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert_eq!(
+        target.merrill_noise_method,
+        MerrillNoiseMethod::MultiscaleRows
+    );
+    Scope::Tool(Section::Noise).apply(&source, &mut target, ProcessingFamily::Quattro);
+    assert_eq!(
+        target.merrill_noise_method,
+        MerrillNoiseMethod::MultiscaleRows
+    );
+    Scope::Tool(Section::Noise).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert_eq!(
+        target.merrill_noise_method,
+        MerrillNoiseMethod::MultiscaleRowsAndColumns
+    );
+    assert!(target.reconstruction.is_none());
+    Scope::Tool(Section::Noise).apply(&Settings::default(), &mut target, ProcessingFamily::Merrill);
+    assert_eq!(target.merrill_noise_method, MerrillNoiseMethod::Reference);
+}
 
 #[test]
 fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {

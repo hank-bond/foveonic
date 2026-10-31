@@ -57,6 +57,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[lens-correction-audit](./lens-correction-audit.md)** _(archived)._ Audit available lens corrections and defer chromatic aberration after finding no supported vignetting or distortion profile route.
 - **[merrill-fast-noise](./merrill-fast-noise.md)** _(archived)._ Bypass optional Merrill Noise and Detail in Fast while preserving requested controls for Full.
 - **[merrill-fast-preview](./merrill-fast-preview.md)** _(archived)._ Integrate Merrill Fast and Smart previews while reducing native row-correction GPU cost.
+- **[merrill-multiscale-noise](./merrill-multiscale-noise.md)** _(archived)._ Integrate the approved Merrill multiscale filter and both shield correction choices through the production rendering path.
 - **[merrill-noise-default](./merrill-noise-default.md)** _(archived)._ Enable Noise and Detail for newly opened Merrill photographs while preserving saved off choices.
 - **[merrill-regional-preview](./merrill-regional-preview.md)** _(archived)._ Deliver Merrill Smart detail from native processing tiles before continuing the whole frame.
 - **[metadata-first-loading](./metadata-first-loading.md)** _(archived)._ Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.

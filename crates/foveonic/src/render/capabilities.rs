@@ -1,6 +1,8 @@
 //! Resolves supported photographic adjustments and compatible defaults at family boundaries.
 
-use super::{ColorFieldControls, HighlightMode, Rendering, RepairThreshold, Settings};
+use super::{
+    ColorFieldControls, HighlightMode, MerrillNoiseMethod, Rendering, RepairThreshold, Settings,
+};
 use crate::source::{Metadata, ProcessingFamily, Result};
 
 /// Supported adjustments for the loaded photo. Family panels choose their layout,
@@ -156,8 +158,13 @@ impl ControlCapabilities {
     /// Restore unsupported saved adjustments to their supported defaults.
     /// Preserve effect on/off selections and photographic edits.
     pub fn normalize(&self, settings: &mut Settings) -> bool {
+        let method_changed = self.family != ProcessingFamily::Merrill
+            && settings.merrill_noise_method != MerrillNoiseMethod::Reference;
+        if method_changed {
+            settings.merrill_noise_method = MerrillNoiseMethod::Reference;
+        }
         if self.family == ProcessingFamily::Quattro {
-            return super::recipes::quattro::normalize_photographic(settings);
+            return super::recipes::quattro::normalize_photographic(settings) || method_changed;
         }
         let before = (
             settings.rendering,
@@ -207,26 +214,32 @@ impl ControlCapabilities {
         if !self.color_dq_adjustable {
             settings.color_dq_gain = None;
         }
-        before
-            != (
-                settings.rendering,
-                settings.monochrome,
-                settings.reconstruction,
-                settings.highlight_amount,
-                settings.monochrome_smoothness,
-                settings.highlight_mode,
-                settings.highlight_threshold_ev,
-                settings.color_field,
-                settings.row_correction,
-                settings.repair,
-                settings.color_dq_gain,
-                settings.tonal_ranges,
-            )
+        method_changed
+            || before
+                != (
+                    settings.rendering,
+                    settings.monochrome,
+                    settings.reconstruction,
+                    settings.highlight_amount,
+                    settings.monochrome_smoothness,
+                    settings.highlight_mode,
+                    settings.highlight_threshold_ev,
+                    settings.color_field,
+                    settings.row_correction,
+                    settings.repair,
+                    settings.color_dq_gain,
+                    settings.tonal_ranges,
+                )
     }
 
     /// Reject unsupported requests without silently changing processing choices.
     /// Numeric validity and camera metadata requirements are checked separately.
     pub fn validate(&self, settings: &Settings) -> Result<()> {
+        if self.family != ProcessingFamily::Merrill
+            && settings.merrill_noise_method != MerrillNoiseMethod::Reference
+        {
+            return Err("multiscale noise methods are available only for Merrill cameras".into());
+        }
         if self.family == ProcessingFamily::Quattro {
             return super::recipes::quattro::validate_photographic(settings);
         }

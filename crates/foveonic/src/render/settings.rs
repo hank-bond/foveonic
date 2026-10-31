@@ -29,6 +29,16 @@ pub enum Rendering {
     Monochrome,
 }
 
+/// Merrill color noise cleanup and shield correction strategy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MerrillNoiseMethod {
+    #[default]
+    Reference,
+    MultiscaleRows,
+    MultiscaleRowsAndColumns,
+}
+
 /// Workspace rendering quality. Exports and inspection select Full.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PreviewQuality {
@@ -131,6 +141,8 @@ pub struct Settings {
     pub color_field: ColorFieldControls,
     /// Estimate and subtract native additive per-row layer bias before reconstruction.
     pub row_correction: bool,
+    /// Merrill color noise method, retained while Noise is disabled.
+    pub merrill_noise_method: MerrillNoiseMethod,
     /// Optional color noise and detail settings. None selects the recipe baseline.
     /// Mandatory sensor reconstruction still runs when these adjustments are off.
     pub reconstruction: Option<crate::noise::Controls>,
@@ -174,6 +186,7 @@ impl Default for Settings {
             highlight_mode: HighlightMode::Classic,
             color_field: ColorFieldControls::default(),
             row_correction: true,
+            merrill_noise_method: MerrillNoiseMethod::Reference,
             reconstruction: None,
             sharpen_amount: None,
             tiff_color_space: None,
@@ -273,6 +286,16 @@ impl Settings {
                     .is_some_and(|c| c.merrill_effects().noise),
                 |v| v > 0.,
             )
+    }
+
+    /// Native color filtering follows the shared Noise bypass independently of Detail.
+    pub(crate) fn multiscale_noise_selected(&self) -> bool {
+        self.merrill_noise_method != MerrillNoiseMethod::Reference
+            && !self.is_monochrome()
+            && self.processing_sections.noise
+            && self
+                .reconstruction
+                .is_some_and(|c| c.merrill_effects().noise)
     }
 
     /// Merrill's optional tile processing, retaining inactive controls in the recipe.

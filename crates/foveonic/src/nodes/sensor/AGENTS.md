@@ -33,12 +33,14 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[hlp_calibration.rs](./hlp_calibration.rs)** Applies sparse blue correction and ordered shading while retaining pre-color scratch samples.
 - **[luma_cluster.rs](./luma_cluster.rs)** Repairs ordered mono clusters with parallel candidate scoring and stable source-order ties.
 - **[mod.rs](./mod.rs)** Prepares and corrects original camera layers before rendering-specific reconstruction.
+- **[multiscale.rs](./multiscale.rs)** Filters native sensor-layer color differences at three scales while preserving their sum.
 - **[ordered_blue_repair.rs](./ordered_blue_repair.rs)** Groups ordered mono defect records into independent GPU batches without changing their dependencies.
 - **[phase_extraction.rs](./phase_extraction.rs)** Separates six-sample cells into RGB and spatial blue codes with affine or channel-gain calibration.
 - **[phase_gain.rs](./phase_gain.rs)** Resizes interleaved phase gain maps and corrects blue samples below a supplied threshold.
 - **[red_detail.rs](./red_detail.rs)** Adds signed red-channel detail using a separable five-row binomial support.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.
 - **[rgb_despeckle.rs](./rgb_despeckle.rs)** Removes isolated RGB excursions using immutable masked five-by-five neighborhoods.
+- **[shield_noise.rs](./shield_noise.rs)** Predicts native green-magenta row and column errors from the original shield samples.
 - **[signed_repair.rs](./signed_repair.rs)** Repairs signed RGB code values with ordered packed records or a vertically ordered despeckle sweep.
 - **[sparse_repair.rs](./sparse_repair.rs)** Repairs sparse RGB and four-phase blue defects through ordered ghost and pattern passes.
 - **[spatial_tables.rs](./spatial_tables.rs)** Prepare Merrill spatial gain grids from camera byte tables, aperture, focus, and chief-ray angle.

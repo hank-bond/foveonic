@@ -3,6 +3,53 @@
 use super::*;
 use crate::source::{Matrix, MatrixEncoding, Metadata, PropertyList};
 
+#[test]
+fn merrill_noise_method_defaults_and_round_trips_without_changing_inactive_controls() {
+    assert_eq!(
+        serde_json::from_str::<Settings>("{}")
+            .unwrap()
+            .merrill_noise_method,
+        MerrillNoiseMethod::Reference
+    );
+    for (method, stored) in [
+        (MerrillNoiseMethod::Reference, "reference"),
+        (MerrillNoiseMethod::MultiscaleRows, "multiscale_rows"),
+        (
+            MerrillNoiseMethod::MultiscaleRowsAndColumns,
+            "multiscale_rows_and_columns",
+        ),
+    ] {
+        let settings = Settings {
+            merrill_noise_method: method,
+            ..Default::default()
+        };
+        let encoded = serde_json::to_value(&settings).unwrap();
+        assert_eq!(encoded["merrill_noise_method"], stored);
+        let restored: Settings = serde_json::from_value(encoded).unwrap();
+        assert_eq!(restored, settings);
+        assert!(restored.reconstruction.is_none());
+    }
+    assert!(
+        serde_json::from_str::<Settings>(r#"{"merrill_noise_method":"unrecognized"}"#).is_err()
+    );
+}
+
+#[test]
+fn merrill_noise_method_changes_have_a_distinct_interactive_identity() {
+    let settings = Settings::default();
+    let mut edited = settings.clone();
+    edited.merrill_noise_method = MerrillNoiseMethod::MultiscaleRows;
+    assert_eq!(
+        settings.changed_parameters(&edited),
+        ["merrill-noise-method"]
+    );
+    edited.merrill_noise_method = MerrillNoiseMethod::MultiscaleRowsAndColumns;
+    assert_eq!(
+        settings.changed_parameters(&edited),
+        ["merrill-noise-method"]
+    );
+}
+
 fn metadata() -> Metadata {
     let matrix = |dimensions, values| Matrix {
         encoding: MatrixEncoding::Float32,

@@ -4,7 +4,7 @@ use super::common::{self, adjustment, adjustment_row, automatic_adjustment, RowC
 use crate::{help, preferences::EditingSection};
 use eframe::egui;
 use foveonic::{
-    render::{ColorFieldApproach, HighlightMode, Settings},
+    render::{ColorFieldApproach, HighlightMode, MerrillNoiseMethod, Settings},
     source::Metadata,
 };
 
@@ -61,6 +61,37 @@ fn noise(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         Some(&mut controls.noise_enabled),
     );
     ui.add_enabled_ui(controls.noise_enabled, |ui| {
+        ui.horizontal(|ui| {
+            help::control(ui.label("Method"), "Merrill noise method");
+            let methods = [
+                (MerrillNoiseMethod::Reference, "Reference"),
+                (MerrillNoiseMethod::MultiscaleRows, "Multiscale: Rows"),
+                (
+                    MerrillNoiseMethod::MultiscaleRowsAndColumns,
+                    "Multiscale: Rows + Columns",
+                ),
+            ];
+            let label = methods
+                .iter()
+                .find(|(method, _)| *method == settings.merrill_noise_method)
+                .unwrap()
+                .1;
+            let combo = egui::ComboBox::from_id_salt("merrill-noise-method")
+                .width((ui.available_width() - 8.).max(80.))
+                .selected_text(label);
+            let response = crate::widgets::dropdown(ui, combo, |ui| {
+                for (method, label) in methods {
+                    changed |= crate::widgets::menu_value(
+                        ui,
+                        &mut settings.merrill_noise_method,
+                        method,
+                        label,
+                    )
+                    .changed();
+                }
+            });
+            help::control(response.response, "Merrill noise method");
+        });
         let column = common::LabelColumn::new(ui, &["Chroma", "Luma", "Banding"], &[]);
         changed |= column.adjustment(
             ui,

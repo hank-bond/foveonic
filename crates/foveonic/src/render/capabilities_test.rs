@@ -16,6 +16,43 @@ fn capabilities(model: &str) -> ControlCapabilities {
 }
 
 #[test]
+fn multiscale_methods_are_rejected_and_normalized_outside_merrill() {
+    for model in ["SIGMA SD14", "SIGMA dp2 Quattro"] {
+        let capabilities = capabilities(model);
+        for method in [
+            MerrillNoiseMethod::MultiscaleRows,
+            MerrillNoiseMethod::MultiscaleRowsAndColumns,
+        ] {
+            let mut settings = Settings {
+                merrill_noise_method: method,
+                exposure: 0.5,
+                ..Settings::new("Sunlight", "Standard")
+            };
+            assert!(capabilities.validate(&settings).is_err());
+            assert!(capabilities.normalize(&mut settings));
+            assert_eq!(settings.merrill_noise_method, MerrillNoiseMethod::Reference);
+            assert_eq!(settings.exposure, 0.5);
+            assert!(capabilities.validate(&settings).is_ok());
+            assert!(!capabilities.normalize(&mut settings));
+        }
+    }
+    let capabilities = capabilities("SIGMA DP2 Merrill");
+    for rendering in [Rendering::Color, Rendering::Monochrome] {
+        let mut settings = Settings {
+            rendering,
+            merrill_noise_method: MerrillNoiseMethod::MultiscaleRowsAndColumns,
+            ..Settings::new("Sunlight", "Standard")
+        };
+        assert!(capabilities.validate(&settings).is_ok());
+        assert!(!capabilities.normalize(&mut settings));
+        assert_eq!(
+            settings.merrill_noise_method,
+            MerrillNoiseMethod::MultiscaleRowsAndColumns
+        );
+    }
+}
+
+#[test]
 fn merrill_texture_defaults_keep_manual_sharpening_independent() {
     let mut s = Settings::new("Sunlight", "Standard");
     s.reconstruction = Some(Default::default());

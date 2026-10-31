@@ -4,7 +4,7 @@ use super::common::{adjustment, adjustment_with_nudge, automatic_adjustment};
 use super::merrill::{highlight_choice, select_highlight, HIGHLIGHT_METHODS};
 use super::*;
 use crate::help;
-use foveonic::render::{HighlightMode, Rendering, RepairThreshold};
+use foveonic::render::{HighlightMode, MerrillNoiseMethod, Rendering, RepairThreshold};
 use std::ops::RangeInclusive;
 
 // Existing widget interaction fixtures exercise the Merrill panel while full
@@ -67,6 +67,56 @@ fn pointer_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
         pressed,
         modifiers: Default::default(),
     }
+}
+
+#[test]
+fn merrill_noise_methods_remain_saved_when_noise_is_disabled_or_rendering_changes() {
+    for (method, label) in [
+        (MerrillNoiseMethod::Reference, "Reference"),
+        (MerrillNoiseMethod::MultiscaleRows, "Multiscale: Rows"),
+        (
+            MerrillNoiseMethod::MultiscaleRowsAndColumns,
+            "Multiscale: Rows + Columns",
+        ),
+    ] {
+        for noise_enabled in [false, true] {
+            let mut settings = Settings {
+                merrill_noise_method: method,
+                reconstruction: Some(foveonic::noise::Controls {
+                    noise_enabled,
+                    chroma: 3,
+                    ..Default::default()
+                }),
+                ..Settings::new("Sunlight", "Standard")
+            };
+            for rendering in [Rendering::Color, Rendering::Monochrome, Rendering::Color] {
+                settings.rendering = rendering;
+                let before = settings.clone();
+                let ctx = egui::Context::default();
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 2000.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            assert!(!processing_expanded(ui, &mut settings, None));
+                        });
+                    },
+                );
+                assert_eq!(settings, before);
+                if rendering == Rendering::Color {
+                    assert!(!panel_text_centers(&output, label).is_empty());
+                } else if method != MerrillNoiseMethod::Reference {
+                    assert!(panel_text_centers(&output, label).is_empty());
+                }
+            }
+        }
+    }
+    assert!(help::editing("Merrill noise method").is_some());
 }
 
 #[test]

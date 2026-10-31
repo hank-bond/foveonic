@@ -99,6 +99,10 @@ impl Settings {
         changed!(self.despeckle != next.despeckle, "despeckle");
         changed!(self.row_correction != next.row_correction, "row-correction");
         changed!(
+            self.merrill_noise_method != next.merrill_noise_method,
+            "merrill-noise-method"
+        );
+        changed!(
             self.color_dq_gain.map(f32::to_bits) != next.color_dq_gain.map(f32::to_bits),
             "color-dq"
         );

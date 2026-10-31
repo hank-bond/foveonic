@@ -99,13 +99,11 @@ fn native_camera_output_names(
     {
         return crate::render::classic_inspection_outputs(metadata, settings);
     }
-    let mut names = vec![
-        "final",
-        "sensor.layers",
-        "black.levels",
-        "black.histogram",
-        "calibration.layers",
-    ];
+    let mut names = vec!["final", "sensor.layers", "black.levels", "black.histogram"];
+    if settings.multiscale_noise_selected() {
+        names.extend(["shield-noise.layers", "multiscale.layers"]);
+    }
+    names.push("calibration.layers");
     if settings.repair.is_some() {
         names.push("repair.layers");
     }
@@ -209,6 +207,8 @@ pub fn image_outputs_with_family(
             let channels = match name {
                 "black.levels" | "black.histogram" | "banding.rows" => return None,
                 "sensor.layers"
+                | "shield-noise.layers"
+                | "multiscale.layers"
                 | "calibration.layers"
                 | "repair.layers"
                 | "despeckle.layers"
@@ -281,6 +281,8 @@ pub fn comparison_input(
     }
     let mut input = "sensor.layers";
     for (name, enabled) in [
+        ("shield-noise.layers", settings.multiscale_noise_selected()),
+        ("multiscale.layers", settings.multiscale_noise_selected()),
         ("calibration.layers", true),
         ("repair.layers", settings.repair.is_some()),
         ("highlight.layers", settings.highlight_restoration),
@@ -673,5 +675,44 @@ mod quattro_tests {
             image_outputs_with_family(&settings, Some(&metadata), Some(ProcessingFamily::Quattro));
         assert!(full.iter().any(|o| o.name == "final"));
         assert!(!full.iter().any(|o| o.name == "sensor.blue"));
+    }
+}
+
+#[cfg(test)]
+mod multiscale_inspection_test {
+    use super::*;
+
+    #[test]
+    fn native_noise_planes_follow_bypasses_and_report_their_actual_inputs() {
+        let mut settings = Settings {
+            reconstruction: Some(Default::default()),
+            merrill_noise_method: crate::render::MerrillNoiseMethod::MultiscaleRows,
+            ..Default::default()
+        };
+        let outputs = image_outputs(&settings, None);
+        for name in ["shield-noise.layers", "multiscale.layers"] {
+            assert_eq!(
+                outputs.iter().find(|o| o.name == name).unwrap().channels,
+                Channels::Layers
+            );
+        }
+        assert_eq!(
+            comparison_input(&settings, "shield-noise.layers", None),
+            Some("sensor.layers")
+        );
+        assert_eq!(
+            comparison_input(&settings, "multiscale.layers", None),
+            Some("shield-noise.layers")
+        );
+        assert_eq!(
+            comparison_input(&settings, "calibration.layers", None),
+            Some("multiscale.layers")
+        );
+        settings.processing_sections.noise = false;
+        assert!(!output_names(&settings, None).contains(&"multiscale.layers"));
+        assert_eq!(
+            comparison_input(&settings, "calibration.layers", None),
+            Some("sensor.layers")
+        );
     }
 }
