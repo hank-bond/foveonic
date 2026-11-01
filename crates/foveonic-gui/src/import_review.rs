@@ -13,6 +13,7 @@ const STATUS_POLL: std::time::Duration = std::time::Duration::from_millis(150);
 const ERROR_PANEL_HEIGHT: f32 = 120.;
 
 pub struct Review {
+    calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
     defaults: foveonic::render::RecipeDefaults,
     scan_destination: Option<PathBuf>,
     generation: u64,
@@ -26,6 +27,7 @@ pub struct Review {
 impl Review {
     pub fn new(engine: Engine, cache: Arc<Cache>, context: egui::Context) -> Self {
         Self {
+            calibration: None,
             defaults: Default::default(),
             scan_destination: None,
             generation: 0,
@@ -36,6 +38,12 @@ impl Review {
             worker: batch::Worker::new(engine, cache, context),
             received_imports: 0,
         }
+    }
+    pub fn set_noise_calibration(
+        &mut self,
+        calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
+    ) {
+        self.calibration = calibration;
     }
     pub fn rescan(&mut self, browser: &mut Browser, destination: Option<&std::path::Path>) {
         self.scan_destination = destination.map(std::path::Path::to_owned);
@@ -239,6 +247,7 @@ impl Review {
             }
         }
         if self.worker.submit(batch::Batch {
+            calibration: self.calibration.clone(),
             destination,
             photos,
             operation: if browser.import_mode {

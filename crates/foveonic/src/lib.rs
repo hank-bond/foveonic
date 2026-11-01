@@ -12,6 +12,7 @@ pub mod importing;
 pub mod inspection;
 mod interactive;
 mod nodes;
+pub mod noise_calibration;
 pub use nodes::color::noise;
 mod output;
 pub mod preview;

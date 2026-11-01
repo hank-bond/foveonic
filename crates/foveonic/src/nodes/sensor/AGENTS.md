@@ -17,6 +17,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[blue_mismatch.rs](./blue_mismatch.rs)** Repairs odd-phase blue runs after validating the source counter initialization precondition.
 - **[blue_pattern.rs](./blue_pattern.rs)** Removes directional blue phase patterns through explicit coarse masks and ordered pair corrections.
 - **[blue_refresh.rs](./blue_refresh.rs)** Refreshes RGB blue from four spatial blue phases while preserving red and green.
+- **[calibrated_defects.rs](./calibrated_defects.rs)** Repairs serial-matched persistent sensor locations before noise filtering and restores clipped defects afterward.
 - **[calibration.rs](./calibration.rs)** Resolves metadata-derived calibration, white balance, camera color, and image geometry.
 - **[camera_repair.rs](./camera_repair.rs)** Prepares camera repair lists so the GPU can fix pixels in the camera's order.
 - **[chroma_clusters.rs](./chroma_clusters.rs)** Repairs ordered RGB clusters by matching nearby valid three-by-three templates.

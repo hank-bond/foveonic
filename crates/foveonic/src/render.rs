@@ -6,7 +6,7 @@ use crate::image::{Description, ImageTexture, Layout, RenderedImage, Space};
 pub use crate::interactive::RenderSession;
 use crate::interactive::{Execution, Superseded};
 use crate::profile::Profile;
-use crate::source::{Result, Source};
+use crate::source::{Metadata, Result, Source};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -59,6 +59,7 @@ pub(crate) struct WhiteBalanceStats {
 
 pub struct Engine {
     gpu: Gpu,
+    pub(crate) noise_calibration: Option<Arc<crate::noise_calibration::Calibration>>,
     owner: Arc<()>,
     // Keep the latest photo's calibration statistics with the engine. Metadata lifetime
     // and the original sample allocation identify the immutable source.
@@ -83,6 +84,7 @@ impl Engine {
     pub fn new() -> Result<Self> {
         Ok(Self {
             gpu: Gpu::new()?,
+            noise_calibration: None,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
             calibration_resources: Some(Arc::new(
@@ -101,6 +103,7 @@ impl Engine {
     ) -> Result<Self> {
         Ok(Self {
             gpu: Gpu::from_device(device, queue, adapter_name)?,
+            noise_calibration: None,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
             calibration_resources: Some(Arc::new(
@@ -122,10 +125,50 @@ impl Engine {
     pub fn executor(&self) -> Self {
         Self {
             gpu: self.gpu.executor(),
+            noise_calibration: self.noise_calibration.clone(),
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
             calibration_resources: self.calibration_resources.clone(),
         }
+    }
+
+    /// Select an immutable calibration snapshot before beginning a render job.
+    pub fn set_noise_calibration(
+        &mut self,
+        calibration: Option<Arc<crate::noise_calibration::Calibration>>,
+    ) {
+        self.noise_calibration = calibration;
+    }
+
+    pub fn train_noise_calibration(
+        &self,
+        captures: &[crate::noise_calibration::Capture],
+        progress: impl FnMut(crate::noise_calibration::TrainingProgress),
+        cancelled: impl Fn() -> bool,
+    ) -> Result<crate::noise_calibration::Calibration> {
+        crate::noise_calibration::train(&self.gpu, captures, progress, cancelled)
+    }
+
+    pub(crate) fn noise_model(
+        &self,
+        metadata: &Metadata,
+    ) -> Result<&crate::nodes::sensor::noise_model::Model> {
+        if let Some(calibration) = &self.noise_calibration {
+            let iso = metadata
+                .properties
+                .get("ISO")
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(0);
+            if calibration
+                .model
+                .row_priors
+                .iter()
+                .any(|prior| prior.iso == iso)
+            {
+                return Ok(&calibration.model);
+            }
+        }
+        crate::nodes::sensor::noise_model::embedded()
     }
 
     pub(crate) fn cached_neutral(

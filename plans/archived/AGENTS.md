@@ -61,6 +61,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[merrill-noise-cleanup](./merrill-noise-cleanup.md)** _(archived)._ Consolidate reviewed Merrill noise, banding, speckle and shadow controls before optimization.
 - **[merrill-noise-default](./merrill-noise-default.md)** _(archived)._ Enable Noise and Detail for newly opened Merrill photographs while preserving saved off choices.
 - **[merrill-noise-latency](./merrill-noise-latency.md)** _(archived)._ Reduce completed Merrill noise and banding latency while preserving the reviewed corrections.
+- **[merrill-noise-training](./merrill-noise-training.md)** _(archived)._ Implemented user cap calibration with grouped review, fitted noise profiles and serial-matched pixel correction.
 - **[merrill-regional-preview](./merrill-regional-preview.md)** _(archived)._ Deliver Merrill Smart detail from native processing tiles before continuing the whole frame.
 - **[metadata-first-loading](./metadata-first-loading.md)** _(archived)._ Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.
 - **[monochrome-performance](./monochrome-performance.md)** _(archived)._ Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output.

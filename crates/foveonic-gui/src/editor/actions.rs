@@ -26,6 +26,7 @@ impl App {
         let previous_defaults = self.preferences.editor.defaults.clone();
         for action in std::mem::take(&mut self.editor_ui.actions) {
             match action {
+                Action::NoiseCalibration => self.noise_calibration.open = true,
                 Action::Reset(scope, camera) => {
                     let rendering = (scope != Scope::All).then_some(self.settings.rendering);
                     match camera_settings(metadata, rendering) {

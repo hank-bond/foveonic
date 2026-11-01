@@ -208,6 +208,15 @@ pub fn show(ui: &mut egui::Ui, metadata: Option<&Metadata>) {
 mod tests {
     use super::*;
     #[test]
+    fn camera_shutter_description_is_shared_by_table_and_viewport() {
+        let properties = BTreeMap::from([
+            ("SHUTTER".into(), "0.01563".into()),
+            ("SH_DESC".into(), "1/60".into()),
+        ]);
+        assert_eq!(property_rows(&properties), [("Shutter", "1/60".into())]);
+        assert_eq!(capture_values(&properties), ["1/60"]);
+    }
+    #[test]
     fn photographic_not_measured_formatting() {
         assert_eq!(aperture("4.0").unwrap(), "f/4");
         assert_eq!(aperture("2.8").unwrap(), "f/2.8");

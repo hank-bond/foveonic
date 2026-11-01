@@ -69,9 +69,11 @@ fn corrections(
                 .changed()
         })
         .inner;
-    let advanced = egui::CollapsingHeader::new("Advanced")
-        .id_salt("advanced-corrections")
-        .show(ui, |ui| changed |= common::pixel_corrections(ui, settings));
+    let advanced = crate::widgets::disclosure(
+        ui,
+        egui::CollapsingHeader::new("Advanced").id_salt("advanced-corrections"),
+        |ui| changed |= common::pixel_corrections(ui, settings),
+    );
     help::control(advanced.header_response, "Advanced corrections");
     changed
 }

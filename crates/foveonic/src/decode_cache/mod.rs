@@ -157,6 +157,7 @@ struct Header {
 struct Control {
     settings: Settings,
     photo_defaults: crate::render::RecipeDefaults,
+    noise_calibration: Option<String>,
     clear: bool,
     watched: Vec<PathBuf>,
     selected: Option<PathBuf>,
@@ -214,6 +215,7 @@ impl Cache {
     fn at(root: PathBuf) -> Self {
         let control = Arc::new(Mutex::new(Control {
             photo_defaults: Default::default(),
+            noise_calibration: None,
             settings: Settings {
                 enabled: false,
                 ..Settings::default()
@@ -282,6 +284,13 @@ impl Cache {
     pub fn configure_photo_defaults(&self, defaults: &crate::render::RecipeDefaults) {
         self.control.lock().unwrap().photo_defaults = defaults.clone();
     }
+    /// Preview samples are specific to the selected calibration. RAW bundles remain shared.
+    pub fn configure_noise_calibration(&self, signature: Option<String>) {
+        let mut control = self.control.lock().unwrap();
+        control.noise_calibration = signature;
+        control.preview = None;
+    }
+
     /// Replace speculative work with a bounded neighborhood of the selected photo.
     /// Paths follow visible browser order and may include an active concealed photo.
     /// Repeating the same request must not restart a completed or cleared pass.

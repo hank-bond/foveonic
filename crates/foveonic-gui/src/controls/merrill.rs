@@ -57,10 +57,7 @@ fn detail(
     let mut changed = false;
     changed |= common::section_header(ui, EditingSection::Detail, "Detail", Some(enabled));
     ui.add_enabled_ui(*enabled, |ui| {
-        let column = common::LabelColumn::new(ui, &["Fine", "Coarse"], &["Size"])
-            .with_outer_padding(f32::from(
-                crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING,
-            ));
+        let column = common::LabelColumn::new(ui, &["Fine", "Coarse", "Size"]);
         crate::widgets::parameter_group(ui, |ui| {
             changed |= column.adjustment(
                 ui,
@@ -69,7 +66,7 @@ fn detail(
                 foveonic::noise::TextureControls::AMOUNT_RANGE,
                 1.,
             );
-            changed |= column.indented().adjustment(
+            changed |= column.adjustment(
                 ui,
                 ("Fine size", "Size"),
                 &mut texture.fine_size,
@@ -85,7 +82,7 @@ fn detail(
                 foveonic::noise::TextureControls::AMOUNT_RANGE,
                 1.,
             );
-            changed |= column.indented().adjustment(
+            changed |= column.adjustment(
                 ui,
                 ("Coarse size", "Size"),
                 &mut texture.coarse_size,
@@ -176,11 +173,8 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = false;
     common::section_header(ui, EditingSection::Corrections, "Corrections", None);
     crate::widgets::parameter_group(ui, |ui| {
-        let column = common::LabelColumn::new(ui, &["Highlights"], &["Threshold"])
-            .with_toggle(ui, "Highlights")
-            .with_outer_padding(f32::from(
-                crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING,
-            ));
+        let column = common::LabelColumn::new(ui, &["Highlights", "Threshold"])
+            .with_toggle(ui, "Highlights");
         ui.horizontal(|ui| {
             changed |= help::control(
                 column.toggle(ui, "Highlights", &mut settings.highlight_restoration),
@@ -195,7 +189,8 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                     .unwrap()
                     .1;
                 let combo = egui::ComboBox::from_id_salt("highlight-method")
-                    .width(ui.available_width() - 8.)
+                    .width(ui.available_width())
+                    .truncate()
                     .selected_text(label);
                 let response = crate::widgets::dropdown(ui, combo, |ui| {
                     for (value, label) in HIGHLIGHT_METHODS {
@@ -216,7 +211,7 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                     -2. ..=2.,
                     0.,
                     Some(0.),
-                    column.indented().row_controls("Threshold"),
+                    column.row_controls("Threshold"),
                 );
             } else {
                 changed |= adjustment_row(
@@ -226,16 +221,18 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                     0. ..=1.,
                     0.,
                     0.1,
-                    column.indented().row_controls("Threshold"),
+                    column.row_controls("Threshold"),
                 );
             }
         });
     });
-    let advanced = egui::CollapsingHeader::new("Advanced")
-        .id_salt("advanced-corrections")
-        .show(ui, |ui| {
+    let advanced = crate::widgets::disclosure(
+        ui,
+        egui::CollapsingHeader::new("Advanced").id_salt("advanced-corrections"),
+        |ui| {
             changed |= common::bad_pixels(ui, settings);
-        });
+        },
+    );
     help::control(advanced.header_response, "Advanced corrections");
     changed
 }

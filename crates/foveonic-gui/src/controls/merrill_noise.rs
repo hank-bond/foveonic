@@ -24,7 +24,7 @@ pub(super) fn color(ui: &mut egui::Ui, settings: &mut Settings, rotation: u32) -
     );
     ui.add_enabled_ui(controls.noise_enabled, |ui| {
         changed |= noise_method(ui, settings);
-        let column = common::LabelColumn::new(ui, &["Chroma", "Luma"], &[]);
+        let column = common::LabelColumn::new(ui, &["Chroma", "Luma"]);
         changed |= column.adjustment(
             ui,
             ("Chroma noise", "Chroma"),
@@ -42,9 +42,10 @@ pub(super) fn color(ui: &mut egui::Ui, settings: &mut Settings, rotation: u32) -
         changed |= neutralize_shadows(ui, settings);
         changed |= speckles(ui, settings);
         changed |= banding(ui, settings, &mut controls.banding, rotation);
-        egui::CollapsingHeader::new("Advanced")
-            .id_salt("advanced-reconstruction")
-            .show(ui, |ui| {
+        crate::widgets::disclosure(
+            ui,
+            egui::CollapsingHeader::new("Advanced").id_salt("advanced-reconstruction"),
+            |ui| {
                 changed |= automatic_adjustment(
                     ui,
                     "ColorDQ gain",
@@ -54,7 +55,8 @@ pub(super) fn color(ui: &mut egui::Ui, settings: &mut Settings, rotation: u32) -
                     None,
                     RowControls::default(),
                 );
-            });
+            },
+        );
     });
     // Keep both groups' inactive values. Loading an older explicit off
     // recipe must not create settings merely by drawing the panel.
@@ -77,7 +79,8 @@ fn choice_menu<T: Copy + PartialEq>(
         .unwrap()
         .1;
     let combo = egui::ComboBox::from_id_salt(id)
-        .width((ui.available_width() - 8.).max(80.))
+        .width(ui.available_width())
+        .truncate()
         .selected_text(label);
     let mut changed = false;
     let response = crate::widgets::dropdown(ui, combo, |ui| {
@@ -122,9 +125,10 @@ fn neutralize_shadows(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         ShadowNeutralizeControls::STRENGTH_RANGE,
         defaults.strength,
     );
-    egui::CollapsingHeader::new("Shadow selectivity")
-        .id_salt("shadow-neutrality-options")
-        .show(ui, |ui| {
+    crate::widgets::disclosure(
+        ui,
+        egui::CollapsingHeader::new("Shadow selectivity").id_salt("shadow-neutrality-options"),
+        |ui| {
             changed |= adjustment(
                 ui,
                 "Shadow limit",
@@ -146,7 +150,8 @@ fn neutralize_shadows(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 ShadowNeutralizeControls::HUE_WIDTH_RANGE,
                 defaults.hue_width,
             );
-        });
+        },
+    );
     changed
 }
 
@@ -154,29 +159,29 @@ fn speckles(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     use foveonic::render::MerrillSpeckleMethod;
     let defaults = MerrillSpeckleControls::default();
     let mut changed = false;
-    let column = common::LabelColumn::new(ui, &["Speckles"], &[]);
-    ui.horizontal(|ui| {
-        changed |= help::control(
-            column.toggle(ui, "Speckles", &mut settings.despeckle),
-            "Speckles",
-        )
-        .changed();
-        ui.add_enabled_ui(settings.despeckle, |ui| {
-            let methods = [
-                (MerrillSpeckleMethod::Reference, "Reference"),
-                (MerrillSpeckleMethod::Compact, "Compact"),
-            ];
-            changed |= choice_menu(
-                ui,
-                "speckle-method",
-                "Speckle method",
-                &mut settings.merrill_speckles.method,
-                &methods,
-            );
+    crate::widgets::parameter_group(ui, |ui| {
+        let column = common::LabelColumn::new(ui, &["Speckles"]);
+        ui.horizontal(|ui| {
+            changed |= help::control(
+                column.toggle(ui, "Speckles", &mut settings.despeckle),
+                "Speckles",
+            )
+            .changed();
+            ui.add_enabled_ui(settings.despeckle, |ui| {
+                let methods = [
+                    (MerrillSpeckleMethod::Reference, "Reference"),
+                    (MerrillSpeckleMethod::Compact, "Compact"),
+                ];
+                changed |= choice_menu(
+                    ui,
+                    "speckle-method",
+                    "Speckle method",
+                    &mut settings.merrill_speckles.method,
+                    &methods,
+                );
+            });
         });
-    });
-    ui.add_enabled_ui(settings.despeckle, |ui| {
-        ui.indent("speckle-parameters", |ui| {
+        ui.add_enabled_ui(settings.despeckle, |ui| {
             changed |= adjustment(
                 ui,
                 "Speckle threshold",
@@ -208,29 +213,29 @@ fn banding(
     rotation: u32,
 ) -> bool {
     let mut changed = false;
-    let column = common::LabelColumn::new(ui, &["Banding"], &["Strength"]);
-    ui.horizontal(|ui| {
-        changed |= help::control(
-            column.toggle(ui, "Banding", &mut settings.merrill_banding.enabled),
-            "Banding enabled",
-        )
-        .changed();
-        ui.add_enabled_ui(settings.merrill_banding.enabled, |ui| {
-            let methods = [
-                (MerrillBandingMethod::Reference, "Reference"),
-                (MerrillBandingMethod::Directional, "Directional"),
-            ];
-            changed |= choice_menu(
-                ui,
-                "banding-method",
-                "Banding method",
-                &mut settings.merrill_banding.method,
-                &methods,
-            );
+    crate::widgets::parameter_group(ui, |ui| {
+        let column = common::LabelColumn::new(ui, &["Banding", "Strength"]);
+        ui.horizontal(|ui| {
+            changed |= help::control(
+                column.toggle(ui, "Banding", &mut settings.merrill_banding.enabled),
+                "Banding enabled",
+            )
+            .changed();
+            ui.add_enabled_ui(settings.merrill_banding.enabled, |ui| {
+                let methods = [
+                    (MerrillBandingMethod::Reference, "Reference"),
+                    (MerrillBandingMethod::Directional, "Directional"),
+                ];
+                changed |= choice_menu(
+                    ui,
+                    "banding-method",
+                    "Banding method",
+                    &mut settings.merrill_banding.method,
+                    &methods,
+                );
+            });
         });
-    });
-    ui.add_enabled_ui(settings.merrill_banding.enabled, |ui| {
-        ui.indent("banding-parameters", |ui| {
+        ui.add_enabled_ui(settings.merrill_banding.enabled, |ui| {
             match settings.merrill_banding.method {
                 MerrillBandingMethod::Reference => {
                     let help_key = if settings.is_monochrome() {
@@ -258,7 +263,7 @@ fn banding(
                         ("Horizontal bands", horizontal),
                         ("Vertical bands", vertical),
                     ] {
-                        egui::CollapsingHeader::new(label).show(ui, |ui| {
+                        crate::widgets::disclosure(ui, egui::CollapsingHeader::new(label), |ui| {
                             changed |= band_axis(ui, axis);
                         });
                     }
@@ -279,10 +284,8 @@ fn row_banding(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
 
 fn band_axis(ui: &mut egui::Ui, axis: &mut BandingAxisControls) -> bool {
     let mut changed = false;
-    let column = common::LabelColumn::new(ui, &BandingAxisControls::LABELS, &["Size"])
-        .with_outer_padding(f32::from(
-            crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING,
-        ));
+    let [fine, coarse] = BandingAxisControls::LABELS;
+    let column = common::LabelColumn::new(ui, &[fine, coarse, "Size"]);
     for (index, label) in BandingAxisControls::LABELS.into_iter().enumerate() {
         let range = axis.size_range(index);
         let default = BandingAxisControls::DEFAULT_BANDS[index];

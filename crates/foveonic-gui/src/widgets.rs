@@ -37,7 +37,6 @@ pub(crate) fn format_parameter_value(value: f64) -> String {
 
 const RADIUS: u8 = 4;
 pub const BUTTON_GROUP_MARGIN: i8 = 4;
-pub const PARAMETER_GROUP_HORIZONTAL_PADDING: i8 = 2 * BUTTON_GROUP_MARGIN;
 pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);
 /// Keep slider tracks distinct from both linked groups and the main panel.
 pub const SLIDER_TRACK_FILL: egui::Color32 = egui::Color32::from_gray(60);
@@ -47,17 +46,23 @@ pub fn button_group<R>(
     ui: &mut egui::Ui,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
-    linked_group(ui, egui::Margin::same(BUTTON_GROUP_MARGIN), contents)
+    linked_group(
+        ui,
+        egui::Margin::same(BUTTON_GROUP_MARGIN),
+        egui::Margin::ZERO,
+        contents,
+    )
 }
 
-/// Keep paired parameter rows roomy at the sides without increasing row gaps.
+/// Extend the background around parameter rows without moving their controls.
 pub fn parameter_group<R>(
     ui: &mut egui::Ui,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     linked_group(
         ui,
-        egui::Margin::symmetric(PARAMETER_GROUP_HORIZONTAL_PADDING, BUTTON_GROUP_MARGIN),
+        egui::Margin::same(BUTTON_GROUP_MARGIN),
+        egui::Margin::symmetric(-BUTTON_GROUP_MARGIN, 0),
         contents,
     )
 }
@@ -65,16 +70,40 @@ pub fn parameter_group<R>(
 fn linked_group<R>(
     ui: &mut egui::Ui,
     padding: egui::Margin,
+    outer_margin: egui::Margin,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     egui::Frame::new()
         .inner_margin(padding)
+        .outer_margin(outer_margin)
         .corner_radius(6)
         .fill(MENU_BACKGROUND)
         .show(ui, |ui| {
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), contents)
                 .inner
         })
+}
+
+/// Keep the disclosure line on the parent label edge and its body one em inward.
+pub fn disclosure<R>(
+    ui: &mut egui::Ui,
+    header: egui::CollapsingHeader,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::CollapsingResponse<R> {
+    header.show_unindented(ui, |ui| {
+        let start = ui.next_widget_position();
+        let body = ui
+            .scope(|ui| {
+                ui.visuals_mut().indent_has_left_vline = false;
+                ui.indent("disclosure body", contents)
+            })
+            .inner;
+        ui.painter().line_segment(
+            [start, egui::pos2(start.x, body.response.rect.bottom())],
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
+        body.inner
+    })
 }
 
 pub fn install_style(ctx: &egui::Context) {
@@ -114,8 +143,7 @@ pub fn install_style(ctx: &egui::Context) {
     style
         .text_styles
         .insert(egui::TextStyle::Body, egui::FontId::proportional(13.));
-    // About two lowercase characters in this proportional font, split evenly
-    // around the indentation pipe.
+    // Leave one body em between a disclosure line and its child controls.
     style.spacing.indent = egui::TextStyle::Body.resolve(&style).size;
     style.visuals.indent_has_left_vline = true;
     ctx.set_style(style);
@@ -393,7 +421,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn indentation_reserves_one_body_em_total_with_a_centered_pipe() {
+    fn disclosure_line_aligns_with_parent_and_preserves_body_indentation() {
         let ctx = egui::Context::default();
         install_style(&ctx);
         let mut parent_left = 0.;
@@ -403,16 +431,20 @@ mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 em = egui::TextStyle::Body.resolve(ui.style()).size;
                 parent_left = ui.available_rect_before_wrap().left();
-                ui.indent("indentation-spacing", |ui| {
-                    child_left = ui.available_rect_before_wrap().left();
-                    ui.label("Child");
-                });
+                disclosure(
+                    ui,
+                    egui::CollapsingHeader::new("Options").default_open(true),
+                    |ui| {
+                        child_left = ui.available_rect_before_wrap().left();
+                        ui.label("Child");
+                    },
+                );
             });
         });
         assert_eq!(child_left - parent_left, em);
         assert!(output.shapes.iter().any(|shape| match &shape.shape {
             egui::Shape::LineSegment { points, .. } => {
-                points[0].x == parent_left + 0.5 * em && points[1].x == parent_left + 0.5 * em
+                points[0].x == parent_left && points[1].x == parent_left
             }
             _ => false,
         }));

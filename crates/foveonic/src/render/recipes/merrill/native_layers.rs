@@ -39,7 +39,9 @@ pub(super) enum Output {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build(
+    engine: &crate::render::Engine,
     source: &Source,
     settings: &Settings,
     params: calibration::EncodeParams,
@@ -81,6 +83,25 @@ pub(super) fn build(
     })?;
     let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
     let calibration_params = calibration.params;
+    let defect_map = engine
+        .noise_calibration
+        .as_ref()
+        .filter(|_| settings.processing_sections.noise && settings.despeckle)
+        .and_then(|profile| profile.matching_defects(&source.metadata))
+        .filter(|map| !map.points.is_empty());
+    let working = if let Some(map) = defect_map {
+        let repaired = graph.add(
+            Operation::CalibratedDefects(Arc::new(
+                crate::nodes::sensor::calibrated_defects::Prepared::new(map, false),
+            )),
+            &[input],
+        )?;
+        finish!();
+        repaired
+    } else {
+        input
+    };
+    let model = engine.noise_model(&source.metadata)?;
     let corrected = if policy.multiscale || policy.directional_banding {
         let (shields, filter) = profile.measure("prepare multiscale noise", || {
             layer_noise::prepare(
@@ -89,16 +110,17 @@ pub(super) fn build(
                 calibration_gains,
                 settings.merrill_noise_method
                     == crate::render::MerrillNoiseMethod::MultiscaleRowsAndColumns,
+                model,
             )
         })?;
         let corrected = graph.add(
             Operation::ShieldNoise(Arc::new(shields)),
-            &[input, input, black],
+            &[working, input, black],
         )?;
         finish!();
         let corrected = if policy.directional_banding {
             let guard = profile.measure("prepare guarded native rows", || {
-                layer_noise::prepare_row_guard(&source.metadata)
+                layer_noise::prepare_row_guard(&source.metadata, model)
             })?;
             let guarded = graph.add(
                 Operation::RowGuard(Arc::new(guard)),
@@ -120,7 +142,21 @@ pub(super) fn build(
             corrected
         }
     } else {
-        input
+        working
+    };
+    // The filter preserves original clipped triplets. Check mapped outliers in
+    // those triplets again without weakening the immutable clipping evidence.
+    let corrected = if let Some(map) = defect_map.filter(|_| policy.multiscale) {
+        let repaired = graph.add(
+            Operation::CalibratedDefects(Arc::new(
+                crate::nodes::sensor::calibrated_defects::Prepared::new(map, true),
+            )),
+            &[corrected],
+        )?;
+        finish!();
+        repaired
+    } else {
+        corrected
     };
     let mut calibrated = graph.add(Operation::Calibrate(calibration), &[corrected, black])?;
     finish!();

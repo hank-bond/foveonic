@@ -62,7 +62,6 @@ fn label_width(ui: &egui::Ui) -> f32 {
 fn aligned_label(
     ui: &mut egui::Ui,
     text: &str,
-    indent: Option<f32>,
     enabled: Option<&mut bool>,
     width: Option<f32>,
 ) -> egui::Response {
@@ -73,27 +72,12 @@ fn aligned_label(
     } else {
         0.
     };
-    let mut job = egui::text::LayoutJob::simple_singleline(
+    let job = egui::text::LayoutJob::simple_singleline(
         text.into(),
         font.clone(),
         egui::Color32::PLACEHOLDER,
     );
-    if indent.is_some() {
-        job.sections[0].leading_space = ui.spacing().indent;
-    }
-    let mut galley = ui.painter().layout_job(job.clone());
-    let ink_left = |galley: &egui::Galley| {
-        galley
-            .rows
-            .first()
-            .map_or(0., |row| row.visuals.mesh_bounds.left())
-    };
-    let pipe = indent.map(|padding| (ink_left(&galley) - padding) * 0.5);
-    if let Some(pipe) = pipe {
-        // Keep the established pipe position. Only halve the gap after it.
-        job.sections[0].leading_space -= (ink_left(&galley) - pipe) * 0.5;
-        galley = ui.painter().layout_job(job);
-    }
+    let mut galley = ui.painter().layout_job(job);
     let reference = ui
         .painter()
         .layout_no_wrap("x".into(), font, egui::Color32::PLACEHOLDER);
@@ -114,39 +98,26 @@ fn aligned_label(
     // half the x-height aligns the visible letter body, independent of g/p/h.
     column.rect.max.x = column.rect.min.x + (width - prefix).max(column.size().x);
     column.rect.max.y = column.rect.min.y + 2. * (baseline + body_offset);
-    let response = if let Some(value) = enabled {
+    if let Some(value) = enabled {
         ui.add_sized([width, ROW_HEIGHT], |ui: &mut egui::Ui| {
             crate::widgets::checkbox(ui, value, galley)
         })
     } else {
         ui.add_sized([width, ROW_HEIGHT], egui::Label::new(galley))
-    };
-    if let Some(pipe) = pipe {
-        let x = response.rect.left() + pipe;
-        ui.painter().line_segment(
-            [
-                egui::pos2(x, response.rect.top()),
-                egui::pos2(x, response.rect.bottom()),
-            ],
-            ui.visuals().widgets.noninteractive.bg_stroke,
-        );
     }
-    response
 }
 
 pub(super) fn label(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    aligned_label(ui, text, None, None, None)
+    aligned_label(ui, text, None, None)
 }
 
 /// A section's labels share only the space needed by that section.
 #[derive(Clone, Copy)]
 pub(super) struct LabelColumn {
     width: f32,
-    indent: bool,
-    outer_padding: f32,
 }
 impl LabelColumn {
-    pub(super) fn new(ui: &egui::Ui, labels: &[&str], children: &[&str]) -> Self {
+    pub(super) fn new(ui: &egui::Ui, labels: &[&str]) -> Self {
         let font = egui::TextStyle::Body.resolve(ui.style());
         let width = |text: &str| {
             ui.painter()
@@ -155,31 +126,16 @@ impl LabelColumn {
                 .x
         };
         Self {
-            width: labels
-                .iter()
-                .map(|s| width(s))
-                .chain(children.iter().map(|s| width(s) + ui.spacing().indent))
-                .fold(0., f32::max)
-                .ceil(),
-            indent: false,
-            outer_padding: 0.,
-        }
-    }
-
-    pub(super) fn with_outer_padding(self, outer_padding: f32) -> Self {
-        Self {
-            outer_padding,
-            ..self
+            width: labels.iter().map(|s| width(s)).fold(0., f32::max).ceil(),
         }
     }
 
     pub(super) fn with_toggle(self, ui: &egui::Ui, label: &str) -> Self {
-        let text = Self::new(ui, &[label], &[]).width;
+        let text = Self::new(ui, &[label]).width;
         Self {
             width: self
                 .width
                 .max(text + ui.spacing().icon_width + ui.spacing().icon_spacing),
-            ..self
         }
     }
 
@@ -189,19 +145,11 @@ impl LabelColumn {
         label: &str,
         enabled: &mut bool,
     ) -> egui::Response {
-        aligned_label(ui, label, None, Some(enabled), Some(self.width))
-    }
-
-    pub(super) fn indented(self) -> Self {
-        Self {
-            indent: true,
-            ..self
-        }
+        aligned_label(ui, label, Some(enabled), Some(self.width))
     }
 
     pub(super) fn row_controls(self, label: &str) -> RowControls<'_> {
         RowControls {
-            indent: self.indent.then_some(self.outer_padding),
             label: Some((label, self.width)),
             ..Default::default()
         }
@@ -299,8 +247,6 @@ pub(super) struct RowControls<'a> {
     pub(super) step: Option<f64>,
     /// Grid origin for stepped values. Zero preserves the ordinary slider grid.
     pub(super) step_origin: f64,
-    /// Some includes the containing group's left padding when centering the pipe.
-    pub(super) indent: Option<f32>,
     pub(super) label: Option<(&'a str, f32)>,
 }
 
@@ -350,7 +296,6 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
         enabled,
         step,
         step_origin,
-        indent,
         label: label_override,
     } = controls;
     // The two Highlights rows need separate help and widget IDs.
@@ -381,16 +326,13 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
         ui.horizontal(|ui| {
             let enabled = if let Some(enabled) = enabled {
                 toggled = help::control(
-                    aligned_label(ui, display_label, indent, Some(&mut *enabled), label_width),
+                    aligned_label(ui, display_label, Some(&mut *enabled), label_width),
                     label,
                 )
                 .changed();
                 *enabled
             } else {
-                help::control(
-                    aligned_label(ui, display_label, indent, None, label_width),
-                    label,
-                );
+                help::control(aligned_label(ui, display_label, None, label_width), label);
                 true
             };
             ui.add_enabled_ui(enabled, |ui| {
@@ -560,7 +502,7 @@ pub(super) fn white_balance(
         enabled,
     );
     ui.add_enabled_ui(!settings.is_monochrome(), |ui| {
-        let column = LabelColumn::new(ui, &["Warmth", "Tint"], &[]);
+        let column = LabelColumn::new(ui, &["Warmth", "Tint"]);
         changed |= column.adjustment(
             ui,
             ("Warmth", "Warmth"),
@@ -606,7 +548,8 @@ fn camera_choice(
                 enabled && choices.as_ref().is_some_and(|list| !list.is_empty()),
                 |ui| {
                     let combo = egui::ComboBox::from_id_salt(key)
-                        .width(ui.available_width() - 8.)
+                        .width(ui.available_width())
+                        .truncate()
                         .selected_text(if value.is_empty() {
                             "As Shot"
                         } else {
@@ -680,7 +623,7 @@ pub(super) fn tone_with_exposure_range(
                 "Highlights",
             ]
         };
-        let column = LabelColumn::new(ui, labels, &[]);
+        let column = LabelColumn::new(ui, labels);
         for (label, value, range, default) in [
             ("Exposure", &mut settings.exposure, exposure_range, 0.),
             ("Saturation", &mut settings.saturation, 0. ..=2., 1.),
@@ -773,7 +716,7 @@ pub(super) fn sharpening_with_range(
             == foveonic::render::PhotographicMethod::Universal
         {
             let sharp = &mut settings.photographic.sharpening;
-            let column = LabelColumn::new(ui, &["Amount", "Radius"], &[]);
+            let column = LabelColumn::new(ui, &["Amount", "Radius"]);
             changed |= column.adjustment(
                 ui,
                 ("Universal amount", "Amount"),
@@ -788,10 +731,11 @@ pub(super) fn sharpening_with_range(
                 0.3..=4.,
                 0.8,
             );
-            egui::CollapsingHeader::new("Advanced")
-                .id_salt("universal-sharpening")
-                .show(ui, |ui| {
-                    let column = LabelColumn::new(ui, &["Threshold", "Halos"], &[]);
+            crate::widgets::disclosure(
+                ui,
+                egui::CollapsingHeader::new("Advanced").id_salt("universal-sharpening"),
+                |ui| {
+                    let column = LabelColumn::new(ui, &["Threshold", "Halos"]);
                     changed |= adjustment_row(
                         ui,
                         "Sharpen threshold",
@@ -808,10 +752,11 @@ pub(super) fn sharpening_with_range(
                         0. ..=1.,
                         0.5,
                     );
-                });
+                },
+            );
             return;
         }
-        let column = LabelColumn::new(ui, &["Amount"], &[]);
+        let column = LabelColumn::new(ui, &["Amount"]);
         changed |= automatic_adjustment(
             ui,
             "Sharpen",
@@ -876,7 +821,8 @@ pub(super) fn method_choice(
     ui.horizontal(|ui| {
         help::control(ui.label(label), key);
         let combo = egui::ComboBox::from_id_salt(key)
-            .width((ui.available_width() - 8.).max(80.))
+            .width(ui.available_width())
+            .truncate()
             .selected_text(value.label());
         let response = crate::widgets::dropdown(ui, combo, |ui| {
             for method in [

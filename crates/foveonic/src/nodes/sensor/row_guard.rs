@@ -21,7 +21,12 @@ const IMAGE_WORKGROUP: u32 = 8;
 const PASSES: u32 = 10;
 const MINIMUM_SIDE: u32 = 65;
 
-const GAUSSIANS: [(f64, usize); 4] = [(1.25, 5), (3., 12), (8., 32), (4., 16)];
+const GAUSSIANS: [(f64, usize); 4] = [
+    (noise_model::ROW_PRIOR_SIGMA, 5),
+    (3., 12),
+    (8., 32),
+    (4., 16),
+];
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -43,7 +48,13 @@ pub struct Prepared {
 impl Prepared {
     /// Uses uncalibrated sensor codes and a half-open active rectangle.
     /// Noise terms are constant, linear and quadratic, each in layer order.
-    pub(crate) fn new(extent: [u32; 2], area: [u32; 4], noise: [f32; 9], iso: u32) -> Result<Self> {
+    pub(crate) fn new(
+        extent: [u32; 2],
+        area: [u32; 4],
+        noise: [f32; 9],
+        iso: u32,
+        model: &noise_model::Model,
+    ) -> Result<Self> {
         if area[0] >= area[2]
             || area[1] >= area[3]
             || area[2] > extent[0]
@@ -56,7 +67,7 @@ impl Prepared {
         {
             return Err("invalid native row guard parameters".into());
         }
-        let covariance = noise_model::embedded()?.row_inverse_covariance(iso);
+        let covariance = model.row_inverse_covariance(iso);
         let mut weights = Vec::new();
         for (sigma, radius) in GAUSSIANS {
             let kernel: Vec<f64> = (-(radius as isize)..=radius as isize)

@@ -5,6 +5,7 @@ use eframe::egui;
 use foveonic::{render::Settings, source::ProcessingFamily};
 
 pub enum Action {
+    NoiseCalibration,
     Reset(Scope, bool),
     Apply(Scope, Box<Settings>),
     Save(Scope),
@@ -112,6 +113,15 @@ impl Menus<'_> {
     }
     fn menu(&mut self, ui: &mut egui::Ui, scope: Scope) {
         let Some(family) = self.family else { return };
+        if family == ProcessingFamily::Merrill && scope == Scope::Tool(super::Section::Noise) {
+            if ui.button("Calibrate noise…").clicked() {
+                self.state.actions.push(Action::NoiseCalibration);
+                ui.close_menu();
+            }
+            if self.library.choices(family, scope).next().is_some() {
+                ui.separator();
+            }
+        }
         for (index, preset) in self.library.choices(family, scope) {
             ui.horizontal(|ui| {
                 if ui.button(&preset.name).clicked() {

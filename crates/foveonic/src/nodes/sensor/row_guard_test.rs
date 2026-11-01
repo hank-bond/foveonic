@@ -238,17 +238,66 @@ fn row_guard_shader_validates_without_a_device() {
 
 #[test]
 fn row_guard_metadata_and_reflection_are_bounded() {
-    assert!(Prepared::new([190, 170], [3, 2, 187, 168], [1.; 9], 100).is_ok());
-    assert!(Prepared::new([190, 170], [3, 2, 187, 168], [f32::NAN; 9], 100).is_err());
-    assert!(Prepared::new([190, 170], [3, 2, 191, 168], [1.; 9], 100).is_err());
-    assert!(Prepared::new([190, 170], [3, 2, 20, 168], [1.; 9], 100).is_err());
-    assert!(Prepared::new([190, 170], [3, 2, 187, 168], [1.; 9], 0).is_err());
+    assert!(Prepared::new(
+        [190, 170],
+        [3, 2, 187, 168],
+        [1.; 9],
+        100,
+        noise_model::embedded().unwrap()
+    )
+    .is_ok());
+    assert!(Prepared::new(
+        [190, 170],
+        [3, 2, 187, 168],
+        [f32::NAN; 9],
+        100,
+        noise_model::embedded().unwrap()
+    )
+    .is_err());
+    assert!(Prepared::new(
+        [190, 170],
+        [3, 2, 191, 168],
+        [1.; 9],
+        100,
+        noise_model::embedded().unwrap()
+    )
+    .is_err());
+    assert!(Prepared::new(
+        [190, 170],
+        [3, 2, 20, 168],
+        [1.; 9],
+        100,
+        noise_model::embedded().unwrap()
+    )
+    .is_err());
+    assert!(Prepared::new(
+        [190, 170],
+        [3, 2, 187, 168],
+        [1.; 9],
+        0,
+        noise_model::embedded().unwrap()
+    )
+    .is_err());
     assert_eq!(
         (-3..10).map(|v| reflect(v, 4)).collect::<Vec<_>>(),
         [2, 1, 0, 0, 1, 2, 3, 3, 2, 1, 0, 0, 1]
     );
-    let low = Prepared::new([100, 100], [0, 0, 100, 100], [1.; 9], 50).unwrap();
-    let high = Prepared::new([100, 100], [0, 0, 100, 100], [1.; 9], 6400).unwrap();
+    let low = Prepared::new(
+        [100, 100],
+        [0, 0, 100, 100],
+        [1.; 9],
+        50,
+        noise_model::embedded().unwrap(),
+    )
+    .unwrap();
+    let high = Prepared::new(
+        [100, 100],
+        [0, 0, 100, 100],
+        [1.; 9],
+        6400,
+        noise_model::embedded().unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         low.params.inverse_covariance[0][0],
         noise_model::embedded().unwrap().row_inverse_covariance(100)[0]
@@ -277,6 +326,7 @@ fn fixture() -> GuardFixture {
         area,
         [4., 9., 0.2, 0.01, 0.02, 0.005, 0., 0., 0.],
         100,
+        noise_model::embedded().unwrap(),
     )
     .unwrap();
     let mut original = Vec::new();
@@ -415,6 +465,7 @@ fn row_guard_matches_frozen_native_photo_profiles() {
         area,
         noise,
         metadata["iso"].as_u64().unwrap() as u32,
+        noise_model::embedded().unwrap(),
     )
     .unwrap();
     let raw = std::fs::read(folder.join("source.u16")).unwrap();

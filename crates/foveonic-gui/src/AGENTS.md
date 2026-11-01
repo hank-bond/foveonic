@@ -20,6 +20,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 - **[controls/](./controls/AGENTS.md)** Family panels compose shared editing widgets while the processor defines supported controls.
 - **[editor/](./editor/AGENTS.md)** Editor workflow separates scoped settings, application presets and defaults from authored photos and transient comparisons.
+- **[noise_calibration/](./noise_calibration/AGENTS.md)** Calibration separates capture storage and availability, background job control, and shared-metadata presentation.
 
 ### Source files
 

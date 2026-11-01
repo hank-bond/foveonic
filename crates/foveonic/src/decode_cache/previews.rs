@@ -18,7 +18,7 @@ use std::{
 
 pub const MAX_SIDE: u32 = 2048;
 // Bump when photographic processing or preview encoding changes its appearance.
-const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE03";
+const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE04";
 // Allow the largest RGB16 image plus its TIFF and compression overhead.
 const MAX_ENCODED: u64 = 32 * 1024 * 1024;
 // Signature, JSON length, and JSON CRC32 share the decoded source prefix layout.
@@ -28,6 +28,7 @@ const PREVIEW_PREFIX_BYTES: u64 = (HEADER_CHECKSUM_OFFSET + size_of::<u32>()) as
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Key {
+    calibration: Option<String>,
     source: Identity,
     recipe: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,6 +40,7 @@ impl Key {
     }
     fn read(path: &Path) -> Result<Self> {
         Ok(Self {
+            calibration: None,
             source: Identity::read(path)?,
             default_recipe: None,
             recipe: sidecar::load(path)?
@@ -102,6 +104,16 @@ impl Cache {
                 .cloned()
                 .ok_or("selection invalidated")?;
             return Ok(Key {
+                calibration: if selection
+                    .properties
+                    .get("CAMMODEL")
+                    .and_then(|v| ProcessingFamily::from_camera_model(v))
+                    == Some(ProcessingFamily::Merrill)
+                {
+                    self.control.lock().unwrap().noise_calibration.clone()
+                } else {
+                    None
+                },
                 source,
                 default_recipe: default_key(
                     &defaults,
@@ -116,6 +128,17 @@ impl Cache {
             });
         }
         let mut key = Key::read(path)?;
+        let calibration = self.control.lock().unwrap().noise_calibration.clone();
+        if calibration.is_some()
+            && self
+                .capture_properties(path)?
+                .get("CAMMODEL")
+                .and_then(|v| ProcessingFamily::from_camera_model(v))
+                == Some(ProcessingFamily::Merrill)
+        {
+            key.calibration = calibration;
+        }
+
         if key.recipe.is_none() && !defaults.is_empty() {
             key.default_recipe = default_key(&defaults, &self.capture_properties(path)?, true)?;
         }
@@ -169,8 +192,19 @@ impl Cache {
         settings: &crate::render::Settings,
         metadata: &Metadata,
         preview: Preview,
+        calibration: Option<&str>,
     ) -> Result<()> {
         let key = self.preview_key(path)?;
+        let family = metadata.processing_family()?;
+        let calibration = if family == ProcessingFamily::Merrill {
+            calibration
+        } else {
+            None
+        };
+        if key.calibration.as_deref() != calibration {
+            return Ok(());
+        }
+
         let mut expected = match &key.recipe {
             Some(bytes) => sidecar::decode(bytes)?,
             None => match &key.default_recipe {
@@ -248,6 +282,7 @@ fn read_file(
     let header: PreviewHeader = serde_json::from_slice(&bytes)?;
     if header.key.source != key.source
         || header.key.recipe != key.recipe
+        || (header.rendered && header.key.calibration != key.calibration)
         || (check_defaults && header.rendered && header.key.default_recipe != key.default_recipe)
         || !settings.permits(header.family)
         || header.extent.iter().any(|n| *n == 0 || *n > MAX_SIDE)
@@ -277,6 +312,7 @@ pub(super) fn prepared(
     current: &impl Fn() -> bool,
 ) -> Result<()> {
     let key = Key {
+        calibration: None,
         source: identity,
         default_recipe: None,
         recipe: recipe.map(sidecar::encode).transpose()?,

@@ -3,24 +3,50 @@
 use crate::source::Result;
 use std::sync::OnceLock;
 
-#[derive(serde::Deserialize)]
+pub(crate) const ROW_PRIOR_SIGMA: f64 = 1.25;
+pub(crate) const GAUSSIAN_SIGMAS: [usize; 4] = [2, 8, 32, 128];
+pub(crate) const COLUMN_REFERENCE_LENGTH: usize = 4704;
+pub(crate) const MODEL_COUNT: usize = 5;
+pub(crate) const SCALES: usize = GAUSSIAN_SIGMAS.len() + 1;
+pub(crate) const WEIGHTS_PER_MODEL: usize = SCALES * 3;
+pub(crate) const GAUSSIAN_WEIGHT_COUNT: usize = 8 * (2 + 8 + 32 + 128) + 4;
+pub(crate) const REFERENCE_OFFSET: usize = MODEL_COUNT * WEIGHTS_PER_MODEL + GAUSSIAN_WEIGHT_COUNT;
+pub(crate) const MODEL_FLOATS: usize = REFERENCE_OFFSET + 2 * COLUMN_REFERENCE_LENGTH;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RowPrior {
-    iso: u32,
-    inverse_covariance: [f32; 9],
+pub(crate) struct RowPrior {
+    pub(crate) iso: u32,
+    pub(crate) inverse_covariance: [f32; 9],
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Model {
-    shield_color_axis: [f32; 3],
-    row_priors: Vec<RowPrior>,
+    pub(crate) shield_color_axis: [f32; 3],
+    pub(crate) row_priors: Vec<RowPrior>,
+    #[serde(default)]
+    pub(crate) shield_tables: Vec<f32>,
 }
 
 impl Model {
     fn parse(bytes: &[u8]) -> Result<Self> {
-        let model: Self = serde_json::from_slice(bytes)?;
-        if model.shield_color_axis.iter().any(|v| !v.is_finite())
+        let mut model: Self = serde_json::from_slice(bytes)?;
+        model.shield_tables = include_bytes!("shield_noise_model.bin")
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_le_bytes(*v))
+            .collect();
+        model.validate()?;
+        Ok(model)
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        let model = self;
+        if model.shield_tables.len() != MODEL_FLOATS
+            || model.shield_tables.iter().any(|v| !v.is_finite())
+            || model.shield_color_axis.iter().any(|v| !v.is_finite())
             || model.shield_color_axis.iter().all(|v| *v == 0.)
             || model.row_priors.is_empty()
             || model.row_priors.iter().any(|prior| {
@@ -31,9 +57,9 @@ impl Model {
                 .windows(2)
                 .any(|pair| pair[0].iso >= pair[1].iso)
         {
-            return Err("invalid Merrill noise model metadata".into());
+            return Err("invalid Merrill noise profile data".into());
         }
-        Ok(model)
+        Ok(())
     }
 
     pub(crate) fn shield_color_axis(&self) -> [f32; 3] {

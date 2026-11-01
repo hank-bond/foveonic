@@ -1,7 +1,7 @@
 //! Prepares native layer noise and shield correction in camera color coordinates.
 
 use crate::{
-    nodes::sensor::{calibration, multiscale, row_guard, shield_noise},
+    nodes::sensor::{calibration, multiscale, noise_model, row_guard, shield_noise},
     source::{Metadata, Result},
 };
 
@@ -9,7 +9,10 @@ const NUMERICAL_FLOOR: f64 = 1e-12;
 const OUTPUT_NEUTRAL: [f64; 3] = [1.; 3];
 const GREEN_MAGENTA: [f64; 3] = [-0.5, 1., -0.5];
 
-pub(super) fn prepare_row_guard(metadata: &Metadata) -> Result<row_guard::Prepared> {
+pub(super) fn prepare_row_guard(
+    metadata: &Metadata,
+    model: &noise_model::Model,
+) -> Result<row_guard::Prepared> {
     let iso = metadata
         .properties
         .get("ISO")
@@ -20,6 +23,7 @@ pub(super) fn prepare_row_guard(metadata: &Metadata) -> Result<row_guard::Prepar
         calibration::rectangle(metadata, "ActiveImageArea")?,
         metadata.fixed::<9>("ColorNoiseModel")?.map(|v| v as f32),
         iso,
+        model,
     )
 }
 
@@ -28,21 +32,14 @@ pub(super) fn prepare(
     white_balance: &str,
     gains: [f32; 3],
     columns: bool,
+    model: &noise_model::Model,
 ) -> Result<(shield_noise::Prepared, multiscale::Prepared)> {
     let extent = [metadata.width as u32, metadata.height as u32];
-    let active = calibration::rectangle(metadata, "ActiveImageArea")?;
-    let bottom = calibration::rectangle(metadata, "DarkShieldTop")?;
-    let ranges = metadata.fixed::<4>("DarkShieldColRange")?;
-    if ranges
-        .iter()
-        .any(|v| !v.is_finite() || *v < 0. || v.fract() != 0.)
-        || ranges[2] > ranges[3]
-        || ranges[3] >= metadata.width as f64
-    {
-        return Err("invalid right dark-shield bounds".into());
-    }
-    let bottom = [active[0], bottom[1], active[2], bottom[3]];
-    let right = [ranges[2] as u32, active[1], ranges[3] as u32 + 1, active[3]];
+    let shield_noise::Regions {
+        active,
+        bottom,
+        right,
+    } = shield_noise::Regions::from_metadata(metadata)?;
     // Noise correction uses camera coordinates before the selected photographic
     // look. Editable DNG and photographic rendering therefore share this basis.
     let color = calibration::color(metadata, white_balance, &super::dng_base::unselected_mode())?;
@@ -50,7 +47,8 @@ pub(super) fn prepare(
         std::array::from_fn(|i| f64::from(color.matrix[i / 3][i % 3]) * f64::from(gains[i % 3]));
     let (neutral, direction) = basis(matrix)?;
     let noise = metadata.fixed::<9>("ColorNoiseModel")?.map(|v| v as f32);
-    let shields = shield_noise::Prepared::new(extent, active, bottom, right, direction, columns)?;
+    let shields =
+        shield_noise::Prepared::new(extent, active, bottom, right, direction, columns, model)?;
     let filter = multiscale::Prepared::new(extent, active, noise, neutral)?;
     Ok((shields, filter))
 }

@@ -100,7 +100,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         } else {
             &mut controls.bands[selected]
         };
-        let column = LabelColumn::new(ui, &["Hue", "Saturation", "Lightness"], &[]);
+        let column = LabelColumn::new(ui, &["Hue", "Saturation", "Lightness"]);
         ui.add_enabled_ui(!mono, |ui| {
             changed |= column.adjustment(
                 ui,

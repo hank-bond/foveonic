@@ -88,11 +88,12 @@ pub(super) fn build(
             && !settings.is_monochrome()
             && preview::available(&source.metadata),
     );
-    let (recipe, couplings) =
-        match native_layers::build(source, settings, params, &policy, names, profile, execution)? {
-            native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
-            native_layers::Output::Ready { recipe, couplings } => (recipe, couplings),
-        };
+    let (recipe, couplings) = match native_layers::build(
+        engine, source, settings, params, &policy, names, profile, execution,
+    )? {
+        native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
+        native_layers::Output::Ready { recipe, couplings } => (recipe, couplings),
+    };
     let mut graph = recipe.graph;
     let mut calibrated = recipe.final_id;
     let directional_banding_selected = policy.directional_banding;

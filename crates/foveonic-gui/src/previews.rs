@@ -22,6 +22,7 @@ const RGB_CHANNELS: usize = 3;
 const READY_CAPACITY: usize = 1;
 
 struct Job {
+    calibration_signature: Option<String>,
     path: PathBuf,
     revision: u64,
     source: Arc<ImageTexture>,
@@ -35,6 +36,7 @@ struct Pending {
     stop: bool,
 }
 pub struct Ready {
+    pub calibration_signature: Option<String>,
     pub path: PathBuf,
     pub revision: u64,
     pub image: PreparedPreview,
@@ -99,12 +101,14 @@ impl Previews {
                         native_extent: job.native_extent,
                         ..preview
                     },
+                    job.calibration_signature.as_deref(),
                 );
                 Some(prepared)
             });
             if let Some(image) = result {
                 if tx
                     .send(Ready {
+                        calibration_signature: job.calibration_signature,
                         path: job.path,
                         revision: job.revision,
                         image,
@@ -145,6 +149,7 @@ impl Previews {
         {
             self.wanted = Some((
                 Job {
+                    calibration_signature: frame.calibration_signature.clone(),
                     path: frame.path.clone(),
                     revision: frame.revision,
                     source: frame.texture.clone(),

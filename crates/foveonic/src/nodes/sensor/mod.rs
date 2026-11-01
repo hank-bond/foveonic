@@ -5,6 +5,7 @@ pub(crate) mod blue_mismatch;
 pub(crate) mod banding;
 pub(crate) mod blue_despeckle;
 pub(crate) mod blue_refresh;
+pub(crate) mod calibrated_defects;
 pub(crate) mod calibration;
 pub(crate) mod camera_repair;
 pub(crate) mod chroma_clusters;

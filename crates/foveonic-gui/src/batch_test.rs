@@ -260,6 +260,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     };
     fs::remove_file(failed).unwrap();
     assert!(worker.submit(Batch {
+        calibration: None,
         destination: destination.clone(),
         photos: vec![
             Photo {

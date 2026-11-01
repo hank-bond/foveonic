@@ -1,5 +1,6 @@
 //! Checks robust shield extraction, trained Gaussian predictions and native-sum preservation.
 
+use super::noise_model::{GAUSSIAN_SIGMAS, MODEL_COUNT, REFERENCE_OFFSET, WEIGHTS_PER_MODEL};
 use super::*;
 
 fn median(values: &mut [f32]) -> f32 {
@@ -92,8 +93,7 @@ fn predicted_profile(original: &[[f32; 3]], p: &Prepared, axis: usize, high: boo
             kernel += radius * 2 + 1;
         }
         if axis == 1 {
-            output[i] -=
-                f64::from(p.model[REFERENCE_OFFSET + state * COLUMN_REFERENCE_LENGTH as usize + i]);
+            output[i] -= f64::from(p.model[REFERENCE_OFFSET + state * COLUMN_REFERENCE_LENGTH + i]);
         }
     }
     let mean = output.iter().sum::<f64>() / output.len() as f64;
@@ -118,7 +118,8 @@ fn shield_shader_and_metadata_validate() {
         [2, 20, 18, 22],
         [20, 2, 24, 18],
         [-1., 1., 0.],
-        false
+        false,
+        noise_model::embedded().unwrap()
     )
     .is_ok());
     assert!(Prepared::new(
@@ -127,7 +128,8 @@ fn shield_shader_and_metadata_validate() {
         [2, 20, 18, 22],
         [20, 2, 24, 18],
         [-1., 1., 0.],
-        true
+        true,
+        noise_model::embedded().unwrap()
     )
     .is_err());
     assert!(Prepared::new(
@@ -136,7 +138,8 @@ fn shield_shader_and_metadata_validate() {
         [2, 20, 18, 22],
         [20, 2, 24, 18],
         [1., 1., 1.],
-        false
+        false,
+        noise_model::embedded().unwrap()
     )
     .is_err());
     assert!(Prepared::new(
@@ -145,7 +148,8 @@ fn shield_shader_and_metadata_validate() {
         [2, 17, 18, 19],
         [20, 2, 24, 18],
         [-1., 1., 0.],
-        false
+        false,
+        noise_model::embedded().unwrap()
     )
     .is_err());
 }
@@ -203,7 +207,16 @@ fn native_shield_predictions_match_robust_independent_profiles_in_both_states() 
         .unwrap();
     let mut row_results = Vec::new();
     for columns in [false, true] {
-        let p = Prepared::new(extent, active, bottom, right, [-0.6, 0.9, -0.3], columns).unwrap();
+        let p = Prepared::new(
+            extent,
+            active,
+            bottom,
+            right,
+            [-0.6, 0.9, -0.3],
+            columns,
+            noise_model::embedded().unwrap(),
+        )
+        .unwrap();
         for high in [false, true] {
             let black = gpu
                 .upload(

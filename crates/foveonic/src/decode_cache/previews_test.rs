@@ -284,6 +284,7 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
             &edited,
             &metadata,
             fixture.write(true, [100; 3]).preview,
+            None,
         )
         .unwrap();
     assert!(cache.control.lock().unwrap().preview.is_none());
@@ -293,6 +294,7 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
             &settings,
             &metadata,
             fixture.write(true, [100; 3]).preview,
+            None,
         )
         .unwrap();
     assert!(cache.control.lock().unwrap().preview.take().is_some());
@@ -303,6 +305,7 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
             &settings,
             &metadata,
             fixture.write(true, [80, 120, 160]).preview,
+            None,
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -386,4 +389,30 @@ fn original_large_previews_keep_orientation_and_skip_cropped_camera_jpegs() {
             .is_ok_and(|(h, _)| !h.rendered));
         }
     }
+}
+
+#[test]
+fn calibration_identity_invalidates_rendered_previews_but_keeps_embedded_previews() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("cache");
+    let mut write = fixture.write(true, [40, 80, 120]);
+    write.header.key.calibration = Some("user-one".into());
+    let key = write.header.key.clone();
+    write_checked(&root, write, &Settings::default(), &[], &|| true).unwrap();
+    assert!(read(&key.location(&root), &key, &Settings::default()).is_ok());
+    let mut different = key.clone();
+    for calibration in [None, Some("user-two".into())] {
+        different.calibration = calibration;
+        assert!(read(&key.location(&root), &different, &Settings::default()).is_err());
+    }
+    fs::remove_file(key.location(&root)).unwrap();
+    write_checked(
+        &root,
+        fixture.write(false, [40, 80, 120]),
+        &Settings::default(),
+        &[],
+        &|| true,
+    )
+    .unwrap();
+    assert!(read(&key.location(&root), &key, &Settings::default()).is_ok());
 }

@@ -21,6 +21,7 @@ use std::{
 };
 
 pub struct Request {
+    pub calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
     pub rendition: crate::editor::Rendition,
     pub revision: u64,
     pub path: PathBuf,
@@ -64,6 +65,7 @@ fn resolve_preview(request: &Request, settings: &mut Settings, metadata: &Metada
 }
 
 pub struct Frame {
+    pub calibration_signature: Option<String>,
     pub rendition: crate::editor::Rendition,
     pub requested: Settings,
     pub path: PathBuf,
@@ -177,6 +179,7 @@ impl Worker {
         let (tx, replies) = mpsc::sync_channel(2);
         let slot = pending.clone();
         thread::spawn(move || {
+            let mut engine = engine;
             let mut source: Option<(PathBuf, RenderSession)> = None;
             loop {
                 let (request, queued_at, _activity) = {
@@ -216,6 +219,7 @@ impl Worker {
                     crate::progress::Reporter::new(progress_updates.clone(), request.revision);
                 let started = std::time::Instant::now();
                 crate::timing::worker_started(request.revision, queued_at, started);
+                engine.set_noise_calibration(request.calibration.clone());
                 let mut metadata = None;
                 let mut settings = request.settings.clone();
                 let mut defaults_errors = Vec::new();
@@ -311,6 +315,7 @@ impl Worker {
                     }
                     if let Some(before)=view_before{crate::timing::emit("view",serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
                     Ok(Some(Frame {
+                        calibration_signature: request.calibration.as_ref().map(|p| p.signature().to_owned()),
                         rendition: request.rendition,
                         requested: request.settings.clone(),
                         path: request.path.clone(),
@@ -521,6 +526,7 @@ mod tests {
         for (index, settings) in selections.into_iter().enumerate() {
             let destination = directory.join(format!("{index}.dng"));
             worker.submit(super::Request {
+                calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
                 revision: index as u64 + 1,
@@ -579,6 +585,7 @@ mod tests {
         );
         for revision in 1..=20 {
             worker.submit(super::Request {
+                calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
                 revision,
@@ -608,6 +615,7 @@ mod tests {
             break;
         }
         worker.submit(super::Request {
+            calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
             revision: 21,
@@ -628,6 +636,7 @@ mod tests {
         assert_eq!(frame.artifact.settings.white_balance, "Sunlight");
         assert_eq!(frame.artifact.settings.color_mode, "Standard");
         worker.submit(super::Request {
+            calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
             revision: 22,
@@ -675,6 +684,7 @@ mod tests {
         {
             let revision = index as u64 + 1;
             worker.submit(super::Request {
+                calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
                 revision,
@@ -708,6 +718,7 @@ mod tests {
             );
         }
         worker.submit(super::Request {
+            calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
             revision: 9,
@@ -725,6 +736,7 @@ mod tests {
         assert_eq!(frame.texture.description().space, Space::CalibratedLayers);
         drop(frame);
         worker.submit(super::Request {
+            calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
             revision: 10,
@@ -848,6 +860,7 @@ mod tests {
             };
             let start = std::time::Instant::now();
             worker.submit(super::Request {
+                calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
                 revision,
@@ -927,6 +940,7 @@ mod tests {
             settings.sharpen_amount = Some(0.75);
             let submit = |revision, settings: foveonic::render::Settings| {
                 worker.submit(super::Request {
+                    calibration: None,
                     rendition: Default::default(),
                     preview_quality: crate::preferences::PreviewMode::Full,
                     revision,
@@ -1036,6 +1050,7 @@ mod tests {
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
         worker.submit(super::Request {
+            calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
             revision: 1,
@@ -1104,6 +1119,7 @@ mod tests {
         };
         for revision in 1..100 {
             worker.submit(super::Request {
+                calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
                 revision,
@@ -1129,6 +1145,7 @@ mod tests {
         let opening_began = std::time::Instant::now() - std::time::Duration::from_millis(250);
         worker.submit_at(
             super::Request {
+                calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
                 revision: 100,
@@ -1200,6 +1217,7 @@ mod preview_tests {
             },
         );
         let mut request = Request {
+            calibration: None,
             rendition: Default::default(),
             revision: 1,
             path: "merrill.x3f".into(),
@@ -1247,6 +1265,7 @@ mod preview_tests {
     fn fast_policy_keeps_inspection_monochrome_comparisons_and_exports_full() {
         let mut m = metadata();
         let mut r = Request {
+            calibration: None,
             rendition: Default::default(),
             revision: 1,
             path: "test.x3f".into(),
@@ -1399,6 +1418,7 @@ mod preview_tests {
             export_settings.preview_region = Some([100, 100, 400, 300]);
             export_settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::ProPhotoRgb);
             worker.submit(Request {
+                calibration: None,
                 rendition: Default::default(),
                 revision: index as u64 + 1,
                 path: path.clone(),
@@ -1428,6 +1448,7 @@ mod preview_tests {
             );
         }
         worker.submit(Request {
+            calibration: None,
             rendition: Default::default(),
             revision: 5,
             path,

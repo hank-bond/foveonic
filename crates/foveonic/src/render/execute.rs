@@ -423,6 +423,16 @@ impl Engine {
                         profile,
                     )?)
                 }
+                Operation::CalibratedDefects(prepared) => {
+                    if inherited != prepared.extent() {
+                        return Err("calibrated defect extent mismatch".into());
+                    }
+                    Some(crate::nodes::sensor::calibrated_defects::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                    )?)
+                }
                 Operation::Multiscale(prepared) => {
                     if inherited != prepared.extent()
                         || input(1).description.map(|d| d.extent) != Some(inherited)

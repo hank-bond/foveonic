@@ -3,6 +3,7 @@ use crate::preferences::{EditingSection, Section};
 use eframe::egui;
 
 pub const SECTION_GAP: f32 = 7.;
+pub const CONTENT_HORIZONTAL_PADDING: i8 = 6;
 
 pub fn disclosure_icon(ui: &egui::Ui, center: egui::Pos2, collapsed: bool, color: egui::Color32) {
     let points = if collapsed {

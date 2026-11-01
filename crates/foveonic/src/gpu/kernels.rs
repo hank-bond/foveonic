@@ -22,6 +22,10 @@ pub enum Kernel {
     BoxContrastHorizontal,
     BoxContrastApply,
     ColumnGain,
+    CapAccumulate,
+    CapProfiles,
+    CapDefects,
+    CalibratedDefectRepair,
     MultiscalePrepare,
     MultiscaleDownsample,
     MultiscaleMoments,
@@ -317,6 +321,10 @@ impl Kernel {
             Self::BoxContrastHorizontal => "average horizontal luma",
             Self::BoxContrastApply => "apply averaged local contrast",
             Self::ColumnGain => "correct packed sensor columns",
+            Self::CapAccumulate => "accumulate cap moments",
+            Self::CapProfiles => "measure active cap profiles",
+            Self::CapDefects => "identify persistent cap defects",
+            Self::CalibratedDefectRepair => "repair serial-matched sensor defects",
             Self::MultiscalePrepare => "prepare native layer color filtering",
             Self::MultiscaleDownsample => "average native layers for color filtering",
             Self::MultiscaleMoments => "measure native layer horizontal moments",
@@ -691,6 +699,22 @@ impl Gpu {
             (
                 include_str!("../nodes/sensor/column_gain.wgsl"),
                 "column_gain",
+            ),
+            (
+                include_str!("../noise_calibration/training.wgsl"),
+                "cap_accumulate",
+            ),
+            (
+                include_str!("../noise_calibration/training.wgsl"),
+                "cap_profiles",
+            ),
+            (
+                include_str!("../noise_calibration/training.wgsl"),
+                "cap_defects",
+            ),
+            (
+                include_str!("../nodes/sensor/calibrated_defects.wgsl"),
+                "calibrated_defect_repair",
             ),
             (
                 include_str!("../nodes/sensor/multiscale.wgsl"),

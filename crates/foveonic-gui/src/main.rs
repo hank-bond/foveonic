@@ -21,6 +21,7 @@ mod inspect;
 mod metadata;
 mod mixer;
 mod navigator;
+mod noise_calibration;
 mod preferences;
 mod preview_image;
 mod previews;
@@ -57,6 +58,7 @@ struct Opening {
 }
 
 struct App {
+    noise_calibration: noise_calibration::State,
     comparison_selection: Option<PathBuf>,
     comparison_zoom: f32,
     editor_ui: editor::State,
@@ -144,6 +146,7 @@ impl App {
         }
         viewport::set_gamut(rs, preferences.display_gamut);
         let folder = preferences.startup_folder(path);
+        let training_engine = engine.executor();
         let batch_engine = engine.executor();
         let worker = worker::Worker::new(engine, cc.egui_ctx.clone());
         let import =
@@ -155,7 +158,20 @@ impl App {
             Some(worker.cache.clone()),
             rs.clone(),
         );
+        let noise_calibration = noise_calibration::State::new(
+            training_engine,
+            worker.cache.clone(),
+            cc.egui_ctx.clone(),
+            &mut preferences.noise_profile,
+        );
+        worker.cache.configure_noise_calibration(
+            noise_calibration
+                .selected(preferences.noise_profile)
+                .as_ref()
+                .map(|p| p.signature().to_owned()),
+        );
         let mut app = Self {
+            noise_calibration,
             comparison_selection: None,
             comparison_zoom: 1.,
             editor_ui: Default::default(),
@@ -201,6 +217,10 @@ impl App {
             smoke: smoke::Smoke::from_env(),
             last_frame: None,
         };
+        app.import.set_noise_calibration(
+            app.noise_calibration
+                .selected(app.preferences.noise_profile),
+        );
         app.worker
             .cache
             .configure(app.preferences.decode_cache.clone());
@@ -347,6 +367,9 @@ impl App {
             let mut requested = self.view_settings();
             requested.preview_region = region;
             let request = worker::Request {
+                calibration: self
+                    .noise_calibration
+                    .selected(self.preferences.noise_profile),
                 rendition: self.before.active,
                 revision: self.revision,
                 path: path.clone(),
@@ -379,7 +402,14 @@ impl App {
         self.browser.receive(ctx);
         while let Ok(preview) = self.previews.replies.try_recv() {
             if self.frame.as_ref().is_some_and(|frame| {
-                frame.path == preview.path && frame.revision == preview.revision
+                frame.path == preview.path
+                    && frame.revision == preview.revision
+                    && preview.calibration_signature.as_deref()
+                        == self
+                            .noise_calibration
+                            .selected(self.preferences.noise_profile)
+                            .as_ref()
+                            .map(|p| p.signature())
             }) {
                 self.browser
                     .rendered(ctx, preview.path, preview.revision, preview.image);
@@ -414,6 +444,23 @@ impl App {
                     continue;
                 }
             };
+            if !self.exporting
+                && reply
+                    .result
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .is_some_and(|frame| {
+                        frame.calibration_signature.as_deref()
+                            != self
+                                .noise_calibration
+                                .selected(self.preferences.noise_profile)
+                                .as_ref()
+                                .map(|p| p.signature())
+                    })
+            {
+                continue;
+            }
             let current = reply.revision == self.revision;
             if reply.rendition != self.before.active {
                 continue;
@@ -803,7 +850,13 @@ impl App {
                         }
                         if !self.preferences.collapsed.contains(&section) {
                             ui.add_space(6.);
-                            changed |= self.section_body(ui, section);
+                            changed |= egui::Frame::new()
+                                .inner_margin(egui::Margin::symmetric(
+                                    sections::CONTENT_HORIZONTAL_PADDING,
+                                    0,
+                                ))
+                                .show(ui, |ui| self.section_body(ui, section))
+                                .inner;
                         }
                         if let Some((source, after)) = sections::drop(ui, header) {
                             movement = Some((source, section, after));
@@ -1123,6 +1176,24 @@ impl eframe::App for App {
         } else {
             self.receive(ctx);
         }
+        self.noise_calibration
+            .poll(&mut self.preferences.noise_profile);
+        self.noise_calibration
+            .show(ctx, &mut self.preferences.noise_profile);
+        if !self.exporting && self.noise_calibration.take_changed() {
+            self.smart.reset();
+            self.detail = None;
+            let selected = self
+                .noise_calibration
+                .selected(self.preferences.noise_profile);
+            self.worker
+                .cache
+                .configure_noise_calibration(selected.as_ref().map(|p| p.signature().to_owned()));
+            self.import.set_noise_calibration(selected);
+            self.browser.invalidate_previews();
+            self.previews.invalidate();
+            self.submit_request(None, None);
+        }
         self.smoke_tick(ctx);
         let normalized = controls::normalize_with_capture(
             &mut self.settings,
@@ -1192,9 +1263,14 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 changed |= self.tools(ui);
             });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            changed |= self.central(ui);
-        });
+        let mut viewport_frame = egui::Frame::central_panel(&ctx.style());
+        // The information row owns its vertical spacing down to the window edge.
+        viewport_frame.inner_margin.bottom = 0;
+        egui::CentralPanel::default()
+            .frame(viewport_frame)
+            .show(ctx, |ui| {
+                changed |= self.central(ui);
+            });
         self.browser.finish_previews();
         if previous_selection == self.selected && (normalized || previous_settings != self.settings)
         {

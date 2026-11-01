@@ -3269,18 +3269,8 @@ fn label_alignment_preserves_controls_across_fonts_and_scales() {
                             for row in 0..3 {
                                 ui.push_id(row, |ui| {
                                     let mut value = 1_f32;
-                                    let changed = if row == 1 {
-                                        super::common::LabelColumn::new(ui, &["xxx"], &["xxx"])
-                                            .indented()
-                                            .adjustment(
-                                                ui,
-                                                ("xxx", "xxx"),
-                                                &mut value,
-                                                0. ..=2.,
-                                                1.,
-                                            )
-                                    } else {
-                                        super::common::LabelColumn::new(ui, &["xxx"], &["xxx"])
+                                    let changed =
+                                        super::common::LabelColumn::new(ui, &["xxx", "ggg"])
                                             .adjustment(
                                                 ui,
                                                 if row == 2 {
@@ -3291,8 +3281,7 @@ fn label_alignment_preserves_controls_across_fonts_and_scales() {
                                                 &mut value,
                                                 0. ..=2.,
                                                 1.,
-                                            )
-                                    };
+                                            );
                                     assert!(!changed);
                                     assert_eq!(value, 1.);
                                 });
@@ -3331,19 +3320,7 @@ fn label_alignment_preserves_controls_across_fonts_and_scales() {
             assert_eq!(values.len(), 3);
             let ink_left =
                 |t: &egui::epaint::TextShape| t.pos.x + t.galley.rows[0].visuals.mesh_bounds.left();
-            let pipe = output
-                .shapes
-                .iter()
-                .find_map(|s| match &s.shape {
-                    egui::Shape::LineSegment { points, .. } if points[0].x == points[1].x => {
-                        Some(points[0].x)
-                    }
-                    _ => None,
-                })
-                .unwrap();
-            let original_child = ink_left(labels[0]) + ctx.style().spacing.indent;
-            let expected = pipe + (original_child - pipe) * 0.5;
-            assert!((ink_left(labels[1]) - expected).abs() <= 1. / density);
+            assert!((ink_left(labels[1]) - ink_left(labels[0])).abs() <= 1. / density);
             for row in 0..3 {
                 assert!(
                     (knobs[row].x - knobs[0].x).abs() < 0.1,
@@ -3565,7 +3542,7 @@ fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edit
 }
 
 #[test]
-fn parameter_group_pipe_keeps_left_spacing_and_halves_text_gap() {
+fn parameter_groups_extend_backgrounds_without_moving_controls() {
     let ctx = egui::Context::default();
     crate::widgets::install_style(&ctx);
     let mut group = egui::Rect::NOTHING;
@@ -3579,18 +3556,10 @@ fn parameter_group_pipe_keeps_left_spacing_and_halves_text_gap() {
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let padding = f32::from(crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING);
-                let column = super::common::LabelColumn::new(ui, &["Coarse"], &["Size"])
-                    .with_outer_padding(padding);
+                let column = super::common::LabelColumn::new(ui, &["Coarse", "Size"]);
                 group = crate::widgets::parameter_group(ui, |ui| {
                     column.adjustment(ui, ("Coarse detail", "Coarse"), &mut 1_f32, 0. ..=2., 1.);
-                    column.indented().adjustment(
-                        ui,
-                        ("Coarse size", "Size"),
-                        &mut 1_f32,
-                        0.5..=2.,
-                        1.,
-                    );
+                    column.adjustment(ui, ("Coarse size", "Size"), &mut 1_f32, 0.5..=2., 1.);
                 })
                 .response
                 .rect;
@@ -3607,25 +3576,21 @@ fn parameter_group_pipe_keeps_left_spacing_and_halves_text_gap() {
             })
             .unwrap()
     };
-    let child = text("Size");
-    let glyph_left = child.pos.x + child.galley.rows[0].visuals.mesh_bounds.left();
-    let pipe = output
+    assert_eq!(text("Size").pos.x, text("Coarse").pos.x);
+    assert_eq!(text("Coarse").pos.x, group.left());
+    let background = output
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::LineSegment { points, .. } if points[0].x == points[1].x => {
-                Some(points[0].x)
+            egui::Shape::Rect(rect) if rect.fill == crate::widgets::MENU_BACKGROUND => {
+                Some(rect.rect)
             }
             _ => None,
         })
         .unwrap();
-    assert!(
-        ((pipe - group.left()) - 2. * (glyph_left - pipe)).abs() <= 1. / ctx.pixels_per_point(),
-        "group {}, pipe {pipe}, glyph {glyph_left}",
-        group.left()
-    );
-    let padding = f32::from(crate::widgets::PARAMETER_GROUP_HORIZONTAL_PADDING);
-    assert_eq!(text("Coarse").pos.x - group.left(), padding);
+    let padding = f32::from(crate::widgets::BUTTON_GROUP_MARGIN);
+    assert_eq!(background.left(), group.left() - padding);
+    assert_eq!(background.right(), group.right() + padding);
     for value in output.shapes.iter().filter_map(|shape| match &shape.shape {
         egui::Shape::Text(t) if t.galley.text() == "1.00" => Some(t),
         _ => None,
@@ -3640,7 +3605,7 @@ fn parameter_group_pipe_keeps_left_spacing_and_halves_text_gap() {
             })
             .min_by(|a, b| a.area().total_cmp(&b.area()))
             .unwrap();
-        assert_eq!(group.right() - field.right(), padding);
+        assert_eq!(group.right(), field.right());
     }
 }
 

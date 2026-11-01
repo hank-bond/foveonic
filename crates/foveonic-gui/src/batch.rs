@@ -45,6 +45,7 @@ pub struct Scanned {
     pub errors: Vec<String>,
 }
 pub struct Batch {
+    pub calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
     pub destination: PathBuf,
     pub photos: Vec<Photo>,
     pub operation: Operation,
@@ -93,6 +94,7 @@ impl Worker {
         let status = progress.clone();
         let scans = Arc::new(Mutex::new(None));
         let scanned = scans.clone();
+        let mut engine = engine;
         std::thread::spawn(move || loop {
             let (scan, batch) = {
                 let mut state = slot.0.lock().unwrap();
@@ -118,6 +120,7 @@ impl Worker {
                 *scanned.lock().unwrap() = Some(result);
             }
             if let Some(batch) = batch {
+                engine.set_noise_calibration(batch.calibration.clone());
                 cache.processing(|| {
                     run_batch(&engine, &cache, batch, &status, &context, || {
                         let (stop, scan) = {
