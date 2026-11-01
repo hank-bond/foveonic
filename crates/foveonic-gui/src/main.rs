@@ -5,6 +5,7 @@ mod application_settings;
 mod batch;
 mod browser;
 mod capture;
+mod chromaticity;
 mod comparison_view;
 mod controls;
 mod display;
@@ -1290,7 +1291,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "Foveonic",
+        preferences::APP_NAME,
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, path, settings)?))),
     )

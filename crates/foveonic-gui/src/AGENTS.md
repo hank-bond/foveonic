@@ -35,6 +35,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[browser_query.rs](./browser_query.rs)** Defines browser metadata, stable folder-local sorting and shared substring/rating filtering.
 - **[browser_review.rs](./browser_review.rs)** Handles browser highlighting, import checkboxes, and shared hidden-photo visibility.
 - **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
+- **[chromaticity.rs](./chromaticity.rs)** Draws a CIE 1931 xy guide with fixed visual anchors for the layer mixer.
 - **[comparison_view.rs](./comparison_view.rs)** Presents highlighted photos together while the active photo keeps the shared editor and RAW renderer.
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
 - **[display.rs](./display.rs)** Declares the window's display encoding and tags its native Metal layer for host color matching.
@@ -48,7 +49,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[inspect.rs](./inspect.rs)** Groups viewport preview quality, pipeline views, and display-only Input/Output and Difference comparisons.
 - **[main.rs](./main.rs)** Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
-- **[mixer.rs](./mixer.rs)** Edits three-channel proportions with a triangular barycentric monochrome mixer.
+- **[mixer.rs](./mixer.rs)** Edits layer proportions inside a fixed dashed triangle on a CIE xy guide.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
 - **[preferences.rs](./preferences.rs)** Persists workspace, display, cache and per-mode processing preferences separately from image edits.
 - **[preview_image.rs](./preview_image.rs)** Prepares oriented display thumbnails and larger previews away from the UI thread.

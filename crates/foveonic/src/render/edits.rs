@@ -108,6 +108,11 @@ impl Scope {
                 if family == ProcessingFamily::Merrill {
                     merge_reconstruction(source, target, false);
                     target.merrill_noise_method = source.merrill_noise_method;
+                    target.merrill_banding = source.merrill_banding;
+                    target.row_correction = source.row_correction;
+                    target.despeckle = source.despeckle;
+                    target.merrill_speckles = source.merrill_speckles;
+                    target.neutralize_shadows = source.neutralize_shadows;
                 } else {
                     target.reconstruction = source.reconstruction;
                     target.monochrome_smoothness = source.monochrome_smoothness;
@@ -128,8 +133,10 @@ impl Scope {
             }
             Self::Tool(Section::Corrections) => {
                 target.repair = source.repair;
-                target.despeckle = source.despeckle;
-                target.row_correction = source.row_correction;
+                if family != ProcessingFamily::Merrill {
+                    target.despeckle = source.despeckle;
+                    target.row_correction = source.row_correction;
+                }
                 target.highlight_restoration = source.highlight_restoration;
                 target.highlight_amount = source.highlight_amount;
                 target.highlight_threshold_ev = source.highlight_threshold_ev;

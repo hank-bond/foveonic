@@ -1,20 +1,19 @@
-//! Builds Merrill sensor corrections and technical color with lazy inspection preparation.
+//! Coordinates Merrill native layers, tiled reconstruction and technical RGB finishing.
 
 use super::super::{requested, BuiltRecipe};
-use super::{dng_base, layer_noise, preview, region};
+use super::{dng_base, native_layers, preview, reconstruction, region};
 use crate::color_space::ColorSpace;
 use crate::nodes::{
     color::{color_dq, color_mode},
-    sensor::{banding, calibration, camera_repair, color_field, despeckle, highlight},
+    sensor::calibration,
 };
 use crate::{
-    graph::{Graph, Operation},
+    graph::Operation,
     interactive::Execution,
     profile::Profile,
     render::{Engine, Settings},
     source::{Result, Source},
 };
-use std::sync::Arc;
 
 pub(super) enum Prepared {
     Requested(BuiltRecipe),
@@ -81,135 +80,34 @@ pub(super) fn build(
         params = region.encode;
     }
     engine.check_extent([params.output[0], params.output[1]])?;
-    let mut graph = Graph::default();
-    let input = graph.add(Operation::Source, &[])?;
+    let policy = native_layers::Policy::new(
+        settings,
+        preview.is_some(),
+        mode.is_some()
+            && (names == ["final"] || names == ["linear.base"])
+            && !settings.is_monochrome()
+            && preview::available(&source.metadata),
+    );
+    let (recipe, couplings) =
+        match native_layers::build(source, settings, params, &policy, names, profile, execution)? {
+            native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
+            native_layers::Output::Ready { recipe, couplings } => (recipe, couplings),
+        };
+    let mut graph = recipe.graph;
+    let mut calibrated = recipe.final_id;
+    let directional_banding_selected = policy.directional_banding;
     macro_rules! finish {
         () => {
             execution.check()?;
             if requested(&graph, names) {
                 return Ok(Prepared::Requested(BuiltRecipe {
                     graph,
-                    final_id: input,
+                    final_id: calibrated,
                     params,
                     rgb_extent: [params.source[0], params.source[1]],
                 }));
             }
         };
-    }
-    finish!();
-    let mut highlight_params = None;
-    if settings.highlight_restoration && names.contains(&"highlight.density") {
-        let prepared = Arc::new(profile.measure("prepare original saturation", || {
-            highlight::prepare(&source.metadata, settings.highlight_threshold_ev)
-        })?);
-        graph.add(Operation::HighlightDensity(prepared.clone()), &[])?;
-        highlight_params = Some(prepared);
-        finish!();
-    }
-    let black_params = profile.measure("prepare black", || calibration::black(&source.metadata))?;
-    let black = graph.add(Operation::Black(black_params), &[input])?;
-    finish!();
-    let calibration = profile.measure("prepare calibration", || {
-        calibration::prepare(&source.metadata, &settings.white_balance)
-    })?;
-    let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
-    let calibration_params = calibration.params;
-    let multiscale_selected = settings.multiscale_noise_selected()
-        && !(preview.is_some() && settings.preview_quality == crate::render::PreviewQuality::Draft);
-    let corrected = if multiscale_selected {
-        let (shields, filter) = profile.measure("prepare multiscale noise", || {
-            layer_noise::prepare(
-                &source.metadata,
-                &settings.white_balance,
-                calibration_gains,
-                settings.merrill_noise_method
-                    == crate::render::MerrillNoiseMethod::MultiscaleRowsAndColumns,
-            )
-        })?;
-        let corrected = graph.add(
-            Operation::ShieldNoise(Arc::new(shields)),
-            &[input, input, black],
-        )?;
-        finish!();
-        let filtered = graph.add(
-            Operation::Multiscale(Arc::new(filter)),
-            &[corrected, input, black],
-        )?;
-        finish!();
-        filtered
-    } else {
-        input
-    };
-    let mut calibrated = graph.add(Operation::Calibrate(calibration), &[corrected, black])?;
-    finish!();
-    let unrepaired = calibrated;
-    if let Some(threshold) = settings.repair {
-        let prepared = profile.measure("prepare repair records", || {
-            camera_repair::prepare(&source.metadata, threshold)
-        })?;
-        calibrated = graph.add(Operation::Repair(prepared), &[calibrated, input])?;
-        finish!();
-    }
-    if settings.highlight_restoration
-        && settings.highlight_mode == crate::render::HighlightMode::ColorField
-    {
-        let prepared = profile.measure("prepare color-field highlights", || {
-            color_field::prepare(
-                &source.metadata,
-                &settings.white_balance,
-                calibration_params,
-                settings.repair.is_some(),
-                settings.color_field,
-            )
-        })?;
-        calibrated = graph.add(
-            Operation::ColorField(prepared),
-            &[calibrated, input, black, unrepaired],
-        )?;
-        finish!();
-    } else if settings.highlight_restoration {
-        let prepared = match highlight_params {
-            Some(prepared) => prepared,
-            None => Arc::new(profile.measure("prepare highlight restoration", || {
-                highlight::prepare(&source.metadata, settings.highlight_threshold_ev)
-            })?),
-        };
-        calibrated = graph.add(Operation::Highlights(prepared), &[calibrated])?;
-        finish!();
-    }
-    let mut couplings = None;
-    if settings.despeckle {
-        let recipe = profile.measure("prepare noise couplings", || {
-            crate::noise::couplings(
-                &source.metadata,
-                &settings.white_balance,
-                settings.sensor_noise_controls(),
-            )
-        })?;
-        couplings = Some(recipe);
-        let prepared = profile.measure("prepare despeckle", || {
-            despeckle::prepare(&source.metadata, calibration_gains, recipe.despeckle_scale)
-        })?;
-        calibrated = graph.add(Operation::Despeckle(prepared), &[calibrated])?;
-        finish!();
-    }
-    // Fast and Full share this native boundary. Keep it through refinement so
-    // a later edit's Fast response does not repeat sensor repair and highlights.
-    if mode.is_some()
-        && (names == ["final"] || names == ["linear.base"])
-        && !settings.is_monochrome()
-        && preview::available(&source.metadata)
-    {
-        graph.retain_for_session(calibrated);
-    }
-    // Reduced browsing omits the expensive native row-bias estimate. Keep the
-    // requested edit intact so Full and inspection still apply its correction.
-    if settings.row_correction && settings.processing_sections.corrections && preview.is_none() {
-        let prepared = profile.measure("prepare row correction", || {
-            banding::prepare(&source.metadata, calibration_gains)
-        })?;
-        calibrated = graph.add(Operation::Banding(prepared), &[calibrated])?;
-        finish!();
     }
     if settings.is_monochrome() {
         return super::monochrome::build(
@@ -252,88 +150,32 @@ pub(super) fn build(
         }
     }
     let reconstruction = if let Some(controls) = noise_controls {
-        let effects = controls.merrill_effects();
-        let native_params = profile.measure("prepare reference noise", || {
-            crate::noise::prepare(&source.metadata, &settings.white_balance, controls)
-        })?;
-        let params = if let Some(grid) = &preview {
-            grid.noise(native_params)?
-        } else if let Some(region) = &region {
-            native_params.for_region(region.physical)?
-        } else {
-            native_params
-        };
-        let base_inputs = if params.uses_global_context() {
-            let context = graph.add(Operation::NoiseContext(params.full_frame()), &[calibrated])?;
-            let edges = graph.named_output(context, "noise.global-edges")?;
-            if region.is_some() {
-                graph.retain_for_session(context);
-                graph.retain_for_session(edges);
-            }
-            vec![context, edges]
-        } else {
-            vec![calibrated]
-        };
-        let base = graph.add(Operation::NoiseBase(params), &base_inputs)?;
-        finish!();
-        let column_params = if effects.noise {
-            profile.measure("prepare column cuts", || {
-                if let Some(grid) = &preview {
-                    grid.noise(crate::noise::column_parameters(
-                        &source.metadata,
-                        native_params,
-                    )?)
-                } else {
-                    crate::noise::column_parameters(&source.metadata, params)
-                }
-            })?
-        } else {
-            params
-        };
-        let conditioned = graph.add(
-            Operation::Column {
-                params: column_params,
-                enabled: effects.noise,
+        let result = reconstruction::append(
+            reconstruction::Request {
+                source,
+                settings,
+                names,
+                preview: preview.as_ref(),
+                region: region.as_ref(),
+                directional_banding: directional_banding_selected,
             },
-            &[calibrated],
-        )?;
-        finish!();
-        let prepared = crate::nodes::color::texture::Prepared::new(
+            &mut graph,
+            calibrated,
             controls,
-            params.source[0] as f32 / source.metadata.width as f32,
+            profile,
+            execution,
         )?;
-        let inspect_ratio = names
-            .iter()
-            .any(|name| matches!(*name, "detail.raw-ratio" | "detail.ratio" | "pattern.mask"));
-        let ratio = if prepared.needs_ratio() || inspect_ratio {
-            let ratio = graph.add(Operation::Ratio(params), &[conditioned, base])?;
-            finish!();
-            let pattern_recipe = profile.measure("prepare pattern recipe", || {
-                crate::noise::pattern_parameters(&source.metadata, params)
-            })?;
-            let seed = graph.named_output(base, "noise.pattern-seed-tiles")?;
-            let pattern = graph.add(
-                Operation::Pattern {
+        match result {
+            None => {
+                return Ok(Prepared::Requested(BuiltRecipe {
+                    graph,
+                    final_id: calibrated,
                     params,
-                    prepared: pattern_recipe,
-                },
-                &[ratio, seed],
-            )?;
-            finish!();
-            Some(pattern)
-        } else {
-            None
-        };
-        let mut texture_inputs = vec![conditioned];
-        if prepared.needs_base() {
-            texture_inputs.push(base);
+                    rgb_extent: [params.source[0], params.source[1]],
+                }));
+            }
+            Some(reconstruction::Reconstructed { params, tiles }) => Some((params, tiles)),
         }
-        if prepared.needs_ratio() {
-            texture_inputs.push(ratio.ok_or("missing luminance conditioning")?);
-        }
-        let restored = graph.add(Operation::Texture { params, prepared }, &texture_inputs)?;
-        finish!();
-        Some((params, restored))
     } else {
         None
     };
@@ -405,6 +247,33 @@ pub(super) fn build(
     }
     if let Some((params, _)) = reconstruction {
         linear = graph.add(Operation::ProjectColorTiles { params, space }, &[linear])?;
+        finish!();
+    }
+    if !settings.neutralize_shadows.is_neutral() {
+        linear = graph.add(
+            Operation::ImageAlias {
+                data: crate::graph::DataType::LinearRgb(space),
+                output: "shadow-neutralize.input",
+            },
+            &[linear],
+        )?;
+        finish!();
+        let prepared = crate::nodes::finish::shadow_neutralize::Params::new(
+            settings.neutralize_shadows,
+            space,
+            if region.is_some() {
+                1.
+            } else {
+                params.source[0] as f32 / source.metadata.width as f32
+            },
+        );
+        linear = graph.add(
+            Operation::ShadowNeutralize {
+                params: prepared,
+                space,
+            },
+            &[linear],
+        )?;
         finish!();
     }
     // Final sharpening uses the actual reconstructed RGB, independently of

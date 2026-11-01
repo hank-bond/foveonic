@@ -22,6 +22,7 @@ pub(crate) mod ordered_blue_repair;
 pub(crate) mod phase_extraction;
 pub(crate) mod phase_gain;
 pub(crate) mod repair;
+pub(crate) mod row_guard;
 pub(crate) mod shield_noise;
 pub(crate) mod signed_repair;
 pub(crate) mod sparse_repair;

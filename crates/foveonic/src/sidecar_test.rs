@@ -550,25 +550,3 @@ fn retired_merrill_settings_load_without_rewriting_and_save_only_supported_contr
         .reconstruction
         .is_none());
 }
-
-#[test]
-fn retired_layer_experiments_are_discarded_without_losing_other_edits() {
-    let settings = edited();
-    let mut stored: serde_json::Value =
-        serde_json::from_slice(&encode(&settings).unwrap()).unwrap();
-    stored["settings"]["layers"] =
-        serde_json::json!({"enabled":true,"development":{"inhibition":0.8}});
-    let restored = decode(&serde_json::to_vec(&stored).unwrap()).unwrap();
-    assert_eq!(restored, settings);
-    let saved: serde_json::Value = serde_json::from_slice(&encode(&restored).unwrap()).unwrap();
-    assert!(saved["settings"].get("layers").is_none());
-    stored["settings"]["unsupported_edit"] = serde_json::json!(true);
-    assert!(decode(&serde_json::to_vec(&stored).unwrap()).is_err());
-    let duplicate = String::from_utf8(encode(&settings).unwrap())
-        .unwrap()
-        .replace(
-            "\"settings\": {",
-            "\"settings\": {\"layers\":{},\"layers\":{},",
-        );
-    assert!(decode(duplicate.as_bytes()).is_err());
-}

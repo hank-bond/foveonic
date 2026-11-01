@@ -64,3 +64,5 @@ The old linked-control UI, residual-gain kernels, core-only detail projection an
 ## Validation
 
 Checks cover fixed camera-base parameters, independent cleanup endpoints, signed identity, spatial band response, size bounds, exact combined-change mapping, neutral pyramid bypass, independent group toggles, selective inspection, and retained ownership. Native fixtures cover cached/fresh edits, regional seams and corners, all four orientations, Fast/Draft behavior, Full continuation, TIFF and DNG geometry. Sidecar checks cover old and experimental settings, strict schema handling, and save/reload. The filter optimization preserves the accepted portrait's sensor-base and final floating-point samples exactly. Cross-platform photographic/runtime checks remain unperformed.
+
+Merrill speckle controls belong to Noise as specified in [Merrill speckles](./merrill-speckles.md). Camera-record pixel repair retains its Corrections scope.

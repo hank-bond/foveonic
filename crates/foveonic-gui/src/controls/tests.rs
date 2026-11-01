@@ -4,7 +4,9 @@ use super::common::{adjustment, adjustment_with_nudge, automatic_adjustment};
 use super::merrill::{highlight_choice, select_highlight, HIGHLIGHT_METHODS};
 use super::*;
 use crate::help;
-use foveonic::render::{HighlightMode, MerrillNoiseMethod, Rendering, RepairThreshold};
+use foveonic::render::{
+    HighlightMode, MerrillBandingMethod, MerrillNoiseMethod, Rendering, RepairThreshold,
+};
 use std::ops::RangeInclusive;
 
 // Existing widget interaction fixtures exercise the Merrill panel while full
@@ -70,6 +72,197 @@ fn pointer_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
 }
 
 #[test]
+fn directional_band_groups_follow_capture_orientation_and_preserve_saved_values() {
+    for rotation in [0_u32, 90, 180, 270] {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.merrill_noise_method = MerrillNoiseMethod::MultiscaleRows;
+        settings.reconstruction = Some(Default::default());
+        settings.merrill_banding.enabled = true;
+        settings.merrill_banding.method = MerrillBandingMethod::Directional;
+        settings.merrill_banding.rows.bands[0].size = 17;
+        settings.merrill_banding.columns.bands[0].size = 35;
+        let before = settings.clone();
+        let capture = [
+            ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+            ("ROTATION".into(), rotation.to_string()),
+        ]
+        .into();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(650., 2400.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(!super::processing(
+                        ui,
+                        &mut settings,
+                        None,
+                        Some(&capture),
+                        &mut EditingSection::ALL.to_vec(),
+                        &mut crate::editor::Menus {
+                            family: None,
+                            library: &Default::default(),
+                            state: &mut Default::default()
+                        }
+                    ));
+                });
+            },
+        );
+        assert_eq!(settings, before);
+        let horizontal = panel_text_centers(&output, "Horizontal bands")[0].y;
+        let vertical = panel_text_centers(&output, "Vertical bands")[0].y;
+        let expected = if rotation.is_multiple_of(180) {
+            "17"
+        } else {
+            "35"
+        };
+        let other = if rotation.is_multiple_of(180) {
+            "35"
+        } else {
+            "17"
+        };
+        let size = text_centers(&output, expected)[0].y;
+        let other_size = text_centers(&output, other)[0].y;
+        assert!(horizontal < size && size < vertical, "rotation {rotation}");
+        assert!(vertical < other_size, "rotation {rotation}");
+    }
+}
+
+#[test]
+fn banding_methods_are_independent_and_preserve_off_and_monochrome_edits() {
+    for denoiser in [
+        MerrillNoiseMethod::Reference,
+        MerrillNoiseMethod::MultiscaleRows,
+    ] {
+        for rendering in [Rendering::Color, Rendering::Monochrome] {
+            for (method, banding_enabled, noise_enabled) in [
+                (MerrillBandingMethod::Reference, true, true),
+                (MerrillBandingMethod::Directional, true, true),
+                (MerrillBandingMethod::Directional, false, true),
+                (MerrillBandingMethod::Directional, true, false),
+            ] {
+                let ctx = egui::Context::default();
+                let mut settings = Settings::new("Sunlight", "Standard");
+                settings.merrill_noise_method = denoiser;
+                settings.rendering = rendering;
+                settings.reconstruction = Some(foveonic::noise::Controls {
+                    noise_enabled,
+                    ..Default::default()
+                });
+                settings.merrill_banding.enabled = banding_enabled;
+                settings.merrill_banding.method = method;
+                settings.merrill_banding.columns.bands[1].strength = 0.7;
+                let before = settings.clone();
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(650., 2400.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            assert!(!processing_expanded(ui, &mut settings, None));
+                        });
+                    },
+                );
+                assert_eq!(settings, before);
+                assert!(!panel_text_centers(&output, "Banding").is_empty());
+                assert_eq!(
+                    !panel_text_centers(&output, "Horizontal bands").is_empty(),
+                    method == MerrillBandingMethod::Directional
+                );
+                assert_eq!(
+                    !panel_text_centers(&output, "Row banding").is_empty(),
+                    method == MerrillBandingMethod::Reference
+                );
+            }
+        }
+    }
+    for label in [
+        "Banding enabled",
+        "Banding method",
+        "Band strength",
+        "Band size",
+    ] {
+        assert!(help::editing(label).is_some());
+    }
+}
+
+#[test]
+fn band_sizes_use_odd_steps_and_shared_double_click_reset() {
+    let ctx = egui::Context::default();
+    let mut size = 27_u32;
+    let mut frame = |time, events| {
+        let before = size;
+        let mut changed = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 80.),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    changed = super::common::adjustment_row(
+                        ui,
+                        "Band size",
+                        &mut size,
+                        3..=119,
+                        27,
+                        2.,
+                        super::common::RowControls {
+                            step: Some(2.),
+                            step_origin: 1.,
+                            ..Default::default()
+                        },
+                    );
+                });
+            },
+        );
+        assert_eq!(size % 2, 1);
+        assert!((3..=119).contains(&size));
+        assert_eq!(changed, size != before);
+        size
+    };
+    assert_eq!(frame(0., vec![]), 27);
+    for (index, x) in [120., 170., 220., 270., 330.].into_iter().enumerate() {
+        let point = egui::pos2(x, 18.);
+        frame(
+            1. + index as f64,
+            vec![
+                egui::Event::PointerMoved(point),
+                pointer_button(point, true),
+            ],
+        );
+        frame(1.1 + index as f64, vec![pointer_button(point, false)]);
+    }
+    let point = egui::pos2(270., 18.);
+    let mut reset = 0;
+    for (time, pressed) in [(10., true), (10.05, false), (10.1, true), (10.15, false)] {
+        reset = frame(
+            time,
+            vec![
+                egui::Event::PointerMoved(point),
+                pointer_button(point, pressed),
+            ],
+        );
+    }
+    assert_eq!(reset, 27);
+}
+
+#[test]
 fn merrill_noise_methods_remain_saved_when_noise_is_disabled_or_rendering_changes() {
     for (method, label) in [
         (MerrillNoiseMethod::Reference, "Reference"),
@@ -108,11 +301,7 @@ fn merrill_noise_methods_remain_saved_when_noise_is_disabled_or_rendering_change
                     },
                 );
                 assert_eq!(settings, before);
-                if rendering == Rendering::Color {
-                    assert!(!panel_text_centers(&output, label).is_empty());
-                } else if method != MerrillNoiseMethod::Reference {
-                    assert!(panel_text_centers(&output, label).is_empty());
-                }
+                assert!(!panel_text_centers(&output, label).is_empty());
             }
         }
     }
@@ -189,10 +378,10 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
     let (_, output, current) = frame(1.5, vec![]);
     assert_eq!(current.reconstruction, saved.reconstruction);
     assert_eq!(current.saturation, saved.saturation);
-    for label in ["Color Mix", "Mono noise", "Mono banding"] {
+    for label in ["Color Mix", "Mono noise"] {
         assert_eq!(text_centers(&output, label).len(), 1);
     }
-    for label in ["Color mode", "Chroma", "Luma", "Banding", "ColorDQ gain"] {
+    for label in ["Color mode", "Chroma", "Luma", "ColorDQ gain"] {
         assert!(
             text_centers(&output, label).is_empty(),
             "{label} must be hidden in monochrome"
@@ -220,7 +409,7 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
     for label in ["Color mode", "Noise", "Detail"] {
         assert_eq!(text_centers(&output, label).len(), 1);
     }
-    for label in ["Color Mix", "Mono noise", "Mono banding"] {
+    for label in ["Color Mix", "Mono noise"] {
         assert!(text_centers(&output, label).is_empty());
     }
     assert_eq!(after.monochrome.mix, [0., 0., 1.]);
@@ -265,7 +454,7 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             },
         );
         assert_eq!(settings, before);
-        for label in ["Color mode", "Chroma", "Luma", "Banding", "ColorDQ gain"] {
+        for label in ["Color mode", "Chroma", "Luma", "ColorDQ gain"] {
             assert_eq!(
                 panel_text_centers(&output, label).len(),
                 usize::from(rendering == Rendering::Color),
@@ -277,10 +466,19 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             1 + usize::from(rendering == Rendering::Color)
         );
         assert_eq!(panel_text_centers(&output, "Noise").len(), 1);
+        assert_eq!(panel_text_centers(&output, "Banding").len(), 1);
+        let detail = panel_text_centers(&output, "Detail")[0].y;
+        let sharpening = panel_text_centers(&output, "Sharpening")[0].y;
         for (label, count) in [("Fine", 1), ("Coarse", 1), ("Size", 2)] {
-            assert_eq!(panel_text_centers(&output, label).len(), count);
+            assert_eq!(
+                panel_text_centers(&output, label)
+                    .iter()
+                    .filter(|point| point.y > detail && point.y < sharpening)
+                    .count(),
+                count
+            );
         }
-        for label in ["Color Mix", "Mono noise", "Mono banding"] {
+        for label in ["Color Mix", "Mono noise"] {
             assert_eq!(
                 panel_text_centers(&output, label).len(),
                 usize::from(rendering == Rendering::Monochrome),
@@ -340,7 +538,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     assert!(initial.despeckle && initial.repair.is_some() && initial.row_correction);
     let headers = text_centers(&output, "Advanced");
     assert_eq!(headers.len(), 2);
-    assert!(text_centers(&output, "Speckles").is_empty());
+    assert_eq!(text_centers(&output, "Speckles").len(), 1);
     let noise_parameter = "Mean decay";
     assert!(text_centers(&output, noise_parameter).is_empty());
     assert!(text_centers(&output, "ColorDQ gain").is_empty());
@@ -362,7 +560,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     assert_eq!(current, defaults);
     assert!(text_centers(&output, noise_parameter).is_empty());
     assert_eq!(text_centers(&output, "ColorDQ gain").len(), 1);
-    assert!(text_centers(&output, "Speckles").is_empty());
+    assert_eq!(text_centers(&output, "Speckles").len(), 1);
     let corrections = text_centers(&output, "Advanced")[1];
     for pressed in [true, false] {
         assert!(
@@ -425,7 +623,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     }
     let (_, output, closed) = frame(5.5, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
     assert_eq!(closed, edited);
-    assert!(text_centers(&output, "Speckles").is_empty());
+    assert_eq!(text_centers(&output, "Speckles").len(), 1);
     let corrections = text_centers(&output, "Advanced")[1];
     for pressed in [true, false] {
         assert!(
@@ -716,7 +914,7 @@ fn all_visible_editing_controls_have_explanations() {
         let label = match key {
             "Chroma noise" => "Chroma",
             "Luma noise" => "Luma",
-            "Banding noise" => "Banding",
+            "Banding noise" => "Strength",
             "Fine detail" => "Fine",
             "Coarse detail" => "Coarse",
             "Fine size" | "Coarse size" => "Size",
@@ -797,7 +995,7 @@ fn color_field_controls_preserve_edits_and_remain_distinct_from_stock_threshold(
             assert!(!shown("Color-field tuning"));
             assert!(!shown("Color restraint"));
             assert!(shown("Highlights"));
-            let y = text_centers(&output, "Threshold")[0].y;
+            let y = text_centers(&output, "Threshold").last().unwrap().y;
             assert_eq!(
                 text_centers(&output, "A")
                     .iter()
@@ -807,7 +1005,7 @@ fn color_field_controls_preserve_edits_and_remain_distinct_from_stock_threshold(
             );
             assert!(
                 text_centers(&output, "Highlights").last().unwrap().y
-                    < text_centers(&output, "Threshold")[0].y
+                    < text_centers(&output, "Threshold").last().unwrap().y
             );
             assert!(shown("Threshold"));
             for label in [
@@ -864,7 +1062,7 @@ fn all_highlight_methods_share_manual_reset_and_enabled_pointer_behavior() {
         };
         let (output, changed) = frame(0., Vec::new(), &mut settings);
         assert!(!changed);
-        let y = text_centers(&output, "Threshold")[0].y;
+        let y = text_centers(&output, "Threshold").last().unwrap().y;
         let auto = text_centers(&output, "A")
             .into_iter()
             .find(|position| (position.y - y).abs() < 2.);
@@ -1265,8 +1463,9 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
         };
         let label = bounds("Threshold");
         assert!(label.left() < bounds("Bad pixels").left());
-        assert_eq!(bounds("Bad pixels").left(), bounds("Speckles").left());
-        assert_eq!(bounds("Bad pixels").left(), bounds("Row banding").left());
+        assert_eq!(bounds("Banding").left(), bounds("Speckles").left());
+        assert!(bounds("Noise").top() < bounds("Row banding").top());
+        assert!(bounds("Row banding").top() < bounds("Detail").top());
         let ordered = [
             "Tone and Color",
             "Noise",
@@ -1275,9 +1474,7 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
             "Corrections",
             "Highlights",
             "Advanced",
-            "Speckles",
             "Bad pixels",
-            "Row banding",
         ];
         for pair in ordered.windows(2) {
             assert!(
@@ -1347,7 +1544,7 @@ fn tone_and_correction_highlights_have_independent_controls() {
             egui::Shape::Text(text)
                 if text.galley.job.text == "A"
                     && (text.pos.y + text.galley.size().y * 0.5
-                        - text_centers(&output, "Threshold")[0].y)
+                        - text_centers(&output, "Threshold").last().unwrap().y)
                         .abs()
                         < 2. =>
             {
@@ -1381,7 +1578,7 @@ fn tone_and_correction_highlights_have_independent_controls() {
     assert_eq!(manual.highlight_threshold_ev, Some(0.));
     assert_eq!(manual.tone, tone.tone);
     frame(2.2, vec![]);
-    let correction_slider = egui::pos2(280., text_centers(&output, "Threshold")[0].y);
+    let correction_slider = egui::pos2(280., text_centers(&output, "Threshold").last().unwrap().y);
     frame(
         3.,
         vec![
@@ -1876,6 +2073,7 @@ fn correction_checkboxes_start_enabled_and_toggle_independently() {
     for label in ["Bad pixels", "Highlights", "Speckles", "Row banding"] {
         let ctx = egui::Context::default();
         let mut settings = Settings::new("Sunlight", "Standard");
+        settings.reconstruction = Some(Default::default());
         let mut time = 0.;
         let mut render = |events| {
             time += 0.25;
@@ -3717,4 +3915,34 @@ fn color_swatch_selection_changes_visible_values_without_editing_or_rendering() 
     assert_eq!(text_centers(&selected, "0.22").len(), 1);
     assert!(text_centers(&selected, "0.11").is_empty());
     assert_eq!(settings, saved);
+}
+
+#[test]
+fn shadow_neutralization_is_in_color_noise_and_retained_in_monochrome() {
+    let context = egui::Context::default();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.neutralize_shadows.strength = 0.8;
+    let controls = settings.neutralize_shadows;
+    for rendering in [Rendering::Color, Rendering::Monochrome, Rendering::Color] {
+        settings.rendering = rendering;
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500., 3200.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(!processing_expanded(ui, &mut settings, None));
+                });
+            },
+        );
+        assert_eq!(
+            text_centers(&output, "Neutralize shadows").len(),
+            usize::from(rendering == Rendering::Color)
+        );
+        assert_eq!(settings.neutralize_shadows, controls);
+    }
 }

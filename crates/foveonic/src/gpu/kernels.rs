@@ -36,6 +36,16 @@ pub enum Kernel {
     ShieldPredict,
     ShieldReduce,
     ShieldApply,
+    RowGuardProfiles,
+    RowGuardRobust,
+    RowGuardReliability,
+    RowGuardMean,
+    RowGuardConfidence,
+    RowGuardHorizontal,
+    RowGuardApply,
+    DirectionalBandingSmooth,
+    DirectionalBandingDeltas,
+    DirectionalBandingApply,
     PurpleFringe,
     Fppd,
     FppdMask,
@@ -145,6 +155,10 @@ pub enum Kernel {
     TextureInspect,
     NoiseStitch,
     SpeckleDetect,
+    SpeckleCompact,
+    ShadowNeutralAnalyze,
+    ShadowNeutralFilter,
+    ShadowNeutralApply,
     SpecklePrefix,
     SpeckleScatter,
     SpeckleRepair,
@@ -315,6 +329,16 @@ impl Kernel {
             Self::ShieldPredict => "predict native color bands from shields",
             Self::ShieldReduce => "remove predicted color spatial means",
             Self::ShieldApply => "correct shield-predicted native color errors",
+            Self::RowGuardProfiles => "measure independent native row spans",
+            Self::RowGuardRobust => "combine robust native row evidence",
+            Self::RowGuardReliability => "estimate native row reliability",
+            Self::RowGuardMean => "center native row correction fields",
+            Self::RowGuardConfidence => "bound native row correction confidence",
+            Self::RowGuardHorizontal => "prepare native row signal guide",
+            Self::RowGuardApply => "apply guarded fine native row correction",
+            Self::DirectionalBandingSmooth => "measure native directional neighborhoods",
+            Self::DirectionalBandingDeltas => "estimate native directional band offsets",
+            Self::DirectionalBandingApply => "apply weighted native directional bands",
             Self::PurpleFringe => "correct spatial purple fringes",
             Self::Fppd => "correct sparse phase gains",
             Self::FppdMask => "mark sparse phase defects",
@@ -436,6 +460,10 @@ impl Kernel {
             Self::TextureInspect => "texture band inspection",
             Self::NoiseStitch => "processing tile projection",
             Self::SpeckleDetect => "speckle detection",
+            Self::SpeckleCompact => "compact bright speckle correction",
+            Self::ShadowNeutralAnalyze => "measure shadow color",
+            Self::ShadowNeutralFilter => "measure regional shadow color",
+            Self::ShadowNeutralApply => "neutralize shadow color",
             Self::SpecklePrefix => "speckle bank prefixes",
             Self::SpeckleScatter => "speckle record compaction",
             Self::SpeckleRepair => "ordered speckle correction",
@@ -598,8 +626,13 @@ impl Gpu {
             include_str!("../nodes/finish/photographic/common.wgsl"),
             include_str!("../nodes/finish/photographic/local_contrast.wgsl")
         );
+        let oklab = include_str!("../nodes/finish/oklab.wgsl");
+        let shadow_neutralize = format!(
+            "{oklab}\n{}",
+            include_str!("../nodes/finish/shadow_neutralize.wgsl")
+        );
         let color_editor = format!(
-            "{}\n{}",
+            "{oklab}\n{}\n{}",
             include_str!("../nodes/finish/color_editor.wgsl"),
             include_str!("../nodes/finish/color_editor_response.wgsl")
         );
@@ -710,6 +743,46 @@ impl Gpu {
             (
                 include_str!("../nodes/sensor/shield_noise.wgsl"),
                 "shield_apply",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_profiles",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_robust",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_reliability",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_mean",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_confidence",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_horizontal",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_apply",
+            ),
+            (
+                include_str!("../nodes/color/directional_banding.wgsl"),
+                "neighborhoods",
+            ),
+            (
+                include_str!("../nodes/color/directional_banding.wgsl"),
+                "block_deltas",
+            ),
+            (
+                include_str!("../nodes/color/directional_banding.wgsl"),
+                "correct",
             ),
             (
                 include_str!("../nodes/color/purple_fringe.wgsl"),
@@ -1027,6 +1100,10 @@ impl Gpu {
             ),
             (include_str!("../nodes/color/noise_stitch.wgsl"), "stitch"),
             (despeckle, "detect"),
+            (despeckle, "compact"),
+            (shadow_neutralize.as_str(), "analyze"),
+            (shadow_neutralize.as_str(), "regional_filter"),
+            (shadow_neutralize.as_str(), "neutralize"),
             (despeckle, "prefix"),
             (despeckle, "scatter"),
             (despeckle, "repair"),
@@ -1288,6 +1365,9 @@ impl Gpu {
                     || (Kernel::NoiseGlobalTile as usize..=Kernel::NoiseGlobalScalarTile as usize)
                         .contains(&index)
                     || index == Kernel::NoiseMedian as usize
+                    || (Kernel::DirectionalBandingSmooth as usize
+                        ..=Kernel::DirectionalBandingApply as usize)
+                        .contains(&index)
                 {
                     format!(
                         "{}\n{code}",

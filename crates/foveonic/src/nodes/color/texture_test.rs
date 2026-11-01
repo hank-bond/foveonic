@@ -91,6 +91,78 @@ fn parameters() -> Parameters {
 
 #[test]
 #[ignore = "requires a GPU"]
+fn signed_layer_cancellation_cannot_explode_restored_color() {
+    let gpu = Gpu::new().unwrap();
+    let params = parameters();
+    let count = params.atlas_pixels() as usize;
+    let cases = [
+        [-5., 2., 3.],
+        [-5., 2., 3.00001],
+        [-5., -2., -3.],
+        [1., 2., 3.],
+    ];
+    let raw: Vec<f32> = (0..count).flat_map(|i| cases[i % cases.len()]).collect();
+    let original = gpu.upload("Signed near-black cancellation", &raw).unwrap();
+    let base = gpu
+        .upload("Positive filtered signal", &vec![2_f32; count * 3])
+        .unwrap();
+    let ratio = gpu
+        .upload("Positive restored brightness", &vec![1_f32; count])
+        .unwrap();
+    let result = apply(
+        &gpu,
+        Inputs {
+            raw: &original,
+            base: Some(&base),
+            ratio: Some(&ratio),
+        },
+        params,
+        Prepared::new(
+            Controls {
+                chroma: 3,
+                ..Default::default()
+            },
+            1.,
+        )
+        .unwrap(),
+        Requested {
+            layers: true,
+            ..Default::default()
+        },
+        &mut Profile::default(),
+    )
+    .unwrap()
+    .layers
+    .unwrap();
+    let bytes = gpu.readback(&result).unwrap();
+    let values: &[f32] = bytemuck::cast_slice(&bytes);
+    for (index, pixel) in values.as_chunks::<3>().0.iter().enumerate() {
+        assert!(
+            pixel
+                .iter()
+                .all(|v| v.is_finite() && (0. ..=3.).contains(v)),
+            "unbounded color at {index}: {pixel:?}"
+        );
+        if index % 4 == 0 {
+            assert!((pixel.iter().sum::<f32>() / 3. - 1.).abs() < 0.00001);
+        }
+        if index % 4 == 3 {
+            for (actual, expected) in pixel.iter().zip([1.9375, 2., 2.0625]) {
+                assert!(
+                    (actual - expected).abs() < 0.00001,
+                    "positive sample changed"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        gpu.readback(&original).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&raw)
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU"]
 fn texture_preserves_shading_and_separates_noise_and_spatial_bands() {
     let gpu = Gpu::new().unwrap();
     let p = parameters();

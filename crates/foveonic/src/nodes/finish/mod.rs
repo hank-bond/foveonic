@@ -32,3 +32,5 @@ pub(crate) mod linear_gain;
 
 pub(crate) mod linear_basis;
 pub(crate) mod white_balance;
+
+pub(crate) mod shadow_neutralize;

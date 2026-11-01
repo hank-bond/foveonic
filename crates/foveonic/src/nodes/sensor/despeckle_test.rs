@@ -158,6 +158,7 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_input() {
         let out = apply(
             &gpu,
             &input,
+            &input,
             &p,
             &mut Profile::new(crate::profile::Mode::Gpu),
         )
@@ -182,6 +183,7 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_input() {
     p.params.source[3] = 1;
     let out = apply(
         &gpu,
+        &input,
         &input,
         &p,
         &mut Profile::new(crate::profile::Mode::Off),
@@ -221,7 +223,7 @@ fn gpu_scale_matched_thresholds_keep_marginal_detail_and_correct_strong_defects(
     {
         let original = &source;
         let input = gpu.upload("WB scale fixture", original).unwrap();
-        let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+        let output = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
         let bytes = gpu.readback(&output).unwrap();
         let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
         assert_eq!(actual[marginal], original[marginal]);
@@ -239,7 +241,7 @@ fn gpu_scale_matched_thresholds_keep_marginal_detail_and_correct_strong_defects(
                 params: prepared.params,
                 tables: old_tables.clone(),
             };
-            let output = apply(&gpu, &input, &old, &mut Profile::default()).unwrap();
+            let output = apply(&gpu, &input, &input, &old, &mut Profile::default()).unwrap();
             let bytes = gpu.readback(&output).unwrap();
             let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
             assert!((actual[marginal] - (200. - gap)).abs() < 0.002);
@@ -294,7 +296,14 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
             .unwrap();
     let factors = std::array::from_fn(|c| calibration.params.gains[c]);
     let prepared = prepare(&source.metadata, factors, 1.).unwrap();
-    let expected = apply(&gpu, &images[0].buffer, &prepared, &mut Profile::default()).unwrap();
+    let expected = apply(
+        &gpu,
+        &images[0].buffer,
+        &images[0].buffer,
+        &prepared,
+        &mut Profile::default(),
+    )
+    .unwrap();
     assert!(
         gpu.readback(&expected).unwrap() == bytemuck::cast_slice::<f32, u8>(after),
         "despeckle graph input/parameter handoff differs from direct application"
@@ -325,5 +334,112 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
     assert!(
         gpu.readback(&i.buffer).unwrap() == bytemuck::cast_slice::<f32, u8>(before),
         "retained pre-despeckle image changed"
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn compact_speckles_remove_small_clusters_and_preserve_lines_and_source() {
+    use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
+    let gpu = Gpu::new().unwrap();
+    let mut samples = vec![100_f32; 64 * 64 * 3];
+    for y in 10..50 {
+        for c in 0..3 {
+            samples[(y * 64 + 20) * 3 + c] = 300.;
+        }
+    }
+    for y in 31..33 {
+        for x in 31..33 {
+            for c in 0..3 {
+                samples[(y * 64 + x) * 3 + c] = 200.;
+            }
+        }
+    }
+    samples[(40 * 64 + 44) * 3] = 500.;
+    let source = gpu.upload("Compact speckle fixture", &samples).unwrap();
+    for size in [3, 5, 7] {
+        let prepared = Prepared {
+            params: parameters(64, 64, [8, 8, 56, 56]).unwrap(),
+            tables: vec![5.; 3 * 4096],
+        }
+        .with_controls(MerrillSpeckleControls {
+            method: MerrillSpeckleMethod::Compact,
+            threshold: 1.,
+            size,
+        })
+        .unwrap();
+        let output = apply(&gpu, &source, &source, &prepared, &mut Profile::default()).unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let actual: &[f32] = bytemuck::cast_slice(&bytes);
+        assert_eq!(actual[(40 * 64 + 44) * 3], 100.);
+        assert_eq!(
+            actual[(25 * 64 + 20) * 3],
+            300.,
+            "straight line must survive"
+        );
+        assert_eq!(
+            actual[(31 * 64 + 31) * 3],
+            if size == 3 { 200. } else { 100. }
+        );
+        assert_eq!(
+            gpu.readback(&source).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&samples)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn compact_uses_original_highlight_codes_after_calibration() {
+    use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
+    let gpu = Gpu::new().unwrap();
+    let mut original = vec![20_f32; 64 * 64 * 3];
+    let mut calibrated = vec![8_f32; 64 * 64 * 3];
+    let defect = (24 * 64 + 24) * 3;
+    let near_clipped = (32 * 64 + 32) * 3 + 1;
+    let clipped_low_gain = (40 * 64 + 40) * 3 + 2;
+    original[defect] = 1158.;
+    calibrated[defect] = 6923.;
+    original[near_clipped] = 3900.;
+    calibrated[near_clipped] = 7000.;
+    original[clipped_low_gain] = 4095.;
+    calibrated[clipped_low_gain] = 3000.;
+    let raw = gpu
+        .upload("Original highlight evidence", &original)
+        .unwrap();
+    let input = gpu.upload("Calibrated bright points", &calibrated).unwrap();
+    for size in [3, 5, 7] {
+        let prepared = Prepared {
+            params: parameters(64, 64, [8, 8, 56, 56]).unwrap(),
+            tables: vec![5.; 3 * 4096],
+        }
+        .with_controls(MerrillSpeckleControls {
+            method: MerrillSpeckleMethod::Compact,
+            threshold: 1.,
+            size,
+        })
+        .unwrap();
+        let out = apply(&gpu, &input, &raw, &prepared, &mut Profile::default()).unwrap();
+        let bytes = gpu.readback(&out).unwrap();
+        let actual: &[f32] = bytemuck::cast_slice(&bytes);
+        assert_eq!(
+            actual[defect], 8.,
+            "unclipped amplified defect must be repaired"
+        );
+        assert_eq!(actual[near_clipped], calibrated[near_clipped]);
+        assert_eq!(actual[clipped_low_gain], calibrated[clipped_low_gain]);
+        for (i, &value) in actual.iter().enumerate() {
+            if i != defect {
+                assert_eq!(value, calibrated[i], "unexpected change at sample {i}");
+            }
+        }
+    }
+    assert_eq!(
+        gpu.readback(&raw).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&original)
+    );
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&calibrated)
     );
 }

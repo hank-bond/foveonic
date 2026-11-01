@@ -16,6 +16,12 @@ const BINOMIAL: array<f32, 5> = array(0.0625, 0.25, 0.375, 0.25, 0.0625);
 const MIN_LUMINANCE: f32 = 0.0001;
 fn base_rgb(p: u32) -> vec3<f32> { let q=p*3u; return vec3(base[q],base[q+1u],base[q+2u]); }
 fn raw_rgb(p: u32) -> vec3<f32> { let q=p*3u; return vec3(input_values[q],input_values[q+1u],input_values[q+2u]); }
+fn signal_proportion(value: vec3<f32>) -> vec3<f32> {
+    // Signed layers can cancel near black. Normalize physical signal here so
+    // restoring brightness cannot amplify that cancellation into colored points.
+    let signal = max(value, vec3(0.));
+    return signal / max(dot(signal, params.weights.xyz), MIN_LUMINANCE);
+}
 fn mono_log(p: u32) -> f32 {
     let a = dot(base_rgb(p), params.weights.xyz);
     let d = dot(raw_rgb(p), params.weights.xyz);
@@ -67,10 +73,9 @@ fn mix_texture(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let a = base_rgb(p); let d = raw_rgb(p);
     let base_luma = max(dot(a, params.weights.xyz), MIN_LUMINANCE);
-    let raw_luma = max(dot(d, params.weights.xyz), MIN_LUMINANCE);
     // Blend color proportions at a common luminance. Unit texture amounts
     // preserve the selected brightness evidence instead of boosting its contrast.
-    let chroma = mix(d / raw_luma, a / base_luma, controls.strength.w);
+    let chroma = mix(signal_proportion(d), a / base_luma, controls.strength.w);
     let value = chroma * (base_luma * exp2(restored));
     let q = p * 3u;
     output_values[q] = value.x; output_values[q+1u] = value.y; output_values[q+2u] = value.z;

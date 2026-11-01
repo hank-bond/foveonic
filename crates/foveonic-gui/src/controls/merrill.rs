@@ -1,10 +1,13 @@
 //! Composes Merrill color, monochrome, reconstruction and correction controls.
 
-use super::common::{self, adjustment, adjustment_row, automatic_adjustment, RowControls};
+#[path = "merrill_noise.rs"]
+mod noise;
+
+use super::common::{self, adjustment_row, automatic_adjustment};
 use crate::{help, preferences::EditingSection};
 use eframe::egui;
 use foveonic::{
-    render::{ColorFieldApproach, HighlightMode, MerrillNoiseMethod, Settings},
+    render::{ColorFieldApproach, HighlightMode, Settings},
     source::Metadata,
 };
 
@@ -44,96 +47,6 @@ pub(super) fn select_highlight(
         settings.color_field.approach = choice.1;
     }
     before != (settings.highlight_mode, settings.color_field)
-}
-
-fn noise(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = false;
-    let before = settings.reconstruction;
-    let mut controls = before.unwrap_or(foveonic::noise::Controls {
-        noise_enabled: false,
-        detail_enabled: false,
-        ..Default::default()
-    });
-    changed |= common::section_header(
-        ui,
-        EditingSection::Noise,
-        "Noise",
-        Some(&mut controls.noise_enabled),
-    );
-    ui.add_enabled_ui(controls.noise_enabled, |ui| {
-        ui.horizontal(|ui| {
-            help::control(ui.label("Method"), "Merrill noise method");
-            let methods = [
-                (MerrillNoiseMethod::Reference, "Reference"),
-                (MerrillNoiseMethod::MultiscaleRows, "Multiscale: Rows"),
-                (
-                    MerrillNoiseMethod::MultiscaleRowsAndColumns,
-                    "Multiscale: Rows + Columns",
-                ),
-            ];
-            let label = methods
-                .iter()
-                .find(|(method, _)| *method == settings.merrill_noise_method)
-                .unwrap()
-                .1;
-            let combo = egui::ComboBox::from_id_salt("merrill-noise-method")
-                .width((ui.available_width() - 8.).max(80.))
-                .selected_text(label);
-            let response = crate::widgets::dropdown(ui, combo, |ui| {
-                for (method, label) in methods {
-                    changed |= crate::widgets::menu_value(
-                        ui,
-                        &mut settings.merrill_noise_method,
-                        method,
-                        label,
-                    )
-                    .changed();
-                }
-            });
-            help::control(response.response, "Merrill noise method");
-        });
-        let column = common::LabelColumn::new(ui, &["Chroma", "Luma", "Banding"], &[]);
-        changed |= column.adjustment(
-            ui,
-            ("Chroma noise", "Chroma"),
-            &mut controls.chroma,
-            0..=4,
-            2,
-        );
-        changed |= column.adjustment(
-            ui,
-            ("Luma noise", "Luma"),
-            &mut controls.luminance,
-            0..=4,
-            2,
-        );
-        changed |= column.adjustment(
-            ui,
-            ("Banding noise", "Banding"),
-            &mut controls.banding,
-            0..=4,
-            2,
-        );
-        egui::CollapsingHeader::new("Advanced")
-            .id_salt("advanced-reconstruction")
-            .show(ui, |ui| {
-                changed |= automatic_adjustment(
-                    ui,
-                    "ColorDQ gain",
-                    &mut settings.color_dq_gain,
-                    0. ..=2.,
-                    1.,
-                    None,
-                    RowControls::default(),
-                );
-            });
-    });
-    // Keep both groups' inactive values. Loading an older explicit off
-    // recipe must not create settings merely by drawing the panel.
-    if before.is_some() || (controls.noise_enabled || controls.detail_enabled) {
-        settings.reconstruction = Some(controls);
-    }
-    changed
 }
 
 fn detail(
@@ -188,6 +101,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
+    rotation: u32,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
@@ -222,9 +136,9 @@ pub(super) fn show(
         EditingSection::ColorEditor => super::color_editor::show(ui, settings),
         EditingSection::Noise => {
             if mono {
-                mono_noise(ui, settings)
+                noise::monochrome(ui, settings, rotation)
             } else {
-                noise(ui, settings)
+                noise::color(ui, settings, rotation)
             }
         }
         EditingSection::Detail => {
@@ -255,19 +169,6 @@ fn color_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     if before.is_some() || controls.noise_enabled || controls.detail_enabled {
         settings.reconstruction = Some(controls);
     }
-    changed
-}
-
-fn mono_noise(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    common::section_header(ui, EditingSection::Noise, "Noise", None);
-    let mut changed = adjustment(ui, "Mono noise", &mut settings.monochrome.noise, 0..=4, 2);
-    changed |= adjustment(
-        ui,
-        "Mono banding",
-        &mut settings.monochrome.banding,
-        0..=4,
-        2,
-    );
     changed
 }
 
@@ -333,16 +234,7 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let advanced = egui::CollapsingHeader::new("Advanced")
         .id_salt("advanced-corrections")
         .show(ui, |ui| {
-            changed |= common::pixel_corrections(ui, settings);
-            changed |= ui
-                .scope(|ui| {
-                    help::control(
-                        crate::widgets::checkbox(ui, &mut settings.row_correction, "Row banding"),
-                        "Row banding",
-                    )
-                    .changed()
-                })
-                .inner;
+            changed |= common::bad_pixels(ui, settings);
         });
     help::control(advanced.header_response, "Advanced corrections");
     changed

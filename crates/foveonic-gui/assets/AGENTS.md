@@ -4,7 +4,7 @@ summary: "Desktop assets contain layered-X icon artwork and reviewed photographi
 
 # Desktop assets
 
-Photographic-help manifests, PNGs, and provenance live in [`help/`](./help/AGENTS.md). The [README capture recipe](./gui-screenshot.json) and generated `gui-screenshot.webp` are maintained through the explicit [screenshot workflow](../../../docs/gui-screenshot.md). Do not regenerate that image during ordinary builds. The remaining guidance here describes application-icon artwork.
+Photographic-help manifests, PNGs, and provenance live in [`help/`](./help/AGENTS.md). The [README capture recipe](./gui-screenshot.json) and generated `gui-screenshot.webp` are maintained through the explicit [screenshot workflow](../../../docs/gui-screenshot.md). Do not regenerate that image during ordinary builds. The chromaticity mixer uses the unchanged CIE spectral-locus table in `cie1931-locus.csv`. Its source and CC BY-SA 4.0 license are retained in `cie1931-locus-LICENSE.txt`. The remaining guidance here describes application-icon artwork.
 
 `logo.svg` is the current editable revision: the original face polygon/projection, 24-unit slabs with 16-unit gaps, distinct cobalt/yellow-green/vermilion layers, and a softly lit graphite face. Its viewBox tightly bounds the projected geometry.
 

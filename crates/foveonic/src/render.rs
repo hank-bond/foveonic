@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 mod artifacts;
+mod banding_controls;
 mod capabilities;
 #[path = "dng/gpu.rs"]
 mod dng_gpu;
@@ -19,7 +20,13 @@ mod edits;
 mod execute;
 mod recipes;
 mod settings;
+pub use crate::nodes::finish::shadow_neutralize::Controls as ShadowNeutralizeControls;
+mod speckle_controls;
+pub use speckle_controls::{MerrillSpeckleControls, MerrillSpeckleMethod};
 
+pub use banding_controls::{
+    BandingAxisControls, BandingBand, MerrillBandingControls, MerrillBandingMethod,
+};
 pub use capabilities::ControlCapabilities;
 pub use edits::{
     camera_settings, camera_settings_from_properties, Defaults as RecipeDefaults,

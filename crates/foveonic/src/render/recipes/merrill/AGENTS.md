@@ -18,9 +18,11 @@ Monochrome branches after the same sensor corrections, then uses its dedicated m
 - **[dng_base.rs](./dng_base.rs)** Composes Merrill technical DNG samples independently of shared photographic edits.
 - **[layer_noise.rs](./layer_noise.rs)** Prepares native layer noise and shield correction in camera color coordinates.
 - **[monochrome.rs](./monochrome.rs)** Authors sensor-layer monochrome filtering and finishing without the color reconstruction path.
+- **[native_layers.rs](./native_layers.rs)** Composes Merrill native layer corrections before Color and Monochrome diverge.
 - **[photographic.rs](./photographic.rs)** Applies the camera tone curve and saturation after shared linear photographic edits.
 - **[preview.rs](./preview.rs)** Prepares Merrill's half-size calibrated preview grid without changing source metadata.
+- **[reconstruction.rs](./reconstruction.rs)** Composes Merrill tiled noise, directional conditioning and texture reconstruction.
 - **[region.rs](./region.rs)** Maps oriented Merrill detail requests onto native sensor rectangles and processing tiles.
-- **[technical.rs](./technical.rs)** Builds Merrill sensor corrections and technical color with lazy inspection preparation.
+- **[technical.rs](./technical.rs)** Coordinates Merrill native layers, tiled reconstruction and technical RGB finishing.
 
 <!-- INDEX:END -->

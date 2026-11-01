@@ -297,6 +297,8 @@ pub(super) struct RowControls<'a> {
     pub(super) automatic: Option<Automatic<'a>>,
     pub(super) enabled: Option<&'a mut bool>,
     pub(super) step: Option<f64>,
+    /// Grid origin for stepped values. Zero preserves the ordinary slider grid.
+    pub(super) step_origin: f64,
     /// Some includes the containing group's left padding when centering the pipe.
     pub(super) indent: Option<f32>,
     pub(super) label: Option<(&'a str, f32)>,
@@ -347,13 +349,15 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
         mut automatic,
         enabled,
         step,
+        step_origin,
         indent,
         label: label_override,
     } = controls;
     // The two Highlights rows need separate help and widget IDs.
     let display_label = label_override.map_or_else(
         || match label {
-            "Highlight correction" | "Color-field highlights" => "Threshold",
+            "Highlight correction" | "Color-field highlights" | "Speckle threshold" => "Threshold",
+            "Speckle size" => "Size",
             _ => label,
         },
         |(text, _)| text,
@@ -421,7 +425,9 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                     let mut slider = egui::Slider::new(value, range.clone())
                         .show_value(false)
                         .custom_formatter(|v, _| format_value(v));
-                    if let Some(step) = step {
+                    // egui's built-in grid starts at zero. Shifted grids snap
+                    // below so odd endpoints remain reachable.
+                    if let Some(step) = step.filter(|_| step_origin == 0.) {
                         slider = slider.step_by(step);
                     }
                     let response = ui.add(slider).interact(egui::Sense::click_and_drag());
@@ -474,7 +480,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 // the overshoot even though the stored setting is already in range.
                 let mut accepted = value.to_f64();
                 if let Some(step) = step {
-                    accepted = (accepted / step).round() * step;
+                    accepted = ((accepted - step_origin) / step).round() * step + step_origin;
                 }
                 let accepted = accepted.clamp(range.start().to_f64(), range.end().to_f64());
                 let accepted = T::from_f64(accepted);
@@ -826,6 +832,11 @@ pub(super) fn pixel_corrections(ui: &mut egui::Ui, settings: &mut Settings) -> b
         "Speckles",
     )
     .changed();
+    changed | bad_pixels(ui, settings)
+}
+
+pub(super) fn bad_pixels(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let mut changed = false;
     let mut repair = settings.repair.is_some();
     if help::control(
         crate::widgets::checkbox(ui, &mut repair, "Bad pixels"),

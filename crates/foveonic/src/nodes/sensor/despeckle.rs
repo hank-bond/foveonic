@@ -1,4 +1,4 @@
-//! Prepares camera thresholds for GPU speckle repair without changing detection order.
+//! Prepares camera-based thresholds for reference and compact GPU speckle repair.
 
 //!
 //! Tables and detector rules adapted from the reference implementation's
@@ -18,8 +18,9 @@ const CAPACITY: u32 = 624_999;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Params {
-    pub source: [u32; 4], // width, height, block count, records per bank
-    pub area: [u32; 4],   // inclusive detector bounds in full-sensor coordinates
+    pub source: [u32; 4],   // width, height, block count, records per bank
+    pub area: [u32; 4],     // inclusive detector bounds in full-sensor coordinates
+    pub detector: [u32; 4], // method, maximum radius, reserved
 }
 
 pub(crate) struct Prepared {
@@ -28,6 +29,28 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
+    pub(crate) fn with_controls(
+        mut self,
+        controls: crate::render::MerrillSpeckleControls,
+    ) -> Result<Self> {
+        controls.validate()?;
+        self.params.detector = [
+            u32::from(controls.method == crate::render::MerrillSpeckleMethod::Compact),
+            if controls.method == crate::render::MerrillSpeckleMethod::Compact {
+                (controls.size - 1) / 2
+            } else {
+                1
+            },
+            0,
+            0,
+        ];
+        if controls.threshold != 1. {
+            for value in &mut self.tables {
+                *value *= controls.threshold;
+            }
+        }
+        Ok(self)
+    }
     pub(crate) fn key(&self) -> crate::recipe::Key {
         crate::recipe::Key::pod(&self.params).slice(&self.tables)
     }
@@ -50,6 +73,7 @@ fn parameters(width: u32, height: u32, active: [u32; 4]) -> Result<Params> {
     }
     Ok(Params {
         source: [width, height, count / BLOCK, CAPACITY.min(count / BANKS)],
+        detector: [0, 1, 0, 0],
         area: [
             active[0] - 4,
             active[1] - 4,
@@ -126,12 +150,33 @@ pub(crate) fn prepare(
 pub(crate) fn apply(
     gpu: &Gpu,
     input: &crate::gpu::ReadGuard,
+    original: &crate::gpu::ReadGuard,
     prepared: &Prepared,
     profile: &mut Profile,
 ) -> Result<crate::gpu::ReadGuard> {
     let p = prepared.params;
     let count = u64::from(p.source[0]) * u64::from(p.source[1]);
     let mut output = gpu.storage("Despeckled sensor layers", count * 12)?;
+    if p.detector[0] == 1 {
+        let uniform = gpu.uniform(&p);
+        let lookup = gpu.upload("Speckle threshold tables", &prepared.tables)?;
+        let mut trace = gpu.trace(profile.mode.gpu(), 1);
+        gpu.dispatch(
+            Kernel::SpeckleCompact,
+            &mut [
+                (0, Read(input)),
+                (1, Read(&lookup)),
+                (2, Read(&uniform)),
+                (3, Write(output.write())),
+                (7, Read(original)),
+            ],
+            [p.source[0].div_ceil(8), p.source[1].div_ceil(8)],
+            &mut trace,
+        );
+        gpu.finish_trace(&trace, profile)?;
+        return Ok(output);
+    }
+
     let mut marks = gpu.storage("Speckle block ranks", count * 4)?;
     let mut counts = gpu.storage(
         "Speckle block prefixes and bank counts",

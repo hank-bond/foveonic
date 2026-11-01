@@ -21,6 +21,7 @@ Keep tiled sample meanings and side-output dependencies explicit. Noise controls
 - **[code_gain.rs](./code_gain.rs)** Applies a bounded Q12 gain to signed linear RGB codes independently of filtering.
 - **[color_dq.rs](./color_dq.rs)** Builds reference-derived ColorDQ lookup tables with an explicitly selected gain.
 - **[color_mode.rs](./color_mode.rs)** Resolves camera color modes and their camera-ordered tone records.
+- **[directional_banding.rs](./directional_banding.rs)** Estimates distinct native row and column bands and applies their selected strengths on GPU.
 - **[highlight_stream.rs](./highlight_stream.rs)** Executes delayed five-row highlight neutralization with explicit threshold controls.
 - **[histogram_bilateral.rs](./histogram_bilateral.rs)** Filters a scalar code plane with quantized range weights and an adaptive residual blend.
 - **[log_reconstruction.rs](./log_reconstruction.rs)** Reconstructs signed RGB from guided log residuals with caller-selected filtering controls.

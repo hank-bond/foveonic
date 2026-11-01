@@ -1,6 +1,6 @@
 // Reference extrema detector, deterministic bank compaction, and sequential
 // trimmed/chroma-anchored repair. Adapted from Foveonic despeckle.rs / repair.rs.
-struct Params { source: vec4<u32>, area: vec4<u32> };
+struct Params { source: vec4<u32>, area: vec4<u32>, detector: vec4<u32> };
 @group(0) @binding(0) var<storage, read> input_pixels: array<f32>;
 @group(0) @binding(1) var<storage, read> thresholds: array<f32>;
 @group(0) @binding(2) var<uniform> params: Params;
@@ -8,6 +8,9 @@ struct Params { source: vec4<u32>, area: vec4<u32> };
 @group(0) @binding(4) var<storage, read_write> marks: array<u32>;
 @group(0) @binding(5) var<storage, read_write> counts: array<u32>;
 @group(0) @binding(6) var<storage, read_write> records: array<vec2<u32>>;
+@group(0) @binding(7) var<storage, read> original_pixels: array<f32>;
+// Match the conservative native-code highlight guard used by layer filtering.
+const NATIVE_HIGHLIGHT_CODE: f32 = 3900.;
 var<workgroup> ranks: array<u32, 256>;
 const offsets = array<vec2<i32>, 8>(vec2(-1,-1), vec2(0,-1), vec2(1,-1), vec2(-1,0), vec2(1,0), vec2(-1,1), vec2(0,1), vec2(1,1));
 fn sample(p: u32, c: u32) -> f32 { return input_pixels[p * 3u + c]; }
@@ -103,6 +106,36 @@ fn repair() {
                 default: {}
             }
             if all(abs(result)<=vec3(3.402823e38)) { pixels[p*3u]=result.x; pixels[p*3u+1u]=result.y; pixels[p*3u+2u]=result.z; }
+        }
+    }
+}
+
+
+// Optional positive compact-outlier filter. Each radius reads the unchanged
+// image. A straight edge or line retains at least one high ring neighbor.
+@compute @workgroup_size(8,8)
+fn compact(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.source.x || id.y >= params.source.y { return; }
+    let p = id.y * params.source.x + id.x;
+    for (var c = 0u; c < 3u; c++) { pixels[p*3u+c] = sample(p,c); }
+    if id.x < params.area.x || id.x > params.area.z || id.y < params.area.y || id.y > params.area.w { return; }
+    for (var c = 0u; c < 3u; c++) {
+        let center = sample(p,c);
+        // White balance can lift an unclipped defect above calibrated white.
+        // Protect near-clipped highlights using the unchanged sensor sample.
+        if original_pixels[p*3u+c] >= NATIVE_HIGHLIGHT_CODE { continue; }
+        let threshold = thresholds[c*4096u+u32(clamp(center,0.,4095.))];
+        for (var radius = 1u; radius <= params.detector.y; radius++) {
+            var low = 3.402823e38; var high = -3.402823e38; var sum = 0.;
+            for (var n = 0u; n < 8u; n++) {
+                let q = vec2<i32>(id.xy) + offsets[n] * i32(radius);
+                let value = sample(u32(q.y)*params.source.x+u32(q.x),c);
+                low = min(low,value); high = max(high,value); sum += value;
+            }
+            if center > high + threshold {
+                pixels[p*3u+c] = (sum-high-low)/6.;
+                break;
+            }
         }
     }
 }

@@ -18,6 +18,12 @@ pub enum Content {
 
 /// Named outputs available for the selected recipe, independent of transient graph indexes.
 pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'static str> {
+    let effective = settings.processing_settings(
+        metadata
+            .and_then(|m| m.processing_family().ok())
+            .unwrap_or(ProcessingFamily::Merrill),
+    );
+    let settings = effective.as_ref();
     let mut names = camera_output_names(settings, metadata);
     if settings.photographic.tone_method == crate::render::PhotographicMethod::Universal {
         names.retain(|n| *n != "saturation.rgb");
@@ -100,8 +106,14 @@ fn native_camera_output_names(
         return crate::render::classic_inspection_outputs(metadata, settings);
     }
     let mut names = vec!["final", "sensor.layers", "black.levels", "black.histogram"];
-    if settings.multiscale_noise_selected() {
-        names.extend(["shield-noise.layers", "multiscale.layers"]);
+    if settings.multiscale_noise_selected() || settings.directional_banding_selected() {
+        names.push("shield-noise.layers");
+        if settings.directional_banding_selected() {
+            names.push("row-guard.layers");
+        }
+        if settings.multiscale_noise_selected() {
+            names.push("multiscale.layers");
+        }
     }
     names.push("calibration.layers");
     if settings.repair.is_some() {
@@ -113,12 +125,18 @@ fn native_camera_output_names(
     if settings.despeckle {
         names.push("despeckle.layers");
     }
-    if settings.row_correction {
+    if settings.reference_rows_selected() {
         names.extend(["banding.layers", "banding.rows"]);
     }
     if settings.is_monochrome() {
-        names.extend(["mono.mix", "mono.directional", "mono.column"]);
-        if settings.monochrome.noise > 0 {
+        if settings.directional_banding_selected() {
+            names.push("column.layers");
+        }
+        names.extend(["mono.mix", "mono.directional"]);
+        if settings.reference_banding_selected() {
+            names.push("mono.column");
+        }
+        if settings.processing_sections.noise && settings.monochrome.noise > 0 {
             names.push("mono.filtered");
         }
         if settings.despeckle {
@@ -151,6 +169,9 @@ fn native_camera_output_names(
     }
     if settings.merrill_reconstruction().is_some() {
         names.extend(["reconstruction.rgb", "detail.signal"]);
+    }
+    if !settings.neutralize_shadows.is_neutral() {
+        names.extend(["shadow-neutralize.input", "shadow-neutralize.rgb"]);
     }
     names.push("tone.rgb");
     if settings.tone_enabled && settings.saturation != 1. {
@@ -208,6 +229,7 @@ pub fn image_outputs_with_family(
                 "black.levels" | "black.histogram" | "banding.rows" => return None,
                 "sensor.layers"
                 | "shield-noise.layers"
+                | "row-guard.layers"
                 | "multiscale.layers"
                 | "calibration.layers"
                 | "repair.layers"
@@ -279,15 +301,22 @@ pub fn comparison_input(
     {
         return crate::render::classic_inspection_comparison(metadata, settings, output);
     }
+    if output == "shadow-neutralize.rgb" {
+        return Some("shadow-neutralize.input");
+    }
     let mut input = "sensor.layers";
     for (name, enabled) in [
-        ("shield-noise.layers", settings.multiscale_noise_selected()),
+        (
+            "shield-noise.layers",
+            settings.multiscale_noise_selected() || settings.directional_banding_selected(),
+        ),
+        ("row-guard.layers", settings.directional_banding_selected()),
         ("multiscale.layers", settings.multiscale_noise_selected()),
         ("calibration.layers", true),
         ("repair.layers", settings.repair.is_some()),
         ("highlight.layers", settings.highlight_restoration),
         ("despeckle.layers", settings.despeckle),
-        ("banding.layers", settings.row_correction),
+        ("banding.layers", settings.reference_rows_selected()),
     ] {
         if enabled {
             if output == name {
@@ -297,21 +326,24 @@ pub fn comparison_input(
         }
     }
     if settings.is_monochrome() {
+        let column = if settings.reference_banding_selected() {
+            "mono.column"
+        } else {
+            "mono.mix"
+        };
+        let filtered = settings.processing_sections.noise && settings.monochrome.noise > 0;
+        let clean = if filtered { "mono.filtered" } else { column };
         return match output {
+            "column.layers" if settings.directional_banding_selected() => Some(input),
             "mono.texture" => Some(if settings.despeckle {
                 "mono.despeckle"
-            } else if settings.monochrome.noise > 0 {
-                "mono.filtered"
             } else {
-                "mono.column"
+                clean
             }),
-            "mono.directional" | "mono.column" => Some("mono.mix"),
-            "mono.filtered" if settings.monochrome.noise > 0 => Some("mono.column"),
-            "mono.despeckle" if settings.despeckle => Some(if settings.monochrome.noise > 0 {
-                "mono.filtered"
-            } else {
-                "mono.column"
-            }),
+            "mono.directional" => Some("mono.mix"),
+            "mono.column" if settings.reference_banding_selected() => Some("mono.mix"),
+            "mono.filtered" if filtered => Some(column),
+            "mono.despeckle" if settings.despeckle => Some(clean),
             "sharpen.rgb" if settings.sharpen_selected() => Some("monochrome.rgb"),
             _ => None,
         };
@@ -332,7 +364,9 @@ pub fn comparison_input(
         // provide a before/after pair in the same physical image grid.
         "reconstruction.rgb" => None,
         "sharpen.rgb" if settings.sharpen_selected() => {
-            Some(if settings.merrill_reconstruction().is_some() {
+            Some(if !settings.neutralize_shadows.is_neutral() {
+                "shadow-neutralize.rgb"
+            } else if settings.merrill_reconstruction().is_some() {
                 "reconstruction.rgb"
             } else {
                 base
@@ -464,8 +498,59 @@ mod tests {
     }
 
     #[test]
+    fn monochrome_native_band_outputs_follow_the_selected_recipe() {
+        let mut settings = crate::render::Settings::new("Sunlight", "Standard");
+        settings.rendering = crate::render::Rendering::Monochrome;
+        settings.merrill_noise_method = crate::render::MerrillNoiseMethod::MultiscaleRows;
+        settings.merrill_banding.method = crate::render::MerrillBandingMethod::Directional;
+        let names = super::output_names(&settings, None);
+        for name in [
+            "shield-noise.layers",
+            "row-guard.layers",
+            "multiscale.layers",
+            "column.layers",
+            "mono.mix",
+            "mono.filtered",
+        ] {
+            assert!(names.contains(&name), "missing {name}");
+        }
+        for name in [
+            "banding.layers",
+            "mono.column",
+            "noise.layers",
+            "reconstruction.rgb",
+        ] {
+            assert!(!names.contains(&name), "unavailable {name}");
+        }
+        assert_eq!(
+            super::comparison_input(&settings, "mono.filtered", None),
+            Some("mono.mix")
+        );
+        settings.monochrome.noise = 0;
+        assert_eq!(
+            super::comparison_input(&settings, "mono.despeckle", None),
+            Some("mono.mix")
+        );
+        settings.merrill_banding.enabled = false;
+        assert!(!super::output_names(&settings, None).contains(&"column.layers"));
+        assert!(!super::output_names(&settings, None).contains(&"mono.column"));
+        settings.processing_sections.noise = false;
+        for name in [
+            "row-guard.layers",
+            "multiscale.layers",
+            "column.layers",
+            "mono.column",
+            "mono.filtered",
+        ] {
+            assert!(!super::output_names(&settings, None).contains(&name));
+        }
+    }
+
+    #[test]
     fn comparison_inputs_follow_enabled_stages_and_branches() {
         let mut s = crate::render::Settings::new("Sunlight", "Standard");
+        assert_eq!(super::comparison_input(&s, "banding.layers", None), None);
+        s.reconstruction = Some(Default::default());
         assert_eq!(
             super::comparison_input(&s, "repair.layers", None),
             Some("calibration.layers")
@@ -582,7 +667,6 @@ mod tests {
                 "highlight.layers",
                 "highlight.density",
                 "despeckle.layers",
-                "banding.layers",
                 "color.rgb",
                 "tonal-ranges.mask",
                 "tonal-ranges.rgb",
@@ -610,6 +694,7 @@ mod tests {
         assert!(super::output_names(&settings, None).contains(&"black.histogram")); // still available to engine consumers
         settings.reconstruction = Some(Default::default());
         let images = super::image_outputs(&settings, None);
+        assert!(images.iter().any(|image| image.name == "banding.layers"));
         for (name, kind) in [
             ("noise.layers", super::Channels::Layers),
             ("column.layers", super::Channels::Layers),
@@ -708,11 +793,33 @@ mod multiscale_inspection_test {
             comparison_input(&settings, "calibration.layers", None),
             Some("multiscale.layers")
         );
+        settings.merrill_banding.enabled = true;
+        settings.merrill_banding.method = crate::render::MerrillBandingMethod::Directional;
+        assert!(output_names(&settings, None).contains(&"row-guard.layers"));
+        assert_eq!(
+            comparison_input(&settings, "row-guard.layers", None),
+            Some("shield-noise.layers")
+        );
+        assert_eq!(
+            comparison_input(&settings, "multiscale.layers", None),
+            Some("row-guard.layers")
+        );
         settings.processing_sections.noise = false;
         assert!(!output_names(&settings, None).contains(&"multiscale.layers"));
         assert_eq!(
             comparison_input(&settings, "calibration.layers", None),
             Some("sensor.layers")
         );
+    }
+    #[test]
+    fn noise_bypass_hides_inactive_speckle_and_shadow_planes() {
+        let mut settings = crate::render::Settings::default();
+        settings.neutralize_shadows.strength = 0.8;
+        assert!(super::output_names(&settings, None).contains(&"shadow-neutralize.rgb"));
+        settings.processing_sections.noise = false;
+        let names = super::output_names(&settings, None);
+        assert!(!names.contains(&"shadow-neutralize.rgb"));
+        assert!(!names.contains(&"despeckle.layers"));
+        assert!(settings.despeckle);
     }
 }

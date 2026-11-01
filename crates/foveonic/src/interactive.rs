@@ -97,10 +97,22 @@ impl Settings {
         );
         changed!(self.color_field != next.color_field, "color-field");
         changed!(self.despeckle != next.despeckle, "despeckle");
+        changed!(
+            self.merrill_speckles != next.merrill_speckles,
+            "merrill-speckles"
+        );
+        changed!(
+            self.neutralize_shadows != next.neutralize_shadows,
+            "neutralize-shadows"
+        );
         changed!(self.row_correction != next.row_correction, "row-correction");
         changed!(
             self.merrill_noise_method != next.merrill_noise_method,
             "merrill-noise-method"
+        );
+        changed!(
+            self.merrill_banding != next.merrill_banding,
+            "merrill-banding"
         );
         changed!(
             self.color_dq_gain.map(f32::to_bits) != next.color_dq_gain.map(f32::to_bits),
@@ -822,6 +834,12 @@ mod tests {
         let mut c = b.clone();
         c.reconstruction.as_mut().unwrap().detail = 1.1;
         assert_eq!(b.changed_parameters(&c), vec!["detail"]);
+        b = a.clone();
+        b.merrill_speckles.threshold = 0.25;
+        assert_eq!(a.changed_parameters(&b), vec!["merrill-speckles"]);
+        c = b.clone();
+        c.neutralize_shadows.strength = 0.8;
+        assert_eq!(b.changed_parameters(&c), vec!["neutralize-shadows"]);
     }
     #[test]
     #[ignore = "requires a GPU"]

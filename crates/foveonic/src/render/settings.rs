@@ -1,5 +1,6 @@
 //! Defines shared photographic settings and validates their values.
 
+use super::MerrillBandingControls;
 pub use crate::color_space::TiffColorSpace;
 pub use crate::nodes::finish::color_editor::Controls as ColorEditorControls;
 pub use crate::nodes::finish::photographic::{
@@ -114,15 +115,6 @@ pub struct Settings {
     /// Color saturation after tone. Zero is grayscale and one leaves it unchanged.
     pub saturation: f32,
     pub photographic: PhotographicControls,
-    /// Discard retired pre-release layer experiments while retaining other edits.
-    #[doc(hidden)]
-    #[serde(
-        default,
-        rename = "layers",
-        skip_serializing,
-        deserialize_with = "discard_retired_layers"
-    )]
-    pub retired_layers: (),
     /// ColorDQ gain after camera color conversion. Zero skips this correction.
     /// None chooses the camera's automatic gain when noise cleanup is on.
     /// Some keeps an explicit override, including zero for Off.
@@ -131,6 +123,8 @@ pub struct Settings {
     pub repair: Option<RepairThreshold>,
     /// Detect and correct remaining channel extrema with reference-style despeckling.
     pub despeckle: bool,
+    pub merrill_speckles: super::MerrillSpeckleControls,
+    pub neutralize_shadows: crate::nodes::finish::shadow_neutralize::Controls,
     /// Restore clipped-layer color from original camera saturation maps, independently of tone highlights.
     pub highlight_restoration: bool,
     /// Normalized bright-color correction amount. None follows the file or recipe default.
@@ -143,6 +137,8 @@ pub struct Settings {
     pub row_correction: bool,
     /// Merrill color noise method, retained while Noise is disabled.
     pub merrill_noise_method: MerrillNoiseMethod,
+    /// Optional directional cleanup, retaining settings while inactive.
+    pub merrill_banding: MerrillBandingControls,
     /// Optional color noise and detail settings. None selects the recipe baseline.
     /// Mandatory sensor reconstruction still runs when these adjustments are off.
     pub reconstruction: Option<crate::noise::Controls>,
@@ -176,10 +172,11 @@ impl Default for Settings {
             tonal_ranges: TonalRanges::default(),
             saturation: 1.,
             photographic: PhotographicControls::default(),
-            retired_layers: (),
             color_dq_gain: None,
             repair: Some(RepairThreshold::Camera),
             despeckle: true,
+            merrill_speckles: Default::default(),
+            neutralize_shadows: Default::default(),
             highlight_restoration: true,
             highlight_amount: None,
             highlight_threshold_ev: None,
@@ -187,6 +184,7 @@ impl Default for Settings {
             color_field: ColorFieldControls::default(),
             row_correction: true,
             merrill_noise_method: MerrillNoiseMethod::Reference,
+            merrill_banding: MerrillBandingControls::default(),
             reconstruction: None,
             sharpen_amount: None,
             tiff_color_space: None,
@@ -232,11 +230,19 @@ impl Settings {
         if self.is_monochrome() {
             crate::noise::Controls {
                 chroma: self.monochrome.noise,
-                banding: self.monochrome.banding,
+                banding: if self.directional_banding_selected() {
+                    crate::noise::Controls::default().banding
+                } else {
+                    self.monochrome.banding
+                },
                 ..Default::default()
             }
         } else {
-            self.reconstruction.unwrap_or_default().base_controls()
+            let mut controls = self.reconstruction.unwrap_or_default().base_controls();
+            if self.directional_banding_selected() {
+                controls.banding = crate::noise::Controls::default().banding;
+            }
+            controls
         }
     }
 
@@ -288,14 +294,34 @@ impl Settings {
             )
     }
 
-    /// Native color filtering follows the shared Noise bypass independently of Detail.
+    fn merrill_noise_active(&self) -> bool {
+        self.processing_sections.noise
+            && (self.is_monochrome()
+                || self
+                    .reconstruction
+                    .is_some_and(|c| c.merrill_effects().noise))
+    }
+
+    /// Native layer filtering follows the selected recipe's Noise bypass.
     pub(crate) fn multiscale_noise_selected(&self) -> bool {
-        self.merrill_noise_method != MerrillNoiseMethod::Reference
-            && !self.is_monochrome()
-            && self.processing_sections.noise
-            && self
-                .reconstruction
-                .is_some_and(|c| c.merrill_effects().noise)
+        self.merrill_noise_method != MerrillNoiseMethod::Reference && self.merrill_noise_active()
+    }
+
+    /// Directional cleanup is independent of the selected native denoiser.
+    pub(crate) fn directional_banding_selected(&self) -> bool {
+        self.merrill_banding.enabled
+            && self.merrill_banding.method == super::MerrillBandingMethod::Directional
+            && self.merrill_noise_active()
+    }
+
+    pub(crate) fn reference_banding_selected(&self) -> bool {
+        self.merrill_banding.enabled
+            && self.merrill_banding.method == super::MerrillBandingMethod::Reference
+            && self.merrill_noise_active()
+    }
+
+    pub(crate) fn reference_rows_selected(&self) -> bool {
+        self.row_correction && self.reference_banding_selected()
     }
 
     /// Merrill's optional tile processing, retaining inactive controls in the recipe.
@@ -306,15 +332,29 @@ impl Settings {
 
     /// Resolve section bypasses at the recipe boundary. Artifacts and sidecars
     /// keep the requested values, including inactive edits.
-    pub(crate) fn processing_settings(&self) -> std::borrow::Cow<'_, Self> {
+    pub(crate) fn processing_settings(
+        &self,
+        family: crate::source::ProcessingFamily,
+    ) -> std::borrow::Cow<'_, Self> {
+        let speckles_enabled = if family == crate::source::ProcessingFamily::Merrill {
+            self.processing_sections.noise
+                && (self.is_monochrome() || self.reconstruction.is_none_or(|c| c.noise_enabled))
+        } else {
+            self.processing_sections.corrections
+        };
         if self.tone_enabled
             && self.sharpening_enabled
             && self.processing_sections == ProcessingSections::default()
+            && (speckles_enabled || (!self.despeckle && self.neutralize_shadows.is_neutral()))
         {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut effective = self.clone();
         let sections = self.processing_sections;
+        effective.despeckle &= speckles_enabled;
+        if family == crate::source::ProcessingFamily::Merrill && !speckles_enabled {
+            effective.neutralize_shadows.strength = 0.;
+        }
         effective.tone_enabled &= sections.tone;
         effective.color_editor_enabled &= sections.color_editor;
         effective.sharpening_enabled &= sections.sharpening;
@@ -328,7 +368,6 @@ impl Settings {
         }
         if !sections.corrections {
             effective.repair = None;
-            effective.despeckle = false;
             effective.highlight_restoration = false;
         }
         if !effective.tone_enabled {
@@ -418,6 +457,9 @@ impl Settings {
     /// Inspection can show sensor data before WB or mode is known. Check numbers
     /// here and let stages that use those camera choices resolve them later.
     pub fn validate_values(&self) -> Result<()> {
+        self.merrill_speckles.validate()?;
+        self.neutralize_shadows.validate()?;
+        self.merrill_banding.validate()?;
         self.white_balance_bias.validate()?;
         if self
             .monochrome_smoothness
@@ -468,11 +510,4 @@ impl Settings {
         }
         Ok(())
     }
-}
-
-fn discard_retired_layers<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<(), D::Error> {
-    <serde::de::IgnoredAny as serde::Deserialize>::deserialize(deserializer)?;
-    Ok(())
 }

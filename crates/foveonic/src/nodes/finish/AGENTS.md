@@ -34,6 +34,7 @@ Linear gain transfer accepts a reference pair related by scalar brightness multi
 - **[resample.rs](./resample.rs)** Prepares camera resampling weights and leaves image calculations on the GPU.
 - **[resize.rs](./resize.rs)** Prepares reference photographic resize kernels and samples owned floating RGB on the GPU.
 - **[root_detail.rs](./root_detail.rs)** Maps signed linear codes into root space and extracts detail with a signed separable filter.
+- **[shadow_neutralize.rs](./shadow_neutralize.rs)** Selectively reduces green and magenta chroma in dark, nearly neutral regions on GPU.
 - **[signed_response.rs](./signed_response.rs)** Restores linear detail or applies photographic response to signed root-domain samples.
 - **[tone.rs](./tone.rs)** Prepares a camera-derived color-mode tone table for application in a shader.
 - **[tone_equalizer.rs](./tone_equalizer.rs)** Prepares coordinated HDR ranges and a reusable multiscale log-brightness base.

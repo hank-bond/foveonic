@@ -13,7 +13,7 @@ use crate::{
     source::Result,
 };
 
-fn tables(params: Parameters) -> Vec<f32> {
+pub(super) fn tables(params: Parameters) -> Vec<f32> {
     let normalization = 1. / (1. - params.filter[2] as f64);
     (0..4096)
         .map(|i| {

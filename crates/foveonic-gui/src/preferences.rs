@@ -2,7 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-pub const APP_ID: &str = "foveonic";
+// Separate review bundles can retain their own workspace and recipe defaults.
+pub const APP_ID: &str = match option_env!("FOVEONIC_APP_ID") {
+    Some(id) => id,
+    None => "foveonic",
+};
+pub const APP_NAME: &str = match option_env!("FOVEONIC_APP_NAME") {
+    Some(name) => name,
+    None => "Foveonic",
+};
 const STORAGE_KEY: &str = "ui.preferences";
 
 /// Application display limits. The window always remains host color managed.

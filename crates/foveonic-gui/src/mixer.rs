@@ -1,14 +1,7 @@
-//! Edits three-channel proportions with a triangular barycentric monochrome mixer.
+//! Edits layer proportions inside a fixed dashed triangle on a CIE xy guide.
 
 use eframe::egui::{self, Color32, Pos2, Vec2};
 
-fn vertices(rect: egui::Rect) -> [Pos2; 3] {
-    [
-        egui::pos2(rect.center().x, rect.top() + 15.),
-        egui::pos2(rect.left() + 22., rect.bottom() - 20.),
-        egui::pos2(rect.right() - 22., rect.bottom() - 20.),
-    ]
-}
 fn position(corners: [Pos2; 3], mix: [f32; 3]) -> Pos2 {
     (corners[0].to_vec2() * mix[0] + corners[1].to_vec2() * mix[1] + corners[2].to_vec2() * mix[2])
         .to_pos2()
@@ -60,10 +53,13 @@ pub fn show_with_help(
             crate::sections::editing_handle(ui, crate::preferences::EditingSection::Mix);
         });
     });
+    ui.small("Mix proportions");
     let width = ui.available_width().min(280.);
-    let (rect, mut response) =
-        ui.allocate_exact_size(Vec2::new(width, 155.), egui::Sense::click_and_drag());
-    let corners = vertices(rect);
+    let (rect, mut response) = ui.allocate_exact_size(
+        Vec2::new(width, width * 0.90 / 0.80),
+        egui::Sense::click_and_drag(),
+    );
+    let corners = crate::chromaticity::corners(rect);
     if response.dragged() || response.clicked() {
         if let Some(point) = response.interact_pointer_pos() {
             *mix = mix_at(corners, point);
@@ -93,27 +89,22 @@ pub fn show_with_help(
             *mix = mix_at(corners, position(corners, *mix) + step);
         }
     }
-    let colors = [
-        Color32::from_rgb(148, 64, 64),
-        Color32::from_rgb(57, 122, 68),
-        Color32::from_rgb(64, 91, 155),
-    ];
-    let mut mesh = egui::Mesh::default();
-    for (point, color) in corners.into_iter().zip(colors) {
-        mesh.colored_vertex(point, color);
-    }
-    mesh.add_triangle(0, 1, 2);
-    ui.painter().add(mesh);
-    ui.painter().add(egui::Shape::closed_line(
-        corners.to_vec(),
-        egui::Stroke::new(1_f32, ui.visuals().widgets.noninteractive.fg_stroke.color),
+    crate::chromaticity::paint(ui, rect);
+    let path = [corners[0], corners[1], corners[2], corners[0]];
+    ui.painter().extend(egui::Shape::dashed_line(
+        &path,
+        egui::Stroke::new(3_f32, Color32::BLACK),
+        6.,
+        4.,
+    ));
+    ui.painter().extend(egui::Shape::dashed_line(
+        &path,
+        egui::Stroke::new(1.5_f32, Color32::WHITE),
+        6.,
+        4.,
     ));
     for (i, label) in ["R", "G", "B"].into_iter().enumerate() {
-        let offset = if i == 0 {
-            Vec2::new(0., -10.)
-        } else {
-            Vec2::new(if i == 1 { -12. } else { 12. }, 0.)
-        };
+        let offset = (corners[i] - position(corners, [1. / 3.; 3])).normalized() * 12.;
         ui.painter().text(
             corners[i] + offset,
             egui::Align2::CENTER_CENTER,
@@ -146,11 +137,18 @@ mod tests {
     use super::*;
     #[test]
     fn corners_center_edges_and_outside_are_valid_mixtures() {
-        let corners = vertices(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(260., 155.)));
+        let corners = crate::chromaticity::corners(egui::Rect::from_min_size(
+            Pos2::ZERO,
+            Vec2::new(260., 275.),
+        ));
         for i in 0..3 {
             let mut expected = [0.; 3];
             expected[i] = 1.;
-            assert_eq!(mix_at(corners, corners[i]), expected);
+            let actual = mix_at(corners, corners[i]);
+            assert!(actual
+                .into_iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 0.00001));
         }
         for mix in [
             [1. / 3.; 3],
@@ -171,6 +169,20 @@ mod tests {
             let mix = mix_at(corners, point);
             assert!(mix.iter().all(|v| *v >= 0.));
             assert!((mix.iter().sum::<f32>() - 1.).abs() < 0.00001);
+        }
+    }
+    #[test]
+    fn drawing_the_guide_preserves_the_saved_layer_weights() {
+        let context = egui::Context::default();
+        let original = [0.72, 0.08, 0.20];
+        let mut mix = original;
+        for _ in 0..3 {
+            let _ = context.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert!(!show(ui, &mut mix));
+                });
+            });
+            assert_eq!(mix, original);
         }
     }
 }

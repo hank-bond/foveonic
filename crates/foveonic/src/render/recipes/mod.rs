@@ -61,7 +61,7 @@ impl Engine {
         } else {
             settings
         };
-        let effective = input.processing_settings();
+        let effective = input.processing_settings(source.metadata.processing_family()?);
         let mut built = match recipe {
             Recipe::Photographic(_) => {
                 let effective = effective.active_tone_settings();
@@ -161,10 +161,10 @@ pub(super) fn prepare_dng_appearance(
     statistics: super::WhiteBalanceStats,
 ) -> Result<crate::dng::appearance::Prepared> {
     use crate::{dng::appearance::Prepared, source::ProcessingFamily};
-    let effective_edits = settings.processing_settings();
+    let effective_edits = settings.processing_settings(metadata.processing_family()?);
     let baked_color_editor = effective_edits.color_editor_chromatic_active();
     let dng = settings.dng_settings();
-    let effective = dng.processing_settings();
+    let effective = dng.processing_settings(metadata.processing_family()?);
     let settings = &effective;
     let family = metadata.processing_family()?;
     let mut prepared = match family {

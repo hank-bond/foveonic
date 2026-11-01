@@ -13,6 +13,16 @@ use crate::{
 };
 use std::sync::Arc;
 
+fn guide_controls(settings: &Settings) -> crate::render::MonochromeControls {
+    let mut controls = settings.monochrome;
+    // The reference amount controls its selected banding method only. The
+    // scalar denoiser still needs a stable guide when that method is inactive.
+    if !settings.reference_banding_selected() {
+        controls.banding = crate::render::MonochromeControls::default().banding;
+    }
+    controls
+}
+
 pub(super) fn build(
     source: &Source,
     settings: &Settings,
@@ -22,11 +32,32 @@ pub(super) fn build(
     execution: &mut Execution<'_>,
 ) -> Result<Prepared> {
     let space = ColorSpace::from_metadata(&source.metadata)?;
+    if settings.directional_banding_selected() {
+        let params = profile.measure("prepare monochrome native bands", || {
+            let params = crate::noise::prepare(
+                &source.metadata,
+                &settings.white_balance,
+                settings.sensor_noise_controls(),
+            )?;
+            crate::noise::banding_parameters(&source.metadata, params, settings.merrill_banding)
+        })?;
+        let bands = recipe.graph.add(
+            Operation::DirectionalBanding(Arc::new(params)),
+            &[recipe.final_id],
+        )?;
+        // The shared native estimator produces tiles. Its GPU projection keeps
+        // the dedicated monochrome mix on a full calibrated sensor image.
+        recipe.final_id = recipe.graph.named_output(bands, "column.layers")?;
+        execution.check()?;
+        if requested(&recipe.graph, names) {
+            return Ok(Prepared::Requested(recipe));
+        }
+    }
     let prepared = Arc::new(profile.measure("prepare monochrome", || {
         MonoPrepared::new(
             &source.metadata,
             &settings.white_balance,
-            settings.monochrome,
+            guide_controls(settings),
         )
     })?);
     macro_rules! node {
@@ -48,7 +79,7 @@ pub(super) fn build(
     }
     let mix = node!(Stage::Mix, &[recipe.final_id]);
     let directional = node!(Stage::Directional, &[mix]);
-    let column = if settings.processing_sections.noise {
+    let column = if settings.reference_banding_selected() {
         node!(Stage::Column, &[mix, directional])
     } else {
         mix

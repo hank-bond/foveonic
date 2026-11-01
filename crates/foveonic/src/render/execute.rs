@@ -163,6 +163,7 @@ impl Engine {
                 Operation::ChannelNoise(p) => p.extent(),
                 Operation::Multiscale(p) => p.extent(),
                 Operation::ShieldNoise(p) => p.extent(),
+                Operation::RowGuard(p) => p.extent(),
                 Operation::ColorSharpen(p) => p.extent(),
                 Operation::ProportionalSharpen(p) => p.extent(),
                 Operation::Encode { params, .. } => [params.output[0], params.output[1]],
@@ -420,6 +421,21 @@ impl Engine {
                         return Err("multiscale sensor filter extent mismatch".into());
                     }
                     Some(crate::nodes::sensor::multiscale::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        &input(2).buffer,
+                        prepared,
+                        profile,
+                    )?)
+                }
+                Operation::RowGuard(prepared) => {
+                    if inherited != prepared.extent()
+                        || input(1).description.map(|d| d.extent) != Some(inherited)
+                    {
+                        return Err("guarded row extent mismatch".into());
+                    }
+                    Some(crate::nodes::sensor::row_guard::apply(
                         gpu,
                         &input(0).buffer,
                         &input(1).buffer,
@@ -1081,6 +1097,24 @@ impl Engine {
                         None
                     }
                 }
+                Operation::DirectionalBanding(prepared) => {
+                    let params = prepared.params();
+                    let tiles = crate::nodes::color::directional_banding::apply(
+                        gpu,
+                        &input(0).buffer,
+                        prepared,
+                        profile,
+                    )?;
+                    let projected = node.outputs[1];
+                    if required[projected] {
+                        values[projected] = Some(Value {
+                            buffer: reconstruction::project(gpu, &tiles, params, 3, profile)?,
+                            description: DataType::CalibratedLayers
+                                .image_description(params.output_extent()),
+                        });
+                    }
+                    required[index].then_some(tiles)
+                }
                 Operation::Column { params, enabled } => {
                     let tiles = if *enabled {
                         reconstruction::column(gpu, &input(0).buffer, *params, profile)?
@@ -1250,9 +1284,13 @@ impl Engine {
                 Operation::HighlightDensity(prepared) => {
                     highlight::apply(gpu, None, prepared, true, profile)?.density
                 }
-                Operation::Despeckle(prepared) => {
-                    Some(despeckle::apply(gpu, &input(0).buffer, prepared, profile)?)
-                }
+                Operation::Despeckle(prepared) => Some(despeckle::apply(
+                    gpu,
+                    &input(0).buffer,
+                    &input(1).buffer,
+                    prepared,
+                    profile,
+                )?),
                 Operation::Repair(prepared) => Some(camera_repair::apply(
                     gpu,
                     &input(1).buffer,
@@ -1291,6 +1329,15 @@ impl Engine {
                         groups,
                     );
                     Some(output)
+                }
+                Operation::ShadowNeutralize { params, .. } => {
+                    Some(crate::nodes::finish::shadow_neutralize::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        inherited,
+                        profile,
+                    )?)
                 }
                 Operation::LinearColorEditor { params, .. } => {
                     Some(crate::nodes::finish::color_editor::apply(

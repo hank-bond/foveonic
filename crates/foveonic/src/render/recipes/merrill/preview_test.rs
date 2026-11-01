@@ -667,7 +667,9 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
         .render(&source, &settings, &mut Profile::default())
         .unwrap();
     assert_eq!(image.settings(), &settings);
-    let mut neutral = settings.processing_settings().into_owned();
+    let mut neutral = settings
+        .processing_settings(crate::source::ProcessingFamily::Merrill)
+        .into_owned();
     neutral.tone_enabled = true;
     neutral.sharpening_enabled = true;
     let expected = engine

@@ -7,7 +7,7 @@ implementation: conforming
 
 # Merrill multiscale noise
 
-This specification extends [Detail and Noise](./detail-and-noise.md) for Merrill color rendering through the shared GUI and CLI engine. The owner approved retaining both shield correction choices alongside the reference implementation. Reference remains the default.
+This specification extends [Detail and Noise](./detail-and-noise.md) for Merrill color and monochrome rendering through the shared GUI and CLI engine. The owner approved retaining both shield correction choices alongside the reference implementation. Reference remains the default.
 
 ## Appearance priorities
 
@@ -27,9 +27,9 @@ TIFF and editable DNG must use the same selected technical noise path before the
 
 ## Controls and persistence
 
-`Settings::merrill_noise_method` must offer `Reference`, `MultiscaleRows`, and `MultiscaleRowsAndColumns`, serialized as snake_case. Missing fields in older recipes must select Reference. The new choices apply to Merrill color only. Other families must reject explicit nondefault methods during processing validation. GUI compatibility normalization must restore Reference for those families while preserving compatible edits.
+`Settings::merrill_noise_method` must offer `Reference`, `MultiscaleRows`, and `MultiscaleRowsAndColumns`, serialized as snake_case. Missing fields in older recipes must select Reference. The new choices apply to Merrill color and monochrome. Other families must reject explicit nondefault methods during processing validation. GUI compatibility normalization must restore Reference for those families while preserving compatible edits.
 
-The Merrill color Noise section must contain a Method dropdown with Reference, Multiscale: Rows, and Multiscale: Rows + Columns. The shared Noise enable state controls the optional method. Disabling Noise must preserve the selection and leave Detail independent. Changing rendering mode must preserve the color selection. This feature adds no further adjustment sliders or calibration capture interface.
+The Merrill Noise section must contain a Method dropdown with Reference, Multiscale: Rows, and Multiscale: Rows + Columns. The shared Noise enable state controls the optional method. Disabling Noise must preserve the selection and leave Detail independent. Changing rendering mode must preserve the selection. Monochrome retains its dedicated brightness noise amount and downstream monochrome reconstruction. Independent banding choices follow [Merrill banding](./merrill-banding.md). This feature adds no further adjustment sliders or calibration capture interface.
 
 Noise-scoped recipes must copy the method for Merrill. Detail-scoped recipes must preserve the target's method. Existing sidecar, default-recipe, comparison, and processing-section behavior remains authoritative.
 

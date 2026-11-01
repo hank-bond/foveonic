@@ -249,8 +249,11 @@ pub(super) fn write<W: Write + Seek>(
         )
     };
     let mut baked_controls = baked_controls.to_vec();
-    let effective = settings.processing_settings();
+    let effective = settings.processing_settings(metadata.processing_family()?);
     let active = effective.active_tone_settings();
+    if !active.is_monochrome() && !active.neutralize_shadows.is_neutral() {
+        baked_controls.push("neutralize_shadows");
+    }
     if active.color_editor_active() {
         baked_controls.push("color_editor");
     }

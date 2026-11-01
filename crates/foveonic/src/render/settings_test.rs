@@ -4,6 +4,71 @@ use super::*;
 use crate::source::{Matrix, MatrixEncoding, Metadata, PropertyList};
 
 #[test]
+fn directional_banding_defaults_round_trip_and_retain_inactive_values() {
+    let old: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(old.merrill_banding, MerrillBandingControls::default());
+    assert!(old.merrill_banding.enabled);
+    assert_eq!(
+        old.merrill_banding.method,
+        crate::render::MerrillBandingMethod::Reference
+    );
+    assert_eq!(
+        old.merrill_banding.rows.bands.map(|b| (b.size, b.strength)),
+        [(27, 1.), (119, 0.)]
+    );
+    assert_eq!(old.merrill_banding.rows, old.merrill_banding.columns);
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.merrill_banding.enabled = false;
+    settings.merrill_banding.method = crate::render::MerrillBandingMethod::Directional;
+    settings.merrill_banding.columns.bands[1].size = 65;
+    settings.merrill_banding.columns.bands[1].strength = 0.7;
+    let restored = crate::sidecar::decode(&crate::sidecar::encode(&settings).unwrap()).unwrap();
+    assert_eq!(settings, restored);
+    assert_eq!(
+        old.changed_parameters(&Settings {
+            merrill_banding: settings.merrill_banding,
+            ..old.clone()
+        }),
+        ["merrill-banding"]
+    );
+    assert_eq!(
+        serde_json::to_value(settings.merrill_banding).unwrap()["method"],
+        "directional"
+    );
+    assert!(
+        serde_json::from_str::<Settings>(r#"{"merrill_banding":{"method":"unknown"}}"#).is_err()
+    );
+    assert!(serde_json::from_str::<Settings>(r#"{"merrill_banding":{"unknown":1}}"#).is_err());
+}
+
+#[test]
+fn directional_banding_rejects_bad_sizes_order_and_strength_even_when_disabled() {
+    let mut settings = Settings::new("Sunlight", "Standard");
+    for size in [0, 1, 2, 4, 120, 121] {
+        settings.merrill_banding = Default::default();
+        settings.merrill_banding.enabled = false;
+        settings.merrill_banding.rows.bands[0].size = size;
+        assert!(settings.validate_values().is_err(), "size {size}");
+    }
+    for strength in [-0.01, 3.01, f32::NAN, f32::INFINITY] {
+        settings.merrill_banding = Default::default();
+        settings.merrill_banding.enabled = false;
+        settings.merrill_banding.columns.bands[1].strength = strength;
+        assert!(settings.validate_values().is_err(), "strength {strength}");
+    }
+    settings.merrill_banding = Default::default();
+    settings.merrill_banding.rows.bands[0].size = 119;
+    assert!(settings.validate_values().is_err());
+    settings.merrill_banding.rows.bands[0].size = 3;
+    settings.merrill_banding.rows.bands[1].size = 5;
+    assert!(settings.validate_values().is_ok());
+    assert_eq!(settings.merrill_banding.rows.size_range(0), 3..=3);
+    assert_eq!(settings.merrill_banding.rows.size_range(1), 5..=119);
+    settings.merrill_banding.columns.bands[0].strength = 3.;
+    assert!(settings.validate_values().is_ok());
+}
+
+#[test]
 fn merrill_noise_method_defaults_and_round_trips_without_changing_inactive_controls() {
     assert_eq!(
         serde_json::from_str::<Settings>("{}")
@@ -48,6 +113,47 @@ fn merrill_noise_method_changes_have_a_distinct_interactive_identity() {
         settings.changed_parameters(&edited),
         ["merrill-noise-method"]
     );
+}
+
+#[test]
+fn monochrome_native_methods_follow_mono_noise_and_independent_banding_policy() {
+    let mut settings = Settings {
+        rendering: Rendering::Monochrome,
+        merrill_noise_method: MerrillNoiseMethod::MultiscaleRows,
+        ..Settings::default()
+    };
+    assert!(settings.reconstruction.is_none());
+    assert!(settings.multiscale_noise_selected());
+    assert!(settings.reference_banding_selected());
+    assert_eq!(settings.reference_rows_selected(), settings.row_correction);
+    settings.monochrome.noise = 0;
+    assert!(
+        settings.multiscale_noise_selected(),
+        "the reference amount must not disable the native method"
+    );
+    settings.merrill_banding.method = crate::render::MerrillBandingMethod::Directional;
+    settings.monochrome.banding = 4;
+    assert!(settings.directional_banding_selected());
+    assert!(!settings.reference_banding_selected());
+    assert!(!settings.reference_rows_selected());
+    assert_eq!(
+        settings.sensor_noise_controls().banding,
+        crate::noise::Controls::default().banding
+    );
+    settings.merrill_noise_method = MerrillNoiseMethod::Reference;
+    assert!(settings.directional_banding_selected());
+    assert!(!settings.multiscale_noise_selected());
+    settings.merrill_banding.enabled = false;
+    assert!(!settings.directional_banding_selected());
+    settings.merrill_banding.enabled = true;
+    settings.merrill_noise_method = MerrillNoiseMethod::MultiscaleRows;
+    settings.processing_sections.noise = false;
+    assert!(!settings.multiscale_noise_selected());
+    assert!(!settings.directional_banding_selected());
+    assert!(!settings.reference_rows_selected());
+    settings.processing_sections.noise = true;
+    settings.merrill_banding.method = crate::render::MerrillBandingMethod::Reference;
+    assert_eq!(settings.sensor_noise_controls().banding, 4);
 }
 
 fn metadata() -> Metadata {
@@ -334,7 +440,7 @@ fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
     settings.tone_enabled = false;
     settings.sharpening_enabled = false;
     let saved = settings.clone();
-    let effective = settings.processing_settings();
+    let effective = settings.processing_settings(crate::source::ProcessingFamily::Classic);
     assert_eq!(effective.exposure, 0.);
     assert_eq!(effective.saturation, 1.);
     assert_eq!(effective.tone, ToneControls::default());
@@ -350,7 +456,7 @@ fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
     settings.tone_enabled = true;
     settings.sharpening_enabled = true;
     assert!(matches!(
-        settings.processing_settings(),
+        settings.processing_settings(crate::source::ProcessingFamily::Classic),
         std::borrow::Cow::Borrowed(_)
     ));
     assert_eq!(settings.exposure, saved.exposure);
@@ -414,7 +520,7 @@ fn batch_section_exclusions_leave_authored_sidecars_and_values_unchanged() {
         sharpening: false,
         corrections: false,
     };
-    let effective = settings.processing_settings();
+    let effective = settings.processing_settings(crate::source::ProcessingFamily::Classic);
     assert!(!effective.tone_enabled && !effective.sharpening_enabled);
     assert_eq!(effective.exposure, 0.);
     assert!(effective.tonal_ranges.is_neutral());
@@ -435,14 +541,14 @@ fn color_editor_bypass_is_independent_and_retains_authored_values() {
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.photographic.color_editor.bands[0].hue = 0.5;
     settings.tone_enabled = false;
-    let effective = settings.processing_settings();
+    let effective = settings.processing_settings(crate::source::ProcessingFamily::Classic);
     assert!(effective.color_editor_enabled);
     assert_eq!(
         effective.photographic.color_editor,
         settings.photographic.color_editor
     );
     settings.processing_sections.color_editor = false;
-    let effective = settings.processing_settings();
+    let effective = settings.processing_settings(crate::source::ProcessingFamily::Classic);
     assert!(!effective.color_editor_enabled);
     assert_eq!(
         effective.photographic.color_editor,
@@ -463,4 +569,26 @@ fn color_editor_bypass_is_independent_and_retains_authored_values() {
             .unwrap()
             .color_editor_enabled
     );
+}
+
+#[test]
+fn merrill_speckles_follow_noise_scope_and_validate_controls() {
+    use crate::source::ProcessingFamily;
+    let mut s = Settings::default();
+    let original = s.clone();
+    s.processing_sections.corrections = false;
+    assert!(s.processing_settings(ProcessingFamily::Merrill).despeckle);
+    assert!(!s.processing_settings(ProcessingFamily::Classic).despeckle);
+    s.processing_sections.noise = false;
+    assert!(!s.processing_settings(ProcessingFamily::Merrill).despeckle);
+    assert!(s.despeckle);
+    for threshold in [0., f32::NAN, 5.] {
+        s.merrill_speckles.threshold = threshold;
+        assert!(s.validate_values().is_err());
+    }
+    s = original;
+    for size in [0, 2, 4, 9] {
+        s.merrill_speckles.size = size;
+        assert!(s.validate_values().is_err());
+    }
 }

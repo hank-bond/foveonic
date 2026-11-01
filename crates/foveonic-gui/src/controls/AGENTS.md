@@ -22,6 +22,7 @@ Camera metadata supplies white-balance and color-mode choices. Normalize unsuppo
 - **[color_editor.rs](./color_editor.rs)** Selects color ranges for shared linear Hue, Saturation and Lightness adjustments.
 - **[common.rs](./common.rs)** Shares editing rows and photographic controls used by family panels.
 - **[merrill.rs](./merrill.rs)** Composes Merrill color, monochrome, reconstruction and correction controls.
+- **[merrill_noise.rs](./merrill_noise.rs)** Composes Merrill denoising, speckle, shadow-neutrality and independent banding controls.
 - **[quattro.rs](./quattro.rs)** Composes Quattro color and monochrome controls using file-derived defaults.
 - **[sections.rs](./sections.rs)** Arranges supported editing tools without changing their processing or saved image settings.
 

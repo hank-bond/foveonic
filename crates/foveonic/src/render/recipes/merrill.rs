@@ -4,8 +4,10 @@ mod appearance;
 mod dng_base;
 mod layer_noise;
 mod monochrome;
+mod native_layers;
 mod photographic;
 mod preview;
+mod reconstruction;
 mod region;
 mod technical;
 

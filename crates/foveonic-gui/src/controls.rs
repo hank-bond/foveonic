@@ -58,7 +58,17 @@ pub fn processing(
 ) -> bool {
     match capabilities(metadata, capture).map(|c| c.family) {
         Some(ProcessingFamily::Classic) => classic::show(ui, settings, metadata, order, menus),
-        Some(ProcessingFamily::Merrill) => merrill::show(ui, settings, metadata, order, menus),
+        Some(ProcessingFamily::Merrill) => merrill::show(
+            ui,
+            settings,
+            metadata,
+            metadata
+                .map(|m| m.rotation)
+                .or_else(|| capture?.get("ROTATION")?.parse().ok())
+                .unwrap_or(0),
+            order,
+            menus,
+        ),
         Some(ProcessingFamily::Quattro) => {
             quattro::show(ui, settings, metadata, capture, order, menus)
         }

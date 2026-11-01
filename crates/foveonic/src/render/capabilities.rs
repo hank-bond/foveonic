@@ -62,12 +62,23 @@ impl ControlCapabilities {
         }
     }
 
-    /// Quattro X3F marks retain the last saved color/monochrome selection.
+    /// Capture modes and saved X3F choices initialize the rendering independently of color looks.
     pub fn default_rendering(&self, metadata: &Metadata) -> Result<Rendering> {
-        if self.family != ProcessingFamily::Quattro {
-            return Ok(Rendering::Color);
+        if self.family == ProcessingFamily::Quattro {
+            super::recipes::quattro::default_rendering(metadata)
+        } else if self.recorded_monochrome(metadata) {
+            Ok(Rendering::Monochrome)
+        } else {
+            Ok(Rendering::Color)
         }
-        super::recipes::quattro::default_rendering(metadata)
+    }
+
+    fn recorded_monochrome(&self, metadata: &Metadata) -> bool {
+        self.family == ProcessingFamily::Merrill
+            && metadata
+                .properties
+                .get("CM_DESC")
+                .is_some_and(|mode| mode.trim().eq_ignore_ascii_case("Monochrome"))
     }
 
     /// Saved header presets take precedence over the original capture descriptions.
@@ -82,6 +93,8 @@ impl ControlCapabilities {
     pub fn default_color_mode(&self, metadata: &Metadata) -> Result<String> {
         if self.family == ProcessingFamily::Quattro {
             super::recipes::quattro::default_color_mode(metadata)
+        } else if self.recorded_monochrome(metadata) {
+            Ok("Standard".into())
         } else {
             metadata.recorded_color_mode()
         }
@@ -98,6 +111,9 @@ impl ControlCapabilities {
             super::recipes::quattro::apply_capture_defaults(settings, metadata)?;
         } else if self.family == ProcessingFamily::Merrill {
             settings.reconstruction = Some(self.default_noise_controls());
+            if settings.color_mode.is_empty() && self.recorded_monochrome(metadata) {
+                settings.color_mode = self.default_color_mode(metadata)?;
+            }
         }
         Ok(())
     }
@@ -158,13 +174,21 @@ impl ControlCapabilities {
     /// Restore unsupported saved adjustments to their supported defaults.
     /// Preserve effect on/off selections and photographic edits.
     pub fn normalize(&self, settings: &mut Settings) -> bool {
-        let method_changed = self.family != ProcessingFamily::Merrill
-            && settings.merrill_noise_method != MerrillNoiseMethod::Reference;
-        if method_changed {
+        let merrill_changed = if self.family == ProcessingFamily::Merrill {
+            false
+        } else {
+            let changed = settings.neutralize_shadows != Default::default()
+                || settings.merrill_speckles != Default::default()
+                || settings.merrill_banding != Default::default()
+                || settings.merrill_noise_method != MerrillNoiseMethod::Reference;
+            settings.neutralize_shadows = Default::default();
+            settings.merrill_speckles = Default::default();
+            settings.merrill_banding = Default::default();
             settings.merrill_noise_method = MerrillNoiseMethod::Reference;
-        }
+            changed
+        };
         if self.family == ProcessingFamily::Quattro {
-            return super::recipes::quattro::normalize_photographic(settings) || method_changed;
+            return super::recipes::quattro::normalize_photographic(settings) || merrill_changed;
         }
         let before = (
             settings.rendering,
@@ -214,7 +238,7 @@ impl ControlCapabilities {
         if !self.color_dq_adjustable {
             settings.color_dq_gain = None;
         }
-        method_changed
+        merrill_changed
             || before
                 != (
                     settings.rendering,
@@ -235,10 +259,26 @@ impl ControlCapabilities {
     /// Reject unsupported requests without silently changing processing choices.
     /// Numeric validity and camera metadata requirements are checked separately.
     pub fn validate(&self, settings: &Settings) -> Result<()> {
-        if self.family != ProcessingFamily::Merrill
-            && settings.merrill_noise_method != MerrillNoiseMethod::Reference
-        {
-            return Err("multiscale noise methods are available only for Merrill cameras".into());
+        if self.family != ProcessingFamily::Merrill {
+            if settings.neutralize_shadows != Default::default() {
+                return Err("Neutralize shadows is available only for Merrill cameras".into());
+            }
+            if settings.merrill_speckles != Default::default() {
+                return Err(
+                    "speckle threshold and size controls are available only for Merrill cameras"
+                        .into(),
+                );
+            }
+            if settings.merrill_banding != Default::default() {
+                return Err(
+                    "directional banding controls are available only for Merrill cameras".into(),
+                );
+            }
+            if settings.merrill_noise_method != MerrillNoiseMethod::Reference {
+                return Err(
+                    "multiscale noise methods are available only for Merrill cameras".into(),
+                );
+            }
         }
         if self.family == ProcessingFamily::Quattro {
             return super::recipes::quattro::validate_photographic(settings);

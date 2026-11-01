@@ -58,13 +58,20 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Warmth" => "Biases the selected white balance toward warm or cool light. Zero retains As Shot or the chosen camera preset. This is a relative adjustment, not a recorded Kelvin temperature. DNG retains an editable neutral and profile interpretation.",
         "Tint" => "Biases the selected white balance toward magenta or green. Zero preserves the selected balance. It shares the same linear adjustment in display, TIFF and DNG.",
         "Rendering" => {
-            "Color reconstructs a color photograph. Monochrome uses the camera family’s dedicated mixing, filtering and detail processing. Switching does not discard source color."
+            "Color reconstructs a color photograph. Monochrome uses the camera family’s dedicated mixing, filtering and detail processing. Merrill captures recorded as Monochrome open here automatically. Switching to Color keeps a normal color look and retains your saved saturation and color choices. Switching does not discard source color."
         }
         "RGB Mix" => {
-            "Mixes reconstructed red, green and blue channels before monochrome contrast and detail. Drag inside the triangle or select a channel corner. Reset restores the file's initial proportions."
+            "Mixes reconstructed red, green and blue channels before monochrome contrast and detail. Drag inside the dashed triangle or select a channel corner. The fixed CIE xy illustration is a guide to channel proportions. Reset restores the file's initial proportions."
         }
+        "Neutralize shadows" => { "Moves green and magenta casts toward neutral in dark, nearly gray regions. Brightness texture is retained. This is an appearance adjustment, not an estimate of the original scene color. 0 bypasses it." }
+        "Shadow limit" => { "Upper brightness boundary in stops below nominal linear white, before display exposure. More negative values restrict correction to deeper shadows." }
+        "Color tolerance" => { "Maximum relative regional colorfulness. Lower values protect more genuine colors. Higher values can neutralize stronger casts, but can also weaken real muted shadow colors." }
+        "Hue width" => { "Angular tolerance around the observed green/magenta direction. Wider settings affect more neighboring hues." }
+        "Speckle method" => { "Reference repairs isolated bright or dark extrema. Compact targets bright points and small clusters using unchanged ring neighborhoods. Real tiny highlights can also be affected. Both operate before color conversion." }
+        "Speckle threshold" => { "Multiplies the camera-derived detection threshold. Lower values remove more points and can remove fine scene detail. 1 preserves the Reference detection threshold." }
+        "Speckle size" => { "Maximum neighborhood diameter in native sensor pixels. 3 checks isolated points. 5 and 7 also check wider rings for compact clusters. Wider settings can affect tiny real features." }
         "Color Mix" => {
-            "Mixes overlapping color-sensitive sensor layers before monochrome reconstruction. Drag within the triangle or select a pure R, G, or B corner. Blue-only can give cleaner high-ISO monochrome. Reset restores equal proportions. DNG bakes this selection. Retain the X3F and sidecar to change it."
+            "Mixes overlapping color-sensitive sensor layers before monochrome reconstruction. Drag within the dashed triangle or select a pure R, G, or B corner. The fixed anchors on the CIE xy illustration represent layer proportions, not measured sensor primaries. Display gamut settings do not affect this control. Blue-only can give cleaner high-ISO monochrome. Reset restores equal proportions. DNG bakes this selection. Retain the X3F and sidecar to change it."
         }
         "Mono noise" => {
             "Reduces monochrome grain. Choose 0 for the least smoothing and 4 for the strongest. Strong smoothing can soften fine texture."
@@ -112,13 +119,25 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Reduces colored speckles and blotches, especially in shadows. For Merrill, higher positions remove more colored grain independently of texture contrast. Start at 2. The five settings run from 0 to 4. At 0 the added chromatic cleanup is off, while shared sensor corrections remain active. Quattro retains its camera presets. Compare smooth areas and fine color texture: cleanup can also remove real color detail."
         }
         "Merrill noise method" => {
-            "Reference uses the standard noise cleanup. Multiscale filters the three sensor layers together at several sizes to reduce colored blotches. Rows uses shield measurements for row correction. Rows + Columns includes broader row correction and column correction, which can change shadow tint. Compare shadow color, fine detail, and remaining grain. Switching Noise off preserves the selected method."
+            "Reference uses the standard noise cleanup. Multiscale filters the three sensor layers together at several sizes to reduce colored blotches. Rows uses shield measurements for row correction. Rows + Columns includes broader row correction and column correction, which can change shadow tint. Compare shadow color, fine detail, and remaining grain. Both color and monochrome can use either method. Switching Noise off preserves the selected method."
         }
         "Luma noise" => {
             "Reduces grain rather than colored blotches. For Merrill, higher positions use more cleaned brightness evidence without adding contrast gain. Fine and Coarse detail set texture restoration separately. Start at 2. At 0 the added brightness cleanup is off, while shared sensor corrections remain active. Quattro retains its camera presets. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
         }
         "Banding noise" => {
-            "Reduces sensor-column stripes independently of Row banding in Corrections. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger filter to estimate column offsets, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
+            "Sets Reference banding's sensor-column cleanup. Row banding has its own checkbox. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger estimate, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
+        }
+        "Banding enabled" => {
+            "Turns the selected banding cleanup on or off independently of the general noise method. Keep Noise enabled to apply it. Switching banding off preserves its method, sizes, strengths, and Reference row choice."
+        }
+        "Banding method" => {
+            "Reference uses the existing column-strength preset and Row banding checkbox. Directional offers horizontal and vertical cleanup at Fine and Coarse widths. Both choices reduce aligned stripe patterns. Switching methods preserves both sets of controls."
+        }
+        "Band strength" => {
+            "Scales the estimated brightness and color stripes in this width range. It targets aligned bands without increasing general Luma cleanup. Zero turns off this range's added correction. Start gently and compare real edges, colored detail, and remaining bands."
+        }
+        "Band size" => {
+            "Sets this range's neighborhood width in native sensor pixels. Larger values reach wider stripes. Zoom and export size do not change these units. Fine and Coarse sizes stay ordered."
         }
         "Smooth / Crisp" => {
             "Balances smoother rendering against crisper texture. It selects the camera's linked detail-restoration, local-contrast and sharpening settings. The middle position is the normal starting point. Color and luminance noise remain separate controls."
@@ -160,7 +179,7 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Controls which mixed color evidence can steer highlight reconstruction. The default, 0, keeps the original behavior. Increase the strength toward 1 to reject more inconsistent evidence and reduce color bleeding. Strong settings can also discard real color variation in flowers, fabric or skin. This does not add a neutral tint or change brightness reconstruction. Local and Global share the strength. Double-click resets to 0."
         }
         "Advanced corrections" => {
-            "Speckles, Bad pixels, and Row banding default on for new edits. Expand to toggle them individually. Collapsing preserves your settings."
+            "Bad pixels uses camera-recorded defects and defaults on. Merrill Speckles is in Noise. Other camera families retain their Speckles toggle here. Collapsing preserves your settings."
         }
         "Speckles" => crate::help_examples::text("speckles"),
         _ => return None,
@@ -295,6 +314,8 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "highlight.density" => {
             "A diagnostic map from the camera's original saturation flags. It guides Classic correction, but is not Color field's continuous reliability or donation strength. This is not a brightness image or a measure of recovered detail."
         }
+        "shadow-neutralize.input" => { "Reconstructed linear RGB before selective shadow neutralization." }
+        "shadow-neutralize.rgb" => { "Linear RGB after green/magenta reduction in dark, nearly neutral regions. Compare Input to inspect color changes and retained brightness texture." }
         "despeckle.layers" => {
             "Sensor readings after the extra search for isolated bright, dark, or colored dots. Use this to check remaining speckles before general noise reduction."
         }

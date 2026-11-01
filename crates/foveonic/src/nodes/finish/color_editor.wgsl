@@ -36,27 +36,7 @@ fn auxiliary_adjustment(i: u32) -> vec3<f32> {
     if p.values.y==0. { return vec3(0.,0.,aux[i]); }
     return vec3(aux[i*4u],aux[i*4u+1u],aux[i*4u+2u]);
 }
-// Oklab matrices by Björn Ottosson, public-domain 2021 revision:
-// https://bottosson.github.io/posts/oklab/
-// Signed cube roots extend the transform to linear headroom and negative samples.
-fn to_lab(v: vec3<f32>) -> vec3<f32> {
-    let lms=vec3(dot(v,vec3(0.4122214708,0.5363325363,0.0514459929)),
-                 dot(v,vec3(0.2119034982,0.6806995451,0.1073969566)),
-                 dot(v,vec3(0.0883024619,0.2817188376,0.6299787005)));
-    let q=sign(lms)*pow(abs(lms),vec3(1./3.));
-    return vec3(dot(q,vec3(0.2104542553,0.7936177850,-0.0040720468)),
-                dot(q,vec3(1.9779984951,-2.4285922050,0.4505937099)),
-                dot(q,vec3(0.0259040371,0.7827717662,-0.8086757660)));
-}
-fn from_lab(v: vec3<f32>) -> vec3<f32> {
-    let q=vec3(dot(v,vec3(1.,0.3963377774,0.2158037573)),
-               dot(v,vec3(1.,-0.1055613458,-0.0638541728)),
-               dot(v,vec3(1.,-0.0894841775,-1.2914855480)));
-    let lms=q*q*q;
-    return vec3(dot(lms,vec3(4.0767416621,-3.3077115913,0.2309699292)),
-                dot(lms,vec3(-1.2684380046,2.6097574011,-0.3413193965)),
-                dot(lms,vec3(-0.0041960863,-0.7034186147,1.7076147010)));
-}
+
 @compute @workgroup_size(8,8)
 fn color_editor_filter(@builtin(global_invocation_id) id: vec3<u32>) {
     if !valid(id) { return; }
@@ -86,12 +66,12 @@ fn color_editor_apply(@builtin(global_invocation_id) id: vec3<u32>) {
     var result=rgb(i)*exp2(control.z);
     // Lightness-only edits avoid all color-space round trips, including in monochrome.
     if control.x!=0. || control.y!=0. {
-        var lab=to_lab(transform(result/p.values.z,p.to_srgb));
+        var lab=linear_srgb_to_oklab(transform(result/p.values.z,p.to_srgb));
         let angle=control.x*MAX_HUE_RADIANS;
         let c=cos(angle); let s=sin(angle);
         let chroma=vec2(c*lab.y-s*lab.z,s*lab.y+c*lab.z)*max(0.,1.+control.y);
         lab=vec3(lab.x,chroma);
-        result=transform(from_lab(lab),p.from_srgb)*p.values.z;
+        result=transform(oklab_to_linear_srgb(lab),p.from_srgb)*p.values.z;
     }
     dst[n]=result.x; dst[n+1u]=result.y; dst[n+2u]=result.z;
 }

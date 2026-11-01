@@ -1,13 +1,27 @@
 //! Prepares native layer noise and shield correction in camera color coordinates.
 
 use crate::{
-    nodes::sensor::{calibration, multiscale, shield_noise},
+    nodes::sensor::{calibration, multiscale, row_guard, shield_noise},
     source::{Metadata, Result},
 };
 
 const NUMERICAL_FLOOR: f64 = 1e-12;
 const OUTPUT_NEUTRAL: [f64; 3] = [1.; 3];
 const GREEN_MAGENTA: [f64; 3] = [-0.5, 1., -0.5];
+
+pub(super) fn prepare_row_guard(metadata: &Metadata) -> Result<row_guard::Prepared> {
+    let iso = metadata
+        .properties
+        .get("ISO")
+        .ok_or("missing camera ISO for native row correction")?
+        .parse::<u32>()?;
+    row_guard::Prepared::new(
+        [metadata.width as u32, metadata.height as u32],
+        calibration::rectangle(metadata, "ActiveImageArea")?,
+        metadata.fixed::<9>("ColorNoiseModel")?.map(|v| v as f32),
+        iso,
+    )
+}
 
 pub(super) fn prepare(
     metadata: &Metadata,

@@ -17,6 +17,7 @@ pub(crate) mod uv_repair;
 pub(crate) mod chroma;
 pub(crate) mod highlight_stream;
 
+pub(crate) mod directional_banding;
 pub(crate) mod log_reconstruction;
 
 pub(crate) mod range_reconstruction;

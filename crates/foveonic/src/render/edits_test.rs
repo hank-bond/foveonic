@@ -4,6 +4,40 @@ use super::*;
 use crate::render::{MerrillNoiseMethod, PhotographicMethod, PreviewQuality, TiffColorSpace};
 
 #[test]
+fn directional_banding_follows_only_merrill_noise_scope_and_reset() {
+    let mut source = Settings::default();
+    source.merrill_banding.enabled = true;
+    source.merrill_banding.method = crate::render::MerrillBandingMethod::Directional;
+    source.row_correction = false;
+    source.merrill_banding.rows.bands[0].strength = 1.5;
+    source.merrill_banding.columns.bands[1].size = 65;
+    let mut target = Settings::default();
+    Scope::Tool(Section::Detail).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert_eq!(target.merrill_banding, Default::default());
+    Scope::Tool(Section::Noise).apply(&source, &mut target, ProcessingFamily::Quattro);
+    assert_eq!(target.merrill_banding, Default::default());
+    Scope::Tool(Section::Noise).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert_eq!(target.merrill_banding, source.merrill_banding);
+    assert!(!target.row_correction);
+    Scope::Tool(Section::Corrections).apply(
+        &Settings::default(),
+        &mut target,
+        ProcessingFamily::Merrill,
+    );
+    assert!(!target.row_correction);
+    Scope::Tool(Section::Noise).apply(&Settings::default(), &mut target, ProcessingFamily::Merrill);
+    assert_eq!(target.merrill_banding, Default::default());
+    assert!(target.row_correction);
+    for family in [ProcessingFamily::Classic, ProcessingFamily::Quattro] {
+        Scope::Tool(Section::Noise).apply(&source, &mut target, family);
+        assert!(target.row_correction);
+        Scope::Tool(Section::Corrections).apply(&source, &mut target, family);
+        assert!(!target.row_correction);
+        target.row_correction = true;
+    }
+}
+
+#[test]
 fn noise_recipe_copies_merrill_method_without_affecting_detail_or_other_families() {
     let source = Settings {
         merrill_noise_method: MerrillNoiseMethod::MultiscaleRowsAndColumns,
@@ -112,4 +146,43 @@ fn family_defaults_overlay_capture_settings_without_changing_saved_inputs() {
         defaults.apply(ProcessingFamily::Merrill, &capture).exposure,
         0.
     );
+}
+
+#[test]
+fn merrill_speckle_controls_belong_to_noise_and_leave_corrections_independent() {
+    let mut source = Settings {
+        despeckle: false,
+        ..Settings::default()
+    };
+    source.merrill_speckles.method = crate::render::MerrillSpeckleMethod::Compact;
+    source.merrill_speckles.threshold = 0.25;
+    source.merrill_speckles.size = 5;
+    let mut target = Settings::default();
+    Scope::Tool(Section::Corrections).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert!(target.despeckle);
+    assert_eq!(target.merrill_speckles, Default::default());
+    Scope::Tool(Section::Noise).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert!(!target.despeckle);
+    assert_eq!(target.merrill_speckles, source.merrill_speckles);
+    let decoded: Settings = serde_json::from_value(serde_json::to_value(&target).unwrap()).unwrap();
+    assert_eq!(decoded.merrill_speckles, target.merrill_speckles);
+}
+
+#[test]
+fn shadow_neutralization_follows_merrill_noise_scope() {
+    let mut source = Settings::default();
+    source.neutralize_shadows.strength = 0.8;
+    source.neutralize_shadows.color_tolerance = 0.15;
+    let mut target = Settings::default();
+    Scope::Tool(Section::Corrections).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert!(target.neutralize_shadows.is_neutral());
+    Scope::Tool(Section::Noise).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert_eq!(target.neutralize_shadows, source.neutralize_shadows);
+    let original = target.clone();
+    target.processing_sections.noise = false;
+    assert!(target
+        .processing_settings(ProcessingFamily::Merrill)
+        .neutralize_shadows
+        .is_neutral());
+    assert_eq!(target.neutralize_shadows, original.neutralize_shadows);
 }

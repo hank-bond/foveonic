@@ -2,6 +2,79 @@
 
 use super::*;
 
+#[test]
+fn directional_banding_is_merrill_only_and_preserves_its_inactive_choices() {
+    for model in ["SIGMA SD14", "SIGMA dp2 Quattro"] {
+        let cap = capabilities(model);
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.merrill_banding.method = crate::render::MerrillBandingMethod::Directional;
+        settings.exposure = 0.5;
+        assert!(cap.validate(&settings).is_err());
+        assert!(cap.normalize(&mut settings));
+        assert_eq!(settings.merrill_banding, Default::default());
+        assert_eq!(settings.exposure, 0.5);
+        assert!(cap.validate(&settings).is_ok());
+        assert!(!cap.normalize(&mut settings));
+    }
+    let cap = capabilities("SIGMA DP2 Merrill");
+    for rendering in [Rendering::Color, Rendering::Monochrome] {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.rendering = rendering;
+        settings.merrill_banding.rows.bands[1].strength = 0.7;
+        let before = settings.clone();
+        assert!(cap.validate(&settings).is_ok());
+        assert!(!cap.normalize(&mut settings));
+        assert_eq!(settings, before);
+    }
+}
+
+#[test]
+fn merrill_monochrome_capture_starts_mono_with_a_normal_inactive_color_look() {
+    let properties = [
+        ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+        ("CM_DESC".into(), " Monochrome ".into()),
+    ];
+    let metadata = Metadata {
+        processing_version: None,
+        width: 1,
+        height: 1,
+        rotation: 0,
+        properties: properties.into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    let cap = ControlCapabilities::from_metadata(&metadata).unwrap();
+    assert_eq!(
+        cap.default_rendering(&metadata).unwrap(),
+        Rendering::Monochrome
+    );
+    assert_eq!(cap.default_color_mode(&metadata).unwrap(), "Standard");
+    let mut settings = crate::render::camera_settings(&metadata, None).unwrap();
+    assert!(settings.is_monochrome());
+    assert_eq!(settings.color_mode, "Standard");
+    assert_eq!(settings.saturation, 1.);
+    settings.rendering = Rendering::Color;
+    assert!(!cap.normalize(&mut settings));
+    assert_eq!(settings.color_mode, "Standard");
+    assert_eq!(settings.saturation, 1.);
+    settings.color_mode = "Vivid".into();
+    settings.saturation = 1.4;
+    settings.rendering = Rendering::Monochrome;
+    assert!(!cap.normalize(&mut settings));
+    settings.rendering = Rendering::Color;
+    assert!(!cap.normalize(&mut settings));
+    assert_eq!(settings.color_mode, "Vivid");
+    assert_eq!(settings.saturation, 1.4);
+    let explicit = crate::render::camera_settings(&metadata, Some(Rendering::Color)).unwrap();
+    assert_eq!(explicit.rendering, Rendering::Color);
+    assert_eq!(explicit.color_mode, "Standard");
+    assert_eq!(explicit.saturation, 1.);
+    let mut authored = Settings::new("Sunlight", "Vivid");
+    cap.apply_capture_defaults(&mut authored, &metadata)
+        .unwrap();
+    assert_eq!(authored.color_mode, "Vivid");
+}
+
 fn capabilities(model: &str) -> ControlCapabilities {
     ControlCapabilities::from_metadata(&Metadata {
         processing_version: None,

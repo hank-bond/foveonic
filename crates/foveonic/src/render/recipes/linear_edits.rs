@@ -313,7 +313,12 @@ pub(super) fn support(settings: &Settings) -> u32 {
     } else {
         0
     };
-    sharp + local + editor
+    let shadows = if !settings.is_monochrome() && !settings.neutralize_shadows.is_neutral() {
+        crate::nodes::finish::shadow_neutralize::NATIVE_RADIUS
+    } else {
+        0
+    };
+    sharp + local + editor + shadows
 }
 
 pub(super) fn bake(
@@ -328,7 +333,7 @@ pub(super) fn bake(
     settings.preview_quality = PreviewQuality::Full;
     settings.preview_region = None;
     settings.output_size = None;
-    let effective = settings.processing_settings();
+    let effective = settings.processing_settings(source.metadata.processing_family()?);
     let active = effective.active_tone_settings();
     if !baked_active(&active) {
         return Ok(());

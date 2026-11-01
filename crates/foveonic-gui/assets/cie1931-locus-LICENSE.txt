@@ -1,0 +1,7 @@
+CIE 2019, CIE 1931 chromaticity coordinates of spectrum loci, 2 degree observer.
+International Commission on Illumination (CIE), Vienna, AT.
+DOI: https://doi.org/10.25039/CIE.DS.mifmy4x4
+Source: https://files.cie.co.at/Publications-datasets/CIE_cc_1931_2deg.csv
+License: Creative Commons Attribution-ShareAlike 4.0 International
+https://creativecommons.org/licenses/by-sa/4.0/
+The CSV is redistributed unchanged. The diagram samples its coordinates at 5 nm intervals.
