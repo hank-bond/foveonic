@@ -1,7 +1,7 @@
 {
   "id": "row-banding",
-  "title": "Row banding",
-  "description": "Reduces faint stripes caused by uneven sensor rows. Usually best left on. This does not smooth general grain. The Banding noise slider is a separate correction.",
+  "title": "Correct row offsets",
+  "description": "Automatically corrects uneven sensor rows to reduce stripes. This is separate from Column strength, which controls stripes along the other sensor axis. Rotation can make row stripes appear vertical. Usually best left on. General grain remains.",
   "note": "Shadow crop at Exposure +3 EV. Noise and Detail is off. The stripes look vertical because the photo is rotated.",
   "source": "paper-and-recycling-can.x3f",
   "crop": [1940, 3672, 2340, 4072],

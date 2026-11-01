@@ -180,7 +180,7 @@ fn banding_methods_are_independent_and_preserve_off_and_monochrome_edits() {
                     method == MerrillBandingMethod::Directional
                 );
                 assert_eq!(
-                    !panel_text_centers(&output, "Row banding").is_empty(),
+                    !panel_text_centers(&output, "Correct row offsets").is_empty(),
                     method == MerrillBandingMethod::Reference
                 );
             }
@@ -493,7 +493,7 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             "Amount",
             "Speckles",
             "Bad pixels",
-            "Row banding",
+            "Correct row offsets",
         ] {
             assert_eq!(
                 panel_text_centers(&output, label).len(),
@@ -577,7 +577,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     let (_, output, current) = frame(2.5, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
     assert_eq!(current, defaults);
     assert!(text_centers(&output, noise_parameter).is_empty());
-    for label in ["Speckles", "Bad pixels", "Row banding"] {
+    for label in ["Speckles", "Bad pixels", "Correct row offsets"] {
         assert_eq!(text_centers(&output, label).len(), 1);
     }
     let noise = text_centers(&output, "Advanced")[0];
@@ -909,12 +909,12 @@ fn all_visible_editing_controls_have_explanations() {
         "Sharpen",
         "Bad pixels",
         "Speckles",
-        "Row banding",
+        "Correct row offsets",
     ] {
         let label = match key {
             "Chroma noise" => "Chroma",
             "Luma noise" => "Luma",
-            "Banding noise" => "Strength",
+            "Banding noise" => "Column strength",
             "Fine detail" => "Fine",
             "Coarse detail" => "Coarse",
             "Fine size" | "Coarse size" => "Size",
@@ -1464,8 +1464,8 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
         let label = bounds("Threshold");
         assert!(label.left() < bounds("Bad pixels").left());
         assert_eq!(bounds("Banding").left(), bounds("Speckles").left());
-        assert!(bounds("Noise").top() < bounds("Row banding").top());
-        assert!(bounds("Row banding").top() < bounds("Detail").top());
+        assert!(bounds("Noise").top() < bounds("Correct row offsets").top());
+        assert!(bounds("Correct row offsets").top() < bounds("Detail").top());
         let ordered = [
             "Tone and Color",
             "Noise",
@@ -1984,7 +1984,10 @@ fn correction_comparisons_open_and_switch_without_editing_even_on_disabled_contr
     for (label, caption) in [
         ("Bad pixels", "Bad pixels removes the magenta patch."),
         ("Speckles", "Speckles removes the magenta dot."),
-        ("Row banding", "The stripes are reduced. The grain remains."),
+        (
+            "Correct row offsets",
+            "The stripes are reduced. The grain remains.",
+        ),
     ] {
         for initially_enabled in [true, false] {
             for interactive in [true, false] {
@@ -1995,7 +1998,7 @@ fn correction_comparisons_open_and_switch_without_editing_even_on_disabled_contr
                         settings.repair = initially_enabled.then_some(RepairThreshold::Camera)
                     }
                     "Speckles" => settings.despeckle = initially_enabled,
-                    "Row banding" => settings.row_correction = initially_enabled,
+                    "Correct row offsets" => settings.row_correction = initially_enabled,
                     _ => unreachable!(),
                 }
                 let initial = settings.clone();
@@ -2070,7 +2073,12 @@ fn correction_comparisons_open_and_switch_without_editing_even_on_disabled_contr
 
 #[test]
 fn correction_checkboxes_start_enabled_and_toggle_independently() {
-    for label in ["Bad pixels", "Highlights", "Speckles", "Row banding"] {
+    for label in [
+        "Bad pixels",
+        "Highlights",
+        "Speckles",
+        "Correct row offsets",
+    ] {
         let ctx = egui::Context::default();
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.reconstruction = Some(Default::default());
@@ -2143,7 +2151,7 @@ fn correction_checkboxes_start_enabled_and_toggle_independently() {
             match label {
                 "Speckles" => (true, true, false, true),
                 "Highlights" => (true, false, true, true),
-                "Row banding" => (true, true, true, false),
+                "Correct row offsets" => (true, true, true, false),
                 _ => (false, true, true, true),
             }
         );
@@ -2665,7 +2673,7 @@ fn family_panels_show_supported_controls_without_mutating_edits() {
             "Coarse",
             "Size",
             "Threshold",
-            "Row banding",
+            "Correct row offsets",
         ] {
             assert_eq!(
                 panel_text_centers(&output, label).is_empty(),

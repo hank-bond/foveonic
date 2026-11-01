@@ -38,6 +38,7 @@ pub(crate) fn format_parameter_value(value: f64) -> String {
 const RADIUS: u8 = 4;
 pub const BUTTON_GROUP_MARGIN: i8 = 4;
 pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);
+const PARAMETER_SUBGROUP_BACKGROUND: egui::Color32 = egui::Color32::from_gray(36);
 /// Keep slider tracks distinct from both linked groups and the main panel.
 pub const SLIDER_TRACK_FILL: egui::Color32 = egui::Color32::from_gray(60);
 
@@ -50,6 +51,7 @@ pub fn button_group<R>(
         ui,
         egui::Margin::same(BUTTON_GROUP_MARGIN),
         egui::Margin::ZERO,
+        MENU_BACKGROUND,
         contents,
     )
 }
@@ -63,6 +65,21 @@ pub fn parameter_group<R>(
         ui,
         egui::Margin::same(BUTTON_GROUP_MARGIN),
         egui::Margin::symmetric(-BUTTON_GROUP_MARGIN, 0),
+        MENU_BACKGROUND,
+        contents,
+    )
+}
+
+/// Distinguish a nested pair of parameter rows from its enclosing group.
+pub fn parameter_subgroup<R>(
+    ui: &mut egui::Ui,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    linked_group(
+        ui,
+        egui::Margin::same(BUTTON_GROUP_MARGIN),
+        egui::Margin::symmetric(-BUTTON_GROUP_MARGIN, 0),
+        PARAMETER_SUBGROUP_BACKGROUND,
         contents,
     )
 }
@@ -71,13 +88,14 @@ fn linked_group<R>(
     ui: &mut egui::Ui,
     padding: egui::Margin,
     outer_margin: egui::Margin,
+    background: egui::Color32,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     egui::Frame::new()
         .inner_margin(padding)
         .outer_margin(outer_margin)
         .corner_radius(6)
-        .fill(MENU_BACKGROUND)
+        .fill(background)
         .show(ui, |ui| {
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), contents)
                 .inner

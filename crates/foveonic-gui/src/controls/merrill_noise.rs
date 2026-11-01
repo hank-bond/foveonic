@@ -214,7 +214,7 @@ fn banding(
 ) -> bool {
     let mut changed = false;
     crate::widgets::parameter_group(ui, |ui| {
-        let column = common::LabelColumn::new(ui, &["Banding", "Strength"]);
+        let column = common::LabelColumn::new(ui, &["Banding", "Column strength"]);
         ui.horizontal(|ui| {
             changed |= help::control(
                 column.toggle(ui, "Banding", &mut settings.merrill_banding.enabled),
@@ -243,9 +243,14 @@ fn banding(
                     } else {
                         "Banding noise"
                     };
-                    changed |=
-                        column.adjustment(ui, (help_key, "Strength"), reference_amount, 0..=4, 2);
-                    changed |= row_banding(ui, settings);
+                    changed |= column.adjustment(
+                        ui,
+                        (help_key, "Column strength"),
+                        reference_amount,
+                        0..=4,
+                        2,
+                    );
+                    changed |= reference_row_offsets(ui, settings);
                 }
                 MerrillBandingMethod::Directional => {
                     let (horizontal, vertical) = if rotation.is_multiple_of(180) {
@@ -274,10 +279,10 @@ fn banding(
     changed
 }
 
-fn row_banding(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+fn reference_row_offsets(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     help::control(
-        crate::widgets::checkbox(ui, &mut settings.row_correction, "Row banding"),
-        "Row banding",
+        crate::widgets::checkbox(ui, &mut settings.row_correction, "Correct row offsets"),
+        "Correct row offsets",
     )
     .changed()
 }
@@ -290,7 +295,7 @@ fn band_axis(ui: &mut egui::Ui, axis: &mut BandingAxisControls) -> bool {
         let range = axis.size_range(index);
         let default = BandingAxisControls::DEFAULT_BANDS[index];
         ui.push_id(index, |ui| {
-            crate::widgets::parameter_group(ui, |ui| {
+            crate::widgets::parameter_subgroup(ui, |ui| {
                 changed |= column.adjustment(
                     ui,
                     ("Band strength", label),

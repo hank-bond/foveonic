@@ -13,7 +13,7 @@ pub fn control(response: egui::Response, label: &str) -> egui::Response {
         "Highlight correction" => crate::help_examples::attach(response, "highlight-correction"),
         "Bad pixels" => crate::help_examples::attach(response, "bad-pixels"),
         "Speckles" => crate::help_examples::attach(response, "speckles"),
-        "Row banding" => crate::help_examples::attach(response, "row-banding"),
+        "Correct row offsets" => crate::help_examples::attach(response, "row-banding"),
         _ => match editing(label) {
             Some(text) => attach(response, text),
             None => response,
@@ -77,7 +77,7 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Reduces monochrome grain. Choose 0 for the least smoothing and 4 for the strongest. Strong smoothing can soften fine texture."
         }
         "Mono banding" => {
-            "Reduces sensor-column stripes in the mixed signal. Choose 0 to 4. 0 still applies correction. It also influences Speckles independently of the color noise controls."
+            "Sets Column strength for sensor-column stripes in the mixed signal. Correct row offsets controls the other sensor axis separately. Camera rotation can change how these directions appear. Choose 0 to 4. 0 still applies correction. It also influences Speckles independently of the color noise controls."
         }
         "Color mode" => {
             "Chooses the camera's color and contrast look, such as a more natural or vivid rendering. This is a starting look, not just a saturation adjustment. It can also change the tone curve."
@@ -125,13 +125,13 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Reduces grain rather than colored blotches. For Merrill, higher positions use more cleaned brightness evidence without adding contrast gain. Fine and Coarse detail set texture restoration separately. Start at 2. At 0 the added brightness cleanup is off, while shared sensor corrections remain active. Quattro retains its camera presets. Compare smooth areas with hair, leaves, or fabric: smoother results can lose fine texture."
         }
         "Banding noise" => {
-            "Sets Reference banding's sensor-column cleanup. Row banding has its own checkbox. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger estimate, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
+            "Sets Reference banding's Column strength. Correct row offsets enables a separate automatic correction along the other sensor axis. Snaps to five presets: 2 is the starting point, and 0 still applies correction. Higher positions use a wider, stronger estimate, which can affect fine texture. Camera rotation can make these stripes appear horizontal."
         }
         "Banding enabled" => {
             "Turns the selected banding cleanup on or off independently of the general noise method. Keep Noise enabled to apply it. Switching banding off preserves its method, sizes, strengths, and Reference row choice."
         }
         "Banding method" => {
-            "Reference uses the existing column-strength preset and Row banding checkbox. Directional offers horizontal and vertical cleanup at Fine and Coarse widths. Both choices reduce aligned stripe patterns. Switching methods preserves both sets of controls."
+            "Reference offers Column strength and a separate Correct row offsets switch. Directional offers horizontal and vertical cleanup at Fine and Coarse widths. Both choices reduce aligned stripe patterns. Switching methods preserves both sets of controls."
         }
         "Band strength" => {
             "Scales the estimated brightness and color stripes in this width range. It targets aligned bands without increasing general Luma cleanup. Zero turns off this range's added correction. Start gently and compare real edges, colored detail, and remaining bands."
@@ -170,7 +170,7 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Chooses the color space written into TIFF pixels and its matching embedded profile. Camera preserves the stored sRGB or Adobe RGB space. sRGB is convenient for sharing. Adobe RGB and ProPhoto RGB retain wider color ranges for color-managed editing. This does not change the preview or DNG."
         }
         "Bad pixels" => crate::help_examples::text("bad-pixels"),
-        "Row banding" => crate::help_examples::text("row-banding"),
+        "Correct row offsets" => crate::help_examples::text("row-banding"),
         "Highlight correction" => crate::help_examples::text("highlight-correction"),
         "Highlight method" => {
             "Classic uses the existing highlight correction and its camera-relative threshold. Color Field: Local uses 64 local brightness sweeps. Color Field: Global solves the full brightness system for smoother gradients at higher cost. Both share the same color reconstruction and tuning. Both use full-sensor recovery and the supported 8px color grid. Your Classic threshold and shared color-field selectivity strength are retained. The Highlights row below edits the selected method's parameter."
