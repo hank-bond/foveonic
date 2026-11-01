@@ -533,6 +533,9 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
     let source = std::sync::Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
     let engine = Engine::new().unwrap();
     let mut settings = Settings::new("Sunlight", "Standard");
+    // Isolate tile filtering. Speckle correction now follows the Noise bypass,
+    // while a recipe without reconstruction can still select sensor corrections.
+    settings.despeckle = false;
     settings.reconstruction = Some(Default::default());
     let reference = engine
         .render(&source, &settings, &mut Profile::default())

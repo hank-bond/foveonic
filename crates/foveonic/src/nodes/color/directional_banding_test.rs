@@ -33,7 +33,12 @@ fn validates_support_and_keys_each_axis_band_and_boundary() {
     let p = parameters();
     let area = [4, 4, 124, 92];
     let controls = controls();
-    let key = Prepared::new(p, area, controls).unwrap().key();
+    let keys = |prepared: Prepared| {
+        prepared
+            .key(Stage::Correct(Axis::Columns))
+            .join(prepared.key(Stage::Correct(Axis::Rows)))
+    };
+    let key = keys(Prepared::new(p, area, controls).unwrap());
     for axis in 0..2 {
         for index in 0..2 {
             for size in [false, true] {
@@ -48,22 +53,23 @@ fn validates_support_and_keys_each_axis_band_and_boundary() {
                 } else {
                     axis.bands[index].strength += 0.25;
                 }
-                assert!(key != Prepared::new(p, area, edited).unwrap().key());
+                assert!(key != keys(Prepared::new(p, area, edited).unwrap()));
             }
         }
     }
-    assert!(key != Prepared::new(p, [5, 4, 124, 92], controls).unwrap().key());
+    assert!(key != keys(Prepared::new(p, [5, 4, 124, 92], controls).unwrap()));
     assert!(
-        key != Prepared::new(
-            p,
-            area,
-            MerrillBandingControls {
-                enabled: false,
-                ..Default::default()
-            }
+        key != keys(
+            Prepared::new(
+                p,
+                area,
+                MerrillBandingControls {
+                    enabled: false,
+                    ..Default::default()
+                }
+            )
+            .unwrap()
         )
-        .unwrap()
-        .key()
     );
     assert!(Prepared::new(p, [4, 4, 129, 92], controls).is_err());
     let mut short = p;
@@ -84,7 +90,66 @@ fn validates_support_and_keys_each_axis_band_and_boundary() {
         [15, 61]
     );
     assert!(!reduced.uses_reference_fine_boundary(0));
-    assert!(key != reduced.key());
+    assert!(key != keys(reduced));
+}
+
+#[test]
+fn band_measurements_track_support_and_required_slots_independently_of_strength() {
+    let p = parameters();
+    let area = [4, 4, 124, 92];
+    let controls = controls();
+    let base = Prepared::new(p, area, controls).unwrap();
+    for axis in [Axis::Columns, Axis::Rows] {
+        let mut changed = controls;
+        let selected = match axis {
+            Axis::Columns => &mut changed.columns,
+            Axis::Rows => &mut changed.rows,
+        };
+        selected.bands[0].strength = 2.;
+        let changed = Prepared::new(p, area, changed).unwrap();
+        assert!(base.key(Stage::Tiles) == changed.key(Stage::Tiles));
+        assert!(base.key(Stage::Measure(axis)) == changed.key(Stage::Measure(axis)));
+        assert!(base.key(Stage::Correct(axis)) != changed.key(Stage::Correct(axis)));
+        let other = match axis {
+            Axis::Columns => Axis::Rows,
+            Axis::Rows => Axis::Columns,
+        };
+        assert!(base.key(Stage::Measure(other)) == changed.key(Stage::Measure(other)));
+        assert!(base.key(Stage::Correct(other)) == changed.key(Stage::Correct(other)));
+    }
+    let mut changed = controls;
+    changed.rows.bands[1].strength = 0.5;
+    let coarse = Prepared::new(p, area, changed).unwrap();
+    assert!(base.key(Stage::Measure(Axis::Rows)) != coarse.key(Stage::Measure(Axis::Rows)));
+    changed.rows.bands[1].strength = 3.;
+    let stronger = Prepared::new(p, area, changed).unwrap();
+    assert!(coarse.key(Stage::Measure(Axis::Rows)) == stronger.key(Stage::Measure(Axis::Rows)));
+    changed.rows.bands[0].size = 25;
+    let changed_support = Prepared::new(p, area, changed).unwrap();
+    assert!(
+        coarse.key(Stage::Measure(Axis::Rows)) != changed_support.key(Stage::Measure(Axis::Rows))
+    );
+}
+
+fn apply(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    prepared: &Prepared,
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    let mut tiles = apply_stage(gpu, input, None, prepared, Stage::Tiles, profile)?;
+    for axis in [Axis::Columns, Axis::Rows] {
+        let estimates = apply_stage(gpu, &tiles, None, prepared, Stage::Measure(axis), profile)?;
+        tiles = apply_stage(
+            gpu,
+            &tiles,
+            Some(&estimates),
+            prepared,
+            Stage::Correct(axis),
+            profile,
+        )?;
+    }
+    Ok(tiles)
 }
 
 fn read(gpu: &Gpu, buffer: &ReadGuard) -> Vec<f32> {

@@ -232,7 +232,7 @@ fn monochrome_native_methods_keep_layer_order_and_shared_export_preparation() {
                     .graph
                     .nodes
                     .iter()
-                    .any(|n| matches!(n.operation, Operation::DirectionalBanding(_))),
+                    .any(|n| matches!(n.operation, Operation::DirectionalBanding { .. })),
                 directional
             );
             assert_eq!(
@@ -259,7 +259,7 @@ fn monochrome_native_methods_keep_layer_order_and_shared_export_preparation() {
                 assert!(filter < calibrate && calibrate < mix);
             }
             if directional {
-                let local = position(&photo, |op| matches!(op, Operation::DirectionalBanding(_)));
+                let local = position(&photo, final_directional_banding);
                 assert!(local < mix);
                 assert_eq!(
                     photo.graph.nodes[mix].inputs,
@@ -368,6 +368,17 @@ fn position(recipe: &BuiltRecipe, predicate: impl Fn(&Operation) -> bool) -> usi
         .unwrap()
 }
 
+fn final_directional_banding(operation: &Operation) -> bool {
+    use crate::nodes::color::directional_banding::{Axis, Stage};
+    matches!(
+        operation,
+        Operation::DirectionalBanding {
+            stage: Stage::Correct(Axis::Rows),
+            ..
+        }
+    )
+}
+
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn multiscale_preview_order_and_export_preparation_share_native_inputs() {
@@ -452,7 +463,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     let shield = position(&full, |op| matches!(op, Operation::ShieldNoise(_)));
     let guard = position(&full, |op| matches!(op, Operation::RowGuard(_)));
     let filter = position(&full, |op| matches!(op, Operation::Multiscale(_)));
-    let local = position(&full, |op| matches!(op, Operation::DirectionalBanding(_)));
+    let local = position(&full, final_directional_banding);
     assert!(shield < guard && guard < filter && filter < local);
     let dng = super::dng_base::build(
         &engine,
@@ -468,7 +479,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
             if is_guard {
                 matches!(op, Operation::RowGuard(_))
             } else {
-                matches!(op, Operation::DirectionalBanding(_))
+                final_directional_banding(op)
             }
         });
         assert!(
@@ -482,12 +493,12 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
         position(&fast, |op| matches!(op, Operation::RowGuard(_)))
             < position(&fast, |op| matches!(op, Operation::ReduceLayers(_)))
     );
-    let _ = position(&fast, |op| matches!(op, Operation::DirectionalBanding(_)));
+    let _ = position(&fast, final_directional_banding);
     settings.preview_quality = PreviewQuality::Draft;
     let draft = photographic(&engine, &source, &settings);
     assert!(draft.graph.nodes.iter().all(|node| !matches!(
         node.operation,
-        Operation::RowGuard(_) | Operation::DirectionalBanding(_)
+        Operation::RowGuard(_) | Operation::DirectionalBanding { .. }
     )));
 
     settings.preview_quality = PreviewQuality::Full;
@@ -517,11 +528,63 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
             &retained_bytes,
         );
     }
+    // Once a strength edit establishes its frontier, further nonzero changes
+    // must reuse measured offsets rather than rerun either bilateral filter.
+    settings.merrill_banding.rows.bands[0].strength = 0.8;
+    cached(&engine, &mut session, &settings);
+    settings.merrill_banding.rows.bands[0].strength = 0.7;
+    let mut profile = Profile::new(crate::profile::Mode::Wall);
+    let edited = engine
+        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .unwrap()
+        .unwrap();
+    assert!(profile
+        .host
+        .iter()
+        .any(|t| t.stage == "correct native row bands"));
+    assert!(!profile.host.iter().any(|t| matches!(
+        t.stage,
+        "prepare directional band tiles"
+            | "measure native row bands"
+            | "measure native column bands"
+            | "correct native column bands"
+    )));
+    let crate::inspection::Content::Image(edited) = &edited[0].content else {
+        panic!("expected image")
+    };
+    assert_same(
+        "cached band strength",
+        &engine.readback_image(edited).unwrap(),
+        &pixels(&engine, &source, &settings),
+    );
+
+    settings.merrill_banding.rows.bands[0].size = 25;
+    let mut profile = Profile::new(crate::profile::Mode::Wall);
+    let edited = engine
+        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .unwrap()
+        .unwrap();
+    assert!(profile
+        .host
+        .iter()
+        .any(|t| t.stage == "measure native row bands"));
+    assert!(!profile.host.iter().any(|t| matches!(
+        t.stage,
+        "prepare directional band tiles"
+            | "measure native column bands"
+            | "correct native column bands"
+    )));
+    let crate::inspection::Content::Image(edited) = &edited[0].content else {
+        panic!("expected image")
+    };
+    assert_same(
+        "cached band support",
+        &engine.readback_image(edited).unwrap(),
+        &pixels(&engine, &source, &settings),
+    );
     settings.merrill_noise_method = MerrillNoiseMethod::Reference;
     let banding_only = photographic(&engine, &source, &settings);
-    let _ = position(&banding_only, |op| {
-        matches!(op, Operation::DirectionalBanding(_))
-    });
+    let _ = position(&banding_only, final_directional_banding);
     let _ = position(&banding_only, |op| matches!(op, Operation::RowGuard(_)));
     assert!(banding_only
         .graph
@@ -671,6 +734,23 @@ fn neutralize_shadows_cached_switches_and_neutral_bypass_match_fresh() {
             &pixels(&engine, &source, &selected),
         );
     }
+    selected.neutralize_shadows.strength = 0.8;
+    cached(&engine, &mut session, &selected);
+    selected.neutralize_shadows.color_tolerance = 0.4;
+    let mut profile = Profile::new(crate::profile::Mode::Wall);
+    engine
+        .render_session(&mut session, &selected, &["final"], || false, &mut profile)
+        .unwrap()
+        .unwrap();
+    assert!(profile
+        .host
+        .iter()
+        .any(|t| t.stage == "neutralize green and magenta shadows"));
+    assert!(!profile
+        .host
+        .iter()
+        .any(|t| t.stage == "prepare regional shadow color"));
+    selected.neutralize_shadows.strength = 0.;
     assert_same(
         "shadow zero bypass",
         &pixels(&engine, &source, &selected),

@@ -18,6 +18,8 @@ struct Params {
 @group(0) @binding(9) var<storage, read_write> means: array<f32>;
 @group(0) @binding(10) var<storage, read_write> guide: array<f32>;
 @group(0) @binding(11) var<storage, read_write> output_pixels: array<f32>;
+@group(0) @binding(12) var<storage, read_write> evidence_residual: array<f32>;
+@group(0) @binding(13) var<storage, read_write> evidence_variance: array<f32>;
 const LAYERS: u32 = 3u;
 const SPANS: u32 = 12u;
 const SPAN_COMPONENTS: u32 = 3u * LAYERS;
@@ -47,6 +49,9 @@ const SNR_FULL: f32 = 4.;
 const SNR_ZERO: f32 = 12.;
 // Half-sample reflection matches the row estimator at the active boundary.
 fn reflect(value: i32, extent: u32) -> u32 {
+    if value >= 0 && value < i32(extent) {
+        return u32(value);
+    }
     let period = 2 * i32(extent);
     let folded = ((value % period) + period) % period;
     return u32(min(folded, period - 1 - folded));
@@ -116,6 +121,29 @@ fn gaussian_field(y: u32, radius: i32, kernel: u32) -> vec3<f32> {
     return value;
 }
 @compute @workgroup_size(64)
+fn row_guard_evidence(@builtin(global_invocation_id) id: vec3<u32>) {
+    // This entry dispatches one pixel per invocation rather than one complete
+    // row span. The span reduction keeps its original compensated sum order.
+    let x = id.x;
+    let y = id.y;
+    if x >= p.source.z || y >= p.source.w {
+        return;
+    }
+    let z = sample(x, y);
+    var v = vec3(0.);
+    var r = vec3(0.);
+    if all(z < vec3(VALID_MAXIMUM)) && all(z > vec3(VALID_MINIMUM)) {
+        v = max(variance(vertical(x, y, SIGNAL_RADIUS, SIGNAL_KERNEL)), vec3(VARIANCE_FLOOR));
+        let limit = RESIDUAL_SIGMAS * sqrt(v);
+        r = clamp(z - vertical(x, y, FINE_RADIUS, FINE_KERNEL), -limit, limit);
+    }
+    let i = (y * p.source.z + x) * LAYERS;
+    for (var c = 0u; c < LAYERS; c++) {
+        evidence_residual[i + c] = r[c];
+        evidence_variance[i + c] = v[c];
+    }
+}
+@compute @workgroup_size(64)
 fn row_guard_profiles(@builtin(global_invocation_id) id: vec3<u32>) {
     let y = id.x;
     let span = id.y;
@@ -144,9 +172,9 @@ fn row_guard_profiles(@builtin(global_invocation_id) id: vec3<u32>) {
         if !all(z < vec3(VALID_MAXIMUM)) || !all(z > vec3(VALID_MINIMUM)) {
             continue;
         }
-        let v = max(variance(vertical(x, y, SIGNAL_RADIUS, SIGNAL_KERNEL)), vec3(VARIANCE_FLOOR));
-        let limit = RESIDUAL_SIGMAS * sqrt(v);
-        let r = clamp(z - vertical(x, y, FINE_RADIUS, FINE_KERNEL), -limit, limit);
+        let e = (y * p.source.z + x) * LAYERS;
+        let v = vec3(evidence_variance[e], evidence_variance[e + 1u], evidence_variance[e + 2u]);
+        let r = vec3(evidence_residual[e], evidence_residual[e + 1u], evidence_residual[e + 2u]);
         let corrected_residual = r - residual_error;
         let next_residual = residual + corrected_residual;
         residual_error = (next_residual - residual) - corrected_residual;
@@ -223,16 +251,26 @@ fn row_guard_reliability(@builtin(global_invocation_id) id: vec3<u32>) {
         field[y * LAYERS + c] = value[c];
     }
 }
+// Compute each row's filter once in parallel. Both confidence and the ordered
+// compensated mean consume this field without repeating its 65-tap filter.
+@compute @workgroup_size(64)
+fn row_guard_highpass(@builtin(global_invocation_id) id: vec3<u32>) {
+    let y = id.x;
+    if y >= p.source.w {
+        return;
+    }
+    let value = field_value(y * LAYERS) - gaussian_field(y, RELIABILITY_RADIUS, RELIABILITY_KERNEL);
+    for (var c = 0u; c < LAYERS; c++) {
+        guarded[y * LAYERS + c] = value[c];
+    }
+}
 @compute @workgroup_size(1)
 fn row_guard_mean(@builtin(global_invocation_id) id: vec3<u32>) {
     let c = id.x;
     var sum = 0.;
     var error = 0.;
     for (var y = 0u; y < p.source.w; y++) {
-        var value = field[y * LAYERS + c];
-        if p.mean_pass == 0u {
-            value -= gaussian_field(y, RELIABILITY_RADIUS, RELIABILITY_KERNEL)[c];
-        }
+        let value = field[y * LAYERS + c];
         let corrected = value - error;
         let next = sum + corrected;
         error = (next - sum) - corrected;
@@ -252,7 +290,7 @@ fn row_guard_confidence(@builtin(global_invocation_id) id: vec3<u32>) {
         let i = reflect(i32(y) + d, p.source.w) * ROW_COMPONENTS + 2u * LAYERS;
         reference -= row_stat(i) * weights[FINE_KERNEL + u32(d + FINE_RADIUS)];
     }
-    let estimate = field_value(y * LAYERS) - gaussian_field(y, RELIABILITY_RADIUS, RELIABILITY_KERNEL) - field_mean(0u) - reference;
+    let estimate = field_value(y * LAYERS) - field_mean(0u) - reference;
     let projected = vec3(dot(p.inverse_covariance[0].xyz, estimate), dot(p.inverse_covariance[1].xyz, estimate), dot(p.inverse_covariance[2].xyz, estimate));
     let mahalanobis = max(dot(estimate, projected), 0.) / INNOVATION_VARIANCE;
     var distances: array<f32, SPANS>;

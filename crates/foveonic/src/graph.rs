@@ -24,6 +24,8 @@ pub enum DataType {
     SignedDetail,
     FilteredTiles,
     ConditionedTiles,
+    /// Cumulative native band offsets, indexed by tile, block and support.
+    BandEstimates,
     PatternSeedTiles,
     UnconditionedRatioTiles,
     RatioTiles,
@@ -31,6 +33,8 @@ pub enum DataType {
     BlackLevels,
     Histogram,
     RowTable,
+    /// Regional Oklab color and luminance used by shadow neutralization.
+    ShadowColorGuide,
     CalibratedLayers,
     /// Linear codes awaiting the reconstruction finalizer's required gain.
     NormalizedCodeRgb,
@@ -77,9 +81,11 @@ impl DataType {
             Self::BlackLevels
             | Self::Histogram
             | Self::RowTable
+            | Self::ShadowColorGuide
             | Self::File
             | Self::FilteredTiles
             | Self::ConditionedTiles
+            | Self::BandEstimates
             | Self::PatternSeedTiles
             | Self::UnconditionedRatioTiles
             | Self::RatioTiles

@@ -1,5 +1,6 @@
 //! Predicts native green-magenta row and column errors from the original shield samples.
 
+use super::noise_model;
 use crate::{
     gpu::{
         Binding::{Read, Write},
@@ -28,7 +29,7 @@ const REFERENCE_OFFSET: usize = MODEL_COUNT * WEIGHTS_PER_MODEL + GAUSSIAN_WEIGH
 const MODEL_FLOATS: usize = REFERENCE_OFFSET + AXES as usize * COLUMN_REFERENCE_LENGTH as usize;
 const BASIS_MINIMUM: f32 = 1e-6;
 const DIRECTION_SUM_TOLERANCE: f32 = 1e-5;
-const NATIVE_GM_AXIS: [f32; 3] = [-0.7025801, 0.6792753, -0.21205261];
+
 // Little-endian Float32 tables contain five coefficient sets, four normalized
 // Gaussian kernels and two scalar column reference curves. The sets are Rows,
 // Full low/high rows and Full low/high columns. Adjacent band coefficients are
@@ -84,7 +85,7 @@ impl Prepared {
         }
         let projection = direction
             .iter()
-            .zip(NATIVE_GM_AXIS)
+            .zip(noise_model::embedded()?.shield_color_axis())
             .map(|(a, b)| a * b)
             .sum::<f32>();
         if !projection.is_finite() || projection.abs() < BASIS_MINIMUM {

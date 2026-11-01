@@ -22,6 +22,14 @@ use crate::{
 };
 use std::time::Instant;
 
+// Allocation traffic bounds how far stateless work can queue ahead. This is
+// not a residency limit. A single node and retained outputs can exceed it.
+const SUBMISSION_ALLOCATION_WINDOW_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+fn allocated_bytes(activity: crate::profile::GpuActivity) -> u64 {
+    activity.storage_bytes + activity.upload_bytes + activity.uniform_bytes
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ScalarParams {
@@ -69,6 +77,7 @@ impl Engine {
         execution: &mut Execution<'_>,
     ) -> Result<Vec<Value>> {
         let gpu = &self.gpu;
+        let mut completed_allocation_bytes = allocated_bytes(gpu.activity());
         let mut trace = gpu.trace(profile.mode.gpu(), graph.nodes.len() as u32 * 2);
         let mut scratch = Scratch::default();
         let mut values: Vec<Option<Value>> = graph
@@ -1097,16 +1106,18 @@ impl Engine {
                         None
                     }
                 }
-                Operation::DirectionalBanding(prepared) => {
+                Operation::DirectionalBanding { stage, prepared } => {
                     let params = prepared.params();
-                    let tiles = crate::nodes::color::directional_banding::apply(
+                    let estimates = node.inputs.get(1).map(|_| &input(1).buffer);
+                    let tiles = crate::nodes::color::directional_banding::apply_stage(
                         gpu,
                         &input(0).buffer,
+                        estimates,
                         prepared,
+                        *stage,
                         profile,
                     )?;
-                    let projected = node.outputs[1];
-                    if required[projected] {
+                    if let Some(&projected) = node.outputs.get(1).filter(|id| required[**id]) {
                         values[projected] = Some(Value {
                             buffer: reconstruction::project(gpu, &tiles, params, 3, profile)?,
                             description: DataType::CalibratedLayers
@@ -1330,10 +1341,20 @@ impl Engine {
                     );
                     Some(output)
                 }
+                Operation::ShadowNeutralGuide { params, .. } => {
+                    Some(crate::nodes::finish::shadow_neutralize::prepare_guide(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        inherited,
+                        profile,
+                    )?)
+                }
                 Operation::ShadowNeutralize { params, .. } => {
                     Some(crate::nodes::finish::shadow_neutralize::apply(
                         gpu,
                         &input(0).buffer,
+                        &input(1).buffer,
                         *params,
                         inherited,
                         profile,
@@ -1580,8 +1601,20 @@ impl Engine {
             // Queuing a whole outdated render would delay both drawing and newer edits.
             // Finish submitted work off-thread, then check for newer work between stages.
             // Background executors also yield at GPU submission boundaries.
-            if execution.cancel.is_some() {
-                gpu.device.poll(wgpu::Maintain::Wait);
+            let pending_allocation_bytes =
+                allocated_bytes(gpu.activity()).saturating_sub(completed_allocation_bytes);
+            if execution.cancel.is_some()
+                || pending_allocation_bytes >= SUBMISSION_ALLOCATION_WINDOW_BYTES
+            {
+                // Stateless exports also need bounded temporary resource overlap.
+                // Preserve interactive cancellation's existing stage boundaries.
+                let label = if execution.cancel.is_some() {
+                    "complete interactive graph stage"
+                } else {
+                    "complete graph submission window"
+                };
+                profile.measure(label, || gpu.device.poll(wgpu::Maintain::Wait));
+                completed_allocation_bytes = allocated_bytes(gpu.activity());
             }
             stage_completed += 1;
             if let Some(progress) = execution.progress {

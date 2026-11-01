@@ -60,6 +60,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[merrill-multiscale-noise](./merrill-multiscale-noise.md)** _(archived)._ Integrate the approved Merrill multiscale filter and both shield correction choices through the production rendering path.
 - **[merrill-noise-cleanup](./merrill-noise-cleanup.md)** _(archived)._ Consolidate reviewed Merrill noise, banding, speckle and shadow controls before optimization.
 - **[merrill-noise-default](./merrill-noise-default.md)** _(archived)._ Enable Noise and Detail for newly opened Merrill photographs while preserving saved off choices.
+- **[merrill-noise-latency](./merrill-noise-latency.md)** _(archived)._ Reduce completed Merrill noise and banding latency while preserving the reviewed corrections.
 - **[merrill-regional-preview](./merrill-regional-preview.md)** _(archived)._ Deliver Merrill Smart detail from native processing tiles before continuing the whole frame.
 - **[metadata-first-loading](./metadata-first-loading.md)** _(archived)._ Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.
 - **[monochrome-performance](./monochrome-performance.md)** _(archived)._ Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output.
@@ -81,6 +82,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[release-0.4.1](./release-0.4.1.md)** _(archived)._ Record the verified and published 0.4.1 release with Merrill noise/detail controls and processing fixes.
 - **[release-0.4.2](./release-0.4.2.md)** _(archived)._ Record the verified and published 0.4.2 patch release for thumbnail responsiveness and settings copy/paste.
 - **[release-0.5.0](./release-0.5.0.md)** _(archived)._ Clean up the shared photographic editor and prepare the local 0.5.0 feature release for review.
+- **[release-0.6.0](./release-0.6.0.md)** _(archived)._ Prepare the reviewed Merrill noise and banding feature set as a local release candidate.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** _(archived)._ Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.

@@ -94,19 +94,25 @@ pub(super) fn append(
     } else {
         params
     };
-    let conditioning = if request.directional_banding && effects.noise {
-        Operation::DirectionalBanding(Arc::new(crate::noise::banding_parameters(
-            &request.source.metadata,
-            column_params,
-            request.settings.merrill_banding,
-        )?))
+    let conditioned = if request.directional_banding && effects.noise {
+        append_banding(
+            graph,
+            calibrated,
+            Arc::new(crate::noise::banding_parameters(
+                &request.source.metadata,
+                column_params,
+                request.settings.merrill_banding,
+            )?),
+        )?
     } else {
-        Operation::Column {
-            params: column_params,
-            enabled: effects.noise && request.settings.reference_banding_selected(),
-        }
+        graph.add(
+            Operation::Column {
+                params: column_params,
+                enabled: effects.noise && request.settings.reference_banding_selected(),
+            },
+            &[calibrated],
+        )?
     };
-    let conditioned = graph.add(conditioning, &[calibrated])?;
     checkpoint!();
     let prepared = crate::nodes::color::texture::Prepared::new(
         controls,
@@ -148,4 +154,37 @@ pub(super) fn append(
         params,
         tiles: restored,
     }))
+}
+
+/// Keep the reviewed column-then-row order, with independent measurement keys.
+pub(super) fn append_banding(
+    graph: &mut Graph,
+    calibrated: usize,
+    prepared: Arc<crate::nodes::color::directional_banding::Prepared>,
+) -> Result<usize> {
+    use crate::nodes::color::directional_banding::{Axis, Stage};
+    let mut tiles = graph.add(
+        Operation::DirectionalBanding {
+            stage: Stage::Tiles,
+            prepared: prepared.clone(),
+        },
+        &[calibrated],
+    )?;
+    for axis in [Axis::Columns, Axis::Rows] {
+        let estimates = graph.add(
+            Operation::DirectionalBanding {
+                stage: Stage::Measure(axis),
+                prepared: prepared.clone(),
+            },
+            &[tiles],
+        )?;
+        tiles = graph.add(
+            Operation::DirectionalBanding {
+                stage: Stage::Correct(axis),
+                prepared: prepared.clone(),
+            },
+            &[tiles, estimates],
+        )?;
+    }
+    Ok(tiles)
 }

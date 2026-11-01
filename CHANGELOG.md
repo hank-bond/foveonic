@@ -5,6 +5,21 @@ kind: reference
 
 # Changelog
 
+## 0.6.0
+
+<!-- Add your release introduction here. -->
+
+### Changes
+
+- Merrill Noise offers joint multiscale sensor-layer filtering, with Rows and Rows + Columns choices. Both reduce broad color blotches. Rows + Columns also applies broader shield-based correction and can change shadow tint. Reference remains the default.
+- Independent Directional banding targets narrow lines and wider stripes in both directions, with Fine and Coarse strength and size controls. It works with either noise method in Color and Monochrome. Reference banding and its row-correction switch now live together in Noise.
+- Compact speckle cleanup offers threshold and 3, 5 or 7 pixel size choices for bright points and small clusters. Highlight protection uses original sensor values so white balance does not hide unclipped speckles from detection.
+- Neutralize shadows selectively reduces green and magenta casts in dark, nearly gray regions. Strength starts at zero, with shadow, color and hue selectivity controls.
+- Faster Merrill row estimation, band-strength edits, shadow-neutrality edits and joint filtering through shared measurements, guarded buffer reuse and bounded active-photo caching. Bounded processing submissions reduce temporary GPU resource overlap during export.
+- Merrill captures recorded as Monochrome open in Monochrome automatically. Switching to Color restores ordinary color processing. The layer mixer now uses a CIE chromaticity guide with a fixed dashed selection triangle.
+- Browse photographs in grid, list or large views with star ratings, metadata sorting and search. Compare highlighted photographs while retaining one active editing session. Filename tooltips show capture details, and context menus offer copy-path and Finder actions.
+- Save and apply editing-section presets and camera-family defaults. White balance adds warmth and tint adjustments, with transient Before comparisons independent of saved edits.
+
 ## 0.5.0
 
 <!-- Add your release introduction here. -->

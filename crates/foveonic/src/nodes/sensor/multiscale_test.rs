@@ -205,6 +205,17 @@ fn multiscale_shader_validates_without_a_device() {
     )
     .validate(&module)
     .unwrap();
+    for entry in &module.entry_points {
+        let expected = if matches!(
+            entry.name.as_str(),
+            "multiscale_moments" | "multiscale_average"
+        ) {
+            [HORIZONTAL_WORKGROUP_WIDTH, HORIZONTAL_WORKGROUP_HEIGHT, 1]
+        } else {
+            [WORKGROUP_SIDE, WORKGROUP_SIDE, 1]
+        };
+        assert_eq!(entry.workgroup_size, expected, "{} dispatch", entry.name);
+    }
 }
 
 #[test]
@@ -221,7 +232,8 @@ fn rejects_invalid_multiscale_metadata() {
 fn guided_three_scales_match_independent_equations_and_preserve_sensor_contracts() {
     let gpu = Gpu::new().unwrap();
     let extent = [100, 86];
-    let area = [3, 3, 94, 80];
+    // The padded width of 80 leaves a partial horizontal workgroup at native scale.
+    let area = [3, 3, 82, 80];
     let black = [16., 17., 15.];
     let noise = [4., 9., 0.2, 0.04, 0.1, 0.02, 0.0001, 0.0002, 0.0001];
     let prepared = Prepared::new(extent, area, noise, [0.7, 1.3, 0.4]).unwrap();

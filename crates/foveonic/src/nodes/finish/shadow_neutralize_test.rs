@@ -27,6 +27,29 @@ fn neutral_default_and_shadow_controls_are_validated() {
 }
 
 #[test]
+fn regional_guide_identity_tracks_signal_basis_and_support_only() {
+    let base = Params::new(Controls::default(), ColorSpace::Srgb, 1.);
+    let edited = Params::new(
+        Controls {
+            strength: 1.,
+            shadow_ev: -8.,
+            color_tolerance: 0.7,
+            hue_width: 60.,
+        },
+        ColorSpace::Srgb,
+        1.,
+    );
+    assert!(base.guide_key() == edited.guide_key());
+    assert!(base.key() != edited.key());
+    assert!(
+        base.guide_key() != Params::new(Controls::default(), ColorSpace::Srgb, 0.5).guide_key()
+    );
+    assert!(
+        base.guide_key() != Params::new(Controls::default(), ColorSpace::AdobeRgb, 1.).guide_key()
+    );
+}
+
+#[test]
 #[ignore = "requires a GPU"]
 fn shadow_neutralization_preserves_brightness_and_protects_lights_and_strong_color() {
     let gpu = Gpu::new().unwrap();
@@ -57,7 +80,8 @@ fn shadow_neutralization_preserves_brightness_and_protects_lights_and_strong_col
         ColorSpace::Srgb,
         1.,
     );
-    let result = apply(&gpu, &input, p, extent, &mut Profile::default()).unwrap();
+    let guide = prepare_guide(&gpu, &input, p, extent, &mut Profile::default()).unwrap();
+    let result = apply(&gpu, &input, &guide, p, extent, &mut Profile::default()).unwrap();
     let bytes = gpu.readback(&result).unwrap();
     let result: &[f32] = bytemuck::cast_slice(&bytes);
     for (old, new) in values
@@ -95,6 +119,7 @@ fn shadow_neutralization_preserves_brightness_and_protects_lights_and_strong_col
     let bypass = apply(
         &gpu,
         &input,
+        &guide,
         Params::new(Controls::default(), ColorSpace::Srgb, 1.),
         extent,
         &mut Profile::default(),

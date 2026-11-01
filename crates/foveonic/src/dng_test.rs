@@ -43,7 +43,7 @@ fn export_shader_has_valid_guarded_entry_points_without_hardware() {
 
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
-fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
+fn technical_base_defers_presentation_and_bakes_spatial_and_signal_controls() {
     let engine = Engine::new().unwrap();
     let source = Source::open(
         std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
@@ -89,12 +89,6 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
     presentation.tone.shadows = 0.4;
     presentation.tone.highlights = -0.3;
     presentation.saturation = 0.25;
-    presentation.tonal_ranges.shadows = 0.5;
-    presentation.tonal_ranges.highlights = -0.5;
-    presentation.photographic.tone_method = crate::render::PhotographicMethod::Universal;
-    presentation.photographic.local_contrast = 0.5;
-    presentation.photographic.sharpening.method = crate::render::PhotographicMethod::Universal;
-    presentation.photographic.sharpening.amount = 1.2;
     let changed = prepare_base(&engine, &source, &presentation, &mut Profile::default()).unwrap();
     assert_eq!(changed.settings(), &presentation);
     assert_eq!(changed.view(), base.view());
@@ -104,11 +98,24 @@ fn technical_base_defers_rgb_presentation_but_bakes_signal_controls() {
     );
     drop(changed);
 
-    let mut without_hdr = presentation.clone();
+    // Spatial photographic edits are baked. Compare their sample changes
+    // separately from the global presentation carried by the DNG profile.
+    let mut spatial = presentation.clone();
+    spatial.tonal_ranges.shadows = 0.5;
+    spatial.tonal_ranges.highlights = -0.5;
+    spatial.photographic.tone_method = crate::render::PhotographicMethod::Universal;
+    spatial.photographic.local_contrast = 0.5;
+    spatial.photographic.sharpening.method = crate::render::PhotographicMethod::Universal;
+    spatial.photographic.sharpening.amount = 1.2;
+    let baked = prepare_base(&engine, &source, &spatial, &mut Profile::default()).unwrap();
+    assert_ne!(engine.readback_image(&baked).unwrap(), pixels);
+    drop(baked);
+    let mut without_hdr = spatial.clone();
     without_hdr.tonal_ranges = Default::default();
-    without_hdr.photographic = Default::default();
+    without_hdr.photographic.local_contrast = 0.;
+    without_hdr.photographic.sharpening.amount = 0.;
     let before = appearance::Prepared::new(&source.metadata, &without_hdr).unwrap();
-    let after = appearance::Prepared::new(&source.metadata, &presentation).unwrap();
+    let after = appearance::Prepared::new(&source.metadata, &spatial).unwrap();
     assert_eq!(after.mapping.0, before.mapping.0);
     assert_eq!(after.neutral, before.neutral);
     assert_eq!(after.forward.0, before.forward.0);

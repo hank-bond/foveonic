@@ -64,7 +64,7 @@ pub(super) fn color(ui: &mut egui::Ui, settings: &mut Settings, rotation: u32) -
     changed
 }
 
-fn method_menu<T: Copy + PartialEq>(
+fn choice_menu<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     id: &str,
     help_key: &str,
@@ -101,7 +101,7 @@ fn noise_method(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 "Multiscale: Rows + Columns",
             ),
         ];
-        changed |= method_menu(
+        changed |= choice_menu(
             ui,
             "merrill-noise-method",
             "Merrill noise method",
@@ -166,7 +166,7 @@ fn speckles(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 (MerrillSpeckleMethod::Reference, "Reference"),
                 (MerrillSpeckleMethod::Compact, "Compact"),
             ];
-            changed |= method_menu(
+            changed |= choice_menu(
                 ui,
                 "speckle-method",
                 "Speckle method",
@@ -185,19 +185,16 @@ fn speckles(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 defaults.threshold,
             );
             if settings.merrill_speckles.method == MerrillSpeckleMethod::Compact {
-                changed |= adjustment_row(
-                    ui,
-                    "Speckle size",
-                    &mut settings.merrill_speckles.size,
-                    MerrillSpeckleControls::SIZE_RANGE,
-                    defaults.size,
-                    2.,
-                    RowControls {
-                        step: Some(2.),
-                        step_origin: 1.,
-                        ..Default::default()
-                    },
-                );
+                ui.horizontal(|ui| {
+                    help::control(ui.label("Size"), "Speckle size");
+                    changed |= choice_menu(
+                        ui,
+                        "speckle-size",
+                        "Speckle size",
+                        &mut settings.merrill_speckles.size,
+                        &[(3, "3"), (5, "5"), (7, "7")],
+                    );
+                });
             }
         });
     });
@@ -223,7 +220,7 @@ fn banding(
                 (MerrillBandingMethod::Reference, "Reference"),
                 (MerrillBandingMethod::Directional, "Directional"),
             ];
-            changed |= method_menu(
+            changed |= choice_menu(
                 ui,
                 "banding-method",
                 "Banding method",

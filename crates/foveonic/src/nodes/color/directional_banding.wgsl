@@ -35,6 +35,9 @@ fn sensor_position(point:vec3<u32>)->vec2<i32>{
     return vec2<i32>(origin+point.xy)-i32(params.tile.z);
 }
 fn reflect_coordinate(value:i32,first:u32,last:u32)->u32{
+    if value>=i32(first) && value<i32(last){
+        return u32(value);
+    }
     let length=i32(last-first)-1;
     let period=2*length;
     let shifted=value-i32(first);

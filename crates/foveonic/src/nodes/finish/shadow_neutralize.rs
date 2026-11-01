@@ -91,6 +91,9 @@ impl Params {
     pub(crate) fn key(self) -> crate::recipe::Key {
         crate::recipe::Key::pod(&self)
     }
+    pub(crate) fn guide_key(self) -> crate::recipe::Key {
+        crate::recipe::Key::pod(&self.guide_radius).with(&self.to_srgb)
+    }
 }
 fn dispatch_pass(
     gpu: &Gpu,
@@ -124,16 +127,13 @@ fn dispatch_pass(
     gpu.finish_trace(&trace, profile)?;
     Ok(output)
 }
-pub(crate) fn apply(
+pub(crate) fn prepare_guide(
     gpu: &Gpu,
     input: &ReadGuard,
     mut params: Params,
     extent: [u32; 2],
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    if params.strength == 0. {
-        return Ok(input.clone());
-    }
     if input.size()
         != u64::from(extent[0]) * u64::from(extent[1]) * RGB_COMPONENTS * COMPONENT_BYTES
     {
@@ -159,7 +159,7 @@ pub(crate) fn apply(
         profile,
     )?;
     params.filter_axis = 1;
-    let regional = dispatch_pass(
+    dispatch_pass(
         gpu,
         Kernel::ShadowNeutralFilter,
         &horizontal,
@@ -167,14 +167,32 @@ pub(crate) fn apply(
         params,
         GUIDE_COMPONENTS,
         profile,
-    )?;
-    drop(horizontal);
-    drop(guide);
+    )
+}
+
+pub(crate) fn apply(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    regional: &ReadGuard,
+    mut params: Params,
+    extent: [u32; 2],
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    if params.strength == 0. {
+        return Ok(input.clone());
+    }
+    let pixels = u64::from(extent[0]) * u64::from(extent[1]);
+    if input.size() != pixels * RGB_COMPONENTS * COMPONENT_BYTES
+        || regional.size() != pixels * GUIDE_COMPONENTS * COMPONENT_BYTES
+    {
+        return Err("Neutralize shadows image and guide geometry mismatch".into());
+    }
+    params.extent = extent;
     dispatch_pass(
         gpu,
         Kernel::ShadowNeutralApply,
         input,
-        Some(&regional),
+        Some(regional),
         params,
         RGB_COMPONENTS,
         profile,

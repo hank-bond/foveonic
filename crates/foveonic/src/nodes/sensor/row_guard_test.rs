@@ -251,11 +251,13 @@ fn row_guard_metadata_and_reflection_are_bounded() {
     let high = Prepared::new([100, 100], [0, 0, 100, 100], [1.; 9], 6400).unwrap();
     assert_eq!(
         low.params.inverse_covariance[0][0],
-        INVERSE_COVARIANCE[0][0]
+        noise_model::embedded().unwrap().row_inverse_covariance(100)[0]
     );
     assert_eq!(
         high.params.inverse_covariance[0][0],
-        INVERSE_COVARIANCE[4][0]
+        noise_model::embedded()
+            .unwrap()
+            .row_inverse_covariance(1600)[0]
     );
 }
 

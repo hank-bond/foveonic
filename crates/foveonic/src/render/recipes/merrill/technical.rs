@@ -267,12 +267,19 @@ pub(super) fn build(
                 params.source[0] as f32 / source.metadata.width as f32
             },
         );
+        let guide = graph.add(
+            Operation::ShadowNeutralGuide {
+                params: prepared,
+                space,
+            },
+            &[linear],
+        )?;
         linear = graph.add(
             Operation::ShadowNeutralize {
                 params: prepared,
                 space,
             },
-            &[linear],
+            &[linear, guide],
         )?;
         finish!();
     }

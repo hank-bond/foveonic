@@ -21,6 +21,44 @@ const CLIPPED_CODE: f32 = 3900.;
 const MAXIMUM_SLOPE: f32 = 8.;
 const GUIDE_PRIOR_VARIANCE: f32 = 1.;
 const UPDATE_PHASE: f32 = 1.;
+const HORIZONTAL_WORKGROUP_WIDTH: u32 = 32u;
+const HORIZONTAL_WORKGROUP_HEIGHT: u32 = 4u;
+const MAXIMUM_RADIUS: u32 = 4u;
+const HORIZONTAL_TILE_WIDTH: u32 = HORIZONTAL_WORKGROUP_WIDTH + 2u * MAXIMUM_RADIUS;
+const HORIZONTAL_TILE_PIXELS: u32 = HORIZONTAL_TILE_WIDTH * HORIZONTAL_WORKGROUP_HEIGHT;
+// Planar shared storage keeps neighboring lanes on neighboring scalars.
+var<workgroup> horizontal_a: array<f32, HORIZONTAL_TILE_PIXELS * LAYERS>;
+var<workgroup> horizontal_b: array<f32, HORIZONTAL_TILE_PIXELS * LAYERS>;
+var<workgroup> horizontal_c: array<f32, HORIZONTAL_TILE_PIXELS * LAYERS>;
+
+// Separate accessors avoid unsupported workgroup-pointer arguments.
+fn store_horizontal_a(index: u32, value: vec3<f32>) {
+    horizontal_a[index] = value.x;
+    horizontal_a[HORIZONTAL_TILE_PIXELS + index] = value.y;
+    horizontal_a[2u * HORIZONTAL_TILE_PIXELS + index] = value.z;
+}
+fn load_horizontal_a(index: u32) -> vec3<f32> {
+    return vec3(horizontal_a[index], horizontal_a[HORIZONTAL_TILE_PIXELS + index],
+        horizontal_a[2u * HORIZONTAL_TILE_PIXELS + index]);
+}
+fn store_horizontal_b(index: u32, value: vec3<f32>) {
+    horizontal_b[index] = value.x;
+    horizontal_b[HORIZONTAL_TILE_PIXELS + index] = value.y;
+    horizontal_b[2u * HORIZONTAL_TILE_PIXELS + index] = value.z;
+}
+fn load_horizontal_b(index: u32) -> vec3<f32> {
+    return vec3(horizontal_b[index], horizontal_b[HORIZONTAL_TILE_PIXELS + index],
+        horizontal_b[2u * HORIZONTAL_TILE_PIXELS + index]);
+}
+fn store_horizontal_c(index: u32, value: vec3<f32>) {
+    horizontal_c[index] = value.x;
+    horizontal_c[HORIZONTAL_TILE_PIXELS + index] = value.y;
+    horizontal_c[2u * HORIZONTAL_TILE_PIXELS + index] = value.z;
+}
+fn load_horizontal_c(index: u32) -> vec3<f32> {
+    return vec3(horizontal_c[index], horizontal_c[HORIZONTAL_TILE_PIXELS + index],
+        horizontal_c[2u * HORIZONTAL_TILE_PIXELS + index]);
+}
 
 fn reflect(coordinate: i32, extent: u32) -> u32 {
     let period = 2 * (i32(extent) - 1);
@@ -63,13 +101,22 @@ fn multiscale_downsample(@builtin(global_invocation_id) id: vec3<u32>) {
     store_a(id.y * p.stage.x + id.x, value * p.controls.y);
 }
 
-@compute @workgroup_size(8, 8)
-fn multiscale_moments(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(id.xy >= p.stage.xy) { return; }
-    var mean = vec3(0.); var square = vec3(0.); var cross = vec3(0.); var guide_square = 0.;
+@compute @workgroup_size(HORIZONTAL_WORKGROUP_WIDTH, HORIZONTAL_WORKGROUP_HEIGHT)
+fn multiscale_moments(@builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
     let radius = i32(p.stage.w);
-    for (var dx = -radius; dx <= radius; dx++) {
-        let value = load_source(id.y * p.stage.x + reflect(i32(id.x) + dx, p.stage.x));
+    for (var index = lane; index < HORIZONTAL_TILE_PIXELS; index += HORIZONTAL_WORKGROUP_WIDTH * HORIZONTAL_WORKGROUP_HEIGHT) {
+        let x = reflect(i32(group.x * HORIZONTAL_WORKGROUP_WIDTH + index % HORIZONTAL_TILE_WIDTH) - radius, p.stage.x);
+        let y = min(group.y * HORIZONTAL_WORKGROUP_HEIGHT + index / HORIZONTAL_TILE_WIDTH, p.stage.y - 1u);
+        store_horizontal_a(index, load_source(y * p.stage.x + x));
+    }
+    // Partial groups must finish their shared loads before any lane leaves.
+    workgroupBarrier();
+    if any(id.xy >= p.stage.xy) { return; }
+    let first = (id.y % HORIZONTAL_WORKGROUP_HEIGHT) * HORIZONTAL_TILE_WIDTH + id.x % HORIZONTAL_WORKGROUP_WIDTH;
+    var mean = vec3(0.); var square = vec3(0.); var cross = vec3(0.); var guide_square = 0.;
+    for (var tap = 0u; tap < 2u * p.stage.w + 1u; tap++) {
+        let value = load_horizontal_a(first + tap);
         let guide = (value.x + value.y + value.z) / f32(LAYERS);
         mean += value; square += value * value; cross += value * guide; guide_square += guide * guide;
     }
@@ -115,14 +162,27 @@ fn multiscale_coefficients(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var c = 0u; c < LAYERS; c++) { output_b[pixel * LAYERS + c] = b[c]; output_c[pixel * LAYERS + c] = weight[c]; }
 }
 
-@compute @workgroup_size(8, 8)
-fn multiscale_average(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(id.xy >= p.stage.xy) { return; }
-    var a = vec3(0.); var b = vec3(0.); var weight = vec3(0.);
+@compute @workgroup_size(HORIZONTAL_WORKGROUP_WIDTH, HORIZONTAL_WORKGROUP_HEIGHT)
+fn multiscale_average(@builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
     let radius = i32(p.stage.w);
-    for (var dx = -radius; dx <= radius; dx++) {
-        let pixel = id.y * p.stage.x + reflect(i32(id.x) + dx, p.stage.x);
-        a += load_a(pixel); b += load_b(pixel); weight += load_c(pixel);
+    for (var index = lane; index < HORIZONTAL_TILE_PIXELS; index += HORIZONTAL_WORKGROUP_WIDTH * HORIZONTAL_WORKGROUP_HEIGHT) {
+        let x = reflect(i32(group.x * HORIZONTAL_WORKGROUP_WIDTH + index % HORIZONTAL_TILE_WIDTH) - radius, p.stage.x);
+        let y = min(group.y * HORIZONTAL_WORKGROUP_HEIGHT + index / HORIZONTAL_TILE_WIDTH, p.stage.y - 1u);
+        let pixel = y * p.stage.x + x;
+        store_horizontal_a(index, load_a(pixel));
+        store_horizontal_b(index, load_b(pixel));
+        store_horizontal_c(index, load_c(pixel));
+    }
+    // Partial groups must finish their shared loads before any lane leaves.
+    workgroupBarrier();
+    if any(id.xy >= p.stage.xy) { return; }
+    let first = (id.y % HORIZONTAL_WORKGROUP_HEIGHT) * HORIZONTAL_TILE_WIDTH + id.x % HORIZONTAL_WORKGROUP_WIDTH;
+    var a = vec3(0.); var b = vec3(0.); var weight = vec3(0.);
+    for (var tap = 0u; tap < 2u * p.stage.w + 1u; tap++) {
+        a += load_horizontal_a(first + tap);
+        b += load_horizontal_b(first + tap);
+        weight += load_horizontal_c(first + tap);
     }
     let reciprocal = 1. / f32(2 * radius + 1);
     let pixel = id.y * p.stage.x + id.x;

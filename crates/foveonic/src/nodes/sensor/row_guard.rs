@@ -1,5 +1,6 @@
 //! Bounds fine native row offsets using independent image spans and fixed layer covariance.
 
+use super::noise_model;
 use crate::{
     gpu::{
         Binding::{Read, Write},
@@ -17,69 +18,10 @@ const SPAN_COMPONENTS: u64 = 9;
 const ROW_COMPONENTS: u64 = 9;
 const LINE_WORKGROUP: u32 = 64;
 const IMAGE_WORKGROUP: u32 = 8;
-const PASSES: u32 = 8;
+const PASSES: u32 = 10;
 const MINIMUM_SIDE: u32 = 65;
-const ISOS: [u32; 5] = [100, 200, 400, 800, 1600];
+
 const GAUSSIANS: [(f64, usize); 4] = [(1.25, 5), (3., 12), (8., 32), (4., 16)];
-// Inverse native-layer covariance of fine row offsets. The fitting captures
-// cover three bodies. These are amplitude priors, not a spatial mean image.
-const INVERSE_COVARIANCE: [[f32; 9]; 5] = [
-    [
-        19.107,
-        0.12331478,
-        -0.6167973,
-        0.12331478,
-        14.442785,
-        -0.28899893,
-        -0.6167973,
-        -0.28899893,
-        35.301594,
-    ],
-    [
-        25.818092,
-        -0.00394548,
-        -0.5967394,
-        -0.00394548,
-        19.616152,
-        -0.82909,
-        -0.5967394,
-        -0.82909,
-        29.82748,
-    ],
-    [
-        25.160147,
-        0.09412605,
-        -0.5922576,
-        0.09412605,
-        19.473984,
-        -0.56491584,
-        -0.5922576,
-        -0.56491584,
-        27.728594,
-    ],
-    [
-        24.412165,
-        -0.13668239,
-        -0.10386218,
-        -0.13668239,
-        18.427172,
-        -0.24404354,
-        -0.10386218,
-        -0.24404354,
-        115.5543,
-    ],
-    [
-        24.411604,
-        0.10168512,
-        0.17636898,
-        0.10168512,
-        18.164845,
-        -0.34401447,
-        0.17636898,
-        -0.34401447,
-        65.91954,
-    ],
-];
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -114,12 +56,7 @@ impl Prepared {
         {
             return Err("invalid native row guard parameters".into());
         }
-        let model = ISOS
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, value)| value.abs_diff(iso))
-            .unwrap()
-            .0;
+        let covariance = noise_model::embedded()?.row_inverse_covariance(iso);
         let mut weights = Vec::new();
         for (sigma, radius) in GAUSSIANS {
             let kernel: Vec<f64> = (-(radius as isize)..=radius as isize)
@@ -137,9 +74,9 @@ impl Prepared {
                 }),
                 inverse_covariance: std::array::from_fn(|i| {
                     [
-                        INVERSE_COVARIANCE[model][i * 3],
-                        INVERSE_COVARIANCE[model][i * 3 + 1],
-                        INVERSE_COVARIANCE[model][i * 3 + 2],
+                        covariance[i * 3],
+                        covariance[i * 3 + 1],
+                        covariance[i * 3 + 2],
                         0.,
                     ]
                 }),
@@ -189,18 +126,37 @@ pub(crate) fn apply(
     )?;
     let mut stats = workspace(gpu, "Robust native row statistics", rows * ROW_COMPONENTS)?;
     let mut field = workspace(gpu, "Native row reliability field", rows * LAYERS)?;
+    let mut highpass = workspace(gpu, "Native row high-pass field", rows * LAYERS)?;
     let mut guarded = workspace(gpu, "Guarded native row field", rows * LAYERS)?;
     let mut means = workspace(gpu, "Native row field means", 2 * LAYERS)?;
-    let mut guide = workspace(
-        gpu,
-        "Native row signal guide",
-        rows * u64::from(prepared.params.source[2]) * LAYERS,
-    )?;
     let mut output = gpu.storage("Guarded native sensor layers", bytes)?;
     let weights = gpu.upload("Native row Gaussian weights", &prepared.weights)?;
     let uniform = gpu.uniform(&prepared.params);
     let mut trace = gpu.trace(profile.mode.gpu(), PASSES);
     let line_groups = [prepared.params.source[3].div_ceil(LINE_WORKGROUP), 1];
+    let evidence_floats = rows * u64::from(prepared.params.source[2]) * LAYERS;
+    let mut residual = workspace(
+        gpu,
+        "Native row evidence and signal workspace",
+        evidence_floats,
+    )?;
+    let mut variance = workspace(gpu, "Native row pixel variances", evidence_floats)?;
+    gpu.dispatch(
+        Kernel::RowGuardEvidence,
+        &mut [
+            (0, Read(&uniform)),
+            (1, Read(original)),
+            (3, Read(black)),
+            (4, Read(&weights)),
+            (12, Write(residual.write())),
+            (13, Write(variance.write())),
+        ],
+        [
+            prepared.params.source[2].div_ceil(LINE_WORKGROUP),
+            prepared.params.source[3],
+        ],
+        &mut trace,
+    );
     gpu.dispatch(
         Kernel::RowGuardProfiles,
         &mut [
@@ -208,12 +164,17 @@ pub(crate) fn apply(
             (1, Read(original)),
             (2, Read(shield_corrected)),
             (3, Read(black)),
-            (4, Read(&weights)),
             (5, Write(spans.write())),
+            (12, Read(&residual)),
+            (13, Read(&variance)),
         ],
         [line_groups[0], SPANS],
         &mut trace,
     );
+    drop(variance);
+    // The span reduction has submitted its last residual read. The later
+    // signal pass overwrites the same-sized workspace under its write guard.
+    let mut guide = residual;
     gpu.dispatch(
         Kernel::RowGuardRobust,
         &mut [
@@ -236,11 +197,21 @@ pub(crate) fn apply(
         &mut trace,
     );
     gpu.dispatch(
-        Kernel::RowGuardMean,
+        Kernel::RowGuardHighpass,
         &mut [
             (0, Read(&uniform)),
             (4, Read(&weights)),
             (7, Read(&field)),
+            (8, Write(highpass.write())),
+        ],
+        line_groups,
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::RowGuardMean,
+        &mut [
+            (0, Read(&uniform)),
+            (7, Read(&highpass)),
             (9, Write(means.write())),
         ],
         [LAYERS as u32, 1],
@@ -253,7 +224,7 @@ pub(crate) fn apply(
             (4, Read(&weights)),
             (5, Read(&spans)),
             (6, Read(&stats)),
-            (7, Read(&field)),
+            (7, Read(&highpass)),
             (8, Write(guarded.write())),
             (9, Read(&means)),
         ],
@@ -267,7 +238,6 @@ pub(crate) fn apply(
         Kernel::RowGuardMean,
         &mut [
             (0, Read(&final_uniform)),
-            (4, Read(&weights)),
             (7, Read(&guarded)),
             (9, Write(means.write())),
         ],

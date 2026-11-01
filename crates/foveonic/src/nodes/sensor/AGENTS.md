@@ -34,6 +34,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[luma_cluster.rs](./luma_cluster.rs)** Repairs ordered mono clusters with parallel candidate scoring and stable source-order ties.
 - **[mod.rs](./mod.rs)** Prepares and corrects original camera layers before rendering-specific reconstruction.
 - **[multiscale.rs](./multiscale.rs)** Filters native sensor-layer color differences at three scales while preserving their sum.
+- **[noise_model.rs](./noise_model.rs)** Loads the shipped cap calibration's color basis and ISO-dependent native row priors.
 - **[ordered_blue_repair.rs](./ordered_blue_repair.rs)** Groups ordered mono defect records into independent GPU batches without changing their dependencies.
 - **[phase_extraction.rs](./phase_extraction.rs)** Separates six-sample cells into RGB and spatial blue codes with affine or channel-gain calibration.
 - **[phase_gain.rs](./phase_gain.rs)** Resizes interleaved phase gain maps and corrects blue samples below a supplied threshold.

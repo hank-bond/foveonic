@@ -33,7 +33,10 @@ pub enum Operation {
     Multiscale(std::sync::Arc<crate::nodes::sensor::multiscale::Prepared>),
     ShieldNoise(std::sync::Arc<crate::nodes::sensor::shield_noise::Prepared>),
     RowGuard(std::sync::Arc<crate::nodes::sensor::row_guard::Prepared>),
-    DirectionalBanding(std::sync::Arc<crate::nodes::color::directional_banding::Prepared>),
+    DirectionalBanding {
+        stage: crate::nodes::color::directional_banding::Stage,
+        prepared: std::sync::Arc<crate::nodes::color::directional_banding::Prepared>,
+    },
     BluePattern(std::sync::Arc<crate::nodes::sensor::blue_pattern::Prepared>),
     Fppd(std::sync::Arc<crate::nodes::sensor::fppd::Prepared>),
     PurpleFringe(std::sync::Arc<crate::nodes::color::purple_fringe::Prepared>),
@@ -184,6 +187,10 @@ pub enum Operation {
         params: crate::nodes::finish::photographic::Params,
         space: ColorSpace,
     },
+    ShadowNeutralGuide {
+        params: crate::nodes::finish::shadow_neutralize::Params,
+        space: ColorSpace,
+    },
     ShadowNeutralize {
         params: crate::nodes::finish::shadow_neutralize::Params,
         space: ColorSpace,
@@ -261,7 +268,7 @@ impl Operation {
             Self::Multiscale(p) => p.key(),
             Self::ShieldNoise(p) => p.key(),
             Self::RowGuard(p) => p.key(),
-            Self::DirectionalBanding(p) => p.key(),
+            Self::DirectionalBanding { stage, prepared } => prepared.key(*stage),
             Self::Fppd(p) => p.key(),
             Self::PurpleFringe(p) => p.key(),
             Self::PackedLab(p) => p.key(),
@@ -349,6 +356,7 @@ impl Operation {
             Self::Sharpen { amount, .. } => Key::pod(amount),
             Self::LinearColorEditor { params, .. } => params.key(),
             Self::ShadowNeutralize { params, .. } => params.key(),
+            Self::ShadowNeutralGuide { params, .. } => params.guide_key(),
             Self::MonoTexture(c) => Key::pod(&[c.fine, c.coarse, c.fine_size, c.coarse_size]),
             Self::ImageAlias { .. } | Self::TransferLinearGain { .. } => Key::default(),
             Self::PhotographicTone { params, .. }
@@ -378,8 +386,8 @@ impl Operation {
                 key.with(&p.region)
             }
             Self::Column { params, .. } if output == "column.layers" => key.with(&params.region),
-            Self::DirectionalBanding(p) if output == "column.layers" => {
-                key.with(&p.params().region)
+            Self::DirectionalBanding { prepared, .. } if output == "column.layers" => {
+                key.with(&prepared.params().region)
             }
             Self::Ratio(p) if output == "detail.raw-ratio" => key.with(&p.region),
             Self::Pattern { params, .. } if matches!(output, "detail.ratio" | "pattern.mask") => {
@@ -420,7 +428,7 @@ impl Operation {
             Self::Multiscale(_) => "filter native layer color at three scales",
             Self::ShieldNoise(_) => "correct shield-predicted native color errors",
             Self::RowGuard(_) => "estimate guarded fine native row errors",
-            Self::DirectionalBanding(_) => "condition native row and column bands",
+            Self::DirectionalBanding { stage, .. } => stage.label(),
             Self::Fppd(_) => "correct sparse phase gains",
             Self::PurpleFringe(_) => "correct spatial purple fringes",
             Self::CellGain(_) => "apply gain to phase cells",
@@ -498,6 +506,7 @@ impl Operation {
             Self::Sharpen { .. } => "submit sharpen",
             Self::LinearColorEditor { .. } => "submit linear Color Editor",
             Self::ShadowNeutralize { .. } => "neutralize green and magenta shadows",
+            Self::ShadowNeutralGuide { .. } => "prepare regional shadow color",
             Self::MonoTexture(_) => "submit monochrome texture",
             Self::ImageAlias { .. } => "retain image alias",
             Self::LinearBasis { .. } => "bake linear color edits",
@@ -678,7 +687,14 @@ impl Operation {
                 FilteredTiles,
             ),
             Self::Column { .. } => (vec![CalibratedLayers], ConditionedTiles),
-            Self::DirectionalBanding(_) => (vec![CalibratedLayers], ConditionedTiles),
+            Self::DirectionalBanding { stage, .. } => {
+                use crate::nodes::color::directional_banding::Stage;
+                match stage {
+                    Stage::Tiles => (vec![CalibratedLayers], ConditionedTiles),
+                    Stage::Measure(_) => (vec![ConditionedTiles], BandEstimates),
+                    Stage::Correct(_) => (vec![ConditionedTiles, BandEstimates], ConditionedTiles),
+                }
+            }
             Self::Ratio(_) => (
                 vec![ConditionedTiles, FilteredTiles],
                 UnconditionedRatioTiles,
@@ -703,7 +719,10 @@ impl Operation {
             Self::Sharpen { space, .. } => {
                 (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
             }
-            Self::ShadowNeutralize { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
+            Self::ShadowNeutralGuide { space, .. } => (vec![LinearRgb(*space)], ShadowColorGuide),
+            Self::ShadowNeutralize { space, .. } => {
+                (vec![LinearRgb(*space), ShadowColorGuide], LinearRgb(*space))
+            }
             Self::LinearColorEditor { space, .. } => {
                 (vec![LinearRgb(*space); 2], LinearRgb(*space))
             }
@@ -831,7 +850,13 @@ impl Operation {
                 ]
             }
             Self::Column { .. } => vec![("column.layers", CalibratedLayers, vec![0])],
-            Self::DirectionalBanding(_) => vec![("column.layers", CalibratedLayers, vec![0])],
+            Self::DirectionalBanding {
+                stage:
+                    crate::nodes::color::directional_banding::Stage::Correct(
+                        crate::nodes::color::directional_banding::Axis::Rows,
+                    ),
+                ..
+            } => vec![("column.layers", CalibratedLayers, vec![0, 1])],
             Self::Ratio(_) => vec![("detail.raw-ratio", LuminanceRatio, vec![0, 1])],
             Self::Pattern { .. } => vec![
                 ("detail.ratio", LuminanceRatio, vec![0, 1]),
@@ -964,7 +989,7 @@ impl Operation {
             Self::NoiseContext(_) => "noise.global-context",
             Self::NoiseBase(_) => "noise.tiles",
             Self::Column { .. } => "column.tiles",
-            Self::DirectionalBanding(_) => "column.tiles",
+            Self::DirectionalBanding { stage, .. } => stage.output(),
             Self::Ratio(_) => "detail.raw-ratio-tiles",
             Self::Pattern { .. } => "detail.ratio-tiles",
             Self::Texture { .. } => "texture.layers-tiles",
@@ -975,6 +1000,7 @@ impl Operation {
             Self::ColorDq { .. } => "color-dq.rgb",
             Self::LinearColorEditor { .. } => "color-editor.rgb",
             Self::ShadowNeutralize { .. } => "shadow-neutralize.rgb",
+            Self::ShadowNeutralGuide { .. } => "shadow-neutralize.guide",
             Self::MonoTexture(_) => "mono.texture",
             Self::ImageAlias { output, .. } => output,
             Self::LinearBasis { .. } => "dng.linear-color-edits",

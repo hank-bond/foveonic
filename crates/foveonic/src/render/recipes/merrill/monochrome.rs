@@ -41,9 +41,10 @@ pub(super) fn build(
             )?;
             crate::noise::banding_parameters(&source.metadata, params, settings.merrill_banding)
         })?;
-        let bands = recipe.graph.add(
-            Operation::DirectionalBanding(Arc::new(params)),
-            &[recipe.final_id],
+        let bands = super::reconstruction::append_banding(
+            &mut recipe.graph,
+            recipe.final_id,
+            Arc::new(params),
         )?;
         // The shared native estimator produces tiles. Its GPU projection keeps
         // the dedicated monochrome mix on a full calibrated sensor image.

@@ -36,9 +36,11 @@ pub enum Kernel {
     ShieldPredict,
     ShieldReduce,
     ShieldApply,
+    RowGuardEvidence,
     RowGuardProfiles,
     RowGuardRobust,
     RowGuardReliability,
+    RowGuardHighpass,
     RowGuardMean,
     RowGuardConfidence,
     RowGuardHorizontal,
@@ -329,9 +331,11 @@ impl Kernel {
             Self::ShieldPredict => "predict native color bands from shields",
             Self::ShieldReduce => "remove predicted color spatial means",
             Self::ShieldApply => "correct shield-predicted native color errors",
+            Self::RowGuardEvidence => "measure native row pixel evidence",
             Self::RowGuardProfiles => "measure independent native row spans",
             Self::RowGuardRobust => "combine robust native row evidence",
             Self::RowGuardReliability => "estimate native row reliability",
+            Self::RowGuardHighpass => "filter native row reliability field",
             Self::RowGuardMean => "center native row correction fields",
             Self::RowGuardConfidence => "bound native row correction confidence",
             Self::RowGuardHorizontal => "prepare native row signal guide",
@@ -746,6 +750,10 @@ impl Gpu {
             ),
             (
                 include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_evidence",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
                 "row_guard_profiles",
             ),
             (
@@ -755,6 +763,10 @@ impl Gpu {
             (
                 include_str!("../nodes/sensor/row_guard.wgsl"),
                 "row_guard_reliability",
+            ),
+            (
+                include_str!("../nodes/sensor/row_guard.wgsl"),
+                "row_guard_highpass",
             ),
             (
                 include_str!("../nodes/sensor/row_guard.wgsl"),

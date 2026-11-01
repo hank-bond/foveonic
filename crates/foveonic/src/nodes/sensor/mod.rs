@@ -18,6 +18,7 @@ pub(crate) mod highlight_restoration;
 pub(crate) mod hlp_calibration;
 pub(crate) mod luma_cluster;
 pub(crate) mod multiscale;
+pub(crate) mod noise_model;
 pub(crate) mod ordered_blue_repair;
 pub(crate) mod phase_extraction;
 pub(crate) mod phase_gain;

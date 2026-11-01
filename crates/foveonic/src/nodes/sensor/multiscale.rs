@@ -13,6 +13,8 @@ use crate::{
 const PAD_MULTIPLE: u32 = 16;
 const MINIMUM_ACTIVE_SIDE: u32 = 65;
 const WORKGROUP_SIDE: u32 = 8;
+const HORIZONTAL_WORKGROUP_WIDTH: u32 = 32;
+const HORIZONTAL_WORKGROUP_HEIGHT: u32 = 4;
 const MAXIMUM_TRACE_PASSES: u32 = 20;
 const FLOAT_BYTES: u64 = std::mem::size_of::<f32>() as u64;
 const LAYER_BYTES: u64 = std::mem::size_of::<[f32; 3]>() as u64;
@@ -134,6 +136,7 @@ pub(crate) fn apply(
     }
     let full = [prepared.params.source[2], prepared.params.source[3]];
     let mut current = workspace(gpu, full, 3)?;
+    let mut spare: Option<ReadGuard> = None;
     let mut params = prepared.params;
     let uniform = gpu.uniform(&params);
     let mut trace = gpu.trace(profile.mode.gpu(), MAXIMUM_TRACE_PASSES);
@@ -166,6 +169,10 @@ pub(crate) fn apply(
             coarse_extent[0].div_ceil(WORKGROUP_SIDE),
             coarse_extent[1].div_ceil(WORKGROUP_SIDE),
         ];
+        let horizontal_groups = [
+            coarse_extent[0].div_ceil(HORIZONTAL_WORKGROUP_WIDTH),
+            coarse_extent[1].div_ceil(HORIZONTAL_WORKGROUP_HEIGHT),
+        ];
         let coarse = if scale == 1 {
             current.clone()
         } else {
@@ -195,7 +202,7 @@ pub(crate) fn apply(
                 (6, Write(moments_b.write())),
                 (7, Write(moments_c.write())),
             ],
-            groups,
+            horizontal_groups,
             &mut trace,
         );
         let mut a = workspace(gpu, coarse_extent, 3)?;
@@ -215,10 +222,12 @@ pub(crate) fn apply(
             groups,
             &mut trace,
         );
-        drop((moments_a, moments_b, moments_c));
-        let mut average_a = workspace(gpu, coarse_extent, 3)?;
-        let mut average_b = workspace(gpu, coarse_extent, 3)?;
-        let mut average_weight = workspace(gpu, coarse_extent, 3)?;
+        // The coefficient pass submitted the last moment reads. Reuse their
+        // storage on the ordered queue. The four-component plane has enough
+        // room for the three-component averaged weights.
+        let mut average_a = moments_b;
+        let mut average_b = moments_c;
+        let mut average_weight = moments_a;
         gpu.dispatch(
             Kernel::MultiscaleAverage,
             &mut [
@@ -230,11 +239,13 @@ pub(crate) fn apply(
                 (6, Write(average_b.write())),
                 (7, Write(average_weight.write())),
             ],
-            groups,
+            horizontal_groups,
             &mut trace,
         );
-        drop((a, b, weight));
-        let mut delta = workspace(gpu, coarse_extent, 3)?;
+        // The average pass consumed the coefficient planes. Delta can replace
+        // one of them without aliasing any input of the following pass.
+        let mut delta = a;
+        drop((b, weight));
         gpu.dispatch(
             Kernel::MultiscaleApply,
             &mut [
@@ -251,7 +262,10 @@ pub(crate) fn apply(
         drop((average_a, average_b, average_weight, coarse));
         params.controls[3] = UPDATE_PHASE;
         let update = gpu.uniform(&params);
-        let mut next = workspace(gpu, full, 3)?;
+        let mut next = match spare.take() {
+            Some(buffer) => buffer,
+            None => workspace(gpu, full, 3)?,
+        };
         gpu.dispatch(
             Kernel::MultiscaleApply,
             &mut [
@@ -268,7 +282,7 @@ pub(crate) fn apply(
             ],
             &mut trace,
         );
-        current = next;
+        spare = Some(std::mem::replace(&mut current, next));
     }
     let mut output = gpu.storage("Multiscale native sensor layers", bytes)?;
     let uniform = gpu.uniform(&params);

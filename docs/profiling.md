@@ -43,6 +43,21 @@ cargo run --offline --release -p foveonic --example profile_smart_preview -- \
 
 The report destination must be new. The example uses Sunlight/Standard with camera-default controls and a central 992×1002 native-pixel detail tile. It excludes source decoding and GPU initialization. Each route starts from its own completed Fast overview. Five measured pairs follow one warmup pair, with alternating route order. Completed processing and display-texture preparation use profiling Off and retain the overview/detail textures as the GUI does. Separate GPU diagnostic runs contain stage timings and transfer/activity counters. Compare the first detail, direct Full, and additional Full continuation independently. Add the two progressive durations to measure when the whole image becomes Full. These are engine-to-ready measurements, not input-to-screen latency. Stored camera adjustments and different viewport sizes can change native app costs.
 
+## Resource overlap
+
+`profile_noise_resources` compares stateless processing (`async`) with a fresh editor-style session (`staged`). `switch` alternates cases using a fresh session per photograph. Each case is an object with `label`, `source` and the serialized `settings`, in a JSON array. An optional final argument selects a named image output instead of `final`, allowing a processing prefix to be measured separately. Source decoding and device setup precede measurement. Every interval ends with GPU completion. Settled memory sampling uses explicit holds after setup, completed processing, image/session release, source release and engine release.
+
+```sh
+cargo build --offline --release -p foveonic --example profile_noise_resources
+target/release/examples/profile_noise_resources \
+  CASES.json async off 6 0 .local/resource-times.jsonl
+python3 scripts/profiling/resources.py \
+  --binary target/release/examples/profile_noise_resources \
+  --cases CASES.json --directory .local/resource-memory --route async --repeats 3
+```
+
+The macOS recorder starts only its own headless process, preserves raw `vmmap` snapshots, and samples outside render intervals. Run it separately from acceptance timings, builds and other measured renders. Peak physical footprint includes driver resources. The allocation window limits queued allocation traffic, not resident memory. Fresh sessions retain checkpoints while stateless renders do not, so compare completed and released states separately. The switch route loads all sources before measurement and does not emulate retaining the previous displayed photo during a transition.
+
 ## Native feedback
 
 Coordinate GPU work and pointer focus with the owner first. In one terminal:
