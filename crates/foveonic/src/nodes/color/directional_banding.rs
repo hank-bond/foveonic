@@ -1,4 +1,4 @@
-//! Estimates distinct native row and column bands and applies their selected strengths on GPU.
+//! Measures native Fine bands, fits axis-coherent residual Coarse offsets, and shares their tiles with previews.
 
 use crate::{
     gpu::{
@@ -16,8 +16,6 @@ const BLOCK_SIZE: u32 = 40;
 const SEAM_SUPPORT: u32 = 5;
 const WORKGROUP: u32 = 8;
 const DELTA_WORKGROUP: u32 = 64;
-// Fine, Coarse and a reflected Fine estimate for the Coarse difference.
-const DELTA_SLOTS: usize = 3;
 const COMPONENT_BYTES: u64 = 12;
 const REFERENCE_FINE_WIDTH: u32 = 27;
 
@@ -37,30 +35,58 @@ impl Axis {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Band {
+    Fine,
+    Coarse,
+}
+
+impl Band {
+    fn index(self) -> usize {
+        match self {
+            Self::Fine => 0,
+            Self::Coarse => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Stage {
     Tiles,
-    Measure(Axis),
-    Correct(Axis),
+    Retile,
+    Window,
+    Measure(Band, Axis),
+    Correct(Band, Axis),
 }
 
 impl Stage {
     pub(crate) fn output(self) -> &'static str {
         match self {
             Self::Tiles => "banding.source-tiles",
-            Self::Measure(Axis::Columns) => "banding.column-estimates",
-            Self::Correct(Axis::Columns) => "banding.column-tiles",
-            Self::Measure(Axis::Rows) => "banding.row-estimates",
-            Self::Correct(Axis::Rows) => "column.tiles",
+            Self::Retile => "banding.preview-tiles",
+            Self::Window => "banding.region-tiles",
+            Self::Measure(Band::Fine, Axis::Columns) => "banding.fine-column-estimates",
+            Self::Measure(Band::Fine, Axis::Rows) => "banding.fine-row-estimates",
+            Self::Measure(Band::Coarse, Axis::Columns) => "banding.coarse-column-estimates",
+            Self::Measure(Band::Coarse, Axis::Rows) => "banding.coarse-row-estimates",
+            Self::Correct(Band::Fine, Axis::Columns) => "banding.fine-column-tiles",
+            Self::Correct(Band::Fine, Axis::Rows) => "banding.fine-tiles",
+            Self::Correct(Band::Coarse, Axis::Columns) => "banding.coarse-column-tiles",
+            Self::Correct(Band::Coarse, Axis::Rows) => "column.tiles",
         }
     }
-
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Tiles => "prepare directional band tiles",
-            Self::Measure(Axis::Columns) => "measure native column bands",
-            Self::Correct(Axis::Columns) => "correct native column bands",
-            Self::Measure(Axis::Rows) => "measure native row bands",
-            Self::Correct(Axis::Rows) => "correct native row bands",
+            Self::Retile => "prepare reduced band tiles",
+            Self::Window => "select native band tiles",
+            Self::Measure(Band::Fine, Axis::Columns) => "measure native fine column bands",
+            Self::Measure(Band::Fine, Axis::Rows) => "measure native fine row bands",
+            Self::Measure(Band::Coarse, Axis::Columns) => "measure native coarse column bands",
+            Self::Measure(Band::Coarse, Axis::Rows) => "measure native coarse row bands",
+            Self::Correct(Band::Fine, Axis::Columns) => "correct native fine column bands",
+            Self::Correct(Band::Fine, Axis::Rows) => "correct native fine row bands",
+            Self::Correct(Band::Coarse, Axis::Columns) => "correct native coarse column bands",
+            Self::Correct(Band::Coarse, Axis::Rows) => "correct native coarse row bands",
         }
     }
 }
@@ -69,12 +95,12 @@ impl Stage {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BandParams {
     active_area: [u32; 4],
-    sizes: [u32; 4],
-    strengths: [f32; 4],
+    width: u32,
     axis: u32,
-    estimate_slot: u32,
+    kind: u32,
     reflect_samples: u32,
-    reference_fine_boundary: u32,
+    strength: f32,
+    padding: [u32; 3],
 }
 
 #[derive(Clone, Debug)]
@@ -167,74 +193,56 @@ impl Prepared {
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.source[0], self.params.source[1]]
     }
+
     pub(crate) fn key(&self, stage: Stage) -> Key {
         let mut key = Key::pod(&self.params)
             .with(&self.active)
             .with(&self.native_extent)
-            .with(&u32::from(self.controls.enabled))
             .slice(stage.output().as_bytes());
-        let axis = match stage {
-            Stage::Tiles => return key,
-            Stage::Measure(axis) | Stage::Correct(axis) => axis.index(),
+        let (kind, axis) = match stage {
+            Stage::Measure(kind, axis) | Stage::Correct(kind, axis) => (kind, axis),
+            _ => return key,
         };
-        let controls = self.working_controls(axis);
-        for band in controls.bands {
-            key = key.with(&band.size);
-            if matches!(stage, Stage::Correct(_)) {
-                key = key.with(&band.strength);
-            }
+        let band = self.working_controls(axis.index()).bands[kind.index()];
+        key = key.with(&band.size).with(&u32::from(self.controls.enabled));
+        if matches!(stage, Stage::Measure(..)) {
+            key.with(&u32::from(self.controls.enabled && band.strength != 0.))
+        } else {
+            key.with(&band.strength)
         }
-        if matches!(stage, Stage::Measure(_)) {
-            // Strength only selects which estimates are needed. Its magnitude
-            // belongs to the correction key, so it can reuse measured offsets.
-            let needed = required_estimates(controls, self.uses_reference_fine_boundary(axis));
-            key = key.with(&needed.map(u32::from));
-        }
-        key
     }
-
-    fn uniform(&self, axis: usize, controls: BandingAxisControls, scale: usize) -> BandParams {
+    fn uniform(&self, axis: usize, kind: Band) -> BandParams {
+        let selected = self.working_controls(axis).bands[kind.index()];
         BandParams {
             active_area: self.active,
-            sizes: [
-                controls.bands[0].size,
-                controls.bands[1].size,
-                controls.bands[0].size,
-                0,
-            ],
-            strengths: [
-                controls.bands[0].strength,
-                controls.bands[1].strength,
-                0.,
-                0.,
-            ],
+            width: selected.size,
             axis: axis as u32,
-            estimate_slot: scale as u32,
-            reflect_samples: u32::from(scale != 0 || !self.uses_reference_fine_boundary(axis)),
-            reference_fine_boundary: u32::from(self.uses_reference_fine_boundary(axis)),
+            kind: kind.index() as u32,
+            reflect_samples: u32::from(
+                kind == Band::Coarse || !self.uses_reference_fine_boundary(axis),
+            ),
+            strength: if self.controls.enabled {
+                selected.strength
+            } else {
+                0.
+            },
+            padding: [0; 3],
         }
     }
 }
 
-fn required_estimates(
-    controls: BandingAxisControls,
-    reference_fine_boundary: bool,
-) -> [bool; DELTA_SLOTS] {
-    let [fine, coarse] = controls.bands.map(|band| band.strength != 0.);
-    [
-        fine || (coarse && !reference_fine_boundary),
-        coarse,
-        coarse && reference_fine_boundary,
-    ]
+fn block_capacity(p: Parameters, direction: usize, kind: Band) -> u32 {
+    match kind {
+        Band::Fine => p.tile[1 - direction] / BLOCK_SIZE,
+        Band::Coarse => p.tile[1 - direction].div_ceil(BLOCK_SIZE) + 1,
+    }
 }
 
-fn delta_bytes(p: Parameters, direction: usize) -> u64 {
-    let blocks = p.tile[1 - direction] / BLOCK_SIZE;
-    u64::from(blocks)
+fn delta_bytes(p: Parameters, direction: usize, kind: Band) -> u64 {
+    u64::from(block_capacity(p, direction, kind))
         * u64::from(p.tile[direction])
         * u64::from(p.tile_count())
         * COMPONENT_BYTES
-        * DELTA_SLOTS as u64
 }
 
 fn measure_axis(
@@ -242,67 +250,76 @@ fn measure_axis(
     input: &ReadGuard,
     prepared: &Prepared,
     direction: usize,
-    controls: BandingAxisControls,
+    kind: Band,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    let needed = required_estimates(controls, prepared.uses_reference_fine_boundary(direction));
-    if !needed.into_iter().any(|v| v) {
-        // The matching correction is a bypass and never reads estimates.
+    let p = prepared.params;
+    let band = prepared.uniform(direction, kind);
+    if band.strength == 0. {
         return gpu.storage("Inactive directional band estimates", COMPONENT_BYTES);
     }
-    let p = prepared.params;
-    let pixel_bytes = p.atlas_pixels() * COMPONENT_BYTES;
-    let blocks = p.tile[1 - direction] / BLOCK_SIZE;
-    let mut smooth = gpu.storage("Directional band neighborhoods", pixel_bytes)?;
-    let mut deltas = gpu.storage(
-        "Directional cumulative band estimates",
-        delta_bytes(p, direction),
+    if kind == Band::Coarse && p.window != p.full_frame().window {
+        return Err("Coarse band measurement requires full native context".into());
+    }
+    let mut smooth = gpu.storage(
+        "Directional neighborhoods",
+        p.atlas_pixels() * COMPONENT_BYTES,
     )?;
-    let noise_uniform = gpu.uniform(&p);
+    let mut raw = gpu.storage("Measured band offsets", delta_bytes(p, direction, kind))?;
+    let noise = gpu.uniform(&p);
+    let uniform = gpu.uniform(&band);
     let lookup = gpu.upload(
-        "Directional band range weights",
+        "Directional range weights",
         &super::reconstruction::tables(p),
     )?;
-    let groups = p.atlas_extent().map(|v| v.div_ceil(WORKGROUP));
-    let mut trace = gpu.trace(
-        profile.mode.gpu(),
-        needed.into_iter().filter(|v| *v).count() as u32 * 2,
+    let mut trace = gpu.trace(profile.mode.gpu(), if kind == Band::Coarse { 3 } else { 2 });
+    gpu.dispatch(
+        Kernel::DirectionalBandingSmooth,
+        &mut [
+            (0, Read(input)),
+            (1, Read(&noise)),
+            (2, Write(smooth.write())),
+            (5, Read(&lookup)),
+            (6, Read(&uniform)),
+        ],
+        p.atlas_extent().map(|v| v.div_ceil(WORKGROUP)),
+        &mut trace,
     );
-    for (scale, needed) in needed.into_iter().enumerate() {
-        if !needed {
-            continue;
-        }
-        let uniform = gpu.uniform(&prepared.uniform(direction, controls, scale));
+    let groups = [
+        p.tile[direction].div_ceil(DELTA_WORKGROUP),
+        block_capacity(p, direction, kind) * p.tile_count(),
+    ];
+    gpu.dispatch(
+        Kernel::DirectionalBandingDeltas,
+        &mut [
+            (0, Read(input)),
+            (1, Read(&noise)),
+            (2, Read(&smooth)),
+            (3, Write(raw.write())),
+            (6, Read(&uniform)),
+        ],
+        groups,
+        &mut trace,
+    );
+    let result = if kind == Band::Coarse {
+        let mut coherent = gpu.storage("Axis-coherent Coarse offsets", raw.size())?;
         gpu.dispatch(
-            Kernel::DirectionalBandingSmooth,
+            Kernel::DirectionalBandingFit,
             &mut [
-                (0, Read(input)),
-                (1, Read(&noise_uniform)),
-                (2, Write(smooth.write())),
-                (5, Read(&lookup)),
+                (1, Read(&noise)),
+                (3, Read(&raw)),
+                (4, Write(coherent.write())),
                 (6, Read(&uniform)),
             ],
             groups,
             &mut trace,
         );
-        gpu.dispatch(
-            Kernel::DirectionalBandingDeltas,
-            &mut [
-                (0, Read(input)),
-                (1, Read(&noise_uniform)),
-                (2, Read(&smooth)),
-                (3, Write(deltas.write())),
-                (6, Read(&uniform)),
-            ],
-            [
-                p.tile[direction].div_ceil(DELTA_WORKGROUP),
-                blocks * p.tile_count(),
-            ],
-            &mut trace,
-        );
-    }
+        coherent
+    } else {
+        raw
+    };
     gpu.finish_trace(&trace, profile)?;
-    Ok(deltas)
+    Ok(result)
 }
 
 fn correct_axis(
@@ -311,28 +328,29 @@ fn correct_axis(
     estimates: &ReadGuard,
     prepared: &Prepared,
     direction: usize,
-    controls: BandingAxisControls,
+    kind: Band,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    if !controls.bands.iter().any(|band| band.strength != 0.) {
+    let p = prepared.params;
+    let band = prepared.uniform(direction, kind);
+    if band.strength == 0. {
         return Ok(input.clone());
     }
-    let p = prepared.params;
-    if estimates.size() != delta_bytes(p, direction) {
-        return Err("directional band estimates do not match tile geometry".into());
+    if estimates.size() != delta_bytes(p, direction, kind) {
+        return Err("Band estimates do not match native tile geometry".into());
     }
     let mut output = gpu.storage(
-        "Directional band correction tiles",
+        "Corrected native band tiles",
         p.atlas_pixels() * COMPONENT_BYTES,
     )?;
-    let noise_uniform = gpu.uniform(&p);
-    let uniform = gpu.uniform(&prepared.uniform(direction, controls, 0));
+    let noise = gpu.uniform(&p);
+    let uniform = gpu.uniform(&band);
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
         Kernel::DirectionalBandingApply,
         &mut [
             (0, Read(input)),
-            (1, Read(&noise_uniform)),
+            (1, Read(&noise)),
             (3, Read(estimates)),
             (4, Write(output.write())),
             (6, Read(&uniform)),
@@ -341,6 +359,34 @@ fn correct_axis(
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
+    Ok(output)
+}
+// Preserve every native tile's halo and phase when packing a regional atlas.
+// Re-projecting and re-tiling here would blend the overlap twice.
+
+fn select_window(gpu: &Gpu, input: &ReadGuard, p: Parameters) -> Result<ReadGuard> {
+    let full = p.full_frame();
+    if input.size() != full.atlas_pixels() * COMPONENT_BYTES {
+        return Err("Native band tiles do not match the source geometry".into());
+    }
+    if p.window == full.window {
+        return Ok(input.clone());
+    }
+    let tile_bytes = u64::from(p.tile[0]) * u64::from(p.tile[1]) * COMPONENT_BYTES;
+    let mut output = gpu.storage(
+        "Regional native band tiles",
+        p.atlas_pixels() * COMPONENT_BYTES,
+    )?;
+    let ranges = (0..p.tile_count()).map(|tile| {
+        let x = p.window[0] + tile % p.window[2];
+        let y = p.window[1] + tile / p.window[2];
+        [
+            u64::from(y * p.source[2] + x) * tile_bytes,
+            u64::from(tile) * tile_bytes,
+            tile_bytes,
+        ]
+    });
+    gpu.copy_ranges(input, output.write(), ranges);
     Ok(output)
 }
 
@@ -352,40 +398,33 @@ pub(crate) fn apply_stage(
     stage: Stage,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    if stage == Stage::Tiles {
-        if input.size()
-            != u64::from(prepared.extent()[0]) * u64::from(prepared.extent()[1]) * COMPONENT_BYTES
-        {
-            return Err("directional banding input does not match sensor extent".into());
+    let p = prepared.params;
+    if matches!(stage, Stage::Tiles | Stage::Retile) {
+        if input.size() != u64::from(p.source[0]) * u64::from(p.source[1]) * COMPONENT_BYTES {
+            return Err("Banding input does not match sensor extent".into());
         }
-        return super::reconstruction::raw_tiles(gpu, input, prepared.params, profile);
+        return super::reconstruction::raw_tiles(gpu, input, p, profile);
     }
-    if input.size() != prepared.params.atlas_pixels() * COMPONENT_BYTES {
-        return Err("directional band input does not match tile geometry".into());
+    if stage == Stage::Window {
+        return select_window(gpu, input, p);
     }
-    let (Stage::Measure(axis) | Stage::Correct(axis)) = stage else {
-        unreachable!()
-    };
-    let direction = axis.index();
-    let mut controls = prepared.working_controls(direction);
-    if !prepared.controls.enabled {
-        controls
-            .bands
-            .iter_mut()
-            .for_each(|band| band.strength = 0.);
+    if input.size() != p.atlas_pixels() * COMPONENT_BYTES {
+        return Err("Band input does not match tile geometry".into());
     }
     match stage {
-        Stage::Measure(_) => measure_axis(gpu, input, prepared, direction, controls, profile),
-        Stage::Correct(_) => correct_axis(
+        Stage::Measure(kind, axis) => {
+            measure_axis(gpu, input, prepared, axis.index(), kind, profile)
+        }
+        Stage::Correct(kind, axis) => correct_axis(
             gpu,
             input,
-            estimates.ok_or("missing directional band estimates")?,
+            estimates.ok_or("missing band estimates")?,
             prepared,
-            direction,
-            controls,
+            axis.index(),
+            kind,
             profile,
         ),
-        Stage::Tiles => unreachable!(),
+        _ => unreachable!(),
     }
 }
 

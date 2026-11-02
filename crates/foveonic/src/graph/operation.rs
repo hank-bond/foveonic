@@ -694,9 +694,10 @@ impl Operation {
             Self::DirectionalBanding { stage, .. } => {
                 use crate::nodes::color::directional_banding::Stage;
                 match stage {
-                    Stage::Tiles => (vec![CalibratedLayers], ConditionedTiles),
-                    Stage::Measure(_) => (vec![ConditionedTiles], BandEstimates),
-                    Stage::Correct(_) => (vec![ConditionedTiles, BandEstimates], ConditionedTiles),
+                    Stage::Tiles | Stage::Retile => (vec![CalibratedLayers], ConditionedTiles),
+                    Stage::Window => (vec![ConditionedTiles], ConditionedTiles),
+                    Stage::Measure(..) => (vec![ConditionedTiles], BandEstimates),
+                    Stage::Correct(..) => (vec![ConditionedTiles, BandEstimates], ConditionedTiles),
                 }
             }
             Self::Ratio(_) => (
@@ -857,6 +858,7 @@ impl Operation {
             Self::DirectionalBanding {
                 stage:
                     crate::nodes::color::directional_banding::Stage::Correct(
+                        crate::nodes::color::directional_banding::Band::Coarse,
                         crate::nodes::color::directional_banding::Axis::Rows,
                     ),
                 ..

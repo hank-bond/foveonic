@@ -35,8 +35,10 @@ fn validates_support_and_keys_each_axis_band_and_boundary() {
     let controls = controls();
     let keys = |prepared: Prepared| {
         prepared
-            .key(Stage::Correct(Axis::Columns))
-            .join(prepared.key(Stage::Correct(Axis::Rows)))
+            .key(Stage::Correct(Band::Fine, Axis::Columns))
+            .join(prepared.key(Stage::Correct(Band::Fine, Axis::Rows)))
+            .join(prepared.key(Stage::Correct(Band::Coarse, Axis::Columns)))
+            .join(prepared.key(Stage::Correct(Band::Coarse, Axis::Rows)))
     };
     let key = keys(Prepared::new(p, area, controls).unwrap());
     for axis in 0..2 {
@@ -77,10 +79,6 @@ fn validates_support_and_keys_each_axis_band_and_boundary() {
     short.tile[0] = 192;
     short.tile[1] = 160;
     assert!(Prepared::new(short, area, controls).is_err());
-    let mut coarse = controls.columns;
-    coarse.bands[0].strength = 0.;
-    coarse.bands[1].strength = 1.;
-    assert_eq!(required_estimates(coarse, true), [false, true, true]);
     let reduced = Prepared::new(p, area, controls)
         .unwrap()
         .with_native_extent([256, 192])
@@ -94,7 +92,7 @@ fn validates_support_and_keys_each_axis_band_and_boundary() {
 }
 
 #[test]
-fn band_measurements_track_support_and_required_slots_independently_of_strength() {
+fn band_measurements_keep_fine_and_coarse_independent_of_strength() {
     let p = parameters();
     let area = [4, 4, 124, 92];
     let controls = controls();
@@ -108,26 +106,49 @@ fn band_measurements_track_support_and_required_slots_independently_of_strength(
         selected.bands[0].strength = 2.;
         let changed = Prepared::new(p, area, changed).unwrap();
         assert!(base.key(Stage::Tiles) == changed.key(Stage::Tiles));
-        assert!(base.key(Stage::Measure(axis)) == changed.key(Stage::Measure(axis)));
-        assert!(base.key(Stage::Correct(axis)) != changed.key(Stage::Correct(axis)));
+        assert!(
+            base.key(Stage::Measure(Band::Fine, axis))
+                == changed.key(Stage::Measure(Band::Fine, axis))
+        );
+        assert!(
+            base.key(Stage::Correct(Band::Fine, axis))
+                != changed.key(Stage::Correct(Band::Fine, axis))
+        );
         let other = match axis {
             Axis::Columns => Axis::Rows,
             Axis::Rows => Axis::Columns,
         };
-        assert!(base.key(Stage::Measure(other)) == changed.key(Stage::Measure(other)));
-        assert!(base.key(Stage::Correct(other)) == changed.key(Stage::Correct(other)));
+        assert!(
+            base.key(Stage::Measure(Band::Fine, other))
+                == changed.key(Stage::Measure(Band::Fine, other))
+        );
+        assert!(
+            base.key(Stage::Correct(Band::Fine, other))
+                == changed.key(Stage::Correct(Band::Fine, other))
+        );
     }
     let mut changed = controls;
     changed.rows.bands[1].strength = 0.5;
     let coarse = Prepared::new(p, area, changed).unwrap();
-    assert!(base.key(Stage::Measure(Axis::Rows)) != coarse.key(Stage::Measure(Axis::Rows)));
+    assert!(
+        base.key(Stage::Measure(Band::Fine, Axis::Rows))
+            == coarse.key(Stage::Measure(Band::Fine, Axis::Rows))
+    );
+    assert!(
+        base.key(Stage::Measure(Band::Coarse, Axis::Rows))
+            != coarse.key(Stage::Measure(Band::Coarse, Axis::Rows))
+    );
     changed.rows.bands[1].strength = 3.;
     let stronger = Prepared::new(p, area, changed).unwrap();
-    assert!(coarse.key(Stage::Measure(Axis::Rows)) == stronger.key(Stage::Measure(Axis::Rows)));
+    assert!(
+        coarse.key(Stage::Measure(Band::Coarse, Axis::Rows))
+            == stronger.key(Stage::Measure(Band::Coarse, Axis::Rows))
+    );
     changed.rows.bands[0].size = 25;
     let changed_support = Prepared::new(p, area, changed).unwrap();
     assert!(
-        coarse.key(Stage::Measure(Axis::Rows)) != changed_support.key(Stage::Measure(Axis::Rows))
+        coarse.key(Stage::Measure(Band::Fine, Axis::Rows))
+            != changed_support.key(Stage::Measure(Band::Fine, Axis::Rows))
     );
 }
 
@@ -138,16 +159,25 @@ fn apply(
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
     let mut tiles = apply_stage(gpu, input, None, prepared, Stage::Tiles, profile)?;
-    for axis in [Axis::Columns, Axis::Rows] {
-        let estimates = apply_stage(gpu, &tiles, None, prepared, Stage::Measure(axis), profile)?;
-        tiles = apply_stage(
-            gpu,
-            &tiles,
-            Some(&estimates),
-            prepared,
-            Stage::Correct(axis),
-            profile,
-        )?;
+    for band in [Band::Fine, Band::Coarse] {
+        for axis in [Axis::Columns, Axis::Rows] {
+            let estimates = apply_stage(
+                gpu,
+                &tiles,
+                None,
+                prepared,
+                Stage::Measure(band, axis),
+                profile,
+            )?;
+            tiles = apply_stage(
+                gpu,
+                &tiles,
+                Some(&estimates),
+                prepared,
+                Stage::Correct(band, axis),
+                profile,
+            )?;
+        }
     }
     Ok(tiles)
 }
@@ -475,24 +505,24 @@ fn compact_regions_retain_native_tile_phase_and_reflection() {
         })
         .collect();
     let input = gpu.upload("Regional native tile fixture", &source).unwrap();
-    let full = read(
+    let full_tiles = apply(
         &gpu,
-        &apply(
-            &gpu,
-            &input,
-            &Prepared::new(p, area, controls).unwrap(),
-            &mut Profile::default(),
-        )
-        .unwrap(),
-    );
+        &input,
+        &Prepared::new(p, area, controls).unwrap(),
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let full = read(&gpu, &full_tiles);
     let compact = p.for_region([144, 112, 240, 176]).unwrap();
     assert_eq!(compact.window, [1, 1, 1, 1]);
     let region = read(
         &gpu,
-        &apply(
+        &apply_stage(
             &gpu,
-            &input,
+            &full_tiles,
+            None,
             &Prepared::new(compact, area, controls).unwrap(),
+            Stage::Window,
             &mut Profile::default(),
         )
         .unwrap(),
@@ -557,14 +587,76 @@ fn negative_layers_vary_continuously_near_zero_with_added_bands() {
                     "added bands introduced a black-floor jump"
                 );
                 assert!((epsilon[index] - baseline[index]).abs() < 0.002);
-                assert!(
-                    (twice[index] - baseline[index] - 2. * (epsilon[index] - baseline[index]))
-                        .abs()
-                        < 0.000004
-                );
+                // Coarse is remeasured after Fine, so the combined response need
+                // not be linear. Tiny Fine changes must still have tiny effects.
+                assert!((twice[index] - baseline[index]).abs() < 0.004);
                 assert!((coarse_epsilon[index] - raw[index]).abs() < 0.001);
             }
         }
     }
     assert!(changed, "added bands did not exercise accepted corrections");
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn fine_extra_strength_scales_bands_without_amplifying_clipping() {
+    let gpu = Gpu::new().unwrap();
+    let p = parameters();
+    let render = |values: &[f32], columns: f32, rows: f32| {
+        let input = gpu
+            .upload("Fine strength clipping regression", values)
+            .unwrap();
+        let mut controls = controls();
+        controls.columns.bands[0].strength = columns;
+        controls.rows.bands[0].strength = rows;
+        read(
+            &gpu,
+            &apply(
+                &gpu,
+                &input,
+                &Prepared::new(p, [4, 4, 124, 92], controls).unwrap(),
+                &mut Profile::default(),
+            )
+            .unwrap(),
+        )
+    };
+    // With no band offset, stronger correction must not turn signed black
+    // values positive or repeatedly lower values above the code ceiling.
+    let flat: Vec<f32> = (0..128 * 96).flat_map(|_| [-2., -0.5, 40000.]).collect();
+    for (columns, rows) in [(1., 0.), (2., 0.), (3., 0.), (0., 3.), (3., 1.), (1., 3.)] {
+        let output = render(&flat, columns, rows);
+        for y in 16..80 {
+            for x in 16..112 {
+                let index = ((y + 64) * 256 + x + 64) * 3;
+                for (c, expected) in [0., 0., 32766.].into_iter().enumerate() {
+                    assert!((output[index + c] - expected).abs() < 0.001);
+                }
+            }
+        }
+    }
+    // In a positive unclipped field, extra strength still scales the measured
+    // offset. This catches replacing the fix with a unit-strength cap.
+    let banded: Vec<f32> = (0..96)
+        .flat_map(|_| {
+            (0..128).flat_map(|x| {
+                let band = (x as f32 * 0.3).sin();
+                [100. + band, 120. - band, 80. + band]
+            })
+        })
+        .collect();
+    let raw = render(&banded, 0., 0.);
+    let unit = render(&banded, 1., 0.);
+    let strong = render(&banded, 3., 0.);
+    let mut changed = false;
+    for y in 16..80 {
+        for x in 16..112 {
+            for c in 0..3 {
+                let index = ((y + 64) * 256 + x + 64) * 3 + c;
+                let offset = unit[index] - raw[index];
+                changed |= offset.abs() > 0.01;
+                assert!((strong[index] - raw[index] - 3. * offset).abs() < 0.0001);
+            }
+        }
+    }
+    assert!(changed, "the fixture must exercise a nonzero band estimate");
 }

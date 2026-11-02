@@ -51,6 +51,7 @@ pub enum Kernel {
     RowGuardApply,
     DirectionalBandingSmooth,
     DirectionalBandingDeltas,
+    DirectionalBandingFit,
     DirectionalBandingApply,
     PurpleFringe,
     Fppd,
@@ -350,6 +351,7 @@ impl Kernel {
             Self::RowGuardApply => "apply guarded fine native row correction",
             Self::DirectionalBandingSmooth => "measure native directional neighborhoods",
             Self::DirectionalBandingDeltas => "estimate native directional band offsets",
+            Self::DirectionalBandingFit => "fit axis-coherent Coarse offsets",
             Self::DirectionalBandingApply => "apply weighted native directional bands",
             Self::PurpleFringe => "correct spatial purple fringes",
             Self::Fppd => "correct sparse phase gains",
@@ -815,6 +817,10 @@ impl Gpu {
             (
                 include_str!("../nodes/color/directional_banding.wgsl"),
                 "block_deltas",
+            ),
+            (
+                include_str!("../nodes/color/directional_banding.wgsl"),
+                "fit_offsets",
             ),
             (
                 include_str!("../nodes/color/directional_banding.wgsl"),

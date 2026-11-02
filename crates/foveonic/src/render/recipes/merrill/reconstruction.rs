@@ -19,6 +19,7 @@ pub(super) struct Request<'a> {
     pub preview: Option<&'a preview::Grid>,
     pub region: Option<&'a region::Prepared>,
     pub directional_banding: bool,
+    pub native_calibrated: usize,
 }
 
 pub(super) struct Reconstructed {
@@ -80,30 +81,64 @@ pub(super) fn append(
     };
     let base = graph.add(Operation::NoiseBase(params), &base_inputs)?;
     checkpoint!();
-    let column_params = if effects.noise {
+    let native_columns = if effects.noise {
         profile.measure("prepare column cuts", || {
-            if let Some(grid) = request.preview {
-                grid.noise(crate::noise::column_parameters(
-                    &request.source.metadata,
-                    native_params,
-                )?)
-            } else {
-                crate::noise::column_parameters(&request.source.metadata, params)
-            }
+            crate::noise::column_parameters(&request.source.metadata, native_params)
         })?
     } else {
-        params
+        native_params
+    };
+    let column_params = if let Some(grid) = request.preview {
+        grid.noise(native_columns)?
+    } else if let Some(region) = request.region {
+        native_columns.for_region(region.physical)?
+    } else {
+        native_columns
     };
     let conditioned = if request.directional_banding && effects.noise {
-        append_banding(
+        let bands = append_banding(
             graph,
-            calibrated,
+            request.native_calibrated,
             Arc::new(crate::noise::banding_parameters(
                 &request.source.metadata,
-                column_params,
+                native_columns,
                 request.settings.merrill_banding,
             )?),
-        )?
+        )?;
+        // Pooling uses the same complete native field for every view. Regional
+        // views pack original tiles, preserving their halos and seam phase.
+        if request.region.is_some() {
+            graph.retain_for_session(bands);
+        }
+        if let Some(grid) = request.preview {
+            let native = graph.named_output(bands, "column.layers")?;
+            let reduced = graph.add(Operation::ReduceLayers(grid.reduction), &[native])?;
+            graph.add(
+                Operation::DirectionalBanding {
+                    stage: crate::nodes::color::directional_banding::Stage::Retile,
+                    prepared: Arc::new(crate::noise::banding_parameters(
+                        &request.source.metadata,
+                        column_params,
+                        request.settings.merrill_banding,
+                    )?),
+                },
+                &[reduced],
+            )?
+        } else if request.region.is_some() {
+            graph.add(
+                Operation::DirectionalBanding {
+                    stage: crate::nodes::color::directional_banding::Stage::Window,
+                    prepared: Arc::new(crate::noise::banding_parameters(
+                        &request.source.metadata,
+                        column_params,
+                        request.settings.merrill_banding,
+                    )?),
+                },
+                &[bands],
+            )?
+        } else {
+            bands
+        }
     } else {
         graph.add(
             Operation::Column {
@@ -156,13 +191,13 @@ pub(super) fn append(
     }))
 }
 
-/// Keep the reviewed column-then-row order, with independent measurement keys.
+/// Freeze both Fine axes before fitting residual Coarse, with independent measurement keys.
 pub(super) fn append_banding(
     graph: &mut Graph,
     calibrated: usize,
     prepared: Arc<crate::nodes::color::directional_banding::Prepared>,
 ) -> Result<usize> {
-    use crate::nodes::color::directional_banding::{Axis, Stage};
+    use crate::nodes::color::directional_banding::{Axis, Band, Stage};
     let mut tiles = graph.add(
         Operation::DirectionalBanding {
             stage: Stage::Tiles,
@@ -170,21 +205,26 @@ pub(super) fn append_banding(
         },
         &[calibrated],
     )?;
-    for axis in [Axis::Columns, Axis::Rows] {
-        let estimates = graph.add(
-            Operation::DirectionalBanding {
-                stage: Stage::Measure(axis),
-                prepared: prepared.clone(),
-            },
-            &[tiles],
-        )?;
-        tiles = graph.add(
-            Operation::DirectionalBanding {
-                stage: Stage::Correct(axis),
-                prepared: prepared.clone(),
-            },
-            &[tiles, estimates],
-        )?;
+    for band in [Band::Fine, Band::Coarse] {
+        for axis in [Axis::Columns, Axis::Rows] {
+            let estimates = graph.add(
+                Operation::DirectionalBanding {
+                    stage: Stage::Measure(band, axis),
+                    prepared: prepared.clone(),
+                },
+                &[tiles],
+            )?;
+            // Compact offset tables survive activation so the first strength
+            // adjustment can reuse them within the existing cache budget.
+            graph.retain_for_session(estimates);
+            tiles = graph.add(
+                Operation::DirectionalBanding {
+                    stage: Stage::Correct(band, axis),
+                    prepared: prepared.clone(),
+                },
+                &[tiles, estimates],
+            )?;
+        }
     }
     Ok(tiles)
 }

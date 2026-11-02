@@ -125,6 +125,7 @@ pub(super) fn build(
             execution,
         );
     }
+    let native_calibrated = calibrated;
     if let Some(grid) = &preview {
         calibrated = graph.add(Operation::ReduceLayers(grid.reduction), &[calibrated])?;
     }
@@ -159,6 +160,7 @@ pub(super) fn build(
                 preview: preview.as_ref(),
                 region: region.as_ref(),
                 directional_banding: directional_banding_selected,
+                native_calibrated,
             },
             &mut graph,
             calibrated,

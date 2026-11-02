@@ -369,11 +369,11 @@ fn position(recipe: &BuiltRecipe, predicate: impl Fn(&Operation) -> bool) -> usi
 }
 
 fn final_directional_banding(operation: &Operation) -> bool {
-    use crate::nodes::color::directional_banding::{Axis, Stage};
+    use crate::nodes::color::directional_banding::{Axis, Band, Stage};
     matches!(
         operation,
         Operation::DirectionalBanding {
-            stage: Stage::Correct(Axis::Rows),
+            stage: Stage::Correct(Band::Coarse, Axis::Rows),
             ..
         }
     )
@@ -493,7 +493,11 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
         position(&fast, |op| matches!(op, Operation::RowGuard(_)))
             < position(&fast, |op| matches!(op, Operation::ReduceLayers(_)))
     );
-    let _ = position(&fast, final_directional_banding);
+    let fast_bands = position(&fast, final_directional_banding);
+    assert!(
+        full.graph.nodes[local].operation.key("native bands")
+            == fast.graph.nodes[fast_bands].operation.key("native bands")
+    );
     settings.preview_quality = PreviewQuality::Draft;
     let draft = photographic(&engine, &source, &settings);
     assert!(draft.graph.nodes.iter().all(|node| !matches!(
@@ -528,6 +532,30 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
             &retained_bytes,
         );
     }
+    settings.merrill_banding.rows.bands[1].strength = 0.8;
+    cached(&engine, &mut session, &settings);
+    settings.merrill_banding.rows.bands[1].strength = 0.7;
+    let mut profile = Profile::new(crate::profile::Mode::Wall);
+    engine
+        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .unwrap()
+        .unwrap();
+    assert!(profile
+        .host
+        .iter()
+        .any(|t| t.stage == "correct native coarse row bands"));
+    assert!(!profile.host.iter().any(|t| matches!(
+        t.stage,
+        "prepare directional band tiles"
+            | "measure native fine column bands"
+            | "measure native fine row bands"
+            | "measure native coarse column bands"
+            | "measure native coarse row bands"
+            | "correct native fine column bands"
+            | "correct native fine row bands"
+            | "correct native coarse column bands"
+    )));
+
     // Once a strength edit establishes its frontier, further nonzero changes
     // must reuse measured offsets rather than rerun either bilateral filter.
     settings.merrill_banding.rows.bands[0].strength = 0.8;
@@ -541,13 +569,13 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     assert!(profile
         .host
         .iter()
-        .any(|t| t.stage == "correct native row bands"));
+        .any(|t| t.stage == "correct native fine row bands"));
     assert!(!profile.host.iter().any(|t| matches!(
         t.stage,
         "prepare directional band tiles"
-            | "measure native row bands"
-            | "measure native column bands"
-            | "correct native column bands"
+            | "measure native fine row bands"
+            | "measure native fine column bands"
+            | "correct native fine column bands"
     )));
     let crate::inspection::Content::Image(edited) = &edited[0].content else {
         panic!("expected image")
@@ -567,12 +595,12 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     assert!(profile
         .host
         .iter()
-        .any(|t| t.stage == "measure native row bands"));
+        .any(|t| t.stage == "measure native fine row bands"));
     assert!(!profile.host.iter().any(|t| matches!(
         t.stage,
         "prepare directional band tiles"
-            | "measure native column bands"
-            | "correct native column bands"
+            | "measure native fine column bands"
+            | "correct native fine column bands"
     )));
     let crate::inspection::Content::Image(edited) = &edited[0].content else {
         panic!("expected image")
