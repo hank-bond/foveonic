@@ -42,26 +42,28 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
     let gpu = Gpu::new().unwrap();
     let source = array(&f["input"]);
     let input = gpu.upload("Immutable reduced fixture", &source).unwrap();
-    let check =
-        |buffer: &crate::gpu::ReadGuard, expected: Vec<f32>, tolerance: f32, label: &str| {
-            let actual = floats(&gpu, buffer);
-            let mut max = 0_f32;
-            let mut pos = 0;
-            for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
-                let d = (a - b).abs();
-                if d > max {
-                    max = d;
-                    pos = i;
-                }
+    let check = |actual: Vec<f32>, expected: Vec<f32>, tolerance: f32, label: &str| {
+        assert!(
+            actual.iter().all(|v| v.is_finite()),
+            "{label}: invalid sample"
+        );
+        let mut max = 0_f32;
+        let mut pos = 0;
+        for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
+            let d = (a - b).abs();
+            if d > max {
+                max = d;
+                pos = i;
             }
-            assert_eq!(actual.len(), expected.len());
-            assert!(
-                max < tolerance,
-                "{label} maximum {max} at {pos}, {} vs {}",
-                actual[pos],
-                expected[pos]
-            );
-        };
+        }
+        assert_eq!(actual.len(), expected.len());
+        assert!(
+            max < tolerance,
+            "{label} maximum {max} at {pos}, {} vs {}",
+            actual[pos],
+            expected[pos]
+        );
+    };
     let mut p = parameters();
     p.filter = [0.08, 0.8, 0.6, 0.95];
     p.geometry = [4, 0, 21, 1];
@@ -87,20 +89,20 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
     );
     gpu.finish_trace(&trace, &mut Profile::default()).unwrap();
     check(
-        &bilateral,
+        floats(&gpu, &bilateral),
         array(&f["global"]["bilateral"]),
         0.08,
         "global bilateral",
     );
     let global = filter(&gpu, &input, p, true, &mut Profile::default()).unwrap();
     check(
-        global.tiles.as_ref().unwrap(),
+        floats(&gpu, global.tiles.as_ref().unwrap()),
         array(&f["global"]["filtered"]),
         0.1,
         "global fixed/mean",
     );
     check(
-        &global.edges,
+        floats(&gpu, &global.edges),
         array(&f["global"]["edges"]),
         0.005,
         "global LUT",
@@ -111,15 +113,58 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
         p.filter = [0.08, 0.8, 0.6, if key == "local" { 0.92 } else { 0.95 }];
         p.reduction[0] = scale;
         let base = base(&gpu, &input, p, true, true, true, &mut Profile::default()).unwrap();
+        let restored = floats(&gpu, base.tiles.as_ref().unwrap());
+        assert!(restored.iter().all(|v| v.is_finite()));
+        let mut expected_seed = array(&f[key]["seed"]);
+        if key == "local" {
+            // The reference leaves raw gradients in the mean's outer columns.
+            // Their correction changes the restored halo. Compare its unchanged
+            // interior here, with boundary stability checked separately below.
+            // Exclude the corrected column and its adjacent restoration tap.
+            let boundary_support = p.geometry[0] + 2;
+            let first = (boundary_support as f32 / scale).ceil() as usize;
+            let last = ((f[key]["width"].as_u64().unwrap() as u32 - boundary_support) as f32
+                / scale)
+                .floor() as usize;
+            let interior = |values: Vec<f32>| {
+                values
+                    .chunks_exact(p.tile[0] as usize * 3)
+                    .flat_map(|row| row[first * 3..last * 3].iter().copied())
+                    .collect()
+            };
+            check(
+                interior(restored),
+                interior(array(&f[key]["restored"])),
+                0.12,
+                key,
+            );
+
+            // This allocation is transposed native backing, not a physical crop.
+            // Map only the two previously raw reduced-grid boundary columns.
+            let [width, height] = p.reduced_tile_extent().unwrap();
+            let margin = p.geometry[1];
+            let lookup = tables(p);
+            let cap = 4. / p.edge[0];
+            for (index, value) in expected_seed.iter_mut().enumerate() {
+                let x = index as u32 % p.tile[0];
+                let y = index as u32 / p.tile[0];
+                let backing = x * p.tile[1] + y;
+                let column = backing / height;
+                let row = backing % height;
+                if (column == margin || column + margin + 1 == width)
+                    && row >= margin
+                    && row + margin < height
+                {
+                    let bin = (value.min(cap) * (2047. / cap)) as usize;
+                    *value = lookup[2048 + bin.min(2047)];
+                }
+            }
+        } else {
+            check(restored, array(&f[key]["restored"]), 0.12, key);
+        }
         check(
-            base.tiles.as_ref().unwrap(),
-            array(&f[key]["restored"]),
-            0.12,
-            key,
-        );
-        check(
-            base.seed.as_ref().unwrap(),
-            array(&f[key]["seed"]),
+            floats(&gpu, base.seed.as_ref().unwrap()),
+            expected_seed,
             0.002,
             "native F backing seed",
         );
@@ -594,4 +639,77 @@ fn compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams() {
         }
     }
     assert_eq!(floats(&gpu, &input), samples);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn edge_map_covers_recursive_mean_outer_column() {
+    let gpu = Gpu::new().unwrap();
+    let mut p = parameters();
+    let (width, height) = (32u32, 720u32);
+    p.source = [width, height, 1, 1];
+    p.tile = [width, height, 0, 11];
+    p.area = [0, 0, width, height];
+    p.region = p.area;
+    p.diffusion[3] = 1.;
+    let count = (width * height) as usize;
+    // A strong gradient exposes the unmapped outer column without a photo fixture.
+    let ramp: Vec<f32> = (0..count)
+        .flat_map(|i| [100. + 100. * (i as u32 % width) as f32; 3])
+        .collect();
+    let input = gpu.upload("Edge gradient ramp", &ramp).unwrap();
+    let uniform = gpu.uniform(&p);
+    let lookup = gpu.upload("Noise tables", &tables(p)).unwrap();
+    let mut edges = gpu
+        .storage("Recurrence edge weights", count as u64 * 4)
+        .unwrap();
+    let mut trace = gpu.trace(false, 2);
+    gpu.dispatch(
+        Kernel::NoiseEdge,
+        &mut [
+            (0, Read(&input)),
+            (1, Read(&uniform)),
+            (4, Write(edges.write())),
+            (6, Read(&lookup)),
+        ],
+        groups(p),
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, &mut Profile::default()).unwrap();
+    let weights = floats(&gpu, &edges);
+    for y in 8..height - 8 {
+        for x in 8..width - 8 {
+            let e = weights[(y * width + x) as usize];
+            assert!(
+                (0. ..=1.).contains(&e),
+                "unmapped coefficient {e} at {x},{y}"
+            );
+        }
+    }
+    // Isolate recurrence stability: valid weights must preserve constant signal.
+    let constant = gpu
+        .upload("Constant mean input", &vec![20_f32; count * 3])
+        .unwrap();
+    let mut output = gpu.storage("Mean output", count as u64 * 12).unwrap();
+    let mut accumulated = gpu.storage("Mean weights", count as u64 * 4).unwrap();
+    let mut prefix = gpu.storage("Mean prefix", count as u64 * 12).unwrap();
+    let mut trace = gpu.trace(false, 1);
+    gpu.dispatch(
+        Kernel::NoiseMean,
+        &mut [
+            (0, Read(&constant)),
+            (1, Read(&uniform)),
+            (2, Write(output.write())),
+            (3, Read(&edges)),
+            (4, Write(accumulated.write())),
+            (5, Write(prefix.write())),
+        ],
+        [width.div_ceil(64), 1],
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, &mut Profile::default()).unwrap();
+    let actual = floats(&gpu, &output);
+    assert!(actual
+        .iter()
+        .all(|v| v.is_finite() && (*v - 20.).abs() < 0.001));
 }

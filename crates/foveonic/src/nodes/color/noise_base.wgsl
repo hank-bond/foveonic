@@ -194,7 +194,11 @@ fn edge_map(@builtin(global_invocation_id) id: vec3<u32>) {
         value = (gradient(p, vec2(0)) + gradient(p, vec2(-1, 0)) + gradient(p, vec2(1, 0)) + gradient(p, vec2(0, -1)) + gradient(p, vec2(0, 1))) * 0.2;
     }
     let margin=params.geometry.y;
-    if p.x >= margin+1u && p.x+margin+1u < params.tile.x && p.y >= margin && p.y+margin < params.tile.y {
+    // The recursive mean includes the outer margin column. Convert its
+    // gradient to a weight too: a raw value above one overflows long scans.
+    // Global filtering retains its one-column gradient boundary.
+    let horizontal_margin = max(margin, 1u);
+    if p.x >= horizontal_margin && p.x+horizontal_margin < params.tile.x && p.y >= margin && p.y+margin < params.tile.y {
         let cap = 4. / params.edge.x;
         let index = u32(min(value, cap) * (2047. / cap));
         value = table[2048u + min(index, 2047u)];

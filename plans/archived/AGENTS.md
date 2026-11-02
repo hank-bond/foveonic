@@ -38,6 +38,8 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[despeckle](./despeckle.md)** _(archived)._ GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
 - **[detail-and-noise](./detail-and-noise.md)** _(archived)._ The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner.
+- **[detail-filter-border](./detail-filter-border.md)** _(archived)._ Correct the recursive noise filter's missing border-weight conversion and verify enlarged Detail support.
+- **[directional-banding-continuity](./directional-banding-continuity.md)** _(archived)._ The selected residual Coarse banding fit and Fine strength correction are integrated and validated.
 - **[editing-section-layout](./editing-section-layout.md)** _(archived)._ Color Editor has an independent checkbox and editing sections persist their visual drag order without changing processing.
 - **[editor-review-focus](./editor-review-focus.md)** _(archived)._ Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
 - **[editor-workflow](./editor-workflow.md)** _(archived)._ Implemented section recipes, configurable defaults, white-balance bias and isolated Before rendering through the existing editor paths.
