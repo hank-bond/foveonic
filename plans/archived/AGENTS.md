@@ -14,6 +14,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[browser-review](./browser-review.md)** _(archived)._ Add three browser views with independent review ratings, metadata sorting and shared search filters.
+- **[browser-thumbnail-budget](./browser-thumbnail-budget.md)** _(archived)._ Replace the browser thumbnail count limit with a persistent memory budget and group performance preferences.
 - **[cache-and-smart-cleanup](./cache-and-smart-cleanup.md)** _(archived)._ Organize cache and Smart preview responsibilities and explain constants while preserving processing behavior.
 - **[cache-prefetch-window](./cache-prefetch-window.md)** _(archived)._ Bound background decoding around the selected photograph and retain nearby results under the disk budget.
 - **[cache-status-dots](./cache-status-dots.md)** _(archived)._ Replace the provisional cache checkmark with muted caption dots backed by explicit queue and disk states.
@@ -40,6 +41,8 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[detail-amount-range](./detail-amount-range.md)** _(archived)._ Extend Merrill Detail amounts to three while retaining the existing size support.
 - **[detail-and-noise](./detail-and-noise.md)** _(archived)._ The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner.
 - **[detail-filter-border](./detail-filter-border.md)** _(archived)._ Correct the recursive noise filter's missing border-weight conversion and verify enlarged Detail support.
+- **[direct-color-production](./direct-color-production.md)** _(archived)._ Align direct color editing with shared controls, worker jobs and GPU selection contracts.
+- **[direct-color-tool](./direct-color-tool.md)** _(archived)._ Added guide-based color picking, simultaneous HSL dragging and persistent gesture preferences.
 - **[directional-banding-continuity](./directional-banding-continuity.md)** _(archived)._ The selected residual Coarse banding fit and Fine strength correction are integrated and validated.
 - **[editing-section-layout](./editing-section-layout.md)** _(archived)._ Color Editor has an independent checkbox and editing sections persist their visual drag order without changing processing.
 - **[editor-review-focus](./editor-review-focus.md)** _(archived)._ Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
@@ -62,6 +65,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[merrill-chroma-safeguard](./merrill-chroma-safeguard.md)** _(archived)._ The approved chroma safeguard is fused into Merrill texture restoration with matching photographic output and small measured cost.
 - **[merrill-fast-noise](./merrill-fast-noise.md)** _(archived)._ Bypass optional Merrill Noise and Detail in Fast while preserving requested controls for Full.
 - **[merrill-fast-preview](./merrill-fast-preview.md)** _(archived)._ Integrate Merrill Fast and Smart previews while reducing native row-correction GPU cost.
+- **[merrill-hot-pixel](./merrill-hot-pixel.md)** _(archived)._ Repair isolated Merrill near-clipped defects while preserving Compact highlight protection with surrounding support.
 - **[merrill-local-chroma-reliability](./merrill-local-chroma-reliability.md)** _(archived)._ Local chroma trials isolate amplified weak-color noise, limited neutral-grain gains and shadow-neutralization rejection.
 - **[merrill-multiscale-noise](./merrill-multiscale-noise.md)** _(archived)._ Integrate the approved Merrill multiscale filter and both shield correction choices through the production rendering path.
 - **[merrill-neutral-grain-sweep](./merrill-neutral-grain-sweep.md)** _(archived)._ A 228-setting sweep favors earlier correction with stricter color protection while preserving a stronger review alternative.

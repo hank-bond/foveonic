@@ -402,8 +402,10 @@ fn compact_uses_original_highlight_codes_after_calibration() {
     calibrated[defect] = 6923.;
     original[near_clipped] = 3900.;
     calibrated[near_clipped] = 7000.;
+    original[near_clipped - 1] = 600.;
     original[clipped_low_gain] = 4095.;
     calibrated[clipped_low_gain] = 3000.;
+    original[clipped_low_gain + 3] = 600.;
     let raw = gpu
         .upload("Original highlight evidence", &original)
         .unwrap();
@@ -432,6 +434,74 @@ fn compact_uses_original_highlight_codes_after_calibration() {
             if i != defect {
                 assert_eq!(value, calibrated[i], "unexpected change at sample {i}");
             }
+        }
+    }
+    assert_eq!(
+        gpu.readback(&raw).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&original)
+    );
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&calibrated)
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn compact_repairs_isolated_clipped_layers_but_preserves_supported_highlights() {
+    use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
+    let gpu = Gpu::new().unwrap();
+    let mut original = vec![79_f32; 64 * 64 * 3];
+    let mut calibrated = vec![69_f32; 64 * 64 * 3];
+    let defects = [
+        (16 * 64 + 16) * 3,
+        (16 * 64 + 32) * 3 + 1,
+        (16 * 64 + 48) * 3 + 2,
+    ];
+    for (i, &p) in defects.iter().enumerate() {
+        original[p] = [3900., 4045., 4095.][i];
+        calibrated[p] = [7000., 6362., 3000.][i];
+    }
+    let supported = [(32 * 64 + 16) * 3, (32 * 64 + 32) * 3, (32 * 64 + 48) * 3];
+    for &p in &supported {
+        original[p] = 4045.;
+        calibrated[p] = 6362.;
+    }
+    // Cross-layer support, a colored neighbor, and a diagonal in another layer
+    // each keep an ambiguous near-clipped sample protected.
+    original[supported[0] + 1] = 500.;
+    original[supported[1] + 3] = 500.;
+    original[supported[2] + (64 + 1) * 3 + 2] = 500.;
+    let raw = gpu
+        .upload("Original clipped outliers and highlights", &original)
+        .unwrap();
+    let input = gpu
+        .upload("Calibrated clipped outliers and highlights", &calibrated)
+        .unwrap();
+    for size in [3, 5, 7] {
+        let prepared = Prepared {
+            params: parameters(64, 64, [8, 8, 56, 56]).unwrap(),
+            tables: vec![5.; 3 * 4096],
+        }
+        .with_controls(MerrillSpeckleControls {
+            method: MerrillSpeckleMethod::Compact,
+            threshold: 0.8,
+            size,
+        })
+        .unwrap();
+        let out = apply(&gpu, &input, &raw, &prepared, &mut Profile::default()).unwrap();
+        let bytes = gpu.readback(&out).unwrap();
+        let actual: &[f32] = bytemuck::cast_slice(&bytes);
+        for (p, &value) in actual.iter().enumerate() {
+            assert_eq!(
+                value,
+                if defects.contains(&p) {
+                    69.
+                } else {
+                    calibrated[p]
+                },
+                "sample {p}, size {size}"
+            );
         }
     }
     assert_eq!(

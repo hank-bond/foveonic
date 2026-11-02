@@ -1,4 +1,4 @@
-//! Edits hue, saturation and lightness in linear RGB using an independent cleaned color guide.
+//! Edits linear Hue, Saturation and Lightness and picks subject ranges from the same cleaned color guide.
 
 use crate::{
     color_space::{ColorSpace, TiffColorSpace},
@@ -146,25 +146,6 @@ impl Params {
         scale: f32,
         monochrome: bool,
     ) -> Self {
-        // D50 colorants of the researched linear reference working profile.
-        // The profile's Adobe name alone does not identify these exact colorants.
-        const REFERENCE_COLORANTS: [f64; 9] = [
-            42294., 11865., 9030., 21808., 40115., 3611., 1982., 4520., 47557.,
-        ];
-        const ICC_FIXED_SCALE: f64 = (1_u32 << 16) as f64;
-        let inverse = crate::color_space::inverse(REFERENCE_COLORANTS.map(|v| v / ICC_FIXED_SCALE));
-        let source = TiffColorSpace::from(space).to_xyz();
-        let guide_matrix = std::array::from_fn(|r| {
-            std::array::from_fn(|c| {
-                if c < 3 {
-                    (0..3)
-                        .map(|k| inverse[r * 3 + k] * source[k * 3 + c])
-                        .sum::<f64>() as f32
-                } else {
-                    0.
-                }
-            })
-        });
         let pack = |v: Adjustment| {
             [
                 if monochrome { 0. } else { v.hue },
@@ -189,7 +170,7 @@ impl Params {
             bands: controls.bands.map(pack),
             master: pack(controls.master),
             luma: crate::nodes::finish::photographic::luminance(space),
-            guide_matrix,
+            guide_matrix: guide_matrix(space),
             to_srgb: TiffColorSpace::Srgb.transform(space),
             from_srgb: TiffColorSpace::from(space).transform(ColorSpace::Srgb),
         }
@@ -197,6 +178,28 @@ impl Params {
     pub fn key(self) -> Key {
         Key::pod(&self)
     }
+}
+
+fn guide_matrix(space: ColorSpace) -> [[f32; 4]; 3] {
+    // D50 colorants of the researched linear reference working profile.
+    // The profile's Adobe name alone does not identify these exact colorants.
+    const REFERENCE_COLORANTS: [f64; 9] = [
+        42294., 11865., 9030., 21808., 40115., 3611., 1982., 4520., 47557.,
+    ];
+    const ICC_FIXED_SCALE: f64 = (1_u32 << 16) as f64;
+    let inverse = crate::color_space::inverse(REFERENCE_COLORANTS.map(|v| v / ICC_FIXED_SCALE));
+    let source = TiffColorSpace::from(space).to_xyz();
+    std::array::from_fn(|r| {
+        std::array::from_fn(|c| {
+            if c < 3 {
+                (0..3)
+                    .map(|k| inverse[r * 3 + k] * source[k * 3 + c])
+                    .sum::<f64>() as f32
+            } else {
+                0.
+            }
+        })
+    })
 }
 
 fn pass(
@@ -279,4 +282,49 @@ pub(crate) fn apply(
         true,
         profile,
     )
+}
+
+/// Picking has its own uniform contract, separate from photographic adjustments.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct PickParams {
+    shape: [u32; 4],
+    crop: [u32; 4],
+    guide_matrix: [[f32; 4]; 3],
+    normalization: [f32; 4],
+}
+impl PickParams {
+    pub fn new(
+        extent: [u32; 2],
+        space: ColorSpace,
+        white: f32,
+        pixel: [u32; 2],
+        crop: [u32; 4],
+    ) -> Self {
+        Self {
+            shape: [extent[0], extent[1], pixel[0], pixel[1]],
+            crop,
+            guide_matrix: guide_matrix(space),
+            normalization: [white, 0., 0., 0.],
+        }
+    }
+}
+
+/// Return only range weights. Full photographic samples remain on the GPU.
+pub(crate) fn pick(gpu: &Gpu, guide: &ReadGuard, params: PickParams) -> Result<[f32; 8]> {
+    let uniform = gpu.uniform(&params);
+    let mut output = gpu.storage("Color Range pick", 32)?;
+    let mut trace = gpu.trace(false, 1);
+    gpu.dispatch(
+        Kernel::ColorEditorPick,
+        &mut [
+            (0, Read(guide)),
+            (1, Read(&uniform)),
+            (2, Write(output.write())),
+        ],
+        [1, 1],
+        &mut trace,
+    );
+    let bytes = gpu.readback(&output)?;
+    Ok(*bytemuck::from_bytes::<[f32; 8]>(&bytes))
 }

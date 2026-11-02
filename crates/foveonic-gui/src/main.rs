@@ -141,6 +141,7 @@ impl App {
         };
         let overrides = [settings.white_balance.clone(), settings.color_mode.clone()];
         let mut preferences = preferences::Preferences::load(cc.storage);
+        editor::direct_color::configure(&cc.egui_ctx, preferences.direct_color);
         if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
             preferences.preview_quality = preferences::PreviewMode::Smart;
         }
@@ -224,6 +225,8 @@ impl App {
         app.worker
             .cache
             .configure(app.preferences.decode_cache.clone());
+        app.browser
+            .set_thumbnail_budget(app.preferences.thumbnail_cache_bytes);
         app.sidecars.set_defaults(&app.preferences.editor.defaults);
         app.worker
             .cache
@@ -418,6 +421,10 @@ impl App {
         while let Ok(update) = self.worker.replies.try_recv() {
             let reply = match update {
                 worker::Update::Image(reply) => *reply,
+                worker::Update::ColorPick(reply) => {
+                    editor::direct_color::receive(ctx, reply);
+                    continue;
+                }
                 worker::Update::Scopes { key, result } => {
                     if self
                         .frame
@@ -676,6 +683,10 @@ impl App {
                         process_ready,
                         importing: self.browser.import_mode,
                         destination: self.preferences.processing_destination.as_deref(),
+                        destination_unavailable: self.import.destination_unavailable(
+                            ui.ctx(),
+                            self.preferences.processing_destination.as_deref(),
+                        ),
                     },
                 );
                 if let Some(mode) = actions.open_folder {
@@ -719,18 +730,8 @@ impl App {
                 if widgets::button(ui, "Settings", self.settings_open, egui::Vec2::ZERO).clicked() {
                     self.settings_open = !self.settings_open;
                 }
-                if self.status_error {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&self.status).color(ui.visuals().error_fg_color),
-                        )
-                        .truncate(),
-                    )
-                    .on_hover_text(&self.status);
-                }
+                self.toolbar_status(ui);
             });
-            self.sidecars.refresh(&self.settings);
-            self.import.show_status(ui);
         });
         processing::show(
             ui.ctx(),
@@ -746,16 +747,33 @@ impl App {
                 &mut self.preferences.browse_processing
             },
         );
-        if let Some(warning) = self.sidecars.warning() {
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(egui::Color32::YELLOW, warning);
-                if self.sidecars.can_retry()
-                    && widgets::button(ui, "Retry saving edits", false, egui::Vec2::ZERO).clicked()
-                {
-                    self.sidecars.retry();
-                }
-            });
+    }
+    fn toolbar_status(&mut self, ui: &mut egui::Ui) {
+        let warning = self.sidecars.warning();
+        let processing = self.import.status(ui.ctx());
+        let error = warning.is_some()
+            || self.status_error
+            || processing.as_ref().is_some_and(|(_, error)| *error);
+        let mut messages = Vec::new();
+        if let Some(warning) = &warning {
+            messages.push(warning.clone());
         }
+        if self.status_error {
+            messages.push(self.status.clone());
+        }
+        if let Some((message, _)) = processing {
+            messages.push(message);
+        }
+        if !self.status_error && !self.status.is_empty() {
+            messages.push(self.status.clone());
+        }
+        if warning.is_some()
+            && self.sidecars.can_retry()
+            && widgets::button(ui, "Retry saving edits", false, egui::Vec2::ZERO).clicked()
+        {
+            self.sidecars.retry();
+        }
+        toolbar::status(ui, &messages.join("\n"), error);
     }
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
         match section {
@@ -1037,14 +1055,14 @@ impl App {
                         .as_ref()
                         .is_some_and(|active| paths.contains(active))
                 {
-                    self.comparison_view(ui, &paths);
+                    changed |= self.comparison_view(ui, &paths);
                     return;
                 }
                 let canvas = egui::Rect::from_min_size(
                     ui.cursor().min,
                     egui::vec2(ui.available_width(), height),
                 );
-                self.show_photo(ui, mapping);
+                changed |= self.show_photo(ui, mapping);
                 self.before_badge(ui, canvas);
             },
         );
@@ -1067,7 +1085,24 @@ impl App {
         changed
     }
 
-    fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) {
+    fn color_tool_available(&self, mapping: viewport::Mapping) -> bool {
+        !self.exporting
+            && self.sidecars.ready()
+            && self.settings.color_editor_enabled
+            && self.before.active == editor::Rendition::Current
+            && self.output == "final"
+            && !mapping.input
+            && mapping.difference_gain == 0.
+            && self.frame.as_ref().is_some_and(|f| {
+                self.selected.as_ref() == Some(&f.path)
+                    && f.output == "final"
+                    && f.rendition == editor::Rendition::Current
+            })
+    }
+
+    fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) -> bool {
+        let allowed = self.color_tool_available(mapping);
+        self.viewport.editing = editor::direct_color::active(ui.ctx()) && allowed;
         if let Some(frame) = &self.frame {
             self.viewport.show(
                 ui,
@@ -1103,10 +1138,33 @@ impl App {
                 });
             });
         }
+        if let (Some(path), Some((response, uv))) = (
+            &self.selected,
+            self.viewport
+                .pointer(ui.input(|i| i.pointer.interact_pos())),
+        ) {
+            // Existing gestures can continue while their render catches up. Start a new
+            // selection only from a frame that represents the current authored recipe.
+            let uv = uv.filter(|_| {
+                self.frame
+                    .as_ref()
+                    .is_some_and(|f| f.requested == self.settings)
+            });
+            let (changed, request) =
+                editor::direct_color::photo(ui, &response, uv, path, &mut self.settings, allowed);
+            if let Some(request) = request {
+                self.worker.pick_color(request);
+            }
+            return changed;
+        }
+        false
     }
 }
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        if let Some(smoke) = &mut self.smoke {
+            smoke.inject_direct_color(input, ctx);
+        }
         self.capture_actions(ctx, input);
     }
 
@@ -1208,11 +1266,12 @@ impl eframe::App for App {
         application_settings::show(
             ctx,
             &mut self.settings_open,
-            &mut self.preferences.decode_cache,
+            &mut self.preferences,
             &self.worker.cache,
-            &mut self.preferences.display_gamut,
             self.display.target.managed(),
         );
+        self.browser
+            .set_thumbnail_budget(self.preferences.thumbnail_cache_bytes);
         if previous_gamut != self.preferences.display_gamut {
             viewport::set_gamut(&self.render_state, self.preferences.display_gamut);
         }
@@ -1277,6 +1336,7 @@ impl eframe::App for App {
             self.exit_before();
             self.sidecars.edited(&self.settings);
         }
+        self.preferences.direct_color = editor::direct_color::configuration(ctx);
         if std::mem::take(&mut self.browser.clear_selection) {
             self.clear_selection();
             self.status = "No visible photographs".into();

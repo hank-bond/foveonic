@@ -8,9 +8,7 @@ struct Params {
 @group(0) @binding(1) var<uniform> p: Params;
 @group(0) @binding(2) var<storage, read_write> dst: array<f32>;
 @group(0) @binding(3) var<storage, read> aux: array<f32>;
-const SIGNAL_FLOOR: f32 = 0.00001;
 const MAX_TRANSFER_STOPS: f32 = 6.;
-const SHADOW_FADE: f32 = 4.;
 const RANGE_SIGMA_STOPS: f32 = 0.5;
 const SPATIAL_SIGMA_FRACTION: f32 = 0.5;
 // Normalized Hue ±1 rotates chroma by ±30 degrees.

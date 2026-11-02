@@ -1,8 +1,8 @@
-//! Configures application display and temporary disk reuse independently of photographic edits.
+//! Configures display, thumbnail memory and background disk reuse independently of photographic edits.
 
-use crate::widgets;
+use crate::{preferences, widgets};
 use eframe::egui;
-use foveonic::decode_cache::{available_decode_threads, Cache, Settings};
+use foveonic::decode_cache::{available_decode_threads, Cache};
 
 const BYTES_PER_GB: f64 = 1_000_000_000.;
 const CACHE_BUDGET_GB: std::ops::RangeInclusive<f64> = 0.1..=1000.;
@@ -15,11 +15,12 @@ const WINDOW_CENTER_OFFSET: egui::Vec2 = egui::vec2(190., 240.);
 pub fn show(
     ctx: &egui::Context,
     open: &mut bool,
-    settings: &mut Settings,
+    preferences: &mut preferences::Preferences,
     cache: &Cache,
-    gamut: &mut crate::preferences::DisplayGamut,
     managed: bool,
 ) {
+    let settings = &mut preferences.decode_cache;
+    let gamut = &mut preferences.display_gamut;
     let before = settings.clone();
     egui::Window::new("Settings")
         .open(open)
@@ -43,11 +44,23 @@ pub fn show(
                 .on_hover_text("Applies to the viewport, navigator and browser previews. Saved edits and TIFF/DNG output are unchanged.");
             if !managed { ui.weak("This window uses the sRGB display fallback."); }
             ui.separator();
-            ui.heading("Image cache");
+            ui.heading("Performance");
+            ui.horizontal(|ui| {
+                ui.label("Thumbnail memory");
+                let mut mib = preferences.thumbnail_cache_bytes as f64 / preferences::MIB as f64;
+                let range = preferences::THUMBNAIL_BYTES_RANGE;
+                if ui.add(widgets::drag_value(&mut mib)
+                    .range(*range.start() as f64 / preferences::MIB as f64..=*range.end() as f64 / preferences::MIB as f64)
+                    .speed(16.)
+                    .suffix(" MiB")).changed() {
+                    preferences.thumbnail_cache_bytes = (mib * preferences::MIB as f64).round() as u64;
+                }
+            }).response.on_hover_text("Memory for small browser thumbnails. Visible photos stay resident even when they exceed this budget. Larger previews and decoded RAW data use separate storage.");
+            ui.separator();
             widgets::checkbox(ui, &mut settings.enabled, "Enable disk cache");
             ui.add_enabled_ui(settings.enabled, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Maximum space");
+                    ui.label("Disk space");
                     let mut gb = settings.max_bytes as f64 / BYTES_PER_GB;
                     let budget = crate::widgets::drag_value(&mut gb)
                         .range(CACHE_BUDGET_GB)
@@ -72,14 +85,13 @@ pub fn show(
                      More threads use more CPU and memory. Active photos take priority."
                 ));
                 ui.horizontal(|ui| {
-                    ui.label("Decode neighbors");
-                    ui.label("Behind");
+                    ui.label("Look behind");
                     ui.add(
                         crate::widgets::drag_value(&mut settings.prefetch_behind)
                             .range(0..=usize::MAX)
                             .speed(1.),
                     );
-                    ui.label("Ahead");
+                    ui.label("Look ahead");
                     ui.add(
                         crate::widgets::drag_value(&mut settings.prefetch_ahead)
                             .range(0..=usize::MAX)

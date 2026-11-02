@@ -2,6 +2,7 @@
 
 mod actions;
 mod before;
+pub mod direct_color;
 mod menus;
 mod recipes;
 mod sections;

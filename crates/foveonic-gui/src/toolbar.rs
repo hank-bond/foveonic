@@ -28,6 +28,7 @@ pub struct State<'a> {
     pub process_ready: bool,
     pub importing: bool,
     pub destination: Option<&'a std::path::Path>,
+    pub destination_unavailable: bool,
 }
 
 fn container_frame() -> egui::Frame {
@@ -53,6 +54,19 @@ pub fn row<R>(
         egui::Layout::left_to_right(egui::Align::Center),
         contents,
     )
+}
+
+/// Keep status text in the row's remaining width and retain full details on hover.
+pub fn status(ui: &mut egui::Ui, message: &str, error: bool) -> egui::Response {
+    let line = message.lines().collect::<Vec<_>>().join(" · ");
+    let text = egui::RichText::new(line);
+    let text = if error {
+        text.color(ui.visuals().error_fg_color)
+    } else {
+        text.weak()
+    };
+    ui.add(egui::Label::new(text).truncate())
+        .on_hover_text(message)
 }
 
 /// Return actions so folder dialogs and processing stay owned by the app.
@@ -92,6 +106,7 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
                 )
             },
         );
+        let destination_unavailable = state.destination.is_some() && state.destination_unavailable;
         let response = ui.scope(|ui| {
             ui.spacing_mut().button_padding = widgets::button_padding(ui);
             let width = egui::WidgetText::from(label.as_str())
@@ -103,14 +118,32 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
                 )
                 .size()
                 .x + 2. * widgets::button_padding(ui).x;
+            let error = ui.visuals().error_fg_color;
+            let text = if destination_unavailable {
+                egui::RichText::new(label).color(error)
+            } else {
+                egui::RichText::new(label)
+            };
+            let mut button = egui::Button::new(text).truncate();
+            if destination_unavailable {
+                button = button
+                    .fill(error.gamma_multiply(0.15))
+                    .stroke(egui::Stroke::new(1_f32, error));
+            }
             ui.add_sized(
                 egui::vec2(width.min(DESTINATION_MAX_WIDTH), widgets::control_height(ui)),
-                egui::Button::new(label).truncate(),
+                button,
             )
         }).inner;
         let destination_help = state.destination.map_or_else(
             || "Choose the output folder".into(),
-            |path| path.display().to_string(),
+            |path| {
+                if destination_unavailable {
+                    format!("Destination folder unavailable\n{}", path.display())
+                } else {
+                    path.display().to_string()
+                }
+            },
         );
         actions.destination = response.on_hover_text(destination_help).clicked();
         actions.settings = widgets::button(ui, "Processing settings…", false, egui::Vec2::ZERO).clicked();
@@ -207,6 +240,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn long_multiline_status_stays_after_settings_without_growing_the_toolbar() {
+        for width in [220., 520.] {
+            let ctx = egui::Context::default();
+            let mut baseline_height: Option<f32> = None;
+            for message in ["", "Checking import history…\nProcessing error: /Volumes/missing-drive/a/very/long/destination/path/photo.X3F could not be opened"] {
+                let mut settings = egui::Rect::NOTHING;
+                let mut status = egui::Rect::NOTHING;
+                let mut toolbar = egui::Rect::NOTHING;
+                let output = ctx.run(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 200.))),
+                    ..Default::default()
+                }, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        toolbar = row(ui, |ui| {
+                            settings = widgets::button(ui, "Settings", false, egui::Vec2::ZERO).rect;
+                            status = super::status(ui, message, !message.is_empty()).rect;
+                        }).response.rect;
+                    });
+                });
+                assert!(status.left() >= settings.right());
+                assert!(status.right() <= toolbar.right() + 0.01);
+                if let Some(height) = baseline_height {
+                    assert!((toolbar.height() - height).abs() < 0.01);
+                } else {
+                    baseline_height = Some(toolbar.height());
+                }
+                for shape in output.shapes {
+                    if let egui::Shape::Text(text) = shape.shape {
+                        assert_eq!(text.galley.rows.len(), 1, "status wrapped to another row");
+                    }
+                }
+            }
+        }
+    }
+
     fn text_center(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
         output
             .shapes
@@ -249,6 +318,7 @@ mod tests {
                                     process_ready: ready,
                                     importing,
                                     destination: None,
+                                    destination_unavailable: false,
                                 },
                             );
                         });

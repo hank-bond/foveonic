@@ -10,6 +10,7 @@ pub enum Kernel {
     ColorEditorMap,
     ColorEditorFilter,
     ColorEditorApply,
+    ColorEditorPick,
     PerceptualGrade,
     MonoTextureExtract,
     MonoTextureBlur,
@@ -312,6 +313,7 @@ impl Kernel {
             Self::ColorEditorMap => "map Color Editor",
             Self::ColorEditorFilter => "stabilize Color Editor",
             Self::ColorEditorApply => "apply Color Editor",
+            Self::ColorEditorPick => "pick Color Range",
             Self::PerceptualGrade => "perceptual grading",
             Self::MonoTextureExtract => "extract monochrome texture",
             Self::MonoTextureBlur => "filter monochrome texture",
@@ -649,11 +651,16 @@ impl Gpu {
             "{oklab}\n{}",
             include_str!("../nodes/finish/shadow_neutralize.wgsl")
         );
+        let color_selection = include_str!("../nodes/finish/color_editor_selection.wgsl");
         let color_editor = format!(
-            "{}\n{}\n{}",
+            "{color_selection}\n{}\n{}\n{}",
             include_str!("../nodes/finish/perceptual_color.wgsl"),
             include_str!("../nodes/finish/color_editor.wgsl"),
             include_str!("../nodes/finish/color_editor_response.wgsl")
+        );
+        let color_pick = format!(
+            "{color_selection}\n{}",
+            include_str!("../nodes/finish/color_editor_pick.wgsl")
         );
         let perceptual = format!(
             "{}\n{}",
@@ -673,6 +680,7 @@ impl Gpu {
             (color_editor.as_str(), "color_editor_map"),
             (color_editor.as_str(), "color_editor_filter"),
             (color_editor.as_str(), "color_editor_apply"),
+            (color_pick.as_str(), "color_editor_pick"),
             (perceptual.as_str(), "perceptual_grade"),
             (texture, "mono_texture_extract"),
             (texture, "mono_texture_blur"),

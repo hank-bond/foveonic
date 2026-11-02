@@ -1109,3 +1109,54 @@ fn reconstruction_originals_stay_finite_across_noise_choices() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn color_pick_uses_cropped_rotated_guide_coordinates_and_small_readback() {
+    let engine = Engine::new().unwrap();
+    let pixels: Vec<f32> = (0..12)
+        .flat_map(|y| {
+            (0..16).flat_map(move |x| match (x < 8, y < 6) {
+                (true, true) => [1., 0.1, 0.1],
+                (false, true) => [0.1, 1., 0.1],
+                (true, false) => [0.1, 0.1, 1.],
+                (false, false) => [1., 0.6, 0.1],
+            })
+        })
+        .collect();
+    let mut guide = image(&engine, &pixels);
+    guide.description.extent = [16, 12];
+    guide.description.space = Space::LinearRgb(ColorSpace::Srgb);
+    guide.description.linear_white = 1;
+    guide.view = View {
+        crop: [2, 2, 14, 10],
+        rotation: 0,
+        extent: [12, 8],
+    };
+    let corners = [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]];
+    let expected = corners.map(|uv| engine.pick_color_range(&guide, uv).unwrap());
+    assert_ne!(expected[0], expected[1]);
+    for (rotation, indices) in [
+        (0, [0, 1, 2, 3]),
+        (90, [2, 0, 3, 1]),
+        (180, [3, 2, 1, 0]),
+        (270, [1, 3, 0, 2]),
+    ] {
+        guide.view.rotation = rotation;
+        guide.view.extent = if rotation % 180 == 0 {
+            [12, 8]
+        } else {
+            [8, 12]
+        };
+        for (uv, index) in corners.into_iter().zip(indices) {
+            let before = engine.gpu_activity();
+            assert_eq!(
+                engine.pick_color_range(&guide, uv).unwrap(),
+                expected[index]
+            );
+            assert_eq!(engine.gpu_activity().since(before).readback_bytes, 32);
+        }
+    }
+    assert!(engine.pick_color_range(&guide, [-0.1, 0.5]).is_err());
+    assert!(engine.pick_color_range(&guide, [f32::NAN, 0.5]).is_err());
+}

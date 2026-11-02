@@ -24,11 +24,9 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         Some(&mut settings.color_editor_enabled),
     );
     ui.add_enabled_ui(settings.color_editor_enabled, |ui| {
-        let selection = ui.make_persistent_id("color-editor-band");
-        let mut selected = ui
-            .data_mut(|data| data.get_temp::<usize>(selection))
-            .unwrap_or(0)
-            .min(COLORS.len());
+        let (mut selected, picked) = crate::editor::direct_color::selection(ui.ctx());
+        let picking =
+            crate::editor::direct_color::dragging(ui.ctx()) && picked.iter().any(|w| *w > 0.);
         let controls = &mut settings.photographic.color_editor;
         ui.horizontal(|ui| {
             let count = ColorEditorControls::LABELS.len() as f32;
@@ -43,6 +41,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                     ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
                 if response.clicked() {
                     selected = index;
+                    crate::editor::direct_color::select(ui.ctx(), selected);
                 }
                 let visuals = ui.style().interact_selectable(&response, selected == index);
                 let border = if selected == index {
@@ -53,7 +52,9 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 ui.painter()
                     .rect(rect, 3., visuals.bg_fill, border, egui::StrokeKind::Inside);
                 let fill = rect.shrink(3.);
-                if index < COLORS.len() {
+                if picking && picked.get(index).is_none_or(|w| *w == 0.) {
+                    // Keep only the affected swatches colored during the gesture.
+                } else if index < COLORS.len() {
                     ui.painter().rect_filled(
                         fill,
                         2.,
@@ -93,7 +94,6 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 response.on_hover_text(label);
             }
         });
-        ui.data_mut(|data| data.insert_temp(selection, selected));
         let mono = settings.rendering == foveonic::render::Rendering::Monochrome;
         let adjustment = if selected == COLORS.len() {
             &mut controls.master
@@ -124,6 +124,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             -1. ..=1.,
             0.,
         );
+        crate::editor::direct_color::button(ui);
         if mono {
             ui.weak("Lightness uses the original subject colors.");
         }

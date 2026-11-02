@@ -13,12 +13,18 @@ kind: reference
 
 - Merrill Noise offers joint multiscale sensor-layer filtering, with Rows and Rows + Columns choices. Both reduce broad color blotches. Rows + Columns also applies broader shield-based correction and can change shadow tint. Reference remains the default.
 - Independent Directional banding targets narrow lines and wider stripes in both directions, with Fine and Coarse strength and size controls. It works with either noise method in Color and Monochrome. Reference banding and its row-correction switch now live together in Noise.
-- Compact speckle cleanup offers threshold and 3, 5 or 7 pixel size choices for bright points and small clusters. Highlight protection uses original sensor values so white balance does not hide unclipped speckles from detection.
+- Train a User noise profile from lens-cap captures in the Noise section menu. Profiles learn noise and banding weights plus camera-specific hot-pixel locations, applied only to a matching camera serial. Provided weights remain available and cover untrained ISOs.
+- Compact speckle cleanup offers threshold and 3, 5 or 7 pixel size choices for bright points and small clusters. Highlight protection uses original sensor values so white balance does not hide unclipped speckles from detection. Isolated near-clipped spikes in dark surroundings can also be repaired while supported highlights remain protected.
 - Neutralize shadows selectively reduces green and magenta casts in dark, nearly gray regions. Strength starts at zero, with shadow, color and hue selectivity controls.
+- Merrill Detail offers stronger Fine and Coarse amounts up to three. Improve weak-color protection during texture restoration and fix block artifacts from unmapped border weights.
 - Faster Merrill row estimation, band-strength edits, shadow-neutrality edits and joint filtering through shared measurements, guarded buffer reuse and bounded active-photo caching. Bounded processing submissions reduce temporary GPU resource overlap during export.
 - Merrill captures recorded as Monochrome open in Monochrome automatically. Switching to Color restores ordinary color processing. The layer mixer now uses a CIE chromaticity guide with a fixed dashed selection triangle.
 - Browse photographs in grid, list or large views with star ratings, metadata sorting and search. Compare highlighted photographs while retaining one active editing session. Filename tooltips show capture details, and context menus offer copy-path and Finder actions.
 - Save and apply editing-section presets and camera-family defaults. White balance adds warmth and tint adjustments, with transient Before comparisons independent of saved edits.
+- Tone, Saturation and Color Range are separate editing sections with independent bypasses, resets, presets and processing choices. Universal Saturation offers gamut-aware Amount and Contrast plus overlapping Shadows, Midtones and Highlights adjustments. Reference saturation remains available independently of the Tone method.
+- Edit subject colors directly in the photograph with the Color Range eyedropper or D. Drag horizontally for Hue and vertically for Lightness, together in one gesture. Option/Alt + vertical adjusts Saturation. Configure the axes and sensitivity from the adjacent settings button or by right-clicking the photograph. Escape exits and Space pans.
+- Performance settings group thumbnail memory, decoded disk-cache size, background workers and look behind/ahead. Thumbnail retention uses a configurable memory budget, defaulting to 256 MiB, instead of a fixed image count.
+- Unavailable destinations appear red. Workspace status and errors fit on one toolbar line with full details on hover. Destination availability is checked in the background.
 
 ## 0.5.0
 

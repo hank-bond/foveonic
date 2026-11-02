@@ -1,0 +1,16 @@
+---
+summary: "Direct color editing selects existing color ranges from the photograph and changes their HSL sliders through dragging."
+kind: reference
+status: accepted
+implementation: conforming
+---
+
+# Direct color editing
+
+Color Range must offer an on-image editing tool, toggled by its button or D. Escape returns to ordinary navigation. Workspace shortcuts must respect text fields and modal input. The tool's active state, sampled selection and gesture state are transient workspace data, separate from photographic settings and presets.
+
+Clicking the photograph selects its subject color using the same cleaned, white-balanced neutral guide and eight overlapping range weights used by Color Range. Selection must remain fixed until the gesture ends. While dragging, keep affected neighboring swatches colored and mute the others. Retain a white border on the selected range whose sliders are displayed. The tool button must use an eyedropper icon. Both tool buttons must use the shared control height, button padding, border and interaction states used by Browse and Auto. Icons must have inset, font-scaled bounds rather than define their own button size. Nearly neutral or unreliable near-black samples should make no edit. Sampling must remain asynchronous and transfer only a small result from the GPU.
+
+Horizontal dragging changes Hue. Upward dragging increases Lightness, and downward dragging decreases it. Option/Alt + vertical dragging changes Saturation. Both axes must contribute during the same drag, so diagonal movement changes both assigned adjustments. Changing direction must not require releasing the pointer. Option/Alt changes assignments during the gesture while retaining changes already made. Use screen-space distances independent of image zoom. The tool settings popover must assign Hue, Saturation and Lightness to ordinary or Option/Alt horizontal/vertical gestures, with one adjustment per gesture. Assigning an occupied gesture swaps the previous assignment. Offer Sensitivity from 1 to 100, defaulting to 50, and remember these choices in application preferences. Open the same settings from the adjacent settings icon or a right-click in the photograph while the tool is active. Clamp ordinary HSL values to their existing slider limits, deriving each update from the gesture's original settings. In Monochrome only Lightness applies.
+
+Dragging must change the existing Color Range settings and sliders, reusing ordinary rendering, saving, undo/reset, presets, batch and DNG behavior. It must not add a new processing stage or mask. Disabling Color Range, viewing Before or diagnostic output, changing the photograph, or receiving an obsolete pick must not edit the wrong settings. Image geometry must account for orientation, crop, reduced previews and zoom/pan. Normal viewport navigation remains available outside this tool, and Space temporarily permits panning while it is active.

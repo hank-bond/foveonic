@@ -308,3 +308,61 @@ fn gpu_editor_eight_ranges_leave_unselected_color_centers_unchanged() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_color_range_picker_shares_overlap_and_neutral_protection() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [5, 5];
+    let mut params =
+        color_editor::PickParams::new(extent, ColorSpace::Srgb, 1., [2, 2], [0, 0, 5, 5]);
+    params.guide_matrix = [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]];
+    for (rgb, expected) in [
+        ([1_f32, 0., 0.], [1., 0., 0., 0., 0., 0., 0., 0.]),
+        ([1., 0.25, 0.], [0.5, 0.5, 0., 0., 0., 0., 0., 0.]),
+        ([1., 0.5, 0.], [0., 1., 0., 0., 0., 0., 0., 0.]),
+        ([1., 0.75, 0.], [0., 0.5, 0.5, 0., 0., 0., 0., 0.]),
+        ([0.25, 0., 1.], [0., 0., 0., 0., 0., 0.5, 0.5, 0.]),
+        ([0.4, 0.4, 0.4], [0.; 8]),
+        ([0.4, 0.401, 0.4], [0.; 8]),
+        ([0.000001, 0., 0.], [0.; 8]),
+    ] {
+        let source = gpu.upload("pick colors", &rgb.repeat(25)).unwrap();
+        let before = gpu.activity();
+        let picked = color_editor::pick(&gpu, &source, params).unwrap();
+        assert!(
+            picked
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 1e-6),
+            "{rgb:?}: {picked:?}"
+        );
+        assert_eq!(gpu.activity().since(before).readback_bytes, 32);
+        let mut corner = params;
+        corner.shape[2..].copy_from_slice(&[0, 0]);
+        assert_eq!(color_editor::pick(&gpu, &source, corner).unwrap(), picked);
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_color_picker_neighborhood_stays_inside_the_active_crop() {
+    let gpu = Gpu::new().unwrap();
+    let mut params =
+        color_editor::PickParams::new([5, 5], ColorSpace::Srgb, 1., [1, 1], [1, 1, 4, 4]);
+    params.guide_matrix = [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]];
+    let pixels: Vec<f32> = (0..5)
+        .flat_map(|y| {
+            (0..5).flat_map(move |x| {
+                if (1..4).contains(&x) && (1..4).contains(&y) {
+                    [1., 0., 0.]
+                } else {
+                    [0., 0., 1.]
+                }
+            })
+        })
+        .collect();
+    let guide = gpu.upload("cropped color", &pixels).unwrap();
+    let picked = color_editor::pick(&gpu, &guide, params).unwrap();
+    assert_eq!(picked, [1., 0., 0., 0., 0., 0., 0., 0.]);
+}

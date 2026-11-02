@@ -353,6 +353,53 @@ pub fn button(ui: &mut egui::Ui, label: &str, on: bool, minimum: egui::Vec2) -> 
     response
 }
 
+/// Square icon controls use the same height, padding and interaction states as text buttons.
+pub fn icon_button(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    let response = button(ui, "", on, egui::Vec2::splat(control_height(ui)));
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
+    });
+    response
+}
+
+pub fn icon_menu_button<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let side = control_height(ui);
+    let background = ui.painter().add(egui::Shape::Noop);
+    let result = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding = button_padding(ui);
+            egui::menu::menu_custom_button(
+                ui,
+                egui::Button::new("")
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::NONE)
+                    .min_size(egui::Vec2::splat(side)),
+                contents,
+            )
+        })
+        .inner;
+    let on = result.inner.is_some();
+    ui.painter().set(
+        background,
+        frame(ui, &result.response, on, result.response.rect),
+    );
+    result.response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
+    });
+    result
+}
+
+/// Center a square glyph using the standard vertical padding on all four sides.
+pub fn icon_rect(ui: &egui::Ui, response: &egui::Response) -> egui::Rect {
+    let side =
+        (response.rect.width().min(response.rect.height()) - 2. * button_padding(ui).y).max(0.);
+    egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(side))
+}
+
 pub fn checkbox(
     ui: &mut egui::Ui,
     value: &mut bool,
@@ -1062,3 +1109,58 @@ mod tests {
 #[cfg(test)]
 #[path = "widgets_numeric_test.rs"]
 mod numeric_tests;
+
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+
+    #[test]
+    fn icon_controls_share_text_button_geometry_and_inset_glyphs_across_styles() {
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            for em in [13., 20., 28.] {
+                let ctx = egui::Context::default();
+                install_style(&ctx);
+                ctx.set_theme(theme);
+                ctx.style_mut(|s| s.override_font_id = Some(egui::FontId::proportional(em)));
+                let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let before = ui.spacing().clone();
+                        centered_control_row(ui, |ui| {
+                            let browse = button(ui, "Browse…", false, egui::Vec2::ZERO);
+                            let auto = button(ui, "A", false, egui::vec2(22., 20.));
+                            let picker = icon_button(ui, "Picker", false);
+                            let menu = icon_menu_button(ui, "Settings", |ui| {
+                                ui.label("Options");
+                            });
+                            let menu = menu.response;
+                            for response in [&auto, &picker, &menu] {
+                                assert!(
+                                    (response.rect.height() - browse.rect.height()).abs() < 0.01,
+                                    "{theme:?}, {em}"
+                                );
+                                assert!(
+                                    (response.rect.center().y - browse.rect.center().y).abs()
+                                        < 0.01
+                                );
+                            }
+                            for response in [&picker, &menu] {
+                                assert!(
+                                    (response.rect.width() - response.rect.height()).abs() < 0.01
+                                );
+                                let glyph = icon_rect(ui, response);
+                                assert_eq!(glyph.center(), response.rect.center());
+                                let padding = button_padding(ui).y;
+                                assert!(
+                                    (glyph.left() - response.rect.left() - padding).abs() < 0.01
+                                );
+                                assert!((glyph.top() - response.rect.top() - padding).abs() < 0.01);
+                            }
+                        });
+                        assert_eq!(before.button_padding, ui.spacing().button_padding);
+                        assert_eq!(before.interact_size, ui.spacing().interact_size);
+                    });
+                });
+            }
+        }
+    }
+}

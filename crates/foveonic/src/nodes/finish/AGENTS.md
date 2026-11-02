@@ -22,7 +22,7 @@ Linear gain transfer accepts a reference pair related by scalar brightness multi
 - **[code_channel_map.rs](./code_channel_map.rs)** Mixes integral RGB codes with normalized channel weights or copies selected channels.
 - **[code_crop.rs](./code_crop.rs)** Crops, rotates and resizes integral RGB codes with fixed-point mapping and source-derived interpolation phases.
 - **[code_response.rs](./code_response.rs)** Maps unsigned integral RGB codes through supplied linear photographic response tables.
-- **[color_editor.rs](./color_editor.rs)** Edits hue, saturation and lightness in linear RGB using an independent cleaned color guide.
+- **[color_editor.rs](./color_editor.rs)** Edits linear Hue, Saturation and Lightness and picks subject ranges from the same cleaned color guide.
 - **[color_sharpen.rs](./color_sharpen.rs)** Sharpens integral RGB channels with wrapped neighborhood sums and signal-dependent thresholds.
 - **[image_region.rs](./image_region.rs)** Copies a rectangular numerical signal on the GPU while preserving every component bit.
 - **[linear_basis.rs](./linear_basis.rs)** Maps declared linear RGB codes into another linear sample basis without tone or clipping.

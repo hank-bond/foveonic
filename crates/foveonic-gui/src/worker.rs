@@ -135,14 +135,28 @@ pub struct ScopeSnapshot {
 
 pub enum Update {
     Image(Box<Reply>),
+    ColorPick(ColorPickReply),
     Scopes {
         key: ScopeKey,
         result: Result<foveonic::scopes::Scopes, String>,
     },
 }
 
+pub struct ColorPickRequest {
+    pub token: u64,
+    pub path: PathBuf,
+    pub settings: Settings,
+    pub uv: [f32; 2],
+}
+pub struct ColorPickReply {
+    pub token: u64,
+    pub path: PathBuf,
+    pub weights: Result<[f32; 8], String>,
+}
+
 struct Pending {
     cancel_before: u64,
+    color_pick: Option<ColorPickRequest>,
     activity: Option<foveonic::decode_cache::Activity>,
     request: Option<Request>,
     scopes: Option<ScopeRequest>,
@@ -162,6 +176,7 @@ impl Worker {
         let pending = Arc::new((
             Mutex::new(Pending {
                 cancel_before: 0,
+                color_pick: None,
                 activity: None,
                 request: None,
                 scopes: None,
@@ -189,6 +204,7 @@ impl Worker {
                         && !state.clear
                         && state.request.is_none()
                         && state.scopes.is_none()
+                        && state.color_pick.is_none()
                     {
                         state = wake.wait(state).unwrap();
                     }
@@ -198,6 +214,37 @@ impl Worker {
                     if state.clear {
                         state.clear = false;
                         source = None;
+                        continue;
+                    }
+                    if let Some(pick) = state.color_pick.take() {
+                        let _activity = decoded_cache.foreground();
+                        let generation = state.cancel_before;
+                        let recipe = pick.settings.photographic_recipe();
+                        drop(state);
+                        let cancel = || {
+                            let pending = slot.0.lock().unwrap();
+                            pending.stop
+                                || pending.clear
+                                || pending.cancel_before != generation
+                                || pending.request.as_ref().is_some_and(|r| {
+                                    r.path != pick.path
+                                        || r.export.is_some()
+                                        || r.settings.photographic_recipe() != recipe
+                                })
+                        };
+                        let weights = pick_color(&engine, source.as_mut(), &pick, cancel)
+                            .map_err(|e| e.to_string());
+                        if tx
+                            .send(Update::ColorPick(ColorPickReply {
+                                token: pick.token,
+                                path: pick.path,
+                                weights,
+                            }))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        context.request_repaint();
                         continue;
                     }
                     if state.request.is_none() {
@@ -369,9 +416,15 @@ impl Worker {
             context: repaint,
         }
     }
+    pub fn pick_color(&self, request: ColorPickRequest) {
+        let (lock, wake) = &*self.pending;
+        lock.lock().unwrap().color_pick = Some(request);
+        wake.notify_one();
+    }
     pub fn cancel_before(&self, revision: u64) {
         let mut pending = self.pending.0.lock().unwrap();
         pending.cancel_before = revision;
+        pending.color_pick = None;
         pending.request = None;
         pending.scopes = None;
         pending.activity = None;
@@ -381,6 +434,7 @@ impl Worker {
         let (lock, wake) = &*self.pending;
         let mut state = lock.lock().unwrap();
         state.clear = true;
+        state.color_pick = None;
         state.request = None;
         state.activity = None;
         state.scopes = None;
@@ -414,6 +468,52 @@ impl Drop for Worker {
         lock.lock().unwrap().stop = true;
         wake.notify_one();
     }
+}
+
+fn pick_color(
+    engine: &Engine,
+    source: Option<&mut (PathBuf, RenderSession)>,
+    request: &ColorPickRequest,
+    cancel: impl Fn() -> bool,
+) -> foveonic::source::Result<[f32; 8]> {
+    if cancel() {
+        return Err("color selection canceled".into());
+    }
+    let Some((path, session)) = source else {
+        return Err("photo is no longer loaded".into());
+    };
+    if *path != request.path {
+        return Err("photo changed before color selection".into());
+    }
+    let mut settings = request.settings.clone();
+    settings.preview_region = None;
+    settings.output_size = None;
+    // Sampling native coordinates gives Full, Fast and Smart the same subject selection.
+    settings.preview_quality = PreviewQuality::Full;
+    let errors = resolve_camera_settings(&mut settings, session.metadata());
+    if !errors.is_empty() {
+        return Err(errors.join("; ").into());
+    }
+    let artifacts = engine
+        .render_session(
+            session,
+            &settings,
+            &["color-editor.guide"],
+            &cancel,
+            &mut Profile::default(),
+        )?
+        .ok_or("color selection canceled")?;
+    if cancel() {
+        return Err("color selection canceled".into());
+    }
+    let Some(Artifact {
+        content: Content::Image(guide),
+        ..
+    }) = artifacts.into_iter().next()
+    else {
+        return Err("color selection requires a guide image".into());
+    };
+    engine.pick_color_range(&guide, request.uv)
 }
 
 fn analyze_scopes(
@@ -1080,7 +1180,9 @@ mod tests {
                         break;
                     }
                 }
-                super::Update::Image(_) => panic!("scope-only jobs must not render another image"),
+                super::Update::Image(_) | super::Update::ColorPick(_) => {
+                    panic!("scope-only jobs must not publish other jobs")
+                }
             }
         }
         request_scopes(&worker, &frame, None);
@@ -1103,6 +1205,7 @@ mod tests {
             pending: std::sync::Arc::new((
                 std::sync::Mutex::new(super::Pending {
                     cancel_before: 0,
+                    color_pick: None,
                     activity: None,
                     request: None,
                     queued_at: None,
@@ -1470,5 +1573,95 @@ mod preview_tests {
         assert!(frame.artifact.settings.reconstruction.is_some());
         assert!(reply.settings.reconstruction.is_some());
         drop(worker);
+    }
+}
+
+#[cfg(test)]
+mod color_pick_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
+    fn original_color_pick_reuses_loaded_photo_and_keeps_creative_hsl_out_of_the_guide() {
+        let path = PathBuf::from(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap());
+        let source = foveonic::source::Source::open(&path).unwrap();
+        let caps = foveonic::render::ControlCapabilities::from_metadata(&source.metadata).unwrap();
+        let mut settings = caps
+            .editing_defaults(&source.metadata, foveonic::render::Rendering::Color)
+            .unwrap();
+        settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+        settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+        let worker = Worker::new(Engine::new().unwrap(), egui::Context::default());
+        worker.submit(Request {
+            calibration: None,
+            rendition: Default::default(),
+            revision: 1,
+            path: path.clone(),
+            settings: settings.clone(),
+            preview_quality: PreviewMode::Full,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        });
+        loop {
+            if let Update::Image(reply) = worker
+                .replies
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap()
+            {
+                assert!(reply.result.unwrap().is_some());
+                break;
+            }
+        }
+        let mut expected = None;
+        for token in 1..=5 {
+            if token == 2 {
+                settings.photographic.color_editor.master.hue = 0.8;
+                settings.photographic.color_editor.master.lightness = 0.7;
+            }
+            if token == 3 {
+                settings.preview_quality = PreviewQuality::Draft;
+            }
+            if token == 4 {
+                settings.white_balance.clear();
+                settings.color_mode.clear();
+            }
+            if token == 5 {
+                settings.rendering = foveonic::render::Rendering::Monochrome;
+            }
+            let began = std::time::Instant::now();
+            worker.pick_color(ColorPickRequest {
+                token,
+                path: path.clone(),
+                settings: settings.clone(),
+                uv: [0.5, 0.5],
+            });
+            let reply = loop {
+                if let Update::ColorPick(reply) = worker
+                    .replies
+                    .recv_timeout(std::time::Duration::from_secs(30))
+                    .unwrap()
+                {
+                    break reply;
+                }
+            };
+            assert_eq!(reply.token, token);
+            assert_eq!(reply.path, path);
+            eprintln!(
+                "color pick {token}: {:.1} ms",
+                began.elapsed().as_secs_f64() * 1000.
+            );
+            let weights = reply
+                .weights
+                .unwrap_or_else(|error| panic!("pick {token}: {error}"));
+            assert!(
+                (weights.iter().sum::<f32>() - 1.).abs() < 1e-5,
+                "{weights:?}"
+            );
+            if token == 2 {
+                assert_eq!(expected.unwrap(), weights);
+            } else if token == 1 {
+                expected = Some(weights);
+            }
+        }
     }
 }

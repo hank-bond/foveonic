@@ -94,6 +94,14 @@ Owner review supersedes the earlier repair cutoff A-toggle design: the cutoff se
 
 Arrow navigation was previously absent. Individual tiles now receive pointer clicks without becoming separate keyboard focus targets. Focus is acquired on pointer press so egui installs the arrow-key filter by release, including the first arrow immediately after clicking. Virtualized row heights now match the actual tile/list heights; egui adds item spacing itself. This removes the previous spacing mismatch and makes offscreen selection scrolling accurate. The GUI suite passes (60 passed, five opt-in tests ignored), along with strict all-target GUI Clippy, changed-file formatting, documentation generation/checks and tool tests, and diff checks. Native owner interaction review remains pending.
 
+## Destination availability
+
+The [Import workflow](../docs/specs/import-workflow.md) now marks a saved destination red when it is no longer an accessible directory. The toolbar uses the theme's error color for its text, border and tinted background, and retains the full path with an unavailable-folder explanation on hover. The button still opens the destination picker. An unchosen destination keeps ordinary styling. Existing toolbar interaction tests and workspace tests pass. This is a presentation change and does not alter batch submission or persisted destinations.
+
+## Inline workspace status
+
+The owner requested all main-workspace statuses to the right of Settings without adding toolbar rows. Import review now supplies its status and error details as text. The app combines these with foreground statuses and editing-save warnings, showing errors first and retaining save Retry inline. One toolbar presentation function flattens multiline messages, truncates them to remaining width and preserves full details on hover. Remove the separate import-history line, processing-error expander and wrapped save-warning row. Batch results still survive folder changes. A narrow/wide egui regression confirms multiline errors remain one row after Settings and do not expand the toolbar. Workspace tests, strict Clippy, formatting, documentation and artwork checks pass. Native captures confirm the single-row presentation in the rebuilt optimized app.
+
 ## Evidence and remaining work
 
 - Twelve-view native macOS checks covered all six originals after cleanup. Viewport/navigator pixel comparisons match the preceding sensor-gain checks except for one organizer hover tooltip and its shadow overlapping the canvas; processing/display geometry is unchanged.

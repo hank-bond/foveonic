@@ -173,7 +173,7 @@ pub(super) fn build(
             return Ok(());
         }
     }
-    if settings.color_editor_active() {
+    if settings.color_editor_active() || names.contains(&"color-editor.guide") {
         let mut guide = color_guide(engine, source, settings, profile, execution)?;
         let DataType::LinearRgb(guide_space) = guide.graph.outputs[guide.final_id].data else {
             return Err("color guide must be linear RGB".into());

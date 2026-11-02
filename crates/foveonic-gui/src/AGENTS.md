@@ -4,6 +4,8 @@ summary: "GUI modules separate thumbnail browsing, interaction, bounded image jo
 
 # GUI source
 
+Frame updates and widget drawing must not probe the filesystem or wait for worker/GPU completion. Receive background snapshots and queue bounded requests instead. Recompute whole-folder state only when its inputs change. Keep filesystem work outside locks shared with the UI.
+
 Run source decoding and processing on the background image worker. Keep one active image job and one replaceable pending request. Same-photo/root completed older frames may advance feedback without replacing requested settings; reject other-photo/root and out-of-order replies. Deliver images before revision-matched scopes and deferred navigator preparation. Let export jobs finish while editing controls are disabled.
 
 [Import batches](../../../docs/specs/import-workflow.md) have a separate queue of frozen requests and keep interaction available. Reuse the photographic/export paths. Their independent executor shares compiled kernels and yields I/O and GPU submissions to the foreground gate. Keep import review edits in memory and source sidecar writes disabled. Destination history is one compact current-state file, not an audit log or a catalog.
@@ -25,8 +27,8 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 ### Source files
 
 - **[actions.rs](./actions.rs)** Applies workspace commands through browser selection and the existing per-photo editing session.
-- **[application_settings.rs](./application_settings.rs)** Configures application display and temporary disk reuse independently of photographic edits.
-- **[batch.rs](./batch.rs)** Runs frozen Browse and Import batches while yielding work to interactive rendering.
+- **[application_settings.rs](./application_settings.rs)** Configures display, thumbnail memory and background disk reuse independently of photographic edits.
+- **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
 - **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
 - **[browser_chrome.rs](./browser_chrome.rs)** Draws compact browser view/sort/search menus and independent star-rating controls.
 - **[browser_folders.rs](./browser_folders.rs)** Discovers descendant X3Fs and lays out folder groups for virtualized browsing.

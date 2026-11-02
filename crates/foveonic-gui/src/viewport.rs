@@ -424,6 +424,8 @@ pub struct Viewport {
     /// None follows Fit. Some fixes the number of UI points per image pixel.
     scale: Option<f32>,
     pub pan: egui::Vec2,
+    pub editing: bool,
+    response: Option<egui::Response>,
     pub one_to_one: bool,
     pub zoom_snap: ZoomPreset,
     last_canvas: Option<(egui::Vec2, [u32; 2])>,
@@ -437,6 +439,8 @@ impl Default for Viewport {
         Self {
             scale: None,
             pan: egui::Vec2::ZERO,
+            editing: false,
+            response: None,
             one_to_one: false,
             zoom_snap: ZoomPreset::default(),
             last_canvas: None,
@@ -594,11 +598,13 @@ impl Viewport {
         if self.one_to_one {
             self.set_scale_at(1. / ui.ctx().pixels_per_point(), egui::Vec2::ZERO);
         }
-        if response.dragged() {
+        self.response = Some(response.clone());
+        let navigation = !self.editing || ui.input(|i| i.key_down(egui::Key::Space));
+        if response.dragged() && navigation {
             self.scale.get_or_insert(fit);
             self.pan += ui.input(|i| i.pointer.delta());
         }
-        if response.double_clicked() {
+        if response.double_clicked() && navigation {
             let anchor = response
                 .interact_pointer_pos()
                 .map(|mouse| mouse - rect.center())
@@ -685,6 +691,21 @@ impl Viewport {
                 probe: crate::timing::DrawProbe::new(revision),
             },
         ));
+    }
+
+    pub fn pointer(
+        &self,
+        position: Option<egui::Pos2>,
+    ) -> Option<(egui::Response, Option<[f32; 2]>)> {
+        let response = self.response.clone()?;
+        let (canvas, image) = self.last_image?;
+        let uv = position
+            .filter(|p| canvas.contains(*p) && image.contains(*p))
+            .map(|p| {
+                let q = (p - image.min) / image.size();
+                [q.x, q.y]
+            });
+        Some((response, uv))
     }
 
     pub fn visible_uv(&self) -> egui::Rect {

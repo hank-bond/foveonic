@@ -36,7 +36,7 @@ pub struct Selection {
 const STATUS_RADIUS: f32 = 3.;
 const STATUS_INSET: f32 = 10.;
 const STATUS_GUTTER: f32 = 20.;
-const THUMBNAIL_CACHE_ENTRIES: usize = 256;
+const THUMBNAIL_BYTES_PER_PIXEL: u64 = 8;
 const PREVIEW_CACHE_ENTRIES: usize = 8;
 // Texture uploads must leave time for input and the selected image every frame.
 const REPLIES_PER_FRAME: usize = 4;
@@ -135,6 +135,8 @@ pub struct Browser {
     preview_attempts: HashMap<PathBuf, std::time::Instant>,
     rendered_revisions: HashMap<PathBuf, u64>,
     order: VecDeque<PathBuf>,
+    thumbnail_budget_bytes: u64,
+    thumbnail_bytes: u64,
     reveal_selection: bool,
 }
 impl Browser {
@@ -212,6 +214,8 @@ impl Browser {
             preview_attempts: HashMap::new(),
             rendered_revisions: HashMap::new(),
             order: VecDeque::new(),
+            thumbnail_budget_bytes: crate::preferences::DEFAULT_THUMBNAIL_BYTES,
+            thumbnail_bytes: 0,
             reveal_selection: false,
         }
     }
@@ -253,6 +257,7 @@ impl Browser {
         self.clear_selection = false;
         self.decode_states = Arc::new(HashMap::new());
         self.cache.clear();
+        self.thumbnail_bytes = 0;
         self.previews.clear();
         self.preview_order.clear();
         self.versions.clear();
@@ -281,6 +286,7 @@ impl Browser {
         self.preview_checked.clear();
         self.preview_attempts.clear();
         self.cache.clear();
+        self.thumbnail_bytes = 0;
         self.previews.clear();
         self.preview_order.clear();
         self.rendered_revisions.clear();
@@ -363,19 +369,12 @@ impl Browser {
             texture: self.upload(ctx, image.thumbnail.image),
             native_extent,
         };
-        self.cache.insert(path.clone(), Some(thumbnail));
+        self.thumbnail_bytes += Self::thumbnail_bytes(&thumbnail);
+        if let Some(Some(previous)) = self.cache.insert(path.clone(), Some(thumbnail)) {
+            self.thumbnail_bytes -= Self::thumbnail_bytes(&previous);
+        }
         self.order.retain(|p| p != &path);
         self.order.push_back(path.clone());
-        while self.order.len() > THUMBNAIL_CACHE_ENTRIES {
-            let index = self
-                .order
-                .iter()
-                .position(|p| !self.visible.contains(p))
-                .unwrap_or(0);
-            if let Some(old) = self.order.remove(index) {
-                self.cache.remove(&old);
-            }
-        }
         if let Some(preview) = image.preview {
             self.previews.insert(
                 path.clone(),
@@ -472,6 +471,30 @@ impl Browser {
         let wanted: Vec<_> = self.preview_demand.drain().collect();
         self.preview_worker.retain(&wanted);
         self.pending_previews.retain(|p| wanted.contains(p));
+        self.trim_thumbnails(&wanted);
+    }
+    pub fn set_thumbnail_budget(&mut self, bytes: u64) {
+        self.thumbnail_budget_bytes = bytes;
+    }
+    fn thumbnail_bytes(thumbnail: &Thumbnail) -> u64 {
+        let [width, height] = thumbnail.texture.size();
+        width as u64 * height as u64 * THUMBNAIL_BYTES_PER_PIXEL
+    }
+    fn trim_thumbnails(&mut self, wanted: &[PathBuf]) {
+        while self.thumbnail_bytes > self.thumbnail_budget_bytes {
+            let Some(index) = self
+                .order
+                .iter()
+                .position(|p| !self.visible.contains(p) && !wanted.contains(p))
+            else {
+                break;
+            };
+            if let Some(old) = self.order.remove(index) {
+                if let Some(Some(thumbnail)) = self.cache.remove(&old) {
+                    self.thumbnail_bytes -= Self::thumbnail_bytes(&thumbnail);
+                }
+            }
+        }
     }
     fn schedule_thumbnails(&mut self, visible: Vec<PathBuf>) {
         self.visible = visible;
@@ -516,7 +539,12 @@ impl Browser {
     }
     pub fn thumbnail(&mut self, path: &Path) -> Option<Thumbnail> {
         if let Some(texture) = self.cache.get(path) {
-            return texture.clone();
+            let texture = texture.clone();
+            if texture.is_some() && self.order.back().is_none_or(|p| p != path) {
+                self.order.retain(|p| p != path);
+                self.order.push_back(path.to_owned());
+            }
+            return texture;
         }
         self.request(path, Kind::Thumbnail);
         None
@@ -906,6 +934,65 @@ mod tests {
         .unwrap()
     }
     #[test]
+    fn thumbnail_budget_counts_pixels_and_evicts_least_recently_used() {
+        use std::path::PathBuf;
+        let context = eframe::egui::Context::default();
+        let mut browser = super::Browser::new(context.clone());
+        let paths = ["a", "b", "c", "d"].map(PathBuf::from);
+        browser.set_thumbnail_budget(64 * 1024);
+        for (i, path) in paths.iter().enumerate() {
+            let extent = if i == 0 { [64, 64] } else { [64, 32] };
+            let mut image = prepared([128; 3], extent);
+            image.preview = None;
+            browser.insert(&context, path.clone(), image);
+            if i == 2 {
+                browser.finish_previews();
+                assert_eq!(browser.cache.len(), 3);
+                browser.thumbnail(&paths[0]).unwrap();
+            }
+        }
+        browser.finish_previews();
+        assert!(!browser.cache.contains_key(&paths[1]));
+        assert!(browser.cache.contains_key(&paths[0]));
+        assert_eq!(browser.cache.len(), 3);
+
+        // Replacing a large texture releases its full previous charge.
+        browser.insert(&context, paths[0].clone(), prepared([128; 3], [32, 32]));
+        browser.set_thumbnail_budget(40 * 1024);
+        browser.finish_previews();
+        assert_eq!(browser.cache.len(), 3);
+        browser.set_thumbnail_budget(8 * 1024);
+        browser.finish_previews();
+        assert_eq!(browser.cache.len(), 1);
+        assert!(browser.cache.contains_key(&paths[0]));
+        assert_eq!(browser.thumbnail_bytes, 8 * 1024);
+        browser.invalidate_previews();
+        assert_eq!(browser.thumbnail_bytes, 0);
+        browser.insert(&context, paths[0].clone(), prepared([128; 3], [32, 32]));
+        browser.finish_previews();
+        assert_eq!(browser.thumbnail_bytes, 8 * 1024);
+    }
+    #[test]
+    fn thumbnail_budget_pins_sidebar_and_viewport_until_both_finish() {
+        use std::path::PathBuf;
+        let context = eframe::egui::Context::default();
+        let mut browser = super::Browser::new(context.clone());
+        let paths = ["sidebar", "comparison", "offscreen"].map(PathBuf::from);
+        browser.set_thumbnail_budget(8 * 1024);
+        for path in &paths {
+            browser.insert(&context, path.clone(), prepared([128; 3], [32, 32]));
+        }
+        browser.visible = vec![paths[0].clone()];
+        browser.preview(&paths[1]).unwrap();
+        browser.finish_previews();
+        assert_eq!(browser.cache.len(), 2);
+        assert!(!browser.cache.contains_key(&paths[2]));
+        // Once the comparison leaves the viewport its texture can be evicted.
+        browser.finish_previews();
+        assert_eq!(browser.cache.len(), 1);
+        assert!(browser.cache.contains_key(&paths[0]));
+    }
+    #[test]
     fn rendered_thumbnails_replace_embedded_images_and_reject_late_replies() {
         let context = eframe::egui::Context::default();
         let mut browser = super::Browser::new(context.clone());
@@ -1045,7 +1132,7 @@ mod tests {
         }
         data.extend(b"IMAG");
         data.extend(directory.to_le_bytes());
-        let count = super::THUMBNAIL_CACHE_ENTRIES + 20;
+        let count = 673;
         for index in 0..count {
             std::fs::write(folder.path().join(format!("photo-{index:04}.x3f")), &data).unwrap();
         }
@@ -1065,6 +1152,7 @@ mod tests {
                     eframe::egui::CentralPanel::default().show(ctx, |ui| {
                         browser.organizer(ui, None, crate::preferences::Organizer::Icons);
                     });
+                    browser.finish_previews();
                 },
             )
         };
@@ -1078,7 +1166,7 @@ mod tests {
         }
         assert!(browser.pending.is_empty(), "folder warmup did not finish");
         assert_eq!(browser.versions.len(), count);
-        assert_eq!(browser.order.len(), super::THUMBNAIL_CACHE_ENTRIES);
+        assert_eq!(browser.order.len(), count);
         assert!(browser
             .visible
             .iter()

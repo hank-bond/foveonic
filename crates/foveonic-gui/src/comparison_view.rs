@@ -8,7 +8,8 @@ use std::path::PathBuf;
 const VISIBLE_PREVIEWS: usize = 7;
 
 impl App {
-    pub(crate) fn comparison_view(&mut self, ui: &mut egui::Ui, paths: &[PathBuf]) {
+    pub(crate) fn comparison_view(&mut self, ui: &mut egui::Ui, paths: &[PathBuf]) -> bool {
+        let mut changed = false;
         let available = ui.available_size();
         if ui.rect_contains_pointer(ui.available_rect_before_wrap()) {
             self.comparison_zoom =
@@ -58,8 +59,14 @@ impl App {
                                 .id_salt("active comparison"),
                         );
                         child.set_clip_rect(image_rect.intersect(ui.clip_rect()));
-                        child.disable();
-                        self.show_photo(&mut child, mapping);
+                        // Ordinary comparison navigation belongs to the canvas. The
+                        // active photo alone accepts direct color gestures.
+                        if !crate::editor::direct_color::active(ui.ctx())
+                            || !self.color_tool_available(mapping)
+                        {
+                            child.disable();
+                        }
+                        changed |= self.show_photo(&mut child, mapping);
                         self.before_badge(&child, image_rect);
                     } else {
                         let preview = if large_previews < VISIBLE_PREVIEWS {
@@ -105,5 +112,6 @@ impl App {
                     );
                 }
             });
+        changed
     }
 }

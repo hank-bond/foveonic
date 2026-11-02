@@ -8,6 +8,8 @@ Choose the processing family once in the parent dispatcher. Each family panel ow
 
 Construct numeric controls through `widgets::slider` and `widgets::drag_value`. These install the shared display policy of at most three significant digits and two decimal places. Do not instantiate raw egui numeric widgets or override their formatter in production call sites. A source-boundary test enforces this. Preserve stored precision and measure the same shared text when reserving value-field width. Both themes use the policy and suppress built-in full-precision hints.
 
+Ordinary icon controls use `widgets::icon_button`, `widgets::icon_menu_button` and `widgets::icon_rect` for shared sizing, padding and states. Compact header actions retain their dedicated layout.
+
 Editing tool order lives in application preferences. Family panels declare supported tools, and the shared section arranger supplies stable tool identities and accepts typed editing-tool drops. Reordering must not report an image edit or alter pipeline order. Tool headers share the scaled workspace grip.
 
 Camera metadata supplies white-balance and color-mode choices. Normalize unsupported settings through the processor's control contract when metadata arrives. Adding a family should add a panel without adding family switches to shared widgets.

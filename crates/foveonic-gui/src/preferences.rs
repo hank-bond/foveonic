@@ -125,6 +125,10 @@ impl Section {
 }
 pub use crate::editor::Section as EditingSection;
 
+pub const MIB: u64 = 1024 * 1024;
+pub const DEFAULT_THUMBNAIL_BYTES: u64 = 256 * MIB;
+pub const THUMBNAIL_BYTES_RANGE: std::ops::RangeInclusive<u64> = 16 * MIB..=2048 * MIB;
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -140,11 +144,13 @@ pub struct Preferences {
     pub browser_show_ratings: bool,
     #[serde(with = "crate::editor::storage")]
     pub editor: crate::editor::Library,
+    pub direct_color: crate::editor::direct_color::Configuration,
     pub scope: Scope,
     pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
     pub preview_quality: PreviewMode,
     pub decode_cache: foveonic::decode_cache::Settings,
+    pub thumbnail_cache_bytes: u64,
     pub noise_profile: crate::noise_calibration::Slot,
     pub display_gamut: crate::preferences::DisplayGamut,
     pub sections: Vec<Section>,
@@ -163,11 +169,13 @@ impl Default for Preferences {
             browser_sort: Default::default(),
             browser_show_ratings: false,
             editor: Default::default(),
+            direct_color: Default::default(),
             scope: Scope::Histogram,
             scope_viewport: true,
             zoom_snap: ZoomPreset::default(),
             preview_quality: PreviewMode::Full,
             decode_cache: Default::default(),
+            thumbnail_cache_bytes: DEFAULT_THUMBNAIL_BYTES,
             noise_profile: Default::default(),
             display_gamut: Default::default(),
             sections: Section::ALL.to_vec(),
@@ -186,6 +194,10 @@ impl Preferences {
     }
     fn normalize(&mut self) {
         self.decode_cache.normalize();
+        self.direct_color.normalize();
+        self.thumbnail_cache_bytes = self
+            .thumbnail_cache_bytes
+            .clamp(*THUMBNAIL_BYTES_RANGE.start(), *THUMBNAIL_BYTES_RANGE.end());
         crate::editor::normalize_sections(&mut self.editing_sections);
         let mut seen = BTreeSet::new();
         self.sections.retain(|s| seen.insert(*s));
@@ -521,6 +533,32 @@ mod tests {
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+    #[test]
+    fn thumbnail_memory_defaults_migrates_and_persists_independently() {
+        let old: Preferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.thumbnail_cache_bytes, 256 * MIB);
+        let prefs = Preferences {
+            thumbnail_cache_bytes: 512 * MIB,
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec(&prefs).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Preferences>(&bytes).unwrap(),
+            prefs
+        );
+        let mut invalid = Preferences {
+            thumbnail_cache_bytes: 0,
+            ..Default::default()
+        };
+        invalid.normalize();
+        assert_eq!(
+            invalid.thumbnail_cache_bytes,
+            *THUMBNAIL_BYTES_RANGE.start()
+        );
+        invalid.thumbnail_cache_bytes = u64::MAX;
+        invalid.normalize();
+        assert_eq!(invalid.thumbnail_cache_bytes, *THUMBNAIL_BYTES_RANGE.end());
+    }
     #[test]
     fn preview_quality_defaults_full_and_round_trips_as_workspace_state() {
         assert_eq!(Preferences::default().preview_quality, PreviewMode::Full);

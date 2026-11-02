@@ -10,7 +10,7 @@ use foveonic::{decode_cache::Cache, importing::Disposition, render::Engine};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 const STATUS_POLL: std::time::Duration = std::time::Duration::from_millis(150);
-const ERROR_PANEL_HEIGHT: f32 = 120.;
+const DESTINATION_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub struct Review {
     calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
@@ -23,6 +23,8 @@ pub struct Review {
     errors: Vec<String>,
     worker: batch::Worker,
     received_imports: usize,
+    destination_check: Option<(PathBuf, std::time::Instant)>,
+    destination_unavailable: bool,
 }
 impl Review {
     pub fn new(engine: Engine, cache: Arc<Cache>, context: egui::Context) -> Self {
@@ -37,6 +39,8 @@ impl Review {
             errors: Vec::new(),
             worker: batch::Worker::new(engine, cache, context),
             received_imports: 0,
+            destination_check: None,
+            destination_unavailable: false,
         }
     }
     pub fn set_noise_calibration(
@@ -53,6 +57,7 @@ impl Review {
         self.browse_selection.clear();
         self.errors.clear();
         browser.recorded_marks.clear();
+        browser.refresh_filter();
         if browser.import_mode {
             self.worker.scan(batch::Scan {
                 defaults: self.defaults.clone(),
@@ -109,6 +114,7 @@ impl Review {
     }
     pub fn update(&mut self, browser: &mut Browser) {
         let mut replay_from = self.received_imports;
+        let mut filter_changed = false;
         if let Some(scanned) = self.worker.receive_scan() {
             if scanned.generation == self.generation {
                 self.scanning = false;
@@ -118,6 +124,7 @@ impl Review {
                 replay_from = scanned.completed_imports;
                 self.errors = scanned.errors;
                 if browser.import_mode {
+                    filter_changed = true;
                     browser.recorded_marks = scanned
                         .dispositions
                         .into_iter()
@@ -136,7 +143,7 @@ impl Review {
             }
         }
         let progress = self.worker.progress();
-        apply_imports(
+        filter_changed |= apply_imports(
             browser,
             &progress,
             self.scan_destination.as_deref(),
@@ -144,7 +151,9 @@ impl Review {
             self.received_imports,
         );
         self.received_imports = progress.imported.len();
-        browser.refresh_filter();
+        if filter_changed {
+            browser.refresh_filter();
+        }
     }
     pub fn ready(&self, browser: &Browser) -> bool {
         !self.worker.progress().running
@@ -156,42 +165,70 @@ impl Review {
                 !self.browse_selection.is_empty()
             }
     }
-    pub fn show_status(&self, ui: &mut egui::Ui) {
+    /// Directory probes share the background worker. Drawing never touches a removable drive.
+    pub fn destination_unavailable(
+        &mut self,
+        ctx: &egui::Context,
+        path: Option<&std::path::Path>,
+    ) -> bool {
+        let Some(path) = path else {
+            self.destination_check = None;
+            self.destination_unavailable = false;
+            return false;
+        };
+        let changed = self
+            .destination_check
+            .as_ref()
+            .is_none_or(|(old, _)| old != path);
+        if changed {
+            self.destination_unavailable = false;
+        }
+        if let Some((checked, available)) = self.worker.receive_directory() {
+            if checked == path {
+                self.destination_unavailable = !available;
+            }
+        }
+        if changed
+            || self
+                .destination_check
+                .as_ref()
+                .is_some_and(|(_, at)| at.elapsed() >= DESTINATION_POLL)
+        {
+            self.worker.check_directory(path.to_owned());
+            self.destination_check = Some((path.to_owned(), std::time::Instant::now()));
+        }
+        ctx.request_repaint_after(DESTINATION_POLL);
+        self.destination_unavailable
+    }
+    pub fn status(&self, context: &egui::Context) -> Option<(String, bool)> {
         let progress = self.worker.progress();
-        if self.scanning && self.browse_selection.is_empty() {
-            ui.weak("Checking import history…");
-        }
-        // Batch status remains visible when the owner returns to ordinary browsing.
-        if progress.running || progress.total > 0 || !progress.errors.is_empty() {
-            ui.horizontal(|ui| {
-                let label = if progress.running {
-                    "Processing"
-                } else {
-                    "Processing finished"
-                };
-                ui.label(format!(
-                    "{label} · {}/{} photos · {} errors",
-                    progress.completed,
-                    progress.total,
-                    progress.errors.len()
-                ));
-                if progress.running {
-                    ui.ctx().request_repaint_after(STATUS_POLL);
-                }
-            });
-        }
         let errors: Vec<_> = self.errors.iter().chain(&progress.errors).collect();
-        if !errors.is_empty() {
-            ui.collapsing(format!("Processing errors ({})", errors.len()), |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(ERROR_PANEL_HEIGHT)
-                    .show(ui, |ui| {
-                        for error in errors {
-                            ui.colored_label(ui.visuals().error_fg_color, error);
-                        }
-                    });
-            });
+        let mut messages = Vec::new();
+        if let Some(first) = errors.first() {
+            messages.push(format!("Processing errors ({}): {first}", errors.len()));
         }
+        if self.scanning && self.browse_selection.is_empty() {
+            messages.push("Checking import history…".into());
+        }
+        // Batch results stay available after opening another folder with Browse.
+        if progress.running || progress.total > 0 || !progress.errors.is_empty() {
+            let label = if progress.running {
+                "Processing"
+            } else {
+                "Processing finished"
+            };
+            messages.push(format!(
+                "{label} · {}/{} photos · {} errors",
+                progress.completed,
+                progress.total,
+                progress.errors.len()
+            ));
+            if progress.running {
+                context.request_repaint_after(STATUS_POLL);
+            }
+        }
+        messages.extend(errors.iter().skip(1).map(|message| (*message).clone()));
+        (!messages.is_empty()).then(|| (messages.join("\n"), !errors.is_empty()))
     }
     pub fn submit(
         &mut self,
@@ -302,18 +339,22 @@ fn apply_imports(
     destination: Option<&std::path::Path>,
     replay_from: usize,
     received: usize,
-) {
+) -> bool {
     if !browser.import_mode || progress.destination.as_deref() != destination {
-        return;
+        return false;
     }
+    let mut changed = false;
     for path in &progress.imported[replay_from.min(progress.imported.len())..] {
-        browser.recorded_marks.insert(path.clone(), Mark::Imported);
+        changed |=
+            browser.recorded_marks.insert(path.clone(), Mark::Imported) != Some(Mark::Imported);
     }
     for path in &progress.imported[received.min(progress.imported.len())..] {
         if browser.marks.get(path) == Some(&Mark::Pick) {
             browser.marks.remove(path);
+            changed = true;
         }
     }
+    changed
 }
 
 #[cfg(test)]

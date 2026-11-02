@@ -63,6 +63,14 @@ const BROWSER_TARGETS: &[&str] = &[
     "browser-large",
 ];
 const COMPARISON_TARGETS: &[&str] = &["preview", "final", "comparison", "comparison-switch"];
+const DIRECT_COLOR_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "direct-color-ready",
+    "direct-color-edited",
+    "direct-color-settings",
+    "direct-color-exit",
+];
 const PERCEPTUAL_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -245,6 +253,7 @@ pub struct Smoke {
     targets: &'static [&'static str],
     index: usize,
     awaiting: bool,
+    direct_events: std::collections::VecDeque<Vec<egui::Event>>,
     close_at: Option<std::time::Instant>,
     settled_frames: u8,
     fast_region: Option<crate::viewport::PixelRegion>,
@@ -254,10 +263,23 @@ pub struct Smoke {
     current_texture: Option<std::sync::Arc<foveonic::image::ImageTexture>>,
 }
 impl Smoke {
+    pub fn inject_direct_color(&mut self, input: &mut egui::RawInput, ctx: &egui::Context) {
+        if self.targets == DIRECT_COLOR_TARGETS {
+            // Inject focused input without moving the owner's system pointer or focus.
+            input.focused = true;
+        }
+        if let Some(events) = self.direct_events.pop_front() {
+            input.events.push(egui::Event::WindowFocused(true));
+            input.events.extend(events);
+            ctx.request_repaint();
+        }
+    }
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_PERCEPTUAL").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_DIRECT_COLOR").is_some() {
+                DIRECT_COLOR_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_PERCEPTUAL").is_some() {
                 PERCEPTUAL_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_COMPARISON").is_some() {
                 COMPARISON_TARGETS
@@ -296,6 +318,7 @@ impl Smoke {
             },
             index: 0,
             awaiting: false,
+            direct_events: Default::default(),
             close_at: None,
             settled_frames: 0,
             fast_region: None,
@@ -673,6 +696,90 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "direct-color-ready" => {
+                    if std::env::var_os("FOVEONIC_GUI_SMOKE_DIRECT_COLOR_COMPARISON").is_some() {
+                        self.browser.set_actions(vec![(
+                            crate::shortcuts::BrowserAction::SelectAll,
+                            egui::Modifiers::COMMAND,
+                        )]);
+                    }
+                    self.preferences.collapsed =
+                        [Section::Navigator, Section::Scopes, Section::Metadata].into();
+                    self.preferences
+                        .editing_sections
+                        .retain(|s| *s != crate::preferences::EditingSection::ColorEditor);
+                    self.preferences
+                        .editing_sections
+                        .insert(0, crate::preferences::EditingSection::ColorEditor);
+                    self.settings.photographic.color_editor = Default::default();
+                    smoke.direct_events.push_back(vec![
+                        egui::Event::Key {
+                            key: egui::Key::D,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::Key {
+                            key: egui::Key::D,
+                            physical_key: None,
+                            pressed: false,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]);
+                    self.submit(None);
+                }
+                "direct-color-edited" => {
+                    let (response, _) = self.viewport.pointer(None).unwrap();
+                    let anchor = response.rect.center();
+                    let end = anchor + egui::vec2(60., -90.);
+                    let button = |pos, pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    smoke.direct_events.extend([
+                        vec![egui::Event::PointerMoved(anchor), button(anchor, true)],
+                        vec![egui::Event::PointerMoved(end)],
+                    ]);
+                }
+                "direct-color-settings" => {
+                    let (response, _) = self.viewport.pointer(None).unwrap();
+                    let position = response.rect.center() + egui::vec2(60., -90.);
+                    let button = |button, pressed| egui::Event::PointerButton {
+                        pos: position,
+                        button,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    smoke.direct_events.extend([
+                        vec![button(egui::PointerButton::Primary, false)],
+                        vec![button(egui::PointerButton::Secondary, true)],
+                        vec![button(egui::PointerButton::Secondary, false)],
+                    ]);
+                }
+                "direct-color-exit" => {
+                    let escape = vec![
+                        egui::Event::Key {
+                            key: egui::Key::Escape,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::Key {
+                            key: egui::Key::Escape,
+                            physical_key: None,
+                            pressed: false,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ];
+                    smoke.direct_events.push_back(escape.clone());
+                    smoke.direct_events.push_back(escape);
+                }
                 "perceptual-neutral" => {
                     self.preferences.collapsed =
                         [Section::Navigator, Section::Scopes, Section::Metadata].into();
@@ -1170,7 +1277,31 @@ impl App {
                     || self.frame.as_ref().is_some_and(|frame| {
                         self.browser.rendered_revision(&frame.path) == Some(frame.revision)
                     }));
+            let ready = ready
+                && (smoke.targets != DIRECT_COLOR_TARGETS
+                    || match smoke.targets[smoke.index] {
+                        "direct-color-ready" => crate::editor::direct_color::active(ctx),
+                        "direct-color-edited" => self
+                            .settings
+                            .photographic
+                            .color_editor
+                            .bands
+                            .iter()
+                            .any(|b| b.lightness > 0. && b.hue > 0.),
+                        "direct-color-settings" => crate::editor::direct_color::menu_open(ctx),
+                        "direct-color-exit" => !crate::editor::direct_color::active(ctx),
+                        _ => true,
+                    });
             if ready {
+                if smoke.targets == DIRECT_COLOR_TARGETS
+                    && smoke.targets[smoke.index] == "direct-color-settings"
+                {
+                    smoke.settled_frames += 1;
+                    if smoke.settled_frames < 8 {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(20));
+                        return;
+                    }
+                }
                 if smoke.targets == SMART_TARGETS && smoke.targets[smoke.index] == "cache-settings"
                 {
                     smoke.settled_frames += 1;

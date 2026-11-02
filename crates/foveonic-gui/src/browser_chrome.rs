@@ -389,11 +389,7 @@ fn icon_menu<R>(
     ui: &mut egui::Ui,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
-    egui::menu::menu_custom_button(
-        ui,
-        egui::Button::new("").min_size(egui::Vec2::splat(widgets::control_height(ui))),
-        contents,
-    )
+    widgets::icon_menu_button(ui, "Browser options", contents)
 }
 
 #[cfg(test)]

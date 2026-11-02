@@ -18,6 +18,8 @@ pub enum Action {
     PasteSettings,
     BeforeCamera,
     BeforeDefaults,
+    DirectColor,
+    ExitTool,
 }
 
 pub struct Invocation {
@@ -66,6 +68,8 @@ impl Binding {
 }
 
 const BINDINGS: &[Binding] = &[
+    Binding::new(Key::D, Modifiers::NONE, Action::DirectColor),
+    Binding::new(Key::Escape, Modifiers::NONE, Action::ExitTool),
     Binding::new(Key::Y, Modifiers::NONE, Action::BeforeCamera),
     Binding::new(Key::Y, Modifiers::SHIFT, Action::BeforeDefaults),
     Binding::new(
@@ -139,16 +143,20 @@ pub struct Availability {
     pub browser: bool,
     pub import: bool,
     pub settings: bool,
+    pub color_tool_active: bool,
 }
 impl Availability {
     fn allows(&self, action: Action) -> bool {
         self.enabled
             && match action {
-                Action::Browser(BrowserAction::TogglePick | BrowserAction::Hide) => {
-                    self.browser && self.import
+                Action::Browser(BrowserAction::TogglePick) => {
+                    self.browser && self.import && !self.color_tool_active
                 }
+                Action::Browser(BrowserAction::Hide) => self.browser && self.import,
                 Action::Browser(_) => self.browser,
-                Action::CopySettings
+                Action::DirectColor
+                | Action::ExitTool
+                | Action::CopySettings
                 | Action::PasteSettings
                 | Action::BeforeCamera
                 | Action::BeforeDefaults => self.settings,

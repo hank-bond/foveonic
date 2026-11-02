@@ -17,6 +17,10 @@ pub enum Edit {
 impl App {
     pub fn capture_actions(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         self.actions.clear();
+        if crate::editor::direct_color::menu_open(ctx) {
+            self.browser.set_actions(Vec::new());
+            return;
+        }
         let mut browser = Vec::new();
         for invocation in shortcuts::capture(
             ctx,
@@ -26,10 +30,16 @@ impl App {
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
                 settings: self.selected.is_some() && self.sidecars.ready(),
+                color_tool_active: crate::editor::direct_color::active(ctx),
             },
         ) {
             match invocation.action {
                 Action::Browser(action) => browser.push((action, invocation.modifiers)),
+                Action::DirectColor => {
+                    self.exit_before();
+                    crate::editor::direct_color::toggle(ctx);
+                }
+                Action::ExitTool => crate::editor::direct_color::exit(ctx),
                 Action::CopySettings => self.actions.push(Edit::CopySettings),
                 Action::PasteSettings => {
                     if let Some(text) = invocation.text {

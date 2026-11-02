@@ -11,6 +11,7 @@ struct Params { source: vec4<u32>, area: vec4<u32>, detector: vec4<u32> };
 @group(0) @binding(7) var<storage, read> original_pixels: array<f32>;
 // Match the conservative native-code highlight guard used by layer filtering.
 const NATIVE_HIGHLIGHT_CODE: f32 = 3900.;
+const NATIVE_DARK_CODE: f32 = NATIVE_HIGHLIGHT_CODE / 8.;
 var<workgroup> ranks: array<u32, 256>;
 const offsets = array<vec2<i32>, 8>(vec2(-1,-1), vec2(0,-1), vec2(1,-1), vec2(-1,0), vec2(1,0), vec2(-1,1), vec2(0,1), vec2(1,1));
 fn sample(p: u32, c: u32) -> f32 { return input_pixels[p * 3u + c]; }
@@ -111,6 +112,23 @@ fn repair() {
 }
 
 
+fn protected_highlight(p: u32, c: u32, xy: vec2<i32>) -> bool {
+    if original_pixels[p*3u+c] < NATIVE_HIGHLIGHT_CODE { return false; }
+    // Override clipping protection only for a lone layer spike. Require an
+    // eightfold separation from all adjacent samples and both other layers.
+    for (var layer = 0u; layer < 3u; layer++) {
+        if layer != c && original_pixels[p*3u+layer] >= NATIVE_DARK_CODE { return true; }
+    }
+    for (var n = 0u; n < 8u; n++) {
+        let q = xy + offsets[n];
+        let neighbor = u32(q.y)*params.source.x+u32(q.x);
+        for (var layer = 0u; layer < 3u; layer++) {
+            if original_pixels[neighbor*3u+layer] >= NATIVE_DARK_CODE { return true; }
+        }
+    }
+    return false;
+}
+
 // Optional positive compact-outlier filter. Each radius reads the unchanged
 // image. A straight edge or line retains at least one high ring neighbor.
 @compute @workgroup_size(8,8)
@@ -121,9 +139,7 @@ fn compact(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x < params.area.x || id.x > params.area.z || id.y < params.area.y || id.y > params.area.w { return; }
     for (var c = 0u; c < 3u; c++) {
         let center = sample(p,c);
-        // White balance can lift an unclipped defect above calibrated white.
-        // Protect near-clipped highlights using the unchanged sensor sample.
-        if original_pixels[p*3u+c] >= NATIVE_HIGHLIGHT_CODE { continue; }
+        if protected_highlight(p, c, vec2<i32>(id.xy)) { continue; }
         let threshold = thresholds[c*4096u+u32(clamp(center,0.,4095.))];
         for (var radius = 1u; radius <= params.detector.y; radius++) {
             var low = 3.402823e38; var high = -3.402823e38; var sum = 0.;

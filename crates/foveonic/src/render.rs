@@ -235,6 +235,51 @@ impl Engine {
         self.gpu.readback(&image.buffer)
     }
 
+    /// Pick subject-color ranges from a named linear color guide in oriented view coordinates.
+    /// Only eight selection weights leave the GPU, independently of display color management.
+    pub fn pick_color_range(&self, guide: &RenderedImage, uv: [f32; 2]) -> Result<[f32; 8]> {
+        self.check_owner(guide)?;
+        if uv.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v)) {
+            return Err("color pick must be inside the photograph".into());
+        }
+        let crate::image::Space::LinearRgb(space) = guide.description().space else {
+            return Err("color pick requires a linear color guide".into());
+        };
+        let view = guide.view();
+        let [l, t, r, b] = view.crop;
+        if l >= r || t >= b {
+            return Err("color guide has an empty crop".into());
+        }
+        let [width, height] = if matches!(view.rotation, 90 | 270) {
+            [b - t, r - l]
+        } else {
+            [r - l, b - t]
+        };
+        let [x, y] = [
+            ((uv[0] * width as f32) as u32).min(width - 1),
+            ((uv[1] * height as f32) as u32).min(height - 1),
+        ];
+        let pixel = match view.rotation {
+            0 => [l + x, t + y],
+            90 => [l + y, b - 1 - x],
+            180 => [r - 1 - x, b - 1 - y],
+            270 => [r - 1 - y, t + x],
+            _ => return Err("unsupported color pick orientation".into()),
+        };
+        let white = guide.description().linear_white as f32;
+        crate::nodes::finish::color_editor::pick(
+            &self.gpu,
+            guide.buffer(),
+            crate::nodes::finish::color_editor::PickParams::new(
+                guide.description().extent,
+                space,
+                white,
+                pixel,
+                view.crop,
+            ),
+        )
+    }
+
     /// Analyze a region in cropped, rotated output pixels, or the whole view with None.
     /// Right and bottom bounds are excluded. Only counts and weights leave the GPU.
     pub fn scopes(

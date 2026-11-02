@@ -1,5 +1,33 @@
 //! Checks frozen Browse selection processing and destination-scoped import completion receipts.
 
+#[test]
+#[ignore = "requires a GPU"]
+fn destination_probe_tracks_disconnect_reconnect_and_changed_paths_off_thread() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("destination");
+    let context = eframe::egui::Context::default();
+    let engine = foveonic::render::Engine::new().unwrap();
+    let cache = std::sync::Arc::new(foveonic::decode_cache::Cache::new());
+    let mut review = super::Review::new(engine, cache, context.clone());
+    let wait = |review: &mut super::Review, path: &std::path::Path, unavailable| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while review.destination_unavailable(&context, Some(path)) != unavailable {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "destination probe did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    wait(&mut review, &path, true);
+    std::fs::create_dir(&path).unwrap();
+    wait(&mut review, &path, false);
+    std::fs::remove_dir(&path).unwrap();
+    wait(&mut review, &path, true);
+    assert!(!review.destination_unavailable(&context, Some(directory.path())));
+    assert!(!review.destination_unavailable(&context, None));
+}
+
 use super::*;
 use std::{
     fs,
@@ -73,6 +101,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
             browser: true,
             import: browser.import_mode,
             settings: false,
+            color_tool_active: false,
         },
     ) {
         if let crate::shortcuts::Action::Browser(action) = invocation.action {

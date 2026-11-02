@@ -8,6 +8,7 @@ fn available() -> Availability {
         browser: true,
         import: true,
         settings: true,
+        color_tool_active: false,
     }
 }
 #[test]
@@ -151,4 +152,29 @@ fn text_editors_menus_and_modals_keep_clipboard_commands() {
     });
     assert!(capture(&ctx, &mut input, available()).is_empty());
     assert_eq!(input.events.len(), 2);
+}
+
+#[test]
+fn direct_color_leaves_space_for_panning_in_import_without_disabling_hide() {
+    let ctx = egui::Context::default();
+    let mut availability = available();
+    availability.color_tool_active = true;
+    let mut input = egui::RawInput {
+        events: vec![
+            key(Key::Space, Modifiers::NONE),
+            key(Key::Delete, Modifiers::NONE),
+        ],
+        ..Default::default()
+    };
+    let actions = capture(&ctx, &mut input, availability);
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].action, Action::Browser(BrowserAction::Hide));
+    assert_eq!(input.events.len(), 1);
+    assert!(matches!(
+        input.events[0],
+        egui::Event::Key {
+            key: Key::Space,
+            ..
+        }
+    ));
 }

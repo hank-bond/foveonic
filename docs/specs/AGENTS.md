@@ -23,6 +23,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[decode-cache](./decode-cache.md)** _(accepted, conforming, reference)._ A bounded temporary disk LRU reuses decoded sources, originals, selection metadata and previews with per-family workspace controls.
 - **[despeckle](./despeckle.md)** _(accepted, conforming, reference)._ Full-image GPU despeckling detects channel extrema and corrects them in deterministic reference order, independently of camera-record repair.
 - **[detail-and-noise](./detail-and-noise.md)** _(accepted, conforming, reference)._ Merrill GPU reconstruction separates noise cleanup from independently sized Fine and Coarse brightness detail.
+- **[direct-color-editing](./direct-color-editing.md)** _(accepted, conforming, reference)._ Direct color editing selects existing color ranges from the photograph and changes their HSL sliders through dragging.
 - **[display-color-management](./display-color-management.md)** _(accepted, incomplete, reference)._ Display colors follow each image's declared encoding and the host monitor's active profile.
 - **[editing-sidecars](./editing-sidecars.md)** _(accepted, conforming, reference)._ Original X3Fs and editing recipes in a visible source-folder subdirectory are authoritative.
 - **[editor-workflow](./editor-workflow.md)** _(accepted, conforming, reference)._ Editor tools share As Shot white-balance bias, scoped presets, architecture defaults and transient Before comparisons.

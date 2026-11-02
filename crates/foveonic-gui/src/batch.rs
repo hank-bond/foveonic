@@ -1,4 +1,4 @@
-//! Runs frozen Browse and Import batches while yielding work to interactive rendering.
+//! Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
 
 use crate::export::{self, Export, ExportFormat};
 use eframe::egui;
@@ -79,12 +79,14 @@ pub struct Progress {
 struct Pending {
     scan: Option<Scan>,
     batch: Option<Batch>,
+    directory: Option<PathBuf>,
     stop: bool,
 }
 pub struct Worker {
     pending: Arc<(Mutex<Pending>, Condvar)>,
     progress: Arc<Mutex<Progress>>,
     scans: Arc<Mutex<Option<Scanned>>>,
+    directory: Arc<Mutex<Option<(PathBuf, bool)>>>,
 }
 impl Worker {
     pub fn new(engine: Engine, cache: Arc<Cache>, context: egui::Context) -> Self {
@@ -94,11 +96,17 @@ impl Worker {
         let status = progress.clone();
         let scans = Arc::new(Mutex::new(None));
         let scanned = scans.clone();
+        let directory = Arc::new(Mutex::new(None));
+        let checked_directory = directory.clone();
         let mut engine = engine;
         std::thread::spawn(move || loop {
-            let (scan, batch) = {
+            let (scan, batch, directory) = {
                 let mut state = slot.0.lock().unwrap();
-                while !state.stop && state.scan.is_none() && state.batch.is_none() {
+                while !state.stop
+                    && state.scan.is_none()
+                    && state.batch.is_none()
+                    && state.directory.is_none()
+                {
                     state = slot.1.wait(state).unwrap();
                 }
                 if state.stop {
@@ -110,8 +118,17 @@ impl Worker {
                 } else {
                     None
                 };
-                (scan, batch)
+                let directory = if batch.is_none() && scan.is_none() {
+                    state.directory.take()
+                } else {
+                    None
+                };
+                (scan, batch, directory)
             };
+            if let Some(path) = directory {
+                let available = path.is_dir();
+                *checked_directory.lock().unwrap() = Some((path, available));
+            }
             if let Some(scan) = scan {
                 let completed = status.lock().unwrap().imported.len();
                 let result = cache
@@ -146,6 +163,7 @@ impl Worker {
             pending,
             progress,
             scans,
+            directory,
         }
     }
     pub fn scan(&self, scan: Scan) {
@@ -154,6 +172,13 @@ impl Worker {
     }
     pub fn receive_scan(&self) -> Option<Scanned> {
         self.scans.lock().unwrap().take()
+    }
+    pub fn check_directory(&self, path: PathBuf) {
+        self.pending.0.lock().unwrap().directory = Some(path);
+        self.pending.1.notify_one();
+    }
+    pub fn receive_directory(&self) -> Option<(PathBuf, bool)> {
+        self.directory.lock().unwrap().take()
     }
     pub fn submit(&self, batch: Batch) -> bool {
         let mut progress = self.progress.lock().unwrap();
@@ -180,6 +205,7 @@ impl Drop for Worker {
         state.stop = true;
         state.scan = None;
         state.batch = None;
+        state.directory = None;
         self.pending.1.notify_one();
     }
 }
