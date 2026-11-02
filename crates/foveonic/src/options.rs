@@ -500,6 +500,11 @@ mod tests {
         assert_eq!(c.texture.fine_size, 0.75);
         assert_eq!(c.texture.coarse_size, 1.8);
         assert_eq!(c.detail, foveonic::noise::Controls::default().detail);
+        let (maximum, _, _) = parse(&["--fine-detail", "3", "--coarse-detail", "3"]).unwrap();
+        let maximum = maximum.reconstruction.unwrap().texture;
+        assert_eq!((maximum.fine, maximum.coarse), (3., 3.));
+        assert!(parse(&["--fine-detail", "3.01"]).is_err());
+        assert!(parse(&["--coarse-detail", "3.01"]).is_err());
         assert!(parse(&["--fine-detail", "NaN"]).is_err());
         assert!(parse(&["--coarse-detail", "-0.1"]).is_err());
         assert!(parse(&["--fine-size", "0.49"]).is_err());

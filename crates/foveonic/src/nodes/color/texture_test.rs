@@ -192,7 +192,14 @@ fn texture_controls_start_neutral_and_validate() {
             .steps,
         [1., 1., 2., 4.]
     );
-    for value in [f32::NAN, f32::INFINITY, -0.01, 2.01] {
+    selected.texture.fine = 3.;
+    selected.texture.coarse = 3.;
+    selected.validate().unwrap();
+    assert_eq!(
+        serde_json::from_value::<Controls>(serde_json::to_value(selected).unwrap()).unwrap(),
+        selected
+    );
+    for value in [f32::NAN, f32::INFINITY, -0.01, 3.01] {
         selected.texture.fine = value;
         assert!(selected.validate().is_err());
     }

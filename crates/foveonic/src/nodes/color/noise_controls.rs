@@ -31,7 +31,7 @@ pub struct TextureControls {
     pub coarse_size: f32,
 }
 impl TextureControls {
-    pub const AMOUNT_RANGE: std::ops::RangeInclusive<f32> = 0. ..=2.;
+    pub const AMOUNT_RANGE: std::ops::RangeInclusive<f32> = 0. ..=3.;
     // At 2× the four binomial passes need 60 pixels of the 64-pixel tile context.
     pub const SIZE_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.;
 
@@ -126,7 +126,7 @@ impl Controls {
             .iter()
             .any(|v| !v.is_finite() || !TextureControls::AMOUNT_RANGE.contains(v))
         {
-            return Err("fine and coarse detail must be finite and in 0..2".into());
+            return Err("fine and coarse detail must be finite and in 0..3".into());
         }
         if self.chroma > 4
             || self.luminance > 4

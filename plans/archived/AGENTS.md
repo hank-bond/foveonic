@@ -37,6 +37,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[decode-cache-module](./decode-cache-module.md)** _(archived)._ Gather decoded-cache implementation and tests into a directory module for release 0.5.0.
 - **[despeckle](./despeckle.md)** _(archived)._ GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
+- **[detail-amount-range](./detail-amount-range.md)** _(archived)._ Extend Merrill Detail amounts to three while retaining the existing size support.
 - **[detail-and-noise](./detail-and-noise.md)** _(archived)._ The reference-style full-resolution noise/detail shader slice is implemented, validated, and accepted by the owner.
 - **[detail-filter-border](./detail-filter-border.md)** _(archived)._ Correct the recursive noise filter's missing border-weight conversion and verify enlarged Detail support.
 - **[directional-banding-continuity](./directional-banding-continuity.md)** _(archived)._ The selected residual Coarse banding fit and Fine strength correction are integrated and validated.
