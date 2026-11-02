@@ -20,7 +20,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     changed |= super::common::section_header(
         ui,
         EditingSection::ColorEditor,
-        "Color Editor",
+        "Color Range",
         Some(&mut settings.color_editor_enabled),
     );
     ui.add_enabled_ui(settings.color_editor_enabled, |ui| {
@@ -104,14 +104,14 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         ui.add_enabled_ui(!mono, |ui| {
             changed |= column.adjustment(
                 ui,
-                ("Color Editor Hue", "Hue"),
+                ("Color Range Hue", "Hue"),
                 &mut adjustment.hue,
                 -1. ..=1.,
                 0.,
             );
             changed |= column.adjustment(
                 ui,
-                ("Color Editor Saturation", "Saturation"),
+                ("Color Range Saturation", "Saturation"),
                 &mut adjustment.saturation,
                 -1. ..=1.,
                 0.,
@@ -119,7 +119,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         });
         changed |= column.adjustment(
             ui,
-            ("Color Editor Lightness", "Lightness"),
+            ("Color Range Lightness", "Lightness"),
             &mut adjustment.lightness,
             -1. ..=1.,
             0.,

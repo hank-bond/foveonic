@@ -5,6 +5,7 @@ mod color_editor;
 mod common;
 mod merrill;
 mod quattro;
+mod saturation;
 mod sections;
 
 use crate::preferences::EditingSection;
@@ -76,7 +77,8 @@ pub fn processing(
             let mut changed = common::white_balance(ui, settings, metadata, true);
             changed |= common::color_mode(ui, settings, metadata, !settings.is_monochrome());
             ui.separator();
-            changed |= common::tone(ui, settings, settings.is_monochrome());
+            changed |= common::tone(ui, settings);
+            changed |= saturation::show(ui, settings);
             changed
         }
     }

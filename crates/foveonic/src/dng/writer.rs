@@ -260,6 +260,12 @@ pub(super) fn write<W: Write + Seek>(
     if !active.tonal_ranges.is_neutral() {
         baked_controls.push("hdr");
     }
+    if active.universal_saturation_active() {
+        baked_controls.push("perceptual_grading");
+    }
+    if active.photographic.brightness != 0. {
+        baked_controls.push("brightness");
+    }
     if active.photographic.local_contrast != 0. {
         baked_controls.push("local_contrast");
     }

@@ -39,11 +39,17 @@ pub fn automatic(label: &str) -> Option<&'static str> {
 
 pub fn editing(label: &str) -> Option<&'static str> {
     Some(match label {
-        "Color Editor" => "The checkbox bypasses this editor while retaining its values. Select a color swatch, then adjust Hue, Saturation or Lightness. The rainbow swatch adjusts all colors. Lightness also works in Monochrome without replacing the sensor mixture. These edits are baked into DNG and TIFF. Double-click a slider to reset it.",
-        "Color Editor Hue" => "Rotates the selected colors by up to 30 degrees in perceptual hue. Zero leaves hue unchanged. Inactive in Monochrome.",
-        "Color Editor Saturation" => "Adjusts chroma in the selected original subject-color range. Minus one removes chroma; zero is unchanged. Inactive in Monochrome.",
-        "Color Editor Lightness" => "Brightens or darkens the selected original subject colors using the same stabilized gain in Color and Monochrome. Zero leaves brightness unchanged.",
-        "Tone method" => "Reference retains the camera family's tone and saturation response. Universal keeps its base camera appearance and RAW exposure, then applies shared contrast and saturation. Reference uses the original Shadows/Highlights across camera families. Universal instead enables the four HDR ranges and Local Contrast. Inactive settings are retained and bypassed. Positive saturation protects already vivid colors. DNG bakes active Color Editor, HDR, Local Contrast and Universal sharpening while retaining camera appearance in metadata. Global tone presentation keeps its existing DNG interpretation. Processing settings can omit sections for each output format.",
+        "Color Range" => "The checkbox bypasses this editor while retaining its values. Select a color swatch, then adjust Hue, Saturation or Lightness. The rainbow swatch adjusts all colors. Lightness also works in Monochrome without replacing the sensor mixture. These edits are baked into DNG and TIFF. Double-click a slider to reset it.",
+        "Color Range Hue" => "Rotates the selected colors by up to 30 degrees in perceptual hue. Zero leaves hue unchanged. Inactive in Monochrome.",
+        "Color Range Saturation" => "Adjusts chroma in the selected original subject-color range. Minus one removes chroma; zero is unchanged. Inactive in Monochrome.",
+        "Saturation method" => "Reference uses the camera family's saturation response. Universal adjusts perceptual colorfulness with gamut protection, saturation contrast and overlapping tonal amounts. This choice is independent of Tone. Inactive values are retained. Universal adjustments bake into DNG pixels.",
+        "Brightness" => "Shifts midtone brightness while holding black and nominal white in place. Uses an anchored curve after spatial HDR and before the camera response. Preserves RGB ratios. Zero is neutral. This is tonal shaping, not exposure in stops. Baked into DNG when active.",
+        "Perceptual saturation" => "Adjusts colorfulness at constant perceptual lightness and hue. Positive favors muted colors while protecting vivid colors. Negative tames vivid colors preferentially. Zero is neutral and -1 removes chroma when tonal saturation controls are zero. Global and tonal amounts add together. Inactive in Monochrome.",
+        "Reference saturation" => "Controls camera saturation. One is unchanged, zero is grayscale. The Reference method is independent of the Tone method.",
+        "Saturation contrast" => "Positive separates colorfulness: muted colors become quieter and vivid colors stronger. Negative compresses the difference: muted colors rise and vivid colors soften. Preserves perceptual lightness and hue, with working-gamut protection. Zero is unchanged. Inactive in Monochrome.",
+        "Perceptual ranges" => "Saturation by tone: Shadows, Midtones and Highlights have overlapping crossovers and weights that sum to one. They follow Exposure and the camera curve's middle-gray pivot. Bands do not reselect pixels as you adjust them. These masks are pointwise, unlike the spatial HDR filter.",
+        "Color Range Lightness" => "Brightens or darkens the selected original subject colors using the same stabilized gain in Color and Monochrome. Zero leaves brightness unchanged.",
+        "Tone method" => "Reference uses the camera family's tonal response and Shadows/Highlights. Universal adds shared dynamic-range controls, anchored Brightness and Local Contrast while retaining the base camera appearance. Saturation has its own independent section and method. Inactive values remain saved.",
         "Local contrast" => "Adjusts texture contrast independently of Noise, Fine/Coarse Detail and sharpening. Negative smooths tonal texture. Positive adds definition. Zero is unchanged and skips filtering. Runs before the camera tone response and bakes into DNG. Keep the X3F and sidecar to change the adjustment.",
         "Sharpening method" => "Reference retains the camera family's sharpening response. Universal replaces its creative sharpening with shared Amount, Radius, Threshold and Halo suppression controls, while sensor reconstruction remains active. The two methods keep independent amounts. Universal runs before the camera tone response and is baked into DNG.",
         "Universal amount" => "Strengthens edges in the finished color or monochrome image. Zero turns it off. Universal replaces reference sharpening instead of adding another sharpening pass. Applies to preview, TIFF and DNG samples.",
@@ -86,7 +92,7 @@ pub fn editing(label: &str) -> Option<&'static str> {
             "Makes the photo brighter or darker, measured in stops: +1 doubles brightness and −1 halves it. This acts after noise reduction and detail processing. Start here for overall brightness. Brightening can reveal noise or turn bright areas white. Darkening cannot recover detail lost when the photo was taken."
         }
         "Saturation" => {
-            "Adjusts color intensity. 1× leaves it unchanged, 0 removes color, and higher values make colors stronger. Too much can hide subtle color differences or make skin tones unnatural."
+            "Bypasses saturation while retaining its amounts and method. Tone and Color Range stay independent. Universal offers perceptual Amount, Contrast and overlapping Shadows/Midtones/Highlights. Chromatic adjustments are inactive in Monochrome."
         }
         "Contrast" => {
             "Changes the separation between dark and light tones. Higher values give a punchier look. Lower values give a softer look. Strong contrast can hide detail in shadows and highlights. 0 keeps the starting contrast for the selected rendering mode."
@@ -100,8 +106,8 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "Highlights" => {
             "Shapes the brighter part of the tone curve. Use it to adjust the appearance of bright surfaces and their tonal separation. It is not highlight recovery: detail lost at capture cannot be brought back by this slider. 0 leaves it unchanged."
         }
-        "Tone" | "Tone and Color" => {
-            "Temporarily bypasses exposure, saturation and tonal edits while preserving their values. The selected camera color mode and its base tone curve remain active. Neutral slider values already leave those edits unchanged."
+        "Tone" => {
+            "Temporarily bypasses exposure and tonal edits while preserving their values. Saturation and Color Range remain independent. The selected camera color mode and its base tone curve remain active."
         }
         "Sharpening" => {
             "Temporarily bypasses final sharpening while preserving its amount and Auto selection. Zero sharpening is already neutral."
@@ -359,6 +365,12 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "linear.sharpen" => "Linear RGB after Universal sharpening and before the camera tone response. Compare with Input to see the sharpening change. This adjustment is baked into DNG samples.",
         "linear.local-contrast" => "Linear RGB after pre-curve Local Contrast. Compare with Input to see texture changes before the camera tone curve. This adjustment is baked into DNG samples.",
         "finish.tone" => "Photographic RGB after universal contrast and saturation. The base camera look remains present.",
+        "linear.brightness" => "Linear RGB after anchored midtone shaping, following spatial HDR. Input/Output and Difference compare against its unchanged input. RGB ratios are preserved and the adjustment is baked into DNG.",
+        "perceptual.input" => "Linear working RGB before Universal saturation and Color Range.",
+        "perceptual.rgb" => "Linear working RGB after shared Oklab saturation, before Color Range and the camera curve. Input/Output and Difference use its actual input.",
+        "perceptual.shadows" => "Shadows weight for saturation by tone. White is fully affected. The three band weights sum to one.",
+        "perceptual.midtones" => "Midtones weight for saturation by tone. White is fully affected. The three band weights sum to one.",
+        "perceptual.highlights" => "Highlights weight for saturation by tone. White is fully affected. The three band weights sum to one.",
         "tonal-ranges.mask" => "Brightness used to select the tonal ranges. Black represents -8 stops below nominal white and white represents nominal white. A multiscale spatial base smooths small details while respecting strong edges.",
         "tonal-ranges.rgb" => "Linear working RGB after the tonal exposure gains, before the camera tone curve. Input/Output and Difference compare it with the actual linear input. Zero adjustments are unchanged.",
         "tone.rgb" => {

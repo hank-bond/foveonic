@@ -282,7 +282,7 @@ impl Comparison {
         .on_hover_text(explanation);
         if self.difference {
             ui.label("Amplify");
-            ui.add(egui::DragValue::new(&mut self.gain).range(1. ..=1024.).speed(1.).suffix("×"))
+            ui.add(crate::widgets::drag_value(&mut self.gain).range(1. ..=1024.).speed(1.).suffix("×"))
                 .on_hover_text("Magnifies small differences for display only. Amplification can clip this diagnostic view without clipping the photograph. At 1×, a full nominal signal-range change reaches black or white.");
         }
         !before && self.requested()

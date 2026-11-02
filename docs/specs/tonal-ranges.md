@@ -19,7 +19,7 @@ Photographic pixel arithmetic must run on the GPU. Inspection must expose the br
 
 ## Export boundary
 
-DNG must bake active HDR into its linear samples using the same brightness gain as native photographic rendering. The selected camera curve and Exposure still determine the HDR pivot, while the camera appearance itself remains in DNG metadata. The shared pre-curve recipe also includes sensitivity, Local Contrast and Universal sharpening, so export applies their combined gain once. Neutral controls, Reference tone and the Tone and Color section bypass must preserve the established DNG sample recipe.
+DNG must bake active HDR into its linear samples using the same brightness gain as native photographic rendering. The selected camera curve and Exposure still determine the HDR pivot, while the camera appearance itself remains in DNG metadata. The shared pre-curve recipe also includes sensitivity, Local Contrast and Universal sharpening, so export applies their combined gain once. Neutral controls, Reference tone and the Tone section bypass must preserve the established DNG sample recipe.
 
 The original X3F and sidecar remain the editable source. DNG is an edited derivative and cannot recalculate a baked spatial adjustment. Control help must identify this boundary. Camera adapters must preserve their technical sample basis and required reconstruction. Dehaze remains outside this work.
 

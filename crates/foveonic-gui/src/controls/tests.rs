@@ -461,10 +461,7 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
                 "{rendering:?}: {label}"
             );
         }
-        assert_eq!(
-            panel_text_centers(&output, "Saturation").len(),
-            1 + usize::from(rendering == Rendering::Color)
-        );
+        assert_eq!(panel_text_centers(&output, "Saturation").len(), 2);
         assert_eq!(panel_text_centers(&output, "Noise").len(), 1);
         assert_eq!(panel_text_centers(&output, "Banding").len(), 1);
         let detail = panel_text_centers(&output, "Detail")[0].y;
@@ -490,7 +487,6 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
             "Exposure",
             "Contrast",
             "Shadows",
-            "Amount",
             "Speckles",
             "Bad pixels",
             "Correct row offsets",
@@ -501,6 +497,7 @@ fn expanded_editing_shows_only_the_active_modes_controls_without_resetting_value
                 "{rendering:?}: {label}"
             );
         }
+        assert_eq!(panel_text_centers(&output, "Amount").len(), 2);
         assert_eq!(panel_text_centers(&output, "Highlights").len(), 2);
     }
 }
@@ -542,7 +539,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     let noise_parameter = "Mean decay";
     assert!(text_centers(&output, noise_parameter).is_empty());
     assert!(text_centers(&output, "ColorDQ gain").is_empty());
-    assert_eq!(text_centers(&output, "Tone and Color").len(), 1);
+    assert_eq!(text_centers(&output, "Tone").len(), 1);
     assert_eq!(text_centers(&output, "Noise").len(), 1);
     for pressed in [true, false] {
         assert!(
@@ -1467,7 +1464,7 @@ fn correction_groups_align_checkboxes_and_keep_highlights_inline() {
         assert!(bounds("Noise").top() < bounds("Correct row offsets").top());
         assert!(bounds("Correct row offsets").top() < bounds("Detail").top());
         let ordered = [
-            "Tone and Color",
+            "Tone",
             "Noise",
             "Sharpening",
             "Amount",
@@ -1510,7 +1507,7 @@ fn tone_and_correction_highlights_have_independent_controls() {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(400., 1200.),
+                    egui::vec2(400., 1600.),
                 )),
                 time: Some(time),
                 events,
@@ -1632,20 +1629,14 @@ fn tone_methods_show_only_their_active_controls_and_preserve_edits() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(!common::tone(ui, &mut settings, false));
+                    assert!(!common::tone(ui, &mut settings));
                 });
             },
         );
-        for label in [
-            "Exposure",
-            "Saturation",
-            "Contrast",
-            "Shadows",
-            "Highlights",
-        ] {
+        for label in ["Exposure", "Contrast", "Shadows", "Highlights"] {
             assert_eq!(text_centers(&output, label).len(), 1, "{method:?}: {label}");
         }
-        for label in ["Blacks", "Whites", "Local contrast"] {
+        for label in ["Blacks", "Whites", "Brightness", "Local contrast"] {
             assert_eq!(
                 !text_centers(&output, label).is_empty(),
                 method == PhotographicMethod::Universal,
@@ -1657,6 +1648,60 @@ fn tone_methods_show_only_their_active_controls_and_preserve_edits() {
         assert!(text_centers(&output, "TIFF").is_empty());
         assert_eq!(settings, before);
     }
+}
+
+#[test]
+fn tone_and_saturation_have_separate_rows_and_visible_tonal_group() {
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.photographic.tone_method = foveonic::render::PhotographicMethod::Universal;
+    settings.photographic.saturation_method = foveonic::render::PhotographicMethod::Universal;
+    settings.photographic.perceptual.saturation = 0.007;
+    settings.photographic.perceptual.contrast = 0.123456;
+    let before = settings.clone();
+    let draw = |settings: &mut Settings, saturation: bool| {
+        egui::Context::default().run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 1500.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let changed = if saturation {
+                        super::saturation::show(ui, settings)
+                    } else {
+                        common::tone(ui, settings)
+                    };
+                    assert!(!changed);
+                });
+            },
+        )
+    };
+    let tone = draw(&mut settings, false);
+    for label in [
+        "Exposure",
+        "Shadows",
+        "Highlights",
+        "Blacks",
+        "Whites",
+        "Brightness",
+        "Contrast",
+    ] {
+        assert_eq!(text_centers(&tone, label).len(), 1, "{label}");
+    }
+    for label in ["Saturation", "Amount", "Midtones", "Perceptual saturation"] {
+        assert!(text_centers(&tone, label).is_empty());
+    }
+    let sat = draw(&mut settings, true);
+    for label in ["Amount", "Contrast", "Shadows", "Midtones", "Highlights"] {
+        assert_eq!(text_centers(&sat, label).len(), 1, "{label}");
+    }
+    assert!(text_centers(&sat, "Saturation by tone").is_empty());
+    assert_eq!(text_centers(&sat, "0.01").len(), 1);
+    assert_eq!(text_centers(&sat, "0.12").len(), 1);
+    assert_eq!(settings, before);
 }
 
 #[test]
@@ -2979,12 +3024,12 @@ fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
                 },
             );
             assert_eq!(settings, before);
+            assert_eq!(text_centers(&output, "Amount").len(), 2);
             for label in [
                 "Color",
                 "Monochrome",
                 "Exposure",
                 "Smooth / Crisp",
-                "Amount",
                 "Highlight recovery",
             ] {
                 assert_eq!(text_centers(&output, label).len(), 1, "{model}: {label}");
@@ -3061,6 +3106,7 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         },
     );
     assert_eq!(settings, before);
+    assert_eq!(text_centers(&output, "Amount").len(), 2);
     for label in [
         "Mode",
         "Color mode",
@@ -3072,7 +3118,6 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         "Chroma noise",
         "Luma noise",
         "Smooth / Crisp",
-        "Amount",
         "Highlight recovery",
         "Monochrome",
     ] {
@@ -3115,7 +3160,8 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         },
     );
     assert_eq!(settings, before);
-    for label in ["Color Mix", "Mono noise", "Smooth / Crisp", "Amount"] {
+    assert_eq!(text_centers(&output, "Amount").len(), 2);
+    for label in ["Color Mix", "Mono noise", "Smooth / Crisp"] {
         assert_eq!(text_centers(&output, label).len(), 1, "{label}");
     }
     for label in ["Chroma noise", "Luma noise", "Mono banding"] {
@@ -3473,8 +3519,9 @@ fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edit
     };
     let (_, mut output, _) = frame(0., vec![]);
     let labels = [
-        "Tone and Color",
+        "Tone",
         "Exposure",
+        "Saturation",
         "Noise",
         "Chroma",
         "Detail",
@@ -3494,7 +3541,8 @@ fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edit
     };
     let baseline = positions(&output);
     for (index, (label, parameter)) in [
-        ("Tone and Color", "Exposure"),
+        ("Tone", "Exposure"),
+        ("Saturation", "Amount"),
         ("Noise", "Chroma"),
         ("Detail", "Fine"),
         ("Sharpening", "Amount"),
@@ -3516,14 +3564,22 @@ fn section_bypasses_keep_controls_visible_fixed_and_disabled_without_losing_edit
         assert_eq!(positions(&off), baseline, "{label} shifted controls");
         let mut expected = original.clone();
         match label {
-            "Tone and Color" => expected.tone_enabled = false,
+            "Tone" => expected.tone_enabled = false,
+            "Saturation" => expected.saturation_enabled = false,
             "Sharpening" => expected.sharpening_enabled = false,
             "Noise" => expected.reconstruction.as_mut().unwrap().noise_enabled = false,
             "Detail" => expected.reconstruction.as_mut().unwrap().detail_enabled = false,
             _ => unreachable!(),
         }
         assert_eq!(current, expected);
-        let slider = egui::pos2(240., text_centers(&off, parameter)[0].y);
+        let slider = egui::pos2(
+            240.,
+            if label == "Sharpening" {
+                text_centers(&off, parameter).last().unwrap().y
+            } else {
+                text_centers(&off, parameter)[0].y
+            },
+        );
         frame(
             time + 1.,
             vec![
@@ -3724,7 +3780,7 @@ fn universal_sharpening_values_fit_the_reserved_field_and_keep_panel_width_stabl
             "threshold {threshold}: panel grew to {width}"
         );
         assert_eq!(
-            text_centers(&output, "0.312").len(),
+            text_centers(&output, "0.31").len(),
             1,
             "radius readout should use three significant digits"
         );
@@ -3745,9 +3801,11 @@ fn photographic_value_readouts_limit_significant_digits_and_round_carries() {
         (-1.23456, "-1.23"),
         (12.3456, "12.3"),
         (123.456, "123"),
-        (0.123456, "0.123"),
-        (0.0123456, "0.0123"),
-        (0.00123456, "0.00123"),
+        (0.123456, "0.12"),
+        (0.0123456, "0.01"),
+        (0.00123456, "1.23e-3"),
+        (0.007, "0.01"),
+        (-0.007, "-0.01"),
         (0.01, "0.01"),
         (0.8, "0.80"),
         (9.999, "10.0"),
@@ -3788,7 +3846,7 @@ fn merrill_color_sensitivity_is_shared_without_changing_values_on_mode_switch() 
                 });
             },
         );
-        assert_eq!(panel_text_centers(&output, "Color Editor").len(), 1);
+        assert_eq!(panel_text_centers(&output, "Color Range").len(), 1);
         assert_eq!(settings.photographic, before.photographic);
     }
 }

@@ -165,6 +165,10 @@ impl Settings {
         );
         changed!(self.tone_enabled != next.tone_enabled, "tone-enabled");
         changed!(
+            self.saturation_enabled != next.saturation_enabled,
+            "saturation-enabled"
+        );
+        changed!(
             self.color_editor_enabled != next.color_editor_enabled,
             "color-editor-enabled"
         );

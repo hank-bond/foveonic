@@ -28,7 +28,7 @@ fn samples(gpu: &crate::gpu::Gpu, buffer: &crate::gpu::ReadGuard) -> Vec<f32> {
 
 #[test]
 #[ignore = "requires a GPU"]
-fn gpu_photographic_tone_preserves_neutral_headroom_and_restrains_saturation() {
+fn gpu_photographic_tone_preserves_neutral_headroom_and_rgb_ratios() {
     use crate::{gpu::Gpu, profile::Profile};
     let gpu = Gpu::new().unwrap();
     let extent = [6, 1];
@@ -40,28 +40,25 @@ fn gpu_photographic_tone_preserves_neutral_headroom_and_restrains_saturation() {
     p.values = [0., 1., 0., 0.];
     let neutral = tone::apply(&gpu, &input, p, extent, &mut Profile::default()).unwrap();
     assert_eq!(samples(&gpu, &neutral), values);
-    p.values[1] = 1.5;
+    p.values = [0.7, 1., 0., 0.];
     let output = tone::apply(&gpu, &input, p, extent, &mut Profile::default()).unwrap();
     let actual = samples(&gpu, &output);
-    for (v, w) in values
+    assert!(actual.iter().all(|v| v.is_finite()));
+    for (source, result) in values
         .as_chunks::<3>()
         .0
         .iter()
         .zip(actual.as_chunks::<3>().0)
     {
-        let y: f32 = v.iter().zip(p.luma).map(|(v, c)| v * c).sum();
-        let out: f32 = w.iter().zip(p.luma).map(|(v, c)| v * c).sum();
-        assert!((y - out).abs() < 0.00001);
-        let q =
-            (1. - v.iter().copied().fold(f32::INFINITY, f32::min) / y.max(0.000001)).clamp(0., 1.);
-        let gain = 1.8 / (1. + 0.8 * q);
-        for c in 0..3 {
-            assert!((w[c] - (y + (v[c] - y) * gain)).abs() < 0.00001);
+        let y: f32 = source.iter().zip(p.luma).map(|(v, c)| v * c).sum();
+        if y >= 1. || y <= 0. {
+            assert_eq!(source, result);
+        } else {
+            for c in 1..3 {
+                assert!((result[c] * source[0] - result[0] * source[c]).abs() < 0.00001);
+            }
         }
     }
-    p.values = [0.7, 1., 0., 0.];
-    let output = tone::apply(&gpu, &input, p, extent, &mut Profile::default()).unwrap();
-    assert!(samples(&gpu, &output).iter().all(|v| v.is_finite()));
     assert_eq!(samples(&gpu, &input), values);
 }
 
@@ -220,5 +217,93 @@ fn gpu_sharpening_threshold_and_halo_controls_have_independent_effects() {
     let output = sharpen::apply(&gpu, &input, p, extent, &mut Profile::default()).unwrap();
     for (a, b) in samples(&gpu, &output).iter().zip(&values) {
         assert!((a - b).abs() < 0.000001);
+    }
+}
+
+#[test]
+fn brightness_validates_persists_and_defaults_to_neutral() {
+    assert_eq!(Controls::default().brightness, 0.);
+    for amount in [-1., -0.3, 0., 0.4, 1.] {
+        let controls = Controls {
+            brightness: amount,
+            ..Default::default()
+        };
+        controls.validate().unwrap();
+        let decoded: Controls =
+            serde_json::from_str(&serde_json::to_string(&controls).unwrap()).unwrap();
+        assert_eq!(decoded, controls);
+    }
+    for amount in [f32::NAN, f32::INFINITY, -1.01, 1.01] {
+        assert!(Controls {
+            brightness: amount,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_brightness_is_anchored_monotone_ratio_preserving_and_scale_independent() {
+    use crate::{gpu::Gpu, profile::Profile};
+    let gpu = Gpu::new().unwrap();
+    let extent = [4097, 1];
+    let ramp: Vec<f32> = (0..extent[0]).flat_map(|i| [i as f32 / 4096.; 3]).collect();
+    for white in [1., 4095.] {
+        let data: Vec<_> = ramp.iter().map(|x| x * white).collect();
+        let input = gpu.upload("brightness ramp", &data).unwrap();
+        for amount in [-1., -0.5, 0., 0.5, 1.] {
+            let mut p = Params::new(extent, ColorSpace::Srgb);
+            p.luma = p.luma.map(|v| v / white);
+            p.values[0] = 2_f32.powf(2. * amount);
+            let adjusted =
+                tone::brightness(&gpu, &input, p, extent, &mut Profile::default()).unwrap();
+            let values = samples(&gpu, &adjusted);
+            if amount == 0. {
+                assert_eq!(values, data);
+            }
+            assert_eq!(values[0], 0.);
+            assert!((values[values.len() - 1] / white - 1.).abs() < 1e-6);
+            assert!(values.iter().all(|x| x.is_finite()));
+            assert!(values.windows(6).step_by(3).all(|w| w[0] <= w[3]));
+            let middle = values[2048 * 3] / white;
+            assert!((amount == 0.) || ((middle > 0.5) == (amount > 0.)));
+            // Contrast and brightness compose without reversing tonal order.
+            for contrast in [-1., 0., 1.] {
+                let mut finish = Params::new(extent, ColorSpace::Srgb);
+                finish.luma = finish.luma.map(|v| v / white);
+                finish.values = [contrast, 1., 0., 0.];
+                let combined =
+                    tone::apply(&gpu, &adjusted, finish, extent, &mut Profile::default()).unwrap();
+                let values = samples(&gpu, &combined);
+                assert!(values.windows(6).step_by(3).all(|w| w[0] <= w[3]));
+            }
+        }
+        assert_eq!(samples(&gpu, &input), data);
+    }
+    let values = [
+        -0.2_f32, -0.1, -0.3, 2., 3., 4., -0.03, 0.1, 0.8, 0.3, 0.12, 0.05,
+    ];
+    let input = gpu
+        .upload("signed and colorful brightness", &values)
+        .unwrap();
+    for amount in [-1., 1.] {
+        let mut p = Params::new([4, 1], ColorSpace::Srgb);
+        p.values[0] = 2_f32.powf(2. * amount);
+        let output = tone::brightness(&gpu, &input, p, [4, 1], &mut Profile::default()).unwrap();
+        let actual = samples(&gpu, &output);
+        assert_eq!(&actual[..6], &values[..6]);
+        for (before, after) in values
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(actual.as_chunks::<3>().0)
+        {
+            let gain = after[2] / before[2];
+            for c in 0..3 {
+                assert!((after[c] - before[c] * gain).abs() < 2e-6);
+            }
+        }
     }
 }

@@ -10,6 +10,7 @@ pub enum Kernel {
     ColorEditorMap,
     ColorEditorFilter,
     ColorEditorApply,
+    PerceptualGrade,
     MonoTextureExtract,
     MonoTextureBlur,
     MonoTextureApply,
@@ -123,6 +124,7 @@ pub enum Kernel {
     Color,
     Tone,
     PhotographicTone,
+    PhotographicBrightness,
     UniversalSharpExtract,
     UniversalSharpBlur,
     UniversalSharpen,
@@ -310,6 +312,7 @@ impl Kernel {
             Self::ColorEditorMap => "map Color Editor",
             Self::ColorEditorFilter => "stabilize Color Editor",
             Self::ColorEditorApply => "apply Color Editor",
+            Self::PerceptualGrade => "perceptual grading",
             Self::MonoTextureExtract => "extract monochrome texture",
             Self::MonoTextureBlur => "filter monochrome texture",
             Self::MonoTextureApply => "apply monochrome texture",
@@ -434,6 +437,7 @@ impl Kernel {
             Self::Color => "color matrix",
             Self::Tone => "tone",
             Self::PhotographicTone => "photographic tone",
+            Self::PhotographicBrightness => "photographic brightness",
             Self::UniversalSharpExtract => "sharp extract",
             Self::UniversalSharpBlur => "sharp blur",
             Self::UniversalSharpen => "universal sharpen",
@@ -646,9 +650,15 @@ impl Gpu {
             include_str!("../nodes/finish/shadow_neutralize.wgsl")
         );
         let color_editor = format!(
-            "{oklab}\n{}\n{}",
+            "{}\n{}\n{}",
+            include_str!("../nodes/finish/perceptual_color.wgsl"),
             include_str!("../nodes/finish/color_editor.wgsl"),
             include_str!("../nodes/finish/color_editor_response.wgsl")
+        );
+        let perceptual = format!(
+            "{}\n{}",
+            include_str!("../nodes/finish/perceptual_color.wgsl"),
+            include_str!("../nodes/finish/perceptual_grade.wgsl")
         );
         let texture = include_str!("../nodes/monochrome/texture.wgsl");
         let kernels = [
@@ -663,6 +673,7 @@ impl Gpu {
             (color_editor.as_str(), "color_editor_map"),
             (color_editor.as_str(), "color_editor_filter"),
             (color_editor.as_str(), "color_editor_apply"),
+            (perceptual.as_str(), "perceptual_grade"),
             (texture, "mono_texture_extract"),
             (texture, "mono_texture_blur"),
             (texture, "mono_texture_apply"),
@@ -1073,6 +1084,7 @@ impl Gpu {
             (include_str!("../nodes/color/color.wgsl"), "main"),
             (include_str!("../nodes/finish/tone.wgsl"), "main"),
             (photographic_tone.as_str(), "photographic_tone"),
+            (photographic_tone.as_str(), "photographic_brightness"),
             (photographic_sharpen.as_str(), "sharp_extract"),
             (photographic_sharpen.as_str(), "sharp_blur"),
             (photographic_sharpen.as_str(), "universal_sharpen"),

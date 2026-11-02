@@ -28,7 +28,7 @@ Quattro supports white balance, camera color modes, tone, saturation,
 chroma and luminance noise, native Smooth/Crisp detail and sharpening, with camera-derived ISO controls.
 
 Options (also available for batch):
-  --tone-method METHOD      reference (default) or universal contrast/saturation
+  --tone-method METHOD      reference (default) or universal tone
   --blacks VALUE            Shared HDR -1..1, default 0
   --hdr-shadows VALUE       Shared HDR -1..1, default 0
   --hdr-highlights VALUE    Shared HDR -1..1, default 0
@@ -50,7 +50,13 @@ Options (also available for batch):
   --mono-mix R,G,B          Nonnegative sensor-layer amounts, normalized to one
   --mono-noise N            Mono histogram-noise preset 0..4 (default 2, 0 skips)
   --mono-banding N          Mono column-correction preset 0..4 (default 2)
-  --saturation FACTOR       Nonnegative, default 1. Inactive in monochrome
+  --saturation FACTOR       Reference amount, nonnegative, default 1
+  --saturation-method METHOD reference (default) or universal, independent of tone
+  --universal-saturation N   Universal amount, -1..1, default 0
+  --saturation-contrast N    Universal colorfulness contrast, -1..1, default 0
+  --saturation-shadows N     Universal shadow amount, -1..1, default 0
+  --saturation-midtones N    Universal midtone amount, -1..1, default 0
+  --saturation-highlights N  Universal highlight amount, -1..1, default 0
   --color-dq-gain FACTOR     Override native ColorDQ gain (0 off). Reconstruction defaults to auto
   --repair                  Camera-derived ordered repair (default on)
   --no-repair               Disable camera-record repair

@@ -12,6 +12,7 @@ read_when: "Read before writing documentation or source summaries."
 - `AGENTS.md` gives operating instructions and routes readers to relevant files.
 - `docs/specs/` records required behavior agreed with the owner.
 - `plans/` tracks steps, progress, checks, discoveries, and corrected assumptions for an implementation attempt.
+- Research references in `docs/` catalog evidence and alternatives independently of the current implementation proposal.
 - Comments beside code explain local intent and constraints. Separate documents capture knowledge that code does not explain.
 
 Create additional document categories when work needs them. Give each fact one home and link instead of duplicating it. Keep documentation lean, plain, and grounded in actual discussions and work. User-facing copy uses camera names such as **Quattro H**. **Tiger** is an internal architecture name for code and developer documentation.
@@ -29,6 +30,8 @@ Set `status: accepted` when requirements are agreed and contain enough detail fo
 Set `implementation: incomplete` until code and evidence satisfy all stated requirements. Set `implementation: conforming` once they do. Acceptance and implementation are separate states.
 
 Link plans to the requirements they implement. Use small action-oriented checklists and update them during work. Move lasting requirements into specifications and keep temporary techniques and findings in the plan. Creating a plan does not authorize implementation.
+
+Keep open-ended research and candidate workflows outside specifications. Use a separate exploration plan for what we might build next. When starting a concrete implementation slice, record its agreed behavior in the relevant specification without turning the wider research catalog into requirements.
 
 ## Format documents
 

@@ -41,6 +41,7 @@ pub(super) fn show(
                 EditingSection::Mix,
                 EditingSection::WhiteBalance,
                 EditingSection::Tone,
+                EditingSection::Saturation,
                 EditingSection::ColorEditor,
                 EditingSection::Noise,
                 EditingSection::Sharpening,
@@ -50,6 +51,7 @@ pub(super) fn show(
             &[
                 EditingSection::WhiteBalance,
                 EditingSection::Tone,
+                EditingSection::Saturation,
                 EditingSection::ColorEditor,
                 EditingSection::Noise,
                 EditingSection::Sharpening,
@@ -71,9 +73,8 @@ pub(super) fn show(
                     defaults.monochrome.mix,
                     "RGB Mix",
                 ),
-                EditingSection::Tone => {
-                    common::tone_with_exposure_range(ui, settings, mono, -2. ..=2.)
-                }
+                EditingSection::Tone => common::tone_with_exposure_range(ui, settings, -2. ..=2.),
+                EditingSection::Saturation => super::saturation::show(ui, settings),
                 EditingSection::ColorEditor => super::color_editor::show(ui, settings),
                 EditingSection::Noise => noise_and_detail(ui, settings, &defaults, capabilities),
                 EditingSection::Sharpening => {

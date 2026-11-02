@@ -7,7 +7,7 @@ implementation: conforming
 
 # Editor workflow controls
 
-Each editing section must offer a reset arrow and a preset menu. Ordinary reset restores that section from the user's configured defaults. Option/Alt-click restores its camera-as-shot baseline instead. Matching controls at the top of Editing apply to the whole photographic recipe. Section actions must leave other sections and workspace state unchanged.
+Each editing section must offer a reset arrow and a preset menu. Tone, Saturation and Color Range have independent scopes, including their methods, amounts and enable switches. Ordinary reset restores that section from the user's configured defaults. Option/Alt-click restores its camera-as-shot baseline instead. Matching controls at the top of Editing apply to the whole photographic recipe. Section actions must leave other sections and workspace state unchanged.
 
 Reset and preset glyphs should be compact within their existing click targets. Reset uses a left-pointing undo arrow with a rounded return inside a bordered button. Editing-tool drag grips should match the larger workspace grip for visibility.
 

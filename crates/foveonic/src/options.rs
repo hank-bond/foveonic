@@ -142,6 +142,22 @@ fn parse_settings_with_noise_defaults(
             "--hdr-highlights" => settings.tonal_ranges.highlights = value.parse()?,
             "--whites" => settings.tonal_ranges.whites = value.parse()?,
             "--tone-method" => settings.photographic.tone_method = parse_method(&value)?,
+            "--saturation-method" => {
+                settings.photographic.saturation_method = parse_method(&value)?
+            }
+            "--universal-saturation" => {
+                settings.photographic.perceptual.saturation = value.parse()?
+            }
+            "--saturation-contrast" => settings.photographic.perceptual.contrast = value.parse()?,
+            "--saturation-shadows" => {
+                settings.photographic.perceptual.bands[0].saturation = value.parse()?
+            }
+            "--saturation-midtones" => {
+                settings.photographic.perceptual.bands[1].saturation = value.parse()?
+            }
+            "--saturation-highlights" => {
+                settings.photographic.perceptual.bands[2].saturation = value.parse()?
+            }
             "--sharpen-method" => settings.photographic.sharpening.method = parse_method(&value)?,
             "--universal-sharpen" => settings.photographic.sharpening.amount = value.parse()?,
             "--sharpen-radius" => settings.photographic.sharpening.radius = value.parse()?,
@@ -287,6 +303,56 @@ fn parse_method(value: &str) -> Result<foveonic::render::PhotographicMethod> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saturation_method_and_tonal_amounts_are_independent_of_tone() {
+        let args = [
+            "--wb",
+            "Sunlight",
+            "--mode",
+            "Standard",
+            "--saturation-method",
+            "universal",
+            "--universal-saturation",
+            "0.4",
+            "--saturation-contrast",
+            "-0.2",
+            "--saturation-shadows",
+            "-0.3",
+            "--saturation-midtones",
+            "0.1",
+            "--saturation-highlights",
+            "-0.5",
+        ];
+        let (s, _, _) = parse_settings(args.into_iter().map(OsString::from)).unwrap();
+        assert_eq!(
+            s.photographic.tone_method,
+            foveonic::render::PhotographicMethod::Reference
+        );
+        assert!(s.universal_saturation());
+        assert_eq!(s.photographic.perceptual.saturation, 0.4);
+        assert_eq!(s.photographic.perceptual.contrast, -0.2);
+        assert_eq!(
+            s.photographic.perceptual.bands.map(|b| b.saturation),
+            [-0.3, 0.1, -0.5]
+        );
+        for flag in [
+            "--universal-saturation",
+            "--saturation-contrast",
+            "--saturation-shadows",
+            "--saturation-midtones",
+            "--saturation-highlights",
+        ] {
+            for invalid in ["1.01", "-1.01", "NaN"] {
+                assert!(parse_settings(
+                    ["--wb", "Sunlight", "--mode", "Standard", flag, invalid]
+                        .into_iter()
+                        .map(OsString::from)
+                )
+                .is_err());
+            }
+        }
+    }
 
     #[test]
     fn merrill_noise_method_selects_both_shield_choices_and_preserves_noise_strength() {

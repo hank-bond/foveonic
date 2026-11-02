@@ -38,9 +38,9 @@ pub(crate) use execute::Value;
 use recipes::Recipe;
 pub use settings::{
     ColorEditorControls, ColorFieldApproach, ColorFieldControls, HighlightMode, MerrillNoiseMethod,
-    MonochromeControls, PhotographicControls, PhotographicMethod, PreviewQuality,
-    ProcessingSections, Rendering, RepairThreshold, Settings, TiffColorSpace, TonalRanges,
-    ToneControls, UniversalSharpening, WhiteBalanceBias,
+    MonochromeControls, PerceptualControls, PhotographicControls, PhotographicMethod,
+    PreviewQuality, ProcessingSections, Rendering, RepairThreshold, Settings, TiffColorSpace,
+    TonalRanges, ToneControls, UniversalSharpening, WhiteBalanceBias,
 };
 
 /// Completed recipe preparation and execution boundaries for an interactive render.

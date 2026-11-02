@@ -126,7 +126,10 @@ pub fn show_with_help(
     crate::help::control(response, "Color Mix");
     ui.horizontal(|ui| {
         for (name, amount) in ["R", "G", "B"].into_iter().zip(*mix) {
-            ui.label(format!("{name} {:.1}%", amount * 100.));
+            ui.label(format!(
+                "{name} {}%",
+                crate::widgets::format_parameter_value(f64::from(amount) * 100.)
+            ));
         }
     });
     before != *mix

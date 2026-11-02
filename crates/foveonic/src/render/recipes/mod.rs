@@ -162,7 +162,7 @@ pub(super) fn prepare_dng_appearance(
 ) -> Result<crate::dng::appearance::Prepared> {
     use crate::{dng::appearance::Prepared, source::ProcessingFamily};
     let effective_edits = settings.processing_settings(metadata.processing_family()?);
-    let baked_color_editor = effective_edits.color_editor_chromatic_active();
+    let baked_chromatic_edits = effective_edits.linear_chromatic_active();
     let dng = settings.dng_settings();
     let effective = dng.processing_settings(metadata.processing_family()?);
     let settings = &effective;
@@ -187,8 +187,8 @@ pub(super) fn prepare_dng_appearance(
         };
         prepared.white_balance_bias(settings.white_balance_bias.matrix(space))?;
     }
-    if baked_color_editor {
-        prepared.sample_notes = Some("Selected pre-tone color reconstruction and Color Editor edits are baked through the inverse linear profile basis. Camera response, exposure and global presentation remain in the profile.");
+    if baked_chromatic_edits {
+        prepared.sample_notes = Some("Selected pre-tone color reconstruction and chromatic edits are baked through the inverse linear profile basis. Camera response, exposure and global presentation remain in the profile.");
     }
     Ok(prepared)
 }

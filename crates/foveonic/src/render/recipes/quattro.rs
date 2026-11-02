@@ -804,12 +804,12 @@ fn compose(
             },
             &[recipe.final_id],
         )?;
-        if settings.saturation != 1. && !settings.is_monochrome() {
+        if settings.reference_saturation() != 1. && !settings.is_monochrome() {
             recipe.final_id = recipe.graph.add(
                 Operation::Saturation {
                     params: super::saturation(
                         [params.output[0], params.output[1], 0, 0],
-                        settings.saturation,
+                        settings.reference_saturation(),
                     ),
                     space,
                 },
@@ -835,12 +835,12 @@ fn compose(
         },
         &[response_input],
     )?;
-    if settings.saturation != 1. && !settings.is_monochrome() {
+    if settings.reference_saturation() != 1. && !settings.is_monochrome() {
         final_id = graph.add(
             Operation::Saturation {
                 params: super::saturation(
                     [params.output[0], params.output[1], 0, 0],
-                    settings.saturation,
+                    settings.reference_saturation(),
                 ),
                 space: crate::color_space::ColorSpace::Srgb,
             },

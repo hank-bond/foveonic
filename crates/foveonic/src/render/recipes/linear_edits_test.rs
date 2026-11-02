@@ -43,7 +43,9 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
         };
         s.photographic.sharpening.method = PhotographicMethod::Universal;
         s.photographic.sharpening.amount = 0.;
+        s.photographic.brightness = 0.25;
         let mut neutral = s.clone();
+        neutral.photographic.brightness = 0.;
         neutral.tonal_ranges = Default::default();
         neutral.photographic.local_contrast = 0.;
         neutral.photographic.color_editor = Default::default();
@@ -180,6 +182,9 @@ fn original_output_sections_bypass_edits_without_changing_authored_settings() {
         settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         settings.photographic.tone_method = PhotographicMethod::Universal;
+        settings.photographic.saturation_method = crate::render::PhotographicMethod::Universal;
+        settings.photographic.brightness = 0.4;
+        settings.photographic.perceptual.saturation = 0.2;
         settings.photographic.color_editor.bands[0].lightness = 0.4;
         settings.tonal_ranges.shadows = 0.3;
         settings.photographic.local_contrast = 0.2;
@@ -188,6 +193,7 @@ fn original_output_sections_bypass_edits_without_changing_authored_settings() {
         let authored = serde_json::to_vec(&settings).unwrap();
         let mut explicit = settings.clone();
         explicit.tone_enabled = false;
+        explicit.saturation_enabled = false;
         explicit.sharpening_enabled = false;
         let expected_image = engine
             .render_dng_base(&source, &explicit, &mut Profile::default())
@@ -196,6 +202,7 @@ fn original_output_sections_bypass_edits_without_changing_authored_settings() {
         let expected = engine.readback_image(&expected_image).unwrap();
         drop(expected_image);
         settings.processing_sections.tone = false;
+        settings.processing_sections.saturation = false;
         settings.processing_sections.sharpening = false;
         let output = engine
             .render_dng_base(&source, &settings, &mut Profile::default())
@@ -237,6 +244,65 @@ fn original_output_sections_bypass_edits_without_changing_authored_settings() {
         }
         assert_eq!(serde_json::to_vec(&settings).unwrap(), authored);
     }
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
+fn original_perceptual_neutral_and_cached_edits_keep_reconstruction_unchanged() {
+    let source =
+        Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let engine = Engine::new().unwrap();
+    let mut s = caps
+        .editing_defaults(&source.metadata, Rendering::Color)
+        .unwrap();
+    s.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+    s.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    s.photographic.tone_method = PhotographicMethod::Reference;
+    let baseline = engine.render(&source, &s, &mut Profile::default()).unwrap();
+    let expected = engine.readback_image(&baseline).unwrap();
+    drop(baseline);
+    s.photographic.saturation_method = crate::render::PhotographicMethod::Universal;
+    let neutral = engine.render(&source, &s, &mut Profile::default()).unwrap();
+    assert_eq!(engine.readback_image(&neutral).unwrap(), expected);
+    drop(neutral);
+    drop(expected);
+    s.tonal_ranges.shadows = 0.3;
+    s.tonal_ranges.highlights = -0.4;
+    s.photographic.brightness = 0.3;
+    s.photographic.perceptual.saturation = 0.15;
+    s.photographic.perceptual.contrast = -0.3;
+    let mut session = RenderSession::new(source.clone());
+    let _ = engine
+        .render_session(
+            &mut session,
+            &s,
+            &["final"],
+            || false,
+            &mut Profile::default(),
+        )
+        .unwrap();
+    s.photographic.perceptual.contrast = 0.4;
+    let mut profile = Profile::new(Mode::Wall);
+    let mut cached = engine
+        .render_session(&mut session, &s, &["final"], || false, &mut profile)
+        .unwrap()
+        .unwrap();
+    assert!(
+        !profile.host.iter().any(|t| matches!(
+            t.stage,
+            "upload sensor phase cells" | "submit calibration" | "submit reference noise base"
+        )),
+        "grading edit rebuilt reconstruction: {:?}",
+        profile.host
+    );
+    let Content::Image(cached) = cached.remove(0).content else {
+        panic!("image")
+    };
+    let expected = engine.readback_image(&cached).unwrap();
+    drop(cached);
+    let fresh = engine.render(&source, &s, &mut Profile::default()).unwrap();
+    assert_eq!(engine.readback_image(&fresh).unwrap(), expected);
 }
 
 #[test]
@@ -315,6 +381,16 @@ fn original_reference_sharpening_bypass_matches_neutral_universal() {
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
 fn original_hsl_dng_reprojects_to_the_same_pre_curve_rgb() {
+    check_chromatic_dng_reprojection(false);
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
+fn original_perceptual_dng_reprojects_to_the_same_pre_curve_rgb() {
+    check_chromatic_dng_reprojection(true);
+}
+
+fn check_chromatic_dng_reprojection(perceptual: bool) {
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
@@ -334,7 +410,20 @@ fn original_hsl_dng_reprojects_to_the_same_pre_curve_rgb() {
     };
     settings.photographic.color_editor.master.saturation = -0.2;
     settings.photographic.color_editor.bands[0].lightness = 0.1;
-    settings.photographic.tone_method = PhotographicMethod::Universal;
+    // Exercise Universal saturation independently of the Tone method.
+    settings.photographic.tone_method = if perceptual {
+        PhotographicMethod::Reference
+    } else {
+        PhotographicMethod::Universal
+    };
+    if perceptual {
+        settings.photographic.saturation_method = crate::render::PhotographicMethod::Universal;
+        settings.photographic.brightness = 0.2;
+        settings.photographic.perceptual.saturation = 0.3;
+        settings.photographic.perceptual.contrast = -0.4;
+        settings.tonal_ranges.highlights = -0.5;
+        settings.photographic.perceptual.bands[0].saturation = -0.2;
+    }
     settings.tonal_ranges.shadows = 0.2;
     settings.photographic.local_contrast = 0.2;
     settings.photographic.sharpening.method = PhotographicMethod::Universal;

@@ -16,6 +16,7 @@ fn tone_selection_bypasses_inactive_controls_without_overwriting_them() {
     settings.tone.highlights = -0.3;
     settings.tonal_ranges.shadows = 0.6;
     settings.photographic.local_contrast = 0.2;
+    settings.photographic.brightness = 0.3;
     for method in [Method::Reference, Method::Universal, Method::Reference] {
         settings.photographic.tone_method = method;
         let saved = settings.clone();
@@ -23,12 +24,14 @@ fn tone_selection_bypasses_inactive_controls_without_overwriting_them() {
         if method == Method::Reference {
             assert!(effective.tonal_ranges.is_neutral());
             assert_eq!(effective.photographic.local_contrast, 0.);
+            assert_eq!(effective.photographic.brightness, 0.);
             assert_eq!(effective.tone, settings.tone);
         } else {
             assert_eq!(effective.tone.shadows, 0.);
             assert_eq!(effective.tone.highlights, 0.);
             assert_eq!(effective.tonal_ranges, settings.tonal_ranges);
             assert_eq!(effective.photographic.local_contrast, 0.2);
+            assert_eq!(effective.photographic.brightness, 0.3);
         }
         assert_eq!(settings, saved);
     }
@@ -249,7 +252,10 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
     settings.photographic.sharpening.method = PhotographicMethod::Universal;
     settings.photographic.sharpening.amount = 0.8;
     settings.tone.contrast = 0.4;
-    settings.saturation = 1.2;
+    settings.photographic.saturation_method = PhotographicMethod::Universal;
+    settings.photographic.perceptual.saturation = 0.3;
+    settings.photographic.perceptual.contrast = -0.4;
+    settings.photographic.perceptual.bands[0].saturation = -0.2;
     settings.tonal_ranges.shadows = 0.4;
     settings.tonal_ranges.highlights = -0.3;
     let full = engine

@@ -115,8 +115,9 @@ pub fn show(ctx: &egui::Context, open: &mut bool, mode: FolderMode, settings: &m
             ui.label("Apply image settings");
             let sections = settings.sections_mut();
             for (title, value) in [
-                ("Tone and Color", &mut sections.tone),
-                ("Color Editor", &mut sections.color_editor),
+                ("Tone", &mut sections.tone),
+                ("Saturation", &mut sections.saturation),
+                ("Color Range", &mut sections.color_editor),
                 ("Noise", &mut sections.noise),
                 ("Detail", &mut sections.detail),
                 ("Sharpening", &mut sections.sharpening),

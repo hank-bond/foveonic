@@ -7,6 +7,11 @@ pub fn normalize(order: &mut Vec<Section>) {
     if !order.contains(&Section::WhiteBalance) {
         order.insert(0, Section::WhiteBalance);
     }
+    if !order.contains(&Section::Saturation) {
+        if let Some(index) = order.iter().position(|s| *s == Section::Tone) {
+            order.insert(index + 1, Section::Saturation);
+        }
+    }
     let mut seen = BTreeSet::new();
     order.retain(|section| seen.insert(*section));
     for section in Section::ALL {

@@ -44,6 +44,7 @@ pub enum Section {
     WhiteBalance,
     Mix,
     Tone,
+    Saturation,
     ColorEditor,
     Noise,
     Detail,
@@ -51,10 +52,11 @@ pub enum Section {
     Corrections,
 }
 impl Section {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::WhiteBalance,
         Self::Mix,
         Self::Tone,
+        Self::Saturation,
         Self::ColorEditor,
         Self::Noise,
         Self::Detail,
@@ -94,11 +96,17 @@ impl Scope {
             Self::Tool(Section::Tone) => {
                 target.tone_enabled = source.tone_enabled;
                 target.exposure = source.exposure;
-                target.saturation = source.saturation;
                 target.tone = source.tone;
                 target.tonal_ranges = source.tonal_ranges;
                 target.photographic.tone_method = source.photographic.tone_method;
+                target.photographic.brightness = source.photographic.brightness;
                 target.photographic.local_contrast = source.photographic.local_contrast;
+            }
+            Self::Tool(Section::Saturation) => {
+                target.saturation_enabled = source.saturation_enabled;
+                target.saturation = source.saturation;
+                target.photographic.saturation_method = source.photographic.saturation_method;
+                target.photographic.perceptual = source.photographic.perceptual;
             }
             Self::Tool(Section::ColorEditor) => {
                 target.color_editor_enabled = source.color_editor_enabled;

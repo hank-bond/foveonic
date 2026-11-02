@@ -200,6 +200,10 @@ pub enum Operation {
         params: crate::nodes::finish::color_editor::Params,
         space: ColorSpace,
     },
+    PerceptualGrade {
+        params: crate::nodes::finish::perceptual_grade::Params,
+        space: ColorSpace,
+    },
     LinearBasis {
         rows: [[f32; 4]; 3],
         space: ColorSpace,
@@ -211,6 +215,10 @@ pub enum Operation {
     },
     TransferLinearGain {
         data: DataType,
+        space: ColorSpace,
+    },
+    LinearBrightness {
+        params: crate::nodes::finish::photographic::Params,
         space: ColorSpace,
     },
     LinearLocalContrast {
@@ -359,9 +367,11 @@ impl Operation {
             Self::LinearColorEditor { params, .. } => params.key(),
             Self::ShadowNeutralize { params, .. } => params.key(),
             Self::ShadowNeutralGuide { params, .. } => params.guide_key(),
+            Self::PerceptualGrade { params, .. } => params.key(),
             Self::MonoTexture(c) => Key::pod(&[c.fine, c.coarse, c.fine_size, c.coarse_size]),
             Self::ImageAlias { .. } | Self::TransferLinearGain { .. } => Key::default(),
             Self::PhotographicTone { params, .. }
+            | Self::LinearBrightness { params, .. }
             | Self::LinearLocalContrast { params, .. }
             | Self::LinearUniversalSharpen { params, .. } => params.key(),
             Self::ToneMask { guide, .. } => guide.key(),
@@ -510,12 +520,14 @@ impl Operation {
             Self::LinearColorEditor { .. } => "submit linear Color Editor",
             Self::ShadowNeutralize { .. } => "neutralize green and magenta shadows",
             Self::ShadowNeutralGuide { .. } => "prepare regional shadow color",
+            Self::PerceptualGrade { .. } => "submit perceptual grading",
             Self::MonoTexture(_) => "submit monochrome texture",
             Self::ImageAlias { .. } => "retain image alias",
             Self::LinearBasis { .. } => "bake linear color edits",
             Self::LinearWhiteBalance { .. } => "white balance bias",
             Self::TransferLinearGain { .. } => "bake linear brightness edits",
             Self::PhotographicTone { .. } => "finish.tone",
+            Self::LinearBrightness { .. } => "linear.brightness",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",
             Self::ToneMask { .. } => "submit tonal brightness mask",
             Self::TonalRanges { .. } => "submit tonal range exposure",
@@ -731,6 +743,14 @@ impl Operation {
             Self::LinearColorEditor { space, .. } => {
                 (vec![LinearRgb(*space); 2], LinearRgb(*space))
             }
+            Self::PerceptualGrade { params, space } => (
+                vec![LinearRgb(*space)],
+                if params.is_mask() {
+                    ScalarField
+                } else {
+                    LinearRgb(*space)
+                },
+            ),
             Self::MonoTexture(_) => (vec![Monochrome], Monochrome),
             Self::LinearBasis { data, space, .. } => (vec![LinearRgb(*space)], *data),
             Self::LinearWhiteBalance { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
@@ -748,7 +768,9 @@ impl Operation {
             Self::LinearUniversalSharpen { space, .. } => {
                 (vec![LinearRgb(*space)], LinearRgb(*space))
             }
-            Self::LinearLocalContrast { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
+            Self::LinearBrightness { space, .. } | Self::LinearLocalContrast { space, .. } => {
+                (vec![LinearRgb(*space)], LinearRgb(*space))
+            }
             Self::ImageAlias { data, .. } => (vec![*data], *data),
             Self::PhotographicTone { space, .. } => {
                 (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space))
@@ -1008,12 +1030,14 @@ impl Operation {
             Self::LinearColorEditor { .. } => "color-editor.rgb",
             Self::ShadowNeutralize { .. } => "shadow-neutralize.rgb",
             Self::ShadowNeutralGuide { .. } => "shadow-neutralize.guide",
+            Self::PerceptualGrade { params, .. } => params.name(),
             Self::MonoTexture(_) => "mono.texture",
             Self::ImageAlias { output, .. } => output,
             Self::LinearBasis { .. } => "dng.linear-color-edits",
             Self::LinearWhiteBalance { .. } => "white-balance.rgb",
             Self::TransferLinearGain { .. } => "dng.linear-edits",
             Self::PhotographicTone { .. } => "finish.tone",
+            Self::LinearBrightness { .. } => "linear.brightness",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",
             Self::ToneMask { .. } => "tonal-ranges.mask",
             Self::TonalRanges { .. } => "tonal-ranges.rgb",

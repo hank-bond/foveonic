@@ -69,6 +69,10 @@ impl Sharpening {
 #[serde(default, deny_unknown_fields)]
 pub struct Controls {
     pub tone_method: Method,
+    pub saturation_method: Method,
+    pub perceptual: super::perceptual_grade::Controls,
+    /// Anchored midtone shaping after spatial HDR. Zero is neutral.
+    pub brightness: f32,
     #[serde(alias = "monochrome_sensitivity")]
     pub color_editor: super::color_editor::Controls,
     /// Neutral-centered multiscale local contrast, independent of reconstruction.
@@ -78,6 +82,10 @@ pub struct Controls {
 impl Controls {
     pub(crate) fn validate(self) -> Result<()> {
         self.color_editor.validate()?;
+        self.perceptual.validate()?;
+        if !(-1. ..=1.).contains(&self.brightness) {
+            return Err("brightness must be in -1..1".into());
+        }
         if !(-1. ..=1.).contains(&self.local_contrast) {
             return Err("local contrast must be in -1..1".into());
         }
@@ -92,7 +100,7 @@ impl Controls {
 pub struct Params {
     /// Width, height, spatial stride/radius and axis for filter dispatches.
     pub shape: [u32; 4],
-    /// Tone: contrast/saturation. Sharpen: amount/threshold/halo/sigma.
+    /// Tone: contrast. Brightness: rational-curve gain. Sharpen: amount/threshold/halo/sigma.
     /// Local contrast: amount/native-grid scale. Unused fields stay zero.
     pub values: [f32; 4],
     pub luma: [f32; 4],
@@ -109,16 +117,11 @@ impl Params {
         Key::pod(&self)
     }
 
-    pub(crate) fn tone(
-        extent: [u32; 2],
-        space: ColorSpace,
-        contrast: f64,
-        saturation: f32,
-    ) -> Self {
+    pub(crate) fn tone(extent: [u32; 2], space: ColorSpace, contrast: f64) -> Self {
         // UI contrast spans -2..2. The shared cubic uses a normalized -1..1 amount.
         const CONTRAST_CONTROL_SCALE: f32 = 0.5;
         let mut p = Self::new(extent, space);
-        p.values = [contrast as f32 * CONTRAST_CONTROL_SCALE, saturation, 0., 0.];
+        p.values = [contrast as f32 * CONTRAST_CONTROL_SCALE, 0., 0., 0.];
         p
     }
 

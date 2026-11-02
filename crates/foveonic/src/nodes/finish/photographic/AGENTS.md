@@ -18,6 +18,6 @@ Inspection names use the graph's immutable image alias. Aliases do not belong in
 
 - **[local_contrast.rs](./local_contrast.rs)** Adjusts six log-brightness texture bands without coupling noise or sharpening.
 - **[sharpen.rs](./sharpen.rs)** Sharpens square-root brightness with independent threshold and halo restraint.
-- **[tone.rs](./tone.rs)** Applies shared contrast and saturation to normalized photographic RGB.
+- **[tone.rs](./tone.rs)** Applies anchored linear brightness and post-appearance contrast.
 
 <!-- INDEX:END -->

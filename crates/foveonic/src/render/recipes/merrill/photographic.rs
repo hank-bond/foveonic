@@ -98,11 +98,11 @@ pub(in crate::render::recipes) fn build(
     if requested(&recipe.graph, names) {
         return Ok(recipe);
     }
-    if !settings.is_monochrome() && settings.saturation != 1. {
+    if !settings.is_monochrome() && settings.reference_saturation() != 1. {
         let dimensions = [recipe.params.source[0], recipe.params.source[1], 0, 0];
         recipe.final_id = recipe.graph.add(
             Operation::Saturation {
-                params: super::super::saturation(dimensions, settings.saturation),
+                params: super::super::saturation(dimensions, settings.reference_saturation()),
                 space,
             },
             &[recipe.final_id],

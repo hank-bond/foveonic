@@ -315,13 +315,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
     } else {
         (-nudge.abs().log10()).ceil().clamp(2., 15.) as usize
     };
-    let format_value = |value: f64| {
-        if T::INTEGRAL {
-            format!("{value:.0}")
-        } else {
-            crate::widgets::format_parameter_value(value)
-        }
-    };
+    let format_value = |value| crate::widgets::format_numeric_value(value, T::INTEGRAL);
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
             let enabled = if let Some(enabled) = enabled {
@@ -364,11 +358,8 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                     // Apply to every editing slider while leaving adjacent
                     // value fields, buttons and group backgrounds unchanged.
                     ui.visuals_mut().widgets.inactive.bg_fill = crate::widgets::SLIDER_TRACK_FILL;
-                    let mut slider = egui::Slider::new(value, range.clone())
-                        .show_value(false)
-                        .custom_formatter(|v, _| format_value(v));
-                    // egui's built-in grid starts at zero. Shifted grids snap
-                    // below so odd endpoints remain reachable.
+                    let mut slider = crate::widgets::slider(value, range.clone()).show_value(false);
+                    // Shifted grids snap below so odd endpoints remain reachable.
                     if let Some(step) = step.filter(|_| step_origin == 0.) {
                         slider = slider.step_by(step);
                     }
@@ -401,7 +392,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                                 let focused =
                                     ui.memory(|memory| memory.has_focus(ui.next_auto_id()));
                                 ui.add(
-                                    egui::DragValue::new(value)
+                                    crate::widgets::drag_value(value)
                                         .range(range.clone())
                                         .speed(if focused {
                                             nudge
@@ -410,8 +401,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                                         } else {
                                             0.01
                                         })
-                                        .fixed_decimals(decimals)
-                                        .custom_formatter(|v, _| format_value(v)),
+                                        .fixed_decimals(decimals),
                                 )
                             },
                         )
@@ -576,22 +566,20 @@ fn camera_choice(
     changed
 }
 
-pub(super) fn tone(ui: &mut egui::Ui, settings: &mut Settings, mono: bool) -> bool {
-    tone_with_exposure_range(ui, settings, mono, -4. ..=4.)
+pub(super) fn tone(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    tone_with_exposure_range(ui, settings, -4. ..=4.)
 }
 
 pub(super) fn tone_with_exposure_range(
     ui: &mut egui::Ui,
     settings: &mut Settings,
-    mono: bool,
     exposure_range: RangeInclusive<f32>,
 ) -> bool {
     let mut changed = false;
-    let title = if mono { "Tone" } else { "Tone and Color" };
     changed |= section_header(
         ui,
         EditingSection::Tone,
-        title,
+        "Tone",
         Some(&mut settings.tone_enabled),
     );
     ui.add_enabled_ui(settings.tone_enabled, |ui| {
@@ -603,34 +591,55 @@ pub(super) fn tone_with_exposure_range(
         );
         let universal =
             settings.photographic.tone_method == foveonic::render::PhotographicMethod::Universal;
-        let labels: &[&str] = if universal {
+        let column = LabelColumn::new(
+            ui,
             &[
                 "Exposure",
-                "Saturation",
+                "Brightness",
                 "Contrast",
                 "Shadows",
                 "Highlights",
                 "Blacks",
                 "Whites",
                 "Local contrast",
-            ]
-        } else {
-            &[
-                "Exposure",
-                "Saturation",
-                "Contrast",
-                "Shadows",
-                "Highlights",
-            ]
-        };
-        let column = LabelColumn::new(ui, labels);
-        for (label, value, range, default) in [
-            ("Exposure", &mut settings.exposure, exposure_range, 0.),
-            ("Saturation", &mut settings.saturation, 0. ..=2., 1.),
-        ] {
-            if !mono || label != "Saturation" {
-                changed |= column.adjustment(ui, (label, label), value, range, default);
+            ],
+        );
+        changed |= column.adjustment(
+            ui,
+            ("Exposure", "Exposure"),
+            &mut settings.exposure,
+            exposure_range,
+            0.,
+        );
+        if universal {
+            ui.weak("Dynamic range");
+            for (label, value) in [
+                ("Shadows", &mut settings.tonal_ranges.shadows),
+                ("Highlights", &mut settings.tonal_ranges.highlights),
+                ("Blacks", &mut settings.tonal_ranges.blacks),
+                ("Whites", &mut settings.tonal_ranges.whites),
+            ] {
+                changed |= ui
+                    .push_id(("tonal-ranges", label), |ui| {
+                        column.adjustment(
+                            ui,
+                            ("Tonal ranges", label),
+                            value,
+                            -foveonic::render::TonalRanges::MAX_AMOUNT
+                                ..=foveonic::render::TonalRanges::MAX_AMOUNT,
+                            0.,
+                        )
+                    })
+                    .inner;
             }
+            ui.weak("Tone shaping");
+            changed |= column.adjustment(
+                ui,
+                ("Brightness", "Brightness"),
+                &mut settings.photographic.brightness,
+                -1. ..=1.,
+                0.,
+            );
         }
         changed |= column.adjustment(
             ui,
@@ -647,26 +656,8 @@ pub(super) fn tone_with_exposure_range(
                 -1. ..=1.,
                 0.,
             );
-            for (label, value) in [
-                ("Blacks", &mut settings.tonal_ranges.blacks),
-                ("Shadows", &mut settings.tonal_ranges.shadows),
-                ("Highlights", &mut settings.tonal_ranges.highlights),
-                ("Whites", &mut settings.tonal_ranges.whites),
-            ] {
-                changed |= ui
-                    .push_id(("tonal-ranges", label), |ui| {
-                        column.adjustment(
-                            ui,
-                            ("Tonal ranges", label),
-                            value,
-                            -foveonic::render::TonalRanges::MAX_AMOUNT
-                                ..=foveonic::render::TonalRanges::MAX_AMOUNT,
-                            0.,
-                        )
-                    })
-                    .inner;
-            }
-        } else {
+        }
+        if !universal {
             for (label, value) in [
                 ("Shadows", &mut settings.tone.shadows),
                 ("Highlights", &mut settings.tone.highlights),

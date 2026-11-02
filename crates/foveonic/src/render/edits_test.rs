@@ -74,6 +74,10 @@ fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {
         ..Default::default()
     };
     source.photographic.tone_method = PhotographicMethod::Universal;
+    source.photographic.saturation_method = crate::render::PhotographicMethod::Universal;
+    source.photographic.perceptual.saturation = 0.3;
+    source.photographic.perceptual.contrast = -0.4;
+    source.photographic.brightness = 0.6;
     source.highlight_restoration = false;
     let mut target = Settings {
         preview_quality: PreviewQuality::Draft,
@@ -84,6 +88,20 @@ fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {
     };
     Scope::Tool(Section::Tone).apply(&source, &mut target, ProcessingFamily::Merrill);
     assert_eq!(target.exposure, 1.);
+    assert_eq!(
+        target.photographic.brightness,
+        source.photographic.brightness
+    );
+    assert_eq!(target.photographic.perceptual, Default::default());
+    Scope::Tool(Section::Saturation).apply(&source, &mut target, ProcessingFamily::Merrill);
+    assert_eq!(
+        target.photographic.perceptual,
+        source.photographic.perceptual
+    );
+    assert_eq!(
+        target.photographic.saturation_method,
+        source.photographic.saturation_method
+    );
     assert!(target.highlight_restoration);
     assert_eq!(
         target.photographic.tone_method,

@@ -36,7 +36,6 @@ fn auxiliary_adjustment(i: u32) -> vec3<f32> {
     if p.values.y==0. { return vec3(0.,0.,aux[i]); }
     return vec3(aux[i*4u],aux[i*4u+1u],aux[i*4u+2u]);
 }
-
 @compute @workgroup_size(8,8)
 fn color_editor_filter(@builtin(global_invocation_id) id: vec3<u32>) {
     if !valid(id) { return; }
@@ -66,12 +65,10 @@ fn color_editor_apply(@builtin(global_invocation_id) id: vec3<u32>) {
     var result=rgb(i)*exp2(control.z);
     // Lightness-only edits avoid all color-space round trips, including in monochrome.
     if control.x!=0. || control.y!=0. {
-        var lab=linear_srgb_to_oklab(transform(result/p.values.z,p.to_srgb));
+        var lab=to_lab(transform(result/p.values.z,p.to_srgb));
         let angle=control.x*MAX_HUE_RADIANS;
-        let c=cos(angle); let s=sin(angle);
-        let chroma=vec2(c*lab.y-s*lab.z,s*lab.y+c*lab.z)*max(0.,1.+control.y);
-        lab=vec3(lab.x,chroma);
-        result=transform(oklab_to_linear_srgb(lab),p.from_srgb)*p.values.z;
+        lab=adjust_chroma(lab,angle,control.y);
+        result=transform(from_lab(lab),p.from_srgb)*p.values.z;
     }
     dst[n]=result.x; dst[n+1u]=result.y; dst[n+2u]=result.z;
 }

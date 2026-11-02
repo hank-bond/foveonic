@@ -10,13 +10,13 @@ use crate::{
 };
 
 /// Camera adapters retain their existing RAW exposure and base appearance.
-/// Universal contrast/saturation are evaluated once after that boundary.
+/// Universal contrast is evaluated after that boundary; saturation has its own method.
 pub(super) fn camera_settings(settings: &Settings) -> Settings {
     let mut base = settings.clone();
     if base.photographic.tone_method == Method::Universal {
         base.tone.contrast = 0.;
-        base.saturation = 1.;
     }
+    base.saturation = settings.reference_saturation();
     base
 }
 
@@ -46,20 +46,8 @@ pub(super) fn build(
             &[recipe.final_id],
         )?;
     }
-    if settings.photographic.tone_method == Method::Universal
-        && (settings.tone.contrast != 0.
-            || (!settings.is_monochrome() && settings.saturation != 1.))
-    {
-        let p = Params::tone(
-            extent,
-            space,
-            settings.tone.contrast,
-            if settings.is_monochrome() {
-                1.
-            } else {
-                settings.saturation
-            },
-        );
+    if settings.photographic.tone_method == Method::Universal && settings.tone.contrast != 0. {
+        let p = Params::tone(extent, space, settings.tone.contrast);
         recipe.graph.retain_for_session(recipe.final_id);
         recipe.final_id = recipe.graph.add(
             Operation::PhotographicTone { params: p, space },

@@ -1,10 +1,34 @@
-//! Shares button, checkbox, and dropdown states across the workspace.
+//! Shares numeric display policy and workspace button, checkbox, and dropdown widgets.
 
 use eframe::egui;
 
 const VALUE_SIGNIFICANT_DIGITS: usize = 3;
-/// Compact photographic readouts retain up to three significant digits.
-/// Small or large magnitudes use scientific notation instead of long zero runs.
+const VALUE_DECIMAL_PLACES: usize = 2;
+
+/// All numeric widgets and their layout measurements use this display policy.
+pub(crate) fn format_numeric_value(value: f64, integral: bool) -> String {
+    if integral && value.abs() < 1000. {
+        format!("{value:.0}")
+    } else {
+        format_parameter_value(value)
+    }
+}
+
+pub(crate) fn drag_value<T: egui::emath::Numeric>(value: &mut T) -> egui::DragValue<'_> {
+    egui::DragValue::new(value)
+        .custom_formatter(|value, _| format_numeric_value(value, T::INTEGRAL))
+}
+
+pub(crate) fn slider<T: egui::emath::Numeric>(
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+) -> egui::Slider<'_> {
+    egui::Slider::new(value, range)
+        .custom_formatter(|value, _| format_numeric_value(value, T::INTEGRAL))
+}
+
+/// Compact readouts use at most three significant digits and two decimal places.
+/// Scientific notation keeps small nonzero settings distinguishable from zero.
 pub(crate) fn format_parameter_value(value: f64) -> String {
     if value == 0. {
         return "0.00".into();
@@ -26,11 +50,14 @@ pub(crate) fn format_parameter_value(value: f64) -> String {
             mantissa.trim_end_matches('0').trim_end_matches('.')
         );
     }
-    let mut decimals = (VALUE_SIGNIFICANT_DIGITS as i32 - 1 - exponent) as usize;
-    let mut text = format!("{value:.decimals$}");
-    while decimals > 2 && text.ends_with('0') {
-        text.pop();
-        decimals -= 1;
+    let decimals =
+        ((VALUE_SIGNIFICANT_DIGITS as i32 - 1 - exponent) as usize).min(VALUE_DECIMAL_PLACES);
+    let text = format!("{value:.decimals$}");
+    if text.parse::<f64>() == Ok(0.) {
+        return format!(
+            "{}e{exponent}",
+            mantissa.trim_end_matches('0').trim_end_matches('.')
+        );
     }
     text
 }
@@ -147,16 +174,6 @@ pub fn install_style(ctx: &egui::Context) {
     }
     visuals.collapsing_header_frame = true;
     style.visuals = visuals;
-    // Built-in DragValue hints print the full float independently of its
-    // formatter. Domain help stays available through our explicit tooltips.
-    style.explanation_tooltips = false;
-    style.number_formatter = egui::style::NumberFormatter::new(|value, decimals| {
-        if *decimals.end() == 0 && value.abs() < 1000. {
-            format!("{value:.0}")
-        } else {
-            format_parameter_value(value)
-        }
-    });
     style.spacing.item_spacing = egui::vec2(7., 6.);
     style
         .text_styles
@@ -165,6 +182,14 @@ pub fn install_style(ctx: &egui::Context) {
     style.spacing.indent = egui::TextStyle::Body.resolve(&style).size;
     style.visuals.indent_has_left_vline = true;
     ctx.set_style(style);
+    // A system theme change must not restore egui's full-precision hints or
+    // default formatting on widgets outside the photographic control rows.
+    ctx.all_styles_mut(|style| {
+        style.explanation_tooltips = false;
+        style.number_formatter = egui::style::NumberFormatter::new(|value, decimals| {
+            format_numeric_value(value, *decimals.end() == 0)
+        });
+    });
 }
 
 pub fn visuals(ui: &egui::Ui, response: &egui::Response, on: bool) -> egui::style::WidgetVisuals {
@@ -1033,3 +1058,7 @@ mod tests {
         assert_eq!(fill, egui::Color32::from_gray(29));
     }
 }
+
+#[cfg(test)]
+#[path = "widgets_numeric_test.rs"]
+mod numeric_tests;

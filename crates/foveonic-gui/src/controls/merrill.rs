@@ -111,6 +111,7 @@ pub(super) fn show(
         &[
             EditingSection::WhiteBalance,
             EditingSection::Tone,
+            EditingSection::Saturation,
             EditingSection::ColorEditor,
             EditingSection::Noise,
             EditingSection::Detail,
@@ -129,7 +130,8 @@ pub(super) fn show(
             .white_balance_active(settings),
         ),
         EditingSection::Mix => crate::mixer::show(ui, &mut settings.monochrome.mix),
-        EditingSection::Tone => common::tone_with_exposure_range(ui, settings, mono, -4. ..=4.),
+        EditingSection::Tone => common::tone_with_exposure_range(ui, settings, -4. ..=4.),
+        EditingSection::Saturation => super::saturation::show(ui, settings),
         EditingSection::ColorEditor => super::color_editor::show(ui, settings),
         EditingSection::Noise => {
             if mono {

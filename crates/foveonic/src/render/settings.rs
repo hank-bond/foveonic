@@ -3,6 +3,7 @@
 use super::MerrillBandingControls;
 pub use crate::color_space::TiffColorSpace;
 pub use crate::nodes::finish::color_editor::Controls as ColorEditorControls;
+pub use crate::nodes::finish::perceptual_grade::Controls as PerceptualControls;
 pub use crate::nodes::finish::photographic::{
     Controls as PhotographicControls, Method as PhotographicMethod,
     Sharpening as UniversalSharpening,
@@ -61,6 +62,7 @@ impl PreviewQuality {
 #[serde(default)]
 pub struct ProcessingSections {
     pub tone: bool,
+    pub saturation: bool,
     pub color_editor: bool,
     pub noise: bool,
     pub detail: bool,
@@ -71,6 +73,7 @@ impl Default for ProcessingSections {
     fn default() -> Self {
         Self {
             tone: true,
+            saturation: true,
             color_editor: true,
             noise: true,
             detail: true,
@@ -101,8 +104,10 @@ pub struct Settings {
     pub color_mode: String,
     /// Stops applied to linear RGB before the selected rendering mode's tone curve.
     pub exposure: f32,
-    /// Bypass tone/color edits without changing their saved values or camera look.
+    /// Bypass tone edits without changing their saved values or camera look.
     pub tone_enabled: bool,
+    /// Bypass saturation independently of tone and subject-color adjustments.
+    pub saturation_enabled: bool,
     /// Bypass Color Editor without changing its saved range adjustments.
     pub color_editor_enabled: bool,
     /// Bypass final sharpening while retaining its amount and Auto choice.
@@ -112,7 +117,7 @@ pub struct Settings {
     pub tone: ToneControls,
     /// Spatial photographic HDR ranges, applied before camera tone and baked into DNG.
     pub tonal_ranges: TonalRanges,
-    /// Color saturation after tone. Zero is grayscale and one leaves it unchanged.
+    /// Reference camera saturation. Zero is grayscale and one leaves it unchanged.
     pub saturation: f32,
     pub photographic: PhotographicControls,
     /// ColorDQ gain after camera color conversion. Zero skips this correction.
@@ -166,6 +171,7 @@ impl Default for Settings {
             color_mode: String::new(),
             exposure: 0.,
             tone_enabled: true,
+            saturation_enabled: true,
             color_editor_enabled: true,
             sharpening_enabled: true,
             tone: ToneControls::default(),
@@ -285,6 +291,30 @@ impl Settings {
             && self.photographic.color_editor.chromatic_active()
     }
 
+    pub(crate) fn reference_saturation(&self) -> f32 {
+        if self.saturation_enabled
+            && !self.is_monochrome()
+            && self.photographic.saturation_method == PhotographicMethod::Reference
+        {
+            self.saturation
+        } else {
+            1.
+        }
+    }
+    pub fn universal_saturation(&self) -> bool {
+        self.saturation_enabled
+            && self.photographic.saturation_method == PhotographicMethod::Universal
+    }
+    pub(crate) fn universal_saturation_active(&self) -> bool {
+        self.universal_saturation() && self.photographic.perceptual.is_active(self.is_monochrome())
+    }
+    pub(crate) fn linear_chromatic_active(&self) -> bool {
+        self.color_editor_chromatic_active()
+            || (self.universal_saturation()
+                && !self.is_monochrome()
+                && self.photographic.perceptual.chromatic_active())
+    }
+
     pub fn color_dq_selected(&self) -> bool {
         !self.is_monochrome()
             && self.color_dq_gain.map_or(
@@ -343,6 +373,7 @@ impl Settings {
             self.processing_sections.corrections
         };
         if self.tone_enabled
+            && self.saturation_enabled
             && self.sharpening_enabled
             && self.processing_sections == ProcessingSections::default()
             && (speckles_enabled || (!self.despeckle && self.neutralize_shadows.is_neutral()))
@@ -356,6 +387,7 @@ impl Settings {
             effective.neutralize_shadows.strength = 0.;
         }
         effective.tone_enabled &= sections.tone;
+        effective.saturation_enabled &= sections.saturation;
         effective.color_editor_enabled &= sections.color_editor;
         effective.sharpening_enabled &= sections.sharpening;
         if let Some(noise) = &mut effective.reconstruction {
@@ -372,10 +404,14 @@ impl Settings {
         }
         if !effective.tone_enabled {
             effective.exposure = 0.;
-            effective.saturation = 1.;
             effective.tone = Default::default();
             effective.tonal_ranges = TonalRanges::default();
             effective.photographic.local_contrast = 0.;
+            effective.photographic.brightness = 0.;
+        }
+        if !effective.saturation_enabled {
+            effective.saturation = 1.;
+            effective.photographic.perceptual = Default::default();
         }
         effective.sharpen_amount = effective.processing_sharpen_amount();
         if !effective.sharpening_enabled {
@@ -392,11 +428,13 @@ impl Settings {
         match settings.photographic.tone_method {
             PhotographicMethod::Reference
                 if !settings.tonal_ranges.is_neutral()
-                    || settings.photographic.local_contrast != 0. =>
+                    || settings.photographic.local_contrast != 0.
+                    || settings.photographic.brightness != 0. =>
             {
                 let active = effective.to_mut();
                 active.tonal_ranges = Default::default();
                 active.photographic.local_contrast = 0.;
+                active.photographic.brightness = 0.;
             }
             PhotographicMethod::Universal
                 if settings.tone.shadows != 0. || settings.tone.highlights != 0. =>

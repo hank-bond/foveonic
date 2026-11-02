@@ -6,7 +6,7 @@ summary: "Family panels compose shared editing widgets while the processor defin
 
 Choose the processing family once in the parent dispatcher. Each family panel owns its layout and includes the controls that describe its processing. Shared rows own widget behavior and photographic controls. Keep photographic processing and capability/default resolution in `foveonic`.
 
-All numeric slider readouts use the shared widget formatter with at most three significant digits. Preserve the stored precision and measure the same formatted text when reserving value-field width.
+Construct numeric controls through `widgets::slider` and `widgets::drag_value`. These install the shared display policy of at most three significant digits and two decimal places. Do not instantiate raw egui numeric widgets or override their formatter in production call sites. A source-boundary test enforces this. Preserve stored precision and measure the same shared text when reserving value-field width. Both themes use the policy and suppress built-in full-precision hints.
 
 Editing tool order lives in application preferences. Family panels declare supported tools, and the shared section arranger supplies stable tool identities and accepts typed editing-tool drops. Reordering must not report an image edit or alter pipeline order. Tool headers share the scaled workspace grip.
 
@@ -24,6 +24,7 @@ Camera metadata supplies white-balance and color-mode choices. Normalize unsuppo
 - **[merrill.rs](./merrill.rs)** Composes Merrill color, monochrome, reconstruction and correction controls.
 - **[merrill_noise.rs](./merrill_noise.rs)** Composes Merrill denoising, speckle, shadow-neutrality and independent banding controls.
 - **[quattro.rs](./quattro.rs)** Composes Quattro color and monochrome controls using file-derived defaults.
+- **[saturation.rs](./saturation.rs)** Composes independent Reference and Universal saturation with visible tonal amounts.
 - **[sections.rs](./sections.rs)** Arranges supported editing tools without changing their processing or saved image settings.
 
 <!-- INDEX:END -->

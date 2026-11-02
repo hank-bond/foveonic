@@ -1,7 +1,6 @@
-// Shared contrast and saturation after camera appearance.
+// Shared contrast after camera appearance.
 // Negative contrast is reduced to preserve a monotone curve over the UI range.
 const NEGATIVE_CONTRAST_SCALE: f32 = 0.3333333333;
-const SATURATION_RESPONSE_GAIN: f32 = 1.6;
 
 // Piecewise cubic with fixed endpoints and no change at the middle pivot.
 // Signed values and highlight headroom pass through unchanged.
@@ -22,18 +21,26 @@ fn photographic_tone(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.y * p.shape.x + id.x;
     var v = rgb(i);
     let y = dot(v, p.luma.xyz);
-    if y > EPSILON && p.values.x != 0. {
+    if y > EPSILON && y < 1. && p.values.x != 0. {
         let root = sqrt(y);
         let mapped = contrast(root, p.values.x);
         v *= mapped * mapped / y;
     }
-    let l = dot(v, p.luma.xyz);
-    var amount = p.values.y;
-    if amount > 1. {
-        let increase = SATURATION_RESPONSE_GAIN * (amount - 1.);
-        let colorful = clamp(1. - min(v.x, min(v.y, v.z)) / max(l, EPSILON), 0., 1.);
-        amount = (1. + increase) / (1. + increase * colorful);
+    store(i, v);
+}
+
+// Anchor black and nominal white in square-root brightness. Use the ratio of
+// roots directly so near-black samples need no division by measured luminance.
+// One scalar preserves RGB ratios, signed components and out-of-range headroom.
+@compute @workgroup_size(8, 8)
+fn photographic_brightness(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !valid(id) { return; }
+    let i = id.y * p.shape.x + id.x;
+    var v = rgb(i);
+    let y = dot(v, p.luma.xyz);
+    if y > 0. && y < 1. && p.values.x != 1. {
+        let g = p.values.x / (1. + sqrt(y) * (p.values.x - 1.));
+        v *= g * g;
     }
-    if p.values.y != 1. { v = vec3(l) + (v - vec3(l)) * amount; }
     store(i, v);
 }

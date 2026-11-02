@@ -64,7 +64,7 @@ pub(crate) fn prepare_appearance(
     if white.iter().any(|v| !v.is_finite() || *v <= 0.) || maximum <= 0. {
         return Err("invalid Quattro DNG camera white".into());
     }
-    let saturation = f64::from(settings.saturation);
+    let saturation = f64::from(settings.reference_saturation());
     let saturation = Matrix(std::array::from_fn(|i| {
         [0.299, 0.587, 0.114][i % 3] * (1. - saturation)
             + if i / 3 == i % 3 { saturation } else { 0. }

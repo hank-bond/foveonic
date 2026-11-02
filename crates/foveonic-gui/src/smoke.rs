@@ -63,6 +63,15 @@ const BROWSER_TARGETS: &[&str] = &[
     "browser-large",
 ];
 const COMPARISON_TARGETS: &[&str] = &["preview", "final", "comparison", "comparison-switch"];
+const PERCEPTUAL_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "perceptual-neutral",
+    "perceptual-grade",
+    "perceptual-mask",
+    "perceptual-editor",
+    "perceptual-mono",
+];
 const IMPORT_WIDE_BROWSER_WIDTH: f32 = 600.;
 const IMPORT_TARGETS: &[&str] = &[
     "preview",
@@ -248,7 +257,9 @@ impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_COMPARISON").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_PERCEPTUAL").is_some() {
+                PERCEPTUAL_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_COMPARISON").is_some() {
                 COMPARISON_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_WORKFLOW").is_some() {
                 WORKFLOW_TARGETS
@@ -662,6 +673,39 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "perceptual-neutral" => {
+                    self.preferences.collapsed =
+                        [Section::Navigator, Section::Scopes, Section::Metadata].into();
+                    self.settings.photographic.tone_method =
+                        foveonic::render::PhotographicMethod::Universal;
+                    self.settings.photographic.saturation_method =
+                        foveonic::render::PhotographicMethod::Universal;
+                    self.submit(None);
+                }
+                "perceptual-grade" => {
+                    self.settings.photographic.brightness = 0.15;
+                    self.settings.tonal_ranges.shadows = 0.25;
+                    self.settings.tonal_ranges.highlights = -0.6;
+                    let c = &mut self.settings.photographic.perceptual;
+                    c.saturation = 0.123456;
+                    c.contrast = -0.4;
+                    c.bands[1].saturation = 0.1;
+                    c.bands[2].saturation = -0.2;
+                    self.submit(None);
+                }
+                "perceptual-mask" => {
+                    self.output = "perceptual.midtones".into();
+                    self.submit(None);
+                }
+                "perceptual-editor" => {
+                    self.output = "final".into();
+                    self.settings.photographic.color_editor.bands[0].saturation = -0.2;
+                    self.submit(None);
+                }
+                "perceptual-mono" => {
+                    self.settings.rendering = foveonic::render::Rendering::Monochrome;
+                    self.submit(None);
+                }
                 "comparison-switch" => {
                     self.comparison_selection = self
                         .browser

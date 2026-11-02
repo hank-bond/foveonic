@@ -25,9 +25,6 @@ pub fn output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<&'s
     );
     let settings = effective.as_ref();
     let mut names = camera_output_names(settings, metadata);
-    if settings.photographic.tone_method == crate::render::PhotographicMethod::Universal {
-        names.retain(|n| *n != "saturation.rgb");
-    }
     names.extend(
         finishing_outputs(settings, metadata)
             .into_iter()
@@ -52,8 +49,7 @@ fn finishing_outputs(settings: &Settings, metadata: Option<&Metadata>) -> Vec<Im
     }];
     if settings.tone_enabled
         && settings.photographic.tone_method == Method::Universal
-        && (settings.tone.contrast != 0.
-            || (!settings.is_monochrome() && settings.saturation != 1.))
+        && settings.tone.contrast != 0.
     {
         out.push(ImageOutput {
             name: "finish.tone",
@@ -73,7 +69,19 @@ fn camera_output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<
     if active.color_editor_active() {
         linear.extend(["color-editor.guide", "color-editor.rgb"]);
     }
+    if active.universal_saturation() {
+        linear.extend([
+            "perceptual.input",
+            "perceptual.rgb",
+            "perceptual.shadows",
+            "perceptual.midtones",
+            "perceptual.highlights",
+        ]);
+    }
     linear.extend(["tonal-ranges.mask", "tonal-ranges.rgb"]);
+    if active.tone_enabled && active.photographic.brightness != 0. {
+        linear.push("linear.brightness");
+    }
     if active.tone_enabled && active.photographic.local_contrast != 0. {
         linear.push("linear.local-contrast");
     }
@@ -174,7 +182,7 @@ fn native_camera_output_names(
         names.extend(["shadow-neutralize.input", "shadow-neutralize.rgb"]);
     }
     names.push("tone.rgb");
-    if settings.tone_enabled && settings.saturation != 1. {
+    if settings.reference_saturation() != 1. {
         names.push("saturation.rgb");
     }
     if settings.sharpen_selected() {
@@ -219,6 +227,32 @@ pub fn image_outputs_with_family(
     if family == Some(ProcessingFamily::Quattro) {
         let mut outputs = crate::render::quattro_inspection_outputs(metadata);
         outputs.extend(finishing_outputs(settings, metadata));
+        if settings.active_tone_settings().photographic.brightness != 0.
+            && outputs.iter().any(|o| o.name == "final")
+        {
+            outputs.push(ImageOutput {
+                name: "linear.brightness",
+                channels: Channels::Rgb,
+            });
+        }
+        if settings.universal_saturation() && outputs.iter().any(|o| o.name == "final") {
+            for name in [
+                "perceptual.input",
+                "perceptual.rgb",
+                "perceptual.shadows",
+                "perceptual.midtones",
+                "perceptual.highlights",
+            ] {
+                outputs.push(ImageOutput {
+                    name,
+                    channels: if matches!(name, "perceptual.input" | "perceptual.rgb") {
+                        Channels::Rgb
+                    } else {
+                        Channels::Scalar
+                    },
+                });
+            }
+        }
         return outputs;
     }
     let names = output_names(settings, metadata);
@@ -242,10 +276,23 @@ pub fn image_outputs_with_family(
                 | "chroma.small-layers"
                 | "chroma.layers"
                 | "color.corrected-layers" => Channels::Layers,
-                "tonal-ranges.mask" | "noise.edges" | "detail.ratio" | "detail.raw-ratio"
-                | "pattern.mask" | "detail.signal" | "texture.change" | "highlight.density"
-                | "mono.mix" | "mono.directional" | "mono.column" | "mono.filtered"
-                | "mono.despeckle" | "mono.texture" => Channels::Scalar,
+                "tonal-ranges.mask"
+                | "perceptual.shadows"
+                | "perceptual.midtones"
+                | "perceptual.highlights"
+                | "noise.edges"
+                | "detail.ratio"
+                | "detail.raw-ratio"
+                | "pattern.mask"
+                | "detail.signal"
+                | "texture.change"
+                | "highlight.density"
+                | "mono.mix"
+                | "mono.directional"
+                | "mono.column"
+                | "mono.filtered"
+                | "mono.despeckle"
+                | "mono.texture" => Channels::Scalar,
                 _ => Channels::Rgb,
             };
             Some(ImageOutput { name, channels })
@@ -275,11 +322,17 @@ pub fn comparison_input(
         }
         return None;
     }
+    if output == "linear.brightness" {
+        return Some("brightness.input");
+    }
     if output == "linear.local-contrast" {
         return Some("local-contrast.input");
     }
     if output == "color-editor.rgb" {
         return Some("color-editor.input");
+    }
+    if output == "perceptual.rgb" {
+        return Some("perceptual.input");
     }
     if output == "linear.sharpen" {
         return Some("linear.sharpen-input");
@@ -287,6 +340,8 @@ pub fn comparison_input(
     if output == "tonal-ranges.rgb" {
         return Some(if settings.color_editor_active() {
             "color-editor.rgb"
+        } else if settings.universal_saturation_active() {
+            "perceptual.rgb"
         } else {
             "linear.edits-input"
         });
@@ -372,7 +427,7 @@ pub fn comparison_input(
                 base
             })
         }
-        "saturation.rgb" if settings.tone_enabled && settings.saturation != 1. => Some("tone.rgb"),
+        "saturation.rgb" if settings.reference_saturation() != 1. => Some("tone.rgb"),
         _ => None,
     }
 }

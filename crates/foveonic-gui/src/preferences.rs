@@ -571,8 +571,12 @@ mod editing_order_tests {
     fn editing_order_round_trips_and_restores_missing_hidden_sections() {
         let mut prefs = Preferences::default();
         assert_eq!(
-            prefs.editing_sections[2..4],
-            [EditingSection::Tone, EditingSection::ColorEditor]
+            prefs.editing_sections[2..5],
+            [
+                EditingSection::Tone,
+                EditingSection::Saturation,
+                EditingSection::ColorEditor
+            ]
         );
         crate::editor::move_section(
             &mut prefs.editing_sections,

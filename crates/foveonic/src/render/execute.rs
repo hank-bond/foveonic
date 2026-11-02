@@ -1380,6 +1380,15 @@ impl Engine {
                         profile,
                     )?)
                 }
+                Operation::PerceptualGrade { params, .. } => {
+                    Some(crate::nodes::finish::perceptual_grade::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        inherited,
+                        profile,
+                    )?)
+                }
                 Operation::MonoTexture(c) => Some(crate::nodes::monochrome::texture::apply(
                     gpu,
                     &input(0).buffer,
@@ -1429,6 +1438,15 @@ impl Engine {
                 }
                 Operation::LinearUniversalSharpen { params, .. } => {
                     Some(crate::nodes::finish::photographic::sharpen::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        inherited,
+                        profile,
+                    )?)
+                }
+                Operation::LinearBrightness { params, .. } => {
+                    Some(crate::nodes::finish::photographic::tone::brightness(
                         gpu,
                         &input(0).buffer,
                         *params,

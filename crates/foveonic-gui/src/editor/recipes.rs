@@ -59,7 +59,12 @@ impl Library {
                 && (preset.family == family
                     || matches!(
                         scope,
-                        Scope::Tool(Section::Tone | Section::ColorEditor | Section::Sharpening)
+                        Scope::Tool(
+                            Section::Tone
+                                | Section::Saturation
+                                | Section::ColorEditor
+                                | Section::Sharpening
+                        )
                     ))
         })
     }

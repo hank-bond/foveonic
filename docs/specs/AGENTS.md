@@ -54,6 +54,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[releases](./releases.md)** _(accepted, conforming, reference)._ Cargo packages macOS apps and release tags build Developer ID signed, unnotarized draft GitHub Releases without publishing them.
 - **[render-resources](./render-resources.md)** _(accepted, conforming, reference)._ Owned GPU render results separate image processing from display and export, with explicit pixel meaning and geometry.
 - **[row-banding](./row-banding.md)** _(accepted, conforming, reference)._ GPU row-banding correction fits the native geometric patch banks, rejects scene-correlated residuals, and subtracts bounded additive per-row sensor bias before reconstruction.
+- **[saturation](./saturation.md)** _(accepted, conforming, reference)._ Saturation is independent of Tone and Color Range, with Reference and gamut-aware Universal processing.
 - **[sensor-defect-calibration](./sensor-defect-calibration.md)** _(accepted, conforming, reference)._ User cap calibration must distinguish general noise distributions from camera-specific sparse pixel defects.
 - **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Smart preview shows Draft before Full detail, with viewport-first refinement where the recipe supports it.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.

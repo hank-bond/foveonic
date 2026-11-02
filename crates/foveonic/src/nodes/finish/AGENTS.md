@@ -29,6 +29,7 @@ Linear gain transfer accepts a reference pair related by scalar brightness multi
 - **[linear_gain.rs](./linear_gain.rs)** Transfers a known scalar brightness edit between two linear RGB representations.
 - **[mask_image.rs](./mask_image.rs)** Converts integer processing flags into a binary floating image for inspection.
 - **[mod.rs](./mod.rs)** Prepares tone and resampling with shaders for sharpening and final encoding.
+- **[perceptual_grade.rs](./perceptual_grade.rs)** Shapes gamut-relative colorfulness with saturation, saturation contrast and three overlapping tonal bands.
 - **[photographic.rs](./photographic.rs)** Defines shared photographic controls and luminance-scaled GPU finishing parameters.
 - **[proportional_sharpen.rs](./proportional_sharpen.rs)** Sharpens integral RGB codes from signed quarter-code detail and an adaptive amount table.
 - **[resample.rs](./resample.rs)** Prepares camera resampling weights and leaves image calculations on the GPU.

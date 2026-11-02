@@ -57,7 +57,7 @@ pub(crate) fn prepare_photographic(
             saturation: if settings.is_monochrome() {
                 0.
             } else {
-                (settings.saturation as f64 - 1.) * 2.
+                (settings.reference_saturation() as f64 - 1.) * 2.
             },
             detail: f64::from(settings.effective_sharpen_amount(metadata)?) - 1.,
         },

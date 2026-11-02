@@ -6,7 +6,7 @@ use crate::{
     graph::{DataType, Graph, Operation},
     interactive::Execution,
     nodes::finish::{
-        color_editor,
+        color_editor, perceptual_grade,
         photographic::{local_contrast, Params},
         tone_equalizer,
     },
@@ -42,8 +42,11 @@ pub(super) fn active(settings: &Settings) -> bool {
 }
 fn baked_active(settings: &Settings) -> bool {
     settings.color_editor_active()
+        || settings.universal_saturation_active()
         || (settings.tone_enabled
-            && (!settings.tonal_ranges.is_neutral() || settings.photographic.local_contrast != 0.))
+            && (!settings.tonal_ranges.is_neutral()
+                || settings.photographic.brightness != 0.
+                || settings.photographic.local_contrast != 0.))
         || (settings.sharpening_enabled && settings.photographic.sharpening.is_active())
 }
 
@@ -56,8 +59,15 @@ pub(super) fn requested_output(name: &str) -> bool {
             | "color-editor.input"
             | "color-editor.guide"
             | "color-editor.rgb"
+            | "perceptual.input"
+            | "perceptual.rgb"
+            | "perceptual.shadows"
+            | "perceptual.midtones"
+            | "perceptual.highlights"
             | "tonal-ranges.mask"
             | "tonal-ranges.rgb"
+            | "brightness.input"
+            | "linear.brightness"
             | "local-contrast.input"
             | "linear.local-contrast"
             | "linear.sharpen-input"
@@ -103,6 +113,65 @@ pub(super) fn build(
     alias(recipe, space, "linear.edits-input")?;
     if requested(&recipe.graph, names) {
         return Ok(());
+    }
+    let grade_requested = names.iter().any(|name| name.starts_with("perceptual."));
+    let hdr_requested = names
+        .iter()
+        .any(|name| matches!(*name, "tonal-ranges.mask" | "tonal-ranges.rgb"));
+    let tonal_pivot = if settings.universal_saturation_active()
+        || grade_requested
+        || !settings.tonal_ranges.is_neutral()
+        || hdr_requested
+    {
+        pivot(profile)?
+    } else {
+        0.
+    };
+    if settings.universal_saturation()
+        && (settings.universal_saturation_active() || grade_requested)
+    {
+        alias(recipe, space, "perceptual.input")?;
+        let input = recipe.final_id;
+        recipe.graph.retain_for_session(input);
+        let params = perceptual_grade::Params::new(
+            extent,
+            space,
+            white,
+            tonal_pivot,
+            settings.photographic.perceptual,
+            settings.is_monochrome(),
+        );
+        for (band, name) in [
+            "perceptual.shadows",
+            "perceptual.midtones",
+            "perceptual.highlights",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if names.contains(&name) {
+                recipe.graph.add(
+                    Operation::PerceptualGrade {
+                        params: params.with_mask(band as u32),
+                        space,
+                    },
+                    &[input],
+                )?;
+            }
+        }
+        if requested(&recipe.graph, names) {
+            return Ok(());
+        }
+        if settings.universal_saturation_active() {
+            recipe.final_id = recipe
+                .graph
+                .add(Operation::PerceptualGrade { params, space }, &[input])?;
+        } else {
+            alias(recipe, space, "perceptual.rgb")?;
+        }
+        if requested(&recipe.graph, names) {
+            return Ok(());
+        }
     }
     if settings.color_editor_active() {
         let mut guide = color_guide(engine, source, settings, profile, execution)?;
@@ -169,11 +238,28 @@ pub(super) fn build(
         recipe.final_id = recipe.graph.add(
             Operation::TonalRanges {
                 controls: settings.tonal_ranges,
-                pivot: pivot(profile)?,
+                pivot: tonal_pivot,
                 white,
                 space,
             },
             &[input, mask],
+        )?;
+        execution.check()?;
+        if requested(&recipe.graph, names) {
+            return Ok(());
+        }
+    }
+    if settings.photographic.brightness != 0. {
+        alias(recipe, space, "brightness.input")?;
+        recipe.graph.retain_for_session(recipe.final_id);
+        let mut params = Params::new(extent, space);
+        params.values[0] = (2. * settings.photographic.brightness).exp2();
+        // Camera adapters apply Exposure later with their response. Classify in
+        // the exposed domain here, then transfer only the brightness gain.
+        params.luma = params.luma.map(|v| v * settings.exposure.exp2() / white);
+        recipe.final_id = recipe.graph.add(
+            Operation::LinearBrightness { params, space },
+            &[recipe.final_id],
         )?;
         execution.check()?;
         if requested(&recipe.graph, names) {
@@ -280,7 +366,9 @@ pub(super) fn prioritize_cache(graph: &mut Graph) {
         .filter(|node| {
             matches!(
                 node.operation,
-                Operation::TonalRanges { .. } | Operation::LinearLocalContrast { .. }
+                Operation::TonalRanges { .. }
+                    | Operation::LinearLocalContrast { .. }
+                    | Operation::PerceptualGrade { .. }
             )
         })
         .flat_map(|node| node.inputs.iter().copied())
@@ -366,7 +454,7 @@ pub(super) fn bake(
     };
     let data = recipe.graph.outputs[recipe.final_id].data;
     let mapping = recipe.graph.append(reference.graph, "dng-edit-reference");
-    recipe.final_id = if active.color_editor_chromatic_active() {
+    recipe.final_id = if active.linear_chromatic_active() {
         let statistics = super::estimated_white_balance(engine, source, &active, profile)?;
         let appearance = super::prepare_dng_appearance(&source.metadata, &active, statistics)?;
         let matrix = appearance.technical_from_native()?;

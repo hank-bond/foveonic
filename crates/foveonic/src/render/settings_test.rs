@@ -156,6 +156,48 @@ fn monochrome_native_methods_follow_mono_noise_and_independent_banding_policy() 
     assert_eq!(settings.sensor_noise_controls().banding, 4);
 }
 
+#[test]
+fn saturation_is_independent_of_tone_method_and_section_bypass() {
+    let mut settings = Settings::default();
+    settings.photographic.saturation_method = PhotographicMethod::Universal;
+    settings.photographic.perceptual.saturation = 0.3;
+    settings.saturation = 1.8;
+    settings.tone.shadows = 0.4;
+    let authored = settings.clone();
+    assert!(settings.universal_saturation_active());
+    assert_eq!(settings.reference_saturation(), 1.);
+    assert_eq!(settings.active_tone_settings().tone.shadows, 0.4);
+    settings.processing_sections.tone = false;
+    let active = settings.processing_settings(crate::source::ProcessingFamily::Classic);
+    assert!(active.universal_saturation_active());
+    assert_eq!(active.tone, Default::default());
+    drop(active);
+    settings.processing_sections.tone = true;
+    settings.processing_sections.saturation = false;
+    let active = settings.processing_settings(crate::source::ProcessingFamily::Classic);
+    assert!(!active.universal_saturation_active());
+    assert_eq!(active.tone.shadows, 0.4);
+    drop(active);
+    settings.processing_sections.saturation = true;
+    settings.photographic.saturation_method = PhotographicMethod::Reference;
+    assert_eq!(settings.reference_saturation(), 1.8);
+    assert_eq!(
+        settings.photographic.perceptual,
+        authored.photographic.perceptual
+    );
+    let decoded: Settings =
+        serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+    assert_eq!(decoded, settings);
+    let old: Settings = serde_json::from_str(
+        r#"{"photographic":{"perceptual":{"enabled":true,"saturation":0.4}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        old.photographic.saturation_method,
+        PhotographicMethod::default()
+    );
+}
+
 fn metadata() -> Metadata {
     let matrix = |dimensions, values| Matrix {
         encoding: MatrixEncoding::Float32,
@@ -442,7 +484,7 @@ fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
     let saved = settings.clone();
     let effective = settings.processing_settings(crate::source::ProcessingFamily::Classic);
     assert_eq!(effective.exposure, 0.);
-    assert_eq!(effective.saturation, 1.);
+    assert_eq!(effective.saturation, 1.3);
     assert_eq!(effective.tone, ToneControls::default());
     assert!(effective.tonal_ranges.is_neutral());
     assert_eq!(effective.sharpen_amount, Some(0.));
@@ -514,6 +556,7 @@ fn batch_section_exclusions_leave_authored_sidecars_and_values_unchanged() {
     let authored = serde_json::to_vec(&settings).unwrap();
     settings.processing_sections = ProcessingSections {
         tone: false,
+        saturation: false,
         color_editor: false,
         noise: false,
         detail: false,

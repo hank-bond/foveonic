@@ -49,7 +49,7 @@ pub fn show(
                 ui.horizontal(|ui| {
                     ui.label("Maximum space");
                     let mut gb = settings.max_bytes as f64 / BYTES_PER_GB;
-                    let budget = egui::DragValue::new(&mut gb)
+                    let budget = crate::widgets::drag_value(&mut gb)
                         .range(CACHE_BUDGET_GB)
                         .speed(BUDGET_DRAG_STEP_GB)
                         .suffix(" GB");
@@ -61,7 +61,7 @@ pub fn show(
                 ui.horizontal(|ui| {
                     ui.label("Background decode workers");
                     ui.add(
-                        egui::DragValue::new(&mut settings.decode_threads)
+                        crate::widgets::drag_value(&mut settings.decode_threads)
                             .range(1..=cores)
                             .speed(1.),
                     );
@@ -75,13 +75,13 @@ pub fn show(
                     ui.label("Decode neighbors");
                     ui.label("Behind");
                     ui.add(
-                        egui::DragValue::new(&mut settings.prefetch_behind)
+                        crate::widgets::drag_value(&mut settings.prefetch_behind)
                             .range(0..=usize::MAX)
                             .speed(1.),
                     );
                     ui.label("Ahead");
                     ui.add(
-                        egui::DragValue::new(&mut settings.prefetch_ahead)
+                        crate::widgets::drag_value(&mut settings.prefetch_ahead)
                             .range(0..=usize::MAX)
                             .speed(1.),
                     );

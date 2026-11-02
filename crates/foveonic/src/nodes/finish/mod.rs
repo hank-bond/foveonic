@@ -27,6 +27,7 @@ pub(crate) mod code_channel_map;
 pub(crate) mod photographic;
 
 pub(crate) mod color_editor;
+pub(crate) mod perceptual_grade;
 
 pub(crate) mod linear_gain;
 

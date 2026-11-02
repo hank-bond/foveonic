@@ -59,7 +59,7 @@ pub(in crate::render::recipes) fn prepare(m: &Metadata, settings: &Settings) -> 
         .white_normalized()?,
     };
     let camera_to_linear = Matrix::diagonal(gains).then(selected);
-    let sat = f64::from(settings.saturation);
+    let sat = f64::from(settings.reference_saturation());
     let saturation = Matrix(std::array::from_fn(|i| {
         [0.299, 0.587, 0.114][i % 3] * (1. - sat) + if i / 3 == i % 3 { sat } else { 0. }
     }));
