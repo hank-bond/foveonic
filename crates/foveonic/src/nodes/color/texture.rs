@@ -1,6 +1,7 @@
 //! Restores independently cleaned brightness and chroma in sensor tiles before color conversion.
 
 use crate::{
+    color_space::{ColorSpace, TiffColorSpace},
     gpu::{
         Binding::{Read, Write},
         Gpu, Kernel, ReadGuard,
@@ -23,6 +24,68 @@ struct Uniforms {
     // Fine, coarse, luminance cleanup, chromatic cleanup.
     strength: [f32; 4],
     steps: [f32; 4],
+    color: Color,
+}
+/// Sensor coordinates for neutral restored grain and true linear RGB luminance.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct Color {
+    active: [u32; 4],
+    rgb_y: [f32; 4],
+    neutral_y: [f32; 4],
+}
+impl Color {
+    pub(crate) fn new(matrix: [[f32; 4]; 3], space: ColorSpace, active: [u32; 4]) -> Result<Self> {
+        let display = TiffColorSpace::Srgb.transform(space);
+        let combined: [[f32; 3]; 3] = std::array::from_fn(|r| {
+            std::array::from_fn(|c| (0..3).map(|k| display[r][k] * matrix[k][c]).sum())
+        });
+        let rgb_y = std::array::from_fn(|c| {
+            if c == 3 {
+                0.
+            } else {
+                (0..3)
+                    .map(|r| [0.2126, 0.7152, 0.0722][r] * combined[r][c])
+                    .sum()
+            }
+        });
+        let inverse =
+            crate::color_space::inverse(std::array::from_fn(|i| f64::from(combined[i / 3][i % 3])));
+        let mut neutral_y: [f32; 4] = std::array::from_fn(|c| {
+            if c == 3 {
+                0.
+            } else {
+                inverse[c * 3..c * 3 + 3].iter().sum::<f64>() as f32
+            }
+        });
+        let y: f32 = (0..3).map(|c| neutral_y[c] * rgb_y[c]).sum();
+        if active[0] >= active[2]
+            || active[1] >= active[3]
+            || !y.is_finite()
+            || y <= 0.
+            || rgb_y.iter().any(|v| !v.is_finite())
+            || neutral_y[..3].iter().any(|v| !v.is_finite() || *v <= 0.)
+        {
+            return Err("invalid texture color coordinates".into());
+        }
+        neutral_y.iter_mut().for_each(|v| *v /= y);
+        Ok(Self {
+            active,
+            rgb_y,
+            neutral_y,
+        })
+    }
+}
+#[cfg(test)]
+impl Default for Color {
+    fn default() -> Self {
+        Self::new(
+            [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]],
+            ColorSpace::Srgb,
+            [0, 0, u32::MAX, u32::MAX],
+        )
+        .unwrap()
+    }
 }
 #[derive(Clone, Copy)]
 pub(crate) struct Prepared {
@@ -37,7 +100,7 @@ impl Prepared {
     pub(crate) fn needs_ratio(self) -> bool {
         self.uniforms.strength[2] != 0.
     }
-    pub(crate) fn new(controls: Controls, scale: f32) -> Result<Self> {
+    pub(crate) fn new(controls: Controls, scale: f32, color: Color) -> Result<Self> {
         controls.validate()?;
         let effects = controls.merrill_effects();
         let detail = effects.texture.unwrap_or_default();
@@ -49,6 +112,7 @@ impl Prepared {
             identity: !effects.changes_layers(),
             uniforms: Uniforms {
                 strength: effects.strength,
+                color,
                 steps: std::array::from_fn(|i| {
                     let size = if i <= FINE_BOUNDARY_STEP {
                         detail.fine_size

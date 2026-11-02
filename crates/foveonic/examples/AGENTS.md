@@ -13,6 +13,10 @@ Setup reports complete file-read, in-memory decode and total source-open wall ti
 
 <!-- Generated from source summaries and document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+### Directories
+
+- **[chroma_investigation/](./chroma_investigation/AGENTS.md)** Opt-in chroma diagnostics inspect matched native-layer samples, normalization and ColorDQ without changing app processing.
+
 ### Source files
 
 - **[compare_color_field.rs](./compare_color_field.rs)** Renders saved-sidecar highlight comparisons and measures completed fresh recipes without changing edits.

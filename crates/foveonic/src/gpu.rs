@@ -613,3 +613,7 @@ mod scheduling_tests {
         thread.join().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "../examples/chroma_investigation/gpu.rs"]
+pub(crate) mod chroma_investigation;

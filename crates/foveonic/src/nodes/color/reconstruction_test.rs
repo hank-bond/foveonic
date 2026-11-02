@@ -535,6 +535,7 @@ fn compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams() {
                     ..Default::default()
                 },
                 1.,
+                Default::default(),
             )
             .unwrap(),
             crate::nodes::color::texture::Requested {

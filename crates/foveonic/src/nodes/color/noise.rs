@@ -150,7 +150,10 @@ impl Parameters {
                 .with(&self.mono)
                 .slice(&self.diffusion[..3])
                 .with(&self.edge[2]),
-            RecipeStage::Texture => key.slice(&self.weights[..3]).with(&self.edge[2]),
+            RecipeStage::Texture => key
+                .slice(&self.weights[..3])
+                .with(&self.edge[2])
+                .with(&self.model),
             RecipeStage::Geometry => key,
         }
     }

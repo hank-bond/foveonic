@@ -31,6 +31,16 @@ Both detail amounts start at one. At those values, the bands recombine neutrally
 
 Restoration stays in calibrated sensor tiles before camera color conversion and ColorDQ. ColorDQ uses its camera-derived amount with the middle-preset cap unless manually set. [Final sharpening](./native-sharpening.md) remains a separate edit using the actual reconstructed RGB. Merrill color Auto sharpening is zero. Manual sharpening retains its meaning.
 
+### Weak-reference chroma safeguard
+
+When chroma cleanup is selected, texture restoration must protect weak filtered color estimates from coloring extra restored brightness. The safeguard uses the existing filtered layers, conditioned input and noise model in the texture pass. It must not add a separate image pass, neighborhood search or mask buffer.
+
+The accepted gain transition is 1–2. The weak-reference signal-to-noise proxy fades from full correction at 0.5 to none at 2. Input/reference disagreement uses a 0.20–0.45 transition between camera-weighted color fractions. These factors multiply with the active chroma cleanup weight. The noise scale comes from the unfiltered model and is a conservative selection proxy, not calibrated uncertainty for the filtered reference.
+
+Only extra restored brightness is made neutral. Reference color at its own brightness remains. Neutrality and preserved linear RGB luminance must use the same sensor-to-RGB conversion as the following technical color stage. DNG uses its technical, unselected color conversion. The correction must remain inside the active sensor rectangle on native and reduced grids. Nonpositive or unreliable denominators bypass it. Zero chroma cleanup and disabled Noise must bypass the correction. Monochrome retains its independent reconstruction.
+
+The safeguard must share GUI, CLI, TIFF, DNG, Full, Fast and regional Smart processing. Its variance model and color couplings must participate in cache identity. `texture.change` continues to describe the selected Fine/Coarse brightness bands, independently of chroma cleanup. No new setting or sidecar field is introduced.
+
 ## Controls and inspection
 
 `Settings::reconstruction` stores shared `noise::Controls`. Merrill has independent Noise and Detail section checkboxes, styled with the same subdued text as other section headings. Noise contains a Method dropdown followed by Chroma, Luma and Banding rows. Reference remains the default method. The optional [multiscale methods](./merrill-multiscale-noise.md) add joint layer filtering with Rows or Rows + Columns shield correction through the same Noise section. Detail contains Fine and Coarse amounts, each paired with its indented Size row inside a padded linked group. Unchecked sections keep their controls visible but disabled so the layout remains stable. Each section sizes its own compact label column. Slider tracks and numeric fields remain aligned within each section. Numeric fields should fit normal signed values without an extra em of unused width. ColorDQ gain remains under Noise → Advanced with its existing automatic/manual toggle.
@@ -63,6 +73,8 @@ The old linked-control UI, residual-gain kernels, core-only detail projection an
 
 ## Validation
 
-Checks cover fixed camera-base parameters, independent cleanup endpoints, signed identity, spatial band response, size bounds, exact combined-change mapping, neutral pyramid bypass, independent group toggles, selective inspection, and retained ownership. Native fixtures cover cached/fresh edits, regional seams and corners, all four orientations, Fast/Draft behavior, Full continuation, TIFF and DNG geometry. Sidecar checks cover old and experimental settings, strict schema handling, and save/reload. The filter optimization preserves the accepted portrait's sensor-base and final floating-point samples exactly. Cross-platform photographic/runtime checks remain unperformed.
+Checks cover fixed camera-base parameters, independent cleanup endpoints, signed identity, spatial band response, size bounds, exact combined-change mapping, neutral pyramid bypass, independent group toggles, selective inspection, and retained ownership. Native fixtures cover cached/fresh edits, regional seams and corners, all four orientations, Fast/Draft behavior, Full continuation, TIFF and DNG geometry. Sidecar checks cover old and experimental settings, strict schema handling, and save/reload. The earlier filter-layout optimization was validated with exact sensor-base and final floating-point replay. The weak-reference safeguard intentionally changes eligible restored color. Cross-platform photographic/runtime checks remain unperformed.
+
+Weak-reference checks cover false-color repair, noisy but correct color, supported detail, active bounds, zero cleanup, nonneutral texture, matrix neutrality and cache dependencies. Seven Merrill photographs across all five Chroma choices compare the fused output with the approved standalone correction. Final photographic continuation is checked separately. Completed texture timings compare the fused pass with the pre-adoption baseline. Appearance-cache revision changes invalidate older rendered previews without discarding decoded source bundles.
 
 Merrill speckle controls belong to Noise as specified in [Merrill speckles](./merrill-speckles.md). Camera-record pixel repair retains its Corrections scope.

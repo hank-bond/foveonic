@@ -4,12 +4,165 @@ use super::*;
 use crate::noise::TextureControls;
 
 #[test]
+fn texture_color_coordinates_validate_neutrality_and_cache_identity() {
+    let matrix = [
+        [1.8, -0.3, 0.1, 0.],
+        [-0.2, 1.3, -0.1, 0.],
+        [0.05, -0.2, 1.4, 0.],
+    ];
+    let color = Color::new(matrix, ColorSpace::Srgb, [2, 3, 240, 78]).unwrap();
+    let rgb: [f32; 3] =
+        std::array::from_fn(|r| (0..3).map(|c| matrix[r][c] * color.neutral_y[c]).sum());
+    assert!(rgb.iter().all(|v| (*v - 1.).abs() < 0.00001));
+    assert!(
+        ((0..3)
+            .map(|c| color.rgb_y[c] * color.neutral_y[c])
+            .sum::<f32>()
+            - 1.)
+            .abs()
+            < 0.000001
+    );
+    assert!(Color::new([[0.; 4]; 3], ColorSpace::Srgb, [0, 0, 1, 1]).is_err());
+    assert!(Color::new(matrix, ColorSpace::Srgb, [0, 0, 0, 1]).is_err());
+    let first = Prepared::new(Controls::default(), 1., color).unwrap();
+    assert!(
+        first.key()
+            != Prepared::new(Controls::default(), 1., Color::default())
+                .unwrap()
+                .key()
+    );
+    let p = parameters();
+    let mut other = p;
+    other.model[0][0] = 1.;
+    assert!(
+        p.key(crate::noise::RecipeStage::Texture) != other.key(crate::noise::RecipeStage::Texture)
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn weak_color_safeguard_repairs_false_color_and_preserves_supported_texture() {
+    let gpu = Gpu::new().unwrap();
+    let mut p = parameters();
+    p.model[0] = [16., 16., 16., 0.];
+    let n = p.atlas_pixels() as usize;
+    let mut raw = vec![20_f32; n * 3];
+    let mut base = vec![1_f32; n * 3];
+    let bad = 40 * 256 + 128;
+    let noisy = 40 * 256 + 140;
+    let supported = 40 * 256 + 152;
+    base[bad * 3..bad * 3 + 3].copy_from_slice(&[0.5, 1.7, 0.8]);
+    raw[bad * 3..bad * 3 + 3].copy_from_slice(&[30., 8., 25.]);
+    for i in [noisy, supported] {
+        base[i * 3..i * 3 + 3].copy_from_slice(&[0.7, 1.6, 0.7]);
+    }
+    raw[noisy * 3..noisy * 3 + 3].copy_from_slice(&[12., 12., 12.]);
+    raw[supported * 3..supported * 3 + 3].copy_from_slice(&[14., 32., 14.]);
+    let input = gpu.upload("Weak-color conditioned input", &raw).unwrap();
+    let reference = gpu.upload("Weak-color reference", &base).unwrap();
+    let ratio = gpu
+        .upload("Unused neutral luma ratio", &vec![1_f32; n])
+        .unwrap();
+    let color = Color {
+        active: [0, 0, 256, 80],
+        rgb_y: p.weights,
+        neutral_y: [1., 1., 1., 0.],
+    };
+    let render = |c: Controls, color: Color| {
+        let out = apply(
+            &gpu,
+            Inputs {
+                raw: &input,
+                base: Some(&reference),
+                ratio: Some(&ratio),
+            },
+            p,
+            Prepared::new(c, 1., color).unwrap(),
+            Requested {
+                layers: true,
+                change: true,
+            },
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let read =
+            |v: &ReadGuard| bytemuck::cast_slice::<u8, f32>(&gpu.readback(v).unwrap()).to_vec();
+        (
+            read(out.layers.as_ref().unwrap()),
+            read(out.change.as_ref().unwrap()),
+        )
+    };
+    let mut c = Controls {
+        chroma: 4,
+        luminance: 0,
+        ..Default::default()
+    };
+    let (pixels, _) = render(c, color);
+    let chroma = |v: &[f32]| {
+        let mean = v.iter().sum::<f32>() / 3.;
+        v.iter().map(|x| (x - mean).powi(2)).sum::<f32>().sqrt()
+    };
+    let expected = |i: usize| {
+        let y = raw[i * 3..i * 3 + 3].iter().sum::<f32>() / 3.;
+        base[i * 3..i * 3 + 3]
+            .iter()
+            .map(|x| x * y)
+            .collect::<Vec<_>>()
+    };
+    assert!(chroma(&pixels[bad * 3..bad * 3 + 3]) < chroma(&expected(bad)) * 0.1);
+    let retained = chroma(&pixels[noisy * 3..noisy * 3 + 3]) / chroma(&expected(noisy));
+    assert!(
+        (0.90..0.94).contains(&retained),
+        "noisy real color retained: {retained}"
+    );
+    for i in 0..n {
+        if i != bad && i != noisy {
+            for (a, b) in pixels[i * 3..i * 3 + 3].iter().zip(&expected(i)) {
+                assert!((a - b).abs() < 0.00001);
+            }
+        }
+    }
+    let limited = Color {
+        active: [0, 0, 100, 80],
+        ..color
+    };
+    let (outside, _) = render(c, limited);
+    assert!(outside[bad * 3..bad * 3 + 3]
+        .iter()
+        .zip(expected(bad))
+        .all(|(a, b)| (a - b).abs() < 0.00001));
+    c.texture.fine = 0.5;
+    c.texture.coarse = 1.5;
+    let (detail, change) = render(c, color);
+    for i in [bad, noisy, supported] {
+        let y = detail[i * 3..i * 3 + 3].iter().sum::<f32>() / 3.;
+        let original = raw[i * 3..i * 3 + 3].iter().sum::<f32>() / 3.;
+        assert!(
+            (y / original - change[i]).abs() < 0.00001,
+            "luminance changed at {i}"
+        );
+    }
+    c.texture = Default::default();
+    c.chroma = 0;
+    let (identity, _) = render(c, color);
+    assert_eq!(identity, raw);
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&raw)
+    );
+    assert_eq!(
+        gpu.readback(&reference).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&base)
+    );
+}
+
+#[test]
 fn texture_controls_start_neutral_and_validate() {
     let legacy: Controls =
         serde_json::from_str(r#"{"chroma":3,"luminance":1,"detail":0.4}"#).unwrap();
     assert_eq!(legacy.texture, TextureControls::default());
     assert_eq!(
-        Prepared::new(Controls::default(), 1.)
+        Prepared::new(Controls::default(), 1., Default::default())
             .unwrap()
             .uniforms
             .strength,
@@ -33,7 +186,10 @@ fn texture_controls_start_neutral_and_validate() {
         serde_json::from_value(serde_json::to_value(selected).unwrap()).unwrap();
     assert_eq!(restored, selected);
     assert_eq!(
-        Prepared::new(selected, 0.5).unwrap().uniforms.steps,
+        Prepared::new(selected, 0.5, Default::default())
+            .unwrap()
+            .uniforms
+            .steps,
         [1., 1., 2., 4.]
     );
     for value in [f32::NAN, f32::INFINITY, -0.01, 2.01] {
@@ -56,19 +212,28 @@ fn group_switches_resolve_independently_without_discarding_settings() {
     let original = selected;
     selected.detail_enabled = false;
     assert_eq!(
-        Prepared::new(selected, 1.).unwrap().uniforms.strength,
+        Prepared::new(selected, 1., Default::default())
+            .unwrap()
+            .uniforms
+            .strength,
         [1., 1., 0.5, 0.75]
     );
     assert_eq!(selected.texture, original.texture);
     selected.noise_enabled = false;
     assert!(!selected.merrill_effects().needs_tiles());
     assert_eq!(
-        Prepared::new(selected, 1.).unwrap().uniforms.strength,
+        Prepared::new(selected, 1., Default::default())
+            .unwrap()
+            .uniforms
+            .strength,
         [1., 1., 0., 0.]
     );
     selected.detail_enabled = true;
     assert_eq!(
-        Prepared::new(selected, 1.).unwrap().uniforms.strength,
+        Prepared::new(selected, 1., Default::default())
+            .unwrap()
+            .uniforms
+            .strength,
         [1.4, 0.3, 0., 0.]
     );
     assert_eq!(selected.texture, original.texture);
@@ -123,6 +288,7 @@ fn signed_layer_cancellation_cannot_explode_restored_color() {
                 ..Default::default()
             },
             1.,
+            Default::default(),
         )
         .unwrap(),
         Requested {
@@ -181,7 +347,7 @@ fn texture_preserves_shading_and_separates_noise_and_spatial_bands() {
                 ratio: Some(&ratio),
             },
             p,
-            Prepared::new(c, 1.).unwrap(),
+            Prepared::new(c, 1., Default::default()).unwrap(),
             Requested {
                 layers: true,
                 ..Default::default()
@@ -306,17 +472,22 @@ fn texture_sizes_persist_and_fit_processing_context() {
     let roundtrip: Controls = serde_json::from_value(serde_json::to_value(c).unwrap()).unwrap();
     assert_eq!(roundtrip, c);
     assert_eq!(
-        Prepared::new(c, 1.).unwrap().uniforms.steps,
+        Prepared::new(c, 1., Default::default())
+            .unwrap()
+            .uniforms
+            .steps,
         [0.75, 1.5, 7.2, 14.4]
     );
     assert!(
-        Prepared::new(c, 1.).unwrap().key()
-            != Prepared::new(Controls::default(), 1.).unwrap().key()
+        Prepared::new(c, 1., Default::default()).unwrap().key()
+            != Prepared::new(Controls::default(), 1., Default::default())
+                .unwrap()
+                .key()
     );
     for scale in [0.5, 1.] {
         c.texture.fine_size = 2.;
         c.texture.coarse_size = 2.;
-        let p = Prepared::new(c, scale).unwrap();
+        let p = Prepared::new(c, scale, Default::default()).unwrap();
         let support: f32 = p.uniforms.steps.iter().map(|s| (2. * s).ceil()).sum();
         assert!(support <= 64. * scale);
     }
@@ -357,7 +528,7 @@ fn texture_change_tracks_sizes_without_changing_layers() {
                 ratio: Some(&ratio),
             },
             p,
-            Prepared::new(c, 1.).unwrap(),
+            Prepared::new(c, 1., Default::default()).unwrap(),
             needs,
             &mut Profile::new(crate::profile::Mode::Gpu),
         )
@@ -439,19 +610,25 @@ fn disabled_and_neutral_detail_share_one_effective_recipe() {
     c.texture.fine_size = 2.;
     c.texture.coarse_size = 0.5;
     assert!(!c.merrill_effects().needs_tiles());
-    let neutral = Prepared::new(c, 1.).unwrap();
+    let neutral = Prepared::new(c, 1., Default::default()).unwrap();
     assert!(!neutral.needs_base());
     assert!(!neutral.needs_ratio());
     c.detail_enabled = false;
     c.texture.fine = 0.2;
     assert!(!c.merrill_effects().needs_tiles());
-    assert!(neutral.key() == Prepared::new(c, 1.).unwrap().key());
+    assert!(neutral.key() == Prepared::new(c, 1., Default::default()).unwrap().key());
     c.detail_enabled = true;
     assert!(c.merrill_effects().needs_tiles());
-    assert!(Prepared::new(c, 1.).unwrap().needs_base());
-    assert!(!Prepared::new(c, 1.).unwrap().needs_ratio());
+    assert!(Prepared::new(c, 1., Default::default())
+        .unwrap()
+        .needs_base());
+    assert!(!Prepared::new(c, 1., Default::default())
+        .unwrap()
+        .needs_ratio());
     c.noise_enabled = true;
-    assert!(Prepared::new(c, 1.).unwrap().needs_ratio());
+    assert!(Prepared::new(c, 1., Default::default())
+        .unwrap()
+        .needs_ratio());
     c.chroma = 0;
     c.luminance = 0;
     c.detail_enabled = false;
@@ -459,5 +636,7 @@ fn disabled_and_neutral_detail_share_one_effective_recipe() {
         c.merrill_effects().needs_tiles(),
         "column cleanup remains selected"
     );
-    assert!(!Prepared::new(c, 1.).unwrap().needs_base());
+    assert!(!Prepared::new(c, 1., Default::default())
+        .unwrap()
+        .needs_base());
 }

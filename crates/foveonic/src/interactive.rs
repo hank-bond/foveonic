@@ -563,6 +563,7 @@ mod tests {
                             ..Default::default()
                         },
                         1.,
+                        Default::default(),
                     )
                     .unwrap(),
                 },
@@ -674,6 +675,7 @@ mod tests {
                     ..Default::default()
                 },
                 1.,
+                Default::default(),
             )
             .unwrap(),
         };
@@ -796,7 +798,9 @@ mod tests {
         assert!(O::NoiseBase(a).key("noise.tiles") == O::NoiseBase(b).key("noise.tiles"));
         assert!(O::NoiseBase(a).key("noise.layers") != O::NoiseBase(b).key("noise.layers"));
         assert!(O::NoiseBase(a).key("noise.tiles") != O::NoiseBase(distant).key("noise.tiles"));
-        let prepared = crate::nodes::color::texture::Prepared::new(Default::default(), 1.).unwrap();
+        let prepared =
+            crate::nodes::color::texture::Prepared::new(Default::default(), 1., Default::default())
+                .unwrap();
         assert!(
             O::Texture {
                 params: a,
@@ -928,3 +932,7 @@ mod tests {
         assert!(cache.plan(&graph, &[input]).unwrap().contains(&input));
     }
 }
+
+#[cfg(test)]
+#[path = "../examples/chroma_investigation/mod.rs"]
+mod chroma_investigation;

@@ -1,6 +1,9 @@
 // Positive multiplicative residuals are separated in log space so bright and
 // dark texture have symmetric controls and constant illumination stays neutral.
-struct TextureControls { strength: vec4<f32>, steps: vec4<f32> }
+struct TextureControls {
+    strength: vec4<f32>, steps: vec4<f32>,
+    area: vec4<u32>, rgb_y: vec4<f32>, neutral_y: vec4<f32>,
+}
 @group(0) @binding(0) var<storage, read> input_values: array<f32>;
 @group(0) @binding(1) var<uniform> params: NoiseParams;
 @group(0) @binding(2) var<storage, read_write> output_values: array<f32>;
@@ -33,6 +36,27 @@ fn mono_log(p: u32) -> f32 {
     let cleaned = max(ratios[p] * (max(a, 0.) + params.edge.z) - params.edge.z, 0.);
     let selected = mix(d, cleaned, controls.strength.z);
     return log2(max(selected, MIN_LUMINANCE) / max(a, MIN_LUMINANCE));
+}
+fn protect_restored_chroma(a:vec3<f32>, d:vec3<f32>, base_y:f32, gain:f32, value:vec3<f32>, position:vec2<u32>)->vec3<f32> {
+    if controls.strength.w==0. || base_y<=MIN_LUMINANCE || any(a<vec3(0.)) || gain<=1. {
+        return value;
+    }
+    let physical=full_position(atlas_position(position,params),params);
+    if any(physical<controls.area.xy)||any(physical>=controls.area.zw){return value;}
+    // The unfiltered model is a weak-signal proxy, not uncertainty of the filtered estimate.
+    let sigma=sqrt(dot(variance(a,params),params.weights.xyz*params.weights.xyz));
+    let weak=1.-smoothstep(0.5,2.,base_y/max(sigma,MIN_LUMINANCE));
+    let amplification=smoothstep(1.,2.,gain);
+    let signal=max(d,vec3(0.));
+    let input_fraction=signal*params.weights.xyz/max(dot(signal,params.weights.xyz),MIN_LUMINANCE);
+    let disagreement=smoothstep(0.20,0.45,length(a*params.weights.xyz/base_y-input_fraction));
+    let amount=weak*amplification*disagreement;
+    let reference_y=dot(a,controls.rgb_y.xyz);
+    if amount<=0. || reference_y<=MIN_LUMINANCE{return value;}
+    // Keep reference color at its own brightness. Only extra restored grain becomes neutral.
+    var delta=(controls.neutral_y.xyz*reference_y-a)*(gain-1.)*controls.strength.w*amount;
+    delta-=controls.neutral_y.xyz*dot(delta,controls.rgb_y.xyz);
+    return value+delta;
 }
 @compute @workgroup_size(8,8)
 fn extract(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -72,11 +96,13 @@ fn mix_texture(@builtin(global_invocation_id) id: vec3<u32>) {
         restored = coarse_low[p] + controls.strength.x * fine + controls.strength.y * coarse;
     }
     let a = base_rgb(p); let d = raw_rgb(p);
-    let base_luma = max(dot(a, params.weights.xyz), MIN_LUMINANCE);
+    let base_y = dot(a, params.weights.xyz);
+    let base_luma = max(base_y, MIN_LUMINANCE);
     // Blend color proportions at a common luminance. Unit texture amounts
     // preserve the selected brightness evidence instead of boosting its contrast.
     let chroma = mix(signal_proportion(d), a / base_luma, controls.strength.w);
-    let value = chroma * (base_luma * exp2(restored));
+    let gain = exp2(restored);
+    let value = protect_restored_chroma(a,d,base_y,gain,chroma*(base_luma*gain),id.xy);
     let q = p * 3u;
     output_values[q] = value.x; output_values[q+1u] = value.y; output_values[q+2u] = value.z;
 }

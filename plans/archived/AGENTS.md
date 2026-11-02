@@ -55,9 +55,13 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[inspection-popup-help](./inspection-popup-help.md)** _(archived)._ Prevent Quattro inspection menus from crashing when a stage lacks explanatory help.
 - **[keyboard-actions](./keyboard-actions.md)** _(archived)._ Centralize workspace shortcuts and apply copied editing recipes to highlighted photographs.
 - **[lens-correction-audit](./lens-correction-audit.md)** _(archived)._ Audit available lens corrections and defer chromatic aberration after finding no supported vignetting or distortion profile route.
+- **[merrill-chroma-outliers](./merrill-chroma-outliers.md)** _(archived)._ Investigate green shadow pixels that intensify with Chroma cleanup before selecting a narrowly scoped correction.
+- **[merrill-chroma-safeguard](./merrill-chroma-safeguard.md)** _(archived)._ The approved chroma safeguard is fused into Merrill texture restoration with matching photographic output and small measured cost.
 - **[merrill-fast-noise](./merrill-fast-noise.md)** _(archived)._ Bypass optional Merrill Noise and Detail in Fast while preserving requested controls for Full.
 - **[merrill-fast-preview](./merrill-fast-preview.md)** _(archived)._ Integrate Merrill Fast and Smart previews while reducing native row-correction GPU cost.
+- **[merrill-local-chroma-reliability](./merrill-local-chroma-reliability.md)** _(archived)._ Local chroma trials isolate amplified weak-color noise, limited neutral-grain gains and shadow-neutralization rejection.
 - **[merrill-multiscale-noise](./merrill-multiscale-noise.md)** _(archived)._ Integrate the approved Merrill multiscale filter and both shield correction choices through the production rendering path.
+- **[merrill-neutral-grain-sweep](./merrill-neutral-grain-sweep.md)** _(archived)._ A 228-setting sweep favors earlier correction with stricter color protection while preserving a stronger review alternative.
 - **[merrill-noise-cleanup](./merrill-noise-cleanup.md)** _(archived)._ Consolidate reviewed Merrill noise, banding, speckle and shadow controls before optimization.
 - **[merrill-noise-default](./merrill-noise-default.md)** _(archived)._ Enable Noise and Detail for newly opened Merrill photographs while preserving saved off choices.
 - **[merrill-noise-latency](./merrill-noise-latency.md)** _(archived)._ Reduce completed Merrill noise and banding latency while preserving the reviewed corrections.

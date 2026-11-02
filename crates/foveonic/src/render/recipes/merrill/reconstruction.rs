@@ -16,6 +16,8 @@ pub(super) struct Request<'a> {
     pub source: &'a Source,
     pub settings: &'a Settings,
     pub names: &'a [&'a str],
+    pub color: crate::nodes::sensor::calibration::ColorParams,
+    pub space: crate::color_space::ColorSpace,
     pub preview: Option<&'a preview::Grid>,
     pub region: Option<&'a region::Prepared>,
     pub directional_banding: bool,
@@ -149,9 +151,24 @@ pub(super) fn append(
         )?
     };
     checkpoint!();
+    let mut active =
+        crate::nodes::sensor::calibration::rectangle(&request.source.metadata, "ActiveImageArea")?;
+    for axis in 0..2 {
+        let native = [
+            request.source.metadata.width as u32,
+            request.source.metadata.height as u32,
+        ][axis];
+        active[axis] =
+            (u64::from(active[axis]) * u64::from(params.source[axis]) / u64::from(native)) as u32;
+        active[axis + 2] = (u64::from(active[axis + 2]) * u64::from(params.source[axis]))
+            .div_ceil(u64::from(native)) as u32;
+    }
+    let color =
+        crate::nodes::color::texture::Color::new(request.color.matrix, request.space, active)?;
     let prepared = crate::nodes::color::texture::Prepared::new(
         controls,
         params.source[0] as f32 / request.source.metadata.width as f32,
+        color,
     )?;
     let inspect_ratio = request
         .names

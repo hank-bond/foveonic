@@ -79,8 +79,12 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
         .add(
             Operation::Texture {
                 params,
-                prepared: crate::nodes::color::texture::Prepared::new(Default::default(), 1.)
-                    .unwrap(),
+                prepared: crate::nodes::color::texture::Prepared::new(
+                    Default::default(),
+                    1.,
+                    Default::default(),
+                )
+                .unwrap(),
             },
             &[conditioned, base, pattern],
         )

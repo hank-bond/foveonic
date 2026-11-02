@@ -151,12 +151,26 @@ pub(super) fn build(
             )?;
         }
     }
+    let mode = match mode {
+        Some(name) => profile.measure("prepare color mode", || {
+            color_mode::prepare(&source.metadata, name)
+        })?,
+        None => dng_base::unselected_mode(),
+    };
+    let mut color = profile.measure("prepare color matrix", || {
+        calibration::color(&source.metadata, &settings.white_balance, &mode)
+    })?;
+    if preview.is_some() || region.is_some() {
+        color.source[..2].copy_from_slice(&params.source[..2]);
+    }
     let reconstruction = if let Some(controls) = noise_controls {
         let result = reconstruction::append(
             reconstruction::Request {
                 source,
                 settings,
                 names,
+                color,
+                space,
                 preview: preview.as_ref(),
                 region: region.as_ref(),
                 directional_banding: directional_banding_selected,
@@ -182,18 +196,6 @@ pub(super) fn build(
     } else {
         None
     };
-    let mode = match mode {
-        Some(name) => profile.measure("prepare color mode", || {
-            color_mode::prepare(&source.metadata, name)
-        })?,
-        None => dng_base::unselected_mode(),
-    };
-    let mut color = profile.measure("prepare color matrix", || {
-        calibration::color(&source.metadata, &settings.white_balance, &mode)
-    })?;
-    if preview.is_some() || region.is_some() {
-        color.source[..2].copy_from_slice(&params.source[..2]);
-    }
     let mut linear = if let Some((params, restored)) = reconstruction {
         graph.add(
             Operation::TiledColor {
