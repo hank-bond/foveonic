@@ -10,7 +10,7 @@ The owner requested cleanup of all combined changes and a release. Follow [appli
 - [x] Correct integration issues and retire stale exploratory or release guidance.
 - [x] Update versioned changes to match the complete release rather than the earlier candidate.
 - [x] Run workspace checks, focused GPU/original-file checks and native smoke validation.
-- [ ] Commit reviewed work, push the release tag and verify the hosted signed assets and Sequoia startup check.
+- [x] Commit reviewed work, push the release tag and verify the hosted signed assets and Sequoia startup check.
 - [ ] Complete the release handoff following the owner publication workflow.
 
 Version 0.6.0 is already assigned but has no application tag or GitHub release. The prior release candidate predates noise-profile training, Detail refinements, independent saturation, thumbnail memory controls and direct color editing. Its archived validation does not cover this final combined release.
@@ -32,3 +32,11 @@ All 713 ordinary workspace tests pass, along with strict all-target Clippy, form
 The local bundle and executable report 0.6.0 and target macOS 15.0 on Apple Silicon. Command-line startup passes. Interactive macOS 15 and third-party raw-editor appearance remain separate photographic/runtime review tasks.
 
 Native smoke checks pass in both single-photo and eight-photo comparison views. Both exercise simultaneous Hue/Lightness dragging, affected swatches, right-click configuration and Escape. Preferences and captures are isolated, with source sidecar writes disabled. The local review bundle passes ad-hoc signature verification. Distribution signing remains the hosted workflow's responsibility.
+
+## Hosted release
+
+Commit `548dea0` and annotated tag `v0.6.0` are pushed. The [release workflow](https://github.com/hank-bond/foveonic/actions/runs/41455313438) passed its complete checks, Developer ID signing, signature verification, asset upload, credential cleanup and signed-app startup on macOS 15. The release draft contains the 0.6.0 changelog section, Apple Silicon ZIP and SHA256SUMS.
+
+The downloaded archive passes its checksum and strict signature verification. Its signature includes hardened runtime and a secure timestamp. Version, Apple Silicon architecture and macOS 15.0 deployment target match the release. The downloaded executable starts and passes the isolated native eight-photo comparison editing smoke test. It is signed and unnotarized as specified. Browser-quarantine acceptance and interactive macOS 15 rendering were not tested by these checks.
+
+Public publication and Latest selection await the owner's final decision under the documented release workflow.
