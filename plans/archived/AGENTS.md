@@ -95,6 +95,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[release-0.4.2](./release-0.4.2.md)** _(archived)._ Record the verified and published 0.4.2 patch release for thumbnail responsiveness and settings copy/paste.
 - **[release-0.5.0](./release-0.5.0.md)** _(archived)._ Clean up the shared photographic editor and prepare the local 0.5.0 feature release for review.
 - **[release-0.6.0](./release-0.6.0.md)** _(archived)._ Prepare the reviewed Merrill noise and banding feature set as a local release candidate.
+- **[release-0.6.0-final](./release-0.6.0-final.md)** _(archived)._ Review the combined editor, browser and Merrill changes and cut the signed 0.6.0 release.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** _(archived)._ Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.

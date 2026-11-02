@@ -1,19 +1,20 @@
 ---
 summary: "Review the combined editor, browser and Merrill changes and cut the signed 0.6.0 release."
+status: archived
 ---
 
 # Release 0.6.0 final review
 
-The owner requested cleanup of all combined changes and a release. Follow [application releases](../docs/specs/releases.md), [saturation](../docs/specs/saturation.md), [direct color editing](../docs/specs/direct-color-editing.md), [browser previews](../docs/specs/browser-previews.md) and [Merrill speckles](../docs/specs/merrill-speckles.md).
+The owner requested cleanup of all combined changes and a release. Follow [application releases](../../docs/specs/releases.md), [saturation](../../docs/specs/saturation.md), [direct color editing](../../docs/specs/direct-color-editing.md), [browser previews](../../docs/specs/browser-previews.md) and [Merrill speckles](../../docs/specs/merrill-speckles.md).
 
 - [x] Review the outstanding changes against existing UI, worker, recipe and GPU ownership.
 - [x] Correct integration issues and retire stale exploratory or release guidance.
 - [x] Update versioned changes to match the complete release rather than the earlier candidate.
 - [x] Run workspace checks, focused GPU/original-file checks and native smoke validation.
 - [x] Commit reviewed work, push the release tag and verify the hosted signed assets and Sequoia startup check.
-- [ ] Complete the release handoff following the owner publication workflow.
+- [x] Complete the release handoff following the owner publication workflow.
 
-Version 0.6.0 is already assigned but has no application tag or GitHub release. The prior release candidate predates noise-profile training, Detail refinements, independent saturation, thumbnail memory controls and direct color editing. Its archived validation does not cover this final combined release.
+At the start of final review, version 0.6.0 was assigned but had no application tag or GitHub release. The prior release candidate predates noise-profile training, Detail refinements, independent saturation, thumbnail memory controls and direct color editing. Its archived validation does not cover this final combined release.
 
 ## Frame-path review
 
@@ -39,4 +40,4 @@ Commit `548dea0` and annotated tag `v0.6.0` are pushed. The [release workflow](h
 
 The downloaded archive passes its checksum and strict signature verification. Its signature includes hardened runtime and a secure timestamp. Version, Apple Silicon architecture and macOS 15.0 deployment target match the release. The downloaded executable starts and passes the isolated native eight-photo comparison editing smoke test. It is signed and unnotarized as specified. Browser-quarantine acceptance and interactive macOS 15 rendering were not tested by these checks.
 
-Public publication and Latest selection await the owner's final decision under the documented release workflow.
+The owner edited the draft notes and explicitly approved publication. [Foveonic v0.6.0](https://github.com/hank-bond/foveonic/releases/tag/v0.6.0) was published as Latest on November 2, 2026. The owner's edited notes and verified assets are unchanged. The Latest API and published release metadata confirm the final state.
