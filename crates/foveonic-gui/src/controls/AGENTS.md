@@ -20,10 +20,8 @@ Camera metadata supplies white-balance and color-mode choices. Normalize unsuppo
 
 ### Source files
 
-- **[advanced_color.rs](./advanced_color.rs)** Composes the Advanced range wheel and saved adjustment list with shared controls.
 - **[classic.rs](./classic.rs)** Composes Classic controls using the camera's built-in reconstruction and corrections.
 - **[color_editor.rs](./color_editor.rs)** Selects color ranges for shared linear Hue, Saturation and Lightness adjustments.
-- **[color_wheel.rs](./color_wheel.rs)** Draws and edits hue and saturation bounds with continuous circular handle gestures.
 - **[common.rs](./common.rs)** Shares editing rows and photographic controls used by family panels.
 - **[merrill.rs](./merrill.rs)** Composes Merrill color, monochrome, reconstruction and correction controls.
 - **[merrill_noise.rs](./merrill_noise.rs)** Composes Merrill denoising, speckle, shadow-neutrality and independent banding controls.

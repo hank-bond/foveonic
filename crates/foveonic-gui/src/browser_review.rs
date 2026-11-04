@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 pub(super) const MARK_GUTTER: f32 = 24.;
 const MARK_SIDE: f32 = 16.;
-const EYE_STROKE: f32 = 1.3;
 
 impl Browser {
     pub(super) fn file_menu(&mut self, response: &egui::Response, path: &Path) {
@@ -114,7 +113,7 @@ impl Browser {
         let color = widgets::visuals(ui, &response, self.hide_reviewed)
             .fg_stroke
             .color;
-        eye(
+        crate::widgets::eye_icon(
             ui,
             egui::Rect::from_center_size(rect.center(), egui::vec2(MARK_SIDE, MARK_SIDE)),
             color,
@@ -153,7 +152,7 @@ impl Browser {
         let rect = egui::Rect::from_center_size(hit.center(), egui::Vec2::splat(MARK_SIDE));
         let visuals = widgets::visuals(ui, &response, false);
         if mark.hidden() {
-            eye(ui, rect, visuals.fg_stroke.color, false);
+            crate::widgets::eye_icon(ui, rect, visuals.fg_stroke.color, false);
         } else {
             ui.painter().rect(
                 rect,
@@ -259,32 +258,5 @@ impl Browser {
                     .find(|path| !self.excluded.contains(*path))
             })
             .cloned()
-    }
-}
-
-// Normalized outline and pupil coordinates scale inside the caption icon.
-fn eye(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32, crossed: bool) {
-    let point = |x, y| rect.min + egui::vec2(x * rect.width(), y * rect.height());
-    let stroke = egui::Stroke::new(EYE_STROKE, color);
-    for height in [0.04, 0.96] {
-        ui.painter().add(egui::Shape::CubicBezier(
-            egui::epaint::CubicBezierShape::from_points_stroke(
-                [
-                    point(0., 0.5),
-                    point(0.28, height),
-                    point(0.72, height),
-                    point(1., 0.5),
-                ],
-                false,
-                egui::Color32::TRANSPARENT,
-                stroke,
-            ),
-        ));
-    }
-    ui.painter()
-        .circle_stroke(rect.center(), rect.height() * 0.15, stroke);
-    if crossed {
-        ui.painter()
-            .line_segment([point(0., 1.), point(1., 0.)], stroke);
     }
 }

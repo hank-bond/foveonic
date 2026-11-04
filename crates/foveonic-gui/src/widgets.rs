@@ -2,6 +2,37 @@
 
 use eframe::egui;
 
+/// Reserve one quarter of a form row for labels. A label may take more space
+/// only when it cannot fit, temporarily reducing that row's control span.
+pub fn form_label_width(ui: &egui::Ui, labels: &[&str], toggle: Option<&str>) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let measure = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.into(), font.clone(), egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let needed = labels
+        .iter()
+        .map(|text| measure(text))
+        .chain(
+            toggle.map(|text| measure(text) + ui.spacing().icon_width + ui.spacing().icon_spacing),
+        )
+        .fold(0., f32::max);
+    (ui.available_width() / 4.).max(needed).ceil()
+}
+
+/// Editing subsection titles share a stronger hierarchy than parameter labels.
+pub fn section_title(ui: &egui::Ui, title: &str) -> egui::RichText {
+    let size = egui::TextStyle::Body.resolve(ui.style()).size * 1.08;
+    let color = if ui.visuals().dark_mode {
+        egui::Color32::from_gray(225)
+    } else {
+        ui.visuals().strong_text_color()
+    };
+    egui::RichText::new(title).size(size).color(color)
+}
+
 const VALUE_SIGNIFICANT_DIGITS: usize = 3;
 const VALUE_DECIMAL_PLACES: usize = 2;
 
@@ -256,6 +287,20 @@ pub fn button_padding(ui: &egui::Ui) -> egui::Vec2 {
     egui::vec2(0.5 * em, 0.25 * em)
 }
 
+/// Prefer the full label when its padded button fits the remaining row width.
+pub fn fitting_button_label<'a>(
+    ui: &egui::Ui,
+    full: &'a str,
+    compact: &'a str,
+    available_width: f32,
+) -> &'a str {
+    if menu_label(ui, full).size().x + 2. * button_padding(ui).x <= available_width {
+        full
+    } else {
+        compact
+    }
+}
+
 /// Balance the leading gap with the layout's automatic trailing gap, then
 /// reserve the full control height before laying out the first label.
 pub fn control_row<R>(
@@ -296,23 +341,26 @@ pub fn button_group_height(ui: &egui::Ui) -> f32 {
     control_height(ui) + 2. * f32::from(BUTTON_GROUP_MARGIN)
 }
 
+fn menu_label(ui: &egui::Ui, label: &str) -> std::sync::Arc<egui::Galley> {
+    egui::WidgetText::from(label).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    )
+}
+
+fn menu_content_width<'a>(ui: &egui::Ui, labels: impl IntoIterator<Item = &'a str>) -> f32 {
+    labels
+        .into_iter()
+        .map(|label| menu_label(ui, label).size().x)
+        .fold(0., f32::max)
+        + 2. * button_padding(ui).x
+}
+
 /// Fit the longest label plus the dropdown arrow and normal control padding.
 pub fn dropdown_width<'a>(ui: &egui::Ui, labels: impl IntoIterator<Item = &'a str>) -> f32 {
-    let longest = labels
-        .into_iter()
-        .map(|label| {
-            egui::WidgetText::from(label)
-                .into_galley(
-                    ui,
-                    Some(egui::TextWrapMode::Extend),
-                    f32::INFINITY,
-                    egui::TextStyle::Button,
-                )
-                .size()
-                .x
-        })
-        .fold(0_f32, f32::max);
-    longest + 2. * button_padding(ui).x + ui.spacing().icon_width + ui.spacing().icon_spacing
+    menu_content_width(ui, labels) + ui.spacing().icon_width + ui.spacing().icon_spacing
 }
 
 pub fn dropdown<R>(
@@ -326,7 +374,18 @@ pub fn dropdown<R>(
     let previous = ui.spacing().clone();
     ui.spacing_mut().button_padding = button_padding(ui);
     ui.spacing_mut().interact_size.y = control_height(ui);
-    let response = combo.show_ui(ui, menu_contents);
+    let width_key = ui.next_auto_id().with("dropdown outer width");
+    let outer_width = ui
+        .data(|d| d.get_temp::<f32>(width_key))
+        .unwrap_or(ui.available_width());
+    let response = combo.show_ui(ui, |ui| {
+        // egui's popup starts with a provisional width. Pin its content to the
+        // closed control, excluding the popup frame's own padding and border.
+        let margin = egui::Frame::popup(ui.style()).total_margin().sum().x;
+        ui.set_width((outer_width - margin).max(1.));
+        menu_contents(ui)
+    });
+    ui.data_mut(|d| d.insert_temp(width_key, response.response.rect.width()));
     ui.spacing_mut().button_padding = previous.button_padding;
     ui.spacing_mut().interact_size = previous.interact_size;
     response
@@ -362,6 +421,88 @@ pub fn icon_button(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
     response
 }
 
+/// Automatic controls share the square geometry of ordinary icon buttons.
+pub fn auto_button(ui: &mut egui::Ui, on: bool) -> egui::Response {
+    let response = icon_button(ui, "A", on);
+    let label = menu_label(ui, "A");
+    ui.painter().galley(
+        response.rect.center() - label.size() * 0.5,
+        label,
+        ui.style().interact_selectable(&response, on).text_color(),
+    );
+    response
+}
+
+fn menu_style(ui: &mut egui::Ui) {
+    ui.spacing_mut().item_spacing.y = 0.;
+    ui.spacing_mut().button_padding = button_padding(ui);
+}
+
+/// Shared primary-click menus retain native drawing and content-sized rows.
+pub fn menu_button<R>(
+    ui: &mut egui::Ui,
+    button: egui::Button<'_>,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let response = ui.add(button);
+    let id = response.id.with("workspace menu");
+    if response.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(id));
+    }
+    if !ui.memory(|m| m.is_popup_open(id)) {
+        ui.data_mut(|d| d.remove::<egui::menu::MenuRoot>(id));
+        return egui::InnerResponse::new(None, response);
+    }
+    let root = ui
+        .data_mut(|d| d.get_temp::<egui::menu::MenuRoot>(id))
+        .unwrap_or_else(|| egui::menu::MenuRoot::new(response.rect.left_bottom(), response.id));
+    // egui 0.31 returns contents only when closing. Retain them while open too.
+    let mut inner = None;
+    let (close, _) = root.show(&response, |ui| {
+        menu_style(ui);
+        inner = Some(contents(ui));
+    });
+    let outside = ui.input(|i| {
+        i.pointer.any_pressed()
+            && i.pointer.interact_pos().is_some_and(|p| {
+                !response.rect.contains(p) && !root.menu_state.read().area_contains(p)
+            })
+    });
+    if close.is_close() || outside {
+        ui.memory_mut(|m| m.close_popup());
+        ui.data_mut(|d| d.remove::<egui::menu::MenuRoot>(id));
+    } else {
+        ui.data_mut(|d| d.insert_temp(id, root));
+    }
+    egui::InnerResponse::new(inner, response)
+}
+
+/// Group exclusive choices under an inert heading, with only the options indented.
+pub fn menu_choices<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    heading: &str,
+    selected: &mut T,
+    choices: &[(T, &str)],
+) -> bool {
+    ui.add_enabled_ui(false, |ui| menu_row(ui, heading, false));
+    ui.scope(|ui| {
+        ui.visuals_mut().indent_has_left_vline = false;
+        ui.indent(heading, |ui| {
+            let mut changed = false;
+            for &(value, label) in choices {
+                let response = menu_value(ui, selected, value, label);
+                changed |= response.changed();
+                if response.clicked() {
+                    ui.close_menu();
+                }
+            }
+            changed
+        })
+        .inner
+    })
+    .inner
+}
+
 pub fn icon_menu_button<R>(
     ui: &mut egui::Ui,
     label: &str,
@@ -372,7 +513,7 @@ pub fn icon_menu_button<R>(
     let result = ui
         .scope(|ui| {
             ui.spacing_mut().button_padding = button_padding(ui);
-            egui::menu::menu_custom_button(
+            menu_button(
                 ui,
                 egui::Button::new("")
                     .fill(egui::Color32::TRANSPARENT)
@@ -458,14 +599,17 @@ pub fn menu_cell(ui: &egui::Ui, response: &egui::Response, selected: bool) -> eg
 
 pub fn menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     let padding = button_padding(ui);
-    let galley = egui::WidgetText::from(label).into_galley(
-        ui,
-        Some(egui::TextWrapMode::Extend),
-        ui.available_width(),
-        egui::TextStyle::Button,
-    );
+    let galley = menu_label(ui, label);
+    let intrinsic_width = galley.size().x + 2. * padding.x;
+    // Popup sizing passes measure content before the available width is known.
+    // Filling egui's provisional 400-point menu width here makes that width permanent.
+    let width = if ui.is_sizing_pass() {
+        intrinsic_width
+    } else {
+        ui.available_width().max(intrinsic_width)
+    };
     let size = egui::vec2(
-        ui.available_width().max(galley.size().x + 2. * padding.x),
+        width,
         ui.spacing()
             .interact_size
             .y
@@ -509,6 +653,173 @@ pub fn menu_value<T: PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_menu_choices_fit_labels_indent_options_and_keep_heading_inert() {
+        for em in [14., 20.] {
+            for x in [10., 530.] {
+                let ctx = egui::Context::default();
+                install_style(&ctx);
+                ctx.style_mut(|s| {
+                    s.text_styles
+                        .insert(egui::TextStyle::Button, egui::FontId::proportional(em));
+                });
+                let mut selected = 2;
+                let mut draw = |time, events| {
+                    let mut open = None;
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(600., 400.),
+                            )),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                let mut anchor = ui.new_child(
+                                    egui::UiBuilder::new().id_salt("menu fixture").max_rect(
+                                        egui::Rect::from_min_size(
+                                            egui::pos2(x, 20.),
+                                            egui::vec2(55., 25.),
+                                        ),
+                                    ),
+                                );
+                                open = menu_button(&mut anchor, egui::Button::new("Menu"), |ui| {
+                                    menu_choices(
+                                        ui,
+                                        "Auto exposure source",
+                                        &mut selected,
+                                        &[(0, "Bracket"), (1, "Dial"), (2, "Both")],
+                                    );
+                                    ui.separator();
+                                    let _ = ui.button("Save preset…");
+                                    let _ = ui.button("Set as default for Quattro");
+                                    ui.min_rect()
+                                })
+                                .inner;
+                            });
+                        },
+                    );
+                    eprintln!(
+                        "frame {time} open {} marker {}",
+                        open.is_some(),
+                        ctx.memory(|m| m.any_popup_open())
+                    );
+                    (output, open)
+                };
+                let text = |output: &egui::FullOutput, label: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Text(t) if t.galley.job.text == label => {
+                                Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing {label}"))
+                };
+                let click = |pos, pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                let (output, _) = draw(0., vec![]);
+                let button = text(&output, "Menu").center();
+                draw(
+                    1.,
+                    vec![egui::Event::PointerMoved(button), click(button, true)],
+                );
+                draw(1.05, vec![click(button, false)]);
+                let (output, open) = draw(1.1, vec![]);
+                let heading = text(&output, "Auto exposure source");
+                let bracket = text(&output, "Bracket");
+                let dial = text(&output, "Dial");
+                let both = text(&output, "Both");
+                let save = text(&output, "Save preset…");
+                let longest = text(&output, "Set as default for Quattro")
+                    .width()
+                    .max(heading.width());
+                assert!(
+                    open.unwrap().width() < longest + em * 2.5,
+                    "menu stretches beyond its labels"
+                );
+                assert!(
+                    (heading.left() - save.left()).abs() < 1.,
+                    "heading must remain unindented"
+                );
+                for option in [bracket, dial, both] {
+                    assert!(
+                        (option.left() - heading.left() - ctx.style().spacing.indent).abs() < 1.
+                    );
+                }
+                assert!(
+                    (dial.top() - bracket.bottom() - em * 0.5).abs() < 1.,
+                    "choices must keep shared row spacing"
+                );
+                assert!((both.top() - dial.bottom() - em * 0.5).abs() < 1.);
+                draw(
+                    2.,
+                    vec![
+                        egui::Event::PointerMoved(heading.center()),
+                        click(heading.center(), true),
+                    ],
+                );
+                draw(2.05, vec![click(heading.center(), false)]);
+                assert!(
+                    draw(2.1, vec![]).1.is_some(),
+                    "the heading must not select or dismiss"
+                );
+                assert!(ctx.memory(|m| m.any_popup_open()));
+                draw(
+                    3.,
+                    vec![
+                        egui::Event::PointerMoved(dial.center()),
+                        click(dial.center(), true),
+                    ],
+                );
+                draw(3.05, vec![click(dial.center(), false)]);
+                assert!(
+                    draw(3.1, vec![]).1.is_none(),
+                    "choice must dismiss the menu"
+                );
+                assert!(!ctx.memory(|m| m.any_popup_open()));
+                draw(
+                    4.,
+                    vec![egui::Event::PointerMoved(button), click(button, true)],
+                );
+                draw(4.05, vec![click(button, false)]);
+                let outside = egui::pos2(300., 380.);
+                draw(
+                    4.1,
+                    vec![egui::Event::PointerMoved(outside), click(outside, true)],
+                );
+                draw(4.15, vec![click(outside, false)]);
+                assert!(draw(4.2, vec![]).1.is_none());
+                draw(
+                    5.,
+                    vec![egui::Event::PointerMoved(button), click(button, true)],
+                );
+                draw(5.05, vec![click(button, false)]);
+                draw(
+                    5.1,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }],
+                );
+                assert!(draw(5.15, vec![]).1.is_none());
+                assert_eq!(selected, 1);
+            }
+        }
+    }
 
     #[test]
     fn disclosure_line_aligns_with_parent_and_preserves_body_indentation() {
@@ -561,7 +872,7 @@ mod tests {
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.add_enabled_ui(enabled, |ui| {
-                        let response = button(ui, "A", on, egui::vec2(22., 20.));
+                        let response = auto_button(ui, on);
                         let visual = visuals(ui, &response, on);
                         result = Some((response, visual));
                     });
@@ -661,6 +972,30 @@ mod tests {
                     });
                 });
             }
+        }
+    }
+
+    #[test]
+    fn fitting_button_labels_follow_actual_button_width_and_restore_on_resize() {
+        for em in [14., 20.] {
+            let ctx = egui::Context::default();
+            install_style(&ctx);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(em));
+                    let width = button(ui, "Advanced", false, egui::Vec2::ZERO).rect.width();
+                    for (available, expected) in [
+                        (width + 1., "Advanced"),
+                        (width - 1., "Adv."),
+                        (width + 1., "Advanced"),
+                    ] {
+                        assert_eq!(
+                            fitting_button_label(ui, "Advanced", "Adv.", available),
+                            expected
+                        );
+                    }
+                });
+            });
         }
     }
 
@@ -793,7 +1128,9 @@ mod tests {
                                     ui.spacing_mut().item_spacing.y = 0.;
                                     let first = menu_row(ui, "Option", false).rect;
                                     let next = menu_row(ui, "Next", true).rect;
-                                    assert_eq!(first.width(), next.width());
+                                    if !ui.is_sizing_pass() {
+                                        assert_eq!(first.width(), next.width());
+                                    }
                                     assert_eq!(first.bottom(), next.top());
                                     first
                                 },
@@ -955,7 +1292,7 @@ mod tests {
             let ctx = egui::Context::default();
             install_style(&ctx);
             let (response, normal, normal_fill) = render(&ctx, on, true, 0., vec![]);
-            assert!(response.rect.width() >= 22.);
+            assert_eq!(response.rect.width(), response.rect.height());
             assert!(response.rect.height() >= 20.);
             assert_eq!(
                 normal.bg_fill,
@@ -1127,7 +1464,7 @@ mod icon_tests {
                         let before = ui.spacing().clone();
                         centered_control_row(ui, |ui| {
                             let browse = button(ui, "Browse…", false, egui::Vec2::ZERO);
-                            let auto = button(ui, "A", false, egui::vec2(22., 20.));
+                            let auto = auto_button(ui, false);
                             let picker = icon_button(ui, "Picker", false);
                             let menu = icon_menu_button(ui, "Settings", |ui| {
                                 ui.label("Options");
@@ -1143,7 +1480,7 @@ mod icon_tests {
                                         < 0.01
                                 );
                             }
-                            for response in [&picker, &menu] {
+                            for response in [&auto, &picker, &menu] {
                                 assert!(
                                     (response.rect.width() - response.rect.height()).abs() < 0.01
                                 );
@@ -1160,6 +1497,139 @@ mod icon_tests {
                         assert_eq!(before.interact_size, ui.spacing().interact_size);
                     });
                 });
+            }
+        }
+    }
+}
+
+/// Shared eyedropper glyph inside the standard icon-button inset.
+pub fn eyedropper_icon(ui: &egui::Ui, response: &egui::Response, on: bool) {
+    let icon = icon_rect(ui, response);
+    let scale = icon.width() / 16.;
+    let at = |x, y| icon.min + egui::vec2(x, y) * scale;
+    let color = visuals(ui, response, on).fg_stroke.color;
+    let stroke = egui::Stroke::new(1.5 * scale, color);
+    ui.painter().add(egui::Shape::closed_line(
+        vec![
+            at(1., 15.),
+            at(2., 11.),
+            at(10., 3.),
+            at(13., 6.),
+            at(5., 14.),
+        ],
+        stroke,
+    ));
+    ui.painter().line_segment([at(8., 1.), at(15., 8.)], stroke);
+    ui.painter()
+        .circle_filled(at(13.5, 2.5), 2.5 * scale, color);
+}
+
+pub fn eye_icon(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32, crossed: bool) {
+    let point = |x, y| rect.min + egui::vec2(x * rect.width(), y * rect.height());
+    let stroke = egui::Stroke::new(1.3_f32, color);
+    for height in [0.04, 0.96] {
+        ui.painter().add(egui::Shape::CubicBezier(
+            egui::epaint::CubicBezierShape::from_points_stroke(
+                [
+                    point(0., 0.5),
+                    point(0.28, height),
+                    point(0.72, height),
+                    point(1., 0.5),
+                ],
+                false,
+                egui::Color32::TRANSPARENT,
+                stroke,
+            ),
+        ));
+    }
+    ui.painter()
+        .circle_stroke(rect.center(), rect.height() * 0.15, stroke);
+    if crossed {
+        ui.painter()
+            .line_segment([point(0., 1.), point(1., 0.)], stroke);
+    }
+}
+
+pub fn eye_button(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    let response = icon_button(ui, label, on);
+    let color = visuals(ui, &response, on).fg_stroke.color;
+    eye_icon(ui, icon_rect(ui, &response), color, !on);
+    response
+}
+
+#[cfg(test)]
+mod dropdown_width_tests {
+    use super::*;
+    #[test]
+    fn ordinary_options_stay_within_the_closed_control_width() {
+        for em in [14., 20.] {
+            for x in [10., 450.] {
+                let ctx = egui::Context::default();
+                install_style(&ctx);
+                ctx.style_mut(|s| {
+                    s.text_styles
+                        .insert(egui::TextStyle::Button, egui::FontId::proportional(em));
+                });
+                let draw = |time, events| {
+                    let mut result = None;
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(720., 400.),
+                            )),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                let mut anchor = ui.new_child(
+                                    egui::UiBuilder::new().id_salt("width fixture").max_rect(
+                                        egui::Rect::from_min_size(
+                                            egui::pos2(x, 20.),
+                                            egui::vec2(220., 300.),
+                                        ),
+                                    ),
+                                );
+                                let response = dropdown(
+                                    &mut anchor,
+                                    egui::ComboBox::from_id_salt("method")
+                                        .width(220.)
+                                        .selected_text("Universal"),
+                                    |ui| {
+                                        let mut value = 0;
+                                        menu_value(ui, &mut value, 0, "Reference");
+                                        menu_value(ui, &mut value, 1, "Universal");
+                                        let margin = egui::Frame::popup(ui.style()).total_margin();
+                                        (ui.min_rect(), margin)
+                                    },
+                                );
+                                result = Some(response);
+                            });
+                        },
+                    );
+                    result.unwrap()
+                };
+                let response = draw(0., vec![]).response;
+                let p = response.rect.center();
+                let button = |pressed| egui::Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                draw(0.1, vec![egui::Event::PointerMoved(p), button(true)]);
+                draw(0.15, vec![button(false)]);
+                let open = draw(0.2, vec![]);
+                let (content, margin) = open.inner.expect("dropdown must open");
+                let outer_width = content.width() + margin.sum().x;
+                assert!(
+                    (outer_width - open.response.rect.width()).abs() < 1.,
+                    "menu {outer_width}, button {:?}",
+                    open.response.rect
+                );
+                assert!((content.left() - margin.left - open.response.rect.left()).abs() < 1.);
             }
         }
     }

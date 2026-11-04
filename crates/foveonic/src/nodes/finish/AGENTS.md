@@ -18,10 +18,6 @@ Linear gain transfer accepts a reference pair related by scalar brightness multi
 
 ### Source files
 
-- **[adaptive_tone.rs](./adaptive_tone.rs)** Fits regional visibility and rescues structured near-black detail through one spatial RGB gain.
-- **[advanced_color.rs](./advanced_color.rs)** Applies bounded soft color selections and perceptual edits from an independent clean guide.
-- **[auto_hdr_experiment.rs](./auto_hdr_experiment.rs)** Runs an isolated GPU visibility-fit experiment and exports photographic comparisons without changing app defaults.
-- **[base_response.rs](./base_response.rs)** Defines regional base-response choices and shared per-profile application caps.
 - **[box_contrast.rs](./box_contrast.rs)** Applies ordered box-mean local contrast to integral RGB codes with explicit noise and gain bounds.
 - **[code_channel_map.rs](./code_channel_map.rs)** Mixes integral RGB codes with normalized channel weights or copies selected channels.
 - **[code_crop.rs](./code_crop.rs)** Crops, rotates and resizes integral RGB codes with fixed-point mapping and source-derived interpolation phases.
@@ -29,7 +25,6 @@ Linear gain transfer accepts a reference pair related by scalar brightness multi
 - **[color_editor.rs](./color_editor.rs)** Edits linear Hue, Saturation and Lightness and picks subject ranges from the same cleaned color guide.
 - **[color_sharpen.rs](./color_sharpen.rs)** Sharpens integral RGB channels with wrapped neighborhood sums and signal-dependent thresholds.
 - **[image_region.rs](./image_region.rs)** Copies a rectangular numerical signal on the GPU while preserving every component bit.
-- **[lightness_invert.rs](./lightness_invert.rs)** Reverses exposed Oklab lightness while retaining color components and exact Monochrome neutrality.
 - **[linear_basis.rs](./linear_basis.rs)** Maps declared linear RGB codes into another linear sample basis without tone or clipping.
 - **[linear_gain.rs](./linear_gain.rs)** Transfers a known scalar brightness edit between two linear RGB representations.
 - **[mask_image.rs](./mask_image.rs)** Converts integer processing flags into a binary floating image for inspection.
