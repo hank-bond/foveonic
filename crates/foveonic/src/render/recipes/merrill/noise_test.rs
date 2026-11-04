@@ -439,13 +439,6 @@ fn multiscale_preview_order_and_export_preparation_share_native_inputs() {
             filter < reduction,
             "Fast must filter the native sensor first"
         );
-        settings.preview_quality = PreviewQuality::Draft;
-        let draft = photographic(&engine, &source, &settings);
-        assert!(draft.graph.nodes.iter().all(|node| !matches!(
-            node.operation,
-            Operation::ShieldNoise(_) | Operation::Multiscale(_)
-        )));
-        let _ = position(&draft, |op| matches!(op, Operation::ReduceLayers(_)));
         assert_eq!(settings.merrill_noise_method, method);
     }
 }
@@ -498,13 +491,6 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
         full.graph.nodes[local].operation.key("native bands")
             == fast.graph.nodes[fast_bands].operation.key("native bands")
     );
-    settings.preview_quality = PreviewQuality::Draft;
-    let draft = photographic(&engine, &source, &settings);
-    assert!(draft.graph.nodes.iter().all(|node| !matches!(
-        node.operation,
-        Operation::RowGuard(_) | Operation::DirectionalBanding { .. }
-    )));
-
     settings.preview_quality = PreviewQuality::Full;
     settings.output_size = Some([240, 160]);
     let mut session = RenderSession::new(source.clone());

@@ -93,7 +93,6 @@ impl Frame {
         match self.artifact.settings.preview_quality {
             PreviewQuality::Full => "Full",
             PreviewQuality::Fast => "Fast",
-            PreviewQuality::Draft => "Draft",
         }
     }
     /// Keep the output visible until its matching input is ready.

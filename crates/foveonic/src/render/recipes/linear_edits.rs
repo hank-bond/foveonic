@@ -720,8 +720,6 @@ fn color_guide(
     if settings.is_monochrome() {
         color.preview_quality = PreviewQuality::Full;
         color.preview_region = None;
-    } else if color.preview_quality == PreviewQuality::Draft {
-        color.preview_quality = PreviewQuality::Fast;
     }
     let mut noise = caps.default_noise_controls();
     noise.detail_enabled = false;

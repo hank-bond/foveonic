@@ -334,6 +334,8 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
         .unwrap()
         .location(cache.directory());
     cache.clear();
+    // Clearing is a separate asynchronous job with its own completion deadline.
+    let deadline = Instant::now() + Duration::from_secs(5);
     while destination.exists() {
         assert!(
             Instant::now() < deadline,

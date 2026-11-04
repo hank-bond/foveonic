@@ -20,11 +20,7 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
     settings.white_balance = cap.default_white_balance(&source.metadata).unwrap();
     settings.color_mode = cap.default_color_mode(&source.metadata).unwrap();
     let mut expected = None;
-    for quality in [
-        PreviewQuality::Full,
-        PreviewQuality::Fast,
-        PreviewQuality::Draft,
-    ] {
+    for quality in [PreviewQuality::Full, PreviewQuality::Fast] {
         settings.preview_quality = quality;
         let mut profile = Profile::default();
         let mut execution = Execution::default();

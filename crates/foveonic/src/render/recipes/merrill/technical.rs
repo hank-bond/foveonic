@@ -132,9 +132,7 @@ pub(super) fn build(
     if let Some(grid) = &preview {
         calibrated = graph.add(Operation::ReduceLayers(grid.reduction), &[calibrated])?;
     }
-    let draft =
-        preview.is_some() && settings.preview_quality == crate::render::PreviewQuality::Draft;
-    let noise_controls = settings.merrill_reconstruction().filter(|_| !draft);
+    let noise_controls = settings.merrill_reconstruction();
     if let Some(region) = &region {
         graph.retain_for_session(calibrated);
         if noise_controls.is_none() {
@@ -217,7 +215,7 @@ pub(super) fn build(
         )?
     };
     finish!();
-    if !draft && settings.color_dq_selected() {
+    if settings.color_dq_selected() {
         let gain = if let Some(gain) = settings.color_dq_gain {
             gain
         } else {

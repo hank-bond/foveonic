@@ -7,7 +7,7 @@ use crate::{
     interactive::Execution,
     nodes::sensor::{banding, calibration, camera_repair, color_field, despeckle, highlight},
     profile::Profile,
-    render::{PreviewQuality, Settings},
+    render::Settings,
     source::{Result, Source},
 };
 use std::sync::Arc;
@@ -21,10 +21,9 @@ pub(super) struct Policy {
 }
 impl Policy {
     pub fn new(settings: &Settings, reduced: bool, retain_calibrated: bool) -> Self {
-        let draft = reduced && settings.preview_quality == PreviewQuality::Draft;
         Self {
-            multiscale: settings.multiscale_noise_selected() && !draft,
-            directional_banding: settings.directional_banding_selected() && !draft,
+            multiscale: settings.multiscale_noise_selected(),
+            directional_banding: settings.directional_banding_selected(),
             reference_rows: settings.reference_rows_selected() && !reduced,
             retain_calibrated,
         }

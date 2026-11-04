@@ -281,7 +281,7 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
     let full_bytes = engine.readback_image(&full).unwrap();
     let [w, h] = full.view().extent;
     let mut session = RenderSession::new(source.clone());
-    settings.preview_quality = PreviewQuality::Draft;
+    settings.preview_quality = PreviewQuality::Fast;
     let overview = session_image(&engine, &mut session, &settings, &mut Profile::default());
     engine
         .view_texture(&overview, None, &mut Profile::default())
@@ -471,24 +471,22 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
         );
         if rendering == Rendering::Color {
             settings.tone_enabled = true;
-            for quality in [PreviewQuality::Fast, PreviewQuality::Draft] {
-                settings.preview_quality = quality;
-                let image = engine
-                    .render(&source, &settings, &mut Profile::default())
-                    .unwrap();
-                assert!(
-                    bytemuck::cast_slice::<u8, f32>(&engine.readback_image(&image).unwrap())
-                        .iter()
-                        .all(|v| v.is_finite())
-                );
-                let dng = engine
-                    .render_dng_base(&source, &settings, &mut Profile::default())
-                    .unwrap();
-                assert_eq!(
-                    dng.description().extent,
-                    [source.metadata.width as u32, source.metadata.height as u32]
-                );
-            }
+            settings.preview_quality = PreviewQuality::Fast;
+            let image = engine
+                .render(&source, &settings, &mut Profile::default())
+                .unwrap();
+            assert!(
+                bytemuck::cast_slice::<u8, f32>(&engine.readback_image(&image).unwrap())
+                    .iter()
+                    .all(|v| v.is_finite())
+            );
+            let dng = engine
+                .render_dng_base(&source, &settings, &mut Profile::default())
+                .unwrap();
+            assert_eq!(
+                dng.description().extent,
+                [source.metadata.width as u32, source.metadata.height as u32]
+            );
         }
     }
 }

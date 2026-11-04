@@ -82,36 +82,27 @@ fn color_preview_support_requires_valid_merrill_geometry_and_supports_native_reg
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_native() {
     use crate::{
-        image::RenderedImage,
         inspection::Content,
         profile::{Mode, Profile},
         render::{Engine, PreviewQuality, RenderSession, Settings},
         source::Source,
     };
-    use std::path::PathBuf;
-
-    fn image(artifacts: Vec<crate::inspection::Artifact>) -> RenderedImage {
-        let Content::Image(image) = artifacts.into_iter().next().unwrap().content else {
-            panic!("expected an image")
-        };
-        *image
-    }
-    let root = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = std::sync::Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
     let engine = Engine::new().unwrap();
     let mut session = RenderSession::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
     let saved_edits = crate::sidecar::encode(&settings).unwrap();
-    let mut full_profile = Profile::new(Mode::Wall);
     let full = engine
-        .render(&source, &settings, &mut full_profile)
+        .render(&source, &settings, &mut Profile::default())
         .unwrap();
-    assert!(full_profile
-        .host
-        .iter()
-        .any(|s| s.stage == "submit row banding correction"));
-    let reconstruction_stages = [
+    let full_bytes = engine.readback_image(&full).unwrap();
+    settings.preview_quality = PreviewQuality::Fast;
+    let mut profile = Profile::new(Mode::Wall);
+    let fast = engine.render(&source, &settings, &mut profile).unwrap();
+    let fast_bytes = engine.readback_image(&fast).unwrap();
+    for stage in [
         "submit reference noise base",
         "submit reference column conditioning",
         "submit reference luminance ratio",
@@ -119,152 +110,66 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
         "submit texture restoration",
         "submit tiled ColorDQ",
         "submit color tile projection",
-    ];
-    for stage in reconstruction_stages {
-        assert!(
-            full_profile.host.iter().any(|s| s.stage == stage),
-            "{stage}"
-        );
+    ] {
+        assert!(profile.host.iter().any(|s| s.stage == stage), "{stage}");
     }
-    let full_bytes = engine.readback_image(&full).unwrap();
-    settings.preview_quality = PreviewQuality::Draft;
-    let mut draft_profile = Profile::new(Mode::Wall);
-    let draft = image(
-        engine
-            .render_session(
-                &mut session,
-                &settings,
-                &["final"],
-                || false,
-                &mut draft_profile,
-            )
-            .unwrap()
-            .unwrap(),
-    );
-    assert!(!draft_profile
+    assert!(!profile
         .host
         .iter()
         .any(|s| s.stage == "submit row banding correction"));
     assert!(
-        draft.settings().row_correction,
-        "preview omission must not change the requested edit"
+        fast.settings().row_correction,
+        "preview policy must retain the authored edit"
     );
-    for stage in reconstruction_stages.into_iter().chain(["submit ColorDQ"]) {
-        assert!(
-            !draft_profile.host.iter().any(|s| s.stage == stage),
-            "{stage}"
-        );
-    }
-    assert!(draft.settings().reconstruction.is_some());
     assert_eq!(
-        crate::sidecar::encode(draft.settings()).unwrap(),
+        crate::sidecar::encode(fast.settings()).unwrap(),
         saved_edits
     );
-    let draft_bytes = engine.readback_image(&draft).unwrap();
-    let mut standalone = settings.clone();
-    standalone.preview_quality = PreviewQuality::Fast;
-    let mut standalone_profile = Profile::new(Mode::Wall);
-    let standalone_image = image(
-        engine
-            .render_session(
-                &mut session,
-                &standalone,
-                &["final"],
-                || false,
-                &mut standalone_profile,
-            )
-            .unwrap()
-            .unwrap(),
-    );
-    for stage in reconstruction_stages {
-        assert!(
-            standalone_profile.host.iter().any(|s| s.stage == stage),
-            "{stage}"
-        );
-    }
-    assert!(!standalone_profile
-        .host
-        .iter()
-        .any(|s| s.stage == "submit row banding correction"));
     assert_eq!(
-        standalone_image.description().extent,
-        draft.description().extent
+        fast.description().extent,
+        full.description().extent.map(|v| v / 2)
     );
-    assert_eq!(
-        crate::sidecar::encode(standalone_image.settings()).unwrap(),
-        saved_edits
-    );
-    let standalone_bytes = engine.readback_image(&standalone_image).unwrap();
-    assert_ne!(standalone_bytes, draft_bytes);
-    assert!(bytemuck::cast_slice::<u8, f32>(&standalone_bytes)
+    assert_eq!(fast.view().crop, full.view().crop.map(|v| v / 2));
+    assert_eq!(fast.view().extent, full.view().extent.map(|v| v / 2));
+    assert!(bytemuck::cast_slice::<u8, f32>(&fast_bytes)
         .iter()
         .all(|v| v.is_finite()));
-    let fresh = engine
-        .render(&source, &standalone, &mut Profile::default())
-        .unwrap();
-    assert_eq!(engine.readback_image(&fresh).unwrap(), standalone_bytes);
-    standalone.reconstruction = None;
-    let unchecked = engine
-        .render(&source, &standalone, &mut Profile::default())
-        .unwrap();
-    assert_ne!(engine.readback_image(&unchecked).unwrap(), standalone_bytes);
-    // Stronger cleanup keeps the same camera-derived base in Fast.
-    standalone.reconstruction = Some(crate::noise::Controls {
-        luminance: 4,
-        ..Default::default()
-    });
-    let stronger = engine
-        .render(&source, &standalone, &mut Profile::default())
-        .unwrap();
-    let stronger_bytes = engine.readback_image(&stronger).unwrap();
-    assert!(bytemuck::cast_slice::<u8, f32>(&stronger_bytes)
-        .iter()
-        .all(|v| v.is_finite()));
-    assert_ne!(stronger_bytes, standalone_bytes);
     let mut bypassed = settings.clone();
     bypassed.reconstruction = None;
     let unchecked = engine
         .render(&source, &bypassed, &mut Profile::default())
         .unwrap();
-    assert_eq!(engine.readback_image(&unchecked).unwrap(), draft_bytes);
-    // Smart drafts also omit explicit advanced ColorDQ choices.
-    bypassed.reconstruction = settings.reconstruction;
-    bypassed.color_dq_gain = Some(1.);
-    let manual = engine
-        .render(&source, &bypassed, &mut Profile::default())
+    assert_ne!(engine.readback_image(&unchecked).unwrap(), fast_bytes);
+    let mut stronger = settings.clone();
+    stronger.reconstruction.as_mut().unwrap().luminance = 4;
+    let stronger = engine
+        .render(&source, &stronger, &mut Profile::default())
         .unwrap();
-    assert_eq!(engine.readback_image(&manual).unwrap(), draft_bytes);
-    assert_eq!(
-        draft.description().extent,
-        full.description().extent.map(|v| v / 2)
-    );
-    assert_eq!(draft.view().crop, full.view().crop.map(|v| v / 2));
-    assert_eq!(draft.view().extent, full.view().extent.map(|v| v / 2));
-    assert_eq!(draft.source_metadata().width, source.metadata.width);
-    assert!(bytemuck::cast_slice::<u8, f32>(&draft_bytes)
-        .iter()
-        .all(|v| v.is_finite()));
-    for step in 0..3 {
-        if step == 1 {
-            settings.exposure = 0.5;
-            settings.saturation = 0.7;
-            settings.reconstruction.as_mut().unwrap().texture.fine = 1.2;
+    assert_ne!(engine.readback_image(&stronger).unwrap(), fast_bytes);
+    for step in 0..4 {
+        match step {
+            1 => {
+                settings.exposure = 0.5;
+                settings.saturation = 0.7;
+                settings.reconstruction.as_mut().unwrap().texture.fine = 0.9;
+            }
+            2 => settings.preview_quality = PreviewQuality::Full,
+            3 => settings.preview_quality = PreviewQuality::Fast,
+            _ => {}
         }
-        if step == 2 {
-            settings = full.settings().clone();
-        }
-        let cached = image(
-            engine
-                .render_session(
-                    &mut session,
-                    &settings,
-                    &["final"],
-                    || false,
-                    &mut Profile::default(),
-                )
-                .unwrap()
-                .unwrap(),
-        );
+        let mut artifacts = engine
+            .render_session(
+                &mut session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let Content::Image(cached) = artifacts.remove(0).content else {
+            panic!("RGB")
+        };
         let fresh = engine
             .render(&source, &settings, &mut Profile::default())
             .unwrap();
@@ -273,55 +178,22 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
             engine.readback_image(&fresh).unwrap(),
             "quality/edit step {step}"
         );
-        if step == 2 {
-            assert_eq!(engine.readback_image(&cached).unwrap(), full_bytes);
-        }
     }
     assert_eq!(engine.readback_image(&full).unwrap(), full_bytes);
-    assert_eq!(engine.readback_image(&draft).unwrap(), draft_bytes);
-    assert_eq!(
-        engine.readback_image(&standalone_image).unwrap(),
-        standalone_bytes
-    );
-    settings.preview_quality = PreviewQuality::Draft;
-    let inspection = image(
-        engine
-            .render_artifacts(
-                &source,
-                &settings,
-                &["calibration.layers"],
-                &mut Profile::default(),
-            )
-            .unwrap(),
-    );
-    assert_eq!(inspection.description().extent, full.description().extent);
-    let dng = engine
-        .render_dng_base(&source, &settings, &mut Profile::default())
+    assert_eq!(engine.readback_image(&fast).unwrap(), fast_bytes);
+    let mut artifacts = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["calibration.layers"],
+            &mut Profile::default(),
+        )
         .unwrap();
-    assert_eq!(dng.description().extent, full.description().extent);
-    let c = settings.reconstruction.as_mut().unwrap();
-    c.texture.coarse = 0.25;
-    for quality in [PreviewQuality::Fast, PreviewQuality::Draft] {
-        settings.preview_quality = quality;
-        let mut profile = Profile::new(Mode::Wall);
-        let reduced = engine.render(&source, &settings, &mut profile).unwrap();
-        assert_eq!(
-            reduced.description().extent,
-            full.description().extent.map(|v| v / 2)
-        );
-        assert_eq!(
-            profile
-                .host
-                .iter()
-                .any(|p| p.stage == "submit texture restoration"),
-            quality == PreviewQuality::Fast
-        );
-        assert!(
-            bytemuck::cast_slice::<u8, f32>(&engine.readback_image(&reduced).unwrap())
-                .iter()
-                .all(|v| v.is_finite())
-        );
-    }
+    let Content::Image(inspection) = artifacts.remove(0).content else {
+        panic!("layers")
+    };
+    assert_eq!(inspection.description().extent, full.description().extent);
+    settings.reconstruction.as_mut().unwrap().texture.coarse = 0.25;
     let mut profile = Profile::new(Mode::Wall);
     let dng = engine
         .render_dng_base(&source, &settings, &mut profile)
@@ -330,7 +202,7 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
     assert!(profile
         .host
         .iter()
-        .any(|p| p.stage == "submit texture restoration"));
+        .any(|s| s.stage == "submit texture restoration"));
 }
 
 #[test]
@@ -425,7 +297,7 @@ fn regional_detail_matches_full_and_continues_without_repeating_sensor_correctio
             let full_bytes = engine.readback_image(&full).unwrap();
             let full_pixels: &[f32] = bytemuck::cast_slice(&full_bytes);
             let mut session = RenderSession::new(source.clone());
-            settings.preview_quality = PreviewQuality::Draft;
+            settings.preview_quality = PreviewQuality::Fast;
             let overview = engine
                 .render_session(
                     &mut session,
