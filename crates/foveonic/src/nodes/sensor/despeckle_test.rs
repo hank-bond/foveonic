@@ -390,6 +390,150 @@ fn compact_speckles_remove_small_clusters_and_preserve_lines_and_source() {
 
 #[test]
 #[ignore = "requires a GPU"]
+fn compact_repairs_white_speckles_when_only_one_layer_crosses_threshold() {
+    use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
+    let gpu = Gpu::new().unwrap();
+    let mut samples = vec![100_f32; 64 * 64 * 3];
+    let center = (24 * 64 + 24) * 3;
+    samples[center..center + 3].fill(200.);
+    let input = gpu
+        .upload("White speckle with unequal thresholds", &samples)
+        .unwrap();
+    for trigger in 0..3 {
+        for size in [3, 5, 7] {
+            let mut lookup = vec![150.; 3 * 4096];
+            lookup[trigger * 4096..(trigger + 1) * 4096].fill(5.);
+            let prepared = Prepared {
+                params: parameters(64, 64, [8, 8, 56, 56]).unwrap(),
+                tables: lookup,
+            }
+            .with_controls(MerrillSpeckleControls {
+                method: MerrillSpeckleMethod::Compact,
+                threshold: 1.,
+                size,
+            })
+            .unwrap();
+            let output = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+            let bytes = gpu.readback(&output).unwrap();
+            let actual: &[f32] = bytemuck::cast_slice(&bytes);
+            assert!(
+                actual.iter().all(|&v| v == 100.),
+                "trigger {trigger}, size {size}"
+            );
+        }
+    }
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&samples)
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn compact_uses_shared_trimmed_donors_including_tied_extremes() {
+    use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
+    let gpu = Gpu::new().unwrap();
+    let center = (24 * 64 + 24) * 3;
+    let offsets = [-65_isize, -64, -63, -1, 1, 63, 64, 65];
+    for trigger in 0..3 {
+        for tied in [false, true] {
+            let mut samples = vec![100_f32; 64 * 64 * 3];
+            samples[center..center + 3].copy_from_slice(&[140., 150., 160.]);
+            samples[center + trigger] = 1000.;
+            let mut donors = [[0_f32; 3]; 8];
+            for (n, donor) in donors.iter_mut().enumerate() {
+                *donor = [
+                    80. + n as f32 * 10.,
+                    200. - n as f32 * 7.,
+                    50. + (n % 3) as f32 * 20.,
+                ];
+                donor[trigger] = if tied {
+                    100.
+                } else {
+                    [100., 80., 110., 90., 95., 105., 120., 115.][n]
+                };
+                let p = (center as isize + offsets[n] * 3) as usize;
+                samples[p..p + 3].copy_from_slice(donor);
+            }
+            // Flat rings exclude the first and last donors. Unequal rings
+            // exclude indices 1 and 6, regardless of the other layers' values.
+            let excluded = if tied { [0, 7] } else { [1, 6] };
+            let mut expected = [0_f32; 3];
+            for (n, donor) in donors.iter().enumerate() {
+                if !excluded.contains(&n) {
+                    for c in 0..3 {
+                        expected[c] += donor[c] / 6.;
+                    }
+                }
+            }
+            let input = gpu
+                .upload("Shared speckle donor fixture", &samples)
+                .unwrap();
+            let mut lookup = vec![10_000.; 3 * 4096];
+            lookup[trigger * 4096..(trigger + 1) * 4096].fill(5.);
+            let prepared = Prepared {
+                params: parameters(64, 64, [8, 8, 56, 56]).unwrap(),
+                tables: lookup,
+            }
+            .with_controls(MerrillSpeckleControls {
+                method: MerrillSpeckleMethod::Compact,
+                threshold: 1.,
+                size: 7,
+            })
+            .unwrap();
+            let output = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+            let bytes = gpu.readback(&output).unwrap();
+            let actual: &[f32] = bytemuck::cast_slice(&bytes);
+            for c in 0..3 {
+                assert!(
+                    (actual[center + c] - expected[c]).abs() < 0.0001,
+                    "trigger {trigger}, tied {tied}, layer {c}: {} != {}",
+                    actual[center + c],
+                    expected[c]
+                );
+            }
+            assert_eq!(
+                gpu.readback(&input).unwrap(),
+                bytemuck::cast_slice::<f32, u8>(&samples)
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn compact_uses_smallest_detected_radius_for_every_layer() {
+    use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
+    let gpu = Gpu::new().unwrap();
+    let mut samples = vec![100_f32; 64 * 64 * 3];
+    let center = (24 * 64 + 24) * 3;
+    samples[center..center + 3].fill(200.);
+    for offset in [-65_isize, -64, -63, -1, 1, 63, 64, 65] {
+        samples[(center as isize + offset * 3) as usize] = 200.;
+    }
+    let input = gpu
+        .upload("Speckle layers with different support", &samples)
+        .unwrap();
+    for size in [5, 7] {
+        let prepared = Prepared {
+            params: parameters(64, 64, [8, 8, 56, 56]).unwrap(),
+            tables: vec![5.; 3 * 4096],
+        }
+        .with_controls(MerrillSpeckleControls {
+            method: MerrillSpeckleMethod::Compact,
+            threshold: 1.,
+            size,
+        })
+        .unwrap();
+        let output = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let actual: &[f32] = bytemuck::cast_slice(&bytes);
+        assert_eq!(&actual[center..center + 3], &[200., 100., 100.]);
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
 fn compact_uses_original_highlight_codes_after_calibration() {
     use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
     let gpu = Gpu::new().unwrap();
@@ -466,6 +610,10 @@ fn compact_repairs_isolated_clipped_layers_but_preserves_supported_highlights() 
     for &p in &supported {
         original[p] = 4045.;
         calibrated[p] = 6362.;
+        // Both unprotected layers would independently qualify as outliers.
+        // Highlight evidence in the first layer must preserve the triplet.
+        calibrated[p + 1] = 300.;
+        calibrated[p + 2] = 400.;
     }
     // Cross-layer support, a colored neighbor, and a diagonal in another layer
     // each keep an ambiguous near-clipped sample protected.

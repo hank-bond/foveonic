@@ -138,19 +138,32 @@ fn compact(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var c = 0u; c < 3u; c++) { pixels[p*3u+c] = sample(p,c); }
     if id.x < params.area.x || id.x > params.area.z || id.y < params.area.y || id.y > params.area.w { return; }
     for (var c = 0u; c < 3u; c++) {
-        let center = sample(p,c);
-        if protected_highlight(p, c, vec2<i32>(id.xy)) { continue; }
-        let threshold = thresholds[c*4096u+u32(clamp(center,0.,4095.))];
-        for (var radius = 1u; radius <= params.detector.y; radius++) {
-            var low = 3.402823e38; var high = -3.402823e38; var sum = 0.;
-            for (var n = 0u; n < 8u; n++) {
-                let q = vec2<i32>(id.xy) + offsets[n] * i32(radius);
-                let value = sample(u32(q.y)*params.source.x+u32(q.x),c);
-                low = min(low,value); high = max(high,value); sum += value;
+        if protected_highlight(p, c, vec2<i32>(id.xy)) { return; }
+    }
+    // Use one radius and one set of donor pixels for all layers so unequal
+    // thresholds cannot leave a colored residual from a white speckle.
+    for (var radius = 1u; radius <= params.detector.y; radius++) {
+        var ring: array<vec3<f32>, 8>;
+        var sum = vec3(0.);
+        for (var n = 0u; n < 8u; n++) {
+            let q = vec2<i32>(id.xy) + offsets[n] * i32(radius);
+            let neighbor = u32(q.y)*params.source.x+u32(q.x);
+            ring[n] = vec3(sample(neighbor,0u),sample(neighbor,1u),sample(neighbor,2u));
+            sum += ring[n];
+        }
+        for (var c = 0u; c < 3u; c++) {
+            var low = 0u; var high = 0u;
+            for (var n = 1u; n < 8u; n++) {
+                if ring[n][c] < ring[low][c] { low = n; }
+                // Choose the last maximum so a flat ring excludes two donors.
+                if ring[n][c] >= ring[high][c] { high = n; }
             }
-            if center > high + threshold {
-                pixels[p*3u+c] = (sum-high-low)/6.;
-                break;
+            let center = sample(p,c);
+            let threshold = thresholds[c*4096u+u32(clamp(center,0.,4095.))];
+            if center > ring[high][c] + threshold {
+                let result = (sum-ring[high]-ring[low])/6.;
+                for (var layer = 0u; layer < 3u; layer++) { pixels[p*3u+layer] = result[layer]; }
+                return;
             }
         }
     }
