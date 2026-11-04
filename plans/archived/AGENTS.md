@@ -91,6 +91,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[quattro-performance](./quattro-performance.md)** _(archived)._ Completed output-equivalent repair and cache optimizations cut Quattro render latency roughly threefold.
 - **[quattro-performance-and-fast-preview](./quattro-performance-and-fast-preview.md)** _(archived)._ Measure Quattro latency and retain simple optimizations that preserve demonstrated photographic output.
 - **[quattro-review](./quattro-review.md)** _(archived)._ Review Quattro Fast integration for recipe ownership, named numerical controls, clear geometry and preserved output.
+- **[quattro-smart-special-pixels](./quattro-smart-special-pixels.md)** _(archived)._ Correct sd Quattro sparse sensor sites before reduced Smart and Fast reconstruction.
 - **[release-0.1.1](./release-0.1.1.md)** _(archived)._ Release v0.1.1 passed local and hosted checks and was published as GitHub's Latest application release.
 - **[release-0.3.0](./release-0.3.0.md)** _(archived)._ Prepare and verify the signed v0.3.0 macOS release with Import, cache scheduling and Merrill Smart previews.
 - **[release-0.4.0](./release-0.4.0.md)** _(archived)._ Prepare and verify the signed v0.4.0 draft with Merrill viewport-first Smart previews and managed display colors.

@@ -31,6 +31,10 @@ mod tiger;
 #[path = "quattro/portability_test.rs"]
 mod portability_tests;
 
+#[cfg(test)]
+#[path = "quattro/preview_test.rs"]
+mod preview_tests;
+
 pub(crate) use inspection::{comparison_input, outputs};
 mod stage1;
 mod stage2;
@@ -288,10 +292,9 @@ fn compose(
     use crate::nodes::sensor::{
         blue_despeckle::Stage as Filter, ordered_blue_repair::Stage as Repair,
     };
-    // Tiger's phase-detection pairs remain visible after a 2x2 mean. Correct
-    // those sensor sites before reducing blue, even when general repairs wait
-    // for Full. Preserve the reviewed ordinary Quattro Fast path.
-    let phase_corrected_blue = if is_interchangeable && (!fast || is_tiger) {
+    // Sparse phase-detection sites survive a 2x2 mean on both sd models.
+    // Apply their own native-grid correction before any preview reduction.
+    let phase_corrected_blue = if is_interchangeable {
         let corrected = graph.add(
             Operation::Fppd(std::sync::Arc::new(if is_tiger {
                 tiger::luma(&source.metadata)?
