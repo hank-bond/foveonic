@@ -25,7 +25,7 @@ The first candidate scores a bounded set of existing HDR responses against a who
 
 Compare two conservative scoring strengths and one restrained perceptual-color variant. Keep a camera baseline, the rejected curve and manual HDR examples as controls. Use photographic toggles across both supplied portraits and the example photographs. Evaluate skin, bright fabric, foliage, saturated objects, dark backgrounds and specular reflections. Aggregate scores are diagnostics, not proof of photographic preference.
 
-The [experiment plan](../plans/visibility-tone-experiment.md) records the processing slice, measurements and review. Application integration, regional caching and final interface choices follow photographic evaluation.
+The [experiment plan](../plans/archived/visibility-tone-experiment.md) records the processing slice, measurements and review. Application integration, regional caching and final interface choices follow photographic evaluation.
 
 ## Regional measurements and bright distractions
 

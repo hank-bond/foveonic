@@ -21,6 +21,8 @@ A successful online sync records the release asset inventory in `.release-assets
 
 Originals, local edits, full TIFFs, and review sheets stay outside Git. Ordinary builds do not download anything or require this directory.
 
+Use `.local/example-photographs/` as the common manual regression collection across camera architectures. Additional local architecture samples and reported problem photographs may live beside the release assets, with their saved edits in the same folder's `foveonic/` subdirectory. Keep acquisition URLs, licenses and checksums with the local samples. The release inventory remains separate, so syncing published examples preserves these additional photographs and edits. Open this folder in the app to review the combined collection after changes.
+
 ## Add or edit a comparison
 
 Create a directory beneath [`assets/help/`](../crates/foveonic-gui/assets/help/AGENTS.md), named for a stable help ID. Its `comparison.json` follows the [Highlights example](../crates/foveonic-gui/assets/help/highlight-correction/comparison.json):

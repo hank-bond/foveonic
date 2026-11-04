@@ -12,8 +12,8 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
-- **[adaptive-tone](./adaptive-tone.md)** _(accepted, incomplete, reference)._ Merrill regional base responses fit useful detail visibility with shared tuning limits independently of artistic tone edits.
-- **[advanced-color-range](./advanced-color-range.md)** _(accepted, conforming, reference)._ Advanced Color Range uses soft hue and saturation selections for saved HSL edits and selective lightness inversion.
+- **[adaptive-tone](./adaptive-tone.md)** _(accepted, conforming, reference)._ Regional base responses fit useful detail visibility with shared tuning limits independently of artistic tone edits.
+- **[advanced-color-range](./advanced-color-range.md)** _(accepted, conforming, reference)._ Advanced Color Range uses soft hue and saturation selections for saved HSL edits.
 - **[application-workflows](./application-workflows.md)** _(accepted, incomplete, reference)._ A personal Merrill X3F app shares processing settings and one image engine between its GUI and batch CLI.
 - **[browser-previews](./browser-previews.md)** _(accepted, conforming, reference)._ Small embedded thumbnails appear immediately and asynchronous cached previews follow the latest photographic render.
 - **[browser-review](./browser-review.md)** _(accepted, conforming, reference)._ Three browser views share star ratings, metadata sorting and text/rating filters without changing photographic recipes.
@@ -37,7 +37,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[image-information-bar](./image-information-bar.md)** _(accepted, conforming, reference)._ A compact image information bar shows capture settings, filename, and visible-region dimensions and coordinates for photographic review.
 - **[import-workflow](./import-workflow.md)** _(accepted, conforming, reference)._ Import mode reviews sources without source-side writes and carries selected originals, edits, and hidden-file decisions to a destination.
 - **[interactive-rendering](./interactive-rendering.md)** _(accepted, incomplete, reference)._ Slider feedback uses full-quality active-edit inputs, bounded latest-request scheduling, image-first delivery, and deferred scopes and navigator presentation.
-- **[lightness-inversion](./lightness-inversion.md)** _(accepted, conforming, reference)._ A default-off Tone prototype reverses perceptual lightness, retains chromatic components and exports through shared linear edits.
+- **[lightness-inversion](./lightness-inversion.md)** _(accepted, conforming, reference)._ Tone, Saturation and Color Range omit the experimental lightness inversion effect.
 - **[merrill-banding](./merrill-banding.md)** _(accepted, conforming, reference)._ Merrill banding correction targets sensor-aligned offsets across multiple row and column widths while retaining natural grain and real color.
 - **[merrill-fast-preview](./merrill-fast-preview.md)** _(accepted, conforming, reference)._ Merrill Fast uses a filtered quarter-pixel grid and Smart delivers native viewport detail before the whole frame.
 - **[merrill-multiscale-noise](./merrill-multiscale-noise.md)** _(accepted, conforming, reference)._ Optional Merrill multiscale layer filtering combines chroma cleanup with fixed shield-based row or row-and-column correction.

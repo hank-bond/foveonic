@@ -34,7 +34,7 @@ The owner rejected the fixed-curve appearance on `_P2M0020.X3F` and `_P2M0015.X3
 
 The rational input warp alone retains approximately 47% of local log contrast at nominal white, 26% at twice nominal white and 12% at four times nominal white. The subsequent camera curve further determines the final contrast. Monotonicity, headroom and anchor tests did not evaluate this photographic failure. The spatial HDR operator instead separates a broad brightness base from local detail and limits the detail contribution to its correction. It also transfers one gain to RGB instead of warping each component independently before the camera response.
 
-The owner subsequently chose a separate visibility-oriented spatial step, with Exposure and existing HDR slider behavior unchanged. The [visibility experiment](../visibility-tone-experiment.md) tracks this trial. Sensor recovery and calibrated color remain upstream. Any eventual DNG integration would need the spatial gain baked through the existing HDR route. It cannot retain the fixed-curve prototype's unchanged-technical-sample expectation.
+The owner subsequently chose a separate visibility-oriented spatial step, with Exposure and existing HDR slider behavior unchanged. The [visibility experiment](./visibility-tone-experiment.md) tracks this trial. Sensor recovery and calibrated color remain upstream. Any eventual DNG integration would need the spatial gain baked through the existing HDR route. It cannot retain the fixed-curve prototype's unchanged-technical-sample expectation.
 
 - [x] Reproduce the two originals with Camera, the rejected curve and the preferred manual HDR adjustments.
 - [x] Produce an isolated spatial visibility-fit comparison with unchanged user controls.

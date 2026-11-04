@@ -5,7 +5,7 @@ kind: reference
 
 # Advanced color range research
 
-The owner suggested selecting the blue sky and inverting its lightness while retaining other colors. This follow-up studies soft color-range selection independently of a decision to implement it. The existing global [lightness inversion prototype](./specs/lightness-inversion.md) remains unchanged.
+The owner suggested selecting the blue sky and inverting its lightness while retaining other colors. This follow-up studies soft color-range selection independently of a decision to implement it. The experimental global and selective inversion controls were later [removed](./specs/lightness-inversion.md) after photographic review. The selection findings remain useful for HSL editing.
 
 ## Interaction and selection
 

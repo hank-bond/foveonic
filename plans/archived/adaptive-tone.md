@@ -1,10 +1,11 @@
 ---
-summary: "Integrate the reviewed regional base responses into Merrill editing with shared app limits and normal rendering/export ownership."
+summary: "Integrate the reviewed regional base responses across camera architectures with shared app limits and normal rendering/export ownership."
+status: archived
 ---
 
-# Regional base response integration
+# Adaptive tone integration
 
-Implement the owner-selected [adaptive tone requirements](../docs/specs/adaptive-tone.md). The owner will tune limits over many photos before choosing final values. Natural and Strong now need separate shared limits and an exposure-aware fit. Keep Camera default and replace the rejected fixed curve.
+Implement the owner-selected [adaptive tone requirements](../../docs/specs/adaptive-tone.md). The owner will tune limits over many photos before choosing final values. Natural and Strong now need separate shared limits and an exposure-aware fit. Keep Camera default and replace the rejected fixed curve.
 
 - [x] Promote the regional estimator to a GPU node with explicit parameters and no mandatory host readback.
 - [x] Add typed guide/application operations and compose the whole-photo Merrill boundary before artistic edits.
@@ -18,12 +19,12 @@ Implement the owner-selected [adaptive tone requirements](../docs/specs/adaptive
 - [x] Compare a more stable search before further limit tuning or a Blacks search.
 - [x] Separate scene fitting from profile caps, refine and stabilize the fit, and reuse the guide across Exposure changes.
 - [x] Validate the new per-profile tuning, photographic differences, cap hits, exposure/cap stability and native review app.
-- [ ] Review the owner's tuning feedback before deciding final defaults.
-- [ ] Add a local, structure-qualified Blacks contribution after general correction, with separate small profile caps.
-- [ ] Compare Black disabled/enabled over photographs and low Exposure extremes, including signed samples, exact black, visible tones, flat dark regions and latency.
-- [ ] Build and open the next isolated review app with Blacks tuning.
+- [x] Adopt the owner's reviewed initial defaults for both profiles.
+- [x] Add a local, structure-qualified Blacks contribution after general correction, with separate small profile caps.
+- [x] Compare Black disabled/enabled over photographs and low Exposure extremes, including signed samples, exact black, visible tones, flat dark regions and latency.
+- [x] Build and open the next isolated review app with Blacks tuning.
 
-The full-resolution route is intentional for this initial app trial. Avoid viewport-dependent fits. A later performance pass can evaluate cheaper guide construction, shared summaries and safe cache policies after the owner tunes behavior.
+The owner subsequently requested quarter-pixel estimation without forcing Full display. The estimator now uses a canonical whole-photo Fast branch after Color mode, white balance and any active Dehaze. Monochrome retains its own preparation and reduces that RGB numerically. Full, Fast and Draft use this same analysis and apply its fitted response on their own working grid. Original-file GPU checks show identical analysis samples, guide and fitted amounts across all three color preview qualities for Natural and Strong. Regional preview remains unavailable for adaptive responses, so Smart refines the whole frame when necessary. Analysis and guide remain retained across Exposure and limit edits.
 
 ## Validation and remaining tuning
 
@@ -41,7 +42,7 @@ An isolated 0.80–1.00 sweep reproduces the discontinuity with the review spide
 
 The original cap stretched all four shadow candidates instead of only admitting additional candidates. Coupled shadow/highlight choices with close scores exchanged places abruptly. A fixed candidate lattice alone would not guarantee continuous output or monotonically brighter shadows when other fitted amounts also change. This motivated the fixed scene domain, blended/refined selection and smooth guard policies below.
 
-The ignored `photographic_shadow_limit_sweep` probe accepts `FOVEONIC_TONAL_SOURCE` and `FOVEONIC_TONAL_OUTPUT`, with an optional `FOVEONIC_TONAL_EXPOSURE` override. It loads source-sidecar edits without writing them, resolves recorded camera choices, forces Natural, and records legacy/current fits and linear means. Its full 0–1 sweep checks an unchanged scene target and nondecreasing mean RGB as the shadow cap rises. It also exports photographic frames around the reported jump for toggle comparison. Other caps use their standard defaults.
+The ignored `photographic_shadow_limit_sweep` probe accepts `FOVEONIC_TONAL_SOURCE` and `FOVEONIC_TONAL_OUTPUT`, with an optional `FOVEONIC_TONAL_EXPOSURE` override. It loads source-sidecar edits without writing them, resolves recorded camera choices, forces Natural, and records the current fitted response and linear means. Its full 0–1 sweep checks an unchanged scene target and nondecreasing mean RGB as the shadow cap rises. It also exports photographic frames around the reported jump for toggle comparison. Other caps use their standard defaults.
 
 The owner approved an exposure-aware fit and separate profile caps. Exposure remains downstream as an artistic gain, but its known EV shift now enters the predictor and HDR pivot. Exposure changes refit the automatic correction while retaining the pre-exposure guide. Region membership and scoring are reevaluated. Exposure is applied only once to photographic appearance.
 
@@ -66,3 +67,38 @@ At 0 EV, all ten photos select different Natural and Strong corrections. The fit
 The current component run reports median profiled fit/application wall time of about 26 ms for Natural and 35 ms for Strong, with the guide already complete. These are single diagnostic runs per photo and exclude upstream reconstruction, guide construction, final tone and export. They are not app interaction latency. Refinement costs more than the original search. Guide reuse avoids the earlier measured roughly 85 ms cold guide cost during Exposure edits. A later performance pass should consider compact summaries and retaining scene fits separately from cap application.
 
 Actual CLI checks export a resized Natural RGB16 TIFF and a Strong linear DNG at +1.6 EV. Native captures verify Camera, Natural, Strong, both profile tuning groups, artistic HDR and Monochrome. The second review app uses separate preferences and copied photos with existing edits, leaving the previous review files available for comparison.
+
+## Local Blacks trial
+
+The near-black contribution runs in the existing half-resolution gain kernel after capped Shadows/Highlights/Whites and reference protection. Its soft toe targets encoded brightness 0.025 for Natural and 0.035 for Strong through the selected camera curve. Exposure shifts the input threshold. Toe slopes are 0.3 and 0.4. The requested gain fades toward the target and is bounded by each profile's small Black cap through the existing HDR gain equation. No global search dimension, image allocation, dispatch or host readback is added.
+
+Local confidence requires agreement between native RGB log-brightness gradients at a two-pixel radius and the existing filtered guide at an eight-pixel radius. Samples below −14 EV are excluded. This is a structure proxy rather than a calibrated signal-to-noise estimate. It should be judged on noisy real shadows before increasing the defaults. Exact black remains zero, and flat dark regions receive no added gain. Manual HDR is unchanged.
+
+Ten photos at 0, −2 and −4 EV produce 120 Black-disabled/enabled profile comparisons with Local highlight recovery and no per-photo estimator tuning. Eighty additional review frames restore two or four stops for inspection while retaining the fit at the listed negative Exposure. The report uses toggles. Black-disabled 0 EV exports match all twenty earlier Natural/Strong TIFFs byte for byte. The fitted Shadows/Highlights/Whites values remain identical within every off/on pair.
+
+The median affected frame area is about 0.1–0.2 percent at 0 EV, 2.7–2.9 percent at −2 EV and 19.8–20.4 percent at −4 EV. Maximum added gain stays below about 1.52× for Natural and 2.04× for Strong. Synthetic checks preserve visible midtones, flat dark samples, finite signed output, exact black and retained input buffers. Structured near-black samples gain roughly 20–30 percent at the default caps while retaining gradation.
+
+Paired diagnostic gain-stage timings add roughly 0.1 ms or less at the tested settings. Timing jitter sometimes reverses the measured difference. These measurements exclude scene fitting, guide construction and app presentation, and are not a total latency guarantee. Graph/Monochrome/DNG baking, cached/fresh agreement, Exposure guide reuse, manual HDR coupling and the 101-step shadow-cap sweep also pass with Blacks enabled.
+
+The third isolated review bundle includes eight Settings caps and passes native captures for Camera, Natural, Strong, shared tuning, artistic HDR and Monochrome. Concurrent Dehaze work initially prevented test compilation and shader startup. After that work supplied its test module and corrected shader parsing, fresh combined workspace tests, strict Clippy, formatting and artwork checks passed. Leave both workstreams uncommitted for the owner's combined cleanup and review.
+
+The owner subsequently limited Base response to Universal tone for workflow consistency. Reference hides the selector and resolves the Camera baseline without overwriting the stored profile. The shared active-settings boundary also applies this rule to rendering and DNG appearance, while the activity predicate keeps inspection and preview policy consistent. Switching back to Universal restores the saved profile. Regression checks cover both profiles, sidecar retention, method switching, UI visibility and Color/Monochrome photographic and DNG output.
+
+These method-boundary checks pass, including the original-file GPU comparison, GUI suite and strict Clippy. An earlier combined workspace run failed the concurrent Dehaze inspection test. Subsequent integration and release coherence checks pass the current Dehaze inspection, preview and export paths. No Dehaze processing was changed for the method-boundary adjustment.
+
+
+The quarter-pixel follow-up passes original-file checks for identical analysis pixels, guides and fitted amounts across Full, Fast and Draft under both profiles. Cached Exposure and limit changes retain guides and match fresh output. Color and Monochrome preserve the Reference baseline and bake active spatial gains into finite DNG output. Native Smart captures show Natural and Strong using Draft feedback, alongside Camera, artistic HDR and Monochrome checks. Published preview identity advances to discard renderings from the former analysis path.
+
+The owner renamed the visible selector to Adaptive with Disabled, Natural and Strong. Shared profile caps moved from Settings into a Tone-menu modal and use the shared numeric row layout. Internal photographic field identities remain unchanged.
+
+Native Smart captures verify Disabled, Natural and Strong and the shared-limit modal. The modal uses both profile groups and the ordinary slider/value-field layout. Existing full-workspace and original-file checks pass after the UI changes.
+
+The owner’s reviewed application limits are now the initial defaults: Natural Blacks/Shadows/Highlights/Whites 0.075/0.25/0.35/1.0, Strong 0.115/0.75/0.65/1.0. Shared saved tuning retains precedence.
+
+Adaptive now extends to Classic and Quattro through the shared Universal path. Adapters supply a predictive neutral camera curve, code white and explicit working RGB bounds. Classic reuses its full-size input and guide for fitting; Merrill and Quattro keep fixed reduced analysis. Camera appearance retains the selected response after the baked spatial gain in DNG. Adaptive remains disabled by default.
+
+Extension checks pass on Merrill, SD15, ordinary Quattro and Quattro H originals in Color and Monochrome. GPU replay matches the composed Adaptive node, reduced color previews share fixed analysis and fit parameters, and Classic analysis keeps the full working grid. Classic and ordinary Quattro also pass Auto/manual Exposure, cached/fresh previews and DNG sample/profile agreement with Adaptive active. Native Classic captures cover Disabled, Natural, Strong, limit tuning, artistic HDR and Monochrome.
+
+The owner’s latest saved tuning lowers Strong Shadows to 0.55. Natural remains Blacks/Shadows/Highlights/Whites 0.075/0.25/0.35/1.0; Strong is now 0.115/0.55/0.65/1.0. Smart’s overview now uses normal Fast with requested denoising, Detail and ColorDQ instead of the minimal diagnostic Draft recipe.
+
+The owner accepted the app-wired behavior for release closeout. Subsequent structural cleanup is recorded in [release coherence](./release-coherence.md).

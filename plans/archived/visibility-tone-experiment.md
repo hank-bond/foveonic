@@ -1,10 +1,11 @@
 ---
-summary: "Experiment with a discrete GPU Auto HDR step that increases useful detail visibility without altering Exposure or existing HDR control semantics."
+summary: "Historical visibility-tone experiments led to the selected regional Adaptive tone response."
+status: archived
 ---
 
 # Visibility-oriented Auto HDR experiment
 
-The owner authorized continued experimentation using a discrete spatial step and broader photographic comparisons. Favor useful visible signal over broad brightness increases. Keep Exposure and existing HDR controls independent. Architecture and final interface can be revised after reviewing results. Scientific background and limits belong in the [research reference](../docs/visibility-tone-research.md).
+The owner authorized continued experimentation using a discrete spatial step and broader photographic comparisons. Favor useful visible signal over broad brightness increases. Keep Exposure and existing HDR controls independent. Architecture and final interface can be revised after reviewing results. Scientific background and limits belong in the [research reference](../../docs/visibility-tone-research.md).
 
 - [x] Preserve camera, rejected-curve and preferred manual-HDR controls on the two supplied portraits.
 - [x] Prototype a GPU summary and bounded response fit using the existing spatial HDR guide and response equations.
@@ -13,7 +14,7 @@ The owner authorized continued experimentation using a discrete spatial step and
 - [x] Open a photographic toggle report with whole frames and useful native-detail crops.
 - [x] Review the photographs with the owner before integration or choosing final behavior.
 
-The experiment initially ran from an ignored original-file test with test-only kernels. The owner subsequently selected the regional versions for [application integration](adaptive-tone.md). The historical comparison generator remains test-only. Camera remains the app default. It consumes corrected calibrated RGB, uses the existing edge-preserving brightness base and applies one spatial gain before ordinary camera tone. Whole-photo sampling excludes sensor borders through the image's active rectangle.
+The experiment initially ran from an ignored original-file test with test-only kernels. The owner subsequently selected the regional versions for [application integration](adaptive-tone.md). The historical comparison generator and its test-only kernels have since been removed. Camera remains the app default. It consumes corrected calibrated RGB, uses the existing edge-preserving brightness base and applies one spatial gain before ordinary camera tone. Whole-photo sampling excludes sensor borders through the image's active rectangle.
 
 The fit uses a coarse joint histogram of base brightness, residual and maximum-channel headroom. A coarse cross-scale gradient estimate provides a structure weight. A candidate grid varies Shadows, Highlights and Whites internally. These are numerical parameters of this experimental node, not changes to the stored user sliders. Black remains anchored. Candidate penalties include dark-detail visibility, highlight clipping, loss of visible contrast, changes to useful middle tones and unreliable shadow amplification. The score is an experimental SDR proxy, not a validated human-vision metric or a calibrated noise estimator.
 
@@ -33,27 +34,17 @@ The first full-resolution pass reported a 102 ms median guide interval and a 96�
 
 The ten-photo validation repeats the experiment with finite-value assertions before and after camera tone and verifies unchanged input buffers. Two existing GPU fixtures pass for native HDR coupling and linear-code-unit invariance after extracting the shared response equations. All 724 ordinary workspace tests pass serially. The response extraction changes ownership of equations, not the manual control math.
 
-## Reproduce and review
+## Experiment retirement
 
-Supply newline-separated source paths in a text file. Use a fresh output directory because photographic exports refuse overwrite:
-
-```sh
-FOVEONIC_VISIBILITY_SOURCES="$(cat path/to/source-paths.txt)" FOVEONIC_VISIBILITY_OUTPUT="$PWD/.local/visibility-tone-comparison" cargo test --offline --release -p foveonic --lib photographic_visibility_experiment -- --ignored --nocapture --test-threads=1
-python3 scripts/visibility_tone_report.py .local/visibility-tone-comparison
-open .local/visibility-tone-comparison/index.html
-```
-
-The report builder uses macOS `sips` to retain embedded color profiles in PNG previews and extract oriented detail crops. It performs no photographic tone processing. The report offers A/B toggles, whole photos, native details and fit/100% viewing. Space or clicking toggles the comparison. Arrow keys change photos. Keys 1–6 select the second rendition. Native TIFFs and metrics retain the processing evidence locally.
-
-The report contains sixty whole frames and thirty native crops, with all image links checked and JavaScript syntax validated. It is open for review. Strict all-target Clippy, formatting, documentation indexes, whitespace checks and five artwork tests pass. The extra native-detail render selects identical response parameters to the initial comparison. No experiment was committed or made an application default.
+The owner selected the app's regional Adaptive tone logic and approved removal of superseded implementations, comparison probes, kernels and report tooling. This document retains the photographic findings. Current requirements and regression coverage belong to the Adaptive tone integration.
 
 ## Owner review and Local recovery comparison
 
 The owner finds the overall results close to the desired starting rendition. This endorses further work on the direction, without selecting a final strength or approving application integration. The owner requested the entire comparison again with Color Field: Local highlight recovery.
 
-The test runner now accepts `FOVEONIC_VISIBILITY_HIGHLIGHTS=local`. Omission retains Classic to reproduce the first experiment. The Local run explicitly enables highlight reconstruction, selects the local brightness solver and retains default selectivity 0. All sixty renditions and thirty native detail crops are rerendered from that upstream recovery. White balance, color mode, reconstruction controls, candidate grid and scoring remain unchanged. Automatic responses are fitted again to the newly recovered RGB. Natural selects the same response on nine photographs. The red flower adds shadow amount 0.15. Every recorded rendition identifies the recovery method and selectivity, and the viewer labels the method. The first comparison is retained separately.
+The later Local-recovery comparison explicitly selected Local for every rendition. The Local run explicitly enables highlight reconstruction, selects the local brightness solver and retains default selectivity 0. All sixty renditions and thirty native detail crops are rerendered from that upstream recovery. White balance, color mode, reconstruction controls, candidate grid and scoring remain unchanged. Automatic responses are fitted again to the newly recovered RGB. Natural selects the same response on nine photographs. The red flower adds shadow amount 0.15. Every recorded rendition identifies the recovery method and selectivity, and the viewer labels the method. The first comparison is retained separately.
 
-The full Local run passes finite RGB checks before and after camera tone and input immutability checks on all ten photographs. To reproduce it, add `FOVEONIC_VISIBILITY_HIGHLIGHTS=local` to the command above and use a fresh output directory such as `.local/visibility-tone-local-highlights` for both the test and report builder.
+The full Local run passes finite RGB checks before and after camera tone and input immutability checks on all ten photographs.
 
 ## Strength ordering feedback
 
@@ -71,7 +62,7 @@ The score averages sample losses by whole-photo area and adds a separate amount 
 
 A possible follow-up would assess the bright tail or coherent highlight regions separately, giving small areas with recoverable gradation adequate influence while retaining white specular points and useful middle tones. Any such trial should compare all ten scenes and preserve the original controls. No scoring change has been made from this feedback yet.
 
-The owner approved a regional measurement trial and describes frequently using maximum Whites reduction to reveal gradation and reduce distracting speculars. The [research reference](../docs/visibility-tone-research.md#regional-measurements-and-bright-distractions) separates regional measurement from regional application and records the additional brightness-balance objective. Keep analysis in RGB and defer optimization and cache-policy implementation until photographic review of this trial.
+The owner approved a regional measurement trial and describes frequently using maximum Whites reduction to reveal gradation and reduce distracting speculars. The [research reference](../../docs/visibility-tone-research.md#regional-measurements-and-bright-distractions) separates regional measurement from regional application and records the additional brightness-balance objective. Keep analysis in RGB and defer optimization and cache-policy implementation until photographic review of this trial.
 
 ## Regional trial
 
@@ -80,8 +71,8 @@ The owner approved a regional measurement trial and describes frequently using m
 - [x] Compare original and regional Natural/Strong with Camera and manual HDR across all ten photos.
 - [x] Measure estimator kernels separately from the existing brightness guide and correction application.
 - [x] Review photographic results before optimizing or implementing caching.
-- [ ] Clarify the strength target and trial limits before selecting final behavior.
-- [ ] Perform the requested optimization and cache-policy evaluation after review.
+- [x] Select the regional application behavior and profile limits through photographic review.
+Performance and cache-policy optimization remain separate from the completed photographic experiment and release coherence pass.
 
 The regional trial samples the same active-area 256×256 grid. It summarizes 1,235 overlapping windows of 16, 32 and 64 sample positions per side. Each window records log-brightness variation, coherent structure, and separate bright/dark subsets. Bright scoring combines predicted gradation with prominence relative to the surrounding window. Only subsets with at least four sampled positions contribute. Average bright-region loss and the largest regional bright loss receive separate weights, preventing whole-photo area from being the only importance measure. These are heuristic regional summaries, not semantic objects or calibrated signal-to-noise estimates.
 

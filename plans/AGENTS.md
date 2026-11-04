@@ -16,8 +16,6 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
-- **[adaptive-tone](./adaptive-tone.md)** Integrate the reviewed regional base responses into Merrill editing with shared app limits and normal rendering/export ownership.
-- **[advanced-color-range](./advanced-color-range.md)** Build and evaluate an Advanced Color Range wheel, saved edit list and selective lightness inversion.
 - **[archived/](./archived/AGENTS.md)** Archived plans record completed implementation slices, their checks, and historical limitations.
 - **[classic-coverage](./classic-coverage.md)** Complete ordinary color rendering and editable DNG export across all pre-Merrill Sigma Classic cameras.
 - **[color-field-boundaries](./color-field-boundaries.md)** Prepare the reviewed Color Field boundary recovery with separate evidence and application masks for a scoped commit.
@@ -34,7 +32,6 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
-- **[lightness-inversion](./lightness-inversion.md)** Prototype a saved, exportable lightness inversion that preserves color components and keeps Monochrome achromatic.
 - **[merrill-banding-width](./merrill-banding-width.md)** Compare scale-separated native row and column correction against the accepted fine-band baseline.
 - **[perceptual-editing](./perceptual-editing.md)** Evaluate shared colorfulness and an Exposure, spatial HDR and anchored Brightness workflow.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
@@ -44,6 +41,5 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
 - **[tonal-ranges](./tonal-ranges.md)** Implement and evaluate coordinated Merrill HDR controls after researching spatial tone mapping.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.
-- **[visibility-tone-experiment](./visibility-tone-experiment.md)** Experiment with a discrete GPU Auto HDR step that increases useful detail visibility without altering Exposure or existing HDR control semantics.
 
 <!-- INDEX:END -->

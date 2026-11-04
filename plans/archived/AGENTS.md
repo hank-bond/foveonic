@@ -12,6 +12,8 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+- **[adaptive-tone](./adaptive-tone.md)** _(archived)._ Integrate the reviewed regional base responses across camera architectures with shared app limits and normal rendering/export ownership.
+- **[advanced-color-range](./advanced-color-range.md)** _(archived)._ Build and evaluate an Advanced Color Range wheel, saved HSL edit list.
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[browser-review](./browser-review.md)** _(archived)._ Add three browser views with independent review ratings, metadata sorting and shared search filters.
 - **[browser-thumbnail-budget](./browser-thumbnail-budget.md)** _(archived)._ Replace the browser thumbnail count limit with a persistent memory budget and group performance preferences.
@@ -62,6 +64,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[inspection-popup-help](./inspection-popup-help.md)** _(archived)._ Prevent Quattro inspection menus from crashing when a stage lacks explanatory help.
 - **[keyboard-actions](./keyboard-actions.md)** _(archived)._ Centralize workspace shortcuts and apply copied editing recipes to highlighted photographs.
 - **[lens-correction-audit](./lens-correction-audit.md)** _(archived)._ Audit available lens corrections and defer chromatic aberration after finding no supported vignetting or distortion profile route.
+- **[lightness-inversion](./lightness-inversion.md)** _(archived)._ Remove the experimental lightness inversion controls, recipe fields and GPU operation after owner review.
 - **[merrill-chroma-outliers](./merrill-chroma-outliers.md)** _(archived)._ Investigate green shadow pixels that intensify with Chroma cleanup before selecting a narrowly scoped correction.
 - **[merrill-chroma-safeguard](./merrill-chroma-safeguard.md)** _(archived)._ The approved chroma safeguard is fused into Merrill texture restoration with matching photographic output and small measured cost.
 - **[merrill-fast-noise](./merrill-fast-noise.md)** _(archived)._ Bypass optional Merrill Noise and Detail in Fast while preserving requested controls for Full.
@@ -100,6 +103,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[release-0.5.0](./release-0.5.0.md)** _(archived)._ Clean up the shared photographic editor and prepare the local 0.5.0 feature release for review.
 - **[release-0.6.0](./release-0.6.0.md)** _(archived)._ Prepare the reviewed Merrill noise and banding feature set as a local release candidate.
 - **[release-0.6.0-final](./release-0.6.0-final.md)** _(archived)._ Review the combined editor, browser and Merrill changes and cut the signed 0.6.0 release.
+- **[release-coherence](./release-coherence.md)** _(archived)._ Record the release component review, structural cleanup and validation before grouped commits.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** _(archived)._ Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
@@ -115,5 +119,6 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[tiger-smart-preview](./tiger-smart-preview.md)** _(archived)._ Enable Tiger Fast and Smart previews through the shared overview, regional refinement and whole-frame continuation.
 - **[unified-highlight-control](./unified-highlight-control.md)** _(archived)._ Replace neutral restraint with a bounded color-consistency cutoff and share one Highlights/A row across Classic, Local and Global.
 - **[viewport-scopes](./viewport-scopes.md)** _(archived)._ Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
+- **[visibility-tone-experiment](./visibility-tone-experiment.md)** _(archived)._ Historical visibility-tone experiments led to the selected regional Adaptive tone response.
 
 <!-- INDEX:END -->

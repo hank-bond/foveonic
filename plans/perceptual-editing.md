@@ -238,3 +238,65 @@ The strength rollback passes all seven perceptual GPU tests, workspace tests, st
 ## Saturation closeout
 
 The owner selected separate Tone, Saturation and Color Range sections. The concrete scope is recorded in [Saturation](../docs/specs/saturation.md) and tracked in the [closeout plan](./archived/saturation-closeout.md). Universal saturation retains the accepted fixed-gamut two-slider response and overlapping tonal saturation masks. Its method is independent of Tone. The Color Range swatches retain their existing HSL response. Saved experimental edits receive no migration. Wider tone, highlight-rendering and automatic exposure research remains separate.
+
+## Shared saturation shoulder and unlocked boost
+
+The owner approved replacing Basic and Advanced direct chroma scaling with the Universal saturation shoulder. All perceptual saturation amounts extend to +2 without remapping the existing protected 0 through +1 response. Hue, Lightness and Saturation Contrast retain their ranges. One saved Prevent color clipping checkbox defaults on and governs every perceptual saturation addition independently of global Saturation bypass and Reference selection. See the [current requirements](../docs/specs/saturation.md#shared-clipping-protection).
+
+The protected boundary explains the reported yellow-flower behavior. Saved-edit diagnostics find roughly 85 percent of sampled flower yellows change by less than 0.1 percent chroma from zero to +1. Roughly 81 percent already have negative blue in working Adobe RGB. Muted samples in the same photo gain a median roughly 74 percent. Increasing the amount alone cannot unlock the protected samples. With protection off, use the contrast-shaped occupancy divided by one plus itself in the positive shoulder and skip the final positive gamut guard. Reference saturation and deliberate negative saturation remain independent of this choice.
+
+- [x] Share the gamut search and positive/negative saturation operation across global, Basic and Advanced nodes.
+- [x] Carry the saved policy through scopes, CLI, graph keys, previews and exports.
+- [x] Extend amount validation, shared sliders and direct gestures to +2.
+- [x] Verify protected/unlocked boundaries, muted-color preference, signed/headroom samples, code scales and unchanged desaturation.
+- [x] Verify Color Range agreement, selected-range behavior, inversion, native UI, cached rendering and DNG baking.
+- [x] Build the local review app and leave the work uncommitted alongside concurrent Dehaze work.
+
+The implementation extracts the existing cubic hue-ray boundary and rational shoulder into one WGSL source. All three nodes receive the same saved policy through their parameter keys. Advanced saturation now uses the same pre-exposure code-white boundary as Global and Basic, while exposed inversion remains separate. Saturation owns the shared checkbox in presets/reset. The checkbox stays available with Reference selected or global Saturation bypassed, so it can still control Color Range. A single public amount range supplies validation, numerical widgets and direct dragging. No additional processing dispatches or image buffers were introduced. Selected-range saturation now performs the boundary math already used by Universal, so this does not claim unchanged stage latency.
+
+Eight perceptual GPU checks cover maximum global/tonal sums, all three working spaces, signed/headroom envelopes, monotonic protected colorfulness, neutral preservation, desaturation and code scale. The shared-policy check compares Basic and Advanced against Global at both code scales, both policies and five positive/negative amounts, including Advanced Exposure changes. Repeated protected boosts retain one ceiling. Six Basic and three Advanced GPU checks preserve selection, lightness behavior, inversion, previews and Monochrome. Original-file checks pass unlocked global/Basic/Advanced DNG reprojection, protected HSL/perceptual DNG reprojection, cached/fresh agreement, reconstruction reuse, inversion in Color/Monochrome and Full/Fast/regional Advanced rendering.
+
+Nine fixed-baseline flower frames compare zero, +1 and +4 Global saturation and +4 Basic/Advanced All Colors selections, with photographic toggles. Sampled flower chroma stays essentially unchanged under protected +1/+4 and rises by about 33 percent at unlocked +1 and 67 percent at unlocked +4. Muted samples retain greater proportional boosts. These are pre-render chroma measurements. Unlocked appearance can shift hue and clip later by design.
+
+Workspace tests, strict Clippy, formatting, documentation indexes and artwork checks pass. Native captures include the +4 amount with protection on/off, tonal masks, Color Range and Monochrome. The separately identified saturation review app uses the existing copied photos. Leave the work uncommitted for the owner's combined cleanup with Dehaze.
+
+The owner subsequently reduced the maximum from +4 to +2 for all perceptual saturation controls. The shared range now drives validation, sliders and direct dragging at -1 through +2. The strength mapping, clipping policy and response within that range are unchanged. Earlier +4 photographic captures remain historical comparisons rather than current control limits.
+
+## Capture-compensation Exposure Auto
+
+The owner requested Exposure A in both tone methods. The selected operation is metadata compensation rather than a brightness estimator. Save the Auto selection separately from manual EV. Keep the slider and number field editable, disabling Auto on edits and resetting to manual zero on double-click. Camera-family defaults retain the dynamic selection. The Tone hamburger menu contains Auto exposure source, selecting Bracket, Dial or Both exclusively and defaulting to Both. The owner rejected a context menu on the A button because that would introduce a one-off interaction. The [finishing requirements](../docs/specs/photographic-finishing.md) record these choices.
+
+The source selector uses queued editor actions. Owner review selected an inline, non-selectable heading with Bracket, Dial and Both indented below it. The separate submenu and its placement state were removed. Shared widgets retain content-based sizing, font padding and adjacent rows. Checks cover both screen edges, two font sizes, the longest parent label, inert heading clicks, option selection, outside clicks and Escape.
+
+Clicking selected Exposure A now disables Auto and resets manual EV to zero, as subsequently requested. This replaces the earlier reapply-on-every-click behavior. Numeric edits and double-click reset retain their established behavior. Native rendering confirms the heading remains aligned with ordinary menu items and only its options are indented. Tests cover A on/off, zero reset and continued manual editing under both tone methods.
+
+Merrill PROP metadata distinguishes EXPCOMP, the dial setting, from EXPNET, which includes a bracket offset. The yellow-flower file records dial zero and net +1 EV. Both and Bracket therefore request -1 EV, while Dial requests zero. Capture readouts now follow the same net metadata. Exposure is resolved into an effective manual request before graph construction and DNG appearance, with the authored recipe retained separately. This prevents source defaults from becoming frozen results and prevents nested reference recipes from applying Auto twice.
+
+- [x] Add saved Auto/compensation choices and shared metadata resolution across processing and export.
+- [x] Add the editable A row, exclusive nested menu and dynamic family-default behavior.
+- [x] Verify metadata components, missing values, recipe scopes, GUI gestures, cached/fresh output and TIFF/DNG agreement.
+- [x] Build and open the local app for review without committing concurrent work.
+
+Verification passes metadata decomposition and invalid/missing-value checks, saved Tone scope and dynamic family defaults, CLI mode/manual precedence, editable numeric fields and sliders, zero reset, A toggling and the inline exclusive choices. Original-file GPU checks match Auto to equivalent manual EV exactly in cached/fresh Color and Monochrome under both tone methods, including adaptive Natural. DNG samples and fitted baseline/curve/look agree. The authored recipe retains Auto and its inactive manual EV. Native captures show Reference, Universal, Dial, Bracket, Monochrome and manual zero. Workspace tests, strict Clippy, formatting, documentation indexes and artwork checks pass. No image-processing pass or estimator was added.
+
+## Balanced saturation controls
+
+The owner selected symmetric -1 through +1 controls instead of extending desaturation travel. Keep the established -1 through +2 processing and serialization units. Store twice the positive control value as the processing amount and leave negative values unchanged. A saved +1 therefore displays +0.5, and the full positive control position uses the existing +2 endpoint. No pixel algorithm, gamut policy, saved look or CLI meaning changes.
+
+Use one shared conversion for Global, tonal, Basic and Advanced saturation, including direct color gestures. The common row adapter commits the converted amount only after an actual edit, preserving stored precision during drawing. Apply direct gestures in control coordinates before conversion, including when crossing zero. Reference saturation and Saturation Contrast keep their existing controls.
+
+Verification passes the conversion endpoints and round trips, unchanged encoded recipes after drawing Global/Basic/Advanced panels, shared numeric formatting and direct gestures in balanced coordinates. Workspace tests, strict Clippy, formatting, documentation indexes and artwork checks pass. Native captures show the existing maximum processing amount as control +1, with neutral centered. Processing shaders and cached image identities are unchanged because the stored amounts retain their meaning. The local review app is rebuilt for owner feedback.
+
+Editing rows now share a pane-relative label column. A label only takes additional space when it cannot fit, temporarily shortening that row’s control. Slider tracks and dropdowns fill the remaining row. Basic and Advanced color picking share one asynchronous drag path and disarm at pointer release. Selective Color Range inversion was removed at the owner’s request.
+
+The owner standardized Tone and Saturation to one shared label column, including both Method dropdowns and Adaptive. Local contrast is now labeled Clarity. Internal photographic fields and processing meanings are unchanged.
+
+White Balance now uses that same shared column for Mode, Warmth and Tint. Its dropdown and sliders align with Tone and Saturation without individual width overrides.
+
+Noise now shares a column across main rows, Speckles, Banding and expanded shadow/advanced controls. LabelColumn retains its originating position so disclosure labels can stay indented while their controls keep the parent grid. Shared subsection headings are slightly larger than parameter labels, with softened white in the dark theme and strong foreground in the light theme. Owner feedback reduced their size to 1.08 times the body font and dark-theme foreground to gray 225.
+
+The owner selected Neutralize and Neutral Range as shorter visible labels. Responsive sizing replaces fixed group label buckets so short Noise and Speckles rows match Tone, Saturation and Color Range at the same pane width. Shared dropdowns exclude their popup frame margin when reserving menu content width.
+
+Owner feedback reduced the responsive label allocation from one third to one quarter of the pane. Sliders and dropdowns regain that space while long-label fallback and resize restoration remain shared.
+
+The shared saturation clipping policy moved to the Editing menu and now guards Reference as well as Universal and Color Range. Native Reference math remains in place: weighted RGB saturation after camera tone in Merrill/Quattro, equal-channel signed-code saturation before the final response table in Classic. A shared native-direction shoulder limits new excursions. DNG sampling evaluates that guard before profile transport. Section presets/reset no longer own the parent policy. Corrections also has a saved bypass that retains authored controls and stops Dehaze estimation and picking.
