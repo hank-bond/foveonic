@@ -13,6 +13,6 @@ Read [`src/AGENTS.md`](./src/AGENTS.md) before implementation. Follow the select
 ### Directories
 
 - **[examples/](./examples/AGENTS.md)** The all-enabled benchmark separates completed renders, transfers, export, and bit-exact photographic checks. _Measure pipeline performance or compare an optimization with retained float-image goldens._
-- **[src/](./src/AGENTS.md)** The library separates source decoding, metadata preparation, typed graph construction, GPU execution, and TIFF packaging.
+- **[src/](./src/AGENTS.md)** The library separates source decoding, metadata preparation, typed graph construction, GPU execution, and photographic packaging.
 
 <!-- INDEX:END -->

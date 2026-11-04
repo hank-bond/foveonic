@@ -29,6 +29,7 @@ fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_err
     let mut output = Output {
         formats: vec![],
         tiff_color_space: None,
+        encoding: Default::default(),
         sections: Default::default(),
         conflict: ConflictPolicy::Overwrite,
     };
@@ -245,6 +246,13 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     let mut requested = Settings::new("Sunlight", "Standard");
     requested.exposure = 0.35;
     requested.output_size = Some([600, 400]);
+    let encoding = foveonic::output::EncodingOptions {
+        tiff_compression: foveonic::output::TiffCompression::Zip,
+        jpeg_quality: 81,
+        png_depth: foveonic::output::BitDepth::Eight,
+        jxl_effort: 1,
+        ..Default::default()
+    };
     let frozen = requested.clone();
     let output_space = Some(foveonic::render::TiffColorSpace::AdobeRgb);
     let mut output_settings = frozen.clone();
@@ -275,8 +283,9 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
             decisions: Vec::new()
         },
         output: Output {
-            formats: vec![ExportFormat::Tiff, ExportFormat::Dng],
+            formats: ExportFormat::ALL.to_vec(),
             tiff_color_space: output_space,
+            encoding,
             sections: Default::default(),
             conflict: ConflictPolicy::Rename,
         },
@@ -288,13 +297,22 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     let baseline = engine
         .render(session.source(), &output_settings, &mut Profile::default())
         .unwrap();
-    engine
-        .write_tiff(
-            &baseline,
-            &directory.path().join("expected.tiff"),
-            &mut Profile::default(),
-        )
-        .unwrap();
+    for format in ExportFormat::ALL
+        .into_iter()
+        .filter(|f| *f != ExportFormat::Dng)
+    {
+        engine
+            .write_image(
+                &baseline,
+                &directory
+                    .path()
+                    .join(format!("expected.{}", format.extension())),
+                format,
+                encoding,
+                &mut Profile::default(),
+            )
+            .unwrap();
+    }
     drop(baseline);
     foveonic::dng::write_source(
         &engine,
@@ -322,7 +340,8 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     assert_eq!(progress.completed, 2);
     assert_eq!(progress.imported, vec![path.clone()]);
     assert_eq!(progress.errors.len(), 1, "{:?}", progress.errors);
-    for extension in ["tiff", "dng"] {
+    for format in ExportFormat::ALL {
+        let extension = format.extension();
         assert_eq!(
             fs::read(directory.path().join(format!("expected.{extension}"))).unwrap(),
             fs::read(
@@ -354,6 +373,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         &Output {
             formats: vec![],
             tiff_color_space: None,
+            encoding: Default::default(),
             sections: Default::default(),
             conflict: ConflictPolicy::Rename,
         },
@@ -392,6 +412,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         &Output {
             formats: vec![],
             tiff_color_space: None,
+            encoding: Default::default(),
             sections: Default::default(),
             conflict: ConflictPolicy::Rename,
         },

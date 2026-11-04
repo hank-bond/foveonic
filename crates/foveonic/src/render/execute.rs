@@ -1656,7 +1656,9 @@ impl Engine {
                     );
                     Some(output)
                 }
-                Operation::Tiff {
+                Operation::WriteImage {
+                    format,
+                    options,
                     path,
                     params,
                     space,
@@ -1667,17 +1669,19 @@ impl Engine {
                         .write(true)
                         .create_new(true)
                         .open(path)?;
-                    crate::output::write_tiff(
+                    crate::output::write(
                         std::io::BufWriter::new(file),
                         &bytes,
                         params,
                         *space,
+                        *format,
+                        *options,
                         profile,
                     )?;
                     None
                 }
             };
-            if !matches!(node.operation, Operation::Tiff { .. }) {
+            if !matches!(node.operation, Operation::WriteImage { .. }) {
                 profile.record(node.operation.label(), start);
             }
             if !cached[index] {

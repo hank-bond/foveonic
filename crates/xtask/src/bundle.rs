@@ -46,6 +46,10 @@ pub fn assemble(binary: &Path, compiled: &Path, version: &str) -> Result<PathBuf
     let contents = staged.join("Contents");
     fs::create_dir_all(contents.join("MacOS"))?;
     fs::create_dir(contents.join("Resources"))?;
+    fs::write(
+        contents.join("Resources/JPEG-XL-LICENSES.txt"),
+        include_str!("../../foveonic/licenses/JPEG-XL.txt"),
+    )?;
     fs::copy(binary, contents.join("MacOS/foveonic-gui"))
         .with_context(|| format!("Cannot copy executable {}", binary.display()))?;
     for name in ["Assets.car", "Foveonic.icns"] {
@@ -165,7 +169,11 @@ mod tests {
             assert_eq!(metadata[key].as_string(), Some(value));
         }
         assert!(!metadata.contains_key("NSRequiresAquaSystemAppearance"));
-        assert_eq!(fs::read_dir(contents.join("Resources")).unwrap().count(), 2);
+        assert_eq!(fs::read_dir(contents.join("Resources")).unwrap().count(), 3);
+        assert_eq!(
+            fs::read_to_string(contents.join("Resources/JPEG-XL-LICENSES.txt")).unwrap(),
+            include_str!("../../foveonic/licenses/JPEG-XL.txt")
+        );
         let stale = contents.join("Resources/old-icon.png");
         fs::write(&stale, "old").unwrap();
         assemble(&binary, &compiled, "0.1.1").unwrap();

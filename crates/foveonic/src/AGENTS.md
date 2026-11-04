@@ -1,5 +1,5 @@
 ---
-summary: "The library separates source decoding, metadata preparation, typed graph construction, GPU execution, and TIFF packaging."
+summary: "The library separates source decoding, metadata preparation, typed graph construction, GPU execution, and photographic packaging."
 ---
 
 # Processor source
@@ -20,6 +20,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[graph/](./graph/AGENTS.md)** Graph operations define supported node parameters, typed ports, cache keys, and named output dependencies.
 - **[nodes/](./nodes/AGENTS.md)** Processing nodes group sensor corrections, color and monochrome reconstruction, and finishing with their shaders and tests.
 - **[noise_calibration/](./noise_calibration/AGENTS.md)** Cap calibration separates capture review, GPU reductions, statistical fitting and validated user profile storage.
+- **[output/](./output/AGENTS.md)** Photographic output adapters delegate image compression to encoder dependencies.
 - **[render/](./render/AGENTS.md)** Rendering separates shared settings, authored recipes, graph execution, and owned inspection artifacts.
 - **[x3f/](./x3f/AGENTS.md)** The X3F reader decodes sensor samples and camera metadata from original files.
 
@@ -35,10 +36,10 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[importing.rs](./importing.rs)** Copies originals, publishes complete outputs, and stores destination import and hidden decisions.
 - **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
 - **[interactive.rs](./interactive.rs)** Reuses unchanged inputs for the current edit while keeping earlier images safe.
-- **[lib.rs](./lib.rs)** Shares X3F decoding and GPU photo processing between TIFF and DNG exports.
-- **[main.rs](./main.rs)** Inspects supported X3Fs and exports TIFF or linear DNG through shared rendering settings.
+- **[lib.rs](./lib.rs)** Shares X3F decoding and GPU photo processing between photographic and DNG exports.
+- **[main.rs](./main.rs)** Inspects supported X3Fs and exports photographs or linear DNG through shared rendering settings.
 - **[options.rs](./options.rs)** Shares photographic CLI option parsing between conversion and the completed-processing profiler.
-- **[output.rs](./output.rs)** Packages GPU-encoded RGB16 samples into an oriented, color-profiled TIFF.
+- **[output.rs](./output.rs)** Shares photographic export formats and packages encoded RGB samples with their color profiles.
 - **[preview.rs](./preview.rs)** Decodes embedded bitmap and JPEG previews while retaining their declared colors at RGB16 precision.
 - **[preview_color.rs](./preview_color.rs)** Preserves embedded display colors from camera metadata and JPEG profiles in declared RGB16 spaces.
 - **[preview_pixels.rs](./preview_pixels.rs)** Resizes bounded preview samples in linear light while retaining their declared RGB primaries.

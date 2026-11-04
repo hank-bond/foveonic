@@ -12,11 +12,15 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Settings {
     pub format: ExportFormat,
+    pub encoding: foveonic::output::EncodingOptions,
     pub tiff_color_space: Option<TiffColorSpace>,
     pub copy_only: bool,
     pub conflict: ConflictPolicy,
     pub dng_sections: ProcessingSections,
     pub tiff_sections: ProcessingSections,
+    pub jpeg_sections: ProcessingSections,
+    pub png_sections: ProcessingSections,
+    pub jxl_sections: ProcessingSections,
 }
 
 impl Settings {
@@ -24,12 +28,18 @@ impl Settings {
         match self.format {
             ExportFormat::Dng => self.dng_sections,
             ExportFormat::Tiff => self.tiff_sections,
+            ExportFormat::Jpeg => self.jpeg_sections,
+            ExportFormat::Png => self.png_sections,
+            ExportFormat::Jxl => self.jxl_sections,
         }
     }
     fn sections_mut(&mut self) -> &mut ProcessingSections {
         match self.format {
             ExportFormat::Dng => &mut self.dng_sections,
             ExportFormat::Tiff => &mut self.tiff_sections,
+            ExportFormat::Jpeg => &mut self.jpeg_sections,
+            ExportFormat::Png => &mut self.png_sections,
+            ExportFormat::Jxl => &mut self.jxl_sections,
         }
     }
 
@@ -74,30 +84,33 @@ pub fn show(ctx: &egui::Context, open: &mut bool, mode: FolderMode, settings: &m
             ui.horizontal(|ui| {
                 ui.label("Format");
                 let combo = egui::ComboBox::from_id_salt("processing-format")
-                    .width(widgets::dropdown_width(ui, ["DNG", "TIFF"]))
+                    .width(widgets::dropdown_width(
+                        ui,
+                        ExportFormat::ALL.map(ExportFormat::label),
+                    ))
                     .selected_text(settings.format.label());
                 widgets::dropdown(ui, combo, |ui| {
-                    for format in [ExportFormat::Dng, ExportFormat::Tiff] {
+                    for format in ExportFormat::ALL {
                         widgets::menu_value(ui, &mut settings.format, format, format.label());
                     }
                 });
             });
-            if settings.format == ExportFormat::Tiff {
+            if settings.format != ExportFormat::Dng {
                 ui.horizontal(|ui| {
                     ui.label("Color space");
-                    let combo = egui::ComboBox::from_id_salt("processing-tiff-space")
+                    let combo = egui::ComboBox::from_id_salt("processing-color-space")
                         .width(widgets::dropdown_width(
                             ui,
-                            std::iter::once("Camera")
+                            std::iter::once("As Shot")
                                 .chain(TiffColorSpace::ALL.map(TiffColorSpace::label)),
                         ))
                         .selected_text(
                             settings
                                 .tiff_color_space
-                                .map_or("Camera", TiffColorSpace::label),
+                                .map_or("As Shot", TiffColorSpace::label),
                         );
                     widgets::dropdown(ui, combo, |ui| {
-                        widgets::menu_value(ui, &mut settings.tiff_color_space, None, "Camera");
+                        widgets::menu_value(ui, &mut settings.tiff_color_space, None, "As Shot");
                         for space in TiffColorSpace::ALL {
                             widgets::menu_value(
                                 ui,
@@ -108,6 +121,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, mode: FolderMode, settings: &m
                         }
                     });
                 });
+                encoding_controls(ui, settings.format, &mut settings.encoding);
             }
         }
         if mode == FolderMode::Browse || !settings.copy_only {
@@ -161,6 +175,81 @@ pub fn show(ctx: &egui::Context, open: &mut bool, mode: FolderMode, settings: &m
     }
 }
 
+fn encoding_controls(
+    ui: &mut egui::Ui,
+    format: ExportFormat,
+    options: &mut foveonic::output::EncodingOptions,
+) {
+    use foveonic::output::{BitDepth, TiffCompression};
+    match format {
+        ExportFormat::Tiff => {
+            ui.horizontal(|ui| {
+                ui.label("Compression");
+                let combo = egui::ComboBox::from_id_salt("tiff-compression")
+                    .width(widgets::dropdown_width(
+                        ui,
+                        TiffCompression::ALL.map(TiffCompression::label),
+                    ))
+                    .selected_text(options.tiff_compression.label());
+                widgets::dropdown(ui, combo, |ui| {
+                    for value in TiffCompression::ALL {
+                        widgets::menu_value(
+                            ui,
+                            &mut options.tiff_compression,
+                            value,
+                            value.label(),
+                        );
+                    }
+                });
+            });
+            ui.weak("16-bit RGB. All compression options preserve identical pixels.");
+        }
+        ExportFormat::Jpeg => {
+            ui.horizontal(|ui| {
+                ui.label("Quality");
+                ui.add(widgets::slider(&mut options.jpeg_quality, 1..=100));
+            });
+            ui.weak("8-bit RGB with lossy compression.");
+        }
+        ExportFormat::Png => {
+            ui.horizontal(|ui| {
+                ui.label("Bit depth");
+                let combo = egui::ComboBox::from_id_salt("png-depth")
+                    .width(widgets::dropdown_width(ui, ["8-bit", "16-bit"]))
+                    .selected_text(if options.png_depth == BitDepth::Eight {
+                        "8-bit"
+                    } else {
+                        "16-bit"
+                    });
+                widgets::dropdown(ui, combo, |ui| {
+                    widgets::menu_value(ui, &mut options.png_depth, BitDepth::Eight, "8-bit");
+                    widgets::menu_value(ui, &mut options.png_depth, BitDepth::Sixteen, "16-bit");
+                });
+            });
+            ui.weak("Lossless compression at the selected bit depth.");
+        }
+        ExportFormat::Jxl => {
+            widgets::checkbox(ui, &mut options.jxl_lossless, "Lossless");
+            if !options.jxl_lossless {
+                ui.horizontal(|ui| {
+                    ui.label("Quality");
+                    ui.add(widgets::slider(&mut options.jxl_quality, 1..=100));
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.label("Compression effort");
+                ui.add(widgets::slider(&mut options.jxl_effort, 1..=11));
+            });
+            ui.weak("Higher effort trades encoding time for smaller files, preserving quality.");
+            if options.jxl_effort == 11 {
+                ui.weak("Maximum effort is extremely slow and intended for lossless archives.");
+            }
+            ui.weak("16-bit RGB. Lossless preserves the exact rendered samples.");
+        }
+        ExportFormat::Dng => (),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,7 +267,7 @@ mod tests {
             .next_back()
             .unwrap()
     }
-    fn has_label(output: &egui::FullOutput, label: &str) -> bool {
+    pub(super) fn has_label(output: &egui::FullOutput, label: &str) -> bool {
         output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == label))
     }
 
@@ -221,7 +310,7 @@ mod tests {
         assert!(has_label(&output, "Color space"));
         let popup = click(&output, "Overwrite");
         let output = click(&popup, "Rename");
-        let popup = click(&output, "Camera");
+        let popup = click(&output, "As Shot");
         let output = click(&popup, "ProPhoto RGB");
         let popup = click(&output, "Process + originals");
         let output = click(&popup, "Copy originals");
@@ -287,5 +376,43 @@ mod section_tests {
         restored.import_processing.format = ExportFormat::Tiff;
         assert!(restored.import_processing.sections().detail);
         assert!(!restored.import_processing.sections().corrections);
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+    #[test]
+    fn every_format_has_independent_sections_and_encoder_choices_survive_preferences() {
+        let mut settings = Settings::default();
+        settings.encoding.jpeg_quality = 83;
+        settings.encoding.jxl_effort = 9;
+        settings.encoding.png_depth = foveonic::output::BitDepth::Eight;
+        for format in ExportFormat::ALL {
+            settings.format = format;
+            assert!(settings.sections().tone);
+            settings.sections_mut().tone = false;
+        }
+        let mut restored: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(restored, settings);
+        for format in ExportFormat::ALL {
+            restored.format = format;
+            assert!(!restored.sections().tone);
+        }
+        let ctx = egui::Context::default();
+        widgets::install_style(&ctx);
+        for format in ExportFormat::ALL {
+            restored.format = format;
+            let output = ctx.run(Default::default(), |ctx| {
+                show(ctx, &mut true, FolderMode::Browse, &mut restored)
+            });
+            let has = |label| super::tests::has_label(&output, label);
+            assert_eq!(has("Compression"), format == ExportFormat::Tiff);
+            assert_eq!(has("Bit depth"), format == ExportFormat::Png);
+            assert_eq!(has("Lossless"), format == ExportFormat::Jxl);
+            assert_eq!(has("Quality"), format == ExportFormat::Jpeg);
+            assert_eq!(has("Compression effort"), format == ExportFormat::Jxl);
+        }
     }
 }

@@ -304,6 +304,7 @@ impl Review {
                     vec![settings.format]
                 },
                 tiff_color_space: settings.tiff_color_space,
+                encoding: settings.encoding,
                 sections: settings.sections(),
                 conflict: settings.conflict,
             },

@@ -496,13 +496,32 @@ impl Engine {
         Ok(*image)
     }
 
-    /// Encodes and exports an image created by this engine.
+    /// Writes an uncompressed RGB16 TIFF using the shared photographic export path.
     pub fn write_tiff(
         &self,
         image: &RenderedImage,
         path: &Path,
         profile: &mut Profile,
     ) -> Result<[u32; 2]> {
+        self.write_image(
+            image,
+            path,
+            crate::output::Format::Tiff,
+            Default::default(),
+            profile,
+        )
+    }
+
+    /// Encodes and exports an image created by this engine.
+    pub fn write_image(
+        &self,
+        image: &RenderedImage,
+        path: &Path,
+        format: crate::output::Format,
+        options: crate::output::EncodingOptions,
+        profile: &mut Profile,
+    ) -> Result<[u32; 2]> {
+        options.validate(format)?;
         profile.mode.check_gpu_features(self.device().features())?;
         self.check_owner(image)?;
         if path.exists() {
@@ -510,7 +529,7 @@ impl Engine {
         }
         let mut params = image.params();
         let Space::ToneMappedRgb(space) = image.description.space else {
-            return Err("TIFF requires tone-mapped RGB".into());
+            return Err("photographic export requires tone-mapped RGB".into());
         };
         let mut graph = Graph::default();
         let input = graph.add(
@@ -525,7 +544,7 @@ impl Engine {
                 .unwrap_or(crate::image::ColorSpace::Srgb)
                 .into()
         });
-        params.output[2] = destination as u32;
+        params.output[2] = destination.encoding_code(options.native_jxl(format));
         // Neutral mono has the same white in every destination. Avoid adding
         // rounding differences between its otherwise equal channels.
         params.output[3] = u32::from(
@@ -540,7 +559,9 @@ impl Engine {
             &[input],
         )?;
         let file = graph.add(
-            Operation::Tiff {
+            Operation::WriteImage {
+                format,
+                options,
                 path: path.to_owned(),
                 params,
                 space: destination,

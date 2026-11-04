@@ -1,4 +1,4 @@
-//! Shares camera-choice resolution and Full TIFF/DNG exports between interactive and batch workers.
+//! Shares camera-choice resolution and Full photographic and DNG exports between interactive and batch workers.
 
 use foveonic::{
     importing::ConflictPolicy,
@@ -9,30 +9,12 @@ use foveonic::{
 };
 use std::{collections::HashSet, path::PathBuf};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ExportFormat {
-    Tiff,
-    #[default]
-    Dng,
-}
-impl ExportFormat {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Tiff => "TIFF",
-            Self::Dng => "DNG",
-        }
-    }
-    pub fn extension(self) -> &'static str {
-        match self {
-            Self::Tiff => "tiff",
-            Self::Dng => "dng",
-        }
-    }
-}
+pub use foveonic::output::Format as ExportFormat;
 #[derive(Clone)]
 pub struct Export {
     pub path: PathBuf,
     pub format: ExportFormat,
+    pub encoding: foveonic::output::EncodingOptions,
     pub tiff_color_space: Option<foveonic::render::TiffColorSpace>,
     pub conflict: ConflictPolicy,
     pub sections: foveonic::render::ProcessingSections,
@@ -92,7 +74,7 @@ pub fn write(
                     profile,
                 )?;
             }
-            ExportFormat::Tiff => {
+            _ => {
                 let mut artifacts = engine
                     .render_session_with_progress(
                         session,
@@ -107,7 +89,7 @@ pub fn write(
                 let Content::Image(image) = artifact.content else {
                     return Err("final export output is not an image".into());
                 };
-                engine.write_tiff(&image, temporary, profile)?;
+                engine.write_image(&image, temporary, export.format, export.encoding, profile)?;
             }
         }
         Ok(())

@@ -272,7 +272,9 @@ pub enum Operation {
         space: ColorSpace,
         destination: TiffColorSpace,
     },
-    Tiff {
+    WriteImage {
+        format: crate::output::Format,
+        options: crate::output::EncodingOptions,
         path: PathBuf,
         params: EncodeParams,
         space: TiffColorSpace,
@@ -429,7 +431,16 @@ impl Operation {
                 destination,
                 ..
             } => Key::pod(params).with(&(*destination as u32)),
-            Self::Tiff { params, space, .. } => Key::pod(params).with(&(*space as u32)),
+            Self::WriteImage {
+                params,
+                space,
+                format,
+                options,
+                ..
+            } => Key::pod(params)
+                .with(&(*space as u32))
+                .with(&(*format as u32))
+                .slice(&options.key()),
         };
         // Compact tile buffers depend on their window. Only projected images
         // also depend on the physical output rectangle within those tiles.
@@ -579,7 +590,7 @@ impl Operation {
             Self::TonalRanges { .. } => "submit tonal range exposure",
             Self::Tone { .. } => "submit tone",
             Self::Encode { .. } => "submit encode",
-            Self::Tiff { .. } => "TIFF",
+            Self::WriteImage { .. } => "image file",
         }
     }
 
@@ -848,7 +859,7 @@ impl Operation {
             Self::Encode {
                 space, destination, ..
             } => (vec![ToneMappedRgb(*space)], EncodedRgb16(*destination)),
-            Self::Tiff { space, .. } => (vec![EncodedRgb16(*space)], File),
+            Self::WriteImage { space, .. } => (vec![EncodedRgb16(*space)], File),
         }
     }
 }
@@ -1117,7 +1128,7 @@ impl Operation {
             Self::SharpSignal { .. } => "detail.signal",
             Self::Sharpen { .. } => "sharpen.rgb",
             Self::Encode { .. } => "export.rgb16",
-            Self::Tiff { .. } => "export.file",
+            Self::WriteImage { .. } => "export.file",
         }
     }
 }

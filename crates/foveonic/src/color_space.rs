@@ -92,6 +92,16 @@ impl TiffColorSpace {
         }
     }
 
+    /// Native JPEG XL signaling uses pure gamma for ProPhoto. Encode from
+    /// linear light with that curve instead of relabeling ROMM's shadow toe.
+    pub(crate) fn encoding_code(self, native_color: bool) -> u32 {
+        if native_color && self == Self::ProPhotoRgb {
+            3
+        } else {
+            self as u32
+        }
+    }
+
     pub(crate) fn profile(self) -> &'static [u8] {
         match self {
             Self::Srgb => include_bytes!("../assets/srgb-v4.icc"),

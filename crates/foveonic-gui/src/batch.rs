@@ -53,6 +53,7 @@ pub struct Batch {
 }
 pub struct Output {
     pub formats: Vec<ExportFormat>,
+    pub encoding: foveonic::output::EncodingOptions,
     pub tiff_color_space: Option<foveonic::render::TiffColorSpace>,
     pub conflict: ConflictPolicy,
     pub sections: foveonic::render::ProcessingSections,
@@ -448,6 +449,7 @@ fn export_photo(
                 path,
                 format,
                 tiff_color_space: output.tiff_color_space,
+                encoding: output.encoding,
                 sections: output.sections,
                 conflict: output.conflict,
             },
@@ -528,6 +530,7 @@ fn import_photo(
                     path,
                     format,
                     tiff_color_space: output.tiff_color_space,
+                    encoding: output.encoding,
                     sections: output.sections,
                     conflict: output.conflict,
                 },

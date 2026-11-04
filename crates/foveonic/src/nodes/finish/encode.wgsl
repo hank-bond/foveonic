@@ -11,10 +11,13 @@ fn transfer(value: f32) -> u32 {
         else { encoded = 1.055 * pow(linear, 1.0 / 2.4) - 0.055; }
     } else if params.output_size.z == 1u {
         encoded = pow(linear, 1.0 / 2.2);
-    } else {
+    } else if params.output_size.z == 2u {
         // ProPhoto's linear toe matches the embedded ROMM profile.
         if linear < 1.0 / 512.0 { encoded = linear * 16.0; }
         else { encoded = pow(linear, 1.0 / 1.8); }
+    } else {
+        // Lossy JXL declares native ProPhoto primaries with a pure gamma curve.
+        encoded = pow(linear, 1.0 / 1.8);
     }
     return u32(clamp(floor(encoded * 65535.0 + 0.5), 0.0, 65535.0));
 }

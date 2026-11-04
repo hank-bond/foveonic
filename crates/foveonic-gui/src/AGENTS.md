@@ -43,7 +43,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
 - **[display.rs](./display.rs)** Declares the window's display encoding and tags its native Metal layer for host color matching.
 - **[display_image.rs](./display_image.rs)** Uploads bounded linear-light photographic previews without clipping them to sRGB.
-- **[export.rs](./export.rs)** Shares camera-choice resolution and Full TIFF/DNG exports between interactive and batch workers.
+- **[export.rs](./export.rs)** Shares camera-choice resolution and Full photographic and DNG exports between interactive and batch workers.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
 - **[help_examples.rs](./help_examples.rs)** Presents embedded photographic comparisons through one image-switching popover template.
 - **[icon.rs](./icon.rs)** Loads the window icon while leaving macOS Dock appearances to the app bundle.

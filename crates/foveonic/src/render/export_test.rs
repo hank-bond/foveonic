@@ -1,4 +1,4 @@
-//! Checks TIFF-only color conversion and automatic/manual sharpening equivalence.
+//! Checks destination color encoding, shadow preservation and automatic/manual sharpening equivalence.
 
 use super::*;
 use crate::{image::ColorSpace, inspection::Content};
@@ -369,5 +369,88 @@ fn auto_sharpen_matches_manual_for_color_mono_cached_and_dng_recipes() {
             engine.readback_image(&matched).unwrap() == before,
             "DNG Auto/manual or export isolation failed route {route}"
         );
+    }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn jxl_native_prophoto_encodes_shadows_with_its_declared_gamma() {
+    use crate::output::{EncodingOptions, Format};
+    let engine = Engine::new().unwrap();
+    let directory = Directory::new();
+    let metadata = Arc::new(crate::source::Metadata {
+        processing_version: None,
+        width: 64,
+        height: 64,
+        rotation: 0,
+        properties: Default::default(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    });
+    for (i, linear) in [1. / 4096., 1. / 1024., 1. / 512., 1. / 256., 0.18_f32]
+        .into_iter()
+        .enumerate()
+    {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.tiff_color_space = Some(TiffColorSpace::ProPhotoRgb);
+        let image = RenderedImage {
+            buffer: engine
+                .gpu
+                .upload("ProPhoto shadow", &vec![linear; 64 * 64 * 3])
+                .unwrap(),
+            description: Description {
+                linear_white: 4095,
+                view_baked: false,
+                extent: [64, 64],
+                layout: Layout::Rgb32Float,
+                space: Space::ToneMappedRgb(ColorSpace::ProPhotoRgb),
+            },
+            view: crate::image::View {
+                crop: [0, 0, 64, 64],
+                rotation: 0,
+                extent: [64, 64],
+            },
+            metadata: metadata.clone(),
+            settings,
+            dehaze_basis: None,
+            owner: engine.owner.clone(),
+        };
+        for (name, lossless, quality) in [
+            ("lossy", false, 99),
+            ("lossless", true, 90),
+            ("maximum", false, 100),
+        ] {
+            let path = directory.0.join(format!("{i}-{name}.jxl"));
+            engine
+                .write_image(
+                    &image,
+                    &path,
+                    Format::Jxl,
+                    EncodingOptions {
+                        jxl_lossless: lossless,
+                        jxl_quality: quality,
+                        jxl_effort: 1,
+                        ..Default::default()
+                    },
+                    &mut Default::default(),
+                )
+                .unwrap();
+            let decoded = crate::output::decode_jxl(&std::fs::read(path).unwrap());
+            let native = !lossless && quality < 100;
+            assert_eq!(decoded.color.is_some(), native);
+            let encoded = if !native && linear < 1. / 512. {
+                f64::from(linear) * 16.
+            } else {
+                f64::from(linear).powf(1. / 1.8)
+            };
+            let expected = (encoded * 65535.).round() as u16;
+            let tolerance = if native { 40 } else { 2 };
+            for value in decoded.pixels {
+                assert!(
+                    value.abs_diff(expected) <= tolerance,
+                    "linear {linear} {name}: got {value}, expected {expected}"
+                );
+            }
+        }
     }
 }

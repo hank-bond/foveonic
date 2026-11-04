@@ -1,5 +1,5 @@
 ---
-summary: "DNG preserves editing latitude and embeds color-mode presentation, while TIFF bakes the selected rendering."
+summary: "DNG preserves editing latitude, while TIFF, JPEG, PNG and JPEG XL bake the selected rendering."
 kind: reference
 status: accepted
 implementation: incomplete
@@ -36,16 +36,25 @@ Lossless JPEG and JPEG XL compression **should** be compared after the initial u
 
 Compression evaluation should compare lossless file sizes, encoding cost, dependencies, and target-reader support; using JPEG XL for the main image requires DNG 1.7 or later. Float16 evaluation should compare shadow quantization, strongly lifted shadows, negative samples, highlight headroom, and reader compatibility. Lossless compression preserves the chosen encoded samples; conversion from the engine's float32 signal can still lose precision.
 
-## TIFF
+## Photographic exports
 
-- The application **must** produce TIFF output with the selected white balance, color, and tone processing baked into the image.
-- TIFF **must** use its own rendering and packaging path within the shared graph engine.
-- TIFF output resizing **must** default to the reference photographic 4×4 phase-kernel approach for explicit output dimensions, replacing bilinear export resizing. Exact dimensions **may** change aspect ratio. Native-size exports **must** retain their existing crop/orientation behavior. Preview sampling and the reconstruction resampler **must** remain independent.
+- The application **must** produce TIFF, JPEG, PNG and JPEG XL output with the selected white balance, color, and tone processing baked into the image.
+- Photographic formats **must** share the existing Full rendering, GPU destination conversion, orientation, resizing and readback path. Encoder dependencies **must** own image compression. AVIF is deferred. DNG keeps its separate linear recipe.
+- Photographic output resizing **must** default to the reference photographic 4×4 phase-kernel approach for explicit output dimensions, replacing bilinear export resizing. Exact dimensions **may** change aspect ratio. Native-size exports **must** retain their existing crop/orientation behavior. Preview sampling and the reconstruction resampler **must** remain independent.
 - Photographic resizing **must** run on the GPU and retain floating signed samples and headroom until destination transfer/encoding. Kernel coefficients and coordinate mapping **may** be prepared on the host. Sampling at physical storage edges **must** stay within owned storage without introducing diagnostic marker colors.
-- TIFF **must** offer sRGB, Adobe RGB, and ProPhoto RGB destination spaces with matching embedded ICC profiles. The default **must** retain the camera's stored working space. Conversion **must** transform tone-mapped linear RGB before destination transfer and clipping, without changing the working image, preview, or DNG samples. ProPhoto transfer **must** retain its linear shadow toe.
-- GUI and CLI **must** share TIFF destination conversion and packaging. The GUI selector **must** appear in the mode-specific Processing settings dialog, with a remembered destination folder and immediate Process action, following the [import workflow](./import-workflow.md). These GUI output preferences **must** override any legacy sidecar output-space selection without changing the saved photographic recipe. CLI settings and legacy sidecars retain the shared TIFF space representation. RGB16 remains the selected TIFF depth.
+- Photographic output **must** offer sRGB, Adobe RGB, and ProPhoto RGB destination spaces, declared through embedded ICC profiles or native JPEG XL color fields. The default **must** retain the camera's stored working space. Conversion **must** transform tone-mapped linear RGB before destination transfer and clipping, without changing the working image, preview, or DNG samples. ICC-profiled ProPhoto output **must** retain its linear shadow toe. Lossy JPEG XL **must** encode from linear light with the pure gamma curve declared by its native color fields, preserving the same linear colors rather than relabeling toe-encoded samples.
+- GUI and CLI **must** share photographic destination conversion and packaging. The GUI selector **must** appear in the mode-specific Processing settings dialog, with a remembered destination folder and immediate Process action, following the [import workflow](./import-workflow.md). These GUI output preferences **must** override any legacy sidecar output-space selection without changing the saved photographic recipe. CLI settings and legacy sidecars retain the shared TIFF space representation. RGB16 remains the selected TIFF depth.
 - Color TIFF ColorDQ conditioning **must** support an explicit gain override (0 Off). The opt-in reconstruction recipe **must** select native automatic processing-ISO gain capped by its noise-derived limit when no override is set. Without reconstruction, automatic selection **must** remain inactive.
+
+### Encoding controls
+
+- TIFF **must** retain RGB16 and offer Uncompressed, LZW and ZIP (Deflate). Every compression choice **must** preserve identical encoded samples. Uncompressed remains the default for editing interoperability.
+- JPEG **must** encode RGB8, embed the selected ICC profile and offer quality from 1 through 100, initially 95.
+- PNG **must** offer RGB8 and RGB16, initially RGB16, with lossless compression and the selected ICC profile.
+- JPEG XL **must** offer 16-bit lossless and perceptual lossy encoding through libjxl. Lossless, initially enabled, **must** preserve the exact encoded RGB16 samples. Lossy quality **must** be adjustable independently of compression effort. Initial quality is 90 and effort is 7. Effort **must** include the library's maximum archival mode, 11, with a visible explanation that it is extremely slow. Lossy output **must** use native color signaling for the selected destination while retaining XYB compression, so ordinary integer decoders can retain the destination gamut. Quality 100 **must** use the exact lossless path. Lossless output **must** retain the original ICC profile.
+- Encoding choices **must** remain application/job preferences, independent of photographic editing sidecars. Background and batch jobs **must** freeze them at submission. Changing output preferences **must not** rerender the viewed photo.
+- CLI `render` **must** select photographic format from the destination extension and reject unsupported formats. CLI `batch` **must** accept a format choice, initially TIFF, and use its extension for every output. GUI and CLI **must** share encoder validation and packaging.
 
 ## Conformance
 
-The initial DNG stores uncompressed uint16 samples; independent decoding reproduces those encoded samples exactly. A subsequent lossless-compression path must preserve the same encoded samples. It opens in downstream raw editors for further exposure, white-balance, and tone editing. Review checks the embedded color-mode presentation, lifted shadows, retained highlight headroom, and available editing latitude in each application. A TIFF reflects the selected baked rendering.
+The initial DNG stores uncompressed uint16 samples; independent decoding reproduces those encoded samples exactly. A subsequent lossless-compression path must preserve the same encoded samples. It opens in downstream raw editors for further exposure, white-balance, and tone editing. Review checks the embedded color-mode presentation, lifted shadows, retained highlight headroom, and available editing latitude in each application. Photographic exports reflect the selected baked rendering. Lossless TIFF, RGB16 PNG and lossless JPEG XL must decode to the same encoded RGB16 samples. RGB8 output must match the selected 8-bit quantization. Every format must declare the matching destination colors.

@@ -159,6 +159,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
                 path: directory.path().join(format!("expected-{index}.tiff")),
                 format: ExportFormat::Tiff,
                 tiff_color_space: None,
+                encoding: Default::default(),
                 sections: Default::default(),
                 conflict: ConflictPolicy::Overwrite,
             },

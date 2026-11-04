@@ -1,4 +1,4 @@
-//! Inspects supported X3Fs and exports TIFF or linear DNG through shared rendering settings.
+//! Inspects supported X3Fs and exports photographs or linear DNG through shared rendering settings.
 
 mod options;
 use foveonic::profile::{self, Mode, Profile};
@@ -8,19 +8,18 @@ use foveonic::render::{Engine, Settings};
 use foveonic::source::{Result, Source};
 use options::parse_settings;
 use std::collections::HashSet;
-#[cfg(test)]
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: foveonic inspect INPUT.x3f
-       foveonic render INPUT.x3f OUTPUT.tiff [--wb NAME] [--mode NAME] [OPTIONS]
+       foveonic render INPUT.x3f OUTPUT.{tiff,jpg,png,jxl} [--wb NAME] [--mode NAME] [OPTIONS]
        foveonic export-dng INPUT.x3f OUTPUT.dng [--wb NAME] [--mode NAME] [OPTIONS]
        foveonic batch OUTPUT_DIR INPUT_OR_DIR... [--wb NAME] [--mode NAME] [OPTIONS]
 
 Batch directories are scanned nonrecursively for .x3f files. Outputs use each input's
-stem with a .tiff extension. Existing outputs and duplicate output names are rejected.
+stem with the chosen extension (TIFF by default). Existing outputs and duplicate output names are rejected.
 Color requires --wb and --mode. Merrill monochrome requires --wb.
 Classic monochrome requires --mode and ignores --wb. Merrill --mono-* options
 select monochrome automatically. Classic uses its camera mixture and rejects overrides.
@@ -95,12 +94,24 @@ Options (also available for batch):
   --smooth-crisp FACTOR     Quattro Smooth/Crisp 0..1 (default from file or 0.5)
   --sharpen AMOUNT           auto, off, or manual amount (Quattro -2..2, default from file)
   --highlight-amount VALUE  Quattro highlight recovery 0..1, default from file or 1
+  --format FORMAT           Batch format: tiff (default), jpeg, png or jxl
+  --jpeg-quality N          1..100, default 95
+  --png-depth N             8 or 16, default 16
+  --jxl-lossless            Preserve exact RGB16 samples (default)
+  --jxl-lossy               Use perceptual lossy JPEG XL compression
+  --jxl-quality N           Lossy quality 1..100, default 90
+  --jxl-effort N            Compression effort 1..11, default 7. 11 is extremely slow
+  --tiff-compression NAME   none (default), lzw or zip. All preserve RGB16
   --tiff-color-space SPACE   camera (default), srgb, adobe-rgb, or prophoto-rgb
-  --size WIDTHxHEIGHT       Exact final oriented TIFF dimensions, reference photographic resampling
+  --size WIDTHxHEIGHT       Exact final oriented photographic dimensions, reference photographic resampling
   --profile MODE            off (default), wall, or synchronized gpu diagnostics
   --help                    Show this help";
 
-fn batch_jobs(inputs: &[PathBuf], destination: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
+fn batch_jobs(
+    inputs: &[PathBuf],
+    destination: &Path,
+    format: foveonic::output::Format,
+) -> Result<Vec<(PathBuf, PathBuf)>> {
     if destination.exists() && !destination.is_dir() {
         return Err("batch destination is not a directory".into());
     }
@@ -138,7 +149,7 @@ fn batch_jobs(inputs: &[PathBuf], destination: &Path) -> Result<Vec<(PathBuf, Pa
             .file_stem()
             .ok_or("input has no filename")?
             .to_os_string();
-        name.push(".tiff");
+        name.push(format!(".{}", format.extension()));
         let output = destination.join(name);
         // Case-fold output names conservatively for the owner's case-insensitive macOS filesystem.
         let key = output.file_name().unwrap().to_string_lossy().to_lowercase();
@@ -153,14 +164,98 @@ fn batch_jobs(inputs: &[PathBuf], destination: &Path) -> Result<Vec<(PathBuf, Pa
     Ok(jobs)
 }
 
+/// Encoder choices are job preferences, separate from the shared photographic settings parser.
+fn parse_export_options(
+    args: impl Iterator<Item = OsString>,
+) -> Result<(
+    Option<foveonic::output::Format>,
+    foveonic::output::EncodingOptions,
+    Vec<OsString>,
+)> {
+    use foveonic::output::{BitDepth, EncodingOptions, Format, TiffCompression};
+    let mut format = None;
+    let mut options = EncodingOptions::default();
+    let mut rest = Vec::new();
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        let flag = arg.to_str().unwrap_or("");
+        if flag == "--jxl-lossless" {
+            options.jxl_lossless = true;
+            continue;
+        }
+        if flag == "--jxl-lossy" {
+            options.jxl_lossless = false;
+            continue;
+        }
+        if !matches!(
+            flag,
+            "--format"
+                | "--jpeg-quality"
+                | "--png-depth"
+                | "--jxl-quality"
+                | "--jxl-effort"
+                | "--tiff-compression"
+        ) {
+            rest.push(arg);
+            continue;
+        }
+        let value = args
+            .next()
+            .ok_or_else(|| format!("missing value for {flag}"))?;
+        let value = value.to_str().ok_or("export option must be text")?;
+        match flag {
+            "--format" => {
+                format = Some(match value {
+                    "tif" | "tiff" => Format::Tiff,
+                    "jpg" | "jpeg" => Format::Jpeg,
+                    "png" => Format::Png,
+                    "jxl" => Format::Jxl,
+                    _ => return Err("format must be tiff, jpeg, png or jxl".into()),
+                });
+            }
+            "--jpeg-quality" => options.jpeg_quality = value.parse()?,
+            "--png-depth" => {
+                options.png_depth = match value {
+                    "8" => BitDepth::Eight,
+                    "16" => BitDepth::Sixteen,
+                    _ => return Err("PNG depth must be 8 or 16".into()),
+                }
+            }
+            "--jxl-quality" => options.jxl_quality = value.parse()?,
+            "--jxl-effort" => options.jxl_effort = value.parse()?,
+            "--tiff-compression" => {
+                options.tiff_compression = match value {
+                    "none" => TiffCompression::None,
+                    "lzw" => TiffCompression::Lzw,
+                    "zip" | "deflate" => TiffCompression::Zip,
+                    _ => return Err("TIFF compression must be none, lzw or zip".into()),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok((format, options, rest))
+}
+
+struct Output<'a> {
+    path: &'a Path,
+    format: foveonic::output::Format,
+    encoding: foveonic::output::EncodingOptions,
+}
+
 fn convert(
     engine: &Engine,
     source: &Source,
     input: &Path,
     settings: &Settings,
-    destination: &Path,
+    output: Output<'_>,
     mode: Mode,
 ) -> Result<[u32; 2]> {
+    let Output {
+        path: destination,
+        format,
+        encoding,
+    } = output;
     mode.check_gpu_features(engine.device().features())?;
     if mode.enabled() {
         eprintln!(
@@ -189,7 +284,7 @@ fn convert(
     let mut profile = Profile::new(mode);
     let before = engine.gpu_activity();
     let start = std::time::Instant::now();
-    let size = engine.write_tiff(&image, destination, &mut profile)?;
+    let size = engine.write_image(&image, destination, format, encoding, &mut profile)?;
     if mode.enabled() {
         eprintln!(
             "{}",
@@ -233,8 +328,18 @@ fn run() -> Result<()> {
         }
         Some("render") | Some("export-dng") => {
             let destination = PathBuf::from(args.next().ok_or(USAGE)?);
-            let control_args = args.clone();
-            let (_settings, extra, profiling) = parse_settings(args)?;
+            let (requested_format, encoding, control_args) = parse_export_options(args)?;
+            let format = foveonic::output::Format::from_extension(&destination)?;
+            if requested_format.is_some_and(|requested| requested != format) {
+                return Err("format does not match output extension".into());
+            }
+            if command == "render" {
+                encoding.validate(format)?;
+            } else if format != foveonic::output::Format::Dng {
+                return Err("export-dng requires a .dng destination".into());
+            }
+            let control_args = control_args.into_iter();
+            let (_settings, extra, profiling) = parse_settings(control_args.clone())?;
             if !extra.is_empty() {
                 return Err(USAGE.into());
             }
@@ -287,25 +392,33 @@ fn run() -> Result<()> {
                 &source,
                 Path::new(&path),
                 &settings,
-                &destination,
+                Output {
+                    path: &destination,
+                    format,
+                    encoding,
+                },
                 profiling,
             )?;
             eprintln!(
-                "Rendered {}x{} RGB16 TIFF using {}: {}",
+                "Rendered {}x{} {} using {}: {}",
                 size[0],
                 size[1],
+                format.label(),
                 engine.adapter_name(),
                 destination.display()
             );
         }
         Some("batch") => {
             let destination = PathBuf::from(path);
-            let control_args = args.clone();
-            let (_settings, inputs, profiling) = parse_settings(args)?;
+            let (format, encoding, control_args) = parse_export_options(args)?;
+            let format = format.unwrap_or(foveonic::output::Format::Tiff);
+            encoding.validate(format)?;
+            let control_args = control_args.into_iter();
+            let (_settings, inputs, profiling) = parse_settings(control_args.clone())?;
             if inputs.is_empty() {
                 return Err(USAGE.into());
             }
-            let jobs = batch_jobs(&inputs, &destination)?;
+            let jobs = batch_jobs(&inputs, &destination, format)?;
             let engine = configured_engine()?;
             if profiling.enabled() {
                 eprintln!(
@@ -325,8 +438,19 @@ fn run() -> Result<()> {
                     Source::open(input).map_err(|error| format!("{}: {error}", input.display()))?;
                 let (settings, _, _) =
                     options::parse_settings_for_camera(control_args.clone(), &source.metadata)?;
-                let size = convert(&engine, &source, input, &settings, output, profiling)
-                    .map_err(|error| format!("{}: {error}", input.display()))?;
+                let size = convert(
+                    &engine,
+                    &source,
+                    input,
+                    &settings,
+                    Output {
+                        path: output,
+                        format,
+                        encoding,
+                    },
+                    profiling,
+                )
+                .map_err(|error| format!("{}: {error}", input.display()))?;
                 eprintln!(
                     "[{}/{}] {}x{}: {}",
                     index + 1,
@@ -625,15 +749,30 @@ mod tests {
         std::fs::write(input.join("ignore.jpg"), b"").unwrap();
         std::fs::create_dir(input.join("nested")).unwrap();
         std::fs::write(input.join("nested/c.x3f"), b"").unwrap();
-        let jobs = batch_jobs(std::slice::from_ref(&input), &out).unwrap();
+        let jobs = batch_jobs(
+            std::slice::from_ref(&input),
+            &out,
+            foveonic::output::Format::Tiff,
+        )
+        .unwrap();
         assert_eq!(jobs.len(), 2);
         assert_eq!(jobs[0].1, out.join("a.tiff"));
         assert!(!out.join("a.tiff").exists());
-        assert!(batch_jobs(&[input.clone(), input.join("a.x3f")], &out).is_err());
+        assert!(batch_jobs(
+            &[input.clone(), input.join("a.x3f")],
+            &out,
+            foveonic::output::Format::Tiff
+        )
+        .is_err());
         std::fs::write(input.join("A.other"), b"").unwrap();
-        assert!(batch_jobs(&[input.clone(), input.join("A.other")], &out).is_err());
+        assert!(batch_jobs(
+            &[input.clone(), input.join("A.other")],
+            &out,
+            foveonic::output::Format::Tiff
+        )
+        .is_err());
         std::fs::write(out.join("a.tiff"), b"keep").unwrap();
-        assert!(batch_jobs(&[input], &out).is_err());
+        assert!(batch_jobs(&[input], &out, foveonic::output::Format::Tiff).is_err());
         assert_eq!(std::fs::read(out.join("a.tiff")).unwrap(), b"keep");
     }
 }
@@ -666,4 +805,42 @@ fn color_sensitivity_cli_preserves_the_selected_rendering() {
             0.1
         ])
     );
+}
+
+#[cfg(test)]
+#[test]
+fn encoding_flags_leave_photographic_options_and_inputs_intact() {
+    let args = [
+        "--format",
+        "jxl",
+        "--wb",
+        "Sunlight",
+        "photo.x3f",
+        "--jxl-lossy",
+        "--jxl-quality",
+        "92",
+        "--jxl-effort",
+        "9",
+        "--exposure",
+        "-0.5",
+    ];
+    let (format, encoding, rest) =
+        parse_export_options(args.into_iter().map(OsString::from)).unwrap();
+    assert_eq!(format, Some(foveonic::output::Format::Jxl));
+    assert_eq!(encoding.jxl_quality, 92);
+    assert_eq!(encoding.jxl_effort, 9);
+    assert!(!encoding.jxl_lossless);
+    assert_eq!(
+        rest,
+        ["--wb", "Sunlight", "photo.x3f", "--exposure", "-0.5"].map(OsString::from)
+    );
+    encoding.validate(format.unwrap()).unwrap();
+    for args in [
+        vec!["--format", "avif"],
+        vec!["--png-depth", "10"],
+        vec!["--jpeg-quality"],
+        vec!["--tiff-compression", "jpeg"],
+    ] {
+        assert!(parse_export_options(args.into_iter().map(OsString::from)).is_err());
+    }
 }
