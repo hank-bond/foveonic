@@ -7,8 +7,10 @@ use foveonic::{render::Settings, source::Metadata};
 /// Export requires a photographic recipe, rather than an inspection-only source.
 pub fn can_export(settings: &Settings, metadata: Option<&Metadata>) -> bool {
     metadata.is_some_and(|metadata| {
-        settings.validate_for_camera(metadata).is_ok()
-            && foveonic::inspection::output_names(settings, Some(metadata)).contains(&"final")
+        let mut resolved = settings.clone();
+        crate::export::resolve_camera_settings(&mut resolved, metadata).is_empty()
+            && resolved.validate_for_camera(metadata).is_ok()
+            && foveonic::inspection::output_names(&resolved, Some(metadata)).contains(&"final")
     })
 }
 
@@ -164,7 +166,7 @@ mod tests {
     use super::*;
     #[test]
     fn export_requires_a_supported_photographic_output() {
-        use foveonic::source::{Matrix, MatrixEncoding};
+        use foveonic::source::{Matrix, MatrixEncoding, PropertyList};
         let settings = Settings::new("Sunlight", "Standard");
         let mut metadata = Metadata {
             width: 5888,
@@ -187,6 +189,24 @@ mod tests {
             );
         }
         assert!(!can_export(&settings, None));
+        assert!(can_export(&settings, Some(&metadata)));
+        for (key, value) in [("WB_DESC", "Sunlight"), ("CM_DESC", "Standard")] {
+            metadata.properties.insert(key.into(), value.into());
+        }
+        for (key, name) in [
+            ("WhiteBalanceGains", "Sunlight"),
+            ("ColorModeCompensations", "Standard"),
+        ] {
+            metadata.lists.insert(
+                key.into(),
+                PropertyList::new(vec![(name.into(), "recorded".into())]).unwrap(),
+            );
+        }
+        let as_shot = Settings::new("", "");
+        assert!(can_export(&as_shot, Some(&metadata)));
+        assert!(as_shot.white_balance.is_empty() && as_shot.color_mode.is_empty());
+        metadata.lists.remove("WhiteBalanceGains");
+        assert!(!can_export(&as_shot, Some(&metadata)));
         assert!(can_export(&settings, Some(&metadata)));
         let mut mono = settings.clone();
         mono.rendering = foveonic::render::Rendering::Monochrome;
