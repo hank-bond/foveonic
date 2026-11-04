@@ -41,16 +41,19 @@ pub struct Menus<'a> {
 impl Menus<'_> {
     /// Overlay the two reserved header slots immediately before the drag grip.
     pub fn header(&mut self, ui: &mut egui::Ui, scope: Scope, rect: egui::Rect) {
+        let side = crate::widgets::ControlSize::Medium.side();
+        let gap = crate::widgets::MEDIUM_CONTROL_GAP;
+        let width = 2. * side + gap;
         let bounds = egui::Rect::from_center_size(
             egui::pos2(
-                rect.right() - 48.,
+                rect.right() - side - gap - width * 0.5,
                 if scope == Scope::All {
                     rect.center().y
                 } else {
-                    rect.top() + crate::widgets::button_group_height(ui) * 0.5
+                    rect.top() + crate::widgets::ControlSize::Medium.group_height() * 0.5
                 },
             ),
-            egui::vec2(44., 20.),
+            egui::vec2(width, side),
         );
         let mut overlay = ui.new_child(
             egui::UiBuilder::new()
@@ -60,11 +63,11 @@ impl Menus<'_> {
         {
             let ui = &mut overlay;
             ui.set_min_size(bounds.size());
-            ui.spacing_mut().item_spacing.x = 2.;
+            ui.spacing_mut().item_spacing.x = gap;
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(self.family.is_some(), |ui| {
                     let (r, response) =
-                        ui.allocate_exact_size(egui::vec2(20., 20.), egui::Sense::click());
+                        ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::click());
                     crate::widgets::paint(ui, &response, false);
                     let color = crate::widgets::visuals(ui, &response, false)
                         .fg_stroke
@@ -97,7 +100,7 @@ impl Menus<'_> {
                         .on_hover_text("Reset to defaults · Option/Alt-click for camera As Shot");
                     let menu = crate::widgets::menu_button(
                         ui,
-                        egui::Button::new("").min_size(egui::vec2(20., 20.)),
+                        egui::Button::new("").min_size(egui::Vec2::splat(side)),
                         |ui| self.menu(ui, scope),
                     )
                     .response;

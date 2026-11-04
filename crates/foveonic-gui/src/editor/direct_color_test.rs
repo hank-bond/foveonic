@@ -530,7 +530,12 @@ fn toolbar_release_arms_each_picker_until_a_photo_gesture_releases() {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        let button = crate::widgets::icon_button(ui, "Pick", active(ctx));
+                        let button = crate::widgets::icon_button(
+                            ui,
+                            "Pick",
+                            active(ctx),
+                            crate::widgets::ControlSize::Large,
+                        );
                         button_center = button.rect.center();
                         if button.clicked() {
                             if advanced {

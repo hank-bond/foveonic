@@ -99,7 +99,7 @@ impl Browser {
     }
 
     pub fn visibility_button(&mut self, ui: &mut egui::Ui, focus: egui::Id) -> egui::Response {
-        let side = widgets::control_height(ui);
+        let side = widgets::ControlSize::Medium.side();
         let (rect, response) =
             ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::click());
         if response.clicked() {

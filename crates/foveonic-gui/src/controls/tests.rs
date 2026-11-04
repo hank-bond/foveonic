@@ -4428,7 +4428,7 @@ fn empty_advanced_panel_keeps_wheel_and_right_aligned_actions_without_authoring_
     for label in ["Basic", "Advanced"] {
         let button = text_centers(&output, label)[0];
         assert!(button.x > title.x);
-        assert!((button.y - title.y).abs() < 2.);
+        assert!((button.y - title.y).abs() < 0.5);
     }
     let labels = ["Smoothness", "Hue", "Saturation", "Lightness", "+", "−"];
     let positions: Vec<_> = labels

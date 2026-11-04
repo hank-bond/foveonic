@@ -68,9 +68,15 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             }
             for i in 0..ranges.count {
                 ui.horizontal(|ui| {
-                    changed |= widgets::checkbox(ui, &mut ranges.ranges[i].enabled, "")
-                        .on_hover_text("Enable this edit")
-                        .changed();
+                    ui.spacing_mut().item_spacing.x = widgets::MEDIUM_CONTROL_GAP;
+                    changed |= widgets::checkbox_sized(
+                        ui,
+                        &mut ranges.ranges[i].enabled,
+                        "",
+                        widgets::ControlSize::Medium,
+                    )
+                    .on_hover_text("Enable this edit")
+                    .changed();
                     let eye = preview_eye(ui, &mut settings.color_range_preview, i);
                     changed |= eye.changed();
                     if eye.clicked() {
@@ -78,9 +84,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                     }
                     let color: egui::Color32 =
                         egui::ecolor::Hsva::new(ranges.ranges[i].hue / 360., 0.65, 0.8, 1.).into();
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(12., 12.), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 2., color);
+                    widgets::swatch(ui, color, widgets::ControlSize::Medium);
                     let _ = range_name(ui, &mut s, i, &mut ranges.ranges[i]);
                 });
             }
@@ -88,7 +92,8 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     widgets::centered_control_row(ui, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let active = direct_color::advanced_active(ui.ctx());
-            let button = widgets::icon_button(ui, "Pick color range", active);
+            let button =
+                widgets::icon_button(ui, "Pick color range", active, widgets::ControlSize::Large);
             widgets::eyedropper_icon(ui, &button, active);
             if button
                 .on_hover_text(
@@ -101,7 +106,12 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             }
             let remove = ui
                 .add_enabled_ui(ranges.count > 0, |ui| {
-                    widgets::icon_button(ui, "Delete color range", false)
+                    widgets::icon_button(
+                        ui,
+                        "Delete color range",
+                        false,
+                        widgets::ControlSize::Large,
+                    )
                 })
                 .inner;
             ui.painter().text(
@@ -128,7 +138,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             }
             let add = ui
                 .add_enabled_ui(ranges.count < MAX_COLOR_RANGES, |ui| {
-                    widgets::icon_button(ui, "Add color range", false)
+                    widgets::icon_button(ui, "Add color range", false, widgets::ControlSize::Large)
                 })
                 .inner;
             ui.painter().text(
@@ -164,9 +174,15 @@ fn range_name(
     range: &mut AdvancedColorRange,
 ) -> egui::Response {
     if let Some(rename) = state.rename.as_mut().filter(|rename| rename.index == index) {
-        let response = ui.add_sized(
-            [ui.available_width(), widgets::control_height(ui)],
+        let width = ui.available_width();
+        let margin = egui::Margin::symmetric(ui.spacing().button_padding.x.round() as i8, 1);
+        let response = ui.add(
             egui::TextEdit::singleline(&mut rename.text)
+                .font(egui::TextStyle::Body)
+                .margin(margin)
+                .vertical_align(egui::Align::Center)
+                .desired_width(width)
+                .min_size(egui::vec2(width, widgets::ControlSize::Medium.side()))
                 .id_salt(("range name", index))
                 .char_limit(foveonic::render::MAX_COLOR_RANGE_NAME_CHARS),
         );
@@ -191,17 +207,13 @@ fn range_name(
     } else {
         range.name.to_string()
     };
-    let response = ui
-        .allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), widgets::control_height(ui)),
-            egui::Layout::left_to_right(egui::Align::Center).with_main_justify(true),
-            |ui| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                ui.add(egui::SelectableLabel::new(state.selected == index, &label))
-            },
-        )
-        .inner
-        .on_hover_text("Double-click to rename");
+    let response = widgets::selectable_row(
+        ui,
+        &label,
+        state.selected == index,
+        widgets::ControlSize::Medium,
+    )
+    .on_hover_text("Double-click to rename");
     if response.clicked() {
         direct_color::exit(ui.ctx());
         state.selected = index;

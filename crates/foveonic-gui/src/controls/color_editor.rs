@@ -169,6 +169,7 @@ fn modes(ui: &mut egui::Ui, state: &mut crate::editor::advanced_color::State, en
     ui.add_enabled_ui(enabled, |ui| {
         crate::widgets::button_group(ui, |ui| {
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = crate::widgets::MEDIUM_CONTROL_GAP;
                 for (advanced, label) in [(false, "Basic"), (true, "Advanced")] {
                     let label = if advanced {
                         crate::widgets::fitting_button_label(
@@ -182,9 +183,16 @@ fn modes(ui: &mut egui::Ui, state: &mut crate::editor::advanced_color::State, en
                     } else {
                         label
                     };
-                    if crate::widgets::selectable_value(ui, &mut state.advanced, advanced, label)
-                        .changed()
+                    if crate::widgets::button_sized(
+                        ui,
+                        label,
+                        state.advanced == advanced,
+                        crate::widgets::ControlSize::Medium,
+                    )
+                    .clicked()
+                        && state.advanced != advanced
                     {
+                        state.advanced = advanced;
                         crate::editor::direct_color::exit(ui.ctx());
                         state.rename = None;
                     }

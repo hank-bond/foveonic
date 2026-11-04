@@ -136,14 +136,14 @@ pub(super) fn tools(ui: &mut egui::Ui, on: bool, config: &mut Configuration) -> 
     let mut menu_open = false;
     crate::widgets::centered_control_row(ui, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let response = crate::widgets::icon_button(ui, "Direct color", on);
+            let response = crate::widgets::icon_button(ui, "Direct color", on, crate::widgets::ControlSize::Large);
             crate::widgets::eyedropper_icon(ui, &response, on);
             toggle = response.clicked();
             response.on_hover_text(
                 "Direct color (D) · Click and drag a subject color. Release to return to navigation. Escape cancels. Space pans. \
                  Configure the axes with the settings button or right-click in the photograph.",
             );
-            let menu = crate::widgets::icon_menu_button(ui, "Direct color settings", |ui| {
+            let menu = crate::widgets::icon_menu_button(ui, "Direct color settings", crate::widgets::ControlSize::Large, |ui| {
                 controls(ui, config)
             });
             menu_open = menu.inner.is_some();

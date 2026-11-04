@@ -68,7 +68,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
 - **[toolbar.rs](./toolbar.rs)** Places source opening, destination and shared processing actions on one padded toolbar row.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
-- **[widgets.rs](./widgets.rs)** Shares numeric display policy and workspace button, checkbox, and dropdown widgets.
+- **[widgets.rs](./widgets.rs)** Shares numeric display policy, control sizes and workspace widgets.
 - **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
 <!-- INDEX:END -->

@@ -43,8 +43,8 @@ impl Browser {
             )
             .size()
             .x;
-        let side = widgets::control_height(ui);
-        let gap = ui.spacing().item_spacing.x;
+        let side = widgets::ControlSize::Medium.side();
+        let gap = widgets::MEDIUM_CONTROL_GAP;
         let search_width = MIN_SEARCH_WIDTH
             + side
             + gap
@@ -59,6 +59,7 @@ impl Browser {
                 + 3. * (side + gap)
                 + if self.import_mode { side + gap } else { 0. };
         widgets::control_row(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = widgets::MEDIUM_CONTROL_GAP;
             let view = icon_menu(ui, |ui| {
                 ui.horizontal(|ui| {
                     for mode in [Organizer::Icons, Organizer::List, Organizer::Large] {
@@ -74,7 +75,7 @@ impl Browser {
             paint_view(ui, view.rect.center(), *organizer, egui::Color32::GRAY);
             view.on_hover_text("Browser view");
             let sort = icon_menu(ui, |ui| {
-                if ui.checkbox(&mut self.sort.reverse, "Reverse").changed() {
+                if crate::widgets::checkbox(ui, &mut self.sort.reverse, "Reverse").changed() {
                     self.query_dirty = true;
                 }
                 ui.separator();
@@ -105,7 +106,7 @@ impl Browser {
             let reserved = side
                 + gap
                 + if self.import_mode {
-                    widgets::control_height(ui) + ui.spacing().item_spacing.x
+                    side + ui.spacing().item_spacing.x
                 } else {
                     0.
                 }
@@ -147,7 +148,7 @@ impl Browser {
 
     pub(super) fn ratings_button(&mut self, ui: &mut egui::Ui) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(
-            egui::Vec2::splat(widgets::control_height(ui)),
+            egui::Vec2::splat(widgets::ControlSize::Medium.side()),
             egui::Sense::click(),
         );
         if response.clicked() {
@@ -167,6 +168,7 @@ impl Browser {
     }
 
     fn search_controls(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing.x = widgets::MEDIUM_CONTROL_GAP;
         let filtered = self.filter.rating != RatingFilter::All;
         let search = icon_menu(ui, |ui| {
             ui.weak("Rating filter");
@@ -211,7 +213,7 @@ impl Browser {
         let clear_width = if self.filter.text.is_empty() {
             0.
         } else {
-            widgets::control_height(ui) + ui.spacing().item_spacing.x
+            widgets::ControlSize::Medium.side() + ui.spacing().item_spacing.x
         };
         if ui
             .add_sized(
@@ -229,7 +231,7 @@ impl Browser {
             self.query_dirty = true;
         }
         if !self.filter.text.is_empty() {
-            let side = widgets::control_height(ui);
+            let side = widgets::ControlSize::Medium.side();
             let clear = ui.add_sized(egui::Vec2::splat(side), egui::Button::new(""));
             let radius = side * 0.24;
             let stroke =
@@ -335,7 +337,7 @@ fn outline_star(ui: &egui::Ui, center: egui::Pos2, radius: f32, color: egui::Col
 
 fn view_button(ui: &mut egui::Ui, mode: Organizer, selected: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
-        egui::Vec2::splat(widgets::control_height(ui)),
+        egui::Vec2::splat(widgets::ControlSize::Medium.side()),
         egui::Sense::click(),
     );
     widgets::paint(ui, &response, selected);
@@ -389,7 +391,12 @@ fn icon_menu<R>(
     ui: &mut egui::Ui,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
-    widgets::icon_menu_button(ui, "Browser options", contents)
+    widgets::icon_menu_button(
+        ui,
+        "Browser options",
+        widgets::ControlSize::Medium,
+        contents,
+    )
 }
 
 #[cfg(test)]

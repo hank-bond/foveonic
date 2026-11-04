@@ -1,4 +1,4 @@
-//! Shares numeric display policy and workspace button, checkbox, and dropdown widgets.
+//! Shares numeric display policy, control sizes and workspace widgets.
 
 use eframe::egui;
 
@@ -16,7 +16,8 @@ pub fn form_label_width(ui: &egui::Ui, labels: &[&str], toggle: Option<&str>) ->
         .iter()
         .map(|text| measure(text))
         .chain(
-            toggle.map(|text| measure(text) + ui.spacing().icon_width + ui.spacing().icon_spacing),
+            toggle
+                .map(|text| measure(text) + ControlSize::Small.side() + ui.spacing().icon_spacing),
         )
         .fold(0., f32::max);
     (ui.available_width() / 4.).max(needed).ceil()
@@ -100,6 +101,7 @@ pub(crate) fn format_parameter_value(value: f64) -> String {
 
 const RADIUS: u8 = 4;
 pub const BUTTON_GROUP_MARGIN: i8 = 4;
+pub const MEDIUM_CONTROL_GAP: f32 = 6.;
 pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);
 const PARAMETER_SUBGROUP_BACKGROUND: egui::Color32 = egui::Color32::from_gray(36);
 /// Keep slider tracks distinct from both linked groups and the main panel.
@@ -346,6 +348,28 @@ pub fn button_group_height(ui: &egui::Ui) -> f32 {
     control_height(ui) + 2. * f32::from(BUTTON_GROUP_MARGIN)
 }
 
+/// Square controls share fixed sizes in logical pixels.
+#[derive(Clone, Copy)]
+pub enum ControlSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl ControlSize {
+    pub const fn side(self) -> f32 {
+        match self {
+            Self::Small => 14.,
+            Self::Medium => 18.,
+            Self::Large => 20.,
+        }
+    }
+
+    pub const fn group_height(self) -> f32 {
+        self.side() + 2. * BUTTON_GROUP_MARGIN as f32
+    }
+}
+
 fn menu_label(ui: &egui::Ui, label: &str) -> std::sync::Arc<egui::Galley> {
     egui::WidgetText::from(label).into_galley(
         ui,
@@ -417,9 +441,31 @@ pub fn button(ui: &mut egui::Ui, label: &str, on: bool, minimum: egui::Vec2) -> 
     response
 }
 
-/// Square icon controls use the same height, padding and interaction states as text buttons.
-pub fn icon_button(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
-    let response = button(ui, "", on, egui::Vec2::splat(control_height(ui)));
+/// Fixed-height text and icon buttons share their frame, spacing and states.
+pub fn button_sized(ui: &mut egui::Ui, label: &str, on: bool, size: ControlSize) -> egui::Response {
+    let text = menu_label(ui, label);
+    let width = if label.is_empty() {
+        size.side()
+    } else {
+        (text.size().x + 2. * button_padding(ui).x).max(size.side())
+    };
+    let (_, response) =
+        ui.allocate_exact_size(egui::vec2(width, size.side()), egui::Sense::click());
+    paint(ui, &response, on);
+    ui.painter().galley(
+        response.rect.center() - text.size() * 0.5,
+        text,
+        visuals(ui, &response, on).text_color(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
+    });
+    response
+}
+
+/// Square icon controls share padding and interaction states across sizes.
+pub fn icon_button(ui: &mut egui::Ui, label: &str, on: bool, size: ControlSize) -> egui::Response {
+    let response = button_sized(ui, "", on, size);
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
     });
@@ -428,7 +474,7 @@ pub fn icon_button(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
 
 /// Automatic controls share the square geometry of ordinary icon buttons.
 pub fn auto_button(ui: &mut egui::Ui, on: bool) -> egui::Response {
-    let response = icon_button(ui, "A", on);
+    let response = icon_button(ui, "A", on, ControlSize::Large);
     let label = menu_label(ui, "A");
     ui.painter().galley(
         response.rect.center() - label.size() * 0.5,
@@ -450,6 +496,14 @@ pub fn menu_button<R>(
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
     let response = ui.add(button);
+    menu_response(ui, response, contents)
+}
+
+fn menu_response<R>(
+    ui: &mut egui::Ui,
+    response: egui::Response,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
     let id = response.id.with("workspace menu");
     if response.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
@@ -511,23 +565,13 @@ pub fn menu_choices<T: Copy + PartialEq>(
 pub fn icon_menu_button<R>(
     ui: &mut egui::Ui,
     label: &str,
+    size: ControlSize,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
-    let side = control_height(ui);
     let background = ui.painter().add(egui::Shape::Noop);
-    let result = ui
-        .scope(|ui| {
-            ui.spacing_mut().button_padding = button_padding(ui);
-            menu_button(
-                ui,
-                egui::Button::new("")
-                    .fill(egui::Color32::TRANSPARENT)
-                    .stroke(egui::Stroke::NONE)
-                    .min_size(egui::Vec2::splat(side)),
-                contents,
-            )
-        })
-        .inner;
+    let (_, response) =
+        ui.allocate_exact_size(egui::Vec2::splat(size.side()), egui::Sense::click());
+    let result = menu_response(ui, response, contents);
     let on = result.inner.is_some();
     ui.painter().set(
         background,
@@ -551,9 +595,22 @@ pub fn checkbox(
     value: &mut bool,
     label: impl Into<egui::WidgetText>,
 ) -> egui::Response {
+    checkbox_sized(ui, value, label, ControlSize::Small)
+}
+
+pub fn checkbox_sized(
+    ui: &mut egui::Ui,
+    value: &mut bool,
+    label: impl Into<egui::WidgetText>,
+    size: ControlSize,
+) -> egui::Response {
+    let side = size.side();
     let background = ui.painter().add(egui::Shape::Noop);
-    let response = ui
+    let (response, icon) = ui
         .scope(|ui| {
+            let spacing = ui.spacing_mut();
+            spacing.icon_width_inner *= side / spacing.icon_width;
+            spacing.icon_width = side;
             let widgets = &mut ui.visuals_mut().widgets;
             for visual in [
                 &mut widgets.inactive,
@@ -564,12 +621,22 @@ pub fn checkbox(
                 visual.bg_fill = egui::Color32::TRANSPARENT;
                 visual.bg_stroke = egui::Stroke::NONE;
             }
-            ui.checkbox(value, label)
+            let response = ui.checkbox(value, label);
+            let (_, icon) = ui.spacing().icon_rectangles(response.rect);
+            (response, icon)
         })
         .inner;
-    let (_, icon) = ui.spacing().icon_rectangles(response.rect);
     ui.painter()
         .set(background, frame(ui, &response, false, icon));
+    response
+}
+
+/// Noninteractive color samples align with the corresponding square controls.
+pub fn swatch(ui: &mut egui::Ui, color: egui::Color32, size: ControlSize) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::Vec2::splat(size.side()), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(RADIUS), color);
     response
 }
 
@@ -584,6 +651,42 @@ pub fn selectable_value<T: PartialEq>(
         *value = choice;
         response.mark_changed();
     }
+    response
+}
+
+/// Selection lists fill the available width with a left-aligned, truncated name.
+pub fn selectable_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    size: ControlSize,
+) -> egui::Response {
+    let width = ui.available_width().max(size.side());
+    let padding = ui.spacing().button_padding.x;
+    let text = egui::WidgetText::from(label).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        (width - 2. * padding).max(0.),
+        egui::TextStyle::Body,
+    );
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, size.side()), egui::Sense::click());
+    if selected || response.hovered() || response.has_focus() {
+        paint(ui, &response, selected);
+    }
+    ui.painter().galley(
+        egui::pos2(rect.left() + padding, rect.center().y - text.size().y * 0.5),
+        text,
+        visuals(ui, &response, selected).text_color(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
     response
 }
 
@@ -1457,7 +1560,7 @@ mod icon_tests {
     use super::*;
 
     #[test]
-    fn icon_controls_share_text_button_geometry_and_inset_glyphs_across_styles() {
+    fn icon_controls_keep_fixed_squares_centered_with_text_buttons_across_styles() {
         for theme in [egui::Theme::Dark, egui::Theme::Light] {
             for em in [13., 20., 28.] {
                 let ctx = egui::Context::default();
@@ -1470,14 +1573,15 @@ mod icon_tests {
                         centered_control_row(ui, |ui| {
                             let browse = button(ui, "Browse…", false, egui::Vec2::ZERO);
                             let auto = auto_button(ui, false);
-                            let picker = icon_button(ui, "Picker", false);
-                            let menu = icon_menu_button(ui, "Settings", |ui| {
+                            let picker = icon_button(ui, "Picker", false, ControlSize::Large);
+                            let menu = icon_menu_button(ui, "Settings", ControlSize::Large, |ui| {
                                 ui.label("Options");
                             });
                             let menu = menu.response;
                             for response in [&auto, &picker, &menu] {
                                 assert!(
-                                    (response.rect.height() - browse.rect.height()).abs() < 0.01,
+                                    (response.rect.height() - ControlSize::Large.side()).abs()
+                                        < 0.01,
                                     "{theme:?}, {em}"
                                 );
                                 assert!(
@@ -1556,7 +1660,7 @@ pub fn eye_icon(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32, crossed: 
 }
 
 pub fn eye_button(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
-    let response = icon_button(ui, label, on);
+    let response = icon_button(ui, label, on, ControlSize::Medium);
     let color = visuals(ui, &response, on).fg_stroke.color;
     eye_icon(ui, icon_rect(ui, &response), color, !on);
     response

@@ -31,10 +31,15 @@ pub(super) fn section_header_with(
     ui.spacing_mut().item_spacing.y = crate::widgets::section_spacing(ui);
     let changed = ui
         .horizontal(|ui| {
-            ui.set_min_height(crate::widgets::button_group_height(ui));
+            ui.set_min_height(crate::widgets::ControlSize::Medium.group_height());
             let text = crate::widgets::section_title(ui, title);
             let (response, enabled) = if let Some(enabled) = enabled {
-                let response = crate::widgets::checkbox(ui, enabled, text);
+                let response = crate::widgets::checkbox_sized(
+                    ui,
+                    enabled,
+                    text,
+                    crate::widgets::ControlSize::Medium,
+                );
                 (response, *enabled)
             } else {
                 (ui.label(text), true)
@@ -65,7 +70,7 @@ fn aligned_label(
         crate::widgets::form_label_width(ui, &[text], enabled.as_ref().map(|_| text))
     });
     let prefix = if enabled.is_some() {
-        ui.spacing().icon_width + ui.spacing().icon_spacing
+        crate::widgets::ControlSize::Small.side() + ui.spacing().icon_spacing
     } else {
         0.
     };
@@ -348,7 +353,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
             };
             ui.add_enabled_ui(enabled, |ui| {
                 let auto_width = if automatic.is_some() {
-                    crate::widgets::control_height(ui) + ui.spacing().item_spacing.x
+                    crate::widgets::ControlSize::Large.side() + ui.spacing().item_spacing.x
                 } else {
                     0.
                 };

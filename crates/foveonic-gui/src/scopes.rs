@@ -24,8 +24,9 @@ pub fn controls(ui: &mut egui::Ui, scope: &mut Scope, viewport: &mut bool) {
             f32::INFINITY,
             egui::TextStyle::Body,
         );
-        let viewport_width =
-            viewport_label.size().x + ui.spacing().icon_width + ui.spacing().icon_spacing;
+        let viewport_width = viewport_label.size().x
+            + crate::widgets::ControlSize::Small.side()
+            + ui.spacing().icon_spacing;
         let dropdown_width =
             (ui.available_width() - viewport_width - ui.spacing().item_spacing.x - CONTROL_PADDING)
                 .max(0.);

@@ -69,13 +69,26 @@ pub fn grip_icon(ui: &egui::Ui, center: egui::Pos2, scale: f32) {
     }
 }
 
-pub const EDITING_ACTIONS_WIDTH: f32 = 64.;
+pub const EDITING_ACTIONS_WIDTH: f32 =
+    3. * crate::widgets::ControlSize::Medium.side() + 2. * crate::widgets::MEDIUM_CONTROL_GAP;
 
 pub fn editing_handle(ui: &mut egui::Ui, section: EditingSection) {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(20., 20.), egui::Sense::drag());
+    let side = crate::widgets::ControlSize::Medium.side();
+    let (bounds, _) = ui.allocate_exact_size(
+        egui::vec2(EDITING_ACTIONS_WIDTH, side),
+        egui::Sense::hover(),
+    );
+    let rect = egui::Rect::from_min_max(
+        bounds.right_top() - egui::vec2(side, 0.),
+        bounds.right_bottom(),
+    );
+    let response = ui.interact(
+        rect,
+        ui.id().with(("editing grip", section)),
+        egui::Sense::drag(),
+    );
     grip_icon(ui, rect.center(), 1.);
     response.dnd_set_drag_payload(section);
-    ui.add_space(EDITING_ACTIONS_WIDTH - 20.);
     response
         .on_hover_cursor(egui::CursorIcon::Grab)
         .on_hover_text("Drag to reorder editing sections");
