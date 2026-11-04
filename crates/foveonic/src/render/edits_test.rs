@@ -79,8 +79,10 @@ fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {
     source.photographic.perceptual.contrast = -0.4;
     source.photographic.brightness = 0.6;
     source.highlight_restoration = false;
+    source.adaptive_tone_tuning.natural.shadows = 0.9;
+    assert_eq!(snapshot(&source).adaptive_tone_tuning, Default::default());
     let mut target = Settings {
-        preview_quality: PreviewQuality::Draft,
+        preview_quality: PreviewQuality::Fast,
         preview_region: Some([0, 0, 20, 30]),
         output_size: Some([200, 300]),
         tiff_color_space: Some(TiffColorSpace::ProPhotoRgb),
@@ -108,10 +110,11 @@ fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {
         PhotographicMethod::Universal
     );
     Scope::All.apply(&source, &mut target, ProcessingFamily::Merrill);
-    assert_eq!(target.preview_quality, PreviewQuality::Draft);
+    assert_eq!(target.preview_quality, PreviewQuality::Fast);
     assert_eq!(target.preview_region, Some([0, 0, 20, 30]));
     assert_eq!(target.output_size, Some([200, 300]));
     assert_eq!(target.tiff_color_space, Some(TiffColorSpace::ProPhotoRgb));
+    assert_eq!(target.adaptive_tone_tuning, Default::default());
     assert!(!target.highlight_restoration);
 }
 

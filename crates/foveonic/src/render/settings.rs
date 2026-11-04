@@ -3,6 +3,7 @@
 use super::MerrillBandingControls;
 pub use crate::color_space::TiffColorSpace;
 pub use crate::nodes::finish::color_editor::Controls as ColorEditorControls;
+pub use crate::nodes::finish::dehaze::Controls as DehazeControls;
 pub use crate::nodes::finish::perceptual_grade::Controls as PerceptualControls;
 pub use crate::nodes::finish::photographic::{
     Controls as PhotographicControls, Method as PhotographicMethod,
@@ -17,6 +18,7 @@ pub use crate::nodes::sensor::color_field::{
 pub use crate::nodes::{
     finish::tone::Controls as ToneControls, sensor::repair::Threshold as RepairThreshold,
 };
+pub use crate::source::AutoExposureCompensation;
 use crate::source::Result;
 
 #[cfg(test)]
@@ -86,6 +88,10 @@ impl Default for ProcessingSections {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub dehaze: DehazeControls,
+    /// Request the automatic shadow tone as transient control metadata, even at zero Amount.
+    #[serde(skip)]
+    pub dehaze_estimate: bool,
     /// Batch-only section choices, excluded from editing sidecars.
     #[serde(skip)]
     pub processing_sections: ProcessingSections,
@@ -95,6 +101,12 @@ pub struct Settings {
     /// Transient oriented native-pixel rectangle for regional preview processing.
     #[serde(skip)]
     pub preview_region: Option<[u32; 4]>,
+    /// Transient selected-range color preview, excluded from saved recipes and exports.
+    #[serde(skip)]
+    pub color_range_preview: Option<usize>,
+    /// Shared estimator tuning snapshot. This is not a per-photo edit.
+    #[serde(skip)]
+    pub adaptive_tone_tuning: super::AdaptiveToneTuning,
     pub rendering: Rendering,
     pub monochrome: MonochromeControls,
     /// Monochrome Smooth/Crisp selection. None follows the file or recipe default.
@@ -104,10 +116,18 @@ pub struct Settings {
     pub color_mode: String,
     /// Stops applied to linear RGB before the selected rendering mode's tone curve.
     pub exposure: f32,
+    /// Resolve inverse capture compensation per source instead of using the manual value.
+    pub exposure_auto: bool,
+    /// Selected capture components, retained when automatic exposure is off.
+    pub exposure_auto_compensation: AutoExposureCompensation,
     /// Bypass tone edits without changing their saved values or camera look.
     pub tone_enabled: bool,
     /// Bypass saturation independently of tone and subject-color adjustments.
     pub saturation_enabled: bool,
+    /// Bypass optional Corrections while retaining their authored values.
+    pub corrections_enabled: bool,
+    /// Shared gamut protection for Reference, Universal and Color Range saturation.
+    pub prevent_color_clipping: bool,
     /// Bypass Color Editor without changing its saved range adjustments.
     pub color_editor_enabled: bool,
     /// Bypass final sharpening while retaining its amount and Auto choice.
@@ -157,9 +177,13 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            dehaze: DehazeControls::default(),
+            dehaze_estimate: false,
             processing_sections: Default::default(),
             preview_quality: PreviewQuality::Full,
             preview_region: None,
+            color_range_preview: None,
+            adaptive_tone_tuning: Default::default(),
             rendering: Rendering::Color,
             monochrome: MonochromeControls::default(),
             monochrome_smoothness: None,
@@ -168,8 +192,12 @@ impl Default for Settings {
             white_balance_bias: Default::default(),
             color_mode: String::new(),
             exposure: 0.,
+            exposure_auto: false,
+            exposure_auto_compensation: Default::default(),
             tone_enabled: true,
             saturation_enabled: true,
+            corrections_enabled: true,
+            prevent_color_clipping: true,
             color_editor_enabled: true,
             sharpening_enabled: true,
             tone: ToneControls::default(),
@@ -198,6 +226,24 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Effective requests use manual EV so nested DNG/reference recipes cannot resolve Auto twice.
+    pub(crate) fn resolved_exposure(
+        &self,
+        metadata: &crate::source::Metadata,
+    ) -> std::borrow::Cow<'_, Self> {
+        if !self.exposure_auto {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut effective = self.clone();
+        effective.exposure = self
+            .exposure_auto_compensation
+            .inverse(crate::source::CaptureExposureCompensation::from_properties(
+                &metadata.properties,
+            ))
+            .unwrap_or(0.);
+        effective.exposure_auto = false;
+        std::borrow::Cow::Owned(effective)
+    }
     /// Photographic values without viewport or output-job policy.
     pub fn photographic_recipe(&self) -> Self {
         super::edits::snapshot(self)
@@ -220,10 +266,28 @@ impl Settings {
 
     /// Color recipes can refine native viewport detail before the whole frame.
     pub fn regional_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
-        !self.is_monochrome()
+        !self.adaptive_tone_active()
+            && !self.is_monochrome()
             && (super::recipes::quattro::fast_available(metadata)
                 || (self.output_size.is_none()
                     && super::recipes::merrill::fast_available(metadata)))
+    }
+
+    pub fn adaptive_tone_active(&self) -> bool {
+        self.tone_enabled
+            && self.processing_sections.tone
+            && self.photographic.tone_method == PhotographicMethod::Universal
+            && self.photographic.base_response.is_adaptive()
+    }
+
+    pub fn dehaze_auto(&self) -> bool {
+        self.corrections_enabled
+            && self.processing_sections.corrections
+            && self.dehaze.shadow.is_none()
+    }
+
+    pub fn dehaze_active(&self) -> bool {
+        self.corrections_enabled && self.processing_sections.corrections && self.dehaze.amount != 0.
     }
 
     pub fn is_monochrome(&self) -> bool {
@@ -283,6 +347,16 @@ impl Settings {
                 .is_active(self.is_monochrome())
     }
 
+    pub(crate) fn advanced_color_active(&self) -> bool {
+        self.color_editor_enabled
+            && (self
+                .photographic
+                .color_editor
+                .advanced
+                .is_active(self.is_monochrome())
+                || self.color_range_preview.is_some())
+    }
+
     pub(crate) fn color_editor_chromatic_active(&self) -> bool {
         self.color_editor_enabled
             && !self.is_monochrome()
@@ -307,7 +381,8 @@ impl Settings {
         self.universal_saturation() && self.photographic.perceptual.is_active(self.is_monochrome())
     }
     pub(crate) fn linear_chromatic_active(&self) -> bool {
-        self.color_editor_chromatic_active()
+        (self.dehaze_active() && !self.is_monochrome())
+            || self.color_editor_chromatic_active()
             || (self.universal_saturation()
                 && !self.is_monochrome()
                 && self.photographic.perceptual.chromatic_active())
@@ -368,9 +443,10 @@ impl Settings {
             self.processing_sections.noise
                 && (self.is_monochrome() || self.reconstruction.is_none_or(|c| c.noise_enabled))
         } else {
-            self.processing_sections.corrections
+            self.corrections_enabled && self.processing_sections.corrections
         };
         if self.tone_enabled
+            && self.corrections_enabled
             && self.saturation_enabled
             && self.sharpening_enabled
             && self.processing_sections == ProcessingSections::default()
@@ -379,7 +455,9 @@ impl Settings {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut effective = self.clone();
-        let sections = self.processing_sections;
+        let mut sections = self.processing_sections;
+        sections.corrections &= self.corrections_enabled;
+        effective.processing_sections = sections;
         effective.despeckle &= speckles_enabled;
         if family == crate::source::ProcessingFamily::Merrill && !speckles_enabled {
             effective.neutralize_shadows.strength = 0.;
@@ -397,15 +475,18 @@ impl Settings {
             effective.color_dq_gain = Some(0.);
         }
         if !sections.corrections {
+            effective.dehaze.amount = 0.;
             effective.repair = None;
             effective.highlight_restoration = false;
         }
         if !effective.tone_enabled {
             effective.exposure = 0.;
+            effective.exposure_auto = false;
             effective.tone = Default::default();
             effective.tonal_ranges = TonalRanges::default();
             effective.photographic.local_contrast = 0.;
             effective.photographic.brightness = 0.;
+            effective.photographic.base_response = Default::default();
         }
         if !effective.saturation_enabled {
             effective.saturation = 1.;
@@ -427,12 +508,14 @@ impl Settings {
             PhotographicMethod::Reference
                 if !settings.tonal_ranges.is_neutral()
                     || settings.photographic.local_contrast != 0.
-                    || settings.photographic.brightness != 0. =>
+                    || settings.photographic.brightness != 0.
+                    || settings.photographic.base_response.is_adaptive() =>
             {
                 let active = effective.to_mut();
                 active.tonal_ranges = Default::default();
                 active.photographic.local_contrast = 0.;
                 active.photographic.brightness = 0.;
+                active.photographic.base_response = Default::default();
             }
             PhotographicMethod::Universal
                 if settings.tone.shadows != 0. || settings.tone.highlights != 0. =>
@@ -479,8 +562,14 @@ impl Settings {
         let mut settings = self.active_tone_settings().into_owned();
         settings.preview_quality = PreviewQuality::Full;
         settings.preview_region = None;
+        settings.color_range_preview = None;
         settings.output_size = None;
+        settings.dehaze = Default::default();
+        settings.dehaze_estimate = false;
         settings.photographic = PhotographicControls {
+            // The selection is retained for appearance range policy. Its spatial
+            // gain is baked through the shared linear edit reference.
+            base_response: settings.photographic.base_response,
             sharpening: crate::nodes::finish::photographic::Sharpening {
                 method: self.photographic.sharpening.method,
                 ..Default::default()
@@ -493,6 +582,7 @@ impl Settings {
     /// Inspection can show sensor data before WB or mode is known. Check numbers
     /// here and let stages that use those camera choices resolve them later.
     pub fn validate_values(&self) -> Result<()> {
+        self.dehaze.validate()?;
         self.merrill_speckles.validate()?;
         self.neutralize_shadows.validate()?;
         self.merrill_banding.validate()?;
@@ -506,6 +596,7 @@ impl Settings {
         self.tonal_ranges.validate()?;
         self.photographic.validate()?;
         self.monochrome.validate()?;
+        self.adaptive_tone_tuning.validate()?;
         self.color_field.validate()?;
         if !self.exposure.is_finite()
             || !self.exposure.exp2().is_finite()

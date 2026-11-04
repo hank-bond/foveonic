@@ -30,6 +30,7 @@ pub(crate) fn prepare_appearance(
                 settings.tone,
             )?,
             code_white: RESPONSE_WHITE_CODE,
+            saturation: Default::default(),
             after_response: srgb_to_romm()?.0,
             notes: Some("Monochrome channel mix and spatial corrections are baked. Technical samples retain preceding 0..65535 code clamps; photographic tone is deferred."),
         });
@@ -64,11 +65,6 @@ pub(crate) fn prepare_appearance(
     if white.iter().any(|v| !v.is_finite() || *v <= 0.) || maximum <= 0. {
         return Err("invalid Quattro DNG camera white".into());
     }
-    let saturation = f64::from(settings.reference_saturation());
-    let saturation = Matrix(std::array::from_fn(|i| {
-        [0.299, 0.587, 0.114][i % 3] * (1. - saturation)
-            + if i / 3 == i % 3 { saturation } else { 0. }
-    }));
     Ok(SampledAppearance {
         basis: ProfileBasis {
             mapping: unbalance.gain(1. / (RESPONSE_WHITE_CODE * maximum)).0,
@@ -84,9 +80,10 @@ pub(crate) fn prepare_appearance(
             settings.tone,
         )?,
         code_white: RESPONSE_WHITE_CODE,
+        saturation: crate::nodes::finish::saturation_guard::Reference { factor: f64::from(settings.reference_saturation()), protect: settings.prevent_color_clipping },
         // Quattro's sampled curve returns linear sRGB. Saturation follows that
         // curve, then D50 adaptation/ROMM conversion puts the fitted look in PCS.
-        after_response: saturation.then(srgb_to_romm()?).0,
+        after_response: srgb_to_romm()?.0,
         notes: Some("Canonical Standard nonlinear color and spatial corrections are baked; the selected look is approximate. Technical samples retain preceding 0..65535 code clamps; photographic tone is deferred."),
     })
 }

@@ -35,6 +35,8 @@ pub enum DataType {
     RowTable,
     /// Regional Oklab color and luminance used by shadow neutralization.
     ShadowColorGuide,
+    /// Estimated haze color and calibrated lower/upper response levels.
+    DehazeAnalysis,
     CalibratedLayers,
     /// Linear codes awaiting the reconstruction finalizer's required gain.
     NormalizedCodeRgb,
@@ -82,6 +84,7 @@ impl DataType {
             | Self::Histogram
             | Self::RowTable
             | Self::ShadowColorGuide
+            | Self::DehazeAnalysis
             | Self::File
             | Self::FilteredTiles
             | Self::ConditionedTiles

@@ -11,10 +11,15 @@ fn grading_values_round_trip_and_validate_even_when_inactive() {
     assert_eq!(decoded, c);
     decoded.validate().unwrap();
     assert!(serde_json::from_str::<Controls>("{}").unwrap() == Controls::default());
-    for value in [f32::NAN, f32::INFINITY, 1.1, -1.1] {
+    c.saturation = 2.;
+    c.bands[0].saturation = 2.;
+    c.validate().unwrap();
+    for value in [f32::NAN, f32::INFINITY, 2.1, -1.1] {
         c.bands[0].saturation = value;
         assert!(c.validate().is_err());
         c.bands[0].saturation = 0.;
+    }
+    for value in [f32::NAN, f32::INFINITY, 1.1, -1.1] {
         c.contrast = value;
         assert!(c.validate().is_err());
     }
@@ -131,6 +136,17 @@ fn gpu_perceptual_monochrome_matches_color_editor_and_keeps_signed_values_finite
 }
 
 fn grade(gpu: &Gpu, values: &[f32], space: ColorSpace, white: f32, c: Controls) -> Vec<f32> {
+    grade_with_protection(gpu, values, space, white, c, true)
+}
+
+fn grade_with_protection(
+    gpu: &Gpu,
+    values: &[f32],
+    space: ColorSpace,
+    white: f32,
+    c: Controls,
+    prevent: bool,
+) -> Vec<f32> {
     let extent = [values.len() as u32 / 3, 1];
     let source = gpu.upload("saturation patches", values).unwrap();
     samples(
@@ -138,7 +154,8 @@ fn grade(gpu: &Gpu, values: &[f32], space: ColorSpace, white: f32, c: Controls) 
         &apply(
             gpu,
             &source,
-            Params::new(extent, space, white, 0.18_f32.log2(), c, false),
+            Params::new(extent, space, white, 0.18_f32.log2(), c, false)
+                .with_clipping_protection(prevent),
             extent,
             &mut Profile::default(),
         )
@@ -185,18 +202,19 @@ fn gpu_perceptual_boost_stays_in_working_gamut_and_preserves_hue_and_lightness()
             (0.05_f32, 0.),
             (0.5, 0.),
             (1., 0.),
-            (2., 1.),
-            (2., -1.),
+            (2., 0.),
+            (4., 1.),
+            (4., -1.),
             (0., 1.),
             (0., -1.),
             (-0.5, 1.),
             (-1., -1.),
         ] {
             let c = Controls {
-                saturation: amount.min(1.),
+                saturation: amount.min(2.),
                 contrast,
                 bands: [Band {
-                    saturation: if amount > 1. { 1. } else { 0. },
+                    saturation: if amount > 2. { 2. } else { 0. },
                 }; 3],
             };
             let result = grade(&gpu, &patches, space, 1., c);
@@ -254,7 +272,7 @@ fn gpu_perceptual_boost_favors_muted_colors_and_combines_controls_once() {
     let space = ColorSpace::Srgb;
     let patches = [0.3, 0.2, 0.2, 0.6, 0.01, 0.01, 0.6, 0., 0.];
     let mut previous = [0.; 3];
-    for amount in [0.01, 0.2, 0.5, 1.] {
+    for amount in [0.01, 0.2, 0.5, 1., 1.5, 2.] {
         let global = Controls {
             saturation: amount,
             ..Default::default()
@@ -489,4 +507,182 @@ fn gpu_two_slider_curve_keeps_colorfulness_order_and_bounds_neutral_amplificatio
             );
         }
     }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_saturation_policy_is_shared_by_global_basic_and_advanced_ranges() {
+    use super::super::{advanced_color, color_editor};
+    let gpu = Gpu::new().unwrap();
+    let patches = [
+        0.3, 0.2, 0.2, 0.7, 0.05, 0.02, 0.6, 0., 0., 0.8, 0.6, -0.01, -0.03, 0.1, 2., 0.2, 0.2,
+        0.2, 0., 0., 0.,
+    ];
+    for space in [
+        ColorSpace::Srgb,
+        ColorSpace::AdobeRgb,
+        ColorSpace::ProPhotoRgb,
+    ] {
+        for white in [1., 4095.] {
+            let values: Vec<_> = patches.iter().map(|v| v * white).collect();
+            let extent = [values.len() as u32 / 3, 1];
+            let input = gpu.upload("shared saturation patches", &values).unwrap();
+            let guide = gpu
+                .upload(
+                    "full selection independent of source",
+                    &[white, 0., 0.].repeat(extent[0] as usize),
+                )
+                .unwrap();
+            for prevent in [true, false] {
+                for amount in [-1., -0.5, 0.5, 1., 2.] {
+                    let expected = grade_with_protection(
+                        &gpu,
+                        &values,
+                        space,
+                        white,
+                        Controls {
+                            saturation: amount,
+                            ..Default::default()
+                        },
+                        prevent,
+                    );
+                    let mut basic = color_editor::Controls::default();
+                    basic.master.saturation = amount;
+                    let edited = color_editor::apply(
+                        &gpu,
+                        &input,
+                        &guide,
+                        color_editor::Params::new(extent, basic, space, white, white, 1., false)
+                            .with_clipping_protection(prevent),
+                        extent,
+                        &mut Profile::default(),
+                    )
+                    .unwrap();
+                    for (a, b) in samples(&gpu, &edited).iter().zip(&expected) {
+                        assert!(
+                            (a - b).abs() / white < 3e-5,
+                            "Basic/global mismatch {space:?} {amount} {prevent}: {a} versus {b}"
+                        );
+                    }
+                    let mut advanced = advanced_color::Controls::default();
+                    advanced.push(advanced_color::Range {
+                        width: 360.,
+                        adjustment: color_editor::Adjustment {
+                            saturation: amount,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    });
+                    for exposure in [-2., 0., 2.] {
+                        let edited = advanced_color::apply(
+                            &gpu,
+                            &input,
+                            &guide,
+                            advanced_color::Params::new(
+                                extent, advanced, space, white, white, exposure, false, None,
+                            )
+                            .with_clipping_protection(prevent),
+                            extent,
+                            &mut Profile::default(),
+                        )
+                        .unwrap();
+                        for (a, b) in samples(&gpu, &edited).iter().zip(&expected) {
+                            assert!((a - b).abs() / white < 3e-5, "Advanced/global mismatch {space:?} {amount} {prevent} EV{exposure}: {a} versus {b}");
+                        }
+                    }
+                }
+            }
+            let protected = grade_with_protection(
+                &gpu,
+                &values,
+                space,
+                white,
+                Controls {
+                    saturation: 2.,
+                    ..Default::default()
+                },
+                true,
+            );
+            let unlocked = grade_with_protection(
+                &gpu,
+                &values,
+                space,
+                white,
+                Controls {
+                    saturation: 2.,
+                    ..Default::default()
+                },
+                false,
+            );
+            let before = lab(&patches[6..9], space);
+            let after = lab(
+                &unlocked[6..9].iter().map(|v| v / white).collect::<Vec<_>>(),
+                space,
+            );
+            assert!(
+                after[1].hypot(after[2]) > before[1].hypot(before[2]) * 1.2,
+                "gamut-edge colors stayed locked"
+            );
+            assert!(unlocked.iter().all(|v| v.is_finite()));
+            assert_eq!(&unlocked[15..], &values[15..], "grays changed");
+            for amount in [-1., -0.5, 0.] {
+                let c = Controls {
+                    saturation: amount,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    grade_with_protection(&gpu, &values, space, white, c, true),
+                    grade_with_protection(&gpu, &values, space, white, c, false),
+                    "policy changed desaturation/neutral"
+                );
+            }
+            // Repeated protected saturation shares the same ceiling rather than granting a new allowance.
+            let repeated = grade_with_protection(
+                &gpu,
+                &protected,
+                space,
+                white,
+                Controls {
+                    saturation: 2.,
+                    ..Default::default()
+                },
+                true,
+            );
+            for (original, output) in values
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .zip(repeated.as_chunks::<3>().0.iter())
+            {
+                let low = original.iter().copied().fold(0., f32::min);
+                let high = original.iter().copied().fold(white, f32::max);
+                assert!(output
+                    .iter()
+                    .all(|v| *v >= low - white * 2e-5 && *v <= high + white * 2e-5));
+            }
+        }
+    }
+}
+
+#[test]
+fn balanced_control_coordinates_preserve_the_existing_processing_amounts() {
+    for (control, amount) in [
+        (-1., -1.),
+        (-0.5, -0.5),
+        (0., 0.),
+        (0.25, 0.5),
+        (0.5, 1.),
+        (1., 2.),
+    ] {
+        assert_eq!(Controls::saturation_from_control(control), amount);
+        assert_eq!(Controls::saturation_to_control(amount), control);
+    }
+    for amount in [-1., -0.1234567, 0., 0.007, 0.1234567, 1.2345678, 2.] {
+        assert_eq!(
+            Controls::saturation_from_control(Controls::saturation_to_control(amount)),
+            amount
+        );
+    }
+    assert_eq!(*Controls::SATURATION_CONTROL_RANGE.start(), -1.);
+    assert_eq!(*Controls::SATURATION_CONTROL_RANGE.end(), 1.);
 }

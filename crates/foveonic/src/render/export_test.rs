@@ -83,6 +83,7 @@ fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() 
             },
             metadata: metadata.clone(),
             settings: Settings::new("Sunlight", "Standard"),
+            dehaze_basis: None,
             owner: engine.owner.clone(),
         };
         let texture = engine
@@ -216,6 +217,7 @@ fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
             lists: Default::default(),
         }),
         settings: Settings::new("Sunlight", "Standard"),
+        dehaze_basis: None,
         owner: engine.owner.clone(),
     };
     let mut graph = Graph::default();

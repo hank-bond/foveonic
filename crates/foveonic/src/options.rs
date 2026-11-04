@@ -72,6 +72,14 @@ fn parse_settings_with_noise_defaults(
     let mut profiling = Mode::Off;
     let mut args = args;
     while let Some(arg) = args.next() {
+        if arg == "--auto-exposure" {
+            settings.exposure_auto = true;
+            continue;
+        }
+        if arg == "--prevent-color-clipping" || arg == "--no-prevent-color-clipping" {
+            settings.prevent_color_clipping = arg == "--prevent-color-clipping";
+            continue;
+        }
         if arg == "--reconstruction" {
             settings.reconstruction.get_or_insert(noise_defaults);
             continue;
@@ -135,12 +143,36 @@ fn parse_settings_with_noise_defaults(
                 settings.monochrome.banding = value.parse()?;
                 settings.rendering = Rendering::Monochrome;
             }
-            "--exposure" => settings.exposure = value.parse()?,
+            "--exposure" => {
+                settings.exposure = value.parse()?;
+                settings.exposure_auto = false;
+            }
+            "--auto-exposure-compensation" => {
+                use foveonic::render::AutoExposureCompensation;
+                settings.exposure_auto_compensation = match value.as_str() {
+                    "bracket" => AutoExposureCompensation::Bracket,
+                    "dial" => AutoExposureCompensation::Dial,
+                    "both" => AutoExposureCompensation::Both,
+                    _ => {
+                        return Err(
+                            "auto exposure compensation must be bracket, dial or both".into()
+                        )
+                    }
+                };
+            }
             "--blacks" => settings.tonal_ranges.blacks = value.parse()?,
             "--hdr-shadows" => settings.tonal_ranges.shadows = value.parse()?,
             "--hdr-highlights" => settings.tonal_ranges.highlights = value.parse()?,
             "--whites" => settings.tonal_ranges.whites = value.parse()?,
             "--tone-method" => settings.photographic.tone_method = parse_method(&value)?,
+            "--base-response" => {
+                settings.photographic.base_response = match value.as_str() {
+                    "camera" => foveonic::render::BaseResponse::Camera,
+                    "natural" => foveonic::render::BaseResponse::Natural,
+                    "strong" => foveonic::render::BaseResponse::Strong,
+                    _ => return Err("base response must be camera, natural or strong".into()),
+                };
+            }
             "--saturation-method" => {
                 settings.photographic.saturation_method = parse_method(&value)?
             }
@@ -154,6 +186,26 @@ fn parse_settings_with_noise_defaults(
             "--saturation-midtones" => {
                 settings.photographic.perceptual.bands[1].saturation = value.parse()?
             }
+            "--adaptive-black-limit" => {
+                let amount = value.parse()?;
+                settings.adaptive_tone_tuning.natural.blacks = amount;
+                settings.adaptive_tone_tuning.strong.blacks = amount;
+            }
+            "--adaptive-shadow-limit" => {
+                let amount = value.parse()?;
+                settings.adaptive_tone_tuning.natural.shadows = amount;
+                settings.adaptive_tone_tuning.strong.shadows = amount;
+            }
+            "--adaptive-highlight-limit" => {
+                let amount = value.parse()?;
+                settings.adaptive_tone_tuning.natural.highlights = amount;
+                settings.adaptive_tone_tuning.strong.highlights = amount;
+            }
+            "--adaptive-white-limit" => {
+                let amount = value.parse()?;
+                settings.adaptive_tone_tuning.natural.whites = amount;
+                settings.adaptive_tone_tuning.strong.whites = amount;
+            }
             "--saturation-highlights" => {
                 settings.photographic.perceptual.bands[2].saturation = value.parse()?
             }
@@ -165,6 +217,23 @@ fn parse_settings_with_noise_defaults(
                 settings.photographic.sharpening.halo_suppression = value.parse()?
             }
             "--local-contrast" => settings.photographic.local_contrast = value.parse()?,
+            "--dehaze" => settings.dehaze.amount = value.parse()?,
+            "--haze-color" => {
+                settings.dehaze.shadow = if value == "auto" {
+                    None
+                } else {
+                    Some(
+                        value
+                            .split(',')
+                            .map(str::parse)
+                            .collect::<std::result::Result<Vec<f32>, _>>()?
+                            .try_into()
+                            .map_err(|_| {
+                                "haze color requires three normalized linear RGB values"
+                            })?,
+                    )
+                }
+            }
             "--color-sensitivity" => {
                 let lightness = value
                     .split(',')
@@ -298,6 +367,62 @@ fn parse_method(value: &str) -> Result<foveonic::render::PhotographicMethod> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dehaze_cli_preserves_auto_and_manual_shadow_tones() {
+        let parse = |args: &[&str]| {
+            super::parse_settings(
+                ["--wb", "Sunlight", "--mode", "Standard"]
+                    .into_iter()
+                    .chain(args.iter().copied())
+                    .map(std::ffi::OsString::from),
+            )
+        };
+        let (manual, _, _) = parse(&["--dehaze", "35"]).unwrap();
+        assert_eq!(manual.dehaze.amount, 35.);
+        assert_eq!(
+            manual.dehaze.shadow,
+            foveonic::render::DehazeControls::default().shadow
+        );
+        let (auto, _, _) = parse(&["--dehaze", "35", "--haze-color", "auto"]).unwrap();
+        assert!(auto.dehaze.shadow.is_none());
+        let (manual, _, _) = parse(&["--dehaze", "-50", "--haze-color", "0.08,0.1,0.12"]).unwrap();
+        assert_eq!(manual.dehaze.shadow, Some([0.08, 0.1, 0.12]));
+        let (auto, _, _) =
+            parse(&["--haze-color", "0.08,0.1,0.12", "--haze-color", "auto"]).unwrap();
+        assert_eq!(auto.dehaze.shadow, None);
+        assert!(parse(&["--dehaze", "101"]).is_err());
+        assert!(parse(&["--haze-color", "0,0,0"]).is_err());
+        assert!(parse(&["--haze-color", "0.1,0.2"]).is_err());
+    }
+    #[test]
+    fn base_response_is_an_independent_saved_choice() {
+        let (settings, _, _) = super::parse_settings(
+            [
+                "--base-response",
+                "natural",
+                "--wb",
+                "Sunlight",
+                "--mode",
+                "Standard",
+            ]
+            .into_iter()
+            .map(std::ffi::OsString::from),
+        )
+        .unwrap();
+        assert_eq!(
+            settings.photographic.base_response,
+            foveonic::render::BaseResponse::Natural
+        );
+        assert_eq!(settings.exposure, 0.);
+        assert!(settings.tonal_ranges.is_neutral());
+        assert!(super::parse_settings(
+            ["--base-response", "unknown"]
+                .into_iter()
+                .map(std::ffi::OsString::from),
+        )
+        .is_err());
+    }
+
     use super::*;
 
     #[test]
@@ -339,7 +464,12 @@ mod tests {
             "--saturation-midtones",
             "--saturation-highlights",
         ] {
-            for invalid in ["1.01", "-1.01", "NaN"] {
+            let upper = if flag == "--saturation-contrast" {
+                "1.01"
+            } else {
+                "2.01"
+            };
+            for invalid in [upper, "-1.01", "NaN"] {
                 assert!(parse_settings(
                     ["--wb", "Sunlight", "--mode", "Standard", flag, invalid]
                         .into_iter()
@@ -572,5 +702,67 @@ mod tests {
         assert!(parse(&["--fine-size", "0.49"]).is_err());
         assert!(parse(&["--coarse-size", "2.01"]).is_err());
         assert!(parse(&["--reconstruction-method", "other"]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod saturation_policy_tests {
+    #[test]
+    fn cli_accepts_extended_amounts_and_one_shared_policy_without_selecting_reference_or_tone() {
+        let parse = |flags: &[&str]| {
+            super::parse_settings(
+                ["--wb", "Sunlight", "--mode", "Standard"]
+                    .iter()
+                    .chain(flags.iter())
+                    .map(std::ffi::OsString::from),
+            )
+        };
+        let (s, _, _) = parse(&[
+            "--universal-saturation",
+            "2",
+            "--saturation-highlights",
+            "2",
+            "--no-prevent-color-clipping",
+        ])
+        .unwrap();
+        assert!(!s.prevent_color_clipping);
+        assert_eq!(s.photographic.perceptual.saturation, 2.);
+        assert_eq!(s.photographic.perceptual.bands[2].saturation, 2.);
+        assert_eq!(
+            s.photographic.saturation_method,
+            foveonic::render::PhotographicMethod::Reference
+        );
+        let (s, _, _) =
+            parse(&["--no-prevent-color-clipping", "--prevent-color-clipping"]).unwrap();
+        assert!(s.prevent_color_clipping);
+        assert!(parse(&["--universal-saturation", "2.01"]).is_err());
+        assert!(parse(&["--saturation-contrast", "1.01"]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod exposure_auto_tests {
+    #[test]
+    fn cli_keeps_auto_compensation_dynamic_and_manual_ev_turns_it_off() {
+        let parse = |flags: &[&str]| {
+            super::parse_settings(
+                ["--wb", "Sunlight", "--mode", "Standard"]
+                    .iter()
+                    .chain(flags.iter())
+                    .map(std::ffi::OsString::from),
+            )
+        };
+        let (s, _, _) =
+            parse(&["--auto-exposure", "--auto-exposure-compensation", "bracket"]).unwrap();
+        assert!(s.exposure_auto);
+        assert_eq!(
+            s.exposure_auto_compensation,
+            foveonic::render::AutoExposureCompensation::Bracket
+        );
+        assert_eq!(s.exposure, 0.);
+        let (s, _, _) = parse(&["--auto-exposure", "--exposure", "0.4"]).unwrap();
+        assert!(!s.exposure_auto);
+        assert_eq!(s.exposure, 0.4);
+        assert!(parse(&["--auto-exposure-compensation", "none"]).is_err());
     }
 }

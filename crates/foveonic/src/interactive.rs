@@ -52,6 +52,8 @@ impl Settings {
                 }
             };
         }
+        changed!(self.dehaze.amount != next.dehaze.amount, "dehaze-amount");
+        changed!(self.dehaze.shadow != next.dehaze.shadow, "dehaze-shadow");
         changed!(
             self.preview_quality != next.preview_quality,
             "preview-quality"
@@ -59,6 +61,10 @@ impl Settings {
         changed!(self.preview_region != next.preview_region, "preview-region");
         changed!(self.rendering != next.rendering, "rendering");
         changed!(self.photographic != next.photographic, "photographic");
+        changed!(
+            self.adaptive_tone_tuning != next.adaptive_tone_tuning,
+            "adaptive-tone-limits"
+        );
         changed!(self.monochrome.mix != next.monochrome.mix, "mono-mix");
         changed!(
             self.monochrome.detail_enabled != next.monochrome.detail_enabled
@@ -123,7 +129,9 @@ impl Settings {
             "sharpen"
         );
         changed!(
-            self.exposure.to_bits() != next.exposure.to_bits(),
+            self.exposure.to_bits() != next.exposure.to_bits()
+                || self.exposure_auto != next.exposure_auto
+                || self.exposure_auto_compensation != next.exposure_auto_compensation,
             "exposure"
         );
         changed!(
@@ -898,6 +906,7 @@ mod tests {
             let base = graph
                 .add(
                     Operation::ImageAlias {
+                        dehaze_basis: None,
                         data: DataType::ToneMappedRgb(ColorSpace::Srgb),
                         output: "finish.base",
                     },

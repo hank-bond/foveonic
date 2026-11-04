@@ -2,6 +2,21 @@
 
 use super::*;
 use crate::render::Settings;
+
+#[test]
+fn monochrome_edit_baking_supports_singular_storage_and_nonzero_black_output() {
+    let mut appearance = Prepared::monochrome(vec![0., 1.], 0., 4096.).unwrap();
+    appearance.mapping = Matrix([0., 1. / 4096., 0., 0., 1. / 4096., 0., 0., 1. / 4096., 0.]);
+    assert!(appearance.technical_from_native().is_err());
+    let reverse = appearance.technical_from_monochrome().unwrap();
+    for value in [0., 0.1, 0.5, 1.] {
+        let stored = reverse.apply([value; 3]);
+        let restored = appearance.mapping.apply(stored);
+        assert_eq!(restored, [value; 3]);
+        assert_eq!(stored[0], stored[1]);
+        assert_eq!(stored[1], stored[2]);
+    }
+}
 #[test]
 fn classic_sample_basis_round_trips_and_keeps_tone_in_profile() {
     use crate::{color_space::TransferFunction, nodes::finish::signed_response};
@@ -487,6 +502,7 @@ fn sampled_unsigned_appearance_preserves_response_matrix_order() {
         response,
         code_white: white,
         after_response: after.0,
+        saturation: Default::default(),
         notes: None,
     })
     .unwrap();

@@ -20,6 +20,9 @@ mod edits;
 mod execute;
 mod recipes;
 mod settings;
+pub use crate::nodes::finish::base_response::{
+    BaseResponse, Limits as AdaptiveToneLimits, Tuning as AdaptiveToneTuning,
+};
 pub use crate::nodes::finish::shadow_neutralize::Controls as ShadowNeutralizeControls;
 mod speckle_controls;
 pub use speckle_controls::{MerrillSpeckleControls, MerrillSpeckleMethod};
@@ -33,14 +36,20 @@ pub use edits::{
     Scope as EditScope, Section as EditSection,
 };
 
+pub use crate::nodes::finish::advanced_color::{
+    Controls as AdvancedColorControls, Range as AdvancedColorRange,
+    MAX_NAME_CHARS as MAX_COLOR_RANGE_NAME_CHARS, MAX_RANGES as MAX_COLOR_RANGES,
+};
+pub use crate::nodes::finish::color_editor::Sample as ColorRangeSample;
 use execute::Input;
 pub(crate) use execute::Value;
 use recipes::Recipe;
 pub use settings::{
-    ColorEditorControls, ColorFieldApproach, ColorFieldControls, HighlightMode, MerrillNoiseMethod,
-    MonochromeControls, PerceptualControls, PhotographicControls, PhotographicMethod,
-    PreviewQuality, ProcessingSections, Rendering, RepairThreshold, Settings, TiffColorSpace,
-    TonalRanges, ToneControls, UniversalSharpening, WhiteBalanceBias,
+    AutoExposureCompensation, ColorEditorControls, ColorFieldApproach, ColorFieldControls,
+    DehazeControls, HighlightMode, MerrillNoiseMethod, MonochromeControls, PerceptualControls,
+    PhotographicControls, PhotographicMethod, PreviewQuality, ProcessingSections, Rendering,
+    RepairThreshold, Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening,
+    WhiteBalanceBias,
 };
 
 /// Completed recipe preparation and execution boundaries for an interactive render.
@@ -65,6 +74,13 @@ pub struct Engine {
     // and the original sample allocation identify the immutable source.
     calibration_statistics: std::sync::Mutex<Vec<CalibrationEstimate>>,
     calibration_resources: Option<Arc<recipes::quattro::resources::ResourceDirectory>>,
+}
+
+#[cfg(test)]
+impl Engine {
+    pub(crate) fn test_gpu(&self) -> &Gpu {
+        &self.gpu
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -236,8 +252,12 @@ impl Engine {
     }
 
     /// Pick subject-color ranges from a named linear color guide in oriented view coordinates.
-    /// Only eight selection weights leave the GPU, independently of display color management.
-    pub fn pick_color_range(&self, guide: &RenderedImage, uv: [f32; 2]) -> Result<[f32; 8]> {
+    /// Only selection weights and wheel coordinates leave the GPU.
+    pub fn pick_color_range(
+        &self,
+        guide: &RenderedImage,
+        uv: [f32; 2],
+    ) -> Result<ColorRangeSample> {
         self.check_owner(guide)?;
         if uv.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v)) {
             return Err("color pick must be inside the photograph".into());
@@ -278,6 +298,59 @@ impl Engine {
                 view.crop,
             ),
         )
+    }
+
+    /// Estimate a shadow tone from an uncorrected linear image patch in oriented view coordinates.
+    /// The returned color is normalized linear sRGB. Only this small result leaves the GPU.
+    pub fn pick_haze_color(&self, image: &RenderedImage, uv: [f32; 2]) -> Result<[f32; 3]> {
+        self.check_owner(image)?;
+        if uv.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v)) {
+            return Err("haze pick must be inside the photograph".into());
+        }
+        let crate::image::Space::LinearRgb(_) = image.description().space else {
+            return Err("haze selection requires a linear image".into());
+        };
+        let view = image.view();
+        let [l, t, r, b] = view.crop;
+        if l >= r || t >= b {
+            return Err("haze selection has an empty crop".into());
+        }
+        let [width, height] = if matches!(view.rotation, 90 | 270) {
+            [b - t, r - l]
+        } else {
+            [r - l, b - t]
+        };
+        let x = ((uv[0] * width as f32) as u32).min(width - 1);
+        let y = ((uv[1] * height as f32) as u32).min(height - 1);
+        let pixel = match view.rotation {
+            0 => [l + x, t + y],
+            90 => [l + y, b - 1 - x],
+            180 => [r - 1 - x, b - 1 - y],
+            270 => [r - 1 - y, t + x],
+            _ => return Err("unsupported haze pick orientation".into()),
+        };
+        let params = crate::nodes::finish::dehaze::Estimate::patch(
+            image.description().extent,
+            image
+                .dehaze_basis
+                .ok_or("haze selection requires a camera-basis guide")?,
+            image.description().linear_white as f32,
+            image.settings.is_monochrome(),
+            pixel,
+            view.crop,
+        );
+        let result = crate::nodes::finish::dehaze::estimate(
+            &self.gpu,
+            image.buffer(),
+            params,
+            &mut Profile::default(),
+        )?;
+        let bytes = self.gpu.readback(&result)?;
+        let values: &[f32] = bytemuck::cast_slice(&bytes);
+        if values[3] == 0. {
+            return Err("No reliable haze color here. Choose a dark, hazy area.".into());
+        }
+        Ok([values[0], values[1], values[2]])
     }
 
     /// Analyze a region in cropped, rotated output pixels, or the whole view with None.

@@ -81,7 +81,13 @@ impl Scope {
                     target.tiff_color_space,
                     target.processing_sections,
                 );
+                let color_preview = target.color_range_preview;
+                let dehaze_estimate = target.dehaze_estimate;
+                let adaptive_limits = target.adaptive_tone_tuning;
                 *target = source.clone();
+                target.color_range_preview = color_preview;
+                target.dehaze_estimate = dehaze_estimate;
+                target.adaptive_tone_tuning = adaptive_limits;
                 target.preview_quality = quality;
                 target.preview_region = region;
                 target.output_size = size;
@@ -96,9 +102,12 @@ impl Scope {
             Self::Tool(Section::Tone) => {
                 target.tone_enabled = source.tone_enabled;
                 target.exposure = source.exposure;
+                target.exposure_auto = source.exposure_auto;
+                target.exposure_auto_compensation = source.exposure_auto_compensation;
                 target.tone = source.tone;
                 target.tonal_ranges = source.tonal_ranges;
                 target.photographic.tone_method = source.photographic.tone_method;
+                target.photographic.base_response = source.photographic.base_response;
                 target.photographic.brightness = source.photographic.brightness;
                 target.photographic.local_contrast = source.photographic.local_contrast;
             }
@@ -140,6 +149,8 @@ impl Scope {
                 target.photographic.sharpening = source.photographic.sharpening;
             }
             Self::Tool(Section::Corrections) => {
+                target.corrections_enabled = source.corrections_enabled;
+                target.dehaze = source.dehaze;
                 target.repair = source.repair;
                 if family != ProcessingFamily::Merrill {
                     target.despeckle = source.despeckle;
@@ -180,8 +191,11 @@ fn merge_reconstruction(source: &Settings, target: &mut Settings, detail: bool) 
 
 pub(super) fn snapshot(settings: &Settings) -> Settings {
     Settings {
+        dehaze_estimate: false,
         preview_quality: Default::default(),
         preview_region: None,
+        color_range_preview: None,
+        adaptive_tone_tuning: Default::default(),
         output_size: None,
         tiff_color_space: None,
         processing_sections: Default::default(),

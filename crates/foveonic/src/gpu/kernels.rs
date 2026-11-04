@@ -12,6 +12,12 @@ pub enum Kernel {
     ColorEditorApply,
     ColorEditorPick,
     PerceptualGrade,
+    AdvancedColor,
+    DehazePrepare,
+    DehazeHorizontal,
+    DehazeVertical,
+    DehazeEstimate,
+    DehazeApply,
     MonoTextureExtract,
     MonoTextureBlur,
     MonoTextureApply,
@@ -249,6 +255,7 @@ pub enum Kernel {
     ChromaRecursiveHorizontal,
     ChromaRecursiveApply,
     SignedPhotographic,
+    ReferenceSaturation,
     CodeRoot,
     CodeDetailVertical,
     CodeDetailHorizontal,
@@ -277,6 +284,14 @@ pub enum Kernel {
     WbHistogram,
     WbAccumulate,
     WbMean,
+    AdaptiveToneHistogram,
+    AdaptiveToneFit,
+    AdaptiveToneSelect,
+    AdaptiveToneGain,
+    AdaptiveToneSampleRegions,
+    AdaptiveToneRegionSummary,
+    AdaptiveToneRegionFit,
+    AdaptiveToneRefine,
     FieldPrepare,
     FieldRepairs,
     FieldNative,
@@ -315,6 +330,12 @@ impl Kernel {
             Self::ColorEditorApply => "apply Color Editor",
             Self::ColorEditorPick => "pick Color Range",
             Self::PerceptualGrade => "perceptual grading",
+            Self::AdvancedColor => "Advanced Color Range",
+            Self::DehazePrepare => "prepare haze analysis",
+            Self::DehazeHorizontal => "horizontal haze minimum",
+            Self::DehazeVertical => "vertical haze minimum",
+            Self::DehazeEstimate => "estimate haze color",
+            Self::DehazeApply => "apply Dehaze",
             Self::MonoTextureExtract => "extract monochrome texture",
             Self::MonoTextureBlur => "filter monochrome texture",
             Self::MonoTextureApply => "apply monochrome texture",
@@ -437,6 +458,7 @@ impl Kernel {
             Self::BlackMean => "black mean",
             Self::Calibration => "calibration",
             Self::Color => "color matrix",
+            Self::ReferenceSaturation => "protected reference saturation",
             Self::Tone => "tone",
             Self::PhotographicTone => "photographic tone",
             Self::PhotographicBrightness => "photographic brightness",
@@ -582,6 +604,14 @@ impl Kernel {
             Self::LogBackward => "log reconstruction backward",
             Self::LogCombine => "log reconstruction combine",
             Self::LogFinalize => "log reconstruction finalize",
+            Self::AdaptiveToneHistogram => "adaptive tone joint histogram",
+            Self::AdaptiveToneFit => "adaptive tone candidate fit",
+            Self::AdaptiveToneSelect => "adaptive tone response selection",
+            Self::AdaptiveToneGain => "adaptive tone adaptive gains",
+            Self::AdaptiveToneSampleRegions => "adaptive tone regional samples",
+            Self::AdaptiveToneRegionSummary => "adaptive tone regional summaries",
+            Self::AdaptiveToneRegionFit => "adaptive tone regional candidate fit",
+            Self::AdaptiveToneRefine => "adaptive tone refinement",
             Self::FieldPrepare => "color-field original reliability and anchors",
             Self::FieldRepairs => "color-field repaired donor exclusion",
             Self::FieldNative => "color-field native gradient equations",
@@ -651,9 +681,19 @@ impl Gpu {
             "{oklab}\n{}",
             include_str!("../nodes/finish/shadow_neutralize.wgsl")
         );
+        let saturation_guard = include_str!("../nodes/finish/saturation_guard.wgsl");
+        let reference_saturation = format!(
+            "{saturation_guard}\n{}",
+            include_str!("../nodes/finish/reference_saturation.wgsl")
+        );
+        let signed_photographic = format!(
+            "{saturation_guard}\n{}",
+            include_str!("../nodes/finish/signed_response.wgsl")
+        );
         let color_selection = include_str!("../nodes/finish/color_editor_selection.wgsl");
+        let saturation = include_str!("../nodes/finish/perceptual_saturation.wgsl");
         let color_editor = format!(
-            "{color_selection}\n{}\n{}\n{}",
+            "{color_selection}\n{}\n{saturation}\n{}\n{}",
             include_str!("../nodes/finish/perceptual_color.wgsl"),
             include_str!("../nodes/finish/color_editor.wgsl"),
             include_str!("../nodes/finish/color_editor_response.wgsl")
@@ -663,11 +703,27 @@ impl Gpu {
             include_str!("../nodes/finish/color_editor_pick.wgsl")
         );
         let perceptual = format!(
-            "{}\n{}",
+            "{}\n{saturation}\n{}",
             include_str!("../nodes/finish/perceptual_color.wgsl"),
             include_str!("../nodes/finish/perceptual_grade.wgsl")
         );
         let texture = include_str!("../nodes/monochrome/texture.wgsl");
+        let advanced = format!(
+            "{color_selection}\n{}\n{saturation}\n{}",
+            include_str!("../nodes/finish/perceptual_color.wgsl"),
+            include_str!("../nodes/finish/advanced_color.wgsl")
+        );
+        let tonal = format!(
+            "{}\n{}",
+            include_str!("../nodes/finish/hdr_response.wgsl"),
+            include_str!("../nodes/finish/tone_equalizer.wgsl")
+        );
+        let visibility = format!(
+            "{}\n{}\n{}",
+            include_str!("../nodes/finish/hdr_response.wgsl"),
+            include_str!("../nodes/finish/adaptive_tone.wgsl"),
+            include_str!("../nodes/finish/adaptive_tone_regions.wgsl")
+        );
         let kernels = [
             (
                 include_str!("../nodes/finish/linear_basis.wgsl"),
@@ -682,6 +738,24 @@ impl Gpu {
             (color_editor.as_str(), "color_editor_apply"),
             (color_pick.as_str(), "color_editor_pick"),
             (perceptual.as_str(), "perceptual_grade"),
+            (advanced.as_str(), "advanced_color"),
+            (
+                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+                "dehaze_prepare",
+            ),
+            (
+                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+                "dehaze_horizontal",
+            ),
+            (
+                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+                "dehaze_vertical",
+            ),
+            (
+                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+                "dehaze_estimate",
+            ),
+            (include_str!("../nodes/finish/dehaze.wgsl"), "dehaze_apply"),
             (texture, "mono_texture_extract"),
             (texture, "mono_texture_blur"),
             (texture, "mono_texture_apply"),
@@ -1099,42 +1173,15 @@ impl Gpu {
             (photographic_local_contrast.as_str(), "local_extract"),
             (photographic_local_contrast.as_str(), "local_blur"),
             (photographic_local_contrast.as_str(), "local_apply"),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "reduce_guide",
-            ),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "mean_horizontal",
-            ),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "statistics",
-            ),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "coefficients",
-            ),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "mean_vertical",
-            ),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "update_base",
-            ),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "finish_mask",
-            ),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "calculate_gain",
-            ),
-            (
-                include_str!("../nodes/finish/tone_equalizer.wgsl"),
-                "apply_ranges",
-            ),
+            (tonal.as_str(), "reduce_guide"),
+            (tonal.as_str(), "mean_horizontal"),
+            (tonal.as_str(), "statistics"),
+            (tonal.as_str(), "coefficients"),
+            (tonal.as_str(), "mean_vertical"),
+            (tonal.as_str(), "update_base"),
+            (tonal.as_str(), "finish_mask"),
+            (tonal.as_str(), "calculate_gain"),
+            (tonal.as_str(), "apply_ranges"),
             (include_str!("../nodes/finish/encode.wgsl"), "main"),
             (include_str!("../nodes/sensor/repair.wgsl"), "main"),
             (sharpen, "main"),
@@ -1304,7 +1351,8 @@ impl Gpu {
                 include_str!("../nodes/color/chroma.wgsl"),
                 "recursive_apply",
             ),
-            (include_str!("../nodes/finish/signed_response.wgsl"), "main"),
+            (&signed_photographic, "main"),
+            (&reference_saturation, "main"),
             (include_str!("../nodes/finish/root_detail.wgsl"), "root_map"),
             (
                 include_str!("../nodes/finish/root_detail.wgsl"),
@@ -1402,6 +1450,14 @@ impl Gpu {
                 include_str!("../nodes/color/weighted_white_balance.wgsl"),
                 "row_means",
             ),
+            (visibility.as_str(), "histogram"),
+            (visibility.as_str(), "fit"),
+            (visibility.as_str(), "select_fit"),
+            (visibility.as_str(), "adaptive_gain"),
+            (visibility.as_str(), "sample_regions"),
+            (visibility.as_str(), "summarize_regions"),
+            (visibility.as_str(), "fit_regions"),
+            (visibility.as_str(), "refine"),
         ];
         #[cfg(test)]
         let mut shader_writes = Vec::new();

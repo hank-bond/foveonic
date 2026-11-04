@@ -36,6 +36,7 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
         },
         metadata: source.metadata.clone(),
         settings: settings.clone(),
+        dehaze_basis: None,
         owner: engine.owner.clone(),
     };
     let base = image(&[-4095., 2047.5, 8190., 4095., 4095., 4095.]);

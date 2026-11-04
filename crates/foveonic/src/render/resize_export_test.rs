@@ -80,6 +80,7 @@ fn resized_tiff_defaults_to_reference_sampling_before_destination_conversion() {
             },
             metadata: metadata.clone(),
             settings: Settings::new("Sunlight", "Standard"),
+            dehaze_basis: None,
             owner: engine.owner.clone(),
         };
         for (index, case) in fixture["cases"].as_array().unwrap().iter().enumerate() {

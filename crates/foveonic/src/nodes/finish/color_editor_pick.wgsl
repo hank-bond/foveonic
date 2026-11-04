@@ -22,6 +22,8 @@ fn color_editor_pick() {
     let hi=max(c.x,max(c.y,c.z)); let lo=min(c.x,min(c.y,c.z));
     let chroma=hi-lo;
     let reliable=hi>p.normalization.x*SIGNAL_FLOOR*SHADOW_FADE && chroma>hi*NEUTRAL_CHROMA_LIMIT;
+    let coordinates=color_coordinates(c,p.normalization.x);
+    dst[8]=coordinates.x;dst[9]=coordinates.y;dst[10]=coordinates.z;dst[11]=0.;
     let weights=range_weights(c);
     for (var k=0u;k<8u;k++) { dst[k]=select(0.,weights[k]/max(chroma,1e-20),reliable); }
 }

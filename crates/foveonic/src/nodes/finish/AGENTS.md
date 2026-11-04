@@ -18,12 +18,16 @@ Linear gain transfer accepts a reference pair related by scalar brightness multi
 
 ### Source files
 
+- **[adaptive_tone.rs](./adaptive_tone.rs)** Fits regional visibility and rescues structured near-black detail through one spatial RGB gain.
+- **[advanced_color.rs](./advanced_color.rs)** Applies bounded soft color selections and perceptual edits from an independent clean guide.
+- **[base_response.rs](./base_response.rs)** Defines regional base-response choices and shared per-profile application caps.
 - **[box_contrast.rs](./box_contrast.rs)** Applies ordered box-mean local contrast to integral RGB codes with explicit noise and gain bounds.
 - **[code_channel_map.rs](./code_channel_map.rs)** Mixes integral RGB codes with normalized channel weights or copies selected channels.
 - **[code_crop.rs](./code_crop.rs)** Crops, rotates and resizes integral RGB codes with fixed-point mapping and source-derived interpolation phases.
 - **[code_response.rs](./code_response.rs)** Maps unsigned integral RGB codes through supplied linear photographic response tables.
 - **[color_editor.rs](./color_editor.rs)** Edits linear Hue, Saturation and Lightness and picks subject ranges from the same cleaned color guide.
 - **[color_sharpen.rs](./color_sharpen.rs)** Sharpens integral RGB channels with wrapped neighborhood sums and signal-dependent thresholds.
+- **[dehaze.rs](./dehaze.rs)** Estimates dark-channel haze and applies bounded correction in recipe-supplied camera RGB.
 - **[image_region.rs](./image_region.rs)** Copies a rectangular numerical signal on the GPU while preserving every component bit.
 - **[linear_basis.rs](./linear_basis.rs)** Maps declared linear RGB codes into another linear sample basis without tone or clipping.
 - **[linear_gain.rs](./linear_gain.rs)** Transfers a known scalar brightness edit between two linear RGB representations.
@@ -35,6 +39,7 @@ Linear gain transfer accepts a reference pair related by scalar brightness multi
 - **[resample.rs](./resample.rs)** Prepares camera resampling weights and leaves image calculations on the GPU.
 - **[resize.rs](./resize.rs)** Prepares reference photographic resize kernels and samples owned floating RGB on the GPU.
 - **[root_detail.rs](./root_detail.rs)** Maps signed linear codes into root space and extracts detail with a signed separable filter.
+- **[saturation_guard.rs](./saturation_guard.rs)** Samples the native saturation shoulder for DNG appearance fitting.
 - **[shadow_neutralize.rs](./shadow_neutralize.rs)** Selectively reduces green and magenta chroma in dark, nearly neutral regions on GPU.
 - **[signed_response.rs](./signed_response.rs)** Restores linear detail or applies photographic response to signed root-domain samples.
 - **[tone.rs](./tone.rs)** Prepares a camera-derived color-mode tone table for application in a shader.

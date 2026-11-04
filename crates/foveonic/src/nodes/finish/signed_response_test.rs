@@ -180,3 +180,56 @@ fn gpu_signed_response_matches_scalar_with_adjusted_tone_saturation_and_detail()
         bytemuck::cast_slice::<f32, u8>(&source)
     );
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn protected_classic_saturation_matches_profile_sampling_and_preserves_neutral_response() {
+    let gpu = Gpu::new().unwrap();
+    let samples = [
+        [0.7, 0.3, 0.2],
+        [1.8, 0.15, 0.05],
+        [0.4; 3],
+        [0.02, 0.03, 0.04],
+    ];
+    let values: Vec<f32> = samples
+        .into_iter()
+        .flatten()
+        .map(|v| (v * SIGNAL_CODE_UNIT).round() as f32)
+        .collect();
+    let input = gpu.upload("Classic saturation samples", &values).unwrap();
+    let mut variants = Vec::new();
+    for protect in [false, true] {
+        let prepared = prepare(
+            Controls {
+                saturation: 2.,
+                ..Default::default()
+            },
+            [1.; 3],
+            ToneAdjustments::default(),
+            TransferFunction::Power(461. / 256.),
+        )
+        .unwrap()
+        .with_clipping_protection(protect);
+        let output = apply_linear(
+            &gpu,
+            &input,
+            [samples.len() as u32, 1],
+            &prepared,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let actual: &[f32] = bytemuck::cast_slice(&bytes);
+        for (i, sample) in values.as_chunks::<3>().0.iter().enumerate() {
+            let expected = prepared.evaluate_linear(std::array::from_fn(|c| {
+                f64::from(sample[c]) / SIGNAL_CODE_UNIT
+            }));
+            for c in 0..3 {
+                assert!((f64::from(actual[i * 3 + c]) - expected[c]).abs() < 0.002);
+            }
+        }
+        variants.push(actual.to_vec());
+    }
+    assert_ne!(variants[0][..6], variants[1][..6]);
+    assert_eq!(variants[0][6..9], variants[1][6..9]);
+}

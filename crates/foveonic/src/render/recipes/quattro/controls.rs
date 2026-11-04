@@ -40,6 +40,15 @@ pub(in crate::render) fn validate_photographic(settings: &Settings) -> Result<()
 
 pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool {
     let mut supported = Settings::new(&settings.white_balance, "Standard");
+    // Transient UI requests participate in validation equality too. Dropping
+    // them would reject a supported photograph before it can render.
+    supported.dehaze = settings.dehaze;
+    supported.dehaze_estimate = settings.dehaze_estimate;
+    supported.color_range_preview = settings.color_range_preview;
+    supported.adaptive_tone_tuning = settings.adaptive_tone_tuning;
+    supported.exposure_auto = settings.exposure_auto;
+    supported.exposure_auto_compensation = settings.exposure_auto_compensation;
+    supported.prevent_color_clipping = settings.prevent_color_clipping;
     if settings.color_mode.is_empty() || appearance::MODES.contains(&settings.color_mode.as_str()) {
         supported.color_mode.clone_from(&settings.color_mode);
     }
@@ -59,6 +68,7 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
     supported.monochrome_smoothness = settings.monochrome_smoothness;
     supported.tone_enabled = settings.tone_enabled;
     supported.saturation_enabled = settings.saturation_enabled;
+    supported.corrections_enabled = settings.corrections_enabled;
     supported.color_editor_enabled = settings.color_editor_enabled;
     supported.sharpening_enabled = settings.sharpening_enabled;
     supported.exposure = settings.exposure.clamp(-2., 2.);

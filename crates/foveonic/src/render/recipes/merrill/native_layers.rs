@@ -61,6 +61,7 @@ pub(super) fn build(
                     final_id: input,
                     params,
                     rgb_extent: [params.source[0], params.source[1]],
+                    rgb_bounds: params.crop,
                 }));
             }
         };
@@ -232,6 +233,7 @@ pub(super) fn build(
             final_id: calibrated,
             params,
             rgb_extent: [params.source[0], params.source[1]],
+            rgb_bounds: params.crop,
         },
         couplings,
     })

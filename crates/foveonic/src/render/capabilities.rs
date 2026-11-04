@@ -252,6 +252,9 @@ impl ControlCapabilities {
     /// Reject unsupported requests without silently changing processing choices.
     /// Numeric validity and camera metadata requirements are checked separately.
     pub fn validate(&self, settings: &Settings) -> Result<()> {
+        if settings.adaptive_tone_active() && settings.preview_region.is_some() {
+            return Err("adaptive base responses require whole-photo processing".into());
+        }
         if self.family != ProcessingFamily::Merrill {
             if settings.neutralize_shadows != Default::default() {
                 return Err("Neutralize shadows is available only for Merrill cameras".into());

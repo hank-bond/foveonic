@@ -41,6 +41,7 @@ pub(crate) struct Prepared {
     tables: Vec<i32>,
     saturation: [i32; 9],
     detail_q14: i32,
+    guard_white: f32,
 }
 
 impl Prepared {
@@ -49,6 +50,20 @@ impl Prepared {
             .slice(&self.tables)
             .slice(&self.saturation)
             .with(&self.detail_q14)
+            .with(&self.guard_white)
+    }
+
+    pub(crate) fn with_clipping_protection(mut self, enabled: bool) -> Self {
+        self.guard_white = if enabled && self.saturation[0] > 4096 {
+            gamma()
+                .iter()
+                .take(32768)
+                .position(|v| *v == 65535)
+                .expect("response white") as f32
+        } else {
+            0.
+        };
+        self
     }
 }
 
@@ -85,13 +100,28 @@ impl Prepared {
             let root = self.tables[LUT_LEN + index(code)];
             self.tables[(2 + c) * LUT_LEN + index(root)]
         });
-        std::array::from_fn(|c| {
-            let sum = self.saturation[c * 3..c * 3 + 3]
+        let candidate: [i32; 3] = std::array::from_fn(|c| {
+            self.saturation[c * 3..c * 3 + 3]
                 .iter()
                 .zip(rgb)
-                .fold(2048_i32, |sum, (m, v)| sum.wrapping_add(m.wrapping_mul(v)));
+                .fold(2048_i32, |sum, (m, v)| sum.wrapping_add(m.wrapping_mul(v)))
+                >> 12
+        });
+        let candidate = if self.guard_white > 0. {
+            let input = rgb.map(f64::from);
+            super::saturation_guard::protect(
+                input,
+                candidate.map(f64::from),
+                input.iter().sum::<f64>() / 3.,
+                f64::from(self.guard_white),
+            )
+            .map(|v| v.round() as i32)
+        } else {
+            candidate
+        };
+        candidate.map(|code| {
             f64::from(f32::from_bits(
-                self.tables[5 * LUT_LEN + index(sum >> 12)] as u32,
+                self.tables[5 * LUT_LEN + index(code)] as u32,
             ))
         })
     }
@@ -141,6 +171,7 @@ pub(crate) fn prepare(
         tables,
         saturation,
         detail_q14: ((c.detail + 1.) * DETAIL_Q14_UNIT) as i32,
+        guard_white: 0.,
     })
 }
 
@@ -364,6 +395,7 @@ pub(crate) fn apply(
         &prepared.tables,
         prepared.saturation,
         prepared.detail_q14,
+        prepared.guard_white,
         ResponseMode::Photographic,
         profile,
     )
@@ -385,6 +417,7 @@ pub(crate) fn apply_linear(
         &prepared.tables,
         prepared.saturation,
         0,
+        prepared.guard_white,
         ResponseMode::LinearPhotographic,
         profile,
     )
@@ -407,6 +440,7 @@ pub(crate) fn apply_linear_detail(
         &exponential(),
         [0; 9],
         prepared.detail_q14,
+        0.,
         ResponseMode::LinearDetail,
         profile,
     )
@@ -421,6 +455,7 @@ fn dispatch_response(
     tables: &[i32],
     saturation: [i32; 9],
     detail_q14: i32,
+    guard_white: f32,
     mode: ResponseMode,
     profile: &mut crate::profile::Profile,
 ) -> crate::source::Result<crate::gpu::ReadGuard> {
@@ -464,7 +499,7 @@ fn dispatch_response(
         matrix: std::array::from_fn(|r| {
             std::array::from_fn(|c| if c < 3 { saturation[r * 3 + c] } else { 0 })
         }),
-        detail: [detail_q14, 0, 0, 0],
+        detail: [detail_q14, guard_white.to_bits() as i32, 0, 0],
     };
     let mut output = gpu.storage("Signed response RGB", pixels * 12)?;
     let uniform = gpu.uniform(&params);

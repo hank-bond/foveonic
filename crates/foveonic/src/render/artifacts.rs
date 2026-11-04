@@ -46,8 +46,21 @@ impl Engine {
             return Err("duplicate requested output".into());
         }
         execution.check()?;
-        execution.plan(graph, &targets)?;
         let mut roots = targets.clone();
+        let estimate = if settings.dehaze_estimate && settings.dehaze_auto() {
+            graph
+                .outputs
+                .iter()
+                .position(|o| o.name == "dehaze.analysis")
+        } else {
+            None
+        };
+        if let Some(id) = estimate {
+            if !roots.contains(&id) {
+                roots.push(id);
+            }
+        }
+        execution.plan(graph, &roots)?;
         for &id in &execution.checkpoints {
             if !roots.contains(&id) {
                 roots.push(id);
@@ -55,6 +68,14 @@ impl Engine {
         }
         let values =
             self.execute_controlled(Input::Source(source), graph, &roots, profile, execution)?;
+        let dehaze_estimate = if let Some(id) = estimate {
+            let value = &values[roots.iter().position(|root| *root == id).unwrap()];
+            let bytes = self.gpu.readback(&value.buffer)?;
+            let table: &[f32] = bytemuck::cast_slice(&bytes);
+            (table.len() == 8 && table[3] > 0.).then(|| [table[0], table[1], table[2]])
+        } else {
+            None
+        };
         values
             .into_iter()
             .zip(targets)
@@ -90,6 +111,12 @@ impl Engine {
                         },
                         metadata: source.metadata.clone(),
                         settings: settings.clone(),
+                        dehaze_basis: match &graph.nodes[output.producer].operation {
+                            crate::graph::Operation::ImageAlias { dehaze_basis, .. } => {
+                                *dehaze_basis
+                            }
+                            _ => None,
+                        },
                         owner: self.owner.clone(),
                     }))
                 } else {
@@ -99,7 +126,7 @@ impl Engine {
                             .iter()
                             .map(|v| *v as f32)
                             .collect(),
-                        DataType::BlackLevels | DataType::RowTable => {
+                        DataType::BlackLevels | DataType::RowTable | DataType::DehazeAnalysis => {
                             bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()
                         }
                         _ => return Err("unsupported diagnostic output".into()),
@@ -107,7 +134,7 @@ impl Engine {
                     Content::Table {
                         columns: match output.data {
                             DataType::Histogram => 4096,
-                            DataType::RowTable => 4,
+                            DataType::RowTable | DataType::DehazeAnalysis => 4,
                             _ => 1,
                         },
                         values,
@@ -115,6 +142,7 @@ impl Engine {
                 };
                 Ok(Artifact {
                     name: output.name,
+                    dehaze_estimate,
                     metadata: source.metadata.clone(),
                     settings: settings.clone(),
                     content,

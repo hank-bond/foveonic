@@ -1,6 +1,6 @@
 //! Prepares coordinated HDR ranges and a reusable multiscale log-brightness base.
 //!
-//! The response and edge coefficients follow research into the reference implementation version 16.6.
+//! Response and edge coefficients follow the inspected coordinated spatial HDR operation.
 //! The floating GPU filter uses our working-space luminance and box boundaries.
 
 use crate::{
@@ -88,28 +88,36 @@ pub(crate) fn pivot(curve: &[f32], exposure: f32) -> Result<f32> {
 }
 
 pub(crate) fn pivot_with_white(curve: &[f32], exposure: f32, white: f32) -> Result<f32> {
+    if !exposure.is_finite() {
+        return Err("invalid HDR pivot exposure".into());
+    }
+    Ok(input_exposure_for_output(curve, PIVOT_OUTPUT, white)? - exposure)
+}
+
+/// Invert a metadata tone table at a linear output brightness, in stops from nominal white.
+pub(crate) fn input_exposure_for_output(curve: &[f32], output: f32, white: f32) -> Result<f32> {
     if curve.len() < 2
         || white <= 0.
         || !white.is_finite()
-        || !exposure.is_finite()
+        || !output.is_finite()
+        || output <= 0.
         || curve.iter().any(|v| !v.is_finite())
     {
         return Err("invalid HDR pivot context".into());
     }
     let upper = curve
-        .partition_point(|v| *v < PIVOT_OUTPUT)
+        .partition_point(|v| *v < output)
         .clamp(1, curve.len() - 1);
     let lower = upper - 1;
     let span = curve[upper] - curve[lower];
     let fraction = if span > 0. {
-        ((PIVOT_OUTPUT - curve[lower]) / span).clamp(0., 1.)
+        ((output - curve[lower]) / span).clamp(0., 1.)
     } else {
         0.
     };
     Ok(((lower as f32 + fraction) / white)
         .max(2_f32.powi(-16))
-        .log2()
-        - exposure)
+        .log2())
 }
 
 #[repr(C)]

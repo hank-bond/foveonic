@@ -40,6 +40,7 @@ pub(super) fn build(
     {
         recipe.final_id = recipe.graph.add(
             Operation::ImageAlias {
+                dehaze_basis: None,
                 data: DataType::ToneMappedRgb(space),
                 output: "finish.base",
             },

@@ -177,6 +177,7 @@ pub enum Operation {
     },
     /// Retain an image under a recipe-owned inspection name without copying it.
     ImageAlias {
+        dehaze_basis: Option<crate::nodes::finish::dehaze::Basis>,
         data: DataType,
         output: &'static str,
     },
@@ -204,6 +205,18 @@ pub enum Operation {
         params: crate::nodes::finish::perceptual_grade::Params,
         space: ColorSpace,
     },
+    AdvancedColor {
+        params: Box<crate::nodes::finish::advanced_color::Params>,
+        space: ColorSpace,
+    },
+    DehazeEstimate {
+        params: crate::nodes::finish::dehaze::Estimate,
+        space: ColorSpace,
+    },
+    Dehaze {
+        params: crate::nodes::finish::dehaze::Params,
+        space: ColorSpace,
+    },
     LinearBasis {
         rows: [[f32; 4]; 3],
         space: ColorSpace,
@@ -223,6 +236,20 @@ pub enum Operation {
     },
     LinearLocalContrast {
         params: crate::nodes::finish::photographic::Params,
+        space: ColorSpace,
+    },
+    AdaptiveToneOverview {
+        source: [u32; 2],
+        space: ColorSpace,
+    },
+    AdaptiveToneGuide {
+        guide: crate::nodes::finish::tone_equalizer::Guide,
+        space: ColorSpace,
+    },
+    AdaptiveTone {
+        params: crate::nodes::finish::adaptive_tone::Params,
+        analysis: crate::nodes::finish::adaptive_tone::Params,
+        curve: Vec<f32>,
         space: ColorSpace,
     },
     ToneMask {
@@ -368,13 +395,26 @@ impl Operation {
             Self::ShadowNeutralize { params, .. } => params.key(),
             Self::ShadowNeutralGuide { params, .. } => params.guide_key(),
             Self::PerceptualGrade { params, .. } => params.key(),
+            Self::AdvancedColor { params, .. } => params.key(),
+            Self::DehazeEstimate { params, .. } => params.key(),
+            Self::Dehaze { params, .. } => params.key(),
             Self::MonoTexture(c) => Key::pod(&[c.fine, c.coarse, c.fine_size, c.coarse_size]),
-            Self::ImageAlias { .. } | Self::TransferLinearGain { .. } => Key::default(),
+            Self::ImageAlias { dehaze_basis, .. } => {
+                dehaze_basis.map_or_else(Key::default, |b| b.key())
+            }
+            Self::TransferLinearGain { .. } => Key::default(),
             Self::PhotographicTone { params, .. }
             | Self::LinearBrightness { params, .. }
             | Self::LinearLocalContrast { params, .. }
             | Self::LinearUniversalSharpen { params, .. } => params.key(),
-            Self::ToneMask { guide, .. } => guide.key(),
+            Self::AdaptiveToneGuide { guide, .. } | Self::ToneMask { guide, .. } => guide.key(),
+            Self::AdaptiveToneOverview { source, .. } => Key::pod(source),
+            Self::AdaptiveTone {
+                params,
+                analysis,
+                curve,
+                ..
+            } => params.key().join(analysis.key()).slice(curve),
             Self::TonalRanges {
                 controls,
                 pivot,
@@ -521,6 +561,9 @@ impl Operation {
             Self::ShadowNeutralize { .. } => "neutralize green and magenta shadows",
             Self::ShadowNeutralGuide { .. } => "prepare regional shadow color",
             Self::PerceptualGrade { .. } => "submit perceptual grading",
+            Self::AdvancedColor { .. } => "Advanced Color Range",
+            Self::DehazeEstimate { .. } => "estimate haze color",
+            Self::Dehaze { .. } => "Dehaze",
             Self::MonoTexture(_) => "submit monochrome texture",
             Self::ImageAlias { .. } => "retain image alias",
             Self::LinearBasis { .. } => "bake linear color edits",
@@ -529,6 +572,9 @@ impl Operation {
             Self::PhotographicTone { .. } => "finish.tone",
             Self::LinearBrightness { .. } => "linear.brightness",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",
+            Self::AdaptiveToneOverview { .. } => "prepare quarter-pixel tone analysis",
+            Self::AdaptiveToneGuide { .. } => "prepare adaptive base guide",
+            Self::AdaptiveTone { .. } => "fit regional base response",
             Self::ToneMask { .. } => "submit tonal brightness mask",
             Self::TonalRanges { .. } => "submit tonal range exposure",
             Self::Tone { .. } => "submit tone",
@@ -754,6 +800,11 @@ impl Operation {
             Self::MonoTexture(_) => (vec![Monochrome], Monochrome),
             Self::LinearBasis { data, space, .. } => (vec![LinearRgb(*space)], *data),
             Self::LinearWhiteBalance { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
+            Self::AdvancedColor { space, .. } => (vec![LinearRgb(*space); 2], LinearRgb(*space)),
+            Self::DehazeEstimate { space, .. } => (vec![LinearRgb(*space)], DehazeAnalysis),
+            Self::Dehaze { space, .. } => {
+                (vec![LinearRgb(*space), DehazeAnalysis], LinearRgb(*space))
+            }
             Self::TransferLinearGain { data, space } => {
                 (vec![*data, LinearRgb(*space), LinearRgb(*space)], *data)
             }
@@ -775,7 +826,21 @@ impl Operation {
             Self::PhotographicTone { space, .. } => {
                 (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space))
             }
-            Self::ToneMask { space, .. } => (vec![LinearRgb(*space)], ScalarField),
+            Self::AdaptiveToneGuide { space, .. } | Self::ToneMask { space, .. } => {
+                (vec![LinearRgb(*space)], ScalarField)
+            }
+            Self::AdaptiveToneOverview { space, .. } => {
+                (vec![LinearRgb(*space)], LinearRgb(*space))
+            }
+            Self::AdaptiveTone { space, .. } => (
+                vec![
+                    LinearRgb(*space),
+                    ScalarField,
+                    LinearRgb(*space),
+                    ScalarField,
+                ],
+                LinearRgb(*space),
+            ),
             Self::TonalRanges { space, .. } => {
                 (vec![LinearRgb(*space), ScalarField], LinearRgb(*space))
             }
@@ -1031,6 +1096,9 @@ impl Operation {
             Self::ShadowNeutralize { .. } => "shadow-neutralize.rgb",
             Self::ShadowNeutralGuide { .. } => "shadow-neutralize.guide",
             Self::PerceptualGrade { params, .. } => params.name(),
+            Self::AdvancedColor { .. } => "advanced-color.rgb",
+            Self::DehazeEstimate { .. } => "dehaze.analysis",
+            Self::Dehaze { .. } => "dehaze.rgb",
             Self::MonoTexture(_) => "mono.texture",
             Self::ImageAlias { output, .. } => output,
             Self::LinearBasis { .. } => "dng.linear-color-edits",
@@ -1039,6 +1107,9 @@ impl Operation {
             Self::PhotographicTone { .. } => "finish.tone",
             Self::LinearBrightness { .. } => "linear.brightness",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",
+            Self::AdaptiveToneOverview { .. } => "base-response.overview",
+            Self::AdaptiveToneGuide { .. } => "base-response.mask",
+            Self::AdaptiveTone { .. } => "base-response.rgb",
             Self::ToneMask { .. } => "tonal-ranges.mask",
             Self::TonalRanges { .. } => "tonal-ranges.rgb",
             Self::Tone { .. } => "tone.rgb",

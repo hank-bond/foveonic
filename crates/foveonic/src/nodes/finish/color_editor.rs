@@ -20,8 +20,16 @@ pub struct Adjustment {
     pub lightness: f32,
 }
 impl Adjustment {
-    fn values(self) -> [f32; 3] {
-        [self.hue, self.saturation, self.lightness]
+    pub(crate) fn validate(self) -> Result<()> {
+        if !(-1. ..=1.).contains(&self.hue)
+            || !super::perceptual_grade::Controls::SATURATION_RANGE.contains(&self.saturation)
+            || !(-1. ..=1.).contains(&self.lightness)
+        {
+            return Err(
+                "Color Range requires Hue/Lightness in -1..1 and Saturation in -1..2".into(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -31,6 +39,7 @@ impl Adjustment {
 pub struct Controls {
     pub bands: [Adjustment; 8],
     pub master: Adjustment,
+    pub advanced: super::advanced_color::Controls,
 }
 impl Controls {
     pub const LABELS: [&'static str; 9] = [
@@ -55,27 +64,28 @@ impl Controls {
         }
     }
     pub fn chromatic_active(self) -> bool {
+        self.advanced.chromatic_active() || self.basic_chromatic_active()
+    }
+    fn basic_chromatic_active(self) -> bool {
         self.bands
             .into_iter()
             .chain([self.master])
             .any(|v| v.hue != 0. || v.saturation != 0.)
     }
     pub fn is_active(self, monochrome: bool) -> bool {
+        self.advanced.is_active(monochrome) || self.basic_active(monochrome)
+    }
+    pub fn basic_active(self, monochrome: bool) -> bool {
         self.bands
             .into_iter()
             .chain([self.master])
             .any(|v| v.lightness != 0.)
-            || (!monochrome && self.chromatic_active())
+            || (!monochrome && self.basic_chromatic_active())
     }
     pub(crate) fn validate(self) -> Result<()> {
-        if self
-            .bands
-            .into_iter()
-            .chain([self.master])
-            .flat_map(Adjustment::values)
-            .any(|v| !(-1. ..=1.).contains(&v))
-        {
-            return Err("Color Editor amounts must be between -1 and 1".into());
+        self.advanced.validate()?;
+        for adjustment in self.bands.into_iter().chain([self.master]) {
+            adjustment.validate()?;
         }
         Ok(())
     }
@@ -100,6 +110,8 @@ pub(crate) struct Params {
     guide_matrix: [[f32; 4]; 3],
     to_srgb: [[f32; 4]; 3],
     from_srgb: [[f32; 4]; 3],
+    /// Shared gamut protection flag and linear code white.
+    protection: [f32; 4],
 }
 impl Params {
     pub fn new(
@@ -128,7 +140,7 @@ impl Params {
             ],
             values: [
                 guide_white,
-                u32::from(!monochrome && controls.chromatic_active()) as f32,
+                u32::from(!monochrome && controls.basic_chromatic_active()) as f32,
                 white,
                 0.,
             ],
@@ -138,14 +150,19 @@ impl Params {
             guide_matrix: guide_matrix(space),
             to_srgb: TiffColorSpace::Srgb.transform(space),
             from_srgb: TiffColorSpace::from(space).transform(ColorSpace::Srgb),
+            protection: [1., white, 0., 0.],
         }
+    }
+    pub fn with_clipping_protection(mut self, prevent: bool) -> Self {
+        self.protection[0] = u32::from(prevent) as f32;
+        self
     }
     pub fn key(self) -> Key {
         Key::pod(&self)
     }
 }
 
-fn guide_matrix(space: ColorSpace) -> [[f32; 4]; 3] {
+pub(super) fn guide_matrix(space: ColorSpace) -> [[f32; 4]; 3] {
     // D50 colorants of the researched linear reference working profile.
     // The profile's Adobe name alone does not identify these exact colorants.
     const REFERENCE_COLORANTS: [f64; 9] = [
@@ -275,10 +292,27 @@ impl PickParams {
     }
 }
 
-/// Return only range weights. Full photographic samples remain on the GPU.
-pub(crate) fn pick(gpu: &Gpu, guide: &ReadGuard, params: PickParams) -> Result<[f32; 8]> {
+/// Small GPU selection record shared by Basic gestures and Advanced picking.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Sample {
+    pub weights: [f32; 8],
+    /// Hue in degrees, relative saturation and selection confidence.
+    pub color: [f32; 4],
+}
+impl From<[f32; 8]> for Sample {
+    fn from(weights: [f32; 8]) -> Self {
+        Self {
+            weights,
+            ..Default::default()
+        }
+    }
+}
+
+/// Full photographic samples remain on the GPU.
+pub(crate) fn pick(gpu: &Gpu, guide: &ReadGuard, params: PickParams) -> Result<Sample> {
     let uniform = gpu.uniform(&params);
-    let mut output = gpu.storage("Color Range pick", 32)?;
+    let mut output = gpu.storage("Color Range pick", size_of::<Sample>() as u64)?;
     let mut trace = gpu.trace(false, 1);
     gpu.dispatch(
         Kernel::ColorEditorPick,
@@ -291,5 +325,5 @@ pub(crate) fn pick(gpu: &Gpu, guide: &ReadGuard, params: PickParams) -> Result<[
         &mut trace,
     );
     let bytes = gpu.readback(&output)?;
-    Ok(*bytemuck::from_bytes::<[f32; 8]>(&bytes))
+    Ok(*bytemuck::from_bytes::<Sample>(&bytes))
 }

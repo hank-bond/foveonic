@@ -18,7 +18,7 @@ use std::{
 
 pub const MAX_SIDE: u32 = 2048;
 // Bump when photographic processing or preview encoding changes its appearance.
-const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE14";
+const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE20";
 // Allow the largest RGB16 image plus its TIFF and compression overhead.
 const MAX_ENCODED: u64 = 32 * 1024 * 1024;
 // Signature, JSON length, and JSON CRC32 share the decoded source prefix layout.
@@ -194,6 +194,11 @@ impl Cache {
         preview: Preview,
         calibration: Option<&str>,
     ) -> Result<()> {
+        // Shared tuning is intentionally absent from photo recipes. Until it has
+        // a persistent preview identity, publish adaptive previews in memory only.
+        if settings.adaptive_tone_active() {
+            return Ok(());
+        }
         let key = self.preview_key(path)?;
         let family = metadata.processing_family()?;
         let calibration = if family == ProcessingFamily::Merrill {

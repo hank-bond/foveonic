@@ -106,6 +106,7 @@ pub(crate) struct Prepared {
     camera_to_romm: Matrix,
     camera_to_native: Matrix,
     after_tone: Matrix,
+    saturation: crate::nodes::finish::saturation_guard::Reference,
     tone: Vec<f32>,
     pub calibration_exposure: f64,
     /// Mode selection has already collapsed the sensor mixture in the samples.
@@ -150,6 +151,7 @@ pub(crate) struct SampledAppearance {
     pub basis: ProfileBasis,
     pub response: crate::nodes::finish::code_response::Prepared,
     pub code_white: f64,
+    pub saturation: crate::nodes::finish::saturation_guard::Reference,
     pub after_response: [f64; 9],
     pub notes: Option<&'static str>,
 }
@@ -183,6 +185,17 @@ pub(crate) struct ProfileData {
 }
 
 impl Prepared {
+    pub(crate) fn with_reference_saturation(mut self, factor: f64, protect: bool) -> Self {
+        self.saturation = crate::nodes::finish::saturation_guard::Reference { factor, protect };
+        self
+    }
+
+    /// Keep stored headroom inside the profile's input domain. Restoring its
+    /// storage scale through BaselineExposure can clip it before tone mapping.
+    pub(crate) fn defer_range_compensation(&mut self) {
+        self.range_compensation = RangeCompensation::ProfileCurve;
+    }
+
     /// Keep WB editable in the DNG neutral while fitting the selected pre-tone bias once.
     /// Storage coordinates and the camera calibration remain unchanged.
     pub(crate) fn white_balance_bias(&mut self, rows: [f64; 9]) -> Result<()> {
@@ -209,6 +222,16 @@ impl Prepared {
     /// can restore it once without copying photographic tone into the samples.
     pub(crate) fn technical_from_native(&self) -> Result<Matrix> {
         self.mapping.then(self.camera_to_native).inverse()
+    }
+
+    /// Monochrome storage can collapse to one signal, making its matrix singular.
+    /// A neutral input still defines the scalar mapping needed to bake new gray values.
+    pub(crate) fn technical_from_monochrome(&self) -> Result<Matrix> {
+        let signal = self.mapping.then(self.camera_to_native).apply([1.; 3])[1];
+        if !signal.is_finite() || signal <= 0. {
+            return Err("invalid monochrome DNG signal mapping".into());
+        }
+        Ok(Matrix::diagonal([1. / signal; 3]))
     }
 
     #[cfg(test)]
@@ -244,6 +267,7 @@ impl Prepared {
             camera_to_romm,
             camera_to_native,
             after_tone,
+            saturation: Default::default(),
             tone: input.tone,
             baked_color_mode: false,
             sample_notes: None,
@@ -281,6 +305,7 @@ impl Prepared {
             },
             Matrix(input.after_response),
         )?;
+        prepared.saturation = input.saturation;
         prepared.sample_notes = input.notes;
         Ok(prepared)
     }
@@ -326,6 +351,7 @@ impl Prepared {
             camera_to_romm,
             camera_to_native: base.then(selected),
             after_tone: after_response,
+            saturation: Default::default(),
             tone: Vec::new(),
             baked_color_mode: false,
             sample_notes: None,
@@ -352,6 +378,7 @@ impl Prepared {
             camera_to_romm: reader.then(romm.inverse()?),
             camera_to_native: identity,
             after_tone: identity,
+            saturation: Default::default(),
             tone,
             baked_color_mode: false,
             sample_notes: None,
@@ -382,13 +409,16 @@ impl Prepared {
             let result = if let Some(response) = &self.response {
                 match response {
                     Response::Signed(response) => response.evaluate_linear(native),
-                    Response::Unsigned { table, code_white } => self
-                        .after_tone
-                        .apply(table.evaluate_codes(native.map(|value| value * code_white))),
+                    Response::Unsigned { table, code_white } => self.after_tone.apply(
+                        self.saturation
+                            .apply(table.evaluate_codes(native.map(|value| value * code_white))),
+                    ),
                 }
             } else {
-                self.after_tone
-                    .apply(native.map(|v| native_tone(&self.tone, v)))
+                self.after_tone.apply(
+                    self.saturation
+                        .apply(native.map(|v| native_tone(&self.tone, v))),
+                )
             };
             result.map(|v| v.clamp(0., 1.))
         };

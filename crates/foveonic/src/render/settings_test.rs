@@ -4,6 +4,88 @@ use super::*;
 use crate::source::{Matrix, MatrixEncoding, Metadata, PropertyList};
 
 #[test]
+fn base_response_is_saved_scoped_and_deferred_to_dng_with_tone_bypass() {
+    use crate::render::{BaseResponse, ControlCapabilities, EditScope, EditSection};
+    use crate::source::ProcessingFamily;
+    let mut settings: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(settings.photographic.base_response, BaseResponse::Camera);
+    settings.photographic.tone_method = PhotographicMethod::Universal;
+    settings.photographic.base_response = BaseResponse::Natural;
+    let saved = crate::sidecar::encode(&settings).unwrap();
+    let loaded = crate::sidecar::decode(&saved).unwrap();
+    assert_eq!(loaded.photographic.base_response, BaseResponse::Natural);
+    assert_eq!(loaded.exposure, 0.);
+    assert!(loaded.tonal_ranges.is_neutral());
+    let mut target = Settings::default();
+    EditScope::Tool(EditSection::Saturation).apply(&loaded, &mut target, ProcessingFamily::Merrill);
+    assert_eq!(target.photographic.base_response, BaseResponse::Camera);
+    EditScope::Tool(EditSection::Tone).apply(&loaded, &mut target, ProcessingFamily::Merrill);
+    assert_eq!(target.photographic.base_response, BaseResponse::Natural);
+    assert_eq!(
+        target.dng_settings().photographic.base_response,
+        BaseResponse::Natural
+    );
+    target.tone_enabled = false;
+    assert_eq!(
+        target
+            .processing_settings(ProcessingFamily::Merrill)
+            .photographic
+            .base_response,
+        BaseResponse::Camera
+    );
+    target.tone_enabled = true;
+    target.processing_sections.tone = false;
+    assert_eq!(
+        target
+            .processing_settings(ProcessingFamily::Merrill)
+            .photographic
+            .base_response,
+        BaseResponse::Camera
+    );
+    assert_eq!(target.photographic.base_response, BaseResponse::Natural);
+    for family in [ProcessingFamily::Classic, ProcessingFamily::Quattro] {
+        let caps = ControlCapabilities::from_family(family);
+        caps.validate(&settings).unwrap();
+        let mut normalized = settings.clone();
+        caps.normalize(&mut normalized);
+        assert_eq!(normalized.photographic.base_response, BaseResponse::Natural);
+    }
+}
+
+#[test]
+fn reference_tone_bypasses_base_response_and_preserves_the_universal_selection() {
+    use crate::render::BaseResponse;
+    for response in [BaseResponse::Natural, BaseResponse::Strong] {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.photographic.base_response = response;
+        for method in [
+            PhotographicMethod::Universal,
+            PhotographicMethod::Reference,
+            PhotographicMethod::Universal,
+        ] {
+            settings.photographic.tone_method = method;
+            let universal = method == PhotographicMethod::Universal;
+            assert_eq!(settings.adaptive_tone_active(), universal);
+            let expected = if universal {
+                response
+            } else {
+                BaseResponse::Camera
+            };
+            assert_eq!(
+                settings.active_tone_settings().photographic.base_response,
+                expected
+            );
+            assert_eq!(settings.dng_settings().photographic.base_response, expected);
+            assert_eq!(settings.photographic.base_response, response);
+            let loaded =
+                crate::sidecar::decode(&crate::sidecar::encode(&settings).unwrap()).unwrap();
+            assert_eq!(loaded.photographic.base_response, response);
+            assert_eq!(loaded.adaptive_tone_active(), universal);
+        }
+    }
+}
+
+#[test]
 fn directional_banding_defaults_round_trip_and_retain_inactive_values() {
     let old: Settings = serde_json::from_str("{}").unwrap();
     assert_eq!(old.merrill_banding, MerrillBandingControls::default());
@@ -522,7 +604,7 @@ fn color_editor_roundtrips_and_stays_separate_from_technical_dng_settings() {
     settings.photographic.tone_method = super::PhotographicMethod::Universal;
     settings.tone.shadows = 0.3;
     settings.tone.highlights = -0.2;
-    settings.preview_quality = super::PreviewQuality::Draft;
+    settings.preview_quality = super::PreviewQuality::Fast;
     settings.preview_region = Some([10, 10, 200, 200]);
     let stored = serde_json::to_value(&settings).unwrap();
     assert!(stored["photographic"]
@@ -636,4 +718,233 @@ fn merrill_speckles_follow_noise_scope_and_validate_controls() {
         s.merrill_speckles.size = size;
         assert!(s.validate_values().is_err());
     }
+}
+
+#[test]
+fn saturation_protection_round_trips_and_survives_global_bypass_for_color_range() {
+    assert!(
+        serde_json::from_str::<Settings>("{}")
+            .unwrap()
+            .prevent_color_clipping
+    );
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.prevent_color_clipping = false;
+    settings.photographic.perceptual.saturation = 2.;
+    settings.photographic.perceptual.bands[2].saturation = 2.;
+    settings.photographic.color_editor.master.saturation = 2.;
+    settings
+        .photographic
+        .color_editor
+        .advanced
+        .push(crate::render::AdvancedColorRange::default());
+    settings.validate_values().unwrap();
+    let loaded = crate::sidecar::decode(&crate::sidecar::encode(&settings).unwrap()).unwrap();
+    assert!(!loaded.prevent_color_clipping);
+    let mut target = Settings::default();
+    crate::render::EditScope::Tool(crate::render::EditSection::ColorEditor).apply(
+        &loaded,
+        &mut target,
+        crate::source::ProcessingFamily::Merrill,
+    );
+    assert!(
+        target.prevent_color_clipping,
+        "Color Range presets must not change the shared Editing policy"
+    );
+    crate::render::EditScope::Tool(crate::render::EditSection::Saturation).apply(
+        &loaded,
+        &mut target,
+        crate::source::ProcessingFamily::Merrill,
+    );
+    assert!(
+        target.prevent_color_clipping,
+        "Saturation presets must not change the shared Editing policy"
+    );
+    crate::render::EditScope::All.apply(
+        &loaded,
+        &mut target,
+        crate::source::ProcessingFamily::Merrill,
+    );
+    assert!(!target.prevent_color_clipping);
+    settings.saturation_enabled = false;
+    let effective = settings.processing_settings(crate::source::ProcessingFamily::Merrill);
+    assert!(!effective.prevent_color_clipping);
+    assert!(effective.color_editor_active());
+    assert!(!settings.dng_settings().prevent_color_clipping);
+}
+
+#[test]
+fn auto_exposure_defaults_resolve_each_photos_compensation_without_saving_the_result() {
+    use crate::{
+        render::{EditScope, EditSection, RecipeDefaults},
+        source::ProcessingFamily,
+    };
+    let mut authored = Settings::new("Sunlight", "Standard");
+    authored.exposure = 1.75;
+    authored.exposure_auto = true;
+    let saved = crate::sidecar::encode(&authored).unwrap();
+    let loaded = crate::sidecar::decode(&saved).unwrap();
+    assert!(loaded.exposure_auto);
+    assert_eq!(loaded.exposure, 1.75);
+    for family in [
+        ProcessingFamily::Merrill,
+        ProcessingFamily::Classic,
+        ProcessingFamily::Quattro,
+    ] {
+        let mut defaults = RecipeDefaults::default();
+        defaults.set(family, EditScope::Tool(EditSection::Tone), &loaded);
+        let recipe = defaults.apply(family, &Settings::new("Sunlight", "Standard"));
+        for (compensation, expected) in [("1.3", -1.3), ("-0.7", 0.7), ("0", 0.)] {
+            let mut metadata = metadata();
+            metadata
+                .properties
+                .insert("EXPCOMP".into(), compensation.into());
+            let effective = recipe.resolved_exposure(&metadata);
+            assert_eq!(effective.exposure, expected);
+            assert!(!effective.exposure_auto);
+            assert_eq!(effective.resolved_exposure(&metadata).exposure, expected);
+            let mut bypass = recipe.clone();
+            bypass.processing_sections.tone = false;
+            let resolved = bypass.resolved_exposure(&metadata);
+            assert_eq!(resolved.processing_settings(family).exposure, 0.);
+        }
+        assert_eq!(recipe.exposure, 1.75);
+        assert!(recipe.exposure_auto);
+    }
+    assert!(
+        !serde_json::from_str::<Settings>("{}")
+            .unwrap()
+            .exposure_auto
+    );
+}
+
+#[test]
+fn auto_exposure_uses_finite_capture_compensation_and_neutral_missing_metadata() {
+    let mut m = metadata();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.exposure_auto = true;
+    settings.exposure = 2.;
+    for value in ["", "bad", "NaN", "inf", "1000", "-1000"] {
+        m.properties.insert("EXPCOMP".into(), value.into());
+        assert_eq!(
+            crate::source::inverse_exposure_compensation(&m.properties),
+            None
+        );
+        assert_eq!(settings.resolved_exposure(&m).exposure, 0.);
+    }
+    m.properties
+        .insert("EXIF_EXPOSURE_BIAS".into(), " 0.5 ".into());
+    assert_eq!(settings.resolved_exposure(&m).exposure, -0.5);
+    m.properties.insert("EXPCOMP".into(), "0".into());
+    m.properties.insert("EXPNET".into(), "+1.00".into());
+    assert_eq!(
+        settings.resolved_exposure(&m).exposure,
+        -1.,
+        "net bracketing must take precedence over the exposure dial"
+    );
+    settings.exposure_auto = false;
+    assert_eq!(settings.resolved_exposure(&m).exposure, 2.);
+}
+
+#[test]
+fn auto_exposure_component_selection_is_exclusive_saved_and_used_by_defaults() {
+    use crate::render::{
+        AutoExposureCompensation::{Both, Bracket, Dial},
+        EditScope, EditSection, RecipeDefaults,
+    };
+    use crate::source::{CaptureExposureCompensation, ProcessingFamily};
+    let mut metadata = metadata();
+    metadata.properties.extend([
+        ("EXPCOMP".into(), "+0.50".into()),
+        ("EXPNET".into(), "+1.50".into()),
+        ("BRACKET".into(), "3 of 3".into()),
+    ]);
+    let values = CaptureExposureCompensation::from_properties(&metadata.properties);
+    assert_eq!(
+        values,
+        CaptureExposureCompensation {
+            dial: Some(0.5),
+            bracket: Some(1.),
+            net: Some(1.5)
+        }
+    );
+    for (choice, expected) in [(Bracket, -1.), (Dial, -0.5), (Both, -1.5)] {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.exposure_auto = true;
+        settings.exposure_auto_compensation = choice;
+        settings.exposure = 1.75;
+        let restored = crate::sidecar::decode(&crate::sidecar::encode(&settings).unwrap()).unwrap();
+        assert_eq!(restored.exposure_auto_compensation, choice);
+        let mut defaults = RecipeDefaults::default();
+        defaults.set(
+            ProcessingFamily::Merrill,
+            EditScope::Tool(EditSection::Tone),
+            &restored,
+        );
+        let applied = defaults.apply(
+            ProcessingFamily::Merrill,
+            &Settings::new("Sunlight", "Standard"),
+        );
+        assert_eq!(applied.resolved_exposure(&metadata).exposure, expected);
+        assert!(applied.exposure_auto);
+        assert_eq!(applied.exposure, 1.75);
+    }
+    metadata.properties.remove("EXPNET");
+    let unknown = CaptureExposureCompensation::from_properties(&metadata.properties);
+    assert_eq!(Dial.inverse(unknown), Some(-0.5));
+    assert_eq!(Bracket.inverse(unknown), None);
+    assert_eq!(Both.inverse(unknown), None);
+    metadata.properties.remove("BRACKET");
+    let unbracketed = CaptureExposureCompensation::from_properties(&metadata.properties);
+    assert_eq!(Bracket.inverse(unbracketed), Some(0.));
+    assert_eq!(Both.inverse(unbracketed), Some(-0.5));
+    assert_eq!(Settings::default().exposure_auto_compensation, Both);
+}
+
+#[test]
+fn corrections_bypass_is_saved_scoped_and_preserves_noise_and_authored_values() {
+    use crate::{
+        render::{EditScope, EditSection},
+        source::ProcessingFamily,
+    };
+    let mut settings = Settings {
+        corrections_enabled: false,
+        ..Default::default()
+    };
+    settings.dehaze.amount = 25.;
+    settings.dehaze.shadow = None;
+    let original = settings.clone();
+    assert!(!settings.dehaze_active() && !settings.dehaze_auto());
+    for family in [
+        ProcessingFamily::Classic,
+        ProcessingFamily::Merrill,
+        ProcessingFamily::Quattro,
+    ] {
+        let effective = settings.processing_settings(family);
+        assert!(!effective.processing_sections.corrections);
+        assert_eq!(effective.dehaze.amount, 0.);
+        assert!(!effective.highlight_restoration);
+        assert!(effective.repair.is_none());
+        assert_eq!(effective.despeckle, family == ProcessingFamily::Merrill);
+        assert_eq!(settings, original);
+        let mut target = Settings::default();
+        EditScope::Tool(EditSection::Corrections).apply(&settings, &mut target, family);
+        assert!(!target.corrections_enabled);
+        assert_eq!(target.dehaze, settings.dehaze);
+        assert!(target.saturation_enabled);
+    }
+    let restored = crate::sidecar::decode(&crate::sidecar::encode(&settings).unwrap()).unwrap();
+    assert_eq!(restored, settings);
+    assert!(
+        serde_json::from_str::<Settings>("{}")
+            .unwrap()
+            .corrections_enabled
+    );
+    settings.corrections_enabled = true;
+    assert_eq!(
+        settings
+            .processing_settings(ProcessingFamily::Merrill)
+            .dehaze
+            .amount,
+        25.
+    );
 }

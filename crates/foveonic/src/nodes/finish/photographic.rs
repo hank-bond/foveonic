@@ -66,9 +66,10 @@ impl Sharpening {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Controls {
     pub tone_method: Method,
+    pub base_response: super::base_response::BaseResponse,
     pub saturation_method: Method,
     pub perceptual: super::perceptual_grade::Controls,
     /// Anchored midtone shaping after spatial HDR. Zero is neutral.

@@ -24,9 +24,8 @@ fn from_lab(v: vec3<f32>) -> vec3<f32> {
     let q=lab_roots(v);
     return from_lms(q*q*q);
 }
-// Shared strength mapping: zero is unchanged and minus one removes chroma.
-fn adjust_chroma(lab: vec3<f32>, angle: f32, saturation: f32) -> vec3<f32> {
+fn rotate_chroma(lab: vec3<f32>, angle: f32) -> vec3<f32> {
     let c=cos(angle); let s=sin(angle);
-    let chroma=vec2(c*lab.y-s*lab.z,s*lab.y+c*lab.z)*max(0.,1.+saturation);
+    let chroma=vec2(c*lab.y-s*lab.z,s*lab.y+c*lab.z);
     return vec3(lab.x,chroma);
 }

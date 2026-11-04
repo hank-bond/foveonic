@@ -15,6 +15,71 @@ pub enum LoadStage {
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+/// Capture compensation components. Net includes the dial and any bracket offset.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CaptureExposureCompensation {
+    pub dial: Option<f32>,
+    pub bracket: Option<f32>,
+    pub net: Option<f32>,
+}
+impl CaptureExposureCompensation {
+    /// Read EV components without guessing an unknown bracket offset.
+    pub fn from_properties(properties: &BTreeMap<String, String>) -> Self {
+        let number = |key: &str| {
+            properties.get(key)?.trim().parse::<f32>().ok().filter(|v| {
+                let gain = (-*v).exp2();
+                v.is_finite() && gain.is_finite() && gain > 0.
+            })
+        };
+        let dial = number("EXPCOMP").or_else(|| number("EXIF_EXPOSURE_BIAS"));
+        let net = number("EXPNET");
+        let bracketed = properties
+            .get("BRACKET")
+            .is_some_and(|v| !v.trim().is_empty());
+        let bracket = match (net, dial) {
+            (Some(net), Some(dial)) => Some(net - dial),
+            (_, Some(_)) if !bracketed => Some(0.),
+            _ => None,
+        };
+        Self {
+            dial,
+            bracket,
+            net: net.or_else(|| (!bracketed).then_some(dial).flatten()),
+        }
+    }
+}
+
+/// Select exactly one set of capture components for automatic exposure compensation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoExposureCompensation {
+    Bracket,
+    Dial,
+    #[default]
+    Both,
+}
+impl AutoExposureCompensation {
+    /// Inverse EV for the selected components, or None if unavailable or unrepresentable.
+    pub fn inverse(self, values: CaptureExposureCompensation) -> Option<f32> {
+        let inverse = -match self {
+            Self::Bracket => values.bracket,
+            Self::Dial => values.dial,
+            Self::Both => values.net,
+        }?;
+        let gain = inverse.exp2();
+        (inverse.is_finite() && gain.is_finite() && gain > 0.).then_some(if inverse == 0. {
+            0.
+        } else {
+            inverse
+        })
+    }
+}
+
+/// Exposure in stops that cancels all recorded capture compensation.
+pub fn inverse_exposure_compensation(properties: &BTreeMap<String, String>) -> Option<f32> {
+    AutoExposureCompensation::Both.inverse(CaptureExposureCompensation::from_properties(properties))
+}
+
 const SENSOR_WIDTH: usize = 4928;
 const SENSOR_HEIGHT: usize = 3264;
 

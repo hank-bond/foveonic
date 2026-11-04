@@ -45,9 +45,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         rgb[c] = tables[(2u + c) * LUT_LEN + index16(value)];
     }
     if params.size.z == MODE_LINEAR_DETAIL { return; }
+    var candidate: vec3<i32>;
     for (var c = 0u; c < 3u; c++) {
         let m = params.matrix[c].xyz;
         let code = (m.x * rgb.x + m.y * rgb.y + m.z * rgb.z + SATURATION_ROUNDING) >> SATURATION_FRACTION_BITS;
+        candidate[c] = code;
+    }
+    let guard_white = bitcast<f32>(params.detail_q14.y);
+    if guard_white > 0. {
+        let input = vec3<f32>(rgb);
+        candidate = vec3<i32>(round(guard_saturation(input, vec3<f32>(candidate), (input.x + input.y + input.z) / 3., guard_white)));
+    }
+    for (var c = 0u; c < 3u; c++) {
+        let code = candidate[c];
         // The prepared response retains photographic rendering, while removing
         // the recipe-selected profile encoding. Keep these values until output.
         output_rgb[pixel * 3u + c] = bitcast<f32>(tables[5u * LUT_LEN + index16(code)]);

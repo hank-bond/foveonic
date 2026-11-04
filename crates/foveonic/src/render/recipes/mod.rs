@@ -26,6 +26,8 @@ struct BuiltRecipe {
     params: calibration::EncodeParams,
     /// Working RGB grid at the shared photographic boundary, before output encoding.
     rgb_extent: [u32; 2],
+    /// Valid image bounds on that RGB grid, independent of sensor/output framing.
+    rgb_bounds: [u32; 4],
 }
 
 fn requested(graph: &Graph, names: &[&str]) -> bool {
@@ -54,12 +56,13 @@ impl Engine {
         if names.is_empty() {
             return Ok(Vec::new());
         }
+        let resolved = settings.resolved_exposure(&source.metadata);
         let dng_settings;
         let input = if matches!(recipe, Recipe::DngBase) {
-            dng_settings = settings.dng_settings();
+            dng_settings = resolved.dng_settings();
             &dng_settings
         } else {
-            settings
+            resolved.as_ref()
         };
         let effective = input.processing_settings(source.metadata.processing_family()?);
         let mut built = match recipe {
@@ -67,7 +70,27 @@ impl Engine {
                 let effective = effective.active_tone_settings();
                 let camera = finishing::camera_settings(&effective);
                 let built = build_camera(self, source, &camera, names, profile, execution)?;
-                finishing::build(&effective, built, names, execution)?
+                let mut built = finishing::build(&effective, built, names, execution)?;
+                if settings.dehaze_estimate
+                    && effective.dehaze_auto()
+                    && !built
+                        .graph
+                        .outputs
+                        .iter()
+                        .any(|o| o.name == "dehaze.analysis")
+                {
+                    // Showing Auto at zero Amount must not change the neutral camera recipe.
+                    let analysis = build_camera(
+                        self,
+                        source,
+                        &camera,
+                        &["dehaze.analysis"],
+                        profile,
+                        execution,
+                    )?;
+                    built.graph.append(analysis.graph, "dehaze-swatch");
+                }
+                built
             }
             Recipe::DngBase => build_dng(self, source, &effective, settings, profile, execution)?,
         };
@@ -137,9 +160,14 @@ fn build_dng(
     Ok(recipe)
 }
 
-pub(in crate::render) fn saturation(dimensions: [u32; 4], factor: f32) -> calibration::ColorParams {
+pub(in crate::render) fn saturation(
+    mut dimensions: [u32; 4],
+    factor: f32,
+    protect: bool,
+) -> calibration::ColorParams {
     // Fixed reference saturation weights are independent of the working primaries.
     let saturation_weights = [0.299, 0.587, 0.114];
+    dimensions[2] = u32::from(protect && factor > 1.);
     calibration::ColorParams {
         source: dimensions,
         matrix: std::array::from_fn(|row| {
@@ -161,6 +189,8 @@ pub(super) fn prepare_dng_appearance(
     statistics: super::WhiteBalanceStats,
 ) -> Result<crate::dng::appearance::Prepared> {
     use crate::{dng::appearance::Prepared, source::ProcessingFamily};
+    let resolved = settings.resolved_exposure(metadata);
+    let settings = resolved.as_ref();
     let effective_edits = settings.processing_settings(metadata.processing_family()?);
     let baked_chromatic_edits = effective_edits.linear_chromatic_active();
     let dng = settings.dng_settings();
@@ -176,6 +206,9 @@ pub(super) fn prepare_dng_appearance(
             Prepared::sampled(quattro::prepare_dng_appearance(metadata, settings)?)?
         }
     };
+    if settings.adaptive_tone_active() {
+        prepared.defer_range_compensation();
+    }
     if family != ProcessingFamily::Merrill {
         prepared.baked_color_mode = settings.is_monochrome();
     }

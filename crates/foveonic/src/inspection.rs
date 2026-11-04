@@ -65,9 +65,21 @@ fn camera_output_names(settings: &Settings, metadata: Option<&Metadata>) -> Vec<
         return names;
     }
     let mut linear = Vec::new();
+    if settings.dehaze_active() {
+        linear.extend(["dehaze.input", "dehaze.rgb"]);
+    }
+    if settings.adaptive_tone_active() {
+        linear.extend(["base-response.mask", "base-response.rgb"]);
+    }
     let active = settings.active_tone_settings();
     if active.color_editor_active() {
         linear.extend(["color-editor.guide", "color-editor.rgb"]);
+    }
+    if active.advanced_color_active() {
+        if !linear.contains(&"color-editor.guide") {
+            linear.push("color-editor.guide");
+        }
+        linear.push("advanced-color.rgb");
     }
     if active.universal_saturation() {
         linear.extend([
@@ -227,6 +239,14 @@ pub fn image_outputs_with_family(
     if family == Some(ProcessingFamily::Quattro) {
         let mut outputs = crate::render::quattro_inspection_outputs(metadata);
         outputs.extend(finishing_outputs(settings, metadata));
+        if settings.dehaze_active() && outputs.iter().any(|o| o.name == "final") {
+            for name in ["dehaze.input", "dehaze.rgb"] {
+                outputs.push(ImageOutput {
+                    name,
+                    channels: Channels::Rgb,
+                });
+            }
+        }
         if settings.active_tone_settings().photographic.brightness != 0.
             && outputs.iter().any(|o| o.name == "final")
         {
@@ -252,6 +272,12 @@ pub fn image_outputs_with_family(
                     },
                 });
             }
+        }
+        if settings.advanced_color_active() && outputs.iter().any(|o| o.name == "final") {
+            outputs.push(ImageOutput {
+                name: "advanced-color.rgb",
+                channels: Channels::Rgb,
+            });
         }
         return outputs;
     }
@@ -309,6 +335,9 @@ pub fn comparison_input(
     output: &str,
     metadata: Option<&Metadata>,
 ) -> Option<&'static str> {
+    if output == "dehaze.rgb" {
+        return Some("dehaze.input");
+    }
     if output.starts_with("finish.") {
         if output == "finish.base" {
             return None;
@@ -324,6 +353,9 @@ pub fn comparison_input(
     }
     if output == "linear.brightness" {
         return Some("brightness.input");
+    }
+    if output == "advanced-color.rgb" {
+        return Some("advanced-color.input");
     }
     if output == "linear.local-contrast" {
         return Some("local-contrast.input");
@@ -342,6 +374,10 @@ pub fn comparison_input(
             "color-editor.rgb"
         } else if settings.universal_saturation_active() {
             "perceptual.rgb"
+        } else if settings.adaptive_tone_active() {
+            "base-response.rgb"
+        } else if settings.dehaze_active() {
+            "dehaze.rgb"
         } else {
             "linear.edits-input"
         });
@@ -434,6 +470,8 @@ pub fn comparison_input(
 
 pub struct Artifact {
     pub name: &'static str,
+    /// Automatic haze color in normalized linear sRGB, when requested and available.
+    pub dehaze_estimate: Option<[f32; 3]>,
     pub metadata: Arc<Metadata>,
     pub settings: Settings,
     pub content: Content,
@@ -441,6 +479,29 @@ pub struct Artifact {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dehaze_inspection_is_independent_of_tone_and_exposes_the_actual_input() {
+        use crate::{render::Settings, source::ProcessingFamily};
+        let mut s = Settings::new("Sunlight", "Standard");
+        s.dehaze.amount = 35.;
+        s.tone_enabled = false;
+        let images = super::image_outputs(&s, None);
+        assert!(images.iter().any(|o| o.name == "dehaze.rgb"));
+        assert!(images.iter().any(|o| o.name == "dehaze.input"));
+        // A family hint alone cannot establish a calibrated photographic output.
+        let early = super::image_outputs_with_family(&s, None, Some(ProcessingFamily::Quattro));
+        assert!(!early.iter().any(|o| o.name.starts_with("dehaze.")));
+        assert_eq!(
+            super::comparison_input(&s, "dehaze.rgb", None),
+            Some("dehaze.input")
+        );
+        assert_eq!(
+            super::comparison_input(&s, "tonal-ranges.rgb", None),
+            Some("dehaze.rgb")
+        );
+        s.processing_sections.corrections = false;
+        assert!(!super::output_names(&s, None).contains(&"dehaze.rgb"));
+    }
     #[test]
     fn color_sensitivity_and_texture_publish_their_actual_inputs() {
         use crate::render::{Rendering, Settings};

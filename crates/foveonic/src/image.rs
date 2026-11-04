@@ -146,6 +146,7 @@ pub struct RenderedImage {
     pub(crate) metadata: Arc<Metadata>,
     pub(crate) settings: Settings,
     pub(crate) owner: Arc<()>,
+    pub(crate) dehaze_basis: Option<crate::nodes::finish::dehaze::Basis>,
 }
 
 impl RenderedImage {

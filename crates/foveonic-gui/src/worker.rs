@@ -513,7 +513,9 @@ fn pick_color(
     else {
         return Err("color selection requires a guide image".into());
     };
-    engine.pick_color_range(&guide, request.uv)
+    engine
+        .pick_color_range(&guide, request.uv)
+        .map(|sample| sample.weights)
 }
 
 fn analyze_scopes(

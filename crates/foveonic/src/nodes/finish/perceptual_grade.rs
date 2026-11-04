@@ -25,6 +25,24 @@ pub struct Controls {
     pub bands: [Band; 3],
 }
 impl Controls {
+    /// Stored processing amounts retain their established strength and recipe meaning.
+    pub const SATURATION_RANGE: std::ops::RangeInclusive<f32> = -1. ..=2.;
+    pub const SATURATION_CONTROL_RANGE: std::ops::RangeInclusive<f32> = -1. ..=1.;
+    /// Balanced control coordinates preserve negative amounts and halve positive amounts.
+    pub fn saturation_to_control(amount: f32) -> f32 {
+        if amount > 0. {
+            amount * 0.5
+        } else {
+            amount
+        }
+    }
+    pub fn saturation_from_control(control: f32) -> f32 {
+        if control > 0. {
+            control * 2.
+        } else {
+            control
+        }
+    }
     pub fn chromatic_active(self) -> bool {
         self.saturation != 0.
             || self.contrast != 0.
@@ -35,9 +53,9 @@ impl Controls {
     }
     pub(crate) fn validate(self) -> Result<()> {
         if std::iter::once(self.saturation)
-            .chain(std::iter::once(self.contrast))
             .chain(self.bands.map(|b| b.saturation))
-            .any(|v| !(-1. ..=1.).contains(&v))
+            .any(|v| !Self::SATURATION_RANGE.contains(&v))
+            || !(-1. ..=1.).contains(&self.contrast)
         {
             return Err("invalid perceptual grading controls".into());
         }
@@ -56,6 +74,8 @@ pub(crate) struct Params {
     luma: [f32; 4],
     to_srgb: [[f32; 4]; 3],
     from_srgb: [[f32; 4]; 3],
+    /// Shared gamut protection flag and linear code white.
+    protection: [f32; 4],
 }
 impl Params {
     pub fn new(
@@ -85,7 +105,12 @@ impl Params {
             luma: super::photographic::luminance(space),
             to_srgb: TiffColorSpace::Srgb.transform(space),
             from_srgb: TiffColorSpace::from(space).transform(ColorSpace::Srgb),
+            protection: [1., white, 0., 0.],
         }
+    }
+    pub fn with_clipping_protection(mut self, prevent: bool) -> Self {
+        self.protection[0] = u32::from(prevent) as f32;
+        self
     }
     pub fn with_mask(mut self, band: u32) -> Self {
         self.shape[2] = band + 1;

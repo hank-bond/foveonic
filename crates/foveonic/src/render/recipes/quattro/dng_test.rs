@@ -107,7 +107,8 @@ fn appearance_edits_preserve_camera_sample_basis() {
         base.basis.selected_from_base,
         selected.basis.selected_from_base
     );
-    assert_ne!(base.after_response, selected.after_response);
+    assert_eq!(base.after_response, selected.after_response);
+    assert_ne!(base.saturation.factor, selected.saturation.factor);
     let signal = [0.1, 0.2, 0.3];
     let camera = Matrix(base.basis.mapping).apply(signal.map(|v| v * RESPONSE_WHITE_CODE));
     let restored = Matrix(base.basis.camera_to_linear).apply(camera);
@@ -145,4 +146,16 @@ fn original_camera_bases_prepare_for_every_balance() {
                 .unwrap_or_else(|error| panic!("{balance}/{mode}: {error}"));
         }
     }
+}
+
+#[test]
+fn dehaze_prepares_the_selected_quattro_camera_basis() {
+    use crate::{color_space::ColorSpace, nodes::finish::dehaze::Basis};
+    let m = metadata();
+    let camera = super::super::calibration::color_matrix(&m, "Daylight", "Standard").unwrap();
+    let selected = super::super::calibration::color_matrix(&m, "Daylight", "Vivid").unwrap();
+    let a = Basis::new(ColorSpace::Srgb, camera, [0.299, 0.587, 0.114]).unwrap();
+    let b = Basis::new(ColorSpace::Srgb, selected, [0.299, 0.587, 0.114]).unwrap();
+    assert_ne!(bytemuck::bytes_of(&a), bytemuck::bytes_of(&b));
+    assert!(Basis::new(ColorSpace::Srgb, [0.; 9], [0.299, 0.587, 0.114]).is_err());
 }

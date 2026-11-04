@@ -3,6 +3,7 @@ struct Params {
     shape: vec4<u32>, values: vec4<f32>, bands: array<vec4<f32>, 8>,
     master: vec4<f32>, luma: vec4<f32>, guide_matrix: array<vec4<f32>, 3>,
     to_srgb: array<vec4<f32>, 3>, from_srgb: array<vec4<f32>, 3>,
+    protection: vec4<f32>,
 }
 @group(0) @binding(0) var<storage, read> src: array<f32>;
 @group(0) @binding(1) var<uniform> p: Params;
@@ -63,10 +64,15 @@ fn color_editor_apply(@builtin(global_invocation_id) id: vec3<u32>) {
     var result=rgb(i)*exp2(control.z);
     // Lightness-only edits avoid all color-space round trips, including in monochrome.
     if control.x!=0. || control.y!=0. {
-        var lab=to_lab(transform(result/p.values.z,p.to_srgb));
+        var normalized=result/p.values.z;
+        var lab=to_lab(transform(normalized,p.to_srgb));
         let angle=control.x*MAX_HUE_RADIANS;
-        lab=adjust_chroma(lab,angle,control.y);
-        result=transform(from_lab(lab),p.from_srgb)*p.values.z;
+        if angle!=0. {
+            lab=rotate_chroma(lab,angle);
+            normalized=transform(from_lab(lab),p.from_srgb);
+        }
+        let graded=perceptual_saturate(normalized,lab,control.y,0.,p.protection.x!=0.,p.from_srgb);
+        if angle!=0. || any(graded!=normalized) { result=graded*p.values.z; }
     }
     dst[n]=result.x; dst[n+1u]=result.y; dst[n+2u]=result.z;
 }

@@ -48,7 +48,8 @@ pub(super) fn build(
     let region = settings
         .preview_region
         .filter(|_| {
-            mode.is_some()
+            !settings.adaptive_tone_active()
+                && mode.is_some()
                 && !settings.is_monochrome()
                 && (names == ["final"] || names == ["linear.base"])
         })
@@ -106,6 +107,7 @@ pub(super) fn build(
                     final_id: calibrated,
                     params,
                     rgb_extent: [params.source[0], params.source[1]],
+                    rgb_bounds: params.crop,
                 }));
             }
         };
@@ -119,6 +121,7 @@ pub(super) fn build(
                 final_id: calibrated,
                 params,
                 rgb_extent: [params.source[0], params.source[1]],
+                rgb_bounds: params.crop,
             },
             names,
             profile,
@@ -129,8 +132,6 @@ pub(super) fn build(
     if let Some(grid) = &preview {
         calibrated = graph.add(Operation::ReduceLayers(grid.reduction), &[calibrated])?;
     }
-    // Smart's draft omits optional reconstruction. Standalone Fast applies the
-    // requested controls on its reduced grid without changing the saved edits.
     let draft =
         preview.is_some() && settings.preview_quality == crate::render::PreviewQuality::Draft;
     let noise_controls = settings.merrill_reconstruction().filter(|_| !draft);
@@ -189,6 +190,7 @@ pub(super) fn build(
                     final_id: calibrated,
                     params,
                     rgb_extent: [params.source[0], params.source[1]],
+                    rgb_bounds: params.crop,
                 }));
             }
             Some(reconstruction::Reconstructed { params, tiles }) => Some((params, tiles)),
@@ -257,6 +259,7 @@ pub(super) fn build(
     if !settings.neutralize_shadows.is_neutral() {
         linear = graph.add(
             Operation::ImageAlias {
+                dehaze_basis: None,
                 data: crate::graph::DataType::LinearRgb(space),
                 output: "shadow-neutralize.input",
             },
@@ -311,6 +314,7 @@ pub(super) fn build(
             final_id: linear,
             params,
             rgb_extent: [params.source[0], params.source[1]],
+            rgb_bounds: params.crop,
         },
         mode,
     ))

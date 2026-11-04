@@ -29,11 +29,18 @@ chroma and luminance noise, native Smooth/Crisp detail and sharpening, with came
 
 Options (also available for batch):
   --tone-method METHOD      reference (default) or universal tone
+  --base-response RESPONSE  camera (default), natural or strong (Merrill Universal tone)
+  --adaptive-black-limit AMOUNT   Override both profile caps, 0..1
+  --adaptive-shadow-limit AMOUNT  Override both profile caps, 0..1
+  --adaptive-highlight-limit AMOUNT  Override both profile caps, 0..1
+  --adaptive-white-limit AMOUNT  Override both profile caps, 0..1
   --blacks VALUE            Shared HDR -1..1, default 0
   --hdr-shadows VALUE       Shared HDR -1..1, default 0
   --hdr-highlights VALUE    Shared HDR -1..1, default 0
   --whites VALUE            Shared HDR -1..1, default 0
   --local-contrast VALUE    -1..1, default 0. Shared multiscale contrast
+  --dehaze VALUE            -100..100, default 0. Remove or add haze
+  --haze-color VALUE        auto or R,G,B in normalized linear sRGB
                             HDR, Local Contrast and Universal sharpening bake into DNG
   --color-sensitivity VALUES Eight amounts -1..1: Red,Orange,Yellow,Green,Cyan,Blue,Purple,Magenta\n                            Color/mono sensitivity is baked into DNG
   --sharpen-method METHOD   reference (default) or universal
@@ -43,6 +50,8 @@ Options (also available for batch):
   --halo-suppression VALUE  Universal halo suppression 0..1, default 0.5
                             Universal sharpening runs before camera tone
   --exposure STOPS           Default 0
+  --auto-exposure            Use inverse capture exposure compensation per photo
+  --auto-exposure-compensation MODE  bracket, dial or both (default both)
   --contrast VALUE          -2..2, default 0
   --shadows VALUE           -2..2, default 0
   --highlights VALUE        -2..2, default 0
@@ -52,11 +61,13 @@ Options (also available for batch):
   --mono-banding N          Mono column-correction preset 0..4 (default 2)
   --saturation FACTOR       Reference amount, nonnegative, default 1
   --saturation-method METHOD reference (default) or universal, independent of tone
-  --universal-saturation N   Universal amount, -1..1, default 0
+  --universal-saturation N   Processing amount, -1..2 (GUI +1 maps to +2), default 0
   --saturation-contrast N    Universal colorfulness contrast, -1..1, default 0
-  --saturation-shadows N     Universal shadow amount, -1..1, default 0
-  --saturation-midtones N    Universal midtone amount, -1..1, default 0
-  --saturation-highlights N  Universal highlight amount, -1..1, default 0
+  --saturation-shadows N     Universal shadow amount, -1..2, default 0
+  --saturation-midtones N    Universal midtone amount, -1..2, default 0
+  --saturation-highlights N  Universal highlight amount, -1..2, default 0
+  --prevent-color-clipping  Protect Universal/Color Range saturation (default)
+  --no-prevent-color-clipping Unlock saturation while retaining the shoulder
   --color-dq-gain FACTOR     Override native ColorDQ gain (0 off). Reconstruction defaults to auto
   --repair                  Camera-derived ordered repair (default on)
   --no-repair               Disable camera-record repair

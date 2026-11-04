@@ -161,7 +161,10 @@ impl Engine {
                 });
             let extent = match &node.operation {
                 Operation::ReduceLayers(prepared) => prepared.output_extent(),
-                Operation::ToneMask { guide, .. } => guide.extent(),
+                Operation::AdaptiveToneOverview { source, .. } => source.map(|v| v.div_ceil(2)),
+                Operation::ToneMask { guide, .. } | Operation::AdaptiveToneGuide { guide, .. } => {
+                    guide.extent()
+                }
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
                 Operation::ProjectColorTiles { params, .. } => params.output_extent(),
                 Operation::NoiseContext(p) => reconstruction::context_extent(*p),
@@ -1325,7 +1328,11 @@ impl Engine {
                     params.source[..2].copy_from_slice(&inherited);
                     let uniform = gpu.uniform(&params);
                     dispatch(
-                        Kernel::Color,
+                        if matches!(node.operation, Operation::Saturation { .. }) {
+                            Kernel::ReferenceSaturation
+                        } else {
+                            Kernel::Color
+                        },
                         &mut [
                             (0, Read(&input(0).buffer)),
                             (1, Read(&uniform)),
@@ -1389,6 +1396,32 @@ impl Engine {
                         profile,
                     )?)
                 }
+                Operation::AdvancedColor { params, .. } => {
+                    Some(crate::nodes::finish::advanced_color::apply(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        **params,
+                        inherited,
+                        profile,
+                    )?)
+                }
+                Operation::DehazeEstimate { params, .. } => {
+                    Some(crate::nodes::finish::dehaze::estimate(
+                        gpu,
+                        &input(0).buffer,
+                        *params,
+                        profile,
+                    )?)
+                }
+                Operation::Dehaze { params, .. } => Some(crate::nodes::finish::dehaze::apply(
+                    gpu,
+                    &input(0).buffer,
+                    &input(1).buffer,
+                    *params,
+                    inherited,
+                    profile,
+                )?),
                 Operation::MonoTexture(c) => Some(crate::nodes::monochrome::texture::apply(
                     gpu,
                     &input(0).buffer,
@@ -1463,13 +1496,45 @@ impl Engine {
                         profile,
                     )?)
                 }
-                Operation::ToneMask { guide, .. } => {
+                Operation::ToneMask { guide, .. } | Operation::AdaptiveToneGuide { guide, .. } => {
                     Some(crate::nodes::finish::tone_equalizer::mask(
                         gpu,
                         &input(0).buffer,
                         *guide,
                         profile,
                     )?)
+                }
+                Operation::AdaptiveToneOverview { source, .. } => {
+                    Some(crate::nodes::finish::adaptive_tone::overview(
+                        gpu,
+                        &input(0).buffer,
+                        *source,
+                        profile,
+                    )?)
+                }
+                Operation::AdaptiveTone {
+                    params,
+                    analysis,
+                    curve,
+                    ..
+                } => {
+                    use crate::nodes::finish::adaptive_tone::{apply_with_analysis, Samples};
+                    let result = apply_with_analysis(
+                        gpu,
+                        Samples {
+                            rgb: &input(0).buffer,
+                            mask: &input(1).buffer,
+                        },
+                        Samples {
+                            rgb: &input(2).buffer,
+                            mask: &input(3).buffer,
+                        },
+                        curve,
+                        *params,
+                        *analysis,
+                        profile,
+                    )?;
+                    Some(result.rgb)
                 }
                 Operation::TonalRanges {
                     white,

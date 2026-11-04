@@ -67,7 +67,7 @@ pub(crate) fn prepare_photographic(
         // standard ROMM shadow toe. Primaries remain ROMM after decoding.
         TransferFunction::Power(PROFILE_POWER),
     )?;
-    Ok(finish)
+    Ok(finish.with_clipping_protection(settings.prevent_color_clipping))
 }
 
 /// Build an editable camera basis and approximate selected-mode mapping.

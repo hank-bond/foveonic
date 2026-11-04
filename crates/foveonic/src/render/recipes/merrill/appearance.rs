@@ -11,13 +11,29 @@ use crate::{
 // Technical linear RGB uses the recovered 12-bit nominal-white code.
 const LINEAR_CODE_WHITE: f64 = 4095.;
 
+/// Photographs, HDR classification and DNG fitting share one selected response.
+pub(super) fn curve(
+    metadata: &Metadata,
+    mode: &color_mode::Settings,
+    settings: &Settings,
+) -> Result<Vec<f32>> {
+    let camera = if settings.is_monochrome() {
+        tone::prepare_monochrome(metadata, settings.tone)?
+    } else {
+        tone::prepare(metadata, mode, settings.tone)?
+    };
+    Ok(camera)
+}
+
 pub(in crate::render::recipes) fn prepare(m: &Metadata, settings: &Settings) -> Result<Prepared> {
     if settings.is_monochrome() {
-        return Prepared::monochrome(
-            tone::prepare_monochrome(m, settings.tone)?,
+        let mut prepared = Prepared::monochrome(
+            curve(m, &super::dng_base::unselected_mode(), settings)?,
             f64::from(settings.exposure),
             LINEAR_CODE_WHITE,
-        );
+        )?;
+        retain_headroom(&mut prepared, settings);
+        return Ok(prepared);
     }
     let key = m
         .lists
@@ -59,19 +75,27 @@ pub(in crate::render::recipes) fn prepare(m: &Metadata, settings: &Settings) -> 
         .white_normalized()?,
     };
     let camera_to_linear = Matrix::diagonal(gains).then(selected);
-    let sat = f64::from(settings.reference_saturation());
-    let saturation = Matrix(std::array::from_fn(|i| {
-        [0.299, 0.587, 0.114][i % 3] * (1. - sat) + if i / 3 == i % 3 { sat } else { 0. }
-    }));
     let (_, iso) = crate::noise::processing_gain(m)?;
-    Prepared::matrix(MatrixAppearance {
+    let mut prepared = Prepared::matrix(MatrixAppearance {
         mapping,
         neutral,
         camera_to_linear,
         linear_to_pcs: pcs,
-        after_response: saturation,
-        tone: tone::prepare(m, &mode, settings.tone)?,
+        after_response: Matrix::diagonal([1.; 3]),
+        tone: curve(m, &mode, settings)?,
         calibration_exposure: (f64::from(iso) / maximum).log2(),
         exposure: f64::from(settings.exposure),
-    })
+    })?;
+    prepared = prepared.with_reference_saturation(
+        f64::from(settings.reference_saturation()),
+        settings.prevent_color_clipping,
+    );
+    retain_headroom(&mut prepared, settings);
+    Ok(prepared)
+}
+
+fn retain_headroom(prepared: &mut Prepared, settings: &Settings) {
+    if settings.photographic.base_response.is_adaptive() {
+        prepared.defer_range_compensation();
+    }
 }

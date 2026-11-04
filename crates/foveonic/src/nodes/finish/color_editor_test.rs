@@ -331,12 +331,13 @@ fn gpu_color_range_picker_shares_overlap_and_neutral_protection() {
         let picked = color_editor::pick(&gpu, &source, params).unwrap();
         assert!(
             picked
+                .weights
                 .iter()
                 .zip(expected)
                 .all(|(a, b)| (a - b).abs() < 1e-6),
             "{rgb:?}: {picked:?}"
         );
-        assert_eq!(gpu.activity().since(before).readback_bytes, 32);
+        assert_eq!(gpu.activity().since(before).readback_bytes, 48);
         let mut corner = params;
         corner.shape[2..].copy_from_slice(&[0, 0]);
         assert_eq!(color_editor::pick(&gpu, &source, corner).unwrap(), picked);
@@ -363,5 +364,5 @@ fn gpu_color_picker_neighborhood_stays_inside_the_active_crop() {
         .collect();
     let guide = gpu.upload("cropped color", &pixels).unwrap();
     let picked = color_editor::pick(&gpu, &guide, params).unwrap();
-    assert_eq!(picked, [1., 0., 0., 0., 0., 0., 0., 0.]);
+    assert_eq!(picked.weights, [1., 0., 0., 0., 0., 0., 0., 0.]);
 }

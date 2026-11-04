@@ -13,15 +13,15 @@ fn saturation_matrices_preserve_gray() {
             .map(|row| (0..3).map(|c| row[c] * rgb[c]).sum())
     };
     assert_eq!(
-        apply(saturation([1, 1, 0, 0], 1.), [1., 0.25, 0.5]),
+        apply(saturation([1, 1, 0, 0], 1., false), [1., 0.25, 0.5]),
         [1., 0.25, 0.5]
     );
     assert_eq!(
-        apply(saturation([1, 1, 0, 0], 0.), [1., 0., 0.]),
+        apply(saturation([1, 1, 0, 0], 0., false), [1., 0., 0.]),
         [0.299; 3]
     );
     for factor in [0., 1., 2.] {
-        for value in apply(saturation([1, 1, 0, 0], factor), [0.42; 3]) {
+        for value in apply(saturation([1, 1, 0, 0], factor, false), [0.42; 3]) {
             assert!((value - 0.42).abs() < 1e-6);
         }
     }
@@ -570,6 +570,7 @@ fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
             lists: Default::default(),
         }),
         settings: Settings::new("Sunlight", "Standard"),
+        dehaze_basis: None,
         owner: engine.owner.clone(),
     }
 }
@@ -1154,7 +1155,7 @@ fn color_pick_uses_cropped_rotated_guide_coordinates_and_small_readback() {
                 engine.pick_color_range(&guide, uv).unwrap(),
                 expected[index]
             );
-            assert_eq!(engine.gpu_activity().since(before).readback_bytes, 32);
+            assert_eq!(engine.gpu_activity().since(before).readback_bytes, 48);
         }
     }
     assert!(engine.pick_color_range(&guide, [-0.1, 0.5]).is_err());

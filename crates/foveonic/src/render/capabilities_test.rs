@@ -752,3 +752,24 @@ fn family_normalization_preserves_inactive_smooth_crisp_and_merrill_texture() {
     assert_eq!(quattro.reconstruction.unwrap().detail, 0.7);
     assert_eq!(quattro.reconstruction.unwrap().texture, Default::default());
 }
+
+#[test]
+fn quattro_accepts_shared_edits_and_transient_gui_analysis_requests() {
+    let cap = capabilities("SIGMA dp2 Quattro");
+    let mut settings = Settings::new("Sunlight", "Standard");
+    // The editor asks for the Auto swatch even when Amount is zero.
+    settings.dehaze_estimate = true;
+    assert!(cap.validate(&settings).is_ok());
+    assert!(!cap.normalize(&mut settings));
+    settings.dehaze.amount = 35.;
+    settings.dehaze.shadow = Some([0.1, 0.2, 0.3]);
+    settings.color_range_preview = Some(0);
+    settings.adaptive_tone_tuning.natural.blacks = 0.02;
+    settings.exposure_auto = true;
+    settings.exposure_auto_compensation = crate::render::AutoExposureCompensation::Dial;
+    settings.prevent_color_clipping = false;
+    let before = settings.clone();
+    assert!(cap.validate(&settings).is_ok());
+    assert!(!cap.normalize(&mut settings));
+    assert_eq!(settings, before);
+}

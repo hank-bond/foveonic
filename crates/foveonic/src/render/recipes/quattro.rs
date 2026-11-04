@@ -192,6 +192,7 @@ fn compose(
                     final_id: $output,
                     params,
                     rgb_extent: [params.output[0], params.output[1]],
+                    rgb_bounds: [0, 0, params.output[0], params.output[1]],
                 });
             }
         };
@@ -724,6 +725,7 @@ fn compose(
             final_id,
             params,
             rgb_extent: [params.output[0], params.output[1]],
+            rgb_bounds: [0, 0, params.output[0], params.output[1]],
         });
     }
     if super::linear_edits::active(settings)
@@ -745,6 +747,7 @@ fn compose(
             final_id: id,
             params,
             rgb_extent: [params.output[0], params.output[1]],
+            rgb_bounds: [0, 0, params.output[0], params.output[1]],
         };
         super::linear_edits::alias(&mut recipe, space, "linear.base")?;
         if requested(&recipe.graph, names) {
@@ -763,7 +766,42 @@ fn compose(
             }
         };
         let mut response = None;
+        let dehaze_basis = if super::linear_edits::needs_dehaze(settings, names) {
+            use crate::nodes::finish::dehaze::Basis;
+            Some(if settings.is_monochrome() {
+                Basis::monochrome()
+            } else {
+                Basis::new(
+                    space,
+                    calibration::color_matrix(&source.metadata, white_balance, color_mode)?,
+                    [0.299, 0.587, 0.114],
+                )?
+            })
+        } else {
+            None
+        };
+        let adaptive = if settings.adaptive_tone_active() {
+            let response = if settings.is_monochrome() {
+                appearance::prepare_monochrome(0., Default::default())?
+            } else {
+                appearance::prepare(&source.metadata, color_mode, 0., Default::default())?
+            };
+            let curve =
+                super::linear_edits::response_curve(|code| response.evaluate_codes([code; 3])[1]);
+            Some(super::linear_edits::Adaptive::new(
+                settings,
+                &recipe,
+                space,
+                appearance::LINEAR_CODE_WHITE as f32,
+                curve,
+                false,
+            )?)
+        } else {
+            None
+        };
         let context = super::linear_edits::Context {
+            dehaze_basis,
+            adaptive,
             space,
             white: appearance::LINEAR_CODE_WHITE as f32,
             guide_white: appearance::LINEAR_CODE_WHITE as f32,
@@ -775,6 +813,7 @@ fn compose(
                     .min(params.output[1] as f32 / native.output[1] as f32)
             },
         };
+        let context_white = context.white;
         super::linear_edits::build(
             engine,
             source,
@@ -784,7 +823,7 @@ fn compose(
             context,
             |_| {
                 let prepared = prepare_response()?;
-                let pivot = super::linear_edits::pivot_from_response(context.white, |code| {
+                let pivot = super::linear_edits::pivot_from_response(context_white, |code| {
                     prepared.evaluate_codes([code; 3])[1]
                 })?;
                 response = Some(prepared);
@@ -813,6 +852,7 @@ fn compose(
                     params: super::saturation(
                         [params.output[0], params.output[1], 0, 0],
                         settings.reference_saturation(),
+                        settings.prevent_color_clipping,
                     ),
                     space,
                 },
@@ -844,6 +884,7 @@ fn compose(
                 params: super::saturation(
                     [params.output[0], params.output[1], 0, 0],
                     settings.reference_saturation(),
+                    settings.prevent_color_clipping,
                 ),
                 space: crate::color_space::ColorSpace::Srgb,
             },
@@ -855,5 +896,6 @@ fn compose(
         final_id,
         params,
         rgb_extent: [params.output[0], params.output[1]],
+        rgb_bounds: [0, 0, params.output[0], params.output[1]],
     })
 }

@@ -1,4 +1,4 @@
-//! Pinned CPU oracle from the reference implementation at 2b0dd443.
+//! Pinned CPU recovery oracle from revision 2b0dd443.
 //! Copyright 2026 Sang Lee and contributors. Apache-2.0. See ../NOTICE.
 //! Add nearby color ratios without changing the chosen highlight brightness.
 //! Without usable color evidence, keep the tone result.

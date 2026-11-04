@@ -4,8 +4,11 @@ pub(crate) mod code_response;
 pub(crate) mod image_region;
 pub(crate) mod mask_image;
 
+pub(crate) mod adaptive_tone;
+pub(crate) mod base_response;
 pub(crate) mod resample;
 pub(crate) mod resize;
+pub(crate) mod saturation_guard;
 pub(crate) mod signed_response;
 pub(crate) mod tone;
 pub(crate) mod tone_equalizer;
@@ -26,7 +29,9 @@ pub(crate) mod code_channel_map;
 
 pub(crate) mod photographic;
 
+pub(crate) mod advanced_color;
 pub(crate) mod color_editor;
+pub(crate) mod dehaze;
 pub(crate) mod perceptual_grade;
 
 pub(crate) mod linear_gain;

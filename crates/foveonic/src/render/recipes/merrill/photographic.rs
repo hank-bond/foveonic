@@ -42,17 +42,53 @@ pub(in crate::render::recipes) fn build(
     if requested(&recipe.graph, names) {
         return Ok(recipe);
     }
+    let adaptive = if settings.adaptive_tone_active() {
+        use crate::nodes::finish::tone;
+        let curve = if settings.is_monochrome() {
+            tone::prepare_monochrome(&source.metadata, Default::default())?
+        } else {
+            tone::prepare(&source.metadata, &mode, Default::default())?
+        };
+        Some(linear_edits::Adaptive::new(
+            settings,
+            &recipe,
+            space,
+            LINEAR_CODE_WHITE,
+            curve,
+            false,
+        )?)
+    } else {
+        None
+    };
     let mut prepared_curve = None;
     let prepare_curve = |profile: &mut Profile| {
         profile.measure("prepare tone curve", || {
-            if settings.is_monochrome() {
-                crate::nodes::finish::tone::prepare_monochrome(&source.metadata, settings.tone)
-            } else {
-                crate::nodes::finish::tone::prepare(&source.metadata, &mode, settings.tone)
-            }
+            super::appearance::curve(&source.metadata, &mode, settings)
         })
     };
+    let dehaze_basis = if linear_edits::needs_dehaze(settings, names) {
+        use crate::nodes::finish::dehaze::Basis;
+        Some(if settings.is_monochrome() {
+            Basis::monochrome()
+        } else {
+            let rows = crate::nodes::sensor::calibration::color(
+                &source.metadata,
+                &settings.white_balance,
+                &mode,
+            )?
+            .matrix;
+            Basis::new(
+                space,
+                std::array::from_fn(|i| f64::from(rows[i / 3][i % 3])),
+                [0.299, 0.587, 0.114],
+            )?
+        })
+    } else {
+        None
+    };
     let context = Context {
+        dehaze_basis,
+        adaptive,
         space,
         white: LINEAR_CODE_WHITE,
         guide_white: CLASSIFIER_CODE_UNIT,
@@ -102,7 +138,11 @@ pub(in crate::render::recipes) fn build(
         let dimensions = [recipe.params.source[0], recipe.params.source[1], 0, 0];
         recipe.final_id = recipe.graph.add(
             Operation::Saturation {
-                params: super::super::saturation(dimensions, settings.reference_saturation()),
+                params: super::super::saturation(
+                    dimensions,
+                    settings.reference_saturation(),
+                    settings.prevent_color_clipping,
+                ),
                 space,
             },
             &[recipe.final_id],

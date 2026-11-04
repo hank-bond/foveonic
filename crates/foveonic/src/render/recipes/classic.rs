@@ -80,6 +80,7 @@ fn compose(
                     final_id,
                     params,
                     rgb_extent: [params.source[0], params.source[1]],
+                    rgb_bounds: params.crop,
                 });
             }
         };
@@ -125,7 +126,15 @@ fn compose(
         )?;
         finish!();
     }
+    let mut dehaze_matrix = None;
     if route.high_iso()? {
+        if super::linear_edits::needs_dehaze(settings, names) && !settings.is_monochrome() {
+            dehaze_matrix = Some(range::color_matrix(
+                metadata,
+                &prepared.color,
+                Some(&settings.color_mode),
+            )?);
+        }
         let reconstruction = range::prepare(
             metadata,
             &prepared.color,
@@ -151,6 +160,12 @@ fn compose(
                 prepare::prepare_color(metadata, &prepared.color, &settings.color_mode)
             }
         })?;
+        if super::linear_edits::needs_dehaze(settings, names) && !settings.is_monochrome() {
+            let p = &color.transform.params;
+            dehaze_matrix = Some(std::array::from_fn(|i| {
+                f64::from(p.matrix[i / 3][i % 3]) / f64::from(1u32 << p.source[3])
+            }));
+        }
         final_id = graph.add(
             Operation::FixedPointColor(Arc::new(color.transform)),
             &[final_id],
@@ -202,6 +217,7 @@ fn compose(
             final_id,
             params,
             rgb_extent: [params.source[0], params.source[1]],
+            rgb_bounds: params.crop,
         });
     }
     if super::linear_edits::active(settings)
@@ -228,18 +244,52 @@ fn compose(
             final_id,
             params,
             rgb_extent: [params.source[0], params.source[1]],
+            rgb_bounds: params.crop,
         };
         super::linear_edits::alias(&mut recipe, space, "linear.base")?;
         if requested(&recipe.graph, names) {
             return Ok(recipe);
         }
         let mut response = None;
+        let dehaze_basis = if super::linear_edits::needs_dehaze(settings, names) {
+            use crate::nodes::finish::dehaze::Basis;
+            Some(if settings.is_monochrome() {
+                Basis::monochrome()
+            } else {
+                Basis::new(
+                    space,
+                    dehaze_matrix.ok_or("missing Classic Dehaze matrix")?,
+                    [0.299, 0.587, 0.114],
+                )?
+            })
+        } else {
+            None
+        };
+        let adaptive = if settings.adaptive_tone_active() {
+            let mut baseline = settings.clone();
+            baseline.exposure = 0.;
+            baseline.tone = Default::default();
+            baseline.saturation = 1.;
+            let response = prepare::prepare_photographic(metadata, &baseline)?;
+            let white = crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32;
+            let curve = super::linear_edits::response_curve(|code| {
+                response.evaluate_linear([code / f64::from(white); 3])[1]
+            });
+            Some(super::linear_edits::Adaptive::new(
+                settings, &recipe, space, white, curve, true,
+            )?)
+        } else {
+            None
+        };
         let context = super::linear_edits::Context {
+            dehaze_basis,
+            adaptive,
             space,
             white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
             guide_white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
             scale: 1.,
         };
+        let context_white = context.white;
         super::linear_edits::build(
             engine,
             source,
@@ -249,8 +299,8 @@ fn compose(
             context,
             |_| {
                 let prepared = prepare::prepare_photographic(metadata, settings)?;
-                let pivot = super::linear_edits::pivot_from_response(context.white, |code| {
-                    prepared.evaluate_linear([code / f64::from(context.white); 3])[1]
+                let pivot = super::linear_edits::pivot_from_response(context_white, |code| {
+                    prepared.evaluate_linear([code / f64::from(context_white); 3])[1]
                 })?;
                 response = Some(prepared);
                 Ok(pivot)
@@ -281,6 +331,7 @@ fn compose(
         final_id,
         params,
         rgb_extent: [params.source[0], params.source[1]],
+        rgb_bounds: params.crop,
     })
 }
 
