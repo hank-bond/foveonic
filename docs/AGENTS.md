@@ -10,14 +10,17 @@ Give each requirement or fact one home and link to it from related documents. Re
 
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+- **[advanced-color-range-research](./advanced-color-range-research.md)** _(reference)._ Color-wheel inspection separates soft range selection, overlapping adjustments and a possible selective lightness inversion.
 - **[color-and-tone-research](./color-and-tone-research.md)** _(reference)._ Research catalog of perceptual saturation, color grading, tonal adjustment, highlight rendering and automatic exposure methods.
 - **[color-field-evaluation](./color-field-evaluation.md)** _(how-to)._ Reproduce saved-sidecar highlight comparisons, completed GPU timings, and a private toggleable browser report.
 - **[contributing](./contributing.md)** _(reference)._ Documentation uses concise requirements, evolving progress plans, frontmatter summaries, and generated directory indexes. _Read before writing documentation or source summaries._
+- **[fuji-rendering-research](./fuji-rendering-research.md)** _(reference)._ Film-rendering inspection connects Fujifilm DR metadata, simulation transforms and candidate X3F/DNG rendering approaches.
 - **[gui-screenshot](./gui-screenshot.md)** _(how-to)._ Explicitly refresh the README's lossless WebP screenshot from a fixed native GUI capture recipe and shared example-photo cache.
 - **[help-examples](./help-examples.md)** _(how-to)._ Download official photographs and explicitly render named comparisons whose PNGs are embedded in photographic help.
 - **[profiling](./profiling.md)** _(how-to)._ Measure completed full processing and warm native feedback with explicit modes, JSON context and separate validation.
 - **[releases](./releases.md)** _(how-to)._ Configure Developer ID signing, review versioned changes, and manually publish the unnotarized macOS app from its draft GitHub Release.
 - **[render-resources](./render-resources.md)** _(reference)._ The render API returns owned full-sensor floating images with separate logical views, GPU texture preparation, and export consumers.
 - **[specs/](./specs/AGENTS.md)** Specifications record agreed application, graph, and output behavior independently of implementation progress.
+- **[visibility-tone-research](./visibility-tone-research.md)** _(reference)._ Visibility-oriented tone research separates useful contrast, spatial compression, noise and color appearance for an isolated Auto HDR experiment.
 
 <!-- INDEX:END -->

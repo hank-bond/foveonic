@@ -7,7 +7,7 @@ summary: "GPU monochrome rendering, a triangular layer mixer, mode-specific edit
 
 ## Closure
 
-The owner accepted the implemented photographic and interface results and authorized closing review-only plans. This implementation slice is complete. Capture One/Lightroom appearance and editing-latitude checks remain unperformed and tracked in the active [DNG export plan](../dng-export.md). No broader camera, high-ISO, or cross-platform coverage is claimed.
+The owner accepted the implemented photographic and interface results and authorized closing review-only plans. This implementation slice is complete. Downstream raw-editor appearance and editing-latitude checks remain unperformed and tracked in the active [DNG export plan](../dng-export.md). No broader camera, high-ISO, or cross-platform coverage is claimed.
 
 Requirements: [monochrome rendering](../../docs/specs/monochrome-rendering.md), [processing graphs](../../docs/specs/processing-graphs.md), [render resources](../../docs/specs/render-resources.md), [interactive rendering](../../docs/specs/interactive-rendering.md), [output strategies](../../docs/specs/output-strategies.md), and [editing sidecars](../../docs/specs/editing-sidecars.md).
 
@@ -55,4 +55,4 @@ On the blue example, SDK/native RGB16 presentation differs by approximately 0.46
 
 ## Remaining acceptance
 
-Owner photographic review is closed by acceptance of the implemented results. Capture One/Lightroom appearance and editing-latitude checks remain external acceptance in the active DNG export plan. No high-ISO photographic survey was available. The established column table ends at estimated ISO 6400, and larger requests fail explicitly. No installation, native GUI launch, or default generated-output change was made during this work.
+Owner photographic review is closed by acceptance of the implemented results. Downstream raw-editor appearance and editing-latitude checks remain external acceptance in the active DNG export plan. No high-ISO photographic survey was available. The established column table ends at estimated ISO 6400, and larger requests fail explicitly. No installation, native GUI launch, or default generated-output change was made during this work.

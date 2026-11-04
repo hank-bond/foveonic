@@ -19,7 +19,7 @@ Isolated calls to each sensor library's capability interface returned intact out
 
 The native libraries contain a generic vignette simulation effect and chromatic-aberration transforms. The vignette effect does not establish a calibrated lens-vignetting correction. Existing sensor and color-shading calibration remains part of the current recipes.
 
-Chromatic-aberration profile decoding, selection and numerical resampling were previously recovered in the research checkout. Future integration still needs actual-database validation, GPU processing, camera/lens selection and preview/export consistency. A prototype using the retained decoder's fixed container layout did not completely decode profile 486, so the 91 containers must not be assumed uniformly validated. The owner deferred this work.
+Chromatic-aberration profile decoding, selection and numerical resampling were previously studied. Future integration still needs actual-database validation, GPU processing, camera/lens selection and preview/export consistency. A prototype using the studied decoder's fixed container layout did not completely decode profile 486, so the 91 containers must not be assumed uniformly validated. The owner deferred this work.
 
 ## Thumbnail observation
 

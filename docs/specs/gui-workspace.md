@@ -62,7 +62,7 @@ Waveform/parade use bilinear placement with 256 weight units per sample. Splitti
 
 RGB keeps its working primaries and linear transfer state. The combined RGB waveform includes matching sRGB or Adobe RGB luminance. Sensor/calibrated layers and pre-tone RGB use 0–4095, scalar fields use 0–1, luminance ratios use 0–2, and signed detail uses −1000…1000 camera codes. Scopes use all buffer channels regardless of display selection. Inspection offers image buffers; node-data diagnostics are deferred.
 
-Capture One screenshots informed the three-pane arrangement. The navigator, scopes, and metadata panels use dark neutral styling.
+Photographic workspace examples informed the three-pane arrangement. The navigator, scopes, and metadata panels use dark neutral styling.
 
 ## Conformance
 

@@ -99,7 +99,7 @@ Defer monochrome, reduced-size processing, neural upsampling and SFD/X3I during 
 - **UI:** add a family panel and capabilities after the supported controls are demonstrated. Decode and capture metadata must identify the family early. Shared widgets do not imply identical slider meaning.
 - **Oracle coverage:** many workers and bounded stage compositions are independently exact. Whole-original replacement parity, matched application TIFFs, complete resource-enabled calibration composition and default level6 local contrast remain unverified.
 
-The authorized reference checkout contains the detailed decoder, dispatch, calibration, Stage1/2/2B/3, finishing and backend research notes. Those notes distinguish static recovery from executed native evidence. This plan summarizes the integration implications without depending on machine-local captures.
+Decoder, dispatch, calibration, Stage1/2/2B/3, finishing and backend research distinguish static recovery from executed native evidence. This plan summarizes the integration implications without depending on machine-local captures.
 
 ## Implemented input and calibration boundaries
 

@@ -1,5 +1,5 @@
 ---
-summary: "Implement and evaluate coordinated Merrill HDR controls after researching Capture One tone mapping."
+summary: "Implement and evaluate coordinated Merrill HDR controls after researching spatial tone mapping."
 ---
 
 # Investigate tonal ranges
@@ -20,7 +20,7 @@ The owner subsequently approved baking Merrill HDR and Local Contrast into DNG u
 - [x] Evaluate photographs and measure completed processing cost.
 - [x] Run repository checks and prepare the app for owner review, without committing.
 - [x] Review range selectivity and Global/Spatial appearance with the owner. The photographic results were rejected.
-- [x] Inspect Capture One's installed HDR engine and recover its four-control response.
+- [x] Inspect a spatial HDR engine and recover its four-control response.
 - [x] Validate recovered response equations against the native Metal kernel on synthetic inputs.
 - [x] Trace spatial filter scales, pivot inputs and settings-field normalization.
 - [x] Validate coefficient arithmetic, base reconstruction and constant gain upsampling against native kernels.
@@ -36,11 +36,11 @@ The owner subsequently approved baking Merrill HDR and Local Contrast into DNG u
 
 ## Current direction
 
-The owner rejected the experiment's appearance and requested Capture One research instead. The four-control interface remains useful, but the fixed response anchors below are a rejected prototype rather than selected photographic behavior. The owner approved the spatial response after the Global/Spatial comparison, removed Global, and selected normalized -1 to +1 amounts. DNG must continue exporting through its existing pipeline while leaving HDR preview adjustments out. The owner subsequently approved committing this implementation with shared photographic finishing.
+The owner rejected the experiment's appearance and requested further spatial HDR research. The four-control interface remains useful, but the fixed response anchors below are a rejected prototype rather than selected photographic behavior. The owner approved the spatial response after the Global/Spatial comparison, removed Global, and selected normalized -1 to +1 amounts. DNG must continue exporting through its existing pipeline while leaving HDR preview adjustments out. The owner subsequently approved committing this implementation with shared photographic finishing.
 
-## Capture One findings
+## Spatial HDR findings
 
-Research examined Capture One 16.6.3.6 application resources and the arm64 ImageCore binary. The Metal library has SHA-256 `b30ddb54b74ba922a53e93c758335e71cb84532f494329d26fe2a7b90e0806e4`. Internal symbols identify `CImgOpLocalToneMappingV8` and sixteen corresponding Metal passes. Embedded AIR bitcode can be extracted from the Metal library's bitcode wrappers and read with the installed Apple clang. CPU disassembly establishes parameter packing and calls between these passes. No application code was imported into the renderer.
+Research examined ARM64 spatial tone-mapping code and sixteen corresponding Metal passes. Embedded AIR bitcode supplies the GPU arithmetic. CPU disassembly establishes parameter packing and calls between these passes. No application code was imported into the renderer.
 
 The HDR stage is spatial. It constructs a logarithmic brightness map, estimates a filtered base through local moments, residuals and coefficients, and uses both the base and the original signal to compute gain. The broad shadow/highlight adjustments and the black/white adjustments share this calculation. Blacks incorporates the shadow gain. Whites incorporates the highlight gain. The final gain map is calculated on a half-width, half-height grid. Separable five-tap filtering reconstructs the sparse expanded gain map before multiplication into RGB. These final passes are principally gain upsampling, rather than an additional full-resolution blur. A separate clipping-recovery operation exists, so this tonal stage alone does not describe reconstruction of clipped channels.
 
@@ -129,7 +129,7 @@ The existing Shadows/Highlights controls adjust camera sigmoid endpoints by only
 
 The app retains the four experimental controls, now with normalized signed amounts between -1 and +1. Zero omits both HDR nodes. Tone bypass preserves the saved amounts. Existing camera Shadows/Highlights remain under Camera curve. Active HDR edits do not block DNG export. The existing technical base and appearance omit HDR, so there is no additional baking or appearance composition. TIFF uses the same photographic graph as the viewport.
 
-Spatial averages linear brightness onto a half-width, half-height guide, constructs the multiscale base, evaluates the coordinated gain on that grid and reconstructs gain bilinearly before multiplying original RGB. Odd dimensions clamp the final cell. Working-space luminance uses the known sRGB or Adobe RGB primaries, rather than Capture One's fixed brightness mix. Coarse guide cells average their source luminance before taking the logarithm. The implementation uses floating EV moments, regularizers 0.45² and 0.9² EV², and replicated boundaries. At the finest one-cell radius, the residual limit uses the native maximum-residual case because no smaller neighborhood exists. These are explicit spatial implementation choices, not claims of bitwise equality with the application's fixed-point pyramid path. No proprietary shader implementation is imported.
+Spatial averages linear brightness onto a half-width, half-height guide, constructs the multiscale base, evaluates the coordinated gain on that grid and reconstructs gain bilinearly before multiplying original RGB. Odd dimensions clamp the final cell. Working-space luminance uses the known sRGB or Adobe RGB primaries, rather than the studied HDR operation's fixed brightness mix. Coarse guide cells average their source luminance before taking the logarithm. The implementation uses floating EV moments, regularizers 0.45² and 0.9² EV², and replicated boundaries. At the finest one-cell radius, the residual limit uses the native maximum-residual case because no smaller neighborhood exists. These are explicit spatial implementation choices, not claims of bitwise equality with the studied fixed-point pyramid path. No proprietary shader implementation is imported.
 
 The pivot inverts our generated camera tone table at 0.25 and removes the pending Exposure gain. The spatial base is independent of the curve, Exposure and the four amounts, so edits to those settings can reuse it. Graph keys include the resulting pivot in the gain node. Selective base inspection stops before later tone metadata preparation. No standalone Brightness or Dehaze setting was added.
 
@@ -151,7 +151,7 @@ Before the final normalization and DNG refinements, all 589 ordinary workspace t
 
 On Apple M1 Pro, completed render-plus-view medians over five rotated trials were 826/840/930 ms for neutral/Global/Spatial on the portrait, and 641/651/735 ms on foliage. Fast medians were 489/500/528 ms and 312/318/339 ms respectively. Cached amount changes had medians of 79/78 ms for Global/Spatial on the portrait and 76/72 ms on foliage. The spatial base and denoising did not rerun for those edits. These measurements exclude source decoding and export and have uncontrolled background activity. They indicate roughly 94–104 ms of initial Full Spatial work and 27–39 ms of initial Fast Spatial work on these two photographs, rather than a cross-machine latency guarantee.
 
-Visual review covered faces, hair, knitted fabric, sky, glossy leaves and dark background at Shadows +0.5 and Highlights -0.5. Spatial preserves visibly more texture than Global at those settings. The local toggleable comparison includes both photographs and neutral output. The owner approved Spatial and rejected Global after this comparison. Complete application-to-application Capture One spatial equivalence has not been established.
+Visual review covered faces, hair, knitted fabric, sky, glossy leaves and dark background at Shadows +0.5 and Highlights -0.5. Spatial preserves visibly more texture than Global at those settings. The local toggleable comparison includes both photographs and neutral output. The owner approved Spatial and rejected Global after this comparison. Complete application-to-application spatial equivalence has not been established.
 
 ## Final UI and export decisions
 

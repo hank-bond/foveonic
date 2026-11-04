@@ -11,7 +11,7 @@ Requirements: [output strategies](../docs/specs/output-strategies.md). The [side
 - [x] Select uint16 sample storage; defer float16 evaluation.
 - [x] Replace the initial lossless-JPEG implementation choice with uncompressed output through the existing `tiff` crate; explore compression only after the first export works.
 - [x] Agree a modified export recipe that reruns processing, bakes content corrections, and replaces pixel-tone rendering with embedded presentation.
-- [x] Inspect the reference implementation's Rust writer and CAMF profile prototype at revision `2b0dd44`.
+- [x] Inspect a Rust DNG writer and CAMF profile prototype at revision `2b0dd44`.
 - [x] Check SDK normalization, white-balance editing, and highlight clipping with synthetic DNGs.
 - [x] Check invertibility of the actual WB/mode matrices in six original DP2 Merrill files.
 - [x] Measure the candidate export basis on GPU-processed photographs: negative samples, highlight range, and uint16 quantization error.
@@ -22,7 +22,7 @@ Requirements: [output strategies](../docs/specs/output-strategies.md). The [side
 - [x] Implement one selected appearance and uncompressed TIFF-based export, then verify full original exports and independent SDK decoding.
 - [x] Owner review of the initial DNG look.
 - [ ] Compare compression codecs and libraries separately after uncompressed export acceptance.
-- [ ] Validate photographic appearance and editing latitude through the SDK. Test color and monochrome exports in Capture One and Lightroom/ACR separately.
+- [ ] Validate photographic appearance and editing latitude through the SDK. Test color and monochrome exports in downstream raw editors separately.
 
 ## Photographic direction
 
@@ -34,7 +34,7 @@ Each export carries one selected presentation. Other camera modes are chosen in 
 
 Technical corrections may be baked using the selected WB; changing WB downstream need not rerun layer-level calibration or cleanup. ColorDQ may be baked; camera mode, tone, and downstream RGB presentation belong in embedded metadata. The current mode matrix precedes ColorDQ, reconstruction, and sharpening. A modified recipe must define this separation explicitly, including its exposure, saturation, and white-balance conventions. Removing a matrix cannot undo nonlinear processing performed under it.
 
-The reference implementation's DNG representation was confirmed to work in Capture One. Use it as a reference for encoding and appearance conventions, not an architecture to copy. Foveonic should fit its existing GPU pipeline, typed graphs, and export ownership. Composition, splitting, fitting, and profile packaging belong in the DNG export area, with small tested helpers for the operations actually needed. Combine adjacent linear operations in the correct space and order; account for per-channel tone through the supported common curve and compensating matrix, with residual look correction where useful. Do not build a portable general-purpose rendering framework or optimize solely for one hardcoded recipe. Photographic usefulness and editing latitude are the acceptance target, not exact output across readers.
+The studied DNG representation was confirmed to work in a downstream raw editor. Use it as a reference for encoding and appearance conventions, not an architecture to copy. Foveonic should fit its existing GPU pipeline, typed graphs, and export ownership. Composition, splitting, fitting, and profile packaging belong in the DNG export area, with small tested helpers for the operations actually needed. Combine adjacent linear operations in the correct space and order; account for per-channel tone through the supported common curve and compensating matrix, with residual look correction where useful. Do not build a portable general-purpose rendering framework or optimize solely for one hardcoded recipe. Photographic usefulness and editing latitude are the acceptance target, not exact output across readers.
 
 ## Technical-base implementation
 
@@ -42,7 +42,7 @@ The reference implementation's DNG representation was confirmed to work in Captu
 
 The GPU test in [`dng_test.rs`](../crates/foveonic/src/dng_test.rs) uses the blue-sign original with reconstruction, automatic ColorDQ, and sharpening. Simultaneously changing mode to Vivid, exposure, all three tone controls, and saturation preserves the base pixels exactly. Sensor gain and WB changes alter the base; subsequent fresh processing leaves the retained original base unchanged. Unknown selected modes are rejected. This establishes the processing separation for that fixture, not metadata composition, native-look equivalence, compression, or reader conformance. That check preceded the uncompressed writer and GUI DNG integration; their validation is tracked separately below.
 
-Checks passed: ordinary workspace tests (61 core, 78 GUI, CLI and documentation tests), all 55 ignored core GPU tests including the new base check and existing exact-output coverage, strict workspace/all-target Clippy, formatting, and generated-index checks. GUI ignored tests were not rerun for this processor-only slice. No SDK/Capture One validation or completed DNG export is claimed.
+Checks passed: ordinary workspace tests (61 core, 78 GUI, CLI and documentation tests), all 55 ignored core GPU tests including the new base check and existing exact-output coverage, strict workspace/all-target Clippy, formatting, and generated-index checks. GUI ignored tests were not rerun for this processor-only slice. No SDK/downstream-editor validation or completed DNG export is claimed.
 
 ## Uncompressed export implementation
 
@@ -62,7 +62,7 @@ A seventh full export used Sunlight/Vivid on the blue-sign original. Its 44,255,
 
 The full ignored workspace run passed all 57 core and seven GUI tests, including the new DNG encoding test and existing exact-output, ownership, sidecar replay, inspection, and dragging coverage. This is correctness evidence, not a new performance or memory claim; the deferred intermittent mismatch is not declared fixed. No GUI was launched or stopped by this pass, and nothing was committed. A follow-up documentation check initially found a stale reference to owner-removed artwork in the [icon plan](./archived/icon-background.md). The owner subsequently approved reference cleanup, and documentation checks passed.
 
-The owner reviewed the exported DNG and approved its look. Broader native save-dialog/export/error interaction, Capture One and Lightroom/ACR WB/exposure latitude, and highlight editing still need validation before claiming complete DNG conformance. Compression remains deferred.
+The owner reviewed the exported DNG and approved its look. Broader native save-dialog/export/error interaction, WB/exposure latitude in downstream raw editors, and highlight editing still need validation before claiming complete DNG conformance. Compression remains deferred.
 
 ## Mapping findings
 
@@ -98,7 +98,7 @@ Range was selected from the maximum active camera-like component divided by its 
 
 ### Reader and precision results
 
-The 144 primary SDK runs covered both recipes, all three variants, unchanged/warm WB, -2 EV brightness, and +3 EV shadow stress. All completed without warnings. The temporary encoder was adapted from the reference implementation at `2b0dd44`, with attribution/license retained and only its cancellation adapter replaced. Its eight unit tests passed. SDK stage-1 decoding matched all 531,062,784 GPU-produced uint16 samples exactly across the twelve photographs/recipes.
+The 144 primary SDK runs covered both recipes, all three variants, unchanged/warm WB, -2 EV brightness, and +3 EV shadow stress. All completed without warnings. The temporary encoder was adapted from the studied DNG writer at `2b0dd44`, with attribution/license retained and only its cancellation adapter replaced. Its eight unit tests passed. SDK stage-1 decoding matched all 531,062,784 GPU-produced uint16 samples exactly across the twelve photographs/recipes.
 
 - Clipping changed actual shadow color/noise, not merely unused below-black storage. In the rocks default, 1,796,086 pixels changed by more than one 8-bit sRGB code in at least one channel at baseline; +3 EV increased that to 2,391,427. Other default images had much smaller affected regions. This establishes an effect, not that clipping is photographically worse: some differences are suppressed colored shadow noise, and owner review remains pending.
 - Integer rounding was small in bright areas: at baseline and -2 EV, no pixel with all reference channels at least 0.5 differed by more than one 8-bit code in any recipe. It was more apparent in deep shadows, especially after reconstruction removed native noise. For rocks with reconstruction/sharpening, baseline rounding changed 5,178,622 pixels by more than one 8-bit code, with maximum component error about 0.0129; +3 EV raised the maximum to about 0.0853. These are encoded sRGB errors under the provisional identity-tone profile, not linear-signal errors or native-look acceptance thresholds.
@@ -124,7 +124,7 @@ The earlier signed-storage probe used uncompressed uint16 to isolate normalizati
 
 Later diagnostic executables were rebuilt as comparison/codec controls were added. The first GPU-run executable hash was not captured before that rebuild, limiting identification of that initial run.
 
-This project's probe has not been run in Capture One or Lightroom; the reference implementation's working Capture One result is separate evidence. No native profile/look fit, alternate photographic WB/mode processing, other Merrill body, high-ISO survey, or owner photographic acceptance of these probes has occurred. Native signed-channel round-trip accuracy and the original editing recipe's appearance are not established by these paired SDK measurements. The sidecar checkpoint and its integration are complete at `218fd90`. Production export was still pending at the end of these historical probes. The uncompressed export implementation and its remaining reader checks are described above.
+This project's probe has not been run in downstream raw editors. The studied DNG writer's successful raw-editor check is separate evidence. No native profile/look fit, alternate photographic WB/mode processing, other Merrill body, high-ISO survey, or owner photographic acceptance of these probes has occurred. Native signed-channel round-trip accuracy and the original editing recipe's appearance are not established by these paired SDK measurements. The sidecar checkpoint and its integration are complete at `218fd90`. Production export was still pending at the end of these historical probes. The uncompressed export implementation and its remaining reader checks are described above.
 
 ## Shared exporter regression after Quattro support
 

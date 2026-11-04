@@ -24,7 +24,7 @@ SD9, SD10, SD14, SD15, DP1, DP1s, DP1x, DP2, DP2s and DP2x. SD1 belongs to the M
 
 ## Starting evidence
 
-Format-30 SD15, DP2 and DP1s already have complete selected low-ISO routes. Original DP1 uses format30 but requires an inline calibration/color route and an ISO400 original reaches the separate denoiser. SD9, SD10 and SD14 use format6 and legacy metadata. Native sensor and metadata captures exist for these originals in the authorized reference checkout.
+Format-30 SD15, DP2 and DP1s already have complete selected low-ISO routes. Original DP1 uses format30 but requires an inline calibration/color route and an ISO400 original reaches the separate denoiser. SD9, SD10 and SD14 use format6 and legacy metadata. Native sensor and metadata captures were collected for these originals.
 
 New public samples include a DP1 ISO100 original and a DP2x ladder at ISO50,100,200,400,800,1600 and3200. DP1x and DP2s sample acquisition remains open. Downloaded originals and provenance stay outside version control. Record coverage and remaining limitations explicitly rather than inferring support from camera-name aliases.
 
@@ -56,7 +56,7 @@ Engine-owned calibration statistics cache the latest immutable source. Public or
 
 The final fixed-build pass exports default and adjusted Standard from all eight acquired models using Auto WB, plus DP2x ISO100/3200 and ISO3200 Incandescent cases. All twenty DNGs validate without Adobe SDK warnings. Independent SDK stage1 decoding preserves all 264,177,792 stored uint16 components exactly. Earlier technical-base checks confirm that exposure, tone and saturation leave samples unchanged. White balance and spatial detail alter them, and retained bases survive later renders.
 
-Full-resolution SDK comparisons use 16-bit encoded sRGB. Mean absolute component errors range from 0.000189 to 0.002233 across these exports. The largest individual difference is 0.06122 on SD9, and at most one component per image exceeds 0.05. Metadata-only neutral and -2EV exposure edits validate on SD9, DP1 and DP2x ISO3200. All six preserve every stored sample and change the SDK render. Each exposure edit lowers mean rendered brightness. These measurements establish the embedded approximate appearance, rather than promising universal parity. Lightroom and Capture One review remain pending.
+Full-resolution SDK comparisons use 16-bit encoded sRGB. Mean absolute component errors range from 0.000189 to 0.002233 across these exports. The largest individual difference is 0.06122 on SD9, and at most one component per image exceeds 0.05. Metadata-only neutral and -2EV exposure edits validate on SD9, DP1 and DP2x ISO3200. All six preserve every stored sample and change the SDK render. Each exposure edit lowers mean rendered brightness. These measurements establish the embedded approximate appearance, rather than promising universal parity. Review in downstream raw editors remains pending.
 
 ## UI and regression checks
 

@@ -54,6 +54,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** _(archived)._ Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[gui-screenshot](./gui-screenshot.md)** _(archived)._ Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README.
 - **[help-comparisons](./help-comparisons.md)** _(archived)._ Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
+- **[highlight-retention](./highlight-retention.md)** _(archived)._ The fixed highlight-retention curve was implemented, photographically rejected and superseded by regional adaptive tone.
 - **[highlight-threshold](./highlight-threshold.md)** _(archived)._ Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** _(archived)._ A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
 - **[import-workflow](./import-workflow.md)** _(archived)._ Added inline import review and bounded asynchronous processing with shared recipes and foreground priority.
@@ -74,6 +75,8 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[merrill-noise-latency](./merrill-noise-latency.md)** _(archived)._ Reduce completed Merrill noise and banding latency while preserving the reviewed corrections.
 - **[merrill-noise-training](./merrill-noise-training.md)** _(archived)._ Implemented user cap calibration with grouped review, fitted noise profiles and serial-matched pixel correction.
 - **[merrill-regional-preview](./merrill-regional-preview.md)** _(archived)._ Deliver Merrill Smart detail from native processing tiles before continuing the whole frame.
+- **[merrill-speckle-layers](./merrill-speckle-layers.md)** _(archived)._ Repair Compact speckles across all three sensor layers using shared donors and whole-pixel highlight protection.
+- **[merrill-speckle-test-image](./merrill-speckle-test-image.md)** _(archived)._ Find one owner-card photograph that demonstrates Compact speckle repair at native sizes 3, 5 and 7.
 - **[metadata-first-loading](./metadata-first-loading.md)** _(archived)._ Read capture highlights independently of image decoding so the information bar updates while the selected photograph loads.
 - **[monochrome-performance](./monochrome-performance.md)** _(archived)._ Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output.
 - **[monochrome-refinement](./monochrome-refinement.md)** _(archived)._ Validated independent monochrome detail and shared color sensitivity while preserving the sensor mixture.

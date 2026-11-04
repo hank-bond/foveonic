@@ -5,21 +5,21 @@ kind: reference
 
 # Color and tone research
 
-This reference compares color and tone methods from darktable, Capture One and the current Foveonic pipeline. It records mechanisms, source evidence and limitations independently of which features we choose to build. Candidate workflow and implementation decisions belong in the [perceptual editing exploration](../plans/perceptual-editing.md).
+This document compares color and tone methods from public source studies, numerical inspection and the current Foveonic pipeline. It records mechanisms, evidence and limitations independently of which features we choose to build. Candidate workflow and implementation decisions belong in the [perceptual editing exploration](../plans/perceptual-editing.md).
 
 ## Research scope and evidence
 
-Research reviewed darktable documentation, its `release-5.6.0` source, selected development modules, Capture One documentation, and the current Foveonic implementation. Capture One documents control behavior but does not publish its processing equations. Owner-authorized local numerical inspection supplements those public descriptions below. Similar interfaces and outcomes do not establish numerical equivalence.
+Research reviewed darktable documentation, its `release-5.6.0` source, selected development modules, documented photographic controls and the current Foveonic implementation. Owner-authorized numerical inspection supplements public descriptions where processing equations are unavailable. Similar interfaces and outcomes do not establish numerical equivalence.
 
 The development Saturation Curve and Spektrafilm references must be treated separately from the inspected 5.6.0 source snapshot. Recheck their status before implementation. Mathematical descriptions below summarize the cited methods. Proposed Foveonic work is tracked separately in the [exploration plan](../plans/perceptual-editing.md).
 
 ### Local numerical inspection
 
-The owner authorized local inspection of Capture One 16.6.3.6 for Apple Silicon and a separate darktable checkout. The durable local archive convention is `~/git/capture-one-research/<version>-<architecture>/`. It retains version hashes, bounded host disassembly, Ghidra pseudocode, Metal bitcode and readable IR, operation indexes, extraction scripts and measured kernel probes. Keep this archive independent of disposable build output. Decoded code, reviewed equations, documented behavior and native validation are distinct evidence levels.
+The owner authorized numerical inspection of photographic processing on Apple Silicon and study of published source. Evidence includes version hashes, bounded host disassembly, generated pseudocode, Metal bitcode and readable IR, operation indexes, extraction scripts and measured kernel probes. Decoded code, reviewed equations, documented behavior and native validation are distinct evidence levels.
 
 ### What the local inspection establishes
 
-The inspected version is 16.6.3.6 for Apple Silicon. The local reference implementation contains several generations of algorithms and different raw, processed-image and DNG routes. The research goal is to understand useful numerical choices. Matching its complete UI, processing-version compatibility or every camera profile is outside this investigation.
+The inspected photographic processing contains several generations of algorithms and different raw, processed-image and DNG routes. The research goal is to understand useful numerical choices. Matching a complete UI, processing-version compatibility or every camera profile is outside this investigation.
 
 The completed isolated checks cover 184 configurations across original host functions and Metal kernels. They include ramps, neutrals, varied hues and chroma, random RGB samples, headroom, hue wraparound, selection falloff, overlapping corrections and combinations of three-way lightness settings. Each check has a bounded scope. Camera setup, every slider-to-field conversion and full color-managed application appearance are not established by these checks.
 
@@ -42,13 +42,21 @@ The completed isolated checks cover 184 configurations across original host func
 
 ### Direct color cursor inspection
 
-The owner-requested follow-up traced the installed version's `BasicColorCorrectionCursorEventHandler`, the picking callbacks and `ColorCorrection_MatchPredefinedSliceSet`. Bounded pseudocode, selector-resolved annotations, extraction scripts, method addresses and binary hashes are retained under the local archive's `direct-color/` directory. These are static findings, separate from the earlier 184 numerical probes. No full-application cursor replay or probe of the recovered slice matcher was performed.
+The owner-requested follow-up traced color-cursor event handling, picking callbacks and predefined-range matching through bounded pseudocode and selector-resolved annotations. These are static findings, separate from the earlier 184 numerical probes. No full-application cursor replay or probe of the recovered range matcher was performed.
 
 The mouse-down path records view and canvas positions, starts asynchronous color picking and saves the current correction list. A movement threshold of two view points separates a click from a meaningful drag. Each pan event compares absolute horizontal and vertical deltas, takes its dominant axis, accounts for flipped view coordinates and dispatches through an action dictionary. Ordinary horizontal/vertical and Option-horizontal/vertical are distinct assignments. The inspected wrappers multiply the sensitivity setting and pointer delta by separate factors: 0.001 for Hue, 0.005 for Lightness and 0.01 for Saturation. These are internal slider units, not portable sensitivity constants.
 
 The picking callback sends sampled RGB to the predefined-slice matcher. That matcher computes an HSV-style hue, finds neighboring enabled slice centers around the hue circle and returns one or two selected indices with complementary weights. Two-range weights depend on the slices' hue extents and smoothness. This picker differs from the profile-based Lab/LCh photographic correction itself. The UI adjustment callbacks iterate the selected indices, add `drag amount × selection weight` to each existing slider and clamp to that slider's limits before replacing the active correction list. The tool therefore edits existing color corrections rather than adding a local image mask.
 
-[Capture One's official introduction](https://www.captureone.com/blog/whats-new-in-capture-one-20) documents direct on-image slider dragging. Its settings permit different axis assignments. Our selected interaction is specified separately in [direct color editing](./specs/direct-color-editing.md). We retain our existing neutral color guide and range weights, add near-neutral protection, allow both pointer axes to contribute during one gesture and derive updates from the initial values. Exact cursor sensitivity, sampled RGB domain and reference picker falloff are not claimed as a match.
+The studied cursor interaction supports direct on-image slider dragging with configurable axis assignments. Our selected interaction is specified separately in [direct color editing](./specs/direct-color-editing.md). We retain our existing neutral color guide and range weights, add near-neutral protection, allow both pointer axes to contribute during one gesture and derive updates from the initial values. Exact cursor sensitivity, sampled RGB domain and picker falloff are not claimed as a match.
+
+### Advanced color range follow-up
+
+The separate [advanced color range research](./advanced-color-range-research.md) records wheel selection, asymmetric edge falloff, overlap checks and the proposed selective lightness inversion. It distinguishes selection inversion from reversing tones inside a selection.
+
+### Fujifilm rendering follow-up
+
+[Fujifilm dynamic range and film rendering research](./fuji-rendering-research.md) traces DR100/200/400 metadata, the native simulation asset chain, synthetic tone/color responses and candidate X3F/DNG adaptations. Capture headroom, automatic scene placement and creative appearance remain separate responsibilities.
 
 ### Domains and processing order
 
@@ -182,9 +190,9 @@ These axes can share a perceptual adjustment operation while retaining distinct 
 | [Darktable Color Harmonizer](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/color-harmonizer/) | Pulls colors toward palette hue anchors, with saturation adjustments, neutral protection and smoothing. | A creative palette tool with a distinct purpose from saturation or white balance. |
 | [Darktable Color Contrast](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/color-contrast/) | Adjusts green–magenta and blue–yellow separation through Lab opponent axes. | A compact creative operation. Unequal axis scaling can change hue as well as chroma. |
 | [Darktable Velvia](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/velvia/) | Weighted saturation enhancement with midtone protection. | A weighted saturation look with documented limitations. Its documentation warns about difficult hue and brightness shifts. |
-| [Capture One global saturation](https://support.captureone.com/hc/en-us/articles/360002602197-Adjusting-saturation-in-the-Exposure-tool) | Positive values have a vibrance-like response with skin restraint. Negative values perform ordinary desaturation. | Evidence that a pleasant global control need not match a targeted saturation control's response. Its public documentation omits equations. The local inspection establishes selected numerical paths. |
-| [Capture One Color Editor](https://support.captureone.com/hc/en-us/articles/360002601358-The-Color-Editor-overview) | Targeted HSL adjustments with adjustable selection smoothness and more precise range selection in Advanced mode. | Reference for approachable subject-color editing and showing the affected range. |
-| [Capture One Skin Tone Uniformity](https://support.captureone.com/hc/en-us/articles/360002596077-Adjusting-skin-tones) | Pulls selected hue, saturation or lightness toward a reference color. | A tool for uneven skin and palette consistency. It is a convergence operation, not an ordinary HSL offset. |
+| Global saturation | Positive values have a vibrance-like response with skin restraint. Negative values perform ordinary desaturation. | Evidence that a pleasant global control need not match a targeted saturation control's response. Documented behavior omits equations. Numerical inspection establishes selected paths. |
+| Color-range editing | Targeted HSL adjustments with adjustable selection smoothness and more precise range selection. | A workflow for approachable subject-color editing and showing the affected range. |
+| Skin-tone uniformity | Pulls selected hue, saturation or lightness toward a target color. | A tool for uneven skin and palette consistency. It is a convergence operation, not an ordinary HSL offset. |
 
 The inspected [Color Balance RGB source](https://github.com/darktable-org/darktable/blob/release-5.6.0/src/iop/colorbalancergb.c) includes perceptual adjustment and gamut limiting. [Saturation Curve source](https://github.com/darktable-org/darktable/blob/master/src/iop/satcurvergb.c) is a moving development reference. Pin a revision and preserve attribution if adapting code.
 
@@ -193,15 +201,15 @@ The inspected [Color Balance RGB source](https://github.com/darktable-org/darkta
 | Tool | Processing concept | Relevance to Foveonic |
 | --- | --- | --- |
 | [Scene-linear Exposure](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/exposure/) | Multiply black-subtracted RGB by `2^EV`. | Keep a clear exposure meaning. Software gain changes signal values but does not reproduce the signal-to-noise improvement of collecting more light. |
-| [Capture One Brightness](https://support.captureone.com/hc/en-us/articles/360002609938-Adjusting-brightness-in-the-Exposure-tool) | Primarily changes midtones and their contrast. | Reference for a visual brightness adjustment distinct from Exposure. |
-| [Capture One RGB and Luma curves](https://support.captureone.com/hc/en-us/articles/360002604017-Improving-contrast-without-altering-saturation-in-the-Curve-tool) | RGB contrast can increase saturation. Luma contrast is designed to avoid that coupling. | Separate tonal intent from incidental color changes. The exact invariants still depend on implementation. |
+| Midtone brightness | Primarily changes midtones and their contrast. | A visual brightness adjustment distinct from Exposure. |
+| RGB and Luma curves | RGB contrast can increase saturation. Luma contrast is designed to avoid that coupling. | Separate tonal intent from incidental color changes. The exact invariants still depend on implementation. |
 | [Darktable Tone Equalizer](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/tone-equalizer/) | Brightness-dependent exposure corrections through an edge-aware guide. | A reference for changing broad tonal relationships while retaining local texture. The existing Foveonic HDR operation remains its own reviewed implementation. |
-| [Capture One HDR](https://support.captureone.com/hc/en-us/articles/360002602737-Recovering-details-in-the-highlights-and-shadows) | Highlights, Shadows, Whites and Blacks alter tonal placement. Strong compression can reduce contrast and saturation. | Useful UI and behavior reference. Documentation does not establish exact spatial filtering or sensor reconstruction equations. |
+| Four-range HDR | Highlights, Shadows, Whites and Blacks alter tonal placement. Strong compression can reduce contrast and saturation. | Useful UI and behavior evidence. Documentation does not establish exact spatial filtering or sensor reconstruction equations. |
 | [Darktable Contrast Equalizer](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/contrast-equalizer/) | Wavelet-scale luminance and chroma detail adjustments with edge controls. | Multiscale contrast and texture control. Its horizontal axis represents feature size, not brightness. |
 | [Darktable Local Contrast](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/local-contrast/) | Local Laplacian or bilateral processing of Lab lightness. | Reference for local separation with a different character from a single high-pass filter. |
-| [Capture One Clarity and Structure](https://support.captureone.com/hc/en-us/articles/360002613998-Adjusting-local-contrast-in-the-Clarity-tool) | Larger versus finer transitions, with methods choosing different saturation and highlight behavior. | Keep local contrast, reconstruction detail and sharpening conceptually separate. |
+| Multiscale local contrast | Larger versus finer transitions, with methods choosing different saturation and highlight behavior. | Keep local contrast, reconstruction detail and sharpening conceptually separate. |
 
-[Capture One Exposure](https://support.captureone.com/hc/en-us/articles/360002602077-Adjusting-exposure-in-the-Exposure-tool) documents camera-like exposure behavior and additional protective behavior for processed inputs. A named Exposure slider does not establish identical behavior across raw and processed image paths.
+The studied Exposure control has camera-like gain and additional protective behavior for processed inputs. A named Exposure slider does not establish identical behavior across raw and processed image paths.
 
 ## Catalog of highlight and rendering tools
 
@@ -236,7 +244,7 @@ Negative samples can arise from black-subtracted noise, color-basis conversion o
 
 Applying a full view transform after an existing camera shoulder can compress the image twice. Its nonlinear chromatic response cannot generally be represented by a scalar curve or a 3×3 matrix.
 
-A DNG appearance mismatch can originate in reconstructed floating samples, stored samples, profile reprojection or reader rendering. [Capture One's DNG support policy](https://support.captureone.com/hc/en-us/articles/360003336397-DNG-Support) does not promise reproduction of another application's embedded edits. This policy does not identify which tag or stage causes a particular mismatch.
+A DNG appearance mismatch can originate in reconstructed floating samples, stored samples, profile reprojection or reader rendering. Reader support does not establish reproduction of another application's embedded edits or identify which tag or stage causes a particular mismatch.
 
 Spatial corrections and shoulders can be baked into linear-light RGB, but the samples then have modified scene relationships. Linear encoding is distinct from an untouched scene-linear signal. Baking more appearance can reduce downstream latitude and interact with a reader's own tone rendering.
 
@@ -244,6 +252,8 @@ Spatial corrections and shoulders can be baked into linear-light RGB, but the sa
 
 ETTR seeks signal quality during acquisition. It does not imply that the brightest pixel should become display white or that every scene's average should become middle gray. Software exposure gain cannot restore signal lost to sensor clipping.
 
-[Darktable Exposure](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/exposure/) documents percentile-based automatic placement and sampled-area exposure matching. [Capture One Exposure](https://support.captureone.com/hc/en-us/articles/360002602077-Adjusting-exposure-in-the-Exposure-tool) describes middle-gray and metering contributions to Auto. Neither establishes a universally correct target for low-key, high-key or backlit scenes.
+[Darktable Exposure](https://docs.darktable.org/usermanual/5.6/en/module-reference/processing-modules/exposure/) documents percentile-based automatic placement and sampled-area exposure matching. The studied automatic exposure control combines middle-gray and metering contributions. Neither establishes a universally correct target for low-key, high-key or backlit scenes.
 
 Useful comparisons separate midtone placement from highlight rendering. A bright specular reflection and a large bright subject can require different treatment even when their maximum values match. Metering, view-transform choice and missing-data reconstruction therefore have separate roles.
+
+[Visible detail and adaptive tone](visibility-tone-research.md) collects display-adaptive, spatial and noise-aware research for a separate visibility-oriented experiment. Automatic exposure is outside that experiment.

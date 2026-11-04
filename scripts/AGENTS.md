@@ -20,5 +20,6 @@ Keep measurement orchestration outside the Rust processing and GUI layers. Do no
 
 - **[color_field_report.py](./color_field_report.py)** Build a private, color-managed, toggleable report from saved-edit GPU comparisons.
 - **[generate_signed_node_fixtures.py](./generate_signed_node_fixtures.py)** Generate bounded native fixtures for signed chroma and direct root/detail operations.
+- **[visibility_tone_report.py](./visibility_tone_report.py)** Build a private photographic toggle report from the GPU visibility experiment.
 
 <!-- INDEX:END -->

@@ -12,6 +12,8 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+- **[adaptive-tone](./adaptive-tone.md)** _(accepted, incomplete, reference)._ Merrill regional base responses fit useful detail visibility with shared tuning limits independently of artistic tone edits.
+- **[advanced-color-range](./advanced-color-range.md)** _(accepted, conforming, reference)._ Advanced Color Range uses soft hue and saturation selections for saved HSL edits and selective lightness inversion.
 - **[application-workflows](./application-workflows.md)** _(accepted, incomplete, reference)._ A personal Merrill X3F app shares processing settings and one image engine between its GUI and batch CLI.
 - **[browser-previews](./browser-previews.md)** _(accepted, conforming, reference)._ Small embedded thumbnails appear immediately and asynchronous cached previews follow the latest photographic render.
 - **[browser-review](./browser-review.md)** _(accepted, conforming, reference)._ Three browser views share star ratings, metadata sorting and text/rating filters without changing photographic recipes.
@@ -21,6 +23,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[color-field](./color-field.md)** _(accepted, incomplete, reference)._ Color-field highlight reconstruction separates brightness and color in GPU passes with immutable source reliability and optional local color-evidence selection.
 - **[column-conditioning](./column-conditioning.md)** _(accepted, conforming, reference)._ GPU column conditioning corrects raw processing tiles after base filtering and before luminance/detail estimation, retaining native windows, cuts, ordered means, strict eligibility, and clipping.
 - **[decode-cache](./decode-cache.md)** _(accepted, conforming, reference)._ A bounded temporary disk LRU reuses decoded sources, originals, selection metadata and previews with per-family workspace controls.
+- **[dehaze](./dehaze.md)** _(draft, incomplete, reference)._ Dehaze adds automatic haze-color estimation and manual shadow-color picking in Corrections.
 - **[despeckle](./despeckle.md)** _(accepted, conforming, reference)._ Full-image GPU despeckling detects channel extrema and corrects them in deterministic reference order, independently of camera-record repair.
 - **[detail-and-noise](./detail-and-noise.md)** _(accepted, conforming, reference)._ Merrill GPU reconstruction separates noise cleanup from independently sized Fine and Coarse brightness detail.
 - **[direct-color-editing](./direct-color-editing.md)** _(accepted, conforming, reference)._ Direct color editing selects existing color ranges from the photograph and changes their HSL sliders through dragging.
@@ -34,10 +37,11 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[image-information-bar](./image-information-bar.md)** _(accepted, conforming, reference)._ A compact image information bar shows capture settings, filename, and visible-region dimensions and coordinates for photographic review.
 - **[import-workflow](./import-workflow.md)** _(accepted, conforming, reference)._ Import mode reviews sources without source-side writes and carries selected originals, edits, and hidden-file decisions to a destination.
 - **[interactive-rendering](./interactive-rendering.md)** _(accepted, incomplete, reference)._ Slider feedback uses full-quality active-edit inputs, bounded latest-request scheduling, image-first delivery, and deferred scopes and navigator presentation.
+- **[lightness-inversion](./lightness-inversion.md)** _(accepted, conforming, reference)._ A default-off Tone prototype reverses perceptual lightness, retains chromatic components and exports through shared linear edits.
 - **[merrill-banding](./merrill-banding.md)** _(accepted, conforming, reference)._ Merrill banding correction targets sensor-aligned offsets across multiple row and column widths while retaining natural grain and real color.
 - **[merrill-fast-preview](./merrill-fast-preview.md)** _(accepted, conforming, reference)._ Merrill Fast uses a filtered quarter-pixel grid and Smart delivers native viewport detail before the whole frame.
 - **[merrill-multiscale-noise](./merrill-multiscale-noise.md)** _(accepted, conforming, reference)._ Optional Merrill multiscale layer filtering combines chroma cleanup with fixed shield-based row or row-and-column correction.
-- **[merrill-speckles](./merrill-speckles.md)** _(accepted, conforming, reference)._ Merrill Noise owns reference and optional compact speckle detection with adjustable threshold and native support.
+- **[merrill-speckles](./merrill-speckles.md)** _(accepted, conforming, reference)._ Merrill Noise owns reference and Compact speckle detection with shared three-layer Compact repair.
 - **[monochrome-rendering](./monochrome-rendering.md)** _(accepted, conforming, reference)._ Merrill monochrome rendering mixes calibrated sensor layers before dedicated GPU filtering and exports editable linear monochrome DNG samples.
 - **[native-sharpening](./native-sharpening.md)** _(accepted, incomplete, reference)._ Optional GPU sharpening uses signed high-pass before exposure/tone, with distinct color-proportional and additive monochrome applications.
 - **[neutralize-shadows](./neutralize-shadows.md)** _(accepted, conforming, reference)._ Neutralize shadows selectively reduces green and magenta casts in dark, nearly neutral regions.

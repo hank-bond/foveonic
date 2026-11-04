@@ -12,7 +12,7 @@ read_when: "Read first when entering the repository."
 - Do not assume access to the owner's files outside this repository, other checkouts, or private projects. Ask for required external inputs.
 - Keep changes within approved scope. Do not commit, publish, install, or make generated output the default without explicit approval. Work is reviewed before commit.
 - Keep responses concise. Use plain language and include contrasts only when needed to prevent significant confusion.
-- Refer to the external processing reference as the "reference implementation" in repository prose, source summaries, and filenames.
+- Reserve "Reference" and "reference implementation" for each camera architecture's original processing approach in repository prose, source summaries, and filenames. Label other approaches by their function.
 
 ## Implementation approach
 

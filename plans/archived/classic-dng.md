@@ -59,7 +59,7 @@ The existing Merrill DNG technical-base and writer tests pass. The full SD15 pho
 
 The macOS system DNG reader opened all six exports at the correct oriented dimensions and rendered them through `sips` with the system sRGB profile. For each camera, the default and adjusted exports produced identical decoded RGB pixels even though their appearance profiles differ. This reader therefore does not establish application of the embedded look. Its brightness and saturation differences from photographic TIFF cannot be treated as profile-fit error or visual acceptance. Representative pairs were retained for review.
 
-Adobe SDK validation and appearance comparisons below complete this reader gate. Lightroom and Capture One acceptance remain pending under the shared DNG plan.
+Adobe SDK validation and appearance comparisons below complete this reader gate. Acceptance in downstream raw editors remains pending under the shared DNG plan.
 
 Workspace checks pass with 104 ordinary core tests and 128 GUI tests, plus CLI, documentation and tooling tests. Strict all-target Clippy, formatting and generated indexes pass. Targeted GPU checks cover linear detail, photographic response, all three Classic technical exports and the existing Merrill DNG separation. The owner approved using the existing Adobe validator and previously authorized the prose pass, commit and merge after the Classic slice was complete.
 

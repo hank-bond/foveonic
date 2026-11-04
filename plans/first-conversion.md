@@ -17,7 +17,7 @@ Requirements: [`processing-graphs.md`](../docs/specs/processing-graphs.md) and [
 - [x] Check six original-file exports and small GPU arithmetic fixtures. Record photographic gaps and memory use.
 - [x] Owner accepted the implemented photographic results and closed the TIFF review checkpoint.
 - [ ] Resolve DNG sample encoding, compression, calibration, and profile fitting with the owner. Add the DNG recipe and packaging node.
-- [ ] Review DNG editing in Lightroom and Capture One.
+- [ ] Review DNG editing in downstream raw editors.
 
 ## Progress and findings
 

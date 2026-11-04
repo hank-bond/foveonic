@@ -7,12 +7,12 @@ status: archived
 
 Requirements: [monochrome rendering](../../docs/specs/monochrome-rendering.md) and [photographic finishing](../../docs/specs/photographic-finishing.md).
 
-The shared finishing work was committed separately. The owner requested research and discussion before implementation, rejected the current sensitivity strength and hard-looking color transitions, and authorized studying the reference implementation. That research request alone did not authorize implementation. The owner subsequently approved a broader layer-operation experiment, then requested its removal after photographic review. The retained scope is sensor mixing, independent monochrome Detail and improved monochrome color sensitivity.
+The shared finishing work was committed separately. The owner requested research and discussion before implementation, rejected the current sensitivity strength and hard-looking color transitions, and authorized studying monochrome color-sensitivity processing. That research request alone did not authorize implementation. The owner subsequently approved a broader layer-operation experiment, then requested its removal after photographic review. The retained scope is sensor mixing, independent monochrome Detail and improved monochrome color sensitivity.
 
-- [x] Study the reference B&W conversion, parameter mapping and following noise filter.
+- [x] Study a color-sensitive B&W conversion, parameter mapping and following noise filter.
 - [x] Validate independently expressed conversion and filter-coefficient arithmetic against native kernels.
 - [x] Discuss and approve the sensor-mix-preserving adaptation before changing photographic behavior.
-- [x] Improve monochrome color sensitivity through photographic review of the source-color guide, hue selection, protection and amount response. The owner accepted the current behavior after comparison with the reference application; per-color HSL is a separate deferred feature.
+- [x] Improve monochrome color sensitivity through photographic review of the source-color guide, hue selection, protection and amount response. The owner accepted the current behavior after comparing color-sensitivity responses. Per-color HSL is a separate deferred feature.
 - [x] Add an independent detail-restoration stage to monochrome noise reconstruction. The owner wants the same Fine/Coarse amounts and Size controls as Merrill color. These technical Detail edits also apply to DNG samples.
 
 Preserve authored sensor-layer mixing and keep Noise, Detail, Local Contrast and Sharpening distinct. This implementation slice is Merrill-only. Local Contrast is an accepted standalone photographic effect, not a substitute for reconstruction detail.
@@ -21,9 +21,9 @@ Preserve authored sensor-layer mixing and keep Noise, Detail, Local Contrast and
 
 The authored sensor mixture must remain the source of monochrome texture and noise behavior. The owner relies on favoring the less noisy blue layer. Sensitivity must not replace that image with a conventional RGB-to-gray conversion. A companion color guide may determine the adjustment, but it must not transfer noisy color texture unfiltered into the cleaner monochrome image. Noise, Detail, Local Contrast and Sharpening remain separate.
 
-## Reference sensitivity findings
+## Color-sensitivity findings
 
-Research examined the installed reference implementation version 16.6.3.6, its arm64 host parameter construction and embedded Metal B&W v8 kernels. These findings describe the recovered numerical stages, not full application-to-application photographic equivalence. No proprietary implementation is imported into production code.
+Research examined ARM64 parameter construction and Metal B&W conversion kernels. These findings describe the recovered numerical stages, not full application-to-application photographic equivalence. No proprietary implementation is imported into production code.
 
 The conversion first uses a built-in linear RGB profile identified as Adobe 1998 G10. Its Y colorants are approximately 0.3328, 0.6121 and 0.0551. Its exact profile matrix differs from this project's existing Adobe RGB profile, so the name alone is insufficient to match the guide space.
 
@@ -50,13 +50,13 @@ Recovered coefficient uniforms are `[1, 1, 1048576, 8192, 0.125, 8192, 0, 0]`. T
 
 The earlier shared shader computes normalized RGB hue, interpolates neighboring hue controls, applies saturation and near-black protection, then uses an exponential exposure gain of up to two stops per signed unit. It has no spatial stabilization for the sensitivity correction. A moderately saturated subject can already receive full strength, and local hue variation or color noise can become exaggerated brightness variation. Applying the gain after the camera appearance also differs from changing a linear brightness mixture.
 
-The reference response is not uniformly weaker at every hue or extreme setting. Its small-change behavior depends on actual channel differences and neutral luminance, and strong darkening is separately restrained. Reducing the current two-stop constant would not reproduce it.
+The studied color-sensitivity response is not uniformly weaker at every hue or extreme setting. Its small-change behavior depends on actual channel differences and neutral luminance, and strong darkening is separately restrained. Reducing the current two-stop constant would not reproduce it.
 
 ## Approved adaptation
 
 Keep the dedicated sensor-mixed and denoised monochrome image. Derive neutral and adjusted brightness from an independent white-balanced color guide using the recovered six-coefficient response. Their ratio gives a brightness correction independent of the selected sensor mixture. Spatially stabilize that correction with the cleaned neutral color structure as a guide, then apply it without replacing the underlying texture. Zero settings must remain an exact bypass.
 
-The Merrill implementation uses an ordinary cleaned linear color reconstruction with texture boosts disabled, independent of the authored mono mix and retained creative color controls. It applies a bounded log brightness correction before tone, with a separable edge-aware filter guided by the cleaned neutral color image. This filter is an adaptation, not the reference multiscale guided filter. Photographic tuning remains subject to owner review. In particular, copying the reference RGB-to-gray output directly would defeat the sensor-mixture constraint. A faithful response adapted to a separate sensor-derived mono base is an intentional departure from the reference's complete B&W pipeline.
+The Merrill implementation uses an ordinary cleaned linear color reconstruction with texture boosts disabled, independent of the authored mono mix and retained creative color controls. It applies a bounded log brightness correction before tone, with a separable edge-aware filter guided by the cleaned neutral color image. This filter is an adaptation of the studied multiscale guided filter. Photographic tuning remains subject to owner review. In particular, copying a conventional RGB-to-gray output directly would defeat the sensor-mixture constraint. A faithful response adapted to a separate sensor-derived mono base is an intentional departure from the studied complete B&W pipeline.
 
 ## Retired experiments
 

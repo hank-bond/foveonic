@@ -9,7 +9,7 @@ implementation: incomplete
 
 ## DNG
 
-- The application **must** produce DNG output intended for further editing in Lightroom and Capture One. The initial implementation **must** use uncompressed unsigned 16-bit samples; compression is evaluated after this path works. DNG **must** be an output-only format for this application; regeneration uses the original X3F and its [editing sidecar](./editing-sidecars.md).
+- The application **must** produce DNG output intended for further editing in downstream raw editors. The initial implementation **must** use uncompressed unsigned 16-bit samples; compression is evaluated after this path works. DNG **must** be an output-only format for this application; regeneration uses the original X3F and its [editing sidecar](./editing-sidecars.md).
 - DNG processing **must** prioritize editing latitude, retaining a useful linear-space image with color and tone presentation embedded as profile or look data.
 - DNG export **must** rerun a modified processing recipe from the original X3F and selected editing settings, rather than serialize existing display buffers. The export recipe **must** omit native pixel-tone rendering and generate its selected appearance as embedded profile or look metadata.
 - DNG for Classic, Merrill and Quattro, including Tiger, **must** bake active [color sensitivity, HDR, Local Contrast and Universal sharpening](./photographic-finishing.md) into linear samples in both Color and Monochrome, using the same combined pre-curve brightness gain as native photographic rendering. Chromatic [Color Editor](./color-editor.md) edits use inverse-profile-basis baking of the selected pre-tone result. Retain the original X3F and sidecar to change these adjustments. Neutral or bypassed edits must leave the established sample recipe unchanged. Camera appearance and global tone presentation remain in metadata.
@@ -48,4 +48,4 @@ Compression evaluation should compare lossless file sizes, encoding cost, depend
 
 ## Conformance
 
-The initial DNG stores uncompressed uint16 samples; independent decoding reproduces those encoded samples exactly. A subsequent lossless-compression path must preserve the same encoded samples. It opens in Lightroom and Capture One for further exposure, white-balance, and tone editing. Review checks the embedded color-mode presentation, lifted shadows, retained highlight headroom, and available editing latitude in each application. A TIFF reflects the selected baked rendering.
+The initial DNG stores uncompressed uint16 samples; independent decoding reproduces those encoded samples exactly. A subsequent lossless-compression path must preserve the same encoded samples. It opens in downstream raw editors for further exposure, white-balance, and tone editing. Review checks the embedded color-mode presentation, lifted shadows, retained highlight headroom, and available editing latitude in each application. A TIFF reflects the selected baked rendering.

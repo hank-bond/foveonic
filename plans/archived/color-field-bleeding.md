@@ -7,14 +7,14 @@ status: archived
 
 ## Scope
 
-The owner approved profiling parameters that could add useful processing flexibility, with priority on the strongly clipped yellow/white skirt in `_P2M0170`. The reference implementation screenshot shows the same yellow wash, so this is an opportunity to improve on the reference rather than a port defect. The owner also reports that the current agreement and boundary sliders have little visible effect. Preserve defaults and existing acceptance checks. Do not add a GUI control until a candidate demonstrates a clear photographic improvement and an understandable tradeoff. Do not commit or install.
+The owner approved profiling parameters that could add useful processing flexibility, with priority on the strongly clipped yellow/white skirt in `_P2M0170`. The CPU recovery screenshot shows the same yellow wash, so this is an opportunity to improve recovery rather than a port defect. The owner also reports that the current agreement and boundary sliders have little visible effect. Preserve defaults and existing acceptance checks. Do not add a GUI control until a candidate demonstrates a clear photographic improvement and an understandable tradeoff. Do not commit or install.
 
 Follow the [color-field requirements](../../docs/specs/color-field.md) and the [control sensitivity investigation](../color-field-controls.md). Source and sidecars remain immutable. Recovery remains in WGSL. Preview images are eight-bit review aids, not numerical goldens.
 
 ## Observations
 
 - The skirt stripe period is roughly 8–9 native pixels. The default 8-pixel color grid therefore spans nearly one yellow/white stripe pair. A cell can average both stripe colors and donate that mixture into clipped white stripes.
-- The reference implementation screenshot shows a similar yellow wash. Classic is whiter because its clipped-color neutralization does not reconstruct the same color evidence.
+- The CPU recovery screenshot shows a similar yellow wash. Classic is whiter because its clipped-color neutralization does not reconstruct the same color evidence.
 - Agreement and boundary slider extrema look essentially identical on the 0170 skirt crop. Their measured changes are concentrated in highlight speckles, not the broad stripe tint.
 - Earlier full-frame comparisons understated the donation effect. Native highlight crops show that removing borrowed color reduces the strongest yellow wash, but changes surviving ratio evidence and genuine highlight color differently from explicit neutralization. Neighboring donor spill is not an established sole cause.
 - Fine grid steps 2, 3, 4, 5 and 6 retain the tint. Smaller grids can reduce speckle, but have not demonstrated a clear photographic solution and cost more.
