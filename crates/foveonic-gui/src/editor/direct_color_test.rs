@@ -28,12 +28,15 @@ fn outdated_picks_and_disabled_tools_cannot_replace_the_current_selection() {
     let settings = Settings::default();
     let mut s = state(&ctx);
     s.drag = Some(Drag {
+        target: Target::Basic,
+        range: None,
         token: 2,
         path: "current.x3f".into(),
         anchor: egui::Pos2::ZERO,
         position: egui::Pos2::ZERO,
         configuration: Default::default(),
         moved: false,
+        released: false,
         amounts: [0.; 3],
         original: Default::default(),
         expected: settings,
@@ -44,9 +47,10 @@ fn outdated_picks_and_disabled_tools_cannot_replace_the_current_selection() {
         receive(
             &ctx,
             ColorPickReply {
+                tool: ColorPickTool::Basic,
                 token,
                 path: path.into(),
-                weights: Ok([1., 0., 0., 0., 0., 0., 0., 0.]),
+                sample: Ok([1., 0., 0., 0., 0., 0., 0., 0.].into()),
             },
         );
         assert!(state(&ctx).drag.unwrap().weights.is_none());
@@ -55,9 +59,10 @@ fn outdated_picks_and_disabled_tools_cannot_replace_the_current_selection() {
     receive(
         &ctx,
         ColorPickReply {
+            tool: ColorPickTool::Basic,
             token: 2,
             path: "current.x3f".into(),
-            weights: Ok([1.; 8]),
+            sample: Ok([1.; 8].into()),
         },
     );
     assert_eq!(selection(&ctx), (3, [0.; 8]));
@@ -65,9 +70,10 @@ fn outdated_picks_and_disabled_tools_cannot_replace_the_current_selection() {
     receive(
         &ctx,
         ColorPickReply {
+            tool: ColorPickTool::Basic,
             token: 2,
             path: "current.x3f".into(),
-            weights: Ok([1.; 8]),
+            sample: Ok([1.; 8].into()),
         },
     );
     assert!(!active(&ctx));
@@ -156,12 +162,23 @@ mod gesture_tests {
         );
         let (changed, _) = frame(&ctx, &mut settings, vec![button(end, false, false)], 0.3);
         assert!(!changed);
+        assert!(
+            !active(&ctx),
+            "release must restore ordinary image navigation before a delayed reply"
+        );
+        frame(
+            &ctx,
+            &mut settings,
+            vec![egui::Event::PointerMoved(egui::pos2(450., 350.))],
+            0.35,
+        );
         receive(
             &ctx,
             ColorPickReply {
+                tool: ColorPickTool::Basic,
                 token: request.token,
                 path: request.path,
-                weights: Ok([0.75, 0.25, 0., 0., 0., 0., 0., 0.]),
+                sample: Ok([0.75, 0.25, 0., 0., 0., 0., 0., 0.].into()),
             },
         );
         assert!(frame(&ctx, &mut settings, vec![], 0.4).0);
@@ -191,9 +208,10 @@ mod gesture_tests {
             receive(
                 &ctx,
                 ColorPickReply {
+                    tool: ColorPickTool::Basic,
                     token: request.token,
                     path: request.path,
-                    weights: Ok([0., 0., 0., 0., 1., 0., 0., 0.]),
+                    sample: Ok([0., 0., 0., 0., 1., 0., 0., 0.].into()),
                 },
             );
             let end = if alt {
@@ -213,7 +231,9 @@ mod gesture_tests {
             let c = settings.photographic.color_editor.bands[4];
             assert_eq!(settings.exposure, -1.3);
             assert_eq!(c.lightness, 0.);
-            assert!((if alt { c.saturation } else { c.hue } - 0.3).abs() < 1e-6);
+            assert!(
+                (if alt { c.saturation } else { c.hue } - if alt { 0.6 } else { 0.3 }).abs() < 1e-6
+            );
             assert_eq!(
                 settings.photographic.color_editor.bands[0],
                 Default::default()
@@ -269,9 +289,10 @@ fn changed_assignments_and_sensitivity_control_the_same_pointer_gesture() {
     receive(
         &ctx,
         ColorPickReply {
+            tool: ColorPickTool::Basic,
             token: request.token,
             path: request.path,
-            weights: Ok([1., 0., 0., 0., 0., 0., 0., 0.]),
+            sample: Ok([1., 0., 0., 0., 0., 0., 0., 0.].into()),
         },
     );
     gesture_tests::frame(
@@ -280,7 +301,7 @@ fn changed_assignments_and_sensitivity_control_the_same_pointer_gesture() {
         vec![egui::Event::PointerMoved(end)],
         0.2,
     );
-    assert_eq!(settings.photographic.color_editor.bands[0].saturation, 0.6);
+    assert_eq!(settings.photographic.color_editor.bands[0].saturation, 1.2);
     assert_eq!(settings.photographic.color_editor.bands[0].lightness, 0.);
 }
 
@@ -304,9 +325,10 @@ fn one_held_drag_changes_both_axes_and_can_change_direction_without_releasing() 
     receive(
         &ctx,
         ColorPickReply {
+            tool: ColorPickTool::Basic,
             token: request.token,
             path: request.path,
-            weights: Ok([1., 0., 0., 0., 0., 0., 0., 0.]),
+            sample: Ok([1., 0., 0., 0., 0., 0., 0., 0.].into()),
         },
     );
     gesture_tests::frame(
@@ -349,7 +371,7 @@ fn one_held_drag_changes_both_axes_and_can_change_direction_without_releasing() 
     let c = settings.photographic.color_editor.bands[0];
     assert!((c.hue - 0.1).abs() < 1e-6);
     assert!((c.lightness - 0.1).abs() < 1e-6);
-    assert!((c.saturation - 0.2).abs() < 1e-6);
+    assert!((c.saturation - 0.4).abs() < 1e-6);
 }
 
 #[test]
@@ -388,4 +410,175 @@ fn right_click_settings_open_and_escape_closes_the_menu_before_the_tool() {
     assert!(!menu_open(&ctx));
     assert!(active(&ctx));
     assert_eq!(settings, Settings::default());
+}
+
+#[test]
+fn direct_saturation_reaches_the_shared_positive_limit_without_extending_hue_or_lightness() {
+    let mut original = ColorEditorControls::default();
+    original.bands[0].saturation = 1.8;
+    let mut weights = [0.; 8];
+    weights[0] = 1.;
+    assert_eq!(
+        adjusted(original, weights, Channel::Saturation, 0.5).bands[0].saturation,
+        2.
+    );
+    assert_eq!(
+        adjusted(original, weights, Channel::Hue, 5.).bands[0].hue,
+        1.
+    );
+    assert_eq!(
+        adjusted(original, weights, Channel::Lightness, 5.).bands[0].lightness,
+        1.
+    );
+}
+
+#[test]
+fn advanced_drag_uses_both_axes_and_finishes_delayed_picks_without_touching_existing_ranges() {
+    for delayed in [false, true] {
+        let ctx = egui::Context::default();
+        toggle_advanced(&ctx);
+        let mut settings = Settings::default();
+        let existing = foveonic::render::AdvancedColorRange {
+            hue: 40.,
+            ..Default::default()
+        };
+        settings.photographic.color_editor.advanced.push(existing);
+        let before = settings.photographic.color_editor;
+        let anchor = egui::pos2(200., 200.);
+        let end = egui::pos2(260., 110.);
+        gesture_tests::frame(&ctx, &mut settings, vec![], 0.);
+        let (_, request) = gesture_tests::frame(
+            &ctx,
+            &mut settings,
+            vec![
+                egui::Event::PointerMoved(anchor),
+                gesture_tests::button(anchor, true, false),
+            ],
+            0.1,
+        );
+        assert!(
+            advanced_active(&ctx),
+            "press must not disarm the eyedropper"
+        );
+        let request = request.unwrap();
+        let reply = || ColorPickReply {
+            tool: ColorPickTool::Advanced,
+            token: request.token,
+            path: request.path.clone(),
+            sample: Ok(foveonic::render::ColorRangeSample {
+                color: [240., 0.7, 1., 0.],
+                weights: [1.; 8],
+            }),
+        };
+        if !delayed {
+            receive(&ctx, reply());
+        }
+        gesture_tests::frame(
+            &ctx,
+            &mut settings,
+            vec![egui::Event::PointerMoved(end)],
+            0.2,
+        );
+        gesture_tests::frame(
+            &ctx,
+            &mut settings,
+            vec![gesture_tests::button(end, false, false)],
+            0.3,
+        );
+        assert!(!active(&ctx));
+        if delayed {
+            gesture_tests::frame(
+                &ctx,
+                &mut settings,
+                vec![egui::Event::PointerMoved(egui::pos2(450., 350.))],
+                0.4,
+            );
+            receive(&ctx, reply());
+            assert!(gesture_tests::frame(&ctx, &mut settings, vec![], 0.5).0);
+        }
+        let result = settings.photographic.color_editor;
+        assert_eq!(result.bands, before.bands);
+        assert_eq!(result.master, before.master);
+        assert_eq!(result.advanced.count, 2);
+        assert_eq!(result.advanced.ranges[0], existing);
+        let range = result.advanced.ranges[1];
+        assert_eq!(range.hue, 240.);
+        assert!((range.adjustment.hue - 0.2).abs() < 1e-6);
+        assert!((range.adjustment.lightness - 0.3).abs() < 1e-6);
+        assert_eq!(super::super::advanced_color::state(&ctx).selected, 1);
+        assert!(!gesture_tests::frame(&ctx, &mut settings, vec![], 0.6).0);
+        assert!(!dragging(&ctx));
+    }
+}
+
+#[test]
+fn toolbar_release_arms_each_picker_until_a_photo_gesture_releases() {
+    for advanced in [false, true] {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::default();
+        let mut button_center = egui::Pos2::ZERO;
+        let mut frame = |time, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 400.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let button = crate::widgets::icon_button(ui, "Pick", active(ctx));
+                        button_center = button.rect.center();
+                        if button.clicked() {
+                            if advanced {
+                                toggle_advanced(ctx)
+                            } else {
+                                toggle(ctx)
+                            }
+                        }
+                        let (_, response) = ui.allocate_exact_size(
+                            ui.available_size(),
+                            egui::Sense::click_and_drag(),
+                        );
+                        photo(
+                            ui,
+                            &response,
+                            Some([0.4, 0.6]),
+                            Path::new("a.x3f"),
+                            &mut settings,
+                            true,
+                        );
+                    });
+                },
+            );
+            button_center
+        };
+        let pos = frame(0., vec![]);
+        frame(
+            0.1,
+            vec![
+                egui::Event::PointerMoved(pos),
+                gesture_tests::button(pos, true, false),
+            ],
+        );
+        frame(0.2, vec![gesture_tests::button(pos, false, false)]);
+        assert!(
+            active(&ctx),
+            "the toolbar's release must leave the picker armed"
+        );
+        let photo_pos = egui::pos2(200., 200.);
+        frame(
+            0.3,
+            vec![
+                egui::Event::PointerMoved(photo_pos),
+                gesture_tests::button(photo_pos, true, false),
+            ],
+        );
+        assert!(active(&ctx));
+        frame(0.4, vec![gesture_tests::button(photo_pos, false, false)]);
+        assert!(!active(&ctx));
+    }
 }

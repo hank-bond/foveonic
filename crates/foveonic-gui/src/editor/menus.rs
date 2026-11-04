@@ -6,6 +6,9 @@ use foveonic::{render::Settings, source::ProcessingFamily};
 
 pub enum Action {
     NoiseCalibration,
+    AdaptiveLimits,
+    PreventSaturationClipping(bool),
+    ExposureAutoCompensation(foveonic::render::AutoExposureCompensation),
     Reset(Scope, bool),
     Apply(Scope, Box<Settings>),
     Save(Scope),
@@ -29,6 +32,8 @@ struct Save {
 }
 
 pub struct Menus<'a> {
+    pub prevent_color_clipping: bool,
+    pub exposure_auto_compensation: foveonic::render::AutoExposureCompensation,
     pub family: Option<ProcessingFamily>,
     pub library: &'a Library,
     pub state: &'a mut State,
@@ -42,7 +47,7 @@ impl Menus<'_> {
                 if scope == Scope::All {
                     rect.center().y
                 } else {
-                    rect.top() + 10.
+                    rect.top() + crate::widgets::control_height(ui) * 0.5
                 },
             ),
             egui::vec2(44., 20.),
@@ -90,7 +95,7 @@ impl Menus<'_> {
                     }
                     response
                         .on_hover_text("Reset to defaults · Option/Alt-click for camera As Shot");
-                    let menu = egui::menu::menu_custom_button(
+                    let menu = crate::widgets::menu_button(
                         ui,
                         egui::Button::new("").min_size(egui::vec2(20., 20.)),
                         |ui| self.menu(ui, scope),
@@ -106,21 +111,60 @@ impl Menus<'_> {
                             (1.2_f32, color),
                         );
                     }
-                    menu.on_hover_text("Presets and defaults");
+                    menu.on_hover_text("Settings, presets and defaults");
                 });
             });
         }
     }
     fn menu(&mut self, ui: &mut egui::Ui, scope: Scope) {
         let Some(family) = self.family else { return };
-        if family == ProcessingFamily::Merrill && scope == Scope::Tool(super::Section::Noise) {
-            if ui.button("Calibrate noise…").clicked() {
-                self.state.actions.push(Action::NoiseCalibration);
+        let editing = scope == Scope::All;
+        if editing {
+            let mut protect = self.prevent_color_clipping;
+            if crate::help::control(
+                crate::widgets::checkbox(ui, &mut protect, "Prevent saturation clipping"),
+                "Prevent color clipping",
+            )
+            .changed()
+            {
+                self.state
+                    .actions
+                    .push(Action::PreventSaturationClipping(protect));
                 ui.close_menu();
             }
-            if self.library.choices(family, scope).next().is_some() {
-                ui.separator();
+            ui.separator();
+        }
+        let tone = scope == Scope::Tool(super::Section::Tone);
+        let calibration =
+            family == ProcessingFamily::Merrill && scope == Scope::Tool(super::Section::Noise);
+        let has_presets = self.library.choices(family, scope).next().is_some();
+        if tone {
+            if ui.button("Adaptive limits…").clicked() {
+                self.state.actions.push(Action::AdaptiveLimits);
+                ui.close_menu();
             }
+            ui.separator();
+        }
+        if tone {
+            use foveonic::render::AutoExposureCompensation::{Both, Bracket, Dial};
+            let mut selected = self.exposure_auto_compensation;
+            if crate::widgets::menu_choices(
+                ui,
+                "Auto exposure source",
+                &mut selected,
+                &[(Bracket, "Bracket"), (Dial, "Dial"), (Both, "Both")],
+            ) {
+                self.state
+                    .actions
+                    .push(Action::ExposureAutoCompensation(selected));
+            }
+        }
+        if calibration && ui.button("Calibrate noise…").clicked() {
+            self.state.actions.push(Action::NoiseCalibration);
+            ui.close_menu();
+        }
+        if (tone || calibration) && has_presets {
+            ui.separator();
         }
         for (index, preset) in self.library.choices(family, scope) {
             ui.horizontal(|ui| {
@@ -140,7 +184,9 @@ impl Menus<'_> {
                 }
             });
         }
-        ui.separator();
+        if tone || calibration || has_presets {
+            ui.separator();
+        }
         let family_name = match family {
             ProcessingFamily::Classic => "Classic",
             ProcessingFamily::Merrill => "Merrill",
@@ -228,6 +274,69 @@ impl State {
 mod tests {
     use super::*;
     #[test]
+    fn clipping_policy_is_checked_in_the_parent_menu_for_every_family() {
+        for family in [
+            ProcessingFamily::Classic,
+            ProcessingFamily::Merrill,
+            ProcessingFamily::Quattro,
+        ] {
+            let ctx = egui::Context::default();
+            let mut state = State::default();
+            let library = Library::default();
+            let mut point = egui::Pos2::ZERO;
+            for (time, pressed) in [(0., None), (1., Some(true)), (1.1, Some(false))] {
+                let output = ctx.run(
+                    egui::RawInput {
+                        time: Some(time),
+                        events: pressed
+                            .map(|pressed| {
+                                vec![
+                                    egui::Event::PointerMoved(point),
+                                    egui::Event::PointerButton {
+                                        pos: point,
+                                        button: egui::PointerButton::Primary,
+                                        pressed,
+                                        modifiers: Default::default(),
+                                    },
+                                ]
+                            })
+                            .unwrap_or_default(),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            Menus {
+                                prevent_color_clipping: true,
+                                exposure_auto_compensation: Default::default(),
+                                family: Some(family),
+                                library: &library,
+                                state: &mut state,
+                            }
+                            .menu(ui, Scope::All);
+                        });
+                    },
+                );
+                point = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.job.text == "Prevent saturation clipping" =>
+                        {
+                            Some(text.pos + text.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .expect("shared policy belongs in Editing");
+            }
+            assert!(matches!(
+                state.actions.as_slice(),
+                [Action::PreventSaturationClipping(false)]
+            ));
+        }
+    }
+
+    #[test]
     fn reset_buttons_keep_normal_and_option_camera_actions_distinct() {
         let ctx = egui::Context::default();
         for alt in [false, true] {
@@ -263,6 +372,8 @@ mod tests {
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             Menus {
+                                prevent_color_clipping: true,
+                                exposure_auto_compensation: Default::default(),
                                 family: Some(ProcessingFamily::Merrill),
                                 library: &Library::default(),
                                 state: &mut state,

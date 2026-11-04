@@ -151,6 +151,7 @@ pub struct Preferences {
     pub thumbnail_cache_bytes: u64,
     pub noise_profile: crate::noise_calibration::Slot,
     pub display_gamut: crate::preferences::DisplayGamut,
+    pub adaptive_tone_tuning: foveonic::render::AdaptiveToneTuning,
     pub sections: Vec<Section>,
     pub editing_sections: Vec<EditingSection>,
     pub collapsed: BTreeSet<Section>,
@@ -176,6 +177,7 @@ impl Default for Preferences {
             thumbnail_cache_bytes: DEFAULT_THUMBNAIL_BYTES,
             noise_profile: Default::default(),
             display_gamut: Default::default(),
+            adaptive_tone_tuning: Default::default(),
             sections: Section::ALL.to_vec(),
             editing_sections: EditingSection::ALL.to_vec(),
             collapsed: BTreeSet::new(),
@@ -192,6 +194,9 @@ impl Preferences {
     }
     fn normalize(&mut self) {
         self.decode_cache.normalize();
+        if self.adaptive_tone_tuning.validate().is_err() {
+            self.adaptive_tone_tuning = Default::default();
+        }
         self.direct_color.normalize();
         self.thumbnail_cache_bytes = self
             .thumbnail_cache_bytes

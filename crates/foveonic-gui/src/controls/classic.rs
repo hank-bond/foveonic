@@ -13,6 +13,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
+    exposure: Option<foveonic::source::CaptureExposureCompensation>,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
@@ -45,7 +46,7 @@ pub(super) fn show(
                 foveonic::render::ControlCapabilities::from_family(ProcessingFamily::Classic)
                     .white_balance_active(settings),
             ),
-            EditingSection::Tone => common::tone(ui, settings),
+            EditingSection::Tone => common::tone(ui, settings, exposure),
             EditingSection::Saturation => super::saturation::show(ui, settings),
             EditingSection::ColorEditor => super::color_editor::show(ui, settings),
             EditingSection::Noise => common::reconstruction(ui, settings),
@@ -62,19 +63,26 @@ fn corrections(
     settings: &mut Settings,
     capabilities: ControlCapabilities,
 ) -> bool {
-    let mut changed = false;
-    common::section_header(ui, EditingSection::Corrections, "Corrections", None);
-    changed |= ui
-        .add_enabled_ui(capabilities.highlights_active(settings), |ui| {
-            crate::widgets::checkbox(ui, &mut settings.highlight_restoration, "Highlights")
-                .changed()
-        })
-        .inner;
-    let advanced = crate::widgets::disclosure(
+    let mut changed = common::section_header(
         ui,
-        egui::CollapsingHeader::new("Advanced").id_salt("advanced-corrections"),
-        |ui| changed |= common::pixel_corrections(ui, settings),
+        EditingSection::Corrections,
+        "Corrections",
+        Some(&mut settings.corrections_enabled),
     );
-    help::control(advanced.header_response, "Advanced corrections");
+    ui.add_enabled_ui(settings.corrections_enabled, |ui| {
+        changed |= super::dehaze::show(ui, settings);
+        changed |= ui
+            .add_enabled_ui(capabilities.highlights_active(settings), |ui| {
+                crate::widgets::checkbox(ui, &mut settings.highlight_restoration, "Highlights")
+                    .changed()
+            })
+            .inner;
+        let advanced = crate::widgets::disclosure(
+            ui,
+            egui::CollapsingHeader::new("Advanced").id_salt("advanced-corrections"),
+            |ui| changed |= common::pixel_corrections(ui, settings),
+        );
+        help::control(advanced.header_response, "Advanced corrections");
+    });
     changed
 }

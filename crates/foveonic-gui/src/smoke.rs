@@ -63,6 +63,38 @@ const BROWSER_TARGETS: &[&str] = &[
     "browser-large",
 ];
 const COMPARISON_TARGETS: &[&str] = &["preview", "final", "comparison", "comparison-switch"];
+const BASE_RESPONSE_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "base-camera",
+    "base-natural",
+    "base-strong",
+    "base-limits",
+    "base-hdr",
+    "base-monochrome",
+];
+const ADVANCED_COLOR_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "advanced-ready",
+    "advanced-picked",
+    "advanced-ranges",
+    "advanced-name",
+    "advanced-selection",
+    "advanced-monochrome",
+];
+const DEHAZE_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "dehaze-auto",
+    "dehaze-freeze",
+    "dehaze-picked",
+    "dehaze-manual",
+    "dehaze-add",
+    "dehaze-monochrome",
+    "dehaze-off",
+    "dehaze-reset",
+];
 const DIRECT_COLOR_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -76,9 +108,21 @@ const PERCEPTUAL_TARGETS: &[&str] = &[
     "final",
     "perceptual-neutral",
     "perceptual-grade",
+    "perceptual-extended",
+    "perceptual-unlocked",
     "perceptual-mask",
     "perceptual-editor",
     "perceptual-mono",
+];
+const EXPOSURE_AUTO_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "exposure-auto-reference",
+    "exposure-auto-universal",
+    "exposure-auto-dial",
+    "exposure-auto-bracket",
+    "exposure-auto-monochrome",
+    "exposure-auto-manual",
 ];
 const IMPORT_WIDE_BROWSER_WIDTH: f32 = 600.;
 const IMPORT_TARGETS: &[&str] = &[
@@ -260,11 +304,15 @@ pub struct Smoke {
     smart_full_revision: Option<u64>,
     display_revision: Option<u64>,
     authored: Option<foveonic::render::Settings>,
+    name_revision: Option<u64>,
     current_texture: Option<std::sync::Arc<foveonic::image::ImageTexture>>,
 }
 impl Smoke {
     pub fn inject_direct_color(&mut self, input: &mut egui::RawInput, ctx: &egui::Context) {
-        if self.targets == DIRECT_COLOR_TARGETS {
+        if self.targets == DIRECT_COLOR_TARGETS
+            || self.targets == DEHAZE_TARGETS
+            || self.targets == ADVANCED_COLOR_TARGETS
+        {
             // Inject focused input without moving the owner's system pointer or focus.
             input.focused = true;
         }
@@ -277,7 +325,15 @@ impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_DIRECT_COLOR").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_EXPOSURE_AUTO").is_some() {
+                EXPOSURE_AUTO_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DEHAZE").is_some() {
+                DEHAZE_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_BASE_RESPONSE").is_some() {
+                BASE_RESPONSE_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_ADVANCED_COLOR").is_some() {
+                ADVANCED_COLOR_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DIRECT_COLOR").is_some() {
                 DIRECT_COLOR_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_PERCEPTUAL").is_some() {
                 PERCEPTUAL_TARGETS
@@ -325,6 +381,7 @@ impl Smoke {
             smart_full_revision: None,
             display_revision: None,
             authored: None,
+            name_revision: None,
             current_texture: None,
         })
     }
@@ -455,16 +512,42 @@ impl App {
             }
             std::fs::create_dir_all(&smoke.directory).unwrap();
             let bytes: Vec<_> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
-            image::save_buffer(
-                smoke
-                    .directory
-                    .join(format!("{}.png", smoke.targets[smoke.index])),
-                &bytes,
-                image.width() as u32,
-                image.height() as u32,
-                image::ColorType::Rgba8,
-            )
-            .unwrap();
+            if smoke.targets == DEHAZE_TARGETS {
+                use image::{
+                    codecs::png::{CompressionType, FilterType, PngEncoder},
+                    ImageEncoder,
+                };
+                // Lossless fast encoding keeps debug capture from blocking native interaction.
+                let file = std::fs::File::create(
+                    smoke
+                        .directory
+                        .join(format!("{}.png", smoke.targets[smoke.index])),
+                )
+                .unwrap();
+                PngEncoder::new_with_quality(
+                    file,
+                    CompressionType::Uncompressed,
+                    FilterType::NoFilter,
+                )
+                .write_image(
+                    &bytes,
+                    image.width() as u32,
+                    image.height() as u32,
+                    image::ExtendedColorType::Rgba8,
+                )
+                .unwrap();
+            } else {
+                image::save_buffer(
+                    smoke
+                        .directory
+                        .join(format!("{}.png", smoke.targets[smoke.index])),
+                    &bytes,
+                    image.width() as u32,
+                    image.height() as u32,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
             if smoke.targets == SMART_TARGETS && smoke.preview_pending() {
                 assert_eq!(
                     self.preferences.preview_quality,
@@ -625,7 +708,7 @@ impl App {
                         if full {
                             foveonic::render::PreviewQuality::Full
                         } else {
-                            foveonic::render::PreviewQuality::Draft
+                            foveonic::render::PreviewQuality::Fast
                         }
                     );
                     assert_eq!(frame.artifact.settings.preview_region, None);
@@ -670,6 +753,40 @@ impl App {
                 )
                 .unwrap();
             }
+            if smoke.targets == DEHAZE_TARGETS && !smoke.preview_pending() {
+                let frame = self.frame.as_ref().unwrap();
+                let target = smoke.targets[smoke.index];
+                if target.starts_with("dehaze-") && target != "dehaze-off" {
+                    assert_eq!(
+                        frame.artifact.settings.preview_quality,
+                        foveonic::render::PreviewQuality::Full
+                    );
+                    assert_eq!(frame.artifact.settings.preview_region, None);
+                    assert_eq!(frame.artifact.settings.dehaze, self.settings.dehaze);
+                }
+                let estimated = crate::editor::dehaze::auto_color(ctx, &self.settings);
+                if target == "final" {
+                    assert!(!self.settings.dehaze_auto());
+                    assert!(frame.artifact.dehaze_estimate.is_none());
+                }
+                if target == "dehaze-auto" {
+                    assert_eq!(estimated, frame.artifact.dehaze_estimate);
+                    assert!(estimated.is_some(), "fixture needs an automatic haze color");
+                }
+                if target == "dehaze-freeze" {
+                    assert_eq!(self.settings.dehaze.shadow, estimated);
+                }
+                if target == "dehaze-reset" {
+                    assert!(self.settings.dehaze.shadow.is_some());
+                    assert!(!self.settings.dehaze_auto());
+                }
+                let report = serde_json::json!({"target":target,"dehaze":self.settings.dehaze,"automatic_color":estimated,"shown_color":self.settings.dehaze.shadow.or(estimated),"rendering":self.settings.rendering,"quality":frame.quality_label(),"processing_ms":frame.milliseconds});
+                std::fs::write(
+                    smoke.directory.join(format!("{target}.json")),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                )
+                .unwrap();
+            }
             smoke.index += 1;
             smoke.awaiting = false;
             if smoke.index == smoke.targets.len() {
@@ -696,6 +813,198 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "dehaze-auto" => {
+                    self.viewport.reset();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Title(
+                        "Foveonic — Dehaze check".into(),
+                    ));
+                    self.preferences.collapsed =
+                        [Section::Navigator, Section::Scopes, Section::Metadata].into();
+                    self.preferences
+                        .editing_sections
+                        .retain(|s| *s != crate::preferences::EditingSection::Corrections);
+                    self.preferences
+                        .editing_sections
+                        .insert(0, crate::preferences::EditingSection::Corrections);
+                    self.settings.dehaze = foveonic::render::DehazeControls {
+                        amount: 35.,
+                        shadow: None,
+                    };
+                    self.submit(None);
+                }
+                "dehaze-freeze" => {
+                    assert!(crate::editor::dehaze::set_auto(
+                        ctx,
+                        &mut self.settings,
+                        false
+                    ));
+                    self.submit(None);
+                }
+                "dehaze-reset" => {
+                    let family = self.metadata.as_ref().unwrap().processing_family().unwrap();
+                    let scope = crate::editor::Scope::Tool(crate::editor::Section::Corrections);
+                    // Reset uses the configured manual color without enabling background estimation.
+                    self.preferences
+                        .editor
+                        .defaults
+                        .set(family, scope, &self.settings);
+                    self.settings.dehaze.shadow = None;
+                    self.editor_ui
+                        .actions
+                        .push(crate::editor::Action::Reset(scope, false));
+                    assert!(self.apply_editor_actions(ctx));
+                    assert!(self.settings.dehaze.shadow.is_some());
+                    self.submit(None);
+                }
+                "dehaze-picked" => {
+                    crate::editor::dehaze::toggle(ctx);
+                    // The neutral bolt in the parking-sign fixture avoids a clipped blue patch.
+                    let position = self.viewport.position_at_uv([0.82, 0.04]).unwrap();
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    smoke.direct_events.extend([
+                        vec![egui::Event::PointerMoved(position), button(true)],
+                        vec![button(false)],
+                    ]);
+                }
+                "dehaze-manual" | "dehaze-add" | "dehaze-monochrome" | "dehaze-off" => {
+                    crate::editor::dehaze::exit(ctx);
+                    assert!(self.settings.dehaze.shadow.is_some());
+                    let target = smoke.targets[smoke.index];
+                    self.settings.dehaze.amount = match target {
+                        "dehaze-manual" => 65.,
+                        "dehaze-add" => -35.,
+                        "dehaze-off" => 0.,
+                        _ => 35.,
+                    };
+                    if target == "dehaze-monochrome" {
+                        self.settings.rendering = foveonic::render::Rendering::Monochrome;
+                    }
+                    self.submit(None);
+                }
+                "advanced-ready" => {
+                    self.preferences.collapsed =
+                        [Section::Navigator, Section::Scopes, Section::Metadata].into();
+                    self.preferences
+                        .editing_sections
+                        .retain(|s| *s != crate::preferences::EditingSection::ColorEditor);
+                    self.preferences
+                        .editing_sections
+                        .insert(0, crate::preferences::EditingSection::ColorEditor);
+                    self.settings.photographic.color_editor = Default::default();
+                    let mut state = crate::editor::advanced_color::state(ctx);
+                    state.advanced = true;
+                    state.selected = 0;
+                    crate::editor::direct_color::toggle_advanced(ctx);
+                    crate::editor::advanced_color::store(ctx, state);
+                    self.submit(None);
+                }
+                "advanced-picked" => {
+                    let (response, _) = self.viewport.pointer(None).unwrap();
+                    let position = response.rect.center();
+                    let end = position + egui::vec2(60., -90.);
+                    let button = |pos, pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    smoke.direct_events.extend([
+                        vec![egui::Event::PointerMoved(position), button(position, true)],
+                        vec![egui::Event::PointerMoved(end)],
+                        vec![button(end, false)],
+                    ]);
+                }
+                "advanced-name" => {
+                    let mut state = crate::editor::advanced_color::state(ctx);
+                    state.rename = Some(crate::editor::advanced_color::Rename {
+                        index: 0,
+                        text: "Petals".into(),
+                        focus: true,
+                    });
+                    crate::editor::advanced_color::store(ctx, state);
+                    smoke.name_revision = Some(self.revision);
+                    smoke.direct_events.extend([
+                        vec![egui::Event::PointerMoved(egui::pos2(6., 6.))],
+                        vec![
+                            egui::Event::Key {
+                                key: egui::Key::Enter,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                            egui::Event::Key {
+                                key: egui::Key::Enter,
+                                physical_key: None,
+                                pressed: false,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    ]);
+                }
+                "advanced-ranges" | "advanced-selection" | "advanced-monochrome" => {
+                    let target = smoke.targets[smoke.index];
+                    assert_eq!(self.settings.photographic.color_editor.advanced.count, 1);
+                    self.settings.photographic.color_editor.advanced.ranges[0]
+                        .adjustment
+                        .lightness = -0.3;
+                    self.settings.color_range_preview =
+                        (target == "advanced-selection").then_some(0);
+                    self.settings.rendering = if target == "advanced-monochrome" {
+                        foveonic::render::Rendering::Monochrome
+                    } else {
+                        foveonic::render::Rendering::Color
+                    };
+                    self.submit(None);
+                }
+                "base-camera" | "base-natural" | "base-strong" | "base-limits" | "base-hdr"
+                | "base-monochrome" => {
+                    let target = smoke.targets[smoke.index];
+                    self.preferences.collapsed =
+                        [Section::Navigator, Section::Scopes, Section::Metadata].into();
+                    self.preferences
+                        .editing_sections
+                        .retain(|s| *s != crate::preferences::EditingSection::Tone);
+                    self.preferences
+                        .editing_sections
+                        .insert(0, crate::preferences::EditingSection::Tone);
+                    self.settings.rendering = if target == "base-monochrome" {
+                        foveonic::render::Rendering::Monochrome
+                    } else {
+                        foveonic::render::Rendering::Color
+                    };
+                    self.settings.photographic.tone_method =
+                        foveonic::render::PhotographicMethod::Universal;
+                    self.settings_open = false;
+                    crate::application_settings::set_adaptive_open(ctx, target == "base-limits");
+                    self.preferences.adaptive_tone_tuning = Default::default();
+                    if target == "base-limits" {
+                        self.preferences.adaptive_tone_tuning.natural.shadows = 0.75;
+                    }
+                    self.settings.photographic.base_response = if target == "base-camera" {
+                        foveonic::render::BaseResponse::Camera
+                    } else if target == "base-strong" {
+                        foveonic::render::BaseResponse::Strong
+                    } else {
+                        foveonic::render::BaseResponse::Natural
+                    };
+                    self.settings.tonal_ranges = if target == "base-hdr" {
+                        foveonic::render::TonalRanges {
+                            shadows: 0.2,
+                            whites: -0.2,
+                            ..Default::default()
+                        }
+                    } else {
+                        Default::default()
+                    };
+                    self.submit(None);
+                }
                 "direct-color-ready" => {
                     if std::env::var_os("FOVEONIC_GUI_SMOKE_DIRECT_COLOR_COMPARISON").is_some() {
                         self.browser.set_actions(vec![(
@@ -756,6 +1065,22 @@ impl App {
                     };
                     smoke.direct_events.extend([
                         vec![button(egui::PointerButton::Primary, false)],
+                        vec![
+                            egui::Event::Key {
+                                key: egui::Key::D,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                            egui::Event::Key {
+                                key: egui::Key::D,
+                                physical_key: None,
+                                pressed: false,
+                                repeat: false,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
                         vec![button(egui::PointerButton::Secondary, true)],
                         vec![button(egui::PointerButton::Secondary, false)],
                     ]);
@@ -780,6 +1105,45 @@ impl App {
                     smoke.direct_events.push_back(escape.clone());
                     smoke.direct_events.push_back(escape);
                 }
+                "exposure-auto-reference"
+                | "exposure-auto-universal"
+                | "exposure-auto-dial"
+                | "exposure-auto-bracket"
+                | "exposure-auto-monochrome"
+                | "exposure-auto-manual" => {
+                    use foveonic::render::{
+                        AutoExposureCompensation, BaseResponse, PhotographicMethod, Rendering,
+                    };
+                    let target = smoke.targets[smoke.index];
+                    self.preferences.collapsed =
+                        [Section::Navigator, Section::Scopes, Section::Metadata].into();
+                    self.preferences
+                        .editing_sections
+                        .retain(|s| *s != crate::preferences::EditingSection::Tone);
+                    self.preferences
+                        .editing_sections
+                        .insert(0, crate::preferences::EditingSection::Tone);
+                    self.settings.rendering = if target == "exposure-auto-monochrome" {
+                        Rendering::Monochrome
+                    } else {
+                        Rendering::Color
+                    };
+                    self.settings.photographic.tone_method = if target == "exposure-auto-reference"
+                    {
+                        PhotographicMethod::Reference
+                    } else {
+                        PhotographicMethod::Universal
+                    };
+                    self.settings.photographic.base_response = BaseResponse::Natural;
+                    self.settings.exposure_auto = target != "exposure-auto-manual";
+                    self.settings.exposure = 0.;
+                    self.settings.exposure_auto_compensation = match target {
+                        "exposure-auto-dial" => AutoExposureCompensation::Dial,
+                        "exposure-auto-bracket" => AutoExposureCompensation::Bracket,
+                        _ => AutoExposureCompensation::Both,
+                    };
+                    self.submit(None);
+                }
                 "perceptual-neutral" => {
                     self.preferences.collapsed =
                         [Section::Navigator, Section::Scopes, Section::Metadata].into();
@@ -798,6 +1162,19 @@ impl App {
                     c.contrast = -0.4;
                     c.bands[1].saturation = 0.1;
                     c.bands[2].saturation = -0.2;
+                    self.submit(None);
+                }
+                "perceptual-extended" | "perceptual-unlocked" => {
+                    self.settings.photographic.perceptual = Default::default();
+                    self.settings.photographic.perceptual.saturation = 2.;
+                    self.settings.prevent_color_clipping =
+                        smoke.targets[smoke.index] != "perceptual-unlocked";
+                    self.preferences
+                        .editing_sections
+                        .retain(|s| *s != crate::preferences::EditingSection::Saturation);
+                    self.preferences
+                        .editing_sections
+                        .insert(0, crate::preferences::EditingSection::Saturation);
                     self.submit(None);
                 }
                 "perceptual-mask" => {
@@ -860,7 +1237,7 @@ impl App {
                         crate::editor::Scope::Tool(crate::editor::Section::Tone),
                         camera,
                     ));
-                    assert!(self.apply_editor_actions());
+                    assert!(self.apply_editor_actions(ctx));
                     assert_eq!(self.settings.exposure, if camera { 0. } else { 0.2 });
                     assert_eq!(self.settings.white_balance_bias.warmth, 0.35);
                     self.submit(None);
@@ -965,9 +1342,7 @@ impl App {
                 "smart-overview" => {
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Smart;
                     self.preferences.scope_viewport = true;
-                    if quattro_smart {
-                        self.settings.reconstruction = Some(Default::default());
-                    }
+                    self.settings.reconstruction = Some(Default::default());
                     self.submit(None);
                 }
                 "smart-100" => self.viewport.one_to_one = true,
@@ -1220,6 +1595,14 @@ impl App {
                 self.selected
                     .as_ref()
                     .is_some_and(|p| self.browser.thumbnail(p).is_some())
+            } else if smoke.targets == DEHAZE_TARGETS {
+                // These controls require the current photo, independently of ancillary panels.
+                !self.busy
+                    && self.frame.as_ref().is_some_and(|frame| {
+                        self.selected.as_ref() == Some(&frame.path)
+                            && frame.output == self.output
+                            && frame.revision == self.revision
+                    })
             } else if smoke.targets == SMART_TARGETS
                 && smoke.targets[smoke.index] == "smart-detail"
                 && regional_smart
@@ -1234,6 +1617,7 @@ impl App {
                             && self.navigator.ready(frame, mapping)
                             && (frame.rendition != crate::editor::Rendition::Current
                                 || frame.output != "final"
+                                || frame.artifact.settings.color_range_preview.is_some()
                                 || self.browser.rendered_revision(&frame.path)
                                     == Some(frame.revision))
                     })
@@ -1277,6 +1661,46 @@ impl App {
                     || self.frame.as_ref().is_some_and(|frame| {
                         self.browser.rendered_revision(&frame.path) == Some(frame.revision)
                     }));
+            let ready = ready
+                && (smoke.targets != ADVANCED_COLOR_TARGETS
+                    || smoke.targets[smoke.index] != "advanced-picked"
+                    || (self.settings.photographic.color_editor.advanced.count == 1
+                        && self.settings.photographic.color_editor.advanced.ranges[0]
+                            .adjustment
+                            .hue
+                            > 0.
+                        && self.settings.photographic.color_editor.advanced.ranges[0]
+                            .adjustment
+                            .lightness
+                            > 0.
+                        && !crate::editor::direct_color::active(ctx)
+                        && !crate::editor::direct_color::dragging(ctx)));
+            let ready = ready
+                && (smoke.targets != ADVANCED_COLOR_TARGETS
+                    || smoke.targets[smoke.index] != "advanced-name"
+                    || (self.settings.photographic.color_editor.advanced.ranges[0]
+                        .name
+                        .as_str()
+                        == "Petals"
+                        && crate::editor::advanced_color::state(ctx).rename.is_none()
+                        && smoke.direct_events.is_empty()));
+            if ready
+                && smoke.targets == ADVANCED_COLOR_TARGETS
+                && smoke.targets[smoke.index] == "advanced-name"
+            {
+                assert_eq!(
+                    smoke.name_revision,
+                    Some(self.revision),
+                    "renaming must not submit an image job"
+                );
+            }
+            let ready = ready
+                && (smoke.targets != DEHAZE_TARGETS
+                    || smoke.targets[smoke.index] != "dehaze-picked"
+                    || (self.settings.dehaze.shadow.is_some()
+                        && !crate::editor::dehaze::active(ctx)
+                        && !crate::editor::dehaze::pending(ctx)
+                        && smoke.direct_events.is_empty()));
             let ready = ready
                 && (smoke.targets != DIRECT_COLOR_TARGETS
                     || match smoke.targets[smoke.index] {

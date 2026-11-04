@@ -726,6 +726,16 @@ impl Viewport {
             ),
         )
     }
+
+    /// Map a visible photographic point for opt-in native gesture checks.
+    pub fn position_at_uv(&self, uv: [f32; 2]) -> Option<egui::Pos2> {
+        if uv.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v)) {
+            return None;
+        }
+        let (canvas, image) = self.last_image?;
+        let position = image.min + egui::vec2(uv[0], uv[1]) * image.size();
+        canvas.contains(position).then_some(position)
+    }
     /// Paint a native-coordinate detail rectangle over the immediate overview.
     #[allow(clippy::too_many_arguments)]
     pub fn show_region(

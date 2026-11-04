@@ -45,7 +45,7 @@ fn effective_preview_quality(
             PreviewMode::Full => PreviewQuality::Full,
             PreviewMode::Fast => PreviewQuality::Fast,
             PreviewMode::Smart if request.settings.preview_region.is_some() => PreviewQuality::Full,
-            PreviewMode::Smart => PreviewQuality::Draft,
+            PreviewMode::Smart => PreviewQuality::Fast,
         }
     } else {
         PreviewQuality::Full
@@ -78,7 +78,7 @@ pub struct Frame {
     pub queued_at: std::time::Instant,
 }
 impl Frame {
-    /// Keep zoom coordinates native while Fast and Draft store fewer pixels.
+    /// Keep zoom coordinates native while Fast stores fewer pixels.
     pub fn display_extent(&self, input: bool) -> [u32; 2] {
         let extent = self.view(input).description().extent;
         if self.artifact.settings.preview_quality.is_reduced()
@@ -142,16 +142,25 @@ pub enum Update {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorPickTool {
+    Basic,
+    Advanced,
+    Dehaze,
+}
+
 pub struct ColorPickRequest {
+    pub tool: ColorPickTool,
     pub token: u64,
     pub path: PathBuf,
     pub settings: Settings,
     pub uv: [f32; 2],
 }
 pub struct ColorPickReply {
+    pub tool: ColorPickTool,
     pub token: u64,
     pub path: PathBuf,
-    pub weights: Result<[f32; 8], String>,
+    pub sample: Result<foveonic::render::ColorRangeSample, String>,
 }
 
 struct Pending {
@@ -232,13 +241,14 @@ impl Worker {
                                         || r.settings.photographic_recipe() != recipe
                                 })
                         };
-                        let weights = pick_color(&engine, source.as_mut(), &pick, cancel)
+                        let sample = pick_color(&engine, source.as_mut(), &pick, cancel)
                             .map_err(|e| e.to_string());
                         if tx
                             .send(Update::ColorPick(ColorPickReply {
+                                tool: pick.tool,
                                 token: pick.token,
                                 path: pick.path,
-                                weights,
+                                sample,
                             }))
                             .is_err()
                         {
@@ -294,6 +304,9 @@ impl Worker {
                         reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
                         return Ok(None);
                     }
+                    settings.dehaze_estimate = request.output == "final"
+                        && request.rendition == crate::editor::Rendition::Current
+                        && settings.dehaze_auto();
                     let edit=session.changed_parameters(&settings);
                     let cancel=||{
                         if request.export.is_some(){return false;}
@@ -388,6 +401,7 @@ impl Worker {
                 // Reply settings populate photo edits. Preview policy stays in UI preferences.
                 settings.preview_quality = PreviewQuality::Full;
                 settings.preview_region = None;
+                settings.dehaze_estimate = false;
                 let publication = crate::timing::Span::new(request.revision, "reply_publication");
                 crate::timing::event(request.revision, "reply_ready");
                 if tx
@@ -475,7 +489,7 @@ fn pick_color(
     source: Option<&mut (PathBuf, RenderSession)>,
     request: &ColorPickRequest,
     cancel: impl Fn() -> bool,
-) -> foveonic::source::Result<[f32; 8]> {
+) -> foveonic::source::Result<foveonic::render::ColorRangeSample> {
     if cancel() {
         return Err("color selection canceled".into());
     }
@@ -498,7 +512,11 @@ fn pick_color(
         .render_session(
             session,
             &settings,
-            &["color-editor.guide"],
+            &[if request.tool == ColorPickTool::Dehaze {
+                "dehaze.input"
+            } else {
+                "color-editor.guide"
+            }],
             &cancel,
             &mut Profile::default(),
         )?
@@ -513,9 +531,15 @@ fn pick_color(
     else {
         return Err("color selection requires a guide image".into());
     };
-    engine
-        .pick_color_range(&guide, request.uv)
-        .map(|sample| sample.weights)
+    if request.tool == ColorPickTool::Dehaze {
+        let rgb = engine.pick_haze_color(&guide, request.uv)?;
+        Ok(foveonic::render::ColorRangeSample {
+            weights: [0.; 8],
+            color: [rgb[0], rgb[1], rgb[2], 1.],
+        })
+    } else {
+        engine.pick_color_range(&guide, request.uv)
+    }
 }
 
 fn analyze_scopes(
@@ -1332,9 +1356,10 @@ mod preview_tests {
             comparison: false,
             export: None,
         };
+        request.settings.dehaze.amount = 35.;
         let mut resolved = request.settings.clone();
         resolve_preview(&request, &mut resolved, &metadata);
-        assert_eq!(resolved.preview_quality, PreviewQuality::Draft);
+        assert_eq!(resolved.preview_quality, PreviewQuality::Fast);
         assert_eq!(resolved.preview_region, None);
         assert!(resolved.row_correction && resolved.despeckle);
         request.preview_quality = PreviewMode::Fast;
@@ -1380,6 +1405,7 @@ mod preview_tests {
             comparison: false,
             export: None,
         };
+        r.settings.dehaze.amount = 35.;
         assert_eq!(
             effective_preview_quality(&r, &r.settings, &m),
             PreviewQuality::Fast
@@ -1387,7 +1413,7 @@ mod preview_tests {
         r.preview_quality = PreviewMode::Smart;
         assert_eq!(
             effective_preview_quality(&r, &r.settings, &m),
-            PreviewQuality::Draft
+            PreviewQuality::Fast
         );
         r.settings.preview_region = Some([100, 100, 400, 300]);
         assert_eq!(
@@ -1440,11 +1466,7 @@ mod preview_tests {
             r.preview_quality = quality;
             assert_eq!(
                 effective_preview_quality(&r, &r.settings, &m),
-                if quality == PreviewMode::Smart {
-                    PreviewQuality::Draft
-                } else {
-                    PreviewQuality::Fast
-                }
+                PreviewQuality::Fast
             );
         }
         r.settings.preview_region = Some([100, 100, 400, 300]);
@@ -1621,7 +1643,7 @@ mod color_pick_tests {
                 settings.photographic.color_editor.master.lightness = 0.7;
             }
             if token == 3 {
-                settings.preview_quality = PreviewQuality::Draft;
+                settings.preview_quality = PreviewQuality::Fast;
             }
             if token == 4 {
                 settings.white_balance.clear();
@@ -1632,6 +1654,7 @@ mod color_pick_tests {
             }
             let began = std::time::Instant::now();
             worker.pick_color(ColorPickRequest {
+                tool: ColorPickTool::Basic,
                 token,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -1653,8 +1676,9 @@ mod color_pick_tests {
                 began.elapsed().as_secs_f64() * 1000.
             );
             let weights = reply
-                .weights
-                .unwrap_or_else(|error| panic!("pick {token}: {error}"));
+                .sample
+                .unwrap_or_else(|error| panic!("pick {token}: {error}"))
+                .weights;
             assert!(
                 (weights.iter().sum::<f32>() - 1.).abs() < 1e-5,
                 "{weights:?}"

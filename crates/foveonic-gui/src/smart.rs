@@ -44,6 +44,10 @@ pub fn same_edits(a: &Settings, b: &Settings) -> bool {
     b.preview_quality = PreviewQuality::Full;
     a.preview_region = None;
     b.preview_region = None;
+    a.dehaze_estimate = false;
+    b.dehaze_estimate = false;
+    a.photographic.color_editor.advanced.clear_names();
+    b.photographic.color_editor.advanced.clear_names();
     a == b
 }
 

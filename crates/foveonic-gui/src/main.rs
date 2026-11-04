@@ -422,7 +422,9 @@ impl App {
             let reply = match update {
                 worker::Update::Image(reply) => *reply,
                 worker::Update::ColorPick(reply) => {
-                    editor::direct_color::receive(ctx, reply);
+                    if !editor::dehaze::receive(ctx, &reply) {
+                        editor::direct_color::receive(ctx, reply);
+                    }
                     continue;
                 }
                 worker::Update::Scopes { key, result } => {
@@ -522,6 +524,16 @@ impl App {
             }
             match reply.result {
                 Ok(Some(frame)) => {
+                    if current
+                        && frame.rendition == editor::Rendition::Current
+                        && frame.artifact.settings.dehaze_estimate
+                    {
+                        editor::dehaze::set_estimate(
+                            ctx,
+                            &self.settings,
+                            frame.artifact.dehaze_estimate,
+                        );
+                    }
                     if frame.rendition != editor::Rendition::Current {
                         self.before
                             .retain_current(&mut self.frame, &mut self.detail);
@@ -652,6 +664,7 @@ impl App {
         // Freeze edits before either executor receives the job.
         self.sidecars.refresh(&self.settings);
         self.import.submit(
+            self.preferences.adaptive_tone_tuning,
             &self.browser,
             &self.sidecars,
             if self.browser.import_mode {
@@ -807,6 +820,8 @@ impl App {
             Section::Editing => {
                 let mut changed = false;
                 ui.add_enabled_ui(!self.exporting && self.sidecars.ready(), |ui| {
+                    let exposure_auto_compensation = self.settings.exposure_auto_compensation;
+                    let prevent_color_clipping = self.settings.prevent_color_clipping;
                     changed = controls::processing(
                         ui,
                         &mut self.settings,
@@ -814,6 +829,8 @@ impl App {
                         self.capture.properties.as_ref(),
                         &mut self.preferences.editing_sections,
                         &mut editor::Menus {
+                            exposure_auto_compensation,
+                            prevent_color_clipping,
                             family: self.metadata.as_deref().and_then(|m| {
                                 foveonic::render::ControlCapabilities::from_metadata(m)
                                     .ok()
@@ -849,6 +866,10 @@ impl App {
                         let header = response.rect;
                         if section == Section::Editing {
                             editor::Menus {
+                                prevent_color_clipping: self.settings.prevent_color_clipping,
+                                exposure_auto_compensation: self
+                                    .settings
+                                    .exposure_auto_compensation,
                                 family: self
                                     .metadata
                                     .as_deref()
@@ -885,7 +906,7 @@ impl App {
         if let Some((source, target, after)) = movement {
             self.preferences.move_section(source, target, after);
         }
-        changed |= self.apply_editor_actions();
+        changed |= self.apply_editor_actions(ui.ctx());
         changed
     }
     fn displayed_channel(&self) -> i32 {
@@ -1085,10 +1106,12 @@ impl App {
         changed
     }
 
-    fn color_tool_available(&self, mapping: viewport::Mapping) -> bool {
+    fn color_tool_available(&self, mapping: viewport::Mapping, ctx: &egui::Context) -> bool {
         !self.exporting
             && self.sidecars.ready()
-            && self.settings.color_editor_enabled
+            && (editor::dehaze::active(ctx)
+                || editor::dehaze::pending(ctx)
+                || self.settings.color_editor_enabled)
             && self.before.active == editor::Rendition::Current
             && self.output == "final"
             && !mapping.input
@@ -1101,8 +1124,9 @@ impl App {
     }
 
     fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) -> bool {
-        let allowed = self.color_tool_available(mapping);
-        self.viewport.editing = editor::direct_color::active(ui.ctx()) && allowed;
+        let allowed = self.color_tool_available(mapping, ui.ctx());
+        self.viewport.editing =
+            (editor::direct_color::active(ui.ctx()) || editor::dehaze::active(ui.ctx())) && allowed;
         if let Some(frame) = &self.frame {
             self.viewport.show(
                 ui,
@@ -1150,8 +1174,13 @@ impl App {
                     .as_ref()
                     .is_some_and(|f| f.requested == self.settings)
             });
-            let (changed, request) =
-                editor::direct_color::photo(ui, &response, uv, path, &mut self.settings, allowed);
+            let (changed, request) = if editor::dehaze::active(ui.ctx())
+                || editor::dehaze::pending(ui.ctx())
+            {
+                editor::dehaze::photo(ui, &response, uv, path, &mut self.settings, allowed)
+            } else {
+                editor::direct_color::photo(ui, &response, uv, path, &mut self.settings, allowed)
+            };
             if let Some(request) = request {
                 self.worker.pick_color(request);
             }
@@ -1203,6 +1232,7 @@ impl eframe::App for App {
                 CACHE_IDLE_POLL
             });
         }
+        editor::dehaze::source(ctx, self.selected.as_deref());
         if let Some(saved) = self.sidecars.receive() {
             if let Some(path) = &self.selected {
                 if let Some(opening) = &self.opening {
@@ -1259,10 +1289,12 @@ impl eframe::App for App {
             self.capture.properties.as_ref(),
         );
         self.sidecars.refresh(&self.settings);
+        editor::advanced_color::sync_photo(ctx, self.selected.as_deref());
         let previous_settings = self.settings.clone();
         let previous_selection = self.selected.clone();
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui));
         let previous_gamut = self.preferences.display_gamut;
+        let previous_limits = self.preferences.adaptive_tone_tuning;
         application_settings::show(
             ctx,
             &mut self.settings_open,
@@ -1270,6 +1302,7 @@ impl eframe::App for App {
             &self.worker.cache,
             self.display.target.managed(),
         );
+        application_settings::adaptive(ctx, &mut self.preferences);
         self.browser
             .set_thumbnail_budget(self.preferences.thumbnail_cache_bytes);
         if previous_gamut != self.preferences.display_gamut {
@@ -1309,7 +1342,13 @@ impl eframe::App for App {
                 self.preferences.browser_show_ratings = self.browser.show_ratings;
             });
         let actions_changed = self.dispatch_actions(ctx);
-        let mut changed = normalized || actions_changed;
+        let tuning_changed = previous_limits != self.preferences.adaptive_tone_tuning;
+        if tuning_changed {
+            self.detail = None;
+            self.browser.invalidate_previews();
+            self.previews.invalidate();
+        }
+        let mut changed = normalized || actions_changed || tuning_changed;
         let tools_limit = (ctx.available_rect().width() - 240.).clamp(300., 600.);
         egui::SidePanel::right("settings")
             .default_width(

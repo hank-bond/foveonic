@@ -75,6 +75,8 @@ pub fn write(
     settings.tiff_color_space = export.tiff_color_space;
     settings.preview_quality = PreviewQuality::Full;
     settings.preview_region = None;
+    settings.color_range_preview = None;
+    settings.dehaze_estimate = false;
     let errors = resolve_camera_settings(&mut settings, session.metadata());
     if !errors.is_empty() {
         return Err(errors.join("; ").into());

@@ -137,7 +137,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
         format: ExportFormat::Tiff,
         ..Default::default()
     };
-    review.submit(&browser, &sidecars, &options);
+    review.submit(Default::default(), &browser, &sidecars, &options);
     assert_eq!(review.worker.progress().total, 2);
     assert!(!review.ready(&browser), "a second batch must wait");
     options.format = ExportFormat::Dng;

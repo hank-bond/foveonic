@@ -20,6 +20,8 @@ fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Meta
         Some(&capture),
         &mut EditingSection::ALL.to_vec(),
         &mut crate::editor::Menus {
+            prevent_color_clipping: true,
+            exposure_auto_compensation: Default::default(),
             family: None,
             library: &Default::default(),
             state: &mut Default::default(),
@@ -106,6 +108,8 @@ fn directional_band_groups_follow_capture_orientation_and_preserve_saved_values(
                         Some(&capture),
                         &mut EditingSection::ALL.to_vec(),
                         &mut crate::editor::Menus {
+                            prevent_color_clipping: true,
+                            exposure_auto_compensation: Default::default(),
                             family: None,
                             library: &Default::default(),
                             state: &mut Default::default()
@@ -329,7 +333,7 @@ fn editing_hides_export_controls_and_preserves_the_selected_tiff_space() {
         },
     );
     assert_eq!(settings, before);
-    for label in ["Export", "TIFF space", "Camera", "ProPhoto RGB"] {
+    for label in ["Export", "TIFF space", "ProPhoto RGB"] {
         assert!(text_centers(&output, label).is_empty());
     }
 }
@@ -533,7 +537,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     assert!(!changed);
     assert_eq!(initial, defaults);
     assert!(initial.despeckle && initial.repair.is_some() && initial.row_correction);
-    let headers = text_centers(&output, "Advanced");
+    let headers = disclosure_centers(&output);
     assert_eq!(headers.len(), 2);
     assert_eq!(text_centers(&output, "Speckles").len(), 1);
     let noise_parameter = "Mean decay";
@@ -558,7 +562,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     assert!(text_centers(&output, noise_parameter).is_empty());
     assert_eq!(text_centers(&output, "ColorDQ gain").len(), 1);
     assert_eq!(text_centers(&output, "Speckles").len(), 1);
-    let corrections = text_centers(&output, "Advanced")[1];
+    let corrections = disclosure_centers(&output)[1];
     for pressed in [true, false] {
         assert!(
             !frame(
@@ -577,7 +581,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     for label in ["Speckles", "Bad pixels", "Correct row offsets"] {
         assert_eq!(text_centers(&output, label).len(), 1);
     }
-    let noise = text_centers(&output, "Advanced")[0];
+    let noise = disclosure_centers(&output)[0];
     for pressed in [true, false] {
         assert!(
             !frame(
@@ -605,7 +609,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     let (changed, _, edited) = frame(4.1, vec![pointer_button(speckles, false)]);
     assert!(changed && !edited.despeckle);
     assert!(edited.repair.is_some() && edited.row_correction && edited.highlight_restoration);
-    let corrections = text_centers(&output, "Advanced")[1];
+    let corrections = disclosure_centers(&output)[1];
     for pressed in [true, false] {
         assert!(
             !frame(
@@ -621,7 +625,7 @@ fn advanced_disclosures_are_independent_and_preserve_corrections() {
     let (_, output, closed) = frame(5.5, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]);
     assert_eq!(closed, edited);
     assert_eq!(text_centers(&output, "Speckles").len(), 1);
-    let corrections = text_centers(&output, "Advanced")[1];
+    let corrections = disclosure_centers(&output)[1];
     for pressed in [true, false] {
         assert!(
             !frame(
@@ -1265,19 +1269,11 @@ fn colordq_stays_inside_collapsed_noise_advanced_and_repair_has_no_parameter_row
                     )
                 })
                 .count();
-            assert_eq!(auto_buttons, 2);
-            let advanced_headers = output
-                .shapes
-                .iter()
-                .filter(|shape| {
-                    matches!(
-                        &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Advanced"
-                    )
-                })
-                .count();
+            assert_eq!(auto_buttons, 4);
+            let advanced_headers = disclosure_centers(&output).len();
             assert_eq!(advanced_headers, 2);
             if reconstruction {
-                let y = position("Advanced").unwrap();
+                let y = disclosure_centers(&output)[0].y;
                 assert!(y > position("Banding").unwrap());
                 assert!(y < position("Detail").unwrap());
                 assert!(y < position("Sharpening").unwrap());
@@ -1319,7 +1315,8 @@ fn automatic_buttons_replace_checkboxes_and_noise_explanation_is_not_inline() {
                 _ => None,
             })
             .collect();
-        assert_eq!(texts.iter().filter(|text| **text == "A").count(), 3);
+        assert_eq!(texts.iter().filter(|text| **text == "A").count(), 5);
+        assert!(!texts.contains(&"No estimate"));
         assert!(texts.contains(&"ColorDQ gain"));
         assert!(help::automatic("ColorDQ gain").is_some());
         assert!(texts.contains(&"Bad pixels"));
@@ -1612,6 +1609,7 @@ fn tone_methods_show_only_their_active_controls_and_preserve_edits() {
     settings.tone.highlights = -0.3;
     settings.tonal_ranges.shadows = 0.6;
     settings.photographic.local_contrast = 0.2;
+    settings.photographic.base_response = foveonic::render::BaseResponse::Strong;
     for method in [
         PhotographicMethod::Reference,
         PhotographicMethod::Universal,
@@ -1629,14 +1627,14 @@ fn tone_methods_show_only_their_active_controls_and_preserve_edits() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(!common::tone(ui, &mut settings));
+                    assert!(!common::tone(ui, &mut settings, None));
                 });
             },
         );
         for label in ["Exposure", "Contrast", "Shadows", "Highlights"] {
             assert_eq!(text_centers(&output, label).len(), 1, "{method:?}: {label}");
         }
-        for label in ["Blacks", "Whites", "Brightness", "Local contrast"] {
+        for label in ["Blacks", "Whites", "Brightness", "Clarity", "Adaptive"] {
             assert_eq!(
                 !text_centers(&output, label).is_empty(),
                 method == PhotographicMethod::Universal,
@@ -1655,7 +1653,7 @@ fn tone_and_saturation_have_separate_rows_and_visible_tonal_group() {
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.photographic.tone_method = foveonic::render::PhotographicMethod::Universal;
     settings.photographic.saturation_method = foveonic::render::PhotographicMethod::Universal;
-    settings.photographic.perceptual.saturation = 0.007;
+    settings.photographic.perceptual.saturation = 0.014;
     settings.photographic.perceptual.contrast = 0.123456;
     let before = settings.clone();
     let draw = |settings: &mut Settings, saturation: bool| {
@@ -1672,7 +1670,7 @@ fn tone_and_saturation_have_separate_rows_and_visible_tonal_group() {
                     let changed = if saturation {
                         super::saturation::show(ui, settings)
                     } else {
-                        common::tone(ui, settings)
+                        common::tone(ui, settings, None)
                     };
                     assert!(!changed);
                 });
@@ -1697,6 +1695,49 @@ fn tone_and_saturation_have_separate_rows_and_visible_tonal_group() {
     let sat = draw(&mut settings, true);
     for label in ["Amount", "Contrast", "Shadows", "Midtones", "Highlights"] {
         assert_eq!(text_centers(&sat, label).len(), 1, "{label}");
+    }
+    let column_x = text_centers(&sat, "Amount")[0].x;
+    for (output, labels) in [
+        (
+            &tone,
+            &[
+                "Method",
+                "Exposure",
+                "Brightness",
+                "Contrast",
+                "Clarity",
+                "Shadows",
+                "Highlights",
+                "Blacks",
+                "Whites",
+            ][..],
+        ),
+        (
+            &sat,
+            &[
+                "Method",
+                "Amount",
+                "Contrast",
+                "Shadows",
+                "Midtones",
+                "Highlights",
+            ][..],
+        ),
+    ] {
+        for label in labels {
+            assert!(
+                (text_centers(output, label)[0].x - column_x).abs() < 0.1,
+                "{label} must share Tone/Saturation's column"
+            );
+        }
+        for old in [
+            "Tone method",
+            "Saturation method",
+            "Local contrast",
+            "Invert lightness",
+        ] {
+            assert!(text_centers(output, old).is_empty());
+        }
     }
     assert!(text_centers(&sat, "Saturation by tone").is_empty());
     assert_eq!(text_centers(&sat, "0.01").len(), 1);
@@ -2830,6 +2871,8 @@ fn capture_properties_select_classic_before_a_render_completes() {
                     capture,
                     &mut EditingSection::ALL.to_vec(),
                     &mut crate::editor::Menus {
+                        prevent_color_clipping: true,
+                        exposure_auto_compensation: Default::default(),
                         family: None,
                         library: &Default::default(),
                         state: &mut Default::default()
@@ -2959,6 +3002,8 @@ fn unsupported_tiger_geometry_keeps_inspection_without_photographic_controls() {
                 Some(&capture),
                 &mut EditingSection::ALL.to_vec(),
                 &mut crate::editor::Menus {
+                    prevent_color_clipping: true,
+                    exposure_auto_compensation: Default::default(),
                     family: None,
                     library: &Default::default(),
                     state: &mut Default::default()
@@ -3015,6 +3060,8 @@ fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
                             Some(&capture),
                             &mut EditingSection::ALL.to_vec(),
                             &mut crate::editor::Menus {
+                                prevent_color_clipping: true,
+                                exposure_auto_compensation: Default::default(),
                                 family: None,
                                 library: &Default::default(),
                                 state: &mut Default::default()
@@ -3097,6 +3144,8 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
                     None,
                     &mut EditingSection::ALL.to_vec(),
                     &mut crate::editor::Menus {
+                        prevent_color_clipping: true,
+                        exposure_auto_compensation: Default::default(),
                         family: None,
                         library: &Default::default(),
                         state: &mut Default::default()
@@ -3151,6 +3200,8 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
                     None,
                     &mut EditingSection::ALL.to_vec(),
                     &mut crate::editor::Menus {
+                        prevent_color_clipping: true,
+                        exposure_auto_compensation: Default::default(),
                         family: None,
                         library: &Default::default(),
                         state: &mut Default::default()
@@ -3224,6 +3275,8 @@ fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
                             Some(&capture),
                             &mut EditingSection::ALL.to_vec(),
                             &mut crate::editor::Menus {
+                                prevent_color_clipping: true,
+                                exposure_auto_compensation: Default::default(),
                                 family: None,
                                 library: &Default::default(),
                                 state: &mut Default::default()
@@ -3323,19 +3376,17 @@ fn label_alignment_preserves_controls_across_fonts_and_scales() {
                             for row in 0..3 {
                                 ui.push_id(row, |ui| {
                                     let mut value = 1_f32;
-                                    let changed =
-                                        super::common::LabelColumn::new(ui, &["xxx", "ggg"])
-                                            .adjustment(
-                                                ui,
-                                                if row == 2 {
-                                                    ("ggg", "ggg")
-                                                } else {
-                                                    ("xxx", "xxx")
-                                                },
-                                                &mut value,
-                                                0. ..=2.,
-                                                1.,
-                                            );
+                                    let changed = super::common::LabelColumn::new(ui).adjustment(
+                                        ui,
+                                        if row == 2 {
+                                            ("ggg", "ggg")
+                                        } else {
+                                            ("xxx", "xxx")
+                                        },
+                                        &mut value,
+                                        0. ..=2.,
+                                        1.,
+                                    );
                                     assert!(!changed);
                                     assert_eq!(value, 1.);
                                 });
@@ -3620,7 +3671,7 @@ fn parameter_groups_extend_backgrounds_without_moving_controls() {
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let column = super::common::LabelColumn::new(ui, &["Coarse", "Size"]);
+                let column = super::common::LabelColumn::new(ui);
                 group = crate::widgets::parameter_group(ui, |ui| {
                     column.adjustment(ui, ("Coarse detail", "Coarse"), &mut 1_f32, 0. ..=2., 1.);
                     column.adjustment(ui, ("Coarse size", "Size"), &mut 1_f32, 0.5..=2., 1.);
@@ -3979,9 +4030,624 @@ fn shadow_neutralization_is_in_color_noise_and_retained_in_monochrome() {
             },
         );
         assert_eq!(
-            text_centers(&output, "Neutralize shadows").len(),
+            text_centers(&output, "Neutralize").len(),
             usize::from(rendering == Rendering::Color)
         );
         assert_eq!(settings.neutralize_shadows, controls);
+    }
+}
+
+// These default-order fixtures exercise the Noise and Corrections disclosures.
+// Color Range's Advanced tab is a separate control above Noise.
+fn disclosure_centers(output: &egui::FullOutput) -> Vec<egui::Pos2> {
+    let noise = text_centers(output, "Noise")[0].y;
+    text_centers(output, "Advanced")
+        .into_iter()
+        .filter(|p| p.y > noise)
+        .collect()
+}
+
+#[test]
+fn saturation_panel_leaves_shared_clipping_policy_to_the_editing_menu() {
+    for method in [
+        foveonic::render::PhotographicMethod::Reference,
+        foveonic::render::PhotographicMethod::Universal,
+    ] {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::default();
+        settings.photographic.saturation_method = method;
+        let before = settings.clone();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!super::saturation::show(ui, &mut settings));
+            });
+        });
+        assert!(text_centers(&output, "Prevent color clipping").is_empty());
+        assert!(text_centers(&output, "Prevent saturation clipping").is_empty());
+        assert_eq!(settings, before);
+    }
+}
+
+#[test]
+fn exposure_auto_is_editable_toggled_and_reset_in_both_tone_methods() {
+    for method in [
+        foveonic::render::PhotographicMethod::Reference,
+        foveonic::render::PhotographicMethod::Universal,
+    ] {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.photographic.tone_method = method;
+        settings.exposure = 0.6;
+        let mut frame = |time, events, calculated: Option<f32>| {
+            let mut changed = false;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(440., 1000.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        changed = common::tone(
+                            ui,
+                            &mut settings,
+                            calculated.map(|v| foveonic::source::CaptureExposureCompensation {
+                                dial: Some(-v),
+                                bracket: Some(0.),
+                                net: Some(-v),
+                            }),
+                        );
+                    });
+                },
+            );
+            (changed, output, settings.clone())
+        };
+        let (_, output, _) = frame(0., vec![], Some(-1.));
+        let a = text_centers(&output, "A")[0];
+        frame(
+            1.,
+            vec![egui::Event::PointerMoved(a), pointer_button(a, true)],
+            Some(-1.),
+        );
+        let (changed, _, auto) = frame(1.05, vec![pointer_button(a, false)], Some(-1.));
+        assert!(changed && auto.exposure_auto);
+        assert_eq!(
+            auto.exposure, 0.6,
+            "Auto must retain its choice without freezing the calculated EV"
+        );
+        let (changed, output, _) = frame(1.1, vec![], Some(-0.3));
+        assert!(
+            !changed,
+            "a new photo's calculation must not rewrite the recipe"
+        );
+        assert_eq!(text_centers(&output, "-0.30").len(), 1);
+        frame(
+            1.11,
+            vec![egui::Event::PointerMoved(a), pointer_button(a, true)],
+            Some(-0.3),
+        );
+        let (changed, output, manual) = frame(1.16, vec![pointer_button(a, false)], Some(-0.3));
+        assert!(changed && !manual.exposure_auto);
+        assert_eq!(manual.exposure, 0.);
+        assert!(!text_centers(&output, "0.00").is_empty());
+        frame(
+            1.17,
+            vec![egui::Event::PointerMoved(a), pointer_button(a, true)],
+            Some(-0.3),
+        );
+        let (_, output, auto) = frame(1.19, vec![pointer_button(a, false)], Some(-0.3));
+        assert!(auto.exposure_auto);
+        let field = text_centers(&output, "-0.30")[0];
+        frame(
+            1.2,
+            vec![
+                egui::Event::PointerMoved(field),
+                pointer_button(field, true),
+            ],
+            Some(-0.3),
+        );
+        frame(
+            1.3,
+            vec![egui::Event::PointerMoved(field + egui::vec2(40., 0.))],
+            Some(-0.3),
+        );
+        let (_, _, manual) = frame(
+            1.4,
+            vec![pointer_button(field + egui::vec2(40., 0.), false)],
+            Some(-0.3),
+        );
+        assert!(!manual.exposure_auto, "the numeric field stayed locked");
+        assert_ne!(manual.exposure, -0.3);
+        frame(
+            2.,
+            vec![egui::Event::PointerMoved(a), pointer_button(a, true)],
+            Some(-1.),
+        );
+        let (_, output, auto) = frame(2.05, vec![pointer_button(a, false)], Some(-1.));
+        assert!(auto.exposure_auto);
+        let row_y = text_centers(&output, "Exposure")[0].y;
+        let slider = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(r)
+                    if r.fill == crate::widgets::SLIDER_TRACK_FILL
+                        && r.rect.height() < 12.
+                        && r.rect.width() > 35.
+                        && (r.rect.center().y - row_y).abs() < 3. =>
+                {
+                    Some(r.rect.right_center() - egui::vec2(2., 0.))
+                }
+                _ => None,
+            })
+            .expect("Exposure slider track");
+        frame(
+            3.,
+            vec![
+                egui::Event::PointerMoved(slider),
+                pointer_button(slider, true),
+            ],
+            Some(-1.),
+        );
+        let (_, _, manual) = frame(3.05, vec![pointer_button(slider, false)], Some(-1.));
+        assert!(!manual.exposure_auto, "the slider stayed locked");
+        frame(
+            4.,
+            vec![egui::Event::PointerMoved(a), pointer_button(a, true)],
+            Some(-1.),
+        );
+        frame(4.05, vec![pointer_button(a, false)], Some(-1.));
+        for (time, pressed) in [(5., true), (5.05, false), (5.1, true), (5.15, false)] {
+            frame(
+                time,
+                vec![
+                    egui::Event::PointerMoved(slider),
+                    pointer_button(slider, pressed),
+                ],
+                Some(-1.),
+            );
+        }
+        let (_, _, reset) = frame(5.2, vec![], Some(-1.));
+        assert!(!reset.exposure_auto);
+        assert_eq!(reset.exposure, 0.);
+    }
+}
+
+#[test]
+fn tone_menu_selects_auto_exposure_source_without_an_a_context_menu() {
+    use foveonic::{
+        render::{AutoExposureCompensation, PhotographicMethod},
+        source::ProcessingFamily,
+    };
+    for family in [
+        ProcessingFamily::Classic,
+        ProcessingFamily::Merrill,
+        ProcessingFamily::Quattro,
+    ] {
+        for method in [PhotographicMethod::Reference, PhotographicMethod::Universal] {
+            let ctx = egui::Context::default();
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.photographic.tone_method = method;
+            settings.exposure_auto = true;
+            settings.exposure = 0.6;
+            let compensation = foveonic::source::CaptureExposureCompensation {
+                dial: Some(0.5),
+                bracket: Some(1.),
+                net: Some(1.5),
+            };
+            let frame = |time, events, settings: &mut Settings| {
+                let mut state = crate::editor::State::default();
+                let mut menu_position = egui::Pos2::ZERO;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 1000.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let response = ui.scope(|ui| {
+                                assert!(!common::tone(ui, settings, Some(compensation)));
+                            });
+                            menu_position = egui::pos2(
+                                response.response.rect.right() - 38.,
+                                response.response.rect.top() + 10.,
+                            );
+                            crate::editor::Menus {
+                                prevent_color_clipping: settings.prevent_color_clipping,
+                                exposure_auto_compensation: settings.exposure_auto_compensation,
+                                family: Some(family),
+                                library: &Default::default(),
+                                state: &mut state,
+                            }
+                            .header(
+                                ui,
+                                crate::editor::Scope::Tool(EditingSection::Tone),
+                                response.response.rect,
+                            );
+                        });
+                    },
+                );
+                (output, state.actions, menu_position)
+            };
+            let (output, _, menu) = frame(0., vec![], &mut settings);
+            let a = text_centers(&output, "A")[0];
+            for (time, pressed) in [(1., true), (1.05, false)] {
+                frame(
+                    time,
+                    vec![
+                        egui::Event::PointerMoved(a),
+                        egui::Event::PointerButton {
+                            pos: a,
+                            button: egui::PointerButton::Secondary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    &mut settings,
+                );
+            }
+            let (output, actions, _) = frame(1.1, vec![], &mut settings);
+            assert!(text_centers(&output, "Auto exposure source").is_empty());
+            assert!(actions.is_empty());
+            frame(
+                2.,
+                vec![egui::Event::PointerMoved(menu), pointer_button(menu, true)],
+                &mut settings,
+            );
+            frame(2.05, vec![pointer_button(menu, false)], &mut settings);
+            let (output, _, _) = frame(2.1, vec![], &mut settings);
+            let heading = text_centers(&output, "Auto exposure source")[0];
+            frame(
+                2.2,
+                vec![
+                    egui::Event::PointerMoved(heading),
+                    pointer_button(heading, true),
+                ],
+                &mut settings,
+            );
+            let (output, actions, _) =
+                frame(2.25, vec![pointer_button(heading, false)], &mut settings);
+            assert!(actions.is_empty(), "heading must not be selectable");
+            for label in ["Bracket", "Dial", "Both"] {
+                assert_eq!(text_centers(&output, label).len(), 1);
+            }
+            let dial = text_centers(&output, "Dial")[0];
+            frame(
+                3.1,
+                vec![egui::Event::PointerMoved(dial), pointer_button(dial, true)],
+                &mut settings,
+            );
+            let (_, actions, _) = frame(3.15, vec![pointer_button(dial, false)], &mut settings);
+            let [crate::editor::Action::ExposureAutoCompensation(choice)] = actions.as_slice()
+            else {
+                panic!("Tone menu did not queue exactly one source selection");
+            };
+            assert_eq!(*choice, AutoExposureCompensation::Dial);
+            // The header queues edits through the editor action handler.
+            settings.exposure_auto_compensation = *choice;
+            assert!(settings.exposure_auto);
+            assert_eq!(settings.exposure, 0.6);
+            let (output, _, _) = frame(3.2, vec![], &mut settings);
+            assert_eq!(text_centers(&output, "-0.50").len(), 1);
+        }
+    }
+}
+
+#[test]
+fn perceptual_saturation_panels_show_balanced_values_without_rewriting_saved_looks() {
+    for panel in 0..3 {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.photographic.saturation_method = foveonic::render::PhotographicMethod::Universal;
+        settings.photographic.perceptual.saturation = 1.;
+        settings.photographic.color_editor.bands[0].saturation = 1.;
+        let mut range = foveonic::render::AdvancedColorRange::default();
+        range.adjustment.saturation = 1.;
+        settings.photographic.color_editor.advanced.push(range);
+        crate::editor::direct_color::select(&ctx, 0);
+        if panel == 2 {
+            let mut state = crate::editor::advanced_color::state(&ctx);
+            state.advanced = true;
+            crate::editor::advanced_color::store(&ctx, state);
+        }
+        let before = settings.clone();
+        let saved = foveonic::sidecar::encode(&settings).unwrap();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500., 1400.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let changed = if panel == 0 {
+                        super::saturation::show(ui, &mut settings)
+                    } else {
+                        super::color_editor::show(ui, &mut settings)
+                    };
+                    assert!(!changed);
+                });
+            },
+        );
+        assert!(
+            !text_centers(&output, "0.50").is_empty(),
+            "panel {panel} did not map stored +1 to control +0.5"
+        );
+        assert_eq!(settings, before);
+        assert_eq!(foveonic::sidecar::encode(&settings).unwrap(), saved);
+    }
+}
+
+#[test]
+fn empty_advanced_panel_keeps_wheel_and_right_aligned_actions_without_authoring_edits() {
+    let ctx = egui::Context::default();
+    crate::widgets::install_style(&ctx);
+    let mut state = crate::editor::advanced_color::state(&ctx);
+    state.advanced = true;
+    crate::editor::advanced_color::store(&ctx, state);
+    let mut settings = Settings::default();
+    let before = settings.clone();
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(380., 850.),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!color_editor::show(ui, &mut settings));
+            });
+        },
+    );
+    assert_eq!(settings, before);
+    assert!(
+        output
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Mesh(m) if m.vertices.len() > 4000)),
+        "empty selection must still show the wheel"
+    );
+    let plus = text_centers(&output, "+")[0];
+    let minus = text_centers(&output, "−")[0];
+    assert!(plus.x < minus.x && minus.x > 250.);
+    assert!(text_centers(&output, "Invert lightness").is_empty());
+    let title = text_centers(&output, "Color Range")[0];
+    for label in ["Basic", "Advanced"] {
+        let button = text_centers(&output, label)[0];
+        assert!(button.x > title.x);
+        assert!((button.y - title.y).abs() < 2.);
+    }
+    let labels = ["Smoothness", "Hue", "Saturation", "Lightness", "+", "−"];
+    let positions: Vec<_> = labels
+        .iter()
+        .map(|label| text_centers(&output, label)[0])
+        .collect();
+    let hint = text_centers(&output, "Pick a color in the photograph to create a range.")[0];
+    assert!(hint.y > positions[3].y && hint.y < positions[4].y);
+    let center = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Mesh(mesh) if mesh.vertices.len() > 4000 => {
+                let min = mesh
+                    .vertices
+                    .iter()
+                    .map(|v| v.pos.x)
+                    .fold(f32::INFINITY, f32::min);
+                let max = mesh
+                    .vertices
+                    .iter()
+                    .map(|v| v.pos.x)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                Some((min + max) * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        (center - 190.).abs() < 1.,
+        "wheel must be centered in the pane"
+    );
+    settings
+        .photographic
+        .color_editor
+        .advanced
+        .push(Default::default());
+    let selected = settings.clone();
+    let populated = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(380., 850.),
+            )),
+            time: Some(1.),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!color_editor::show(ui, &mut settings));
+            });
+        },
+    );
+    for (label, original) in labels.into_iter().zip(positions) {
+        let current = text_centers(&populated, label)[0];
+        assert!(
+            current.distance(original) < 1.,
+            "{label} moved after creating the first range"
+        );
+    }
+    assert_eq!(settings, selected);
+}
+
+#[test]
+fn form_rows_use_a_responsive_column_and_keep_dropdowns_inside_the_pane() {
+    for em in [14., 20.] {
+        for dark in [false, true] {
+            let ctx = egui::Context::default();
+            crate::widgets::install_style(&ctx);
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            ctx.style_mut(|s| {
+                s.text_styles
+                    .insert(egui::TextStyle::Body, egui::FontId::proportional(em));
+            });
+            let mut values = [0_f32; 4];
+            let mut method = foveonic::render::PhotographicMethod::Universal;
+            let mut right = 0.;
+            let mut widths = Vec::new();
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(480., 800.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        right = ui.max_rect().right();
+                        for (label, value) in
+                            ["Hue", "Lightness", "Local contrast", "Saturation method"]
+                                .into_iter()
+                                .zip(&mut values)
+                        {
+                            let width = crate::widgets::form_label_width(ui, &[label], None);
+                            let font = egui::TextStyle::Body.resolve(ui.style());
+                            let text = ui
+                                .painter()
+                                .layout_no_wrap(label.into(), font, egui::Color32::PLACEHOLDER)
+                                .size()
+                                .x;
+                            assert!(
+                                (width - (ui.available_width() / 4.).max(text).ceil()).abs() < 1.
+                            );
+                            widths.push(width);
+                            common::adjustment(ui, label, value, -1. ..=1., 0.);
+                            common::method_choice(ui, label, label, &mut method);
+                        }
+                        assert!(ui.min_rect().right() <= right + 1., "form widened the pane");
+                    });
+                },
+            );
+            assert!(widths.windows(2).all(|pair| pair[0] <= pair[1]));
+            assert_eq!(values, [0.; 4]);
+            assert_eq!(method, foveonic::render::PhotographicMethod::Universal);
+        }
+    }
+}
+
+#[test]
+fn resizing_only_shortens_rows_that_need_more_label_space_and_restores_them() {
+    for em in [13., 18.] {
+        let ctx = egui::Context::default();
+        crate::widgets::install_style(&ctx);
+        ctx.style_mut(|s| {
+            s.text_styles
+                .insert(egui::TextStyle::Body, egui::FontId::proportional(em));
+        });
+        let mut values = [0_f32; 3];
+        let mut frames = Vec::new();
+        for (index, width) in [600., 300., 600.].into_iter().enumerate() {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 800.),
+                    )),
+                    time: Some(index as f64),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let column = common::LabelColumn::new(ui);
+                        let right = ui.max_rect().right();
+                        for (label, value) in ["Hue", "Tint", "Column strength"]
+                            .into_iter()
+                            .zip(&mut values)
+                        {
+                            column.adjustment(ui, (label, label), value, -1. ..=1., 0.);
+                        }
+                        assert!(ui.min_rect().right() <= right + 1.);
+                    });
+                },
+            );
+            let tracks: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.fill == crate::widgets::SLIDER_TRACK_FILL
+                            && r.rect.width() > 35.
+                            && r.rect.height() < 12. =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(tracks.len(), 3);
+            frames.push(tracks);
+        }
+        assert!((frames[0][0].left() - frames[0][2].left()).abs() < 1.);
+        assert!((frames[1][0].left() - frames[1][1].left()).abs() < 1.);
+        assert!(frames[1][2].left() > frames[1][0].left() + 1.);
+        assert_eq!(frames[0], frames[2]);
+        assert_eq!(values, [0.; 3]);
+    }
+}
+
+#[test]
+fn every_family_tone_panel_offers_adaptive_only_for_universal() {
+    for family in [
+        foveonic::source::ProcessingFamily::Classic,
+        foveonic::source::ProcessingFamily::Merrill,
+        foveonic::source::ProcessingFamily::Quattro,
+    ] {
+        for method in [
+            foveonic::render::PhotographicMethod::Reference,
+            foveonic::render::PhotographicMethod::Universal,
+        ] {
+            let ctx = egui::Context::default();
+            let mut settings = Settings::default();
+            settings.photographic.tone_method = method;
+            settings.photographic.base_response = foveonic::render::BaseResponse::Natural;
+            let before = settings.clone();
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let range = if family == foveonic::source::ProcessingFamily::Quattro {
+                        -2. ..=2.
+                    } else {
+                        -4. ..=4.
+                    };
+                    assert!(!common::tone_with_exposure_range(
+                        ui,
+                        &mut settings,
+                        range,
+                        None
+                    ));
+                });
+            });
+            assert_eq!(
+                text_centers(&output, "Adaptive").len(),
+                usize::from(method == foveonic::render::PhotographicMethod::Universal)
+            );
+            assert_eq!(settings, before);
+        }
     }
 }

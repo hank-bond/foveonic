@@ -12,6 +12,7 @@ pub(super) fn show(
     settings: &mut Settings,
     metadata: Option<&Metadata>,
     capture: Option<&BTreeMap<String, String>>,
+    exposure: Option<foveonic::source::CaptureExposureCompensation>,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
@@ -73,7 +74,9 @@ pub(super) fn show(
                     defaults.monochrome.mix,
                     "RGB Mix",
                 ),
-                EditingSection::Tone => common::tone_with_exposure_range(ui, settings, -2. ..=2.),
+                EditingSection::Tone => {
+                    common::tone_with_exposure_range(ui, settings, -2. ..=2., exposure)
+                }
                 EditingSection::Saturation => super::saturation::show(ui, settings),
                 EditingSection::ColorEditor => super::color_editor::show(ui, settings),
                 EditingSection::Noise => noise_and_detail(ui, settings, &defaults, capabilities),
@@ -161,24 +164,31 @@ fn noise_and_detail(
 }
 
 fn corrections(ui: &mut egui::Ui, settings: &mut Settings, defaults: &Settings) -> bool {
-    let mut changed = false;
-    common::section_header(ui, EditingSection::Corrections, "Corrections", None);
-    let highlight_default = defaults.highlight_amount.unwrap_or(1.);
-    let mut highlight = settings.highlight_amount.unwrap_or(highlight_default);
-    if common::stepped_adjustment(
+    let mut changed = common::section_header(
         ui,
-        "Highlight recovery",
-        &mut highlight,
-        0. ..=1.,
-        highlight_default,
-        0.1,
-    ) {
-        settings.highlight_amount = if highlight == highlight_default {
-            None
-        } else {
-            Some(highlight)
-        };
-        changed = true;
-    }
+        EditingSection::Corrections,
+        "Corrections",
+        Some(&mut settings.corrections_enabled),
+    );
+    ui.add_enabled_ui(settings.corrections_enabled, |ui| {
+        changed |= super::dehaze::show(ui, settings);
+        let highlight_default = defaults.highlight_amount.unwrap_or(1.);
+        let mut highlight = settings.highlight_amount.unwrap_or(highlight_default);
+        if common::stepped_adjustment(
+            ui,
+            "Highlight recovery",
+            &mut highlight,
+            0. ..=1.,
+            highlight_default,
+            0.1,
+        ) {
+            settings.highlight_amount = if highlight == highlight_default {
+                None
+            } else {
+                Some(highlight)
+            };
+            changed = true;
+        }
+    });
     changed
 }

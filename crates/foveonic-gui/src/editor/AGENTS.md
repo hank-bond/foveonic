@@ -15,7 +15,9 @@ Reset and comparison baselines must come from the camera adapter. Keep display-o
 ### Source files
 
 - **[actions.rs](./actions.rs)** Applies queued editor actions through shared recipe scopes and the existing editing session.
+- **[advanced_color.rs](./advanced_color.rs)** Stores transient color-tab selection and range-name editing apart from saved adjustments.
 - **[before.rs](./before.rs)** Keeps transient camera/default renditions separate from authored edits and photographic preview publication.
+- **[dehaze.rs](./dehaze.rs)** Tracks automatic shadow colors and asynchronous patch picking while rejecting stale replies.
 - **[direct_color.rs](./direct_color.rs)** Routes on-image color gestures into existing range sliders using asynchronous guide picks.
 - **[direct_color_settings.rs](./direct_color_settings.rs)** Stores direct-color gesture preferences and draws the eyedropper and configuration popover.
 - **[menus.rs](./menus.rs)** Collects scoped recipe actions from header buttons and a named-preset dialog.

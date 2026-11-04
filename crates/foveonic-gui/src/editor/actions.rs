@@ -5,7 +5,7 @@ use crate::App;
 use foveonic::render::{camera_settings, ControlCapabilities};
 
 impl App {
-    pub(crate) fn apply_editor_actions(&mut self) -> bool {
+    pub(crate) fn apply_editor_actions(&mut self, ctx: &eframe::egui::Context) -> bool {
         if self.editor_ui.actions.is_empty() {
             return false;
         }
@@ -27,6 +27,13 @@ impl App {
         for action in std::mem::take(&mut self.editor_ui.actions) {
             match action {
                 Action::NoiseCalibration => self.noise_calibration.open = true,
+                Action::PreventSaturationClipping(enabled) => {
+                    self.settings.prevent_color_clipping = enabled
+                }
+                Action::AdaptiveLimits => crate::application_settings::open_adaptive(ctx),
+                Action::ExposureAutoCompensation(choice) => {
+                    self.settings.exposure_auto_compensation = choice;
+                }
                 Action::Reset(scope, camera) => {
                     let rendering = (scope != Scope::All).then_some(self.settings.rendering);
                     match camera_settings(metadata, rendering) {
@@ -37,6 +44,12 @@ impl App {
                                 self.preferences.editor.defaults.apply(family, &baseline)
                             };
                             scope.apply(&baseline, &mut self.settings, family);
+                            if matches!(
+                                scope,
+                                Scope::All | Scope::Tool(super::Section::Corrections)
+                            ) {
+                                super::dehaze::exit(ctx);
+                            }
                         }
                         Err(error) => {
                             self.status = error.to_string();

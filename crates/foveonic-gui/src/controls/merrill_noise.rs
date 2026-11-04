@@ -1,6 +1,6 @@
 //! Composes Merrill denoising, speckle, shadow-neutrality and independent banding controls.
 
-use super::super::common::{self, adjustment, adjustment_row, automatic_adjustment, RowControls};
+use super::super::common::{self, adjustment_row, automatic_adjustment, LabelColumn, RowControls};
 use crate::{help, preferences::EditingSection};
 use eframe::egui;
 use foveonic::render::{
@@ -23,8 +23,8 @@ pub(super) fn color(ui: &mut egui::Ui, settings: &mut Settings, rotation: u32) -
         Some(&mut controls.noise_enabled),
     );
     ui.add_enabled_ui(controls.noise_enabled, |ui| {
-        changed |= noise_method(ui, settings);
-        let column = common::LabelColumn::new(ui, &["Chroma", "Luma"]);
+        let column = LabelColumn::new(ui);
+        changed |= noise_method(ui, settings, column);
         changed |= column.adjustment(
             ui,
             ("Chroma noise", "Chroma"),
@@ -39,9 +39,9 @@ pub(super) fn color(ui: &mut egui::Ui, settings: &mut Settings, rotation: u32) -
             0..=4,
             2,
         );
-        changed |= neutralize_shadows(ui, settings);
-        changed |= speckles(ui, settings);
-        changed |= banding(ui, settings, &mut controls.banding, rotation);
+        changed |= neutralize_shadows(ui, settings, column);
+        changed |= speckles(ui, settings, column);
+        changed |= banding(ui, settings, &mut controls.banding, rotation, column);
         crate::widgets::disclosure(
             ui,
             egui::CollapsingHeader::new("Advanced").id_salt("advanced-reconstruction"),
@@ -53,7 +53,7 @@ pub(super) fn color(ui: &mut egui::Ui, settings: &mut Settings, rotation: u32) -
                     0. ..=2.,
                     1.,
                     None,
-                    RowControls::default(),
+                    column.row_controls("ColorDQ gain"),
                 );
             },
         );
@@ -92,10 +92,10 @@ fn choice_menu<T: Copy + PartialEq>(
     changed
 }
 
-fn noise_method(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+fn noise_method(ui: &mut egui::Ui, settings: &mut Settings, column: LabelColumn) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        help::control(ui.label("Method"), "Merrill noise method");
+        help::control(column.label(ui, "Method"), "Merrill noise method");
         let methods = [
             (MerrillNoiseMethod::Reference, "Reference"),
             (MerrillNoiseMethod::MultiscaleRows, "Multiscale: Rows"),
@@ -115,37 +115,37 @@ fn noise_method(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     changed
 }
 
-fn neutralize_shadows(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+fn neutralize_shadows(ui: &mut egui::Ui, settings: &mut Settings, column: LabelColumn) -> bool {
     let controls = &mut settings.neutralize_shadows;
     let defaults = ShadowNeutralizeControls::default();
-    let mut changed = adjustment(
+    let mut changed = column.adjustment(
         ui,
-        "Neutralize shadows",
+        ("Neutralize shadows", "Neutralize"),
         &mut controls.strength,
         ShadowNeutralizeControls::STRENGTH_RANGE,
         defaults.strength,
     );
     crate::widgets::disclosure(
         ui,
-        egui::CollapsingHeader::new("Shadow selectivity").id_salt("shadow-neutrality-options"),
+        egui::CollapsingHeader::new("Neutral Range").id_salt("shadow-neutrality-options"),
         |ui| {
-            changed |= adjustment(
+            changed |= column.adjustment(
                 ui,
-                "Shadow limit",
+                ("Shadow limit", "Shadow limit"),
                 &mut controls.shadow_ev,
                 ShadowNeutralizeControls::SHADOW_EV_RANGE,
                 defaults.shadow_ev,
             );
-            changed |= adjustment(
+            changed |= column.adjustment(
                 ui,
-                "Color tolerance",
+                ("Color tolerance", "Color tolerance"),
                 &mut controls.color_tolerance,
                 ShadowNeutralizeControls::COLOR_TOLERANCE_RANGE,
                 defaults.color_tolerance,
             );
-            changed |= adjustment(
+            changed |= column.adjustment(
                 ui,
-                "Hue width",
+                ("Hue width", "Hue width"),
                 &mut controls.hue_width,
                 ShadowNeutralizeControls::HUE_WIDTH_RANGE,
                 defaults.hue_width,
@@ -155,12 +155,11 @@ fn neutralize_shadows(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     changed
 }
 
-fn speckles(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+fn speckles(ui: &mut egui::Ui, settings: &mut Settings, column: LabelColumn) -> bool {
     use foveonic::render::MerrillSpeckleMethod;
     let defaults = MerrillSpeckleControls::default();
     let mut changed = false;
     crate::widgets::parameter_group(ui, |ui| {
-        let column = common::LabelColumn::new(ui, &["Speckles"]);
         ui.horizontal(|ui| {
             changed |= help::control(
                 column.toggle(ui, "Speckles", &mut settings.despeckle),
@@ -182,16 +181,16 @@ fn speckles(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             });
         });
         ui.add_enabled_ui(settings.despeckle, |ui| {
-            changed |= adjustment(
+            changed |= column.adjustment(
                 ui,
-                "Speckle threshold",
+                ("Speckle threshold", "Threshold"),
                 &mut settings.merrill_speckles.threshold,
                 MerrillSpeckleControls::THRESHOLD_RANGE,
                 defaults.threshold,
             );
             if settings.merrill_speckles.method == MerrillSpeckleMethod::Compact {
                 ui.horizontal(|ui| {
-                    help::control(ui.label("Size"), "Speckle size");
+                    help::control(column.label(ui, "Size"), "Speckle size");
                     changed |= choice_menu(
                         ui,
                         "speckle-size",
@@ -211,10 +210,10 @@ fn banding(
     settings: &mut Settings,
     reference_amount: &mut u32,
     rotation: u32,
+    column: LabelColumn,
 ) -> bool {
     let mut changed = false;
     crate::widgets::parameter_group(ui, |ui| {
-        let column = common::LabelColumn::new(ui, &["Banding", "Column strength"]);
         ui.horizontal(|ui| {
             changed |= help::control(
                 column.toggle(ui, "Banding", &mut settings.merrill_banding.enabled),
@@ -269,7 +268,7 @@ fn banding(
                         ("Vertical bands", vertical),
                     ] {
                         crate::widgets::disclosure(ui, egui::CollapsingHeader::new(label), |ui| {
-                            changed |= band_axis(ui, axis);
+                            changed |= band_axis(ui, axis, column);
                         });
                     }
                 }
@@ -287,10 +286,8 @@ fn reference_row_offsets(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     .changed()
 }
 
-fn band_axis(ui: &mut egui::Ui, axis: &mut BandingAxisControls) -> bool {
+fn band_axis(ui: &mut egui::Ui, axis: &mut BandingAxisControls, column: LabelColumn) -> bool {
     let mut changed = false;
-    let [fine, coarse] = BandingAxisControls::LABELS;
-    let column = common::LabelColumn::new(ui, &[fine, coarse, "Size"]);
     for (index, label) in BandingAxisControls::LABELS.into_iter().enumerate() {
         let range = axis.size_range(index);
         let default = BandingAxisControls::DEFAULT_BANDS[index];
@@ -324,11 +321,116 @@ fn band_axis(ui: &mut egui::Ui, axis: &mut BandingAxisControls) -> bool {
 
 pub(super) fn monochrome(ui: &mut egui::Ui, settings: &mut Settings, rotation: u32) -> bool {
     common::section_header(ui, EditingSection::Noise, "Noise", None);
-    let mut changed = noise_method(ui, settings);
-    changed |= adjustment(ui, "Mono noise", &mut settings.monochrome.noise, 0..=4, 2);
-    changed |= speckles(ui, settings);
+    let column = LabelColumn::new(ui);
+    let mut changed = noise_method(ui, settings, column);
+    changed |= column.adjustment(
+        ui,
+        ("Mono noise", "Mono noise"),
+        &mut settings.monochrome.noise,
+        0..=4,
+        2,
+    );
+    changed |= speckles(ui, settings, column);
     let mut amount = settings.monochrome.banding;
-    changed |= banding(ui, settings, &mut amount, rotation);
+    changed |= banding(ui, settings, &mut amount, rotation, column);
     settings.monochrome.banding = amount;
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noise_grid_stays_aligned_through_groups_and_disclosures() {
+        for em in [13., 18.] {
+            for method in [
+                MerrillBandingMethod::Reference,
+                MerrillBandingMethod::Directional,
+            ] {
+                let ctx = egui::Context::default();
+                crate::widgets::install_style(&ctx);
+                ctx.style_mut(|s| {
+                    s.text_styles
+                        .insert(egui::TextStyle::Body, egui::FontId::proportional(em));
+                });
+                ctx.memory_mut(|m| m.set_everything_is_visible(true));
+                let mut settings = Settings {
+                    reconstruction: Some(Default::default()),
+                    despeckle: true,
+                    ..Default::default()
+                };
+                settings.merrill_speckles.method =
+                    foveonic::render::MerrillSpeckleMethod::Reference;
+                settings.merrill_banding.method = method;
+                let before = settings.clone();
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600., 2000.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            assert!(!color(ui, &mut settings, 0));
+                        });
+                    },
+                );
+                assert_eq!(settings, before);
+                let tracks: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r)
+                            if r.fill == crate::widgets::SLIDER_TRACK_FILL
+                                && r.rect.width() > 40.
+                                && r.rect.height() < 12. =>
+                        {
+                            Some(r.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(tracks.len() >= 7, "missing tracks: {tracks:?}");
+                let left = tracks[0].left();
+                for track in &tracks {
+                    assert!(
+                        (track.left() - left).abs() < 0.1,
+                        "{method:?}, {em}: tracks lost the shared column: {tracks:?}"
+                    );
+                }
+                // Only the final ColorDQ row needs the additional Auto button.
+                for track in &tracks[..tracks.len() - 1] {
+                    assert!(
+                        (track.right() - tracks[0].right()).abs() < 0.1,
+                        "integer and decimal rows must share track lengths: {tracks:?}"
+                    );
+                }
+                let references: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text == "Reference" => Some(t.pos.x),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(references.len() >= 2);
+                assert!(references.iter().all(|x| (*x - references[0]).abs() < 0.1));
+                assert!(references[0] >= left && references[0] < left + em);
+                let title = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text == "Noise" => Some(t),
+                        _ => None,
+                    })
+                    .unwrap();
+                let format = &title.galley.job.sections[0].format;
+                assert!(format.font_id.size > em);
+                assert_eq!(format.color, egui::Color32::from_gray(225));
+            }
+        }
+    }
 }

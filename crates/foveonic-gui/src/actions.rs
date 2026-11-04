@@ -30,16 +30,25 @@ impl App {
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
                 settings: self.selected.is_some() && self.sidecars.ready(),
-                color_tool_active: crate::editor::direct_color::active(ctx),
+                color_tool_active: crate::editor::direct_color::active(ctx)
+                    || crate::editor::dehaze::active(ctx),
             },
         ) {
             match invocation.action {
                 Action::Browser(action) => browser.push((action, invocation.modifiers)),
                 Action::DirectColor => {
+                    crate::editor::dehaze::exit(ctx);
                     self.exit_before();
-                    crate::editor::direct_color::toggle(ctx);
+                    if crate::editor::advanced_color::state(ctx).advanced {
+                        crate::editor::direct_color::toggle_advanced(ctx);
+                    } else {
+                        crate::editor::direct_color::toggle(ctx);
+                    }
                 }
-                Action::ExitTool => crate::editor::direct_color::exit(ctx),
+                Action::ExitTool => {
+                    crate::editor::dehaze::exit(ctx);
+                    crate::editor::direct_color::exit(ctx);
+                }
                 Action::CopySettings => self.actions.push(Edit::CopySettings),
                 Action::PasteSettings => {
                     if let Some(text) = invocation.text {
@@ -142,7 +151,7 @@ mod tests {
         let mut source = Settings::new("Shade", "Vivid");
         source.exposure = 0.7;
         source.tone_enabled = false;
-        source.preview_quality = foveonic::render::PreviewQuality::Draft;
+        source.preview_quality = foveonic::render::PreviewQuality::Fast;
         source.preview_region = Some([10, 20, 100, 200]);
         let encoded = String::from_utf8(sidecar::encode(&source).unwrap()).unwrap();
         let copied = clipboard_settings(&encoded).unwrap();

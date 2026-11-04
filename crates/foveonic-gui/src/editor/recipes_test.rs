@@ -8,7 +8,7 @@ fn library_replaces_named_scopes_and_shares_universal_tools_only() {
     let mut library = Library::default();
     let mut source = Settings {
         exposure: 1.,
-        preview_quality: PreviewQuality::Draft,
+        preview_quality: PreviewQuality::Fast,
         ..Default::default()
     };
     library

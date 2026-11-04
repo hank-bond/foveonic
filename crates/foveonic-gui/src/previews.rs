@@ -133,6 +133,7 @@ impl Previews {
         let Some(frame) = frame.filter(|f| {
             f.rendition == crate::editor::Rendition::Current
                 && f.output == "final"
+                && f.artifact.settings.color_range_preview.is_none()
                 && f.artifact.settings.preview_region.is_none()
         }) else {
             self.wanted = None;

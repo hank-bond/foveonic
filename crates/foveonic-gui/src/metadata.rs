@@ -93,6 +93,13 @@ pub fn property_rows(
         ("Software", "FIRMVERS"),
         ("Serial", "CAMSERIAL"),
     ] {
+        if key == "EXPCOMP" {
+            if let Some(inverse) = foveonic::source::inverse_exposure_compensation(p) {
+                let compensation = if inverse == 0. { 0. } else { -inverse };
+                rows.push((label, compact(f64::from(compensation))));
+                continue;
+            }
+        }
         let Some(raw) = get(key) else {
             continue;
         };
@@ -226,5 +233,19 @@ mod tests {
         assert!(shutter("NaN").is_none());
         assert_eq!(captured("1790791918").unwrap(), "2026-09-30 18:11:58");
         assert_eq!(captured("951782400").unwrap(), "2000-02-29 00:00:00");
+    }
+}
+
+#[cfg(test)]
+mod compensation_tests {
+    #[test]
+    fn capture_readout_uses_net_compensation_for_bracketed_shots() {
+        let p = [
+            ("EXPCOMP".into(), "+0.00".into()),
+            ("EXPNET".into(), "+1.00".into()),
+            ("BRACKET".into(), "3 of 3".into()),
+        ]
+        .into();
+        assert_eq!(super::capture_values(&p), vec!["+1.0 EV"]);
     }
 }

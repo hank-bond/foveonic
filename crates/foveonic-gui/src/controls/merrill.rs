@@ -57,7 +57,7 @@ fn detail(
     let mut changed = false;
     changed |= common::section_header(ui, EditingSection::Detail, "Detail", Some(enabled));
     ui.add_enabled_ui(*enabled, |ui| {
-        let column = common::LabelColumn::new(ui, &["Fine", "Coarse", "Size"]);
+        let column = common::LabelColumn::new(ui);
         crate::widgets::parameter_group(ui, |ui| {
             changed |= column.adjustment(
                 ui,
@@ -98,6 +98,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
+    exposure: Option<foveonic::source::CaptureExposureCompensation>,
     rotation: u32,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
@@ -130,7 +131,7 @@ pub(super) fn show(
             .white_balance_active(settings),
         ),
         EditingSection::Mix => crate::mixer::show(ui, &mut settings.monochrome.mix),
-        EditingSection::Tone => common::tone_with_exposure_range(ui, settings, -4. ..=4.),
+        EditingSection::Tone => common::tone(ui, settings, exposure),
         EditingSection::Saturation => super::saturation::show(ui, settings),
         EditingSection::ColorEditor => super::color_editor::show(ui, settings),
         EditingSection::Noise => {
@@ -172,69 +173,75 @@ fn color_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
 }
 
 fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = false;
-    common::section_header(ui, EditingSection::Corrections, "Corrections", None);
-    crate::widgets::parameter_group(ui, |ui| {
-        let column = common::LabelColumn::new(ui, &["Highlights", "Threshold"])
-            .with_toggle(ui, "Highlights");
-        ui.horizontal(|ui| {
-            changed |= help::control(
-                column.toggle(ui, "Highlights", &mut settings.highlight_restoration),
-                "Highlight correction",
-            )
-            .changed();
-            ui.add_enabled_ui(settings.highlight_restoration, |ui| {
-                let mut choice = highlight_choice(settings);
-                let label = HIGHLIGHT_METHODS
-                    .iter()
-                    .find(|(value, _)| *value == choice)
-                    .unwrap()
-                    .1;
-                let combo = egui::ComboBox::from_id_salt("highlight-method")
-                    .width(ui.available_width())
-                    .truncate()
-                    .selected_text(label);
-                let response = crate::widgets::dropdown(ui, combo, |ui| {
-                    for (value, label) in HIGHLIGHT_METHODS {
-                        if crate::widgets::menu_value(ui, &mut choice, value, label).clicked() {
-                            changed |= select_highlight(settings, choice);
+    let mut changed = common::section_header(
+        ui,
+        EditingSection::Corrections,
+        "Corrections",
+        Some(&mut settings.corrections_enabled),
+    );
+    ui.add_enabled_ui(settings.corrections_enabled, |ui| {
+        changed |= super::dehaze::show(ui, settings);
+        crate::widgets::parameter_group(ui, |ui| {
+            let column = common::LabelColumn::new(ui);
+            ui.horizontal(|ui| {
+                changed |= help::control(
+                    column.toggle(ui, "Highlights", &mut settings.highlight_restoration),
+                    "Highlight correction",
+                )
+                .changed();
+                ui.add_enabled_ui(settings.highlight_restoration, |ui| {
+                    let mut choice = highlight_choice(settings);
+                    let label = HIGHLIGHT_METHODS
+                        .iter()
+                        .find(|(value, _)| *value == choice)
+                        .unwrap()
+                        .1;
+                    let combo = egui::ComboBox::from_id_salt("highlight-method")
+                        .width(ui.available_width())
+                        .truncate()
+                        .selected_text(label);
+                    let response = crate::widgets::dropdown(ui, combo, |ui| {
+                        for (value, label) in HIGHLIGHT_METHODS {
+                            if crate::widgets::menu_value(ui, &mut choice, value, label).clicked() {
+                                changed |= select_highlight(settings, choice);
+                            }
                         }
-                    }
+                    });
+                    help::control(response.response, "Highlight method");
                 });
-                help::control(response.response, "Highlight method");
+            });
+            ui.add_enabled_ui(settings.highlight_restoration, |ui| {
+                if settings.highlight_mode == HighlightMode::Classic {
+                    changed |= automatic_adjustment(
+                        ui,
+                        "Highlight correction",
+                        &mut settings.highlight_threshold_ev,
+                        -2. ..=2.,
+                        0.,
+                        Some(0.),
+                        column.row_controls("Threshold"),
+                    );
+                } else {
+                    changed |= adjustment_row(
+                        ui,
+                        "Color-field highlights",
+                        &mut settings.color_field.selectivity,
+                        0. ..=1.,
+                        0.,
+                        0.1,
+                        column.row_controls("Threshold"),
+                    );
+                }
             });
         });
-        ui.add_enabled_ui(settings.highlight_restoration, |ui| {
-            if settings.highlight_mode == HighlightMode::Classic {
-                changed |= automatic_adjustment(
-                    ui,
-                    "Highlight correction",
-                    &mut settings.highlight_threshold_ev,
-                    -2. ..=2.,
-                    0.,
-                    Some(0.),
-                    column.row_controls("Threshold"),
-                );
-            } else {
-                changed |= adjustment_row(
-                    ui,
-                    "Color-field highlights",
-                    &mut settings.color_field.selectivity,
-                    0. ..=1.,
-                    0.,
-                    0.1,
-                    column.row_controls("Threshold"),
-                );
-            }
-        });
+        let advanced = crate::widgets::disclosure(
+            ui,
+            egui::CollapsingHeader::new("Advanced").id_salt("advanced-corrections"),
+            |ui| {
+                changed |= common::bad_pixels(ui, settings);
+            },
+        );
+        help::control(advanced.header_response, "Advanced corrections");
     });
-    let advanced = crate::widgets::disclosure(
-        ui,
-        egui::CollapsingHeader::new("Advanced").id_salt("advanced-corrections"),
-        |ui| {
-            changed |= common::bad_pixels(ui, settings);
-        },
-    );
-    help::control(advanced.header_response, "Advanced corrections");
     changed
 }

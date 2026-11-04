@@ -137,25 +137,10 @@ pub(super) fn tools(ui: &mut egui::Ui, on: bool, config: &mut Configuration) -> 
     crate::widgets::centered_control_row(ui, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let response = crate::widgets::icon_button(ui, "Direct color", on);
-            let icon = crate::widgets::icon_rect(ui, &response);
-            let scale = icon.width() / 16.;
-            let at = |x, y| icon.min + egui::vec2(x, y) * scale;
-            let color = crate::widgets::visuals(ui, &response, on).fg_stroke.color;
-            let stroke = egui::Stroke::new(1.5 * scale, color);
-            let barrel = vec![
-                at(1., 15.),
-                at(2., 11.),
-                at(10., 3.),
-                at(13., 6.),
-                at(5., 14.),
-            ];
-            ui.painter().add(egui::Shape::closed_line(barrel, stroke));
-            ui.painter().line_segment([at(8., 1.), at(15., 8.)], stroke);
-            ui.painter()
-                .circle_filled(at(13.5, 2.5), 2.5 * scale, color);
+            crate::widgets::eyedropper_icon(ui, &response, on);
             toggle = response.clicked();
             response.on_hover_text(
-                "Direct color (D) · Click and drag a subject color. Escape exits; Space pans. \
+                "Direct color (D) · Click and drag a subject color. Release to return to navigation. Escape cancels. Space pans. \
                  Configure the axes with the settings button or right-click in the photograph.",
             );
             let menu = crate::widgets::icon_menu_button(ui, "Direct color settings", |ui| {

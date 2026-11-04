@@ -28,6 +28,7 @@ pub fn show(
         .default_width(WINDOW_WIDTH)
         .default_pos(ctx.available_rect().center() - WINDOW_CENTER_OFFSET)
         .show(ctx, |ui| {
+            egui::ScrollArea::vertical().max_height((ctx.available_rect().height()-100.).max(200.)).show(ui, |ui| {
             ui.heading("Display");
             ui.horizontal(|ui| {
                 ui.label("Gamut");
@@ -136,11 +137,48 @@ pub fn show(
                 "Nearby photos are decoded in the background. ",
                 "Dots beside filenames show cache readiness.",
             ));
+            });
         });
     if &before != settings {
         cache.configure(settings.clone());
     }
     if *open {
         ctx.request_repaint_after(STATUS_REFRESH);
+    }
+}
+
+fn adaptive_id() -> egui::Id {
+    egui::Id::new("Adaptive limits")
+}
+
+pub fn open_adaptive(ctx: &egui::Context) {
+    set_adaptive_open(ctx, true);
+}
+
+pub fn set_adaptive_open(ctx: &egui::Context, open: bool) {
+    ctx.data_mut(|d| d.insert_temp(adaptive_id(), open));
+    ctx.request_repaint();
+}
+
+pub fn adaptive(ctx: &egui::Context, preferences: &mut preferences::Preferences) {
+    if !ctx.data(|d| d.get_temp::<bool>(adaptive_id()).unwrap_or(false)) {
+        return;
+    }
+    let mut close = false;
+    let response = egui::Modal::new(adaptive_id()).show(ctx, |ui| {
+        ui.set_width(WINDOW_WIDTH);
+        ui.heading("Adaptive limits");
+        ui.weak("Shared across photos. Separate caps for each profile.");
+        crate::controls::adaptive_limits(ui, &mut preferences.adaptive_tone_tuning);
+        if ui.button("Reset tuning limits").clicked() {
+            preferences.adaptive_tone_tuning = Default::default();
+        }
+        ui.weak("HDR amounts, not stops. Photo edits keep only the profile.");
+
+        close |= ui.button("Close").clicked();
+    });
+    close |= response.should_close();
+    if close {
+        ctx.data_mut(|d| d.insert_temp(adaptive_id(), false));
     }
 }

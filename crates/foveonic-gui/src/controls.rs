@@ -1,8 +1,12 @@
 //! Selects the camera family's editing panel and shares numerical editing widgets.
 
+mod advanced_color;
 mod classic;
 mod color_editor;
+mod color_wheel;
 mod common;
+pub use common::adaptive_limits;
+mod dehaze;
 mod merrill;
 mod quattro;
 mod saturation;
@@ -57,12 +61,18 @@ pub fn processing(
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
+    let exposure = metadata
+        .map(|m| foveonic::source::CaptureExposureCompensation::from_properties(&m.properties))
+        .or_else(|| capture.map(foveonic::source::CaptureExposureCompensation::from_properties));
     match capabilities(metadata, capture).map(|c| c.family) {
-        Some(ProcessingFamily::Classic) => classic::show(ui, settings, metadata, order, menus),
+        Some(ProcessingFamily::Classic) => {
+            classic::show(ui, settings, metadata, exposure, order, menus)
+        }
         Some(ProcessingFamily::Merrill) => merrill::show(
             ui,
             settings,
             metadata,
+            exposure,
             metadata
                 .map(|m| m.rotation)
                 .or_else(|| capture?.get("ROTATION")?.parse().ok())
@@ -71,13 +81,13 @@ pub fn processing(
             menus,
         ),
         Some(ProcessingFamily::Quattro) => {
-            quattro::show(ui, settings, metadata, capture, order, menus)
+            quattro::show(ui, settings, metadata, capture, exposure, order, menus)
         }
         None => {
             let mut changed = common::white_balance(ui, settings, metadata, true);
             changed |= common::color_mode(ui, settings, metadata, !settings.is_monochrome());
             ui.separator();
-            changed |= common::tone(ui, settings);
+            changed |= common::tone(ui, settings, exposure);
             changed |= saturation::show(ui, settings);
             changed
         }

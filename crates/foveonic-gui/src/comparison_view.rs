@@ -61,8 +61,8 @@ impl App {
                         child.set_clip_rect(image_rect.intersect(ui.clip_rect()));
                         // Ordinary comparison navigation belongs to the canvas. The
                         // active photo alone accepts direct color gestures.
-                        if !crate::editor::direct_color::active(ui.ctx())
-                            || !self.color_tool_available(mapping)
+                        if !(crate::editor::direct_color::active(ui.ctx()) || crate::editor::dehaze::active(ui.ctx()))
+                            || !self.color_tool_available(mapping, ui.ctx())
                         {
                             child.disable();
                         }

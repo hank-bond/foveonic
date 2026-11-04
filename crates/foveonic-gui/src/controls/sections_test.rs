@@ -31,6 +31,8 @@ fn frame(
                             EditingSection::Noise
                         ],
                         &mut crate::editor::Menus {
+                            prevent_color_clipping: true,
+                            exposure_auto_compensation: Default::default(),
                             family: None,
                             library: &Default::default(),
                             state: &mut Default::default()

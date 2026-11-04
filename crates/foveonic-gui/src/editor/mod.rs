@@ -1,7 +1,9 @@
 //! Owns editing-tool identities, scoped recipes and application presets separately from rendered images.
 
 mod actions;
+pub mod advanced_color;
 mod before;
+pub mod dehaze;
 pub mod direct_color;
 mod menus;
 mod recipes;

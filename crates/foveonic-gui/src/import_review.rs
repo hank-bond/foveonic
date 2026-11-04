@@ -232,6 +232,7 @@ impl Review {
     }
     pub fn submit(
         &mut self,
+        limits: foveonic::render::AdaptiveToneTuning,
         browser: &Browser,
         sidecars: &sidecars::Session,
         settings: &processing::Settings,
@@ -270,7 +271,11 @@ impl Review {
                     Ok(settings) => photos.push(batch::Photo {
                         path: path.clone(),
                         identity: source.identity.clone(),
-                        settings: settings.clone(),
+                        settings: {
+                            let mut frozen = settings.clone();
+                            frozen.adaptive_tone_tuning = limits;
+                            frozen
+                        },
                         rating: browser.changed_rating(path).unwrap_or(source.rating),
                     }),
                     Err(error) => self.errors.push(format!("{}: {error}", path.display())),

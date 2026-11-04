@@ -88,13 +88,16 @@ impl App {
         crate::viewport::clear(&self.render_state);
     }
     pub(crate) fn view_settings(&self) -> foveonic::render::Settings {
-        self.before
+        let mut settings = self
+            .before
             .settings(
                 &self.settings,
                 self.metadata.as_deref(),
                 &self.preferences.editor.defaults,
             )
-            .unwrap_or_else(|_| self.settings.clone())
+            .unwrap_or_else(|_| self.settings.clone());
+        settings.adaptive_tone_tuning = self.preferences.adaptive_tone_tuning;
+        settings
     }
     pub(crate) fn before_badge(&self, ui: &egui::Ui, rect: egui::Rect) {
         if self
@@ -134,7 +137,7 @@ mod tests {
             ..Default::default()
         };
         current.white_balance_bias.warmth = 0.3;
-        current.preview_quality = foveonic::render::PreviewQuality::Draft;
+        current.preview_quality = foveonic::render::PreviewQuality::Fast;
         let mut defaults = RecipeDefaults::default();
         let mut default = Settings::default();
         default.photographic.tone_method = PhotographicMethod::Universal;

@@ -1,6 +1,6 @@
 //! Composes independent Reference and Universal saturation with visible tonal amounts.
 
-use super::common::{self, LabelColumn};
+use super::common;
 use crate::preferences::EditingSection;
 use eframe::egui;
 use foveonic::render::{PhotographicMethod, Settings};
@@ -15,15 +15,12 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     ui.add_enabled_ui(
         settings.saturation_enabled && !settings.is_monochrome(),
         |ui| {
-            changed |= common::method_choice(
+            let column = common::LabelColumn::new(ui);
+            changed |= column.method_choice(
                 ui,
                 "Saturation method",
-                "Saturation method",
+                "Method",
                 &mut settings.photographic.saturation_method,
-            );
-            let column = LabelColumn::new(
-                ui,
-                &["Amount", "Contrast", "Shadows", "Midtones", "Highlights"],
             );
             if settings.photographic.saturation_method == PhotographicMethod::Reference {
                 changed |= column.adjustment(
@@ -35,12 +32,10 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 );
             } else {
                 let c = &mut settings.photographic.perceptual;
-                changed |= column.adjustment(
+                changed |= column.saturation_adjustment(
                     ui,
                     ("Perceptual saturation", "Amount"),
                     &mut c.saturation,
-                    -1. ..=1.,
-                    0.,
                 );
                 changed |= column.adjustment(
                     ui,
@@ -54,12 +49,10 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                         .into_iter()
                         .enumerate()
                     {
-                        changed |= column.adjustment(
+                        changed |= column.saturation_adjustment(
                             ui,
                             ("Perceptual ranges", label),
                             &mut c.bands[index].saturation,
-                            -1. ..=1.,
-                            0.,
                         );
                     }
                 });
