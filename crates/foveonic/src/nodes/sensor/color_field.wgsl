@@ -77,30 +77,99 @@ fn adjacent(p:u32,k:u32,width:u32,count:u32)->u32{
 fn connection(i:u32,k:u32)->f32{
     switch k{case 0u:{return edges[i-params.grid.x].y;}case 1u:{return edges[i-1u].x;}case 2u:{return edges[i].y;}default:{return edges[i].x;}}
 }
+// Original reliability remains independent of the color-field evidence mask.
+fn original_q(p:u32)->vec3<f32> {
+    let c=p*3u;let b=vec3(black[0],black[1],black[2]);
+    let raw=(vec3(original[c],original[c+1u],original[c+2u])-b)/(params.white.xyz-b);
+    return vec3(f32(reliability(raw.x)),f32(reliability(raw.y)),f32(reliability(raw.z)))/255.0;
+}
+fn reliability_codes(q:vec3<f32>)->vec3<u32> {
+    return vec3<u32>(floor(q*255.0+0.5));
+}
+fn pack_reliability(q:vec3<u32>)->u32 {
+    return q.x|(q.y<<8u)|(q.z<<16u);
+}
+fn boundary_tone(p:u32,m:vec3<f32>,q:vec3<f32>)->Tone {
+    let raw_q=original_q(p);
+    if all(raw_q==vec3(1.0)) && any(q<vec3(1.0)) {
+        let strength=smooth_onset(2.0*(1.0-min(min(q.x,q.y),q.z)));
+        let my=dot(m,params.luminance.xyz);let ny=dot(params.neutral.xyz,params.luminance.xyz);
+        if finite(my) && ny>1e-12 && all(m>=vec3(0.0)) {
+            // Bright samples can have tiny matrix luminance through cancellation.
+            // Blend continuously through zero so the boundary cannot develop holes.
+            let layers=dot(raw_q*raw_q,m/params.neutral.xyz)/dot(raw_q,raw_q);
+            if layers>0.0 && finite(layers) {
+                let held=max(my/ny,0.0);
+                let trust=smoothstep(0.25,0.75,held/layers);
+                return Tone(mix(layers,held,trust),strength,1u);
+            }
+        }
+        if my>0.0 && finite(my) && ny>1e-12{return Tone(my/ny,strength,1u);}
+        return recover(m,q);
+    }
+    return recover(m,raw_q);
+}
+fn source_severe(xy:vec2<i32>)->bool {
+    if any(xy<vec2(0))||xy.x>=i32(params.size.x)||xy.y>=i32(params.size.y){return false;}
+    let p=(u32(xy.y)*params.size.x+u32(xy.x))*3u;
+    let b=vec3(black[0],black[1],black[2]);
+    let raw=(vec3(original[p],original[p+1u],original[p+2u])-b)/(params.white.xyz-b);
+    return countOneBits(u32(raw.x>=0.97)|(u32(raw.y>=0.97)<<1u)|(u32(raw.z>=0.97)<<2u))>=2u;
+}
+fn boundary_influence(xy:vec2<u32>)->f32 {
+    var nearest=100.0;
+    for(var dy=-4;dy<=4;dy++){for(var dx=-4;dx<=4;dx++){
+        let distance=length(vec2<f32>(f32(dx),f32(dy)));
+        if distance<nearest && source_severe(vec2<i32>(xy)+vec2(dx,dy)){nearest=distance;}
+    }}
+    return 1.0-smoothstep(0.0,4.0,nearest);
+}
+fn boundary_ceiling(influence:f32)->u32 {
+    return u32(clamp(floor(255.0*(1.0-influence)+0.5),0.0,255.0));
+}
+fn field_reliability(p:u32,xy:vec2<u32>,q:vec3<u32>)->vec3<u32> {
+    var influence=boundary_influence(xy);
+    if influence>0.0 {
+        let measured=sample(p);let raw_q=vec3<f32>(q)/255.0;let support=dot(raw_q,raw_q);
+        let ny=dot(params.neutral.xyz,params.luminance.xyz);
+        var gate=0.0;
+        if finite3(measured) && all(measured>=vec3(0.0)) && ny>1e-12 {
+            var layers=max(max(measured.x/params.neutral.x,measured.y/params.neutral.y),measured.z/params.neutral.z);
+            if support>0.0 {layers=dot(raw_q*raw_q,measured/params.neutral.xyz)/support;}
+            if layers>0.0 && finite(layers) {
+                let held=max(dot(measured,params.luminance.xyz)/ny,0.0);
+                gate=1.0-smoothstep(0.25,0.75,held/layers);
+            }
+        }
+        influence*=gate;
+    }
+    return min(q,vec3(boundary_ceiling(influence)));
+}
 @compute @workgroup_size(256)
 fn prepare_source(@builtin(global_invocation_id)id:vec3<u32>){
     let p=id.x;if p>=params.size.z{return;}let xy=vec2(p%params.size.x,p/params.size.x);
     let c=p*3u;let b=vec3(black[0],black[1],black[2]);let raw=(vec3(original[c],original[c+1u],original[c+2u])-b)/(params.white.xyz-b);
-    let q=vec3<u32>(reliability(raw.x),reliability(raw.y),reliability(raw.z));var mask=q.x|(q.y<<8u)|(q.z<<16u);
+    let raw_q=vec3<u32>(reliability(raw.x),reliability(raw.y),reliability(raw.z));
+    let q=field_reliability(p,xy,raw_q);var mask=pack_reliability(q);
     if params.options.z!=0u && any(vec3(calibrated[c],calibrated[c+1u],calibrated[c+2u])!=vec3(unrepaired[c],unrepaired[c+1u],unrepaired[c+2u])){mask|=0x1000000u;}
     atomicStore(&masks[p],mask);
-    let m=sample(p);let t=recover(m,vec3<f32>(q)/255.0);var y=dot(params.luminance.xyz,m);
+    let m=sample(p);let t=boundary_tone(p,m,vec3<f32>(q)/255.0);var y=dot(params.luminance.xyz,m);
     let eligible=in_crop(xy)&&t.available!=0u&&t.strength>0.0;
     if eligible{y=t.amplitude*dot(params.luminance.xyz,params.neutral.xyz);}
     targets[p]=select(-INF,log(max(y,1e-30)),y>0.0&&finite(y));indices[p]=NONE;
-    if eligible{indices[p]=0u;}
+    if eligible && any(original_q(p)<vec3(1.0)){indices[p]=0u;}
 }
 @compute @workgroup_size(256)
 fn mark_repairs(@builtin(global_invocation_id)id:vec3<u32>){if id.x<params.size.w{atomicOr(&masks[repairs[id.x]],0x1000000u);}}
 @compute @workgroup_size(256)
 fn native_equations(@builtin(global_invocation_id)id:vec3<u32>){
-    let i=id.x;if i>=atomicLoad(&counters[0]){return;}let p=positions[i];let m=sample(p);let q=unpack_mask(atomicLoad(&masks[p]));
+    let i=id.x;if i>=atomicLoad(&counters[0]){return;}let p=positions[i];let m=sample(p);let q=original_q(p);
     // Solve the correction to the anchors, not absolute log brightness.
     // This is the same linear system with much less float32 cancellation.
     var e=Equation(vec4(1.0/64.0,1.0,0.0,0.0),vec4(0.0,0.0,1.0/64.0,1.0),vec4(NONE),vec4(0.0));
     for(var k=0u;k<4u;k++){
         let j=adjacent(p,k,params.size.x,params.size.z);if j==NONE||targets[j]<=-INF{continue;}
-        let n=sample(j);let r=unpack_mask(atomicLoad(&masks[j]));var weight=0.0;var gradient=0.0;
+        let n=sample(j);let r=original_q(j);var weight=0.0;var gradient=0.0;
         for(var c=0u;c<3u;c++){if m[c]>0.0&&n[c]>0.0&&finite(m[c])&&finite(n[c]){let w=min(q[c],r[c]);weight+=w*w;gradient+=w*w*(log(n[c])-log(m[c]));}}
         e.block.x+=weight;e.rhs.x+=weight*(targets[j]-targets[p])-gradient;
         e.weights[k]=weight;
@@ -199,13 +268,21 @@ fn commit_color(@builtin(global_invocation_id)id:vec3<u32>){let i=id.x;if i<para
 }}
 @compute @workgroup_size(256)
 fn apply_field(@builtin(global_invocation_id)id:vec3<u32>){
-    let p=id.x;if p>=params.size.z{return;}let xy=vec2(p%params.size.x,p/params.size.x);let mask=atomicLoad(&masks[p]);let c=p*3u;
+    let p=id.x;if p>=params.size.z{return;}let xy=vec2(p%params.size.x,p/params.size.x);var mask=atomicLoad(&masks[p]);let c=p*3u;
+    let raw_q=original_q(p);let codes=reliability_codes(raw_q);
+    // Rejecting field evidence must not discard reliable native layer ratios.
+    mask=(mask&0xff000000u)|pack_reliability(codes);
+    if all(codes==vec3(255u)) {
+        let ceiling=boundary_ceiling(boundary_influence(xy));
+        mask=(mask&0xff000000u)|pack_reliability(vec3(ceiling));
+    }
     var out=vec3(calibrated[c],calibrated[c+1u],calibrated[c+2u]);
     if in_crop(xy)&&(mask&0xffffffu)!=0xffffffu{
-        let m=sample(p);let t=recover(m,unpack_mask(mask));
+        let m=sample(p);let t=boundary_tone(p,m,unpack_mask(mask));
         if t.available!=0u&&t.strength>0.0{
-            // This is the same eligibility test used when targets were built.
-            let amplitude=exp(targets[p])/dot(params.luminance.xyz,params.neutral.xyz);
+            // Newly included pixels use their guarded anchor directly. Only originally
+            // affected pixels participate in the native brightness solve.
+            let amplitude=select(exp(targets[p])/dot(params.luminance.xyz,params.neutral.xyz),t.amplitude,all(raw_q==vec3(1.0)));
             let tone_value=params.neutral.xyz*amplitude;let ty=dot(params.luminance.xyz,tone_value);var g=evidence(m,mask);g.tone=log(max(ty,1e-30));
             let coordinate=(vec2<f32>(xy-params.crop.xy)+0.5)/f32(params.grid.w)-0.5;let lower=vec2<i32>(floor(coordinate));var sum=vec2(0.0);var total=0.0;var distance=0.0;
             for(var dy=0;dy<2;dy++){for(var dx=0;dx<2;dx++){let q=lower+vec2(dx,dy);if any(q<vec2(0))||q.x>=i32(params.grid.x)||q.y>=i32(params.grid.y){continue;}
@@ -214,7 +291,7 @@ fn apply_field(@builtin(global_invocation_id)id:vec3<u32>){
                 sum+=w*n.color.xy;total+=w;distance+=w*d;
             }}
             var prior=prior_uv();distance=select(INF,distance/max(total,1e-30),total>1e-12);if total>1e-12{prior=sum/total;}
-            // Retain the reference prior-coordinate round trip.
+            // Retain the pinned prior-coordinate round trip.
             prior=prior_uv()+(prior-prior_uv());
             let proposal=Guide(ratios(prior),vec3(1.0),g.tone);let confidence=affinity(g,proposal);
             let adjusted=prior_uv()+confidence*(prior-prior_uv());let weight=0.25+1.75*exp(-distance/256.0);

@@ -416,3 +416,25 @@ fn calibration_identity_invalidates_rendered_previews_but_keeps_embedded_preview
     .unwrap();
     assert!(read(&key.location(&root), &key, &Settings::default()).is_ok());
 }
+
+#[test]
+fn obsolete_processing_previews_are_rejected() {
+    let fixture = Fixture::new();
+    let cache = Cache::at(fixture.root.join("cache"));
+    let write = fixture.write(true, [20, 80, 140]);
+    let key = write.header.key.clone();
+    write_checked(cache.directory(), write, &Settings::default(), &[], &|| {
+        true
+    })
+    .unwrap();
+    let destination = key.location(cache.directory());
+    let current = fs::read(&destination).unwrap();
+    for old in [b"FOVPRE11", b"FOVPRE12", b"FOVPRE13"] {
+        let mut bytes = current.clone();
+        bytes[..old.len()].copy_from_slice(old);
+        fs::write(&destination, bytes).unwrap();
+        assert!(read(&destination, &key, &Settings::default()).is_err());
+    }
+    fs::write(&destination, current).unwrap();
+    assert!(read(&destination, &key, &Settings::default()).is_ok());
+}

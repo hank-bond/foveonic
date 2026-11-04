@@ -1,4 +1,4 @@
-// N2 equations adapted from the reference implementation at 2b0dd443.
+// N2 equations adapted from the pinned CPU recovery implementation at 2b0dd443.
 // Copyright 2026 Sang Lee and contributors. Apache-2.0. See color_field/NOTICE.
 const NONE:u32=0xffffffffu;
 const INF:f32=3.402823466e38;
@@ -32,6 +32,12 @@ fn recover(m:vec3<f32>,q:vec3<f32>)->Tone {
     let support=dot(q,q);let my=dot(m,y);
     if support>0.0 && my>0.0 && finite(my) && ny>1e-12 {
         t.amplitude=my/ny;t.strength=smooth_onset(2.0*(1.0-min(min(q.x,q.y),q.z)));t.available=1u;
+    }
+    // A single damaged layer can make matrix luminance nonpositive. Keep the
+    // surviving layers available instead of abandoning this pixel.
+    if t.available==0u && support>0.0 && all(m>=vec3(0.0)) && ny>1e-12 {
+        let amplitude=dot(q*q,m/n)/support;
+        if amplitude>0.0 && finite(amplitude){t=Tone(amplitude,smooth_onset(2.0*(1.0-min(min(q.x,q.y),q.z))),1u);}
     }
     let middle=max(min(q.x,q.y),min(max(q.x,q.y),q.z));
     if middle>=128.0/255.0 || any(m<vec3(0.0)) || !finite(my) || ny<=1e-12{return t;}

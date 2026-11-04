@@ -187,8 +187,8 @@ fn gpu_color_field_corpus_is_exact_between_fresh_and_cached_solves() {
     let directory = std::path::PathBuf::from(std::env::var_os("FOVEONIC_HIGHLIGHT_DIR").unwrap());
     let engine = Engine::new().unwrap();
     for scene in [
-        "0009", "0010", "0035", "0077", "0089", "0095", "0170", "0195", "0286", "0313", "0322",
-        "0331", "0352", "0358", "0373", "0399",
+        "0009", "0010", "0035", "0060", "0077", "0089", "0095", "0170", "0195", "0286", "0313",
+        "0322", "0331", "0352", "0358", "0373", "0399",
     ] {
         let path = directory.join(format!("_P2M{scene}.X3F"));
         let bytes = std::fs::read(crate::sidecar::path(&path)).ok();

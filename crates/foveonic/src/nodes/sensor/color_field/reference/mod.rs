@@ -1,8 +1,8 @@
-//! Adapts the pinned CPU equations to identical floating sensor inputs for tests only.
+//! Adapts the pinned CPU equations and independent boundary rules to identical inputs for tests only.
 //!
 //! Imported module changes are limited to responsibility/attribution comments,
 //! crate import paths, result aliases, and omission of upstream unit tests.
-// Keep the oracle's arithmetic and signatures intact rather than refactoring its loops.
+// Keep imported arithmetic and signatures intact. Boundary orchestration lives in boundary.rs.
 #![allow(dead_code, clippy::too_many_arguments, clippy::needless_range_loop)]
 use std::sync::atomic::{AtomicBool, Ordering};
 pub type ReferenceResult<T> = crate::source::Result<T>;
@@ -42,7 +42,7 @@ struct DngCtx<'a> {
     prior: *const f64,
     conv_matrix: *mut f64,
     camera_y: Option<[f64; 3]>,
-    gradient: Option<&'a gradient_tone::Field>,
+    gradient: Option<&'a dyn BrightnessField>,
     pixels: &'a [[f64; 3]],
 }
 impl DngCtx<'_> {
@@ -50,12 +50,35 @@ impl DngCtx<'_> {
         self.pixels[row * self.cols as usize + col]
     }
 }
+pub(super) mod boundary;
+trait BrightnessField {
+    fn apply(
+        &self,
+        row: usize,
+        col: usize,
+        result: &mut tone_anchor::Result,
+        measured: [f64; 3],
+        neutral: [f64; 3],
+    );
+}
+impl BrightnessField for gradient_tone::Field {
+    fn apply(
+        &self,
+        row: usize,
+        col: usize,
+        result: &mut tone_anchor::Result,
+        measured: [f64; 3],
+        neutral: [f64; 3],
+    ) {
+        self.apply(row, col, result, measured, neutral);
+    }
+}
 mod color_field;
 mod gradient_tone;
 mod highlight_color;
 mod tone_anchor;
 
-pub(super) fn run(
+pub(super) fn run_pinned(
     width: usize,
     height: usize,
     pixels: &[[f64; 3]],

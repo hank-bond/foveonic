@@ -1,6 +1,6 @@
 //! Owns original evidence, GPU brightness/color solves, and native highlight application.
 //!
-//! N2 equations are adapted from the reference implementation at 2b0dd443.
+//! N2 equations are adapted from the pinned CPU recovery implementation at 2b0dd443.
 //! Copyright 2026 Sang Lee and contributors. Apache-2.0. See color_field/NOTICE.
 
 use super::calibration::CalibrationParams;
@@ -10,6 +10,10 @@ use crate::{
     profile::Profile,
     source::{Metadata, Result},
 };
+
+#[cfg(test)]
+#[path = "color_field_boundary_test.rs"]
+mod boundary_tests;
 
 const SOLVER_GROUP_SIZE: u32 = 256;
 const STRICT_COLOR_CUTOFF: f32 = 0.005;

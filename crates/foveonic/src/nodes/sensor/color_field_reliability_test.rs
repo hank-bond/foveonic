@@ -6,19 +6,30 @@ pub(super) fn masks(gpu: &Gpu, params: &Params, original: &[f32], black: &[f32])
     let mut params = *params;
     params.size = [n, 1, n, 0];
     params.crop = [0, 0, n, 1];
-    let empty = gpu
-        .upload("mask test calibrated", &vec![0_f32; original.len()])
-        .unwrap();
-    from_buffers(
+    original_masks(
         gpu,
         &params,
         &gpu.upload("mask test original", original).unwrap(),
         &gpu.upload("mask test black", black).unwrap(),
-        &empty,
     )
 }
 
-pub(super) fn from_buffers(
+pub(super) fn original_masks(
+    gpu: &Gpu,
+    params: &Params,
+    original: &ReadGuard,
+    black: &ReadGuard,
+) -> Vec<u32> {
+    // Zero measurements cannot trigger additional evidence rejection. This keeps
+    // original reliability quantization independent of the boundary equations.
+    let n = params.size[2] as usize;
+    let zero = gpu
+        .upload("original reliability probe", &vec![0_f32; n * 3])
+        .unwrap();
+    field_masks(gpu, params, original, black, &zero)
+}
+
+pub(super) fn field_masks(
     gpu: &Gpu,
     params: &Params,
     original: &ReadGuard,

@@ -37,7 +37,7 @@ fn color_field_shaders_validate() {
 
 #[test]
 #[ignore = "requires a GPU"]
-fn gpu_color_field_matches_pinned_cpu_equations() {
+fn gpu_color_field_matches_independent_cpu_recovery_equations() {
     let gpu = Gpu::new().unwrap();
     let width = 48usize;
     let height = 32usize;
@@ -46,7 +46,7 @@ fn gpu_color_field_matches_pinned_cpu_equations() {
     let matrix = [
         4.45774, -1.90728, 0.581922, -4.22818, 4.30012, -0.701463, 3.1376, -5.81127, 3.31683,
     ];
-    for scene in 0..8 {
+    for scene in 0..9 {
         let mut pixels = Vec::<[f32; 3]>::new();
         let mut masks = Vec::new();
         let mut repaired = vec![false; width * height];
@@ -80,6 +80,19 @@ fn gpu_color_field_matches_pinned_cpu_equations() {
                 if scene == 7 && row == 16 && col == 24 {
                     m = [0.30, 0.66, 1.0];
                     repaired[row * width + col] = true;
+                }
+                // Near a fully clipped region, two surviving layers must keep
+                // their native ratio even when the field rejects their evidence.
+                if scene == 8 && (8..24).contains(&row) {
+                    if (24..32).contains(&col) {
+                        m = [1.; 3];
+                    }
+                    if col == 23 {
+                        m = [1., 0.5, 0.6];
+                    }
+                    if col == 22 {
+                        m = [0.5, 0.4, 0.65];
+                    }
                 }
                 pixels.push(m);
                 masks.push(m.map(|v| {
@@ -122,11 +135,30 @@ fn gpu_color_field_matches_pinned_cpu_equations() {
         // The CPU sees precisely the float32 parameters uploaded to the shader.
         let p = std::array::from_fn(|i| f64::from(prepared.params.neutral[i]));
         let y = std::array::from_fn(|i| f64::from(prepared.params.luminance[i]));
-        let expected = reference::run(
+        let measured: Vec<_> = pixels.iter().map(|p| p.map(f64::from)).collect();
+        let influence = reference::boundary::influences(width, height, &measured);
+        let predicted = reference::boundary::evidence_masks(&measured, &masks, &influence, p, y);
+        let packed =
+            super::reliability_tests::field_masks(&gpu, &prepared.params, &input, &black, &input);
+        let field_masks: Vec<[u8; 3]> = packed
+            .iter()
+            .map(|&mask| std::array::from_fn(|c| (mask >> (8 * c)) as u8))
+            .collect();
+        for (cpu, actual) in predicted.iter().zip(&field_masks) {
+            for c in 0..3 {
+                assert!(
+                    cpu[c].abs_diff(actual[c]) <= 1,
+                    "field mask differs by more than one quantization bin"
+                );
+            }
+        }
+        let expected = reference::boundary::run(
             width,
             height,
-            &pixels.iter().map(|p| p.map(f64::from)).collect::<Vec<_>>(),
+            &measured,
             &masks,
+            &field_masks,
+            &influence,
             &repaired,
             p,
             y,
@@ -200,7 +232,7 @@ fn gpu_color_field_matches_pinned_cpu_equations() {
                 let values = bytemuck::cast_slice::<u8, f32>(&bytes);
                 assert!(values.iter().all(|v| v.is_finite()), "Local");
                 for (i, mask) in masks.iter().enumerate() {
-                    if *mask == [255; 3] {
+                    if *mask == [255; 3] && influence[i] == 0. {
                         assert_eq!(
                             &values[i * 3..i * 3 + 3],
                             &pixels[i],
@@ -221,13 +253,13 @@ fn gpu_color_field_matches_pinned_cpu_equations() {
 
 #[test]
 #[ignore = "requires GPU and FOVEONIC_HIGHLIGHT_DIR with the frozen highlight corpus"]
-fn gpu_color_field_real_crops_match_identical_input_reference() {
+fn gpu_color_field_real_crops_match_identical_input_cpu_equations() {
     check_real_inputs(false);
 }
 
 #[test]
 #[ignore = "requires GPU, FOVEONIC_HIGHLIGHT_DIR, and time/memory for the full-corpus double-precision reference solves"]
-fn gpu_color_field_full_rasters_match_identical_input_reference() {
+fn gpu_color_field_full_rasters_match_identical_input_cpu_equations() {
     check_real_inputs(true);
 }
 
@@ -247,6 +279,7 @@ fn check_real_inputs(full: bool) {
             "_P2M0009.X3F",
             "_P2M0010.X3F",
             "_P2M0035.X3F",
+            "_P2M0060.X3F",
             "_P2M0077.X3F",
             "_P2M0089.X3F",
             "_P2M0095.X3F",
@@ -397,7 +430,7 @@ fn check_real_inputs(full: bool) {
         // Float32 normalization may straddle a u8 rounding boundary. Check
         // quantization independently, then give both solvers identical evidence.
         let actual_masks =
-            super::reliability_tests::from_buffers(&gpu, &prepared.params, &raw, &blacks, &input);
+            super::reliability_tests::original_masks(&gpu, &prepared.params, &raw, &blacks);
         let mut mask_differences = 0;
         for (cpu, &packed) in masks.iter_mut().zip(&actual_masks) {
             let actual = std::array::from_fn(|c| (packed >> (8 * c)) as u8);
@@ -411,8 +444,47 @@ fn check_real_inputs(full: bool) {
             *cpu = actual;
         }
         eprintln!("{name}: {mask_differences} pixels straddle reliability quantization boundaries");
-        let expected =
-            reference::run(width, height, &measured, &masks, &repaired, p, y, matrix).unwrap();
+        let normalized_raw: Vec<[f64; 3]> = (0..width * height)
+            .map(|pixel| {
+                let row = top + pixel / width;
+                let col = left + pixel % width;
+                let off = (row * metadata.width + col) * 3;
+                std::array::from_fn(|c| {
+                    f64::from(
+                        (source.pixels[off + c] - black[c]) / (prepared.params.white[c] - black[c]),
+                    )
+                })
+            })
+            .collect();
+        let influence = reference::boundary::influences(width, height, &normalized_raw);
+        let predicted = reference::boundary::evidence_masks(&measured, &masks, &influence, p, y);
+        let packed =
+            super::reliability_tests::field_masks(&gpu, &prepared.params, &raw, &blacks, &input);
+        let field_masks: Vec<[u8; 3]> = packed
+            .iter()
+            .map(|&mask| std::array::from_fn(|c| (mask >> (8 * c)) as u8))
+            .collect();
+        for (cpu, actual) in predicted.iter().zip(&field_masks) {
+            for c in 0..3 {
+                assert!(
+                    cpu[c].abs_diff(actual[c]) <= 1,
+                    "field mask differs by more than one quantization bin"
+                );
+            }
+        }
+        let expected = reference::boundary::run(
+            width,
+            height,
+            &measured,
+            &masks,
+            &field_masks,
+            &influence,
+            &repaired,
+            p,
+            y,
+            matrix,
+        )
+        .unwrap();
         let output = apply(
             &gpu,
             Inputs {

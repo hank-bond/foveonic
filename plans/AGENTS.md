@@ -20,6 +20,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[advanced-color-range](./advanced-color-range.md)** Build and evaluate an Advanced Color Range wheel, saved edit list and selective lightness inversion.
 - **[archived/](./archived/AGENTS.md)** Archived plans record completed implementation slices, their checks, and historical limitations.
 - **[classic-coverage](./classic-coverage.md)** Complete ordinary color rendering and editable DNG export across all pre-Merrill Sigma Classic cameras.
+- **[color-field-boundaries](./color-field-boundaries.md)** Prepare the reviewed Color Field boundary recovery with separate evidence and application masks for a scoped commit.
 - **[color-field-controls](./color-field-controls.md)** Investigate whether color agreement and boundary controls produce visible changes independently of GUI and cache behavior.
 - **[color-field-production](./color-field-production.md)** Remove exploratory color-field paths, resolve the strict Output blocker, and prepare reviewed integration onto current main.
 - **[color-field-restraint](./color-field-restraint.md)** Expose one per-image highlight color restraint adjustment and remove rejected shader experiments while preserving optimized Local/Global defaults.
