@@ -37,12 +37,6 @@ pub fn path(input: &Path) -> PathBuf {
         .join(name)
 }
 
-fn legacy_path(input: &Path) -> PathBuf {
-    let mut name = input.as_os_str().to_os_string();
-    name.push(".foveonic.json");
-    PathBuf::from(name)
-}
-
 /// Validate unresolved camera choices too: empty WB/mode means recorded X3F defaults.
 pub fn encode(settings: &Settings) -> Result<Vec<u8>> {
     settings.validate_values()?;
@@ -81,10 +75,7 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
 /// A missing sidecar means start with defaults. Other errors need to reach the
 /// caller so an unreadable or newer recipe is not silently replaced.
 pub fn load(input: &Path) -> Result<Option<Settings>> {
-    match load_at(&path(input))? {
-        Some(settings) => Ok(Some(settings)),
-        None => load_at(&legacy_path(input)),
-    }
+    load_at(&path(input))
 }
 
 fn load_at(destination: &Path) -> Result<Option<Settings>> {
@@ -133,12 +124,6 @@ pub fn save(input: &Path, settings: &Settings) -> Result<()> {
         file.sync_all()?;
         drop(file);
         fs::rename(&temporary, &destination)?;
-        // The new recipe is durable before retiring an older adjacent copy.
-        // A malformed older file remains available for manual recovery.
-        let legacy = legacy_path(input);
-        if load_at(&legacy).is_ok_and(|s| s.is_some()) {
-            fs::remove_file(legacy)?;
-        }
         Ok(())
     })();
     if result.is_err() {

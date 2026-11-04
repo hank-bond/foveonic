@@ -26,7 +26,8 @@ impl Adjustment {
 }
 
 /// Red, Orange, Yellow, Green, Cyan, Blue, Purple and Magenta, plus all colors.
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Controls {
     pub bands: [Adjustment; 8],
     pub master: Adjustment,
@@ -43,20 +44,10 @@ impl Controls {
         "Magenta",
         "All colors",
     ];
-    /// Split the two new ranges without changing an existing six-color response.
-    pub fn from_lightness(v: [f32; 6]) -> Self {
+    /// Set Lightness independently in the eight displayed color ranges.
+    pub fn from_lightness(values: [f32; 8]) -> Self {
         Self {
-            bands: [
-                v[0],
-                (v[0] + v[1]) * 0.5,
-                v[1],
-                v[2],
-                v[3],
-                v[4],
-                (v[4] + v[5]) * 0.5,
-                v[5],
-            ]
-            .map(|lightness| Adjustment {
+            bands: values.map(|lightness| Adjustment {
                 lightness,
                 ..Default::default()
             }),
@@ -89,32 +80,6 @@ impl Controls {
         Ok(())
     }
 }
-impl<'de> serde::Deserialize<'de> for Controls {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        #[derive(Default, serde::Deserialize)]
-        #[serde(default, deny_unknown_fields)]
-        struct Current {
-            bands: [Adjustment; 8],
-            master: Adjustment,
-        }
-        #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum Stored {
-            Current(Current),
-            Legacy([f32; 6]),
-        }
-        Ok(match Stored::deserialize(deserializer)? {
-            Stored::Current(v) => Self {
-                bands: v.bands,
-                master: v.master,
-            },
-            Stored::Legacy(v) => Self::from_lightness(v),
-        })
-    }
-}
-
 /// Native-pixel support of the separable color-adjustment filter.
 pub(crate) const NATIVE_RADIUS: u32 = 8;
 

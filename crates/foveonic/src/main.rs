@@ -35,7 +35,7 @@ Options (also available for batch):
   --whites VALUE            Shared HDR -1..1, default 0
   --local-contrast VALUE    -1..1, default 0. Shared multiscale contrast
                             HDR, Local Contrast and Universal sharpening bake into DNG
-  --color-sensitivity VALUES Six amounts -1..1: Red,Yellow,Green,Cyan,Blue,Magenta\n                            Color/mono sensitivity is baked into DNG\n  --mono-sensitivity VALUES Same controls, also selects monochrome
+  --color-sensitivity VALUES Eight amounts -1..1: Red,Orange,Yellow,Green,Cyan,Blue,Purple,Magenta\n                            Color/mono sensitivity is baked into DNG
   --sharpen-method METHOD   reference (default) or universal
   --universal-sharpen VALUE 0..4, default 0
   --sharpen-radius PIXELS   Universal Gaussian sigma 0.3..4, default 0.8
@@ -636,7 +636,7 @@ fn color_sensitivity_cli_preserves_the_selected_rendering() {
         "--mode",
         "Standard",
         "--color-sensitivity",
-        "0.2,0,-0.3,0,0,0.1",
+        "0.2,0.1,0,-0.3,0,0,0.05,0.1",
     ]
     .into_iter()
     .map(OsString::from);
@@ -644,6 +644,15 @@ fn color_sensitivity_cli_preserves_the_selected_rendering() {
     assert_eq!(settings.rendering, foveonic::render::Rendering::Color);
     assert_eq!(
         settings.photographic.color_editor,
-        foveonic::render::ColorEditorControls::from_lightness([0.2, 0., -0.3, 0., 0., 0.1])
+        foveonic::render::ColorEditorControls::from_lightness([
+            0.2,
+            (0.2 + 0.) * 0.5,
+            0.,
+            -0.3,
+            0.,
+            0.,
+            (0. + 0.1) * 0.5,
+            0.1
+        ])
     );
 }

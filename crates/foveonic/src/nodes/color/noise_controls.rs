@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Five cleanup choices and independent texture restoration.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "StoredControls")]
+#[serde(default, deny_unknown_fields)]
 pub struct Controls {
     /// Merrill cleanup and automatic ColorDQ. Inactive values stay saved.
     pub noise_enabled: bool,
@@ -21,7 +21,7 @@ pub struct Controls {
 
 /// Log-luminance band amounts and sizes. One restores neutral detail.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "StoredTextureControls")]
+#[serde(default, deny_unknown_fields)]
 pub struct TextureControls {
     pub fine: f32,
     pub coarse: f32,
@@ -141,102 +141,4 @@ impl Controls {
         }
         Ok(())
     }
-}
-
-// Read retired fields only at the serialization boundary. They cannot select
-// the former renderer and are not written back. Old Merrill residual amounts
-// have no equivalent in the new bands, so missing texture starts neutral.
-#[derive(Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct StoredControls {
-    noise_enabled: bool,
-    detail_enabled: bool,
-    chroma: u32,
-    luminance: u32,
-    banding: u32,
-    detail: f32,
-    texture: TextureControls,
-    #[serde(rename = "overrides")]
-    _retired_overrides: Option<RetiredOverrides>,
-}
-impl Default for StoredControls {
-    fn default() -> Self {
-        let c = Controls::default();
-        Self {
-            noise_enabled: c.noise_enabled,
-            detail_enabled: c.detail_enabled,
-            chroma: c.chroma,
-            luminance: c.luminance,
-            banding: c.banding,
-            detail: c.detail,
-            texture: c.texture,
-            _retired_overrides: None,
-        }
-    }
-}
-impl From<StoredControls> for Controls {
-    fn from(c: StoredControls) -> Self {
-        Self {
-            noise_enabled: c.noise_enabled,
-            detail_enabled: c.detail_enabled,
-            chroma: c.chroma,
-            luminance: c.luminance,
-            banding: c.banding,
-            detail: c.detail,
-            texture: c.texture,
-        }
-    }
-}
-#[derive(Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct StoredTextureControls {
-    fine: f32,
-    coarse: f32,
-    fine_size: f32,
-    coarse_size: f32,
-    #[serde(rename = "enabled")]
-    _retired_enabled: Option<bool>,
-}
-impl Default for StoredTextureControls {
-    fn default() -> Self {
-        let t = TextureControls::default();
-        Self {
-            fine: t.fine,
-            coarse: t.coarse,
-            fine_size: t.fine_size,
-            coarse_size: t.coarse_size,
-            _retired_enabled: None,
-        }
-    }
-}
-impl From<StoredTextureControls> for TextureControls {
-    fn from(t: StoredTextureControls) -> Self {
-        Self {
-            fine: t.fine,
-            coarse: t.coarse,
-            fine_size: t.fine_size,
-            coarse_size: t.coarse_size,
-        }
-    }
-}
-
-// The retired schema remains strict so malformed or newer sidecars are never
-// silently accepted and overwritten. These values do not reach processing.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RetiredOverrides {
-    #[serde(rename = "base-blend")]
-    _base_blend: Option<f32>,
-    #[serde(rename = "edge-cutoff")]
-    _edge_cutoff: Option<f32>,
-    #[serde(rename = "mean-decay")]
-    _mean_decay: Option<f32>,
-    #[serde(rename = "edge-scale")]
-    _edge_scale: Option<f32>,
-    #[serde(rename = "luma-noise-scale")]
-    _luma_noise_scale: Option<f32>,
-    #[serde(rename = "brightness-mix")]
-    _brightness_mix: Option<f32>,
-    #[serde(rename = "layer-mix")]
-    _layer_mix: Option<f32>,
 }

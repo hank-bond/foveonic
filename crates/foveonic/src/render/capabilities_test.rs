@@ -731,14 +731,14 @@ fn quattro_capture_panel_support_includes_tiger_and_still_checks_full_geometry()
 }
 
 #[test]
-fn retired_residual_amount_resets_only_for_merrill_and_keeps_texture_edits() {
+fn family_normalization_preserves_inactive_smooth_crisp_and_merrill_texture() {
     let mut settings = Settings::new("Sunlight", "Standard");
-    settings.reconstruction = Some(serde_json::from_str(r#"{"detail":0.7,"chroma":3,"overrides":{"mean-decay":0.6},"texture":{"enabled":false,"fine":0.8,"coarse":0.2,"fine_size":0.75,"coarse_size":1.6}}"#).unwrap());
+    settings.reconstruction = Some(serde_json::from_str(r#"{"detail":0.7,"chroma":3,"texture":{"fine":0.8,"coarse":0.2,"fine_size":0.75,"coarse_size":1.6}}"#).unwrap());
     let original = settings.clone();
     let merrill = capabilities("SIGMA DP2 Merrill");
     assert!(merrill.validate(&settings).is_ok());
-    assert!(merrill.normalize(&mut settings));
-    assert_eq!(settings.reconstruction.unwrap().detail, 1.);
+    assert!(!merrill.normalize(&mut settings));
+    assert_eq!(settings.reconstruction.unwrap().detail, 0.7);
     assert_eq!(
         settings.reconstruction.unwrap().texture,
         original.reconstruction.unwrap().texture

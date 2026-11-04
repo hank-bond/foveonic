@@ -70,8 +70,7 @@ impl Library {
     }
 }
 
-/// Photo recipes have JSON compatibility readers. Preserve that representation
-/// inside RON application preferences instead of asking RON to interpret them.
+/// Keep presets in the same JSON representation as photographic sidecars.
 pub mod storage {
     use super::Library;
     use serde::{Deserialize, Deserializer, Serializer};

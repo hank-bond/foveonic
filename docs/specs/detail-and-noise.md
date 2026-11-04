@@ -65,9 +65,9 @@ Useful inspection roots include:
 
 `texture.change` is a scalar multiplicative brightness map. One displays as middle gray, lighter means increased and darker means decreased brightness. Both amounts at one produce flat gray. Set an amount away from one to inspect the effect of its size. Individual Fine/Coarse inspection maps are retired. Projection is not a separate correction, so `reconstruction.rgb` does not expose a before/after comparison pair.
 
-## Saved settings and migration
+## Saved settings
 
-The independent enable flags, four texture amounts and sizes persist with the recipe. Older populated reconstruction settings enable both groups. An older null reconstruction setting leaves both off. Merely displaying an old recipe must not populate or rewrite it. Saved experimental texture values are retained while the retired `enabled` flag is ignored. Earlier sidecars missing texture start at neutral amounts and sizes. The earlier residual multiplier has no equivalent and is reset for Merrill when camera capabilities normalize the recipe. Quattro retains that stored field for its Smooth/Crisp behavior. Retired linked overrides are accepted only while reading older sidecars and are omitted on save. Unknown and duplicate fields remain errors. Loading alone must not rewrite sidecars.
+The independent enable flags, four texture amounts and sizes persist with the recipe. Omitted fields use the shared defaults. Reconstruction controls and texture controls deserialize directly into the current schema. Retired override tables and experimental enable fields have no reader. Quattro retains its independent Smooth/Crisp field. Merrill does not apply or rewrite that inactive field. Loading alone must not rewrite sidecars.
 
 The old linked-control UI, residual-gain kernels, core-only detail projection and comparison generator are removed. Pattern preparation uses camera metadata and processing geometry independently of cleanup controls. The camera-derived base algorithms and their attribution remain.
 

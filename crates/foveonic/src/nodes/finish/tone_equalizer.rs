@@ -28,7 +28,7 @@ const BROAD_EDGE_SIGMA_EV: f32 = 0.9;
 const PASSES_PER_SCALE: u32 = 7;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(try_from = "SavedControls", into = "SavedControls")]
+#[serde(default)]
 pub struct Controls {
     pub blacks: f32,
     pub shadows: f32,
@@ -52,49 +52,6 @@ impl Controls {
             return Err("HDR range adjustments must be between -1 and +1".into());
         }
         Ok(())
-    }
-}
-
-// The earlier in-app experiment saved percentage amounts and a mask choice.
-// Read those once into the normalized spatial-only recipe. New saves carry
-// their units explicitly so small old percentages cannot be misinterpreted.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct SavedControls {
-    version: u32,
-    blacks: f32,
-    shadows: f32,
-    highlights: f32,
-    whites: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mask: Option<String>,
-}
-impl From<Controls> for SavedControls {
-    fn from(c: Controls) -> Self {
-        Self {
-            version: 1,
-            blacks: c.blacks,
-            shadows: c.shadows,
-            highlights: c.highlights,
-            whites: c.whites,
-            mask: None,
-        }
-    }
-}
-impl TryFrom<SavedControls> for Controls {
-    type Error = &'static str;
-    fn try_from(c: SavedControls) -> std::result::Result<Self, Self::Error> {
-        let scale = match c.version {
-            0 => 0.01,
-            1 => 1.,
-            _ => return Err("unsupported HDR settings version"),
-        };
-        Ok(Self {
-            blacks: c.blacks * scale,
-            shadows: c.shadows * scale,
-            highlights: c.highlights * scale,
-            whites: c.whites * scale,
-        })
     }
 }
 

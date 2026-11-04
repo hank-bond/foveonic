@@ -139,7 +139,16 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
         settings.photographic.sharpening.amount = 0.6;
         if rendering == Rendering::Monochrome {
             settings.photographic.color_editor =
-                crate::render::ColorEditorControls::from_lightness([0.3, 0.1, -0.2, 0., -0.4, 0.]);
+                crate::render::ColorEditorControls::from_lightness([
+                    0.3,
+                    (0.3 + 0.1) * 0.5,
+                    0.1,
+                    -0.2,
+                    0.,
+                    -0.4,
+                    (-0.4 + 0.) * 0.5,
+                    0.,
+                ]);
         }
         settings.validate_for_camera(&source.metadata).unwrap();
         let mut session = RenderSession::new(source.clone());
@@ -243,8 +252,16 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
     if settings.color_mode.is_empty() {
         settings.color_mode = capabilities.default_color_mode(&source.metadata).unwrap();
     }
-    settings.photographic.color_editor =
-        crate::render::ColorEditorControls::from_lightness([0.2, 0., -0.1, 0., 0.15, 0.]);
+    settings.photographic.color_editor = crate::render::ColorEditorControls::from_lightness([
+        0.2,
+        (0.2 + 0.) * 0.5,
+        0.,
+        -0.1,
+        0.,
+        0.15,
+        (0.15 + 0.) * 0.5,
+        0.,
+    ]);
     settings.photographic.tone_method = PhotographicMethod::Universal;
     settings.photographic.color_editor.master.hue = 0.3;
     settings.photographic.color_editor.master.saturation = -0.2;
@@ -369,8 +386,16 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
             .unwrap();
         let plain_bytes = engine.readback_image(&plain).unwrap();
         drop(plain);
-        settings.photographic.color_editor =
-            crate::render::ColorEditorControls::from_lightness([0.3, -0.1, 0.1, 0., -0.2, 0.1]);
+        settings.photographic.color_editor = crate::render::ColorEditorControls::from_lightness([
+            0.3,
+            (0.3 + -0.1) * 0.5,
+            -0.1,
+            0.1,
+            0.,
+            -0.2,
+            (-0.2 + 0.1) * 0.5,
+            0.1,
+        ]);
         let names = [
             "color-editor.input",
             "color-editor.rgb",

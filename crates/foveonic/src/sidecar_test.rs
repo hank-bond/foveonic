@@ -1,4 +1,4 @@
-//! Checks editing recipe migration, exact persistence, bounded malformed inputs, and atomic preservation.
+//! Checks editing recipe defaults, exact persistence, bounded malformed inputs, and atomic preservation.
 
 use super::*;
 use crate::{noise, render::RepairThreshold};
@@ -96,7 +96,7 @@ fn missing_edit_fields_use_shared_defaults_and_preserve_supplied_values() {
     assert_eq!(defaults, Settings::new("", ""));
     let minimal = br#"{"format":"foveonic-editing","version":1,"settings":{}}"#;
     assert_eq!(decode(minimal).unwrap(), defaults);
-    let partial = br#"{"format":"foveonic-editing","version":1,"settings":{"exposure":1.25,"repair":null,"tone":{"shadows":-0.5},"reconstruction":{"chroma":4,"overrides":{"mean-decay":0.7}}}}"#;
+    let partial = br#"{"format":"foveonic-editing","version":1,"settings":{"exposure":1.25,"repair":null,"tone":{"shadows":-0.5},"reconstruction":{"chroma":4}}}"#;
     let mut expected = defaults;
     expected.exposure = 1.25;
     expected.repair = None;
@@ -134,119 +134,6 @@ fn missing_edit_fields_use_shared_defaults_and_preserve_supplied_values() {
     let mut expected = edited();
     expected.reconstruction.as_mut().unwrap().banding = 2;
     assert_eq!(restored, expected);
-}
-
-#[test]
-fn older_color_field_edits_migrate_to_zero_without_rewriting_sidecars() {
-    let mut older: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
-    older["settings"]["color_field"]
-        .as_object_mut()
-        .unwrap()
-        .remove("selectivity");
-    let mut expected = edited();
-    expected.color_field.selectivity = 0.;
-    assert_eq!(
-        decode(&serde_json::to_vec(&older).unwrap()).unwrap(),
-        expected
-    );
-    let directory = Directory::new();
-    older["settings"]["color_field"]["donation"] = serde_json::json!(0.5);
-    older["settings"]["color_field"]["agreement"] = serde_json::json!(0.75);
-    older["settings"]["color_field"]["boundary_ev"] = serde_json::json!(0.4);
-    older["settings"]["color_field"]["area"] = serde_json::json!("active");
-    for amount in [0., 0.75, 8.] {
-        older["settings"]["color_field"]["restraint"] = serde_json::json!(amount);
-        let bytes = serde_json::to_vec(&older).unwrap();
-        fs::write(path(&directory.input()), &bytes).unwrap();
-        let migrated = load(&directory.input()).unwrap().unwrap();
-        assert_eq!(migrated, expected);
-        assert_eq!(fs::read(path(&directory.input())).unwrap(), bytes);
-        let encoded: serde_json::Value =
-            serde_json::from_slice(&encode(&migrated).unwrap()).unwrap();
-        assert_eq!(
-            encoded["settings"]["color_field"]["selectivity"],
-            serde_json::json!(0.)
-        );
-        assert!(encoded["settings"]["color_field"].get("cutoff").is_none());
-        assert!(encoded["settings"]["color_field"]
-            .get("restraint")
-            .is_none());
-    }
-    older["settings"]["color_field"]["cutoff"] = serde_json::json!(0.01);
-    assert_eq!(
-        decode(&serde_json::to_vec(&older).unwrap()).unwrap(),
-        edited()
-    );
-    for (cutoff, strength) in [(0.005, 1.), (0.01, 0.5), (0.0125, 0.4), (0.02, 0.25)] {
-        older["settings"]["color_field"]["cutoff"] = serde_json::json!(cutoff);
-        let migrated = decode(&serde_json::to_vec(&older).unwrap()).unwrap();
-        assert!((migrated.color_field.selectivity - strength).abs() < 1e-7);
-        let encoded: serde_json::Value =
-            serde_json::from_slice(&encode(&migrated).unwrap()).unwrap();
-        assert!(encoded["settings"]["color_field"].get("cutoff").is_none());
-    }
-    older["settings"]["color_field"]["selectivity"] = serde_json::json!(0.);
-    let mut zero = edited();
-    zero.color_field.selectivity = 0.;
-    assert_eq!(decode(&serde_json::to_vec(&older).unwrap()).unwrap(), zero);
-    older["settings"]["color_field"]["selectivity"] = serde_json::Value::Null;
-    assert_eq!(
-        decode(&serde_json::to_vec(&older).unwrap()).unwrap(),
-        expected
-    );
-    older["settings"]["color_field"]
-        .as_object_mut()
-        .unwrap()
-        .remove("selectivity");
-    for invalid in [0., 0.0049, 0.0201] {
-        older["settings"]["color_field"]["cutoff"] = serde_json::json!(invalid);
-        assert!(decode(&serde_json::to_vec(&older).unwrap()).is_err());
-    }
-    older["settings"]["color_field"]["cutoff"] = serde_json::json!(0.01);
-    for invalid in [-0.001, 1.001] {
-        older["settings"]["color_field"]["selectivity"] = serde_json::json!(invalid);
-        assert!(decode(&serde_json::to_vec(&older).unwrap()).is_err());
-    }
-    assert!(decode(br#"{"format":"foveonic-editing","version":1,"settings":{"color_field":{"selectivity":0,"selectivity":1}}}"#).is_err());
-    assert!(decode(br#"{"format":"foveonic-editing","version":1,"settings":{"color_field":{"cutoff":0.01,"cutoff":0.02}}}"#).is_err());
-    assert!(decode(br#"{"format":"foveonic-editing","version":1,"settings":{"color_field":{"restraint":1,"restraint":2}}}"#).is_err());
-    assert!(decode(
-        br#"{"format":"foveonic-editing","version":1,"settings":{"color_field":{"unknown":1}}}"#
-    )
-    .is_err());
-}
-
-#[test]
-fn exploratory_color_field_recipes_migrate_to_supported_brightness_only() {
-    use crate::render::ColorFieldApproach;
-    let mut saved: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
-    for name in ["donation", "agreement", "boundary_ev", "area"] {
-        saved["settings"]["color_field"][name] = serde_json::json!("retired");
-    }
-    for (name, approach) in [
-        ("faithful", ColorFieldApproach::Faithful),
-        ("anchors", ColorFieldApproach::Faithful),
-        ("uniform_support", ColorFieldApproach::Faithful),
-        ("coarse", ColorFieldApproach::Faithful),
-        ("fast_solve", ColorFieldApproach::Faithful),
-        ("fine", ColorFieldApproach::Faithful),
-        ("local_gradient", ColorFieldApproach::LocalGradient),
-    ] {
-        saved["settings"]["color_field"]["approach"] = serde_json::json!(name);
-        let migrated = decode(&serde_json::to_vec(&saved).unwrap()).unwrap();
-        let mut expected = edited();
-        expected.color_field.approach = approach;
-        assert_eq!(migrated, expected);
-        let encoded: serde_json::Value =
-            serde_json::from_slice(&encode(&migrated).unwrap()).unwrap();
-        assert_eq!(
-            encoded["settings"]["color_field"]
-                .as_object()
-                .unwrap()
-                .len(),
-            2
-        );
-    }
 }
 
 #[test]
@@ -416,41 +303,6 @@ fn missing_parent_or_unreadable_destination_cannot_create_a_recipe() {
     assert!(save(&directory.input(), &edited()).is_err());
 }
 
-#[test]
-fn adjacent_recipes_move_to_visible_folder_only_on_save() {
-    let directory = Directory::new();
-    let input = directory.input();
-    fs::remove_dir(directory.0.join("foveonic")).unwrap();
-    fs::write(legacy_path(&input), encode(&edited()).unwrap()).unwrap();
-    assert_eq!(load(&input).unwrap(), Some(edited()));
-    assert!(!path(&input).exists());
-    assert!(legacy_path(&input).exists());
-    save(&input, &edited()).unwrap();
-    assert_eq!(
-        path(&input),
-        directory.0.join("foveonic/photo.X3F.foveonic.json")
-    );
-    assert_eq!(load(&input).unwrap(), Some(edited()));
-    assert!(!legacy_path(&input).exists());
-}
-
-#[test]
-fn corrupt_legacy_recipes_are_protected_and_new_location_has_precedence() {
-    let directory = Directory::new();
-    let input = directory.input();
-    fs::write(legacy_path(&input), b"recover me").unwrap();
-    assert!(load(&input).is_err());
-    assert!(save(&input, &edited()).is_err());
-    fs::write(path(&input), encode(&edited()).unwrap()).unwrap();
-    assert_eq!(load(&input).unwrap(), Some(edited()));
-    save(&input, &Settings::default()).unwrap();
-    assert_eq!(fs::read(legacy_path(&input)).unwrap(), b"recover me");
-    fs::write(path(&input), b"invalid new recipe").unwrap();
-    fs::write(legacy_path(&input), encode(&edited()).unwrap()).unwrap();
-    assert!(load(&input).is_err());
-    assert!(save(&input, &edited()).is_err());
-}
-
 #[cfg(unix)]
 #[test]
 fn sidecar_paths_preserve_non_utf8_filenames() {
@@ -504,49 +356,4 @@ fn restored_recipe_replays_exact_photographic_pixels() {
         engine.readback_image(&original).unwrap() == engine.readback_image(&replayed).unwrap(),
         "recipe replay changes photographic samples"
     );
-}
-
-#[test]
-fn retired_merrill_settings_load_without_rewriting_and_save_only_supported_controls() {
-    let fixture = Directory::new();
-    let input = fixture.input();
-    fs::write(&input, b"source photograph").unwrap();
-    let mut stored: serde_json::Value =
-        serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
-    stored["settings"]["reconstruction"]["texture"]["enabled"] = serde_json::json!(false);
-    stored["settings"]["reconstruction"]["overrides"] =
-        serde_json::json!({"mean-decay":0.8,"brightness-mix":0.3});
-    let bytes = serde_json::to_vec_pretty(&stored).unwrap();
-    let file = path(&input);
-    fs::write(&file, &bytes).unwrap();
-    let migrated = load(&input).unwrap().unwrap();
-    assert_eq!(migrated, edited());
-    assert_eq!(fs::read(&file).unwrap(), bytes);
-    save(&input, &migrated).unwrap();
-    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-    assert!(saved["settings"]["reconstruction"]
-        .get("overrides")
-        .is_none());
-    assert!(saved["settings"]["reconstruction"]["texture"]
-        .get("enabled")
-        .is_none());
-    assert_eq!(load(&input).unwrap().unwrap(), migrated);
-    assert_eq!(fs::read(&input).unwrap(), b"source photograph");
-
-    stored["settings"]["reconstruction"]
-        .as_object_mut()
-        .unwrap()
-        .remove("texture");
-    let older = decode(&serde_json::to_vec(&stored).unwrap()).unwrap();
-    assert_eq!(
-        older.reconstruction.unwrap().texture,
-        noise::TextureControls::default()
-    );
-    assert_eq!(older.exposure, edited().exposure);
-    assert_eq!(older.color_dq_gain, edited().color_dq_gain);
-    stored["settings"]["reconstruction"] = serde_json::Value::Null;
-    assert!(decode(&serde_json::to_vec(&stored).unwrap())
-        .unwrap()
-        .reconstruction
-        .is_none());
 }

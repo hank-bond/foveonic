@@ -134,8 +134,6 @@ pub const THUMBNAIL_BYTES_RANGE: std::ops::RangeInclusive<u64> = 16 * MIB..=2048
 pub struct Preferences {
     pub last_folder: Option<std::path::PathBuf>,
     pub last_folder_mode: FolderMode,
-    // Keep the persisted key stable while both modes share the destination.
-    #[serde(rename = "import_destination")]
     pub processing_destination: Option<std::path::PathBuf>,
     pub browse_processing: crate::processing::Settings,
     pub import_processing: crate::processing::Settings,
@@ -371,7 +369,7 @@ mod tests {
         assert_eq!(Preferences::load(Some(&store)).processing_destination, None);
         store.0.insert(
             STORAGE_KEY.into(),
-            "(import_destination:Some(\"photos/remembered\"))".into(),
+            "(processing_destination:Some(\"photos/remembered\"))".into(),
         );
         assert_eq!(
             Preferences::load(Some(&store)).processing_destination,
@@ -534,7 +532,7 @@ mod tests {
 mod preview_tests {
     use super::*;
     #[test]
-    fn thumbnail_memory_defaults_migrates_and_persists_independently() {
+    fn thumbnail_memory_defaults_and_persists_independently() {
         let old: Preferences = serde_json::from_str("{}").unwrap();
         assert_eq!(old.thumbnail_cache_bytes, 256 * MIB);
         let prefs = Preferences {

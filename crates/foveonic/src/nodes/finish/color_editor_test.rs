@@ -33,7 +33,7 @@ fn gpu_color_sensitivity_sectors_gray_and_signed_samples() {
             .unwrap();
         let mut params = color_editor::Params::new(
             extent,
-            color_editor::Controls::from_lightness([0.; 6]),
+            color_editor::Controls::from_lightness([0.; 8]),
             ColorSpace::Srgb,
             4096.,
             4096.,
@@ -92,7 +92,7 @@ fn gpu_color_sensitivity_sectors_gray_and_signed_samples() {
     let black = gpu.upload("Black guide", &vec![0_f32; n * 3]).unwrap();
     let params = color_editor::Params::new(
         extent,
-        color_editor::Controls::from_lightness([-1.; 6]),
+        color_editor::Controls::from_lightness([-1.; 8]),
         ColorSpace::Srgb,
         4096.,
         4096.,
@@ -139,7 +139,16 @@ fn gpu_color_and_monochrome_share_the_same_chromaticity_preserving_gain() {
         .unwrap();
     let params = color_editor::Params::new(
         extent,
-        color_editor::Controls::from_lightness([0.3, -0.2, 0., 0.4, -0.2, 0.1]),
+        color_editor::Controls::from_lightness([
+            0.3,
+            (0.3 + -0.2) * 0.5,
+            -0.2,
+            0.,
+            0.4,
+            -0.2,
+            (-0.2 + 0.1) * 0.5,
+            0.1,
+        ]),
         ColorSpace::Srgb,
         4096.,
         4096.,
@@ -168,17 +177,7 @@ fn gpu_color_and_monochrome_share_the_same_chromaticity_preserving_gain() {
 }
 
 #[test]
-fn editor_controls_migrate_and_keep_monochrome_chromatic_values_inactive() {
-    let legacy = [0.4, -0.2, 0.1, 0.2, -0.3, 0.5];
-    let c: color_editor::Controls = serde_json::from_value(serde_json::json!(legacy)).unwrap();
-    assert_eq!(c, color_editor::Controls::from_lightness(legacy));
-    assert_eq!(c.bands[1].lightness, (legacy[0] + legacy[1]) * 0.5);
-    assert_eq!(c.bands[6].lightness, (legacy[4] + legacy[5]) * 0.5);
-    assert_eq!(
-        serde_json::from_str::<color_editor::Controls>(&serde_json::to_string(&c).unwrap())
-            .unwrap(),
-        c
-    );
+fn editor_controls_keep_monochrome_chromatic_values_inactive() {
     let mut c = color_editor::Controls::default();
     c.bands[5].hue = 0.5;
     c.bands[5].saturation = -0.3;

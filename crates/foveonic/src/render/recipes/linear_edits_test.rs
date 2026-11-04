@@ -33,8 +33,16 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
             s.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         }
         s.photographic.tone_method = PhotographicMethod::Universal;
-        s.photographic.color_editor =
-            crate::render::ColorEditorControls::from_lightness([0.06, 0.87, 0., 0., 0., 0.]);
+        s.photographic.color_editor = crate::render::ColorEditorControls::from_lightness([
+            0.06,
+            (0.06 + 0.87) * 0.5,
+            0.87,
+            0.,
+            0.,
+            0.,
+            (0. + 0.) * 0.5,
+            0.,
+        ]);
         s.tonal_ranges = crate::render::TonalRanges {
             blacks: 0.22,
             shadows: -0.5,

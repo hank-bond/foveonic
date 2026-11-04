@@ -111,8 +111,6 @@ pub struct Settings {
     /// Bypass Color Editor without changing its saved range adjustments.
     pub color_editor_enabled: bool,
     /// Bypass final sharpening while retaining its amount and Auto choice.
-    // Keep the established sidecar field name while the UI calls this Sharpening.
-    #[serde(rename = "refinement_enabled")]
     pub sharpening_enabled: bool,
     pub tone: ToneControls,
     /// Spatial photographic HDR ranges, applied before camera tone and baked into DNG.

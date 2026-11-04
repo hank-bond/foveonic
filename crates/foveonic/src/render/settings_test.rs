@@ -370,13 +370,13 @@ fn automatic_manual_and_export_choices_round_trip_without_changing_numeric_recip
         Some(0.)
     );
     let bypass =
-        br#"{"format":"foveonic-editing","version":1,"settings":{"refinement_enabled":false}}"#;
+        br#"{"format":"foveonic-editing","version":1,"settings":{"sharpening_enabled":false}}"#;
     let bypass = crate::sidecar::decode(bypass).unwrap();
     assert!(!bypass.sharpening_enabled);
     let saved: serde_json::Value =
         serde_json::from_slice(&crate::sidecar::encode(&bypass).unwrap()).unwrap();
-    assert_eq!(saved["settings"]["refinement_enabled"], false);
-    assert!(saved["settings"].get("sharpening_enabled").is_none());
+    assert_eq!(saved["settings"]["sharpening_enabled"], false);
+    assert!(saved["settings"].get("refinement_enabled").is_none());
     let settings = Settings::default();
     let mut edited = settings.clone();
     edited.sharpen_amount = Some(0.);
@@ -506,10 +506,18 @@ fn section_bypasses_resolve_to_neutral_and_preserve_stored_edits() {
 }
 
 #[test]
-fn color_editor_migrates_saved_sensitivity_and_stays_separate_from_technical_dng_settings() {
+fn color_editor_roundtrips_and_stays_separate_from_technical_dng_settings() {
     let mut settings = Settings::new("Sunlight", "Standard");
-    settings.photographic.color_editor =
-        crate::render::ColorEditorControls::from_lightness([0.2, 0., -0.3, 0., 0., 0.1]);
+    settings.photographic.color_editor = crate::render::ColorEditorControls::from_lightness([
+        0.2,
+        (0.2 + 0.) * 0.5,
+        0.,
+        -0.3,
+        0.,
+        0.,
+        (0. + 0.1) * 0.5,
+        0.1,
+    ]);
     settings.photographic.local_contrast = 0.4;
     settings.photographic.tone_method = super::PhotographicMethod::Universal;
     settings.tone.shadows = 0.3;
@@ -525,12 +533,6 @@ fn color_editor_migrates_saved_sensitivity_and_stays_separate_from_technical_dng
             .unwrap()
             .photographic,
         settings.photographic
-    );
-    let legacy = serde_json::json!({"photographic": {"monochrome_sensitivity": [0.2_f32,0.,-0.3_f32,0.,0.,0.1_f32]}});
-    let migrated: Settings = serde_json::from_value(legacy).unwrap();
-    assert_eq!(
-        migrated.photographic.color_editor,
-        settings.photographic.color_editor
     );
     let dng = settings.dng_settings();
     assert_eq!(dng.photographic.color_editor, Default::default());

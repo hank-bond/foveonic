@@ -73,7 +73,6 @@ pub struct Controls {
     pub perceptual: super::perceptual_grade::Controls,
     /// Anchored midtone shaping after spatial HDR. Zero is neutral.
     pub brightness: f32,
-    #[serde(alias = "monochrome_sensitivity")]
     pub color_editor: super::color_editor::Controls,
     /// Neutral-centered multiscale local contrast, independent of reconstruction.
     pub local_contrast: f32,

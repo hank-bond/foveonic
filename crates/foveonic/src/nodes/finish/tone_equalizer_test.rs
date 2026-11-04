@@ -34,19 +34,6 @@ fn neutral_controls_and_saved_choices_are_independent() {
 }
 
 #[test]
-fn saved_hdr_amounts_migrate_once_and_new_versions_are_explicit() {
-    let old = r#"{"mask":"global","shadows":50,"highlights":-100}"#;
-    let c: Controls = serde_json::from_str(old).unwrap();
-    assert_eq!(c.shadows, 0.5);
-    assert_eq!(c.highlights, -1.);
-    let saved = serde_json::to_string(&c).unwrap();
-    assert!(saved.contains("\"version\":1"));
-    assert!(!saved.contains("mask"));
-    assert_eq!(serde_json::from_str::<Controls>(&saved).unwrap(), c);
-    assert!(serde_json::from_str::<Controls>(r#"{"version":2}"#).is_err());
-}
-
-#[test]
 fn pivot_follows_the_camera_curve_and_exposure() {
     let curve: Vec<_> = (0..65536).map(|i| i as f32 / 4095.).collect();
     let native = pivot(&curve, 0.).unwrap();

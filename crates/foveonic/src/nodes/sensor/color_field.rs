@@ -42,19 +42,12 @@ pub enum HighlightMode {
 /// Brightness solving only. Both choices share the same color reconstruction.
 pub enum Approach {
     #[default]
-    #[serde(
-        alias = "anchors",
-        alias = "uniform_support",
-        alias = "coarse",
-        alias = "fast_solve",
-        alias = "fine"
-    )]
     Faithful,
     LocalGradient,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(try_from = "SavedControls")]
+#[serde(default, deny_unknown_fields)]
 pub struct Controls {
     /// Selection strength, 0..1. Zero keeps the original behavior.
     pub selectivity: f32,
@@ -68,65 +61,6 @@ impl Default for Controls {
         }
     }
 }
-// Input-only migration. Retired automatic settings become zero, saved raw cutoffs
-// become equivalent strengths, and neutral-restraint amounts are discarded.
-#[derive(serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct SavedControls {
-    #[serde(rename = "donation")]
-    _donation: serde::de::IgnoredAny,
-    #[serde(rename = "agreement")]
-    _agreement: serde::de::IgnoredAny,
-    #[serde(rename = "boundary_ev")]
-    _boundary_ev: serde::de::IgnoredAny,
-    #[serde(rename = "area")]
-    _area: serde::de::IgnoredAny,
-    // Distinguish an omitted setting from retired explicit null, so current settings win.
-    #[serde(deserialize_with = "saved_selectivity")]
-    selectivity: Option<Option<f32>>,
-    cutoff: Option<f32>,
-    approach: Approach,
-    #[serde(rename = "restraint")]
-    _retired_restraint: serde::de::IgnoredAny,
-}
-impl Default for SavedControls {
-    fn default() -> Self {
-        let controls = Controls::default();
-        Self {
-            _donation: serde::de::IgnoredAny,
-            _agreement: serde::de::IgnoredAny,
-            _boundary_ev: serde::de::IgnoredAny,
-            _area: serde::de::IgnoredAny,
-            selectivity: None,
-            cutoff: None,
-            approach: controls.approach,
-            _retired_restraint: serde::de::IgnoredAny,
-        }
-    }
-}
-fn saved_selectivity<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<Option<Option<f32>>, D::Error> {
-    <Option<f32> as serde::Deserialize>::deserialize(deserializer).map(Some)
-}
-impl TryFrom<SavedControls> for Controls {
-    type Error = &'static str;
-    fn try_from(saved: SavedControls) -> std::result::Result<Self, Self::Error> {
-        let selectivity = match saved.selectivity {
-            Some(value) => value.unwrap_or(0.),
-            None => match saved.cutoff {
-                None => 0.,
-                Some(cutoff) if (0.005..=0.02).contains(&cutoff) => STRICT_COLOR_CUTOFF / cutoff,
-                Some(_) => return Err("retired color-field cutoff must be 0.005..0.02"),
-            },
-        };
-        Ok(Self {
-            selectivity,
-            approach: saved.approach,
-        })
-    }
-}
-
 impl Controls {
     pub fn validate(self) -> Result<()> {
         if !(0. ..=1.).contains(&self.selectivity) {

@@ -469,9 +469,8 @@ fn texture_preserves_shading_and_separates_noise_and_spatial_bands() {
 
 #[test]
 fn texture_sizes_persist_and_fit_processing_context() {
-    let old: TextureControls =
-        serde_json::from_str(r#"{"enabled":true,"fine":0.8,"coarse":0.2}"#).unwrap();
-    assert_eq!([old.fine_size, old.coarse_size], [1., 1.]);
+    let partial: TextureControls = serde_json::from_str(r#"{"fine":0.8,"coarse":0.2}"#).unwrap();
+    assert_eq!([partial.fine_size, partial.coarse_size], [1., 1.]);
     let mut c = Controls::default();
     c.texture.fine = 0.8;
     c.texture.fine_size = 0.75;

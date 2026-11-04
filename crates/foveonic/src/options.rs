@@ -36,10 +36,9 @@ pub(crate) fn parse_settings_for_camera(
                 Some("monochrome") => initial.rendering = Rendering::Monochrome,
                 _ => {}
             },
-            Some(
-                "--mono-mix" | "--mono-noise" | "--mono-banding" | "--mono-smoothness"
-                | "--mono-sensitivity",
-            ) => initial.rendering = Rendering::Monochrome,
+            Some("--mono-mix" | "--mono-noise" | "--mono-banding" | "--mono-smoothness") => {
+                initial.rendering = Rendering::Monochrome
+            }
             _ => {}
         }
     }
@@ -166,18 +165,15 @@ fn parse_settings_with_noise_defaults(
                 settings.photographic.sharpening.halo_suppression = value.parse()?
             }
             "--local-contrast" => settings.photographic.local_contrast = value.parse()?,
-            "--mono-sensitivity" | "--color-sensitivity" => {
+            "--color-sensitivity" => {
                 let lightness = value
                     .split(',')
                     .map(str::parse)
                     .collect::<std::result::Result<Vec<f32>, _>>()?
                     .try_into()
-                    .map_err(|_| "color sensitivity requires Red,Yellow,Green,Cyan,Blue,Magenta")?;
+                    .map_err(|_| "color sensitivity requires Red,Orange,Yellow,Green,Cyan,Blue,Purple,Magenta")?;
                 settings.photographic.color_editor =
                     foveonic::render::ColorEditorControls::from_lightness(lightness);
-                if flag == "--mono-sensitivity" {
-                    settings.rendering = Rendering::Monochrome;
-                }
             }
             "--contrast" => settings.tone.contrast = value.parse()?,
             "--shadows" => settings.tone.shadows = value.parse()?,

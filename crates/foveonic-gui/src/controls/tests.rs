@@ -3827,8 +3827,16 @@ fn merrill_color_sensitivity_is_shared_without_changing_values_on_mode_switch() 
     use foveonic::render::Rendering;
     let context = egui::Context::default();
     let mut settings = Settings::new("Sunlight", "Standard");
-    settings.photographic.color_editor =
-        foveonic::render::ColorEditorControls::from_lightness([0.2, 0., -0.3, 0., 0., 0.1]);
+    settings.photographic.color_editor = foveonic::render::ColorEditorControls::from_lightness([
+        0.2,
+        (0.2 + 0.) * 0.5,
+        0.,
+        -0.3,
+        0.,
+        0.,
+        (0. + 0.1) * 0.5,
+        0.1,
+    ]);
     for rendering in [Rendering::Color, Rendering::Monochrome, Rendering::Color] {
         settings.rendering = rendering;
         let before = settings.clone();
