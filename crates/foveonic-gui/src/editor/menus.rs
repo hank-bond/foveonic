@@ -47,7 +47,7 @@ impl Menus<'_> {
                 if scope == Scope::All {
                     rect.center().y
                 } else {
-                    rect.top() + crate::widgets::control_height(ui) * 0.5
+                    rect.top() + crate::widgets::button_group_height(ui) * 0.5
                 },
             ),
             egui::vec2(44., 20.),

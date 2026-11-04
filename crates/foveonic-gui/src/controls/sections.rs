@@ -35,9 +35,16 @@ pub(super) fn show(
 ) -> bool {
     let mut changed = false;
     let mut placements = Vec::new();
+    let spacing = ui.spacing().item_spacing.y;
+    let gap = crate::widgets::section_spacing(ui);
     for section in order.iter().copied().filter(|s| available.contains(s)) {
-        let divider = ui.separator().rect;
-        let response = ui.push_id(section, |ui| draw(ui, section));
+        ui.spacing_mut().item_spacing.y = gap;
+        let divider = ui.add(egui::Separator::default().spacing(0.)).rect;
+        let response = ui.push_id(section, |ui| {
+            ui.spacing_mut().item_spacing.y = spacing;
+            draw(ui, section)
+        });
+        ui.spacing_mut().item_spacing.y = spacing;
         menus.header(
             ui,
             crate::editor::Scope::Tool(section),

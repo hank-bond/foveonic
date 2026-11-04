@@ -27,23 +27,28 @@ pub(super) fn section_header_with(
     enabled: Option<&mut bool>,
     contents: impl FnOnce(&mut egui::Ui, bool),
 ) -> bool {
-    ui.horizontal(|ui| {
-        ui.set_min_height(crate::widgets::button_group_height(ui));
-        let text = crate::widgets::section_title(ui, title);
-        let (response, enabled) = if let Some(enabled) = enabled {
-            let response = crate::widgets::checkbox(ui, enabled, text);
-            (response, *enabled)
-        } else {
-            (ui.label(text), true)
-        };
-        let changed = help::control(response, title).changed();
-        contents(ui, enabled);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::sections::editing_handle(ui, section);
-        });
-        changed
-    })
-    .inner
+    let spacing = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = crate::widgets::section_spacing(ui);
+    let changed = ui
+        .horizontal(|ui| {
+            ui.set_min_height(crate::widgets::button_group_height(ui));
+            let text = crate::widgets::section_title(ui, title);
+            let (response, enabled) = if let Some(enabled) = enabled {
+                let response = crate::widgets::checkbox(ui, enabled, text);
+                (response, *enabled)
+            } else {
+                (ui.label(text), true)
+            };
+            let changed = help::control(response, title).changed();
+            contents(ui, enabled);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                crate::sections::editing_handle(ui, section);
+            });
+            changed
+        })
+        .inner;
+    ui.spacing_mut().item_spacing.y = spacing;
+    changed
 }
 
 /// Reserve the full column while centering the lowercase body on its control.

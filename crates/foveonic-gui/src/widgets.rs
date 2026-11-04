@@ -33,6 +33,11 @@ pub fn section_title(ui: &egui::Ui, title: &str) -> egui::RichText {
     egui::RichText::new(title).size(size).color(color)
 }
 
+/// Headers use the same compact gap above and below their row.
+pub fn section_spacing(ui: &egui::Ui) -> f32 {
+    ui.spacing().item_spacing.y * 0.8
+}
+
 const VALUE_SIGNIFICANT_DIGITS: usize = 3;
 const VALUE_DECIMAL_PLACES: usize = 2;
 

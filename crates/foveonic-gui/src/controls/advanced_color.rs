@@ -62,7 +62,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         .id_salt("Advanced color edits")
         .max_height(140.)
         .show(ui, |ui| {
-            ui.set_min_height(2. * widgets::control_height(ui));
+            ui.set_min_height(widgets::control_height(ui));
             if ranges.count == 0 {
                 ui.weak("Pick a color in the photograph to create a range.");
             }
