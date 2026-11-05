@@ -24,7 +24,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[chroma_repair.rs](./chroma_repair.rs)** Repairs ordered RGB defect records with directional and masked-neighborhood passes.
 - **[color_field.rs](./color_field.rs)** Owns original evidence, GPU brightness/color solves, and native highlight application.
 - **[column_gain.rs](./column_gain.rs)** Applies six-channel per-column affine gains while preserving packed sensor cells.
-- **[despeckle.rs](./despeckle.rs)** Prepares camera-based thresholds for reference and compact GPU speckle repair.
+- **[despeckle.rs](./despeckle.rs)** Prepares camera-based thresholds and bounded dependency rounds for GPU speckle repair.
 - **[dynamic_range.rs](./dynamic_range.rs)** Reconstructs near-saturated channels from GPU cell colors and ordered global color-ratio fits.
 - **[estimated_iso.rs](./estimated_iso.rs)** Estimates processing ISO from camera histograms and reference metadata.
 - **[fixed_point.rs](./fixed_point.rs)** Executes signed fixed-point layer correction and nonlinear matrix transforms with explicit numerical contracts.

@@ -1,4 +1,4 @@
-//! Prepares camera-based thresholds for reference and compact GPU speckle repair.
+//! Prepares camera-based thresholds and bounded dependency rounds for GPU speckle repair.
 
 //!
 //! Tables and detector rules adapted from the reference implementation's
@@ -14,6 +14,7 @@ use crate::{
 const BANKS: u32 = 8;
 const BLOCK: u32 = 256;
 const CAPACITY: u32 = 624_999;
+const PARALLEL_ROUNDS: u32 = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -188,7 +189,7 @@ pub(crate) fn apply(
     )?;
     let uniform = gpu.uniform(&p);
     let lookup = gpu.upload("Speckle threshold tables", &prepared.tables)?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 4);
+    let mut trace = gpu.trace(profile.mode.gpu(), 7 + 2 * PARALLEL_ROUNDS);
     gpu.dispatch(
         Kernel::SpeckleDetect,
         &mut [
@@ -205,14 +206,65 @@ pub(crate) fn apply(
     gpu.dispatch(
         Kernel::SpecklePrefix,
         &mut [(2, Read(&uniform)), (5, Write(counts.write()))],
-        [8, 1],
+        [BANKS, 1],
         &mut trace,
     );
     gpu.dispatch(
         Kernel::SpeckleScatter,
         &mut [
             (2, Read(&uniform)),
-            (4, Read(&marks)),
+            (4, Write(marks.write())),
+            (5, Read(&counts)),
+            (6, Write(records.write())),
+        ],
+        [p.source[2], 1],
+        &mut trace,
+    );
+    // Scatter replaces block ranks with pending layer flags. Readiness uses a
+    // spare record bit, and each dependency round gets a dispatch boundary.
+    for _ in 0..PARALLEL_ROUNDS {
+        gpu.dispatch(
+            Kernel::SpeckleClassifyReady,
+            &mut [
+                (2, Read(&uniform)),
+                (4, Read(&marks)),
+                (5, Read(&counts)),
+                (6, Write(records.write())),
+            ],
+            [p.source[3].div_ceil(BLOCK), BANKS],
+            &mut trace,
+        );
+        gpu.dispatch(
+            Kernel::SpeckleRepairReady,
+            &mut [
+                (2, Read(&uniform)),
+                (3, Write(output.write())),
+                (4, Write(marks.write())),
+                (5, Read(&counts)),
+                (6, Read(&records)),
+            ],
+            [p.source[3].div_ceil(BLOCK), BANKS],
+            &mut trace,
+        );
+    }
+    // Compact unfinished records so the ordered pass visits only the remainder.
+    gpu.dispatch(
+        Kernel::SpeckleRemaining,
+        &mut [(4, Write(marks.write())), (5, Write(counts.write()))],
+        [p.source[2], 1],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::SpecklePrefix,
+        &mut [(2, Read(&uniform)), (5, Write(counts.write()))],
+        [BANKS, 1],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::SpeckleScatter,
+        &mut [
+            (2, Read(&uniform)),
+            (4, Write(marks.write())),
             (5, Read(&counts)),
             (6, Write(records.write())),
         ],

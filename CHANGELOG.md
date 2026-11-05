@@ -5,6 +5,14 @@ kind: reference
 
 # Changelog
 
+## Unreleased
+
+Optimization and responsiveness improvements following the feature-focused 0.7.0 release.
+
+### Changes
+
+- Reduce Merrill Reference speckle-processing stalls at low thresholds while preserving the existing rendered result.
+
 ## 0.7.0
 
 Adaptive starting renders, dehaze, saved crops and more export formats, with improved colour controls and a quieter workspace.

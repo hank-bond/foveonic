@@ -661,3 +661,228 @@ fn compact_repairs_isolated_clipped_layers_but_preserves_supported_highlights() 
         bytemuck::cast_slice::<f32, u8>(&calibrated)
     );
 }
+
+fn serial_replay(
+    gpu: &Gpu,
+    input: &crate::gpu::ReadGuard,
+    prepared: &Prepared,
+) -> crate::gpu::ReadGuard {
+    // Keep the original four-pass execution here as the scheduling oracle.
+    // Production always uses the fixed parallel algorithm.
+    let p = prepared.params;
+    let count = u64::from(p.source[0]) * u64::from(p.source[1]);
+    let mut output = gpu.storage("Serial despeckle check", count * 12).unwrap();
+    let mut marks = gpu.storage("Serial block ranks", count * 4).unwrap();
+    let mut counts = gpu
+        .storage("Serial bank prefixes", u64::from(p.source[2] + BANKS) * 4)
+        .unwrap();
+    let mut records = gpu
+        .storage(
+            "Serial records",
+            u64::from(p.source[3]) * u64::from(BANKS) * 8,
+        )
+        .unwrap();
+    let uniform = gpu.uniform(&p);
+    let lookup = gpu.upload("Serial thresholds", &prepared.tables).unwrap();
+    let mut trace = gpu.trace(false, 4);
+    gpu.dispatch(
+        Kernel::SpeckleDetect,
+        &mut [
+            (0, Read(input)),
+            (1, Read(&lookup)),
+            (2, Read(&uniform)),
+            (3, Write(output.write())),
+            (4, Write(marks.write())),
+            (5, Write(counts.write())),
+        ],
+        [p.source[2], 1],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::SpecklePrefix,
+        &mut [(2, Read(&uniform)), (5, Write(counts.write()))],
+        [BANKS, 1],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::SpeckleScatter,
+        &mut [
+            (2, Read(&uniform)),
+            (4, Write(marks.write())),
+            (5, Read(&counts)),
+            (6, Write(records.write())),
+        ],
+        [p.source[2], 1],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::SpeckleRepair,
+        &mut [
+            (2, Read(&uniform)),
+            (3, Write(output.write())),
+            (5, Read(&counts)),
+            (6, Read(&records)),
+        ],
+        [1, 1],
+        &mut trace,
+    );
+    output
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn parallel_speckle_rounds_match_serial_chains_capacity_and_empty_work() {
+    let gpu = Gpu::new().unwrap();
+    let width = 64;
+    let height = 64;
+    let mut horizontal = vec![100_f32; width * height * 3];
+    let mut vertical = horizontal.clone();
+    let mut diagonal = horizontal.clone();
+    // Vary donors so an earlier repair survives min/max trimming and changes
+    // the next repair. Flat donors could hide an incorrectly reordered chain.
+    for i in 0..width {
+        horizontal[(30 * width + i) * 3 + 2] = 80.;
+        horizontal[(32 * width + i) * 3 + 2] = 120.;
+        vertical[(i * width + 30) * 3] = 80.;
+        vertical[(i * width + 32) * 3] = 120.;
+        for x in 0..width {
+            diagonal[(i * width + x) * 3 + 1] += i as f32 * 0.25;
+        }
+    }
+    for i in 4..60 {
+        let v = if i % 2 == 0 { 300. } else { -100. };
+        horizontal[(31 * width + i) * 3 + 2] = v;
+        vertical[(i * width + 31) * 3] = v;
+        diagonal[(i * width + (63 - i)) * 3 + 1] = v;
+    }
+    let mut seed = 0x843f_2201_u32;
+    let random: Vec<f32> = (0..width * height * 3)
+        .map(|_| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 16) as f32 / 128. - 128.
+        })
+        .collect();
+    let fixture = floats(&fixture()["input"]);
+    for (name, pixels) in [
+        ("empty", vec![100_f32; width * height * 3]),
+        ("horizontal chain", horizontal),
+        ("vertical chain across banks", vertical),
+        ("upper-right dependencies", diagonal),
+        ("dense signed layers", random),
+        ("seven layer masks", fixture),
+    ] {
+        let input = gpu.upload(name, &pixels).unwrap();
+        for capacity in [1, 7, (width * height / BANKS as usize) as u32] {
+            let mut p = Prepared {
+                params: parameters(width as u32, height as u32, [8, 8, 56, 56]).unwrap(),
+                tables: vec![0.; 3 * 4096],
+            };
+            p.params.source[3] = capacity;
+            let before = gpu.activity();
+            let expected = serial_replay(&gpu, &input, &p);
+            let serial_activity = gpu.activity().since(before);
+            let before = gpu.activity();
+            let actual = apply(
+                &gpu,
+                &input,
+                &input,
+                &p,
+                &mut Profile::new(crate::profile::Mode::Off),
+            )
+            .unwrap();
+            let parallel_activity = gpu.activity().since(before);
+            assert_eq!(parallel_activity.allocations, serial_activity.allocations);
+            assert_eq!(
+                parallel_activity.storage_bytes,
+                serial_activity.storage_bytes
+            );
+            assert_eq!(parallel_activity.upload_bytes, serial_activity.upload_bytes);
+            assert_eq!(parallel_activity.readbacks, 0);
+            assert_eq!(
+                gpu.readback(&actual).unwrap(),
+                gpu.readback(&expected).unwrap(),
+                "{name}, bank capacity {capacity}"
+            );
+        }
+        assert_eq!(
+            gpu.readback(&input).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&pixels)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; prints completed despeckle timings"]
+fn parallel_speckle_originals_match_serial_and_measure_completed_work() {
+    use crate::{inspection::Content, render::Settings, source::Source};
+    use std::time::Instant;
+    let root = std::path::PathBuf::from(
+        std::env::var_os("FOVEONIC_FIXTURE_DIR").expect("fixture directory"),
+    );
+    let engine = crate::render::Engine::new().unwrap();
+    let gpu = engine.test_gpu();
+    let settings = Settings::new("Sunlight", "Standard");
+    for name in [
+        "blue-parking-sign",
+        "glossy-leaves-and-buds",
+        "rocks-and-tree-shadows",
+        "sunlit-red-flower",
+        "turquoise-still-life",
+        "yellow-flowers-and-stroller",
+    ] {
+        let source = Source::open(root.join(format!("{name}.x3f"))).unwrap();
+        let mut artifacts = engine
+            .render_artifacts(
+                &source,
+                &settings,
+                &["highlight.layers"],
+                &mut Profile::new(crate::profile::Mode::Off),
+            )
+            .unwrap();
+        let Content::Image(input) = artifacts.remove(0).content else {
+            panic!("expected native layers");
+        };
+        let calibration = super::super::calibration::prepare(&source.metadata, "Sunlight").unwrap();
+        let gains = std::array::from_fn(|c| calibration.params.gains[c]);
+        let couplings = crate::noise::couplings(
+            &source.metadata,
+            "Sunlight",
+            settings.sensor_noise_controls(),
+        )
+        .unwrap();
+        for threshold in [1., 0.2] {
+            let prepared = prepare(&source.metadata, gains, couplings.despeckle_scale)
+                .unwrap()
+                .with_controls(crate::render::MerrillSpeckleControls {
+                    threshold,
+                    ..Default::default()
+                })
+                .unwrap();
+            gpu.device.poll(wgpu::Maintain::Wait);
+            let start = Instant::now();
+            let expected = serial_replay(gpu, &input.buffer, &prepared);
+            gpu.device.poll(wgpu::Maintain::Wait);
+            let serial_ms = start.elapsed().as_secs_f64() * 1000.;
+            let start = Instant::now();
+            let actual = apply(
+                gpu,
+                &input.buffer,
+                &input.buffer,
+                &prepared,
+                &mut Profile::new(crate::profile::Mode::Off),
+            )
+            .unwrap();
+            gpu.device.poll(wgpu::Maintain::Wait);
+            let parallel_ms = start.elapsed().as_secs_f64() * 1000.;
+            assert_eq!(
+                gpu.readback(&actual).unwrap(),
+                gpu.readback(&expected).unwrap(),
+                "{name}, threshold {threshold}"
+            );
+            println!(
+                "speckle_completed {}",
+                serde_json::json!({"source":name,"threshold":threshold,"serial_ms":serial_ms,"parallel_ms":parallel_ms})
+            );
+        }
+    }
+}
