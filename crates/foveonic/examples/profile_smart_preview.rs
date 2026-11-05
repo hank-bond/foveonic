@@ -79,7 +79,7 @@ fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let source_path = PathBuf::from(
         args.next()
-            .ok_or("usage: profile_smart_preview ORIGINAL.x3f REPORT.json [--region-first [fresh|exposure|noise] | --direct-only | --warm-edits] [--fractions LIST] [--repeats N] [-- RENDER_OPTIONS]")?,
+            .ok_or("usage: profile_smart_preview ORIGINAL.x3f REPORT.json [--region-first [fresh|exposure|noise] | --direct-only | --full-edit exposure|noise | --warm-edits] [--fractions LIST] [--repeats N] [--benchmark-off] [--diagnostic wall|gpu | --diagnostic-only wall|gpu] [-- RENDER_OPTIONS]")?,
     );
     let destination = PathBuf::from(args.next().ok_or("missing report destination")?);
     if destination.exists() {
@@ -96,11 +96,16 @@ fn main() -> Result<()> {
     } else {
         controls
     };
+    let mut diagnostic = None;
+    let mut diagnostic_only = false;
+    let mut benchmark_off = false;
+    let mut full_edit: Option<String> = None;
     let mut region_mode = false;
     let mut direct_only = false;
     let mut warm_edits = false;
     let mut scenario = "fresh";
     let mut repeats = 5usize;
+    let mut repeats_set = false;
     let mut fractions = vec![0.25, 0.5, 0.75];
     let mut fractions_set = false;
     let mut runner = runner.iter().peekable();
@@ -108,6 +113,35 @@ fn main() -> Result<()> {
         match arg.to_str() {
             Some("--direct-only") => direct_only = true,
             Some("--warm-edits") => warm_edits = true,
+            Some("--benchmark-off") => benchmark_off = true,
+            Some("--full-edit") => {
+                if full_edit.is_some() {
+                    return Err("specify only one Full edit".into());
+                }
+                let edit = runner
+                    .next()
+                    .and_then(|v| v.to_str())
+                    .ok_or("missing Full edit")?;
+                if !["exposure", "noise"].contains(&edit) {
+                    return Err("Full edit must be exposure or noise".into());
+                }
+                full_edit = Some(edit.to_owned());
+            }
+            Some("--diagnostic" | "--diagnostic-only") => {
+                if diagnostic.is_some() {
+                    return Err("specify only one diagnostic mode".into());
+                }
+                diagnostic_only = arg == "--diagnostic-only";
+                let mode = runner
+                    .next()
+                    .and_then(|v| v.to_str())
+                    .ok_or("missing diagnostic mode")?
+                    .parse::<Mode>()?;
+                if mode == Mode::Off {
+                    return Err("diagnostic mode must be wall or gpu".into());
+                }
+                diagnostic = Some(mode);
+            }
             Some("--region-first") => {
                 region_mode = true;
                 if let Some(value) = runner.peek().and_then(|v| v.to_str()) {
@@ -118,6 +152,7 @@ fn main() -> Result<()> {
                 }
             }
             Some("--repeats") => {
+                repeats_set = true;
                 repeats = runner
                     .next()
                     .and_then(|v| v.to_str())
@@ -147,14 +182,43 @@ fn main() -> Result<()> {
             _ => return Err("invalid Smart profiler arguments".into()),
         }
     }
+    if full_edit.is_some()
+        && (region_mode || direct_only || fractions_set || (repeats_set && !benchmark_off))
+    {
+        return Err(
+            "Full edit cannot be combined with region-first, direct-only, fractions, or repeats"
+                .into(),
+        );
+    }
+    if benchmark_off && (full_edit.as_deref() != Some("exposure") || diagnostic_only) {
+        return Err(
+            "benchmark-off requires Full exposure edit and cannot be diagnostic-only".into(),
+        );
+    }
+    if full_edit.is_some() && !benchmark_off && (!diagnostic_only || diagnostic.is_none()) {
+        return Err("Full edit requires diagnostic-only wall or gpu, or benchmark-off".into());
+    }
+    if diagnostic.is_some() && !region_mode && full_edit.is_none() {
+        return Err("diagnostic requires region-first or Full edit".into());
+    }
     if fractions_set && !region_mode {
         return Err("fractions require region-first".into());
     }
     if direct_only && region_mode {
         return Err("direct-only cannot be combined with region-first".into());
     }
-    if warm_edits && (direct_only || region_mode || fractions_set) {
-        return Err("warm-edits cannot be combined with other routes or fractions".into());
+    if warm_edits
+        && (direct_only
+            || region_mode
+            || fractions_set
+            || full_edit.is_some()
+            || benchmark_off
+            || diagnostic.is_some())
+    {
+        return Err(
+            "warm-edits cannot be combined with other routes, fractions, or diagnostic options"
+                .into(),
+        );
     }
     let source = Arc::new(Source::open(&source_path)?);
     let settings = if controls.is_empty() {
@@ -170,18 +234,49 @@ fn main() -> Result<()> {
         }
         settings
     };
-    if !direct_only && settings.output_size.is_some() {
+    if full_edit.is_none() && !direct_only && settings.output_size.is_some() {
         return Err("regional comparisons require native output size".into());
     }
     if direct_only && !settings.fast_preview_available(&source.metadata) {
         return Err("this camera recipe does not support a Fast overview".into());
     }
-    if !direct_only && !settings.regional_preview_available(&source.metadata) {
+    if full_edit.is_none() && !direct_only && !settings.regional_preview_available(&source.metadata)
+    {
         return Err("this camera recipe does not support regional Smart preview".into());
     }
     let engine = Engine::new()?;
+    diagnostic
+        .unwrap_or(Mode::Off)
+        .check_gpu_features(engine.device().features())?;
     if warm_edits {
         return warm_edit_benchmark(&engine, source, source_path, destination, settings, repeats);
+    }
+    if let Some(edit) = full_edit {
+        if benchmark_off {
+            let off = full_edit_sequence(&engine, source.clone(), &settings, repeats, Mode::Off)?;
+            let diagnostic_runs = if let Some(mode) = diagnostic {
+                Some(full_edit_sequence(
+                    &engine, source, &settings, repeats, mode,
+                )?)
+            } else {
+                None
+            };
+            let report = serde_json::json!({"source":source_path,"adapter":engine.adapter_name(),"scenario":edit,"initial_settings":settings,"timing":"completed Full-to-Full render and view; source decode excluded; profiling off","warmup_edits":2,"runs":off,"diagnostic_mode":diagnostic,"diagnostic_runs":diagnostic_runs,"diagnostic_note":"separate instrumented session; durations are not baseline timings"});
+            std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
+            return Ok(());
+        }
+        let mut session = RenderSession::new(source);
+        let mut edited_settings = settings.clone();
+        edited_settings.preview_quality = PreviewQuality::Full;
+        edited_settings.preview_region = None;
+        let (initial, _initial_texture) =
+            completed(&engine, &mut session, &edited_settings, Mode::Off)?;
+        apply_edit(&mut edited_settings, &edit);
+        let (edited, _edited_texture) =
+            completed(&engine, &mut session, &edited_settings, diagnostic.unwrap())?;
+        let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "scenario":edit, "initial_settings":settings, "requested_settings":edited_settings, "diagnostic_only":true, "diagnostic_note":"Full-to-Full session edit; instrumented durations are not baseline timings", "initial":initial, "edited":edited});
+        std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
+        return Ok(());
     }
     if region_mode {
         return region_benchmark(
@@ -193,6 +288,8 @@ fn main() -> Result<()> {
             &settings,
             repeats,
             &fractions,
+            diagnostic,
+            diagnostic_only,
         );
     }
     let mut runs = Vec::new();
@@ -233,7 +330,7 @@ fn warm_edit_benchmark(
     let initial = settings.clone();
     let mut session = RenderSession::new(source);
     settings.preview_quality = PreviewQuality::Fast;
-    let overview = region_completed(engine, &mut session, &settings)?;
+    let overview = region_completed(engine, &mut session, &settings, Mode::Off)?;
     let extent = overview.0.extent.map(|v| v * 2);
     let size = [992.min(extent[0]), 1002.min(extent[1])];
     let origin = [(extent[0] - size[0]) / 2, (extent[1] - size[1]) / 2];
@@ -245,17 +342,17 @@ fn warm_edit_benchmark(
     ]);
     settings.preview_quality = PreviewQuality::Full;
     settings.preview_region = region;
-    let mut detail = region_completed(engine, &mut session, &settings)?;
+    let mut detail = region_completed(engine, &mut session, &settings, Mode::Off)?;
     settings.preview_region = None;
-    let mut full = region_completed(engine, &mut session, &settings)?;
+    let mut full = region_completed(engine, &mut session, &settings, Mode::Off)?;
     let mut runs = Vec::new();
     for round in 0..repeats {
         settings.exposure = initial.exposure + (round + 1) as f32 * 0.1;
         let started = Instant::now();
         settings.preview_region = region;
-        detail = region_completed(engine, &mut session, &settings)?;
+        detail = region_completed(engine, &mut session, &settings, Mode::Off)?;
         settings.preview_region = None;
-        full = region_completed(engine, &mut session, &settings)?;
+        full = region_completed(engine, &mut session, &settings, Mode::Off)?;
         let total_ms = started.elapsed().as_secs_f64() * 1000.;
         eprintln!(
             "warm edit {round}: slice {:.1} ms, Full {:.1} ms, total {total_ms:.1} ms",
@@ -275,13 +372,42 @@ fn warm_edit_benchmark(
     Ok(())
 }
 
+// Keep the previous image and view alive until the next edit completes.
+fn full_edit_sequence(
+    engine: &Engine,
+    source: Arc<Source>,
+    settings: &Settings,
+    repeats: usize,
+    mode: Mode,
+) -> Result<Vec<serde_json::Value>> {
+    let mut session = RenderSession::new(source);
+    let mut current = settings.clone();
+    current.preview_quality = PreviewQuality::Full;
+    current.preview_region = None;
+    let base_exposure = current.exposure;
+    let (_, mut texture, mut image) = region_completed(engine, &mut session, &current, Mode::Off)?;
+    let mut runs = Vec::new();
+    for index in 0..repeats + 2 {
+        current.exposure = base_exposure + if index % 2 == 0 { 0.5 } else { 0. };
+        let start_epoch_ms = epoch_millis()?;
+        let (result, next_texture, next_image) =
+            region_completed(engine, &mut session, &current, mode)?;
+        let end_epoch_ms = epoch_millis()?;
+        runs.push(serde_json::json!({"warmup":index < 2,"index":index,"exposure":current.exposure,"start_epoch_ms":start_epoch_ms,"end_epoch_ms":end_epoch_ms,"result":result}));
+        (texture, image) = (next_texture, next_image);
+    }
+    drop((texture, image));
+    Ok(runs)
+}
+
 // The image and texture stay alive through continuation, matching foreground ownership.
 fn region_completed(
     engine: &Engine,
     session: &mut RenderSession,
     settings: &Settings,
+    mode: Mode,
 ) -> Result<(Completed, ImageTexture, RenderedImage)> {
-    completed_image(engine, session, settings, Mode::Off)
+    completed_image(engine, session, settings, mode)
 }
 
 fn completed_image(
@@ -324,6 +450,7 @@ fn region_route(
     full_baseline: &[u8],
     scenario: &str,
     initial_settings: &Settings,
+    mode: Mode,
 ) -> Result<serde_json::Value> {
     let mut settings = initial_settings.clone();
     let size = extent.map(|v| ((f64::from(v) * fraction).round() as u32).max(1));
@@ -338,7 +465,12 @@ fn region_route(
     let _previous = if scenario == "fresh" {
         None
     } else {
-        Some(region_completed(engine, &mut session, &settings)?)
+        Some(region_completed(
+            engine,
+            &mut session,
+            &settings,
+            Mode::Off,
+        )?)
     };
     apply_edit(&mut settings, scenario);
     settings.preview_quality = if region_first {
@@ -347,16 +479,18 @@ fn region_route(
         PreviewQuality::Fast
     };
     settings.preview_region = region_first.then_some(rect);
-    let (first, _first_texture, first_image) = region_completed(engine, &mut session, &settings)?;
+    let (first, _first_texture, first_image) =
+        region_completed(engine, &mut session, &settings, mode)?;
     settings.preview_quality = PreviewQuality::Full;
     settings.preview_region = Some(rect);
     let detail = if region_first {
         None
     } else {
-        Some(region_completed(engine, &mut session, &settings)?)
+        Some(region_completed(engine, &mut session, &settings, mode)?)
     };
     settings.preview_region = None;
-    let (full, _full_texture, full_image) = region_completed(engine, &mut session, &settings)?;
+    let (full, _full_texture, full_image) =
+        region_completed(engine, &mut session, &settings, mode)?;
     if verify {
         if engine.readback_image(&full_image)? != full_baseline {
             return Err("Full continuation differs from independent Full".into());
@@ -438,17 +572,23 @@ fn region_benchmark(
     initial_settings: &Settings,
     repeats: usize,
     fractions: &[f64],
+    diagnostic: Option<Mode>,
+    diagnostic_only: bool,
 ) -> Result<()> {
     let mut settings = initial_settings.clone();
     apply_edit(&mut settings, scenario);
     settings.preview_quality = PreviewQuality::Full;
     let mut session = RenderSession::new(source.clone());
-    let (_, _, whole) = region_completed(engine, &mut session, &settings)?;
+    let (_, _, whole) = region_completed(engine, &mut session, &settings, Mode::Off)?;
     let extent = whole.uncropped_view().extent;
-    let full_baseline = engine.readback_image(&whole)?;
+    let full_baseline = if diagnostic_only {
+        Vec::new()
+    } else {
+        engine.readback_image(&whole)?
+    };
     drop((whole, session));
     let mut runs = Vec::new();
-    for &fraction in fractions {
+    for &fraction in if diagnostic_only { &[][..] } else { fractions } {
         for round in 0..=repeats {
             for region_first in if round % 2 == 0 {
                 [false, true]
@@ -466,6 +606,7 @@ fn region_benchmark(
                     &full_baseline,
                     scenario,
                     initial_settings,
+                    Mode::Off,
                 )?;
                 let end_epoch_ms = epoch_millis()?;
                 eprintln!("viewport fraction {fraction}, round {round}: {result}");
@@ -473,7 +614,23 @@ fn region_benchmark(
             }
         }
     }
-    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "extent":extent, "scenario":scenario, "initial_settings":initial_settings, "requested_settings":settings, "output":"final", "timing":"completed render and view preparation, source decode and previous image excluded, alternating pairs per viewport, one warmup pair; off mode", "timestamp_scope":"whole route, including prior image and any verification", "runs":runs});
+    let diagnostic = if let Some(mode) = diagnostic {
+        Some(region_route(
+            engine,
+            source,
+            fractions[0],
+            extent,
+            true,
+            false,
+            &full_baseline,
+            scenario,
+            initial_settings,
+            mode,
+        )?)
+    } else {
+        None
+    };
+    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "extent":extent, "scenario":scenario, "initial_settings":initial_settings, "requested_settings":settings, "output":"final", "timing":"completed render and view preparation, source decode and previous image excluded, alternating pairs per viewport, one warmup pair; off mode", "timestamp_scope":"whole route, including prior image and any verification", "runs":runs, "diagnostic_only":diagnostic_only, "diagnostic":diagnostic, "diagnostic_note":"separate instrumented region-first route; its durations are not baseline timings"});
     std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
     Ok(())
 }

@@ -660,3 +660,103 @@ fn texture_edits_reuse_filtering_and_match_fresh_images() {
         &engine.readback_image(&retained).unwrap(),
     );
 }
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
+fn repair_preparation_session_matches_fresh_and_preserves_ownership() {
+    use crate::nodes::sensor::repair::Threshold;
+    let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Arc::new(Source::open(dir.join("blue-parking-sign.x3f")).unwrap());
+    let engine = Engine::new().unwrap();
+    let mut session = RenderSession::new(source.clone());
+    let mut settings = Settings::new("Sunlight", "Standard");
+    let early = engine
+        .render_session(
+            &mut session,
+            &settings,
+            &["sensor.layers"],
+            || false,
+            &mut Profile::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.cached_preparation_bytes(), 0);
+    drop(early);
+    let retained = session_image(&engine, &mut session, &settings);
+    let retained_pixels = engine.readback_image(&retained).unwrap();
+    assert!(
+        session.cached_preparation_bytes() > 0
+            && session.cached_preparation_bytes() <= 4 * 1024 * 1024
+    );
+    for threshold in [
+        Some(Threshold::Camera),
+        Some(Threshold::Manual(0)),
+        None,
+        Some(Threshold::Manual(15)),
+        Some(Threshold::Camera),
+    ] {
+        settings.repair = threshold;
+        let cached = session_image(&engine, &mut session, &settings);
+        let fresh = engine
+            .render(&source, &settings, &mut Profile::default())
+            .unwrap();
+        assert_same_pixels(
+            "repair setting",
+            &engine.readback_image(&cached).unwrap(),
+            &engine.readback_image(&fresh).unwrap(),
+        );
+        assert!(session.cached_preparation_bytes() <= 4 * 1024 * 1024);
+    }
+    assert_same_pixels(
+        "retained before edits",
+        &engine.readback_image(&retained).unwrap(),
+        &retained_pixels,
+    );
+
+    let other = Arc::new(Source::open(dir.join("turquoise-still-life.x3f")).unwrap());
+    let mut other_session = RenderSession::new(other.clone());
+    assert_eq!(other_session.cached_preparation_bytes(), 0);
+    let cached = session_image(&engine, &mut other_session, &settings);
+    let fresh = engine
+        .render(&other, &settings, &mut Profile::default())
+        .unwrap();
+    assert_same_pixels(
+        "different source",
+        &engine.readback_image(&cached).unwrap(),
+        &engine.readback_image(&fresh).unwrap(),
+    );
+    drop((cached, fresh, other_session));
+
+    let mut cancelled_session = RenderSession::new(source.clone());
+    let checks = Cell::new(0);
+    let cancel = || {
+        checks.set(checks.get() + 1);
+        checks.get() > 1
+    };
+    let mut execution = crate::interactive::Execution {
+        cache: Some(&mut cancelled_session.cache),
+        cancel: Some(&cancel),
+        ..Default::default()
+    };
+    assert!(execution
+        .prepare_repair(&source.metadata, Threshold::Camera)
+        .is_err());
+    drop(execution);
+    assert_eq!(cancelled_session.cached_preparation_bytes(), 0);
+
+    let second = Engine::new().unwrap();
+    let rerender = session_image(&second, &mut session, &settings);
+    let second_fresh = second
+        .render(&source, &settings, &mut Profile::default())
+        .unwrap();
+    assert_same_pixels(
+        "different engine",
+        &second.readback_image(&rerender).unwrap(),
+        &second.readback_image(&second_fresh).unwrap(),
+    );
+    assert_same_pixels(
+        "retained first engine",
+        &engine.readback_image(&retained).unwrap(),
+        &retained_pixels,
+    );
+}

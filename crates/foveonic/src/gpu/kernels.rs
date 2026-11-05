@@ -151,6 +151,7 @@ pub enum Kernel {
     ToneEqualizerGain,
     ToneEqualizerApply,
     Encode,
+    #[cfg(test)]
     Repair,
     Sharpen,
     ColorDq,
@@ -488,6 +489,7 @@ impl Kernel {
             Self::ToneEqualizerGain => "HDR coordinated gains",
             Self::ToneEqualizerApply => "apply tonal range exposure",
             Self::Encode => "encode",
+            #[cfg(test)]
             Self::Repair => "repair",
             Self::Sharpen => "sharpen",
             Self::ColorDq => "ColorDQ",
@@ -688,6 +690,15 @@ impl Gpu {
         let sharpen = include_str!("../nodes/finish/sharpen.wgsl");
         let dng = include_str!("../dng/dng.wgsl");
         let mono = include_str!("../nodes/monochrome/mono.wgsl");
+        let sensor_pair = include_str!("../nodes/sensor/pair_arithmetic.wgsl");
+        let chroma_repair = format!(
+            "{sensor_pair}\n{}",
+            include_str!("../nodes/sensor/chroma_repair.wgsl")
+        );
+        let rgb_despeckle = format!(
+            "{sensor_pair}\n{}",
+            include_str!("../nodes/sensor/rgb_despeckle.wgsl")
+        );
         let photographic_tone = format!(
             "{}\n{}",
             include_str!("../nodes/finish/photographic/common.wgsl"),
@@ -751,7 +762,7 @@ impl Gpu {
             include_str!("../nodes/finish/adaptive_tone.wgsl"),
             include_str!("../nodes/finish/adaptive_tone_regions.wgsl")
         );
-        let kernels = [
+        let kernels: [(&str, &str); Kernel::FieldPrepare as usize] = [
             (
                 include_str!("../nodes/finish/linear_basis.wgsl"),
                 "linear_basis",
@@ -1029,14 +1040,8 @@ impl Gpu {
                 include_str!("../nodes/color/two_scale_noise_blend.wgsl"),
                 "noise_protection_blend",
             ),
-            (
-                include_str!("../nodes/sensor/chroma_repair.wgsl"),
-                "chroma_single",
-            ),
-            (
-                include_str!("../nodes/sensor/chroma_repair.wgsl"),
-                "chroma_general",
-            ),
+            (chroma_repair.as_str(), "chroma_single"),
+            (chroma_repair.as_str(), "chroma_general"),
             (
                 include_str!("../nodes/sensor/ordered_blue_repair.wgsl"),
                 "ordered_blue_repair",
@@ -1057,10 +1062,7 @@ impl Gpu {
                 include_str!("../nodes/sensor/blue_despeckle.wgsl"),
                 "blue_despeckle",
             ),
-            (
-                include_str!("../nodes/sensor/rgb_despeckle.wgsl"),
-                "rgb_despeckle",
-            ),
+            (rgb_despeckle.as_str(), "rgb_despeckle"),
             (
                 include_str!("../nodes/sensor/chroma_clusters.wgsl"),
                 "chroma_clusters",
@@ -1219,6 +1221,7 @@ impl Gpu {
             (tonal.as_str(), "calculate_gain"),
             (tonal.as_str(), "apply_ranges"),
             (include_str!("../nodes/finish/encode.wgsl"), "main"),
+            #[cfg(test)]
             (include_str!("../nodes/sensor/repair.wgsl"), "main"),
             (sharpen, "main"),
             (include_str!("../nodes/color/color_dq.wgsl"), "main"),
@@ -1504,6 +1507,17 @@ impl Gpu {
             .iter()
             .enumerate()
             .map(|(index, &(code, entry))| {
+                let camera_repair = [
+                    Kernel::CameraRepair as usize,
+                    Kernel::CameraDetect as usize,
+                    Kernel::CameraPrefix as usize,
+                    Kernel::CameraScatter as usize,
+                    Kernel::CameraDetected as usize,
+                    Kernel::CameraBlocks as usize,
+                ]
+                .contains(&index);
+                #[cfg(test)]
+                let camera_repair = camera_repair || index == Kernel::Repair as usize;
                 let code: std::borrow::Cow<'_, str> = if [
                     Kernel::Encode as usize,
                     Kernel::View as usize,
@@ -1539,17 +1553,7 @@ impl Gpu {
                         include_str!("../nodes/sensor/highlight_common.wgsl")
                     )
                     .into()
-                } else if [
-                    Kernel::Repair as usize,
-                    Kernel::CameraRepair as usize,
-                    Kernel::CameraDetect as usize,
-                    Kernel::CameraPrefix as usize,
-                    Kernel::CameraScatter as usize,
-                    Kernel::CameraDetected as usize,
-                    Kernel::CameraBlocks as usize,
-                ]
-                .contains(&index)
-                {
+                } else if camera_repair {
                     format!(
                         "{}\n{code}",
                         include_str!("../nodes/sensor/camera_common.wgsl")

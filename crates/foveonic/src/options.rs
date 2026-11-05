@@ -3,8 +3,8 @@
 use foveonic::{
     profile::Mode,
     render::{
-        ColorFieldApproach, HighlightMode, MerrillNoiseMethod, MonochromeControls, Rendering,
-        RepairThreshold, Settings, TiffColorSpace,
+        ColorFieldApproach, HighlightMode, MerrillBandingMethod, MerrillNoiseMethod,
+        MonochromeControls, Rendering, RepairThreshold, Settings, TiffColorSpace,
     },
     source::Result,
 };
@@ -285,6 +285,16 @@ pub(crate) fn parse_settings_with_noise_defaults(
                     _ => controls.texture.coarse_size = value.parse()?,
                 }
             }
+            "--merrill-banding-method" => {
+                settings.merrill_banding.method = match value.as_str() {
+                    "reference" => MerrillBandingMethod::Reference,
+                    "directional" => MerrillBandingMethod::Directional,
+                    _ => {
+                        return Err("Merrill banding method must be reference or directional".into())
+                    }
+                };
+                settings.merrill_banding.enabled = true;
+            }
             "--merrill-noise-method" => {
                 settings.merrill_noise_method = match value.as_str() {
                     "reference" => MerrillNoiseMethod::Reference,
@@ -491,6 +501,55 @@ mod tests {
                 )
                 .is_err());
             }
+        }
+    }
+
+    #[test]
+    fn merrill_banding_method_selects_and_enables_method() {
+        for (value, method) in [
+            ("reference", MerrillBandingMethod::Reference),
+            ("directional", MerrillBandingMethod::Directional),
+        ] {
+            let (settings, _, _) = parse_settings(
+                [
+                    "--wb",
+                    "Sunlight",
+                    "--mode",
+                    "Standard",
+                    "--merrill-banding-method",
+                    value,
+                ]
+                .into_iter()
+                .map(OsString::from),
+            )
+            .unwrap();
+            assert!(settings.merrill_banding.enabled);
+            assert_eq!(settings.merrill_banding.method, method);
+        }
+        let mut initial = Settings::new("Sunlight", "Standard");
+        initial.merrill_banding.enabled = false;
+        initial.merrill_banding.rows.bands[0].strength = 0.5;
+        let (selected, _, _) = parse_settings_with_noise_defaults(
+            ["--merrill-banding-method", "directional"]
+                .into_iter()
+                .map(OsString::from),
+            Default::default(),
+            initial,
+        )
+        .unwrap();
+        assert!(selected.merrill_banding.enabled);
+        assert_eq!(selected.merrill_banding.rows.bands[0].strength, 0.5);
+        for args in [
+            vec!["--merrill-banding-method"],
+            vec!["--merrill-banding-method", "invalid"],
+        ] {
+            assert!(parse_settings(
+                ["--wb", "Sunlight", "--mode", "Standard"]
+                    .into_iter()
+                    .chain(args)
+                    .map(OsString::from)
+            )
+            .is_err());
         }
     }
 

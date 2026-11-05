@@ -38,6 +38,35 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
+    /// Logical CPU retention including the object and all vector capacities.
+    /// Allocator bookkeeping and allocation rounding are not included.
+    pub(crate) fn retained_bytes(&self) -> Option<usize> {
+        let mut bytes = std::mem::size_of::<Self>();
+        macro_rules! add_capacity {
+            ($values:expr, $item:ty) => {
+                bytes = bytes.checked_add(
+                    $values
+                        .capacity()
+                        .checked_mul(std::mem::size_of::<$item>())?,
+                )?;
+            };
+        }
+        add_capacity!(self.records, [u32; 2]);
+        add_capacity!(self.repair_order, u32);
+        add_capacity!(self.phases, [u32; 2]);
+        add_capacity!(self.clusters, Cluster);
+        add_capacity!(self.members, [u32; 4]);
+        add_capacity!(self.masks, u32);
+        Some(bytes)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn oversized_for_test() -> Self {
+        Self {
+            records: vec![[0; 2]; 4 * 1024 * 1024 / 8 + 1],
+            ..Self::default()
+        }
+    }
     pub(crate) fn key(&self) -> crate::recipe::Key {
         crate::recipe::Key::pod(&self.params)
             .slice(&self.records)
