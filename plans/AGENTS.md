@@ -37,7 +37,6 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[release-0.7.0](./release-0.7.0.md)** Prepare, verify and publish the reviewed Adaptive, export, crop and workspace release as 0.7.0.
-- **[release-0.7.2](./release-0.7.2.md)** Prepare and verify the 0.7.2 Smart preview, Merrill editing and licensing release.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.
 - **[shared-photographic-finishing](./shared-photographic-finishing.md)** Integrate shared photographic tone, monochrome sensitivity, local contrast and sharpening with camera recipes and bounded interactive reuse.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
