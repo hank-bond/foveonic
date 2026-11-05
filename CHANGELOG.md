@@ -5,6 +5,17 @@ kind: reference
 
 # Changelog
 
+## 0.7.2
+
+Smoother Smart preview editing and faster repeated Merrill edits.
+
+### Changes
+
+- Smart preview retains completed viewport detail while scrubbing and reuses rendering work across viewport and whole-photograph refinement, reducing flicker and repeated work.
+- Reuse bounded Merrill repair preparation across edits for faster repeated rendering.
+- Developer profiling can attribute rendering work to individual processing nodes.
+- Foveonic is now licensed under AGPL-3.0.
+
 ## 0.7.1
 
 Light-appearance and processing fixes, a choice of photograph background, and smoother browsing and editing.
