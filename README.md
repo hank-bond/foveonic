@@ -55,3 +55,7 @@ cargo xtask bundle
 ```
 
 The app is created at `target/release/Foveonic.app`. To build and launch it instead, use `cargo xtask run`.
+
+## License
+
+Foveonic is licensed under the [GNU Affero General Public License, version 3](LICENSE). Third-party components retain their own licenses and notices.
