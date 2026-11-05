@@ -759,6 +759,14 @@ fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() 
         Settings::new("", ""),
         Settings::new("Sunlight", "Standard"),
         Settings {
+            white_balance_bias: foveonic::render::WhiteBalanceBias {
+                neutral: Some([1.1, 1., 0.7]),
+                warmth: 0.3,
+                tint: -0.2,
+            },
+            ..Settings::new("Sunlight", "Standard")
+        },
+        Settings {
             rendering: Rendering::Monochrome,
             ..Settings::new("", "")
         },
@@ -809,7 +817,9 @@ fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() 
             assert_eq!(*anchors.get_or_insert(positions.clone()), positions);
         }
         let (_, output, _) = frame(None, vec![]);
-        let value = if initial.white_balance.is_empty() {
+        let value = if initial.white_balance_bias.neutral.is_some() {
+            "Custom"
+        } else if initial.white_balance.is_empty() {
             "As Shot"
         } else {
             "Sunlight"
@@ -853,6 +863,7 @@ fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() 
         let (changed, _, current) = frame(Some(&metadata), vec![pointer_button(shade, false)]);
         assert!(changed);
         assert_eq!(current.white_balance, "Shade");
+        assert!(current.white_balance_bias.is_neutral());
         assert_eq!(current.color_mode, initial.color_mode);
     }
 }

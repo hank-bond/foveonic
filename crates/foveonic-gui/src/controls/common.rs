@@ -529,7 +529,7 @@ pub(super) fn color_mode(
             column,
             metadata,
             "ColorModeCompensations",
-            ("Color mode", "Color mode"),
+            ("Color mode", "Color mode", false),
             &mut settings.color_mode,
             true,
         )
@@ -543,15 +543,25 @@ pub(super) fn white_balance(
 ) -> bool {
     section_header(ui, EditingSection::WhiteBalance, "White Balance", None);
     let column = LabelColumn::new(ui);
+    let mut choice = if settings.white_balance_bias.neutral.is_some() {
+        "Custom".to_owned()
+    } else {
+        settings.white_balance.clone()
+    };
     let mut changed = camera_choice(
         ui,
         column,
         metadata,
         "WhiteBalanceGains",
-        ("Mode", "White balance"),
-        &mut settings.white_balance,
+        ("Mode", "White balance", !settings.is_monochrome()),
+        &mut choice,
         enabled,
     );
+    if changed {
+        settings.white_balance = choice;
+        settings.white_balance_bias = Default::default();
+        crate::editor::white_balance::exit(ui.ctx());
+    }
     ui.add_enabled_ui(!settings.is_monochrome(), |ui| {
         changed |= column.adjustment(
             ui,
@@ -576,7 +586,7 @@ fn camera_choice(
     column: LabelColumn,
     metadata: Option<&Metadata>,
     key: &str,
-    (label, help_key): (&str, &str),
+    (label, help_key, picker_enabled): (&str, &str, bool),
     value: &mut String,
     enabled: bool,
 ) -> bool {
@@ -592,6 +602,10 @@ fn camera_choice(
     });
     let mut changed = false;
     ui.horizontal(|ui| {
+        let white_balance = key == "WhiteBalanceGains";
+        if white_balance {
+            ui.spacing_mut().item_spacing.x = crate::widgets::MEDIUM_CONTROL_GAP;
+        }
         help::control(
             aligned_label(ui, label, None, Some(column.width_at(ui))),
             help_key,
@@ -601,7 +615,15 @@ fn camera_choice(
                 enabled && choices.as_ref().is_some_and(|list| !list.is_empty()),
                 |ui| {
                     let combo = egui::ComboBox::from_id_salt(key)
-                        .width(ui.available_width())
+                        .width(
+                            (ui.available_width()
+                                - if white_balance {
+                                    crate::widgets::control_height(ui) + ui.spacing().item_spacing.x
+                                } else {
+                                    0.
+                                })
+                            .max(1.),
+                        )
                         .truncate()
                         .selected_text(if value.is_empty() {
                             "As Shot"
@@ -624,7 +646,13 @@ fn camera_choice(
                 },
             )
             .inner;
+        let height = response.rect.height();
         help::control(response, help_key);
+        if white_balance {
+            ui.add_enabled_ui(enabled && metadata.is_some() && picker_enabled, |ui| {
+                crate::editor::white_balance::button(ui, height)
+            });
+        }
     });
     changed
 }

@@ -41,6 +41,7 @@ fn outdated_picks_and_disabled_tools_cannot_replace_the_current_selection() {
         original: Default::default(),
         expected: settings,
         weights: None,
+        feedback: None,
     });
     store(&ctx, s);
     for (token, path) in [(1, "current.x3f"), (2, "old.x3f")] {
@@ -585,5 +586,55 @@ fn toolbar_release_arms_each_picker_until_a_photo_gesture_releases() {
         assert!(active(&ctx));
         frame(0.4, vec![gesture_tests::button(photo_pos, false, false)]);
         assert!(!active(&ctx));
+    }
+}
+
+#[test]
+fn asynchronous_pick_errors_reach_the_log_once_and_ignore_stale_settings() {
+    for stale in [false, true] {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::default();
+        let mut log = crate::activity::Log::default();
+        toggle(&ctx);
+        gesture_tests::frame(&ctx, &mut settings, vec![], 0.);
+        let pos = egui::pos2(100., 100.);
+        let request = gesture_tests::frame(
+            &ctx,
+            &mut settings,
+            vec![
+                egui::Event::PointerMoved(pos),
+                gesture_tests::button(pos, true, false),
+            ],
+            0.1,
+        )
+        .1
+        .unwrap();
+        gesture_tests::frame(
+            &ctx,
+            &mut settings,
+            vec![gesture_tests::button(pos, false, false)],
+            0.2,
+        );
+        log.receive(&ctx);
+        log.open();
+        receive(
+            &ctx,
+            ColorPickReply {
+                tool: request.tool,
+                token: request.token,
+                path: request.path,
+                sample: Err("No reliable color at this point".into()),
+            },
+        );
+        if stale {
+            settings.exposure = 1.;
+        }
+        gesture_tests::frame(&ctx, &mut settings, vec![], 0.3);
+        log.receive(&ctx);
+        assert_eq!(log.unread_errors(), !stale);
+        log.open();
+        gesture_tests::frame(&ctx, &mut settings, vec![], 0.4);
+        log.receive(&ctx);
+        assert!(!log.unread_errors());
     }
 }

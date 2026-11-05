@@ -8,6 +8,7 @@ pub mod direct_color;
 mod menus;
 mod recipes;
 mod sections;
+pub mod white_balance;
 
 pub use before::{Before, Rendition};
 pub use menus::{Action, Menus, State};

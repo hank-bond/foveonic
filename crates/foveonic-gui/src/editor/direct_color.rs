@@ -60,6 +60,7 @@ struct Drag {
     original: ColorEditorControls,
     expected: Settings,
     weights: Option<[f32; 8]>,
+    feedback: Option<crate::activity::Event>,
 }
 
 #[derive(Clone, Default)]
@@ -73,7 +74,6 @@ struct State {
     selected: usize,
     weights: [f32; 8],
     drag: Option<Drag>,
-    notice: String,
 }
 fn id() -> egui::Id {
     egui::Id::new("direct color tool")
@@ -102,11 +102,10 @@ pub fn advanced_active(ctx: &egui::Context) -> bool {
     let s = state(ctx);
     s.active && s.target == Target::Advanced
 }
-pub fn notice(ctx: &egui::Context) -> String {
-    state(ctx).notice
-}
+
 fn toggle_target(ctx: &egui::Context, target: Target) {
     crate::crop_tool::exit(ctx);
+    super::white_balance::exit(ctx);
     let mut s = state(ctx);
     s.active = !(s.active && s.target == target);
     s.target = target;
@@ -152,6 +151,7 @@ pub fn button(ui: &mut egui::Ui) {
     s.configuration_menu = opened;
     if toggle {
         super::dehaze::exit(ui.ctx());
+        super::white_balance::exit(ui.ctx());
         s.active = !s.active;
         s.target = Target::Basic;
         s.drag = None;
@@ -183,12 +183,18 @@ pub fn receive(ctx: &egui::Context, reply: ColorPickReply) {
                             drag.range = drag.original.advanced.push(range);
                             if let Some(index) = drag.range {
                                 super::advanced_color::select(ctx, index);
-                                s.notice.clear();
+                                drag.feedback = Some(crate::activity::Event::Operation(
+                                    "Color selected.".into(),
+                                ));
                             } else {
-                                s.notice = "The range list is full".into();
+                                drag.feedback = Some(crate::activity::Event::Error(
+                                    "The range list is full".into(),
+                                ));
                             }
                         } else {
-                            s.notice = "Choose a more colorful area".into();
+                            drag.feedback = Some(crate::activity::Event::Error(
+                                "Choose a more colorful area".into(),
+                            ));
                         }
                     } else if let Some((index, _)) = weights
                         .iter()
@@ -197,13 +203,16 @@ pub fn receive(ctx: &egui::Context, reply: ColorPickReply) {
                         .max_by(|a, b| a.1.total_cmp(b.1))
                     {
                         s.selected = index;
-                        s.notice.clear();
+                        drag.feedback =
+                            Some(crate::activity::Event::Operation("Color selected.".into()));
                     } else {
-                        s.notice = "No reliable color at this point".into();
+                        drag.feedback = Some(crate::activity::Event::Error(
+                            "No reliable color at this point".into(),
+                        ));
                     }
                 }
                 Err(error) => {
-                    s.notice = error;
+                    drag.feedback = Some(crate::activity::Event::Error(error));
                     drag.weights = Some([0.; 8]);
                 }
             }
@@ -296,6 +305,9 @@ pub fn photo(
     {
         s.drag = None;
     }
+    if let Some(event) = s.drag.as_mut().and_then(|drag| drag.feedback.take()) {
+        crate::activity::communicate(ui.ctx(), event);
+    }
     // A fresh press is required after a recipe/photo change or while Space pans.
     let pressed = ui.input(|i| i.pointer.primary_pressed());
     if pressed && !response.is_pointer_button_down_on() {
@@ -318,8 +330,12 @@ pub fn photo(
                 original: settings.photographic.color_editor,
                 expected: settings.clone(),
                 weights: None,
+                feedback: None,
             });
-            s.notice = "Selecting color…".into();
+            crate::activity::communicate(
+                ui.ctx(),
+                crate::activity::Event::Operation("Selecting color…".into()),
+            );
             request = Some(ColorPickRequest {
                 tool: s.target.tool(),
                 token: s.generation,
@@ -397,24 +413,6 @@ pub fn photo(
         if drag.released && drag.weights.is_some() {
             s.drag = None;
         }
-    }
-    if response.hovered() && !s.notice.is_empty() {
-        let painter = ui.painter();
-        let pos = response.rect.left_top() + egui::vec2(12., 12.);
-        let galley = painter.layout_no_wrap(
-            s.notice.clone(),
-            egui::TextStyle::Body.resolve(ui.style()),
-            egui::Color32::WHITE,
-        );
-        painter.rect_filled(
-            egui::Rect::from_min_size(
-                pos - egui::vec2(5., 3.),
-                galley.size() + egui::vec2(10., 6.),
-            ),
-            3.,
-            egui::Color32::from_black_alpha(210),
-        );
-        painter.galley(pos, galley, egui::Color32::WHITE);
     }
     store(ui.ctx(), s);
     (changed, request)

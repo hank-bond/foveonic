@@ -30,7 +30,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 ### Source files
 
 - **[actions.rs](./actions.rs)** Applies workspace commands through browser selection and the existing per-photo editing session.
-- **[activity.rs](./activity.rs)** Retains session file operations and errors independently of live progress and acknowledges errors on viewing.
+- **[activity.rs](./activity.rs)** Retains session operations, tool messages and errors with one acknowledged toolbar status.
 - **[application_settings.rs](./application_settings.rs)** Configures display, thumbnail memory and background disk reuse independently of photographic edits.
 - **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
 - **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.

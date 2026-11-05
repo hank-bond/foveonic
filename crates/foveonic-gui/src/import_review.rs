@@ -241,11 +241,7 @@ impl Review {
         ctx.request_repaint_after(DESTINATION_POLL);
         self.destination_unavailable
     }
-    pub fn status(
-        &mut self,
-        context: &egui::Context,
-        log: &mut crate::activity::Log,
-    ) -> Option<String> {
+    pub fn publish_activity(&mut self, context: &egui::Context, log: &mut crate::activity::Log) {
         let progress = self.worker.summary();
         for event in self.events.drain(..) {
             log.record(event);
@@ -261,16 +257,9 @@ impl Review {
         );
         if progress.running {
             context.request_repaint_after(STATUS_POLL);
-            return Some(format!(
-                "Processing {} / {} photos",
-                progress.completed, progress.total
-            ));
         }
-        if self.scanning && self.browse_selection.is_empty() {
-            return Some("Checking import history…".into());
-        }
-        None
     }
+
     pub fn submit(
         &mut self,
         limits: foveonic::render::AdaptiveToneTuning,

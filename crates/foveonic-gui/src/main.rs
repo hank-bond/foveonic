@@ -100,7 +100,6 @@ struct App {
     busy: bool,
     exporting: bool,
     preferences: preferences::Preferences,
-    status: String,
     activity: activity::Log,
     srgb_target: bool,
     display: display::Host,
@@ -227,7 +226,6 @@ impl App {
             busy: false,
             exporting: false,
             preferences,
-            status: "Open a folder of X3F photographs".into(),
             activity: Default::default(),
             srgb_target: rs.target_format.is_srgb(),
             display,
@@ -292,7 +290,7 @@ impl App {
                     self.select(path, false);
                 } else {
                     self.clear_selection();
-                    self.status = "No X3F files in this folder".into();
+                    self.activity.operation("No X3F files in this folder");
                 }
                 self.import.rescan(
                     &mut self.browser,
@@ -339,7 +337,6 @@ impl App {
         self.worker.clear();
         self.worker.progress.begin(self.revision, began);
         self.busy = false;
-        self.status = "Loading editing recipe…".into();
         self.metadata = None;
         self.output = "final".into();
         self.channel = -1;
@@ -380,13 +377,6 @@ impl App {
 
             self.busy = true;
             self.exporting = export.is_some();
-            self.status = if let Some(export) = &export {
-                format!("Saving {}…", export.format.label())
-            } else if self.frame.is_some() {
-                "Updating photo…".into()
-            } else {
-                "Loading photo…".into()
-            };
             timing::requested(self.revision, path, &self.output, &self.settings);
             let mut requested = self.view_settings();
             requested.preview_region = region;
@@ -444,7 +434,9 @@ impl App {
             let reply = match update {
                 worker::Update::Image(reply) => *reply,
                 worker::Update::ColorPick(reply) => {
-                    if !editor::dehaze::receive(ctx, &reply) {
+                    if !editor::white_balance::receive(ctx, &reply)
+                        && !editor::dehaze::receive(ctx, &reply)
+                    {
                         editor::direct_color::receive(ctx, reply);
                     }
                     continue;
@@ -565,12 +557,8 @@ impl App {
                             .retain_current(&mut self.frame, &mut self.detail);
                     }
                     timing::event(frame.revision, "image_received");
-                    self.status.clear();
                     if self.smoke.is_some() {
                         eprintln!("{}: {:.0} ms", frame.artifact.name, frame.milliseconds);
-                    }
-                    if !current {
-                        self.status = "Updating photo…".into();
                     }
                     timing::image_received(
                         frame.revision,
@@ -793,27 +781,20 @@ impl App {
     }
     fn fail(&mut self, message: impl Into<String>) {
         self.activity.error(message);
-        self.status = "Operation failed".into();
     }
     fn toolbar_status(&mut self, ui: &mut egui::Ui) {
-        let processing = self.import.status(ui.ctx(), &mut self.activity);
+        self.import.publish_activity(ui.ctx(), &mut self.activity);
+        self.activity.receive(ui.ctx());
         self.activity
             .observe(activity::Origin::Edits, self.sidecars.warnings());
-        self.activity.button(ui);
         if self.sidecars.warning().is_some()
             && self.sidecars.can_retry()
             && widgets::button(ui, "Retry saving edits", false, egui::Vec2::ZERO).clicked()
         {
             self.sidecars.retry();
         }
-        let message = if self.sidecars.warning().is_some() {
-            "Edits need attention"
-        } else if self.folder_loader.loading() {
-            "Opening folder…"
-        } else {
-            processing.as_deref().unwrap_or(&self.status)
-        };
-        toolbar::status(ui, message);
+        self.activity.button(ui);
+        self.activity.status(ui);
     }
 
     fn crop_preview_active(&self) -> bool {
@@ -1283,9 +1264,11 @@ impl App {
                     .as_ref()
                     .is_some_and(|f| f.requested == self.settings)
             });
-            let (changed, request) = if editor::dehaze::active(ui.ctx())
-                || editor::dehaze::pending(ui.ctx())
+            let (changed, request) = if editor::white_balance::active(ui.ctx())
+                || editor::white_balance::pending(ui.ctx())
             {
+                editor::white_balance::photo(ui, &response, uv, path, &mut self.settings, allowed)
+            } else if editor::dehaze::active(ui.ctx()) || editor::dehaze::pending(ui.ctx()) {
                 editor::dehaze::photo(ui, &response, uv, path, &mut self.settings, allowed)
             } else {
                 editor::direct_color::photo(ui, &response, uv, path, &mut self.settings, allowed)
@@ -1352,6 +1335,7 @@ impl eframe::App for App {
             });
         }
         editor::dehaze::source(ctx, self.selected.as_deref());
+        editor::white_balance::source(ctx, self.selected.as_deref());
         crop_tool::source(ctx, self.selected.as_deref());
         if let Some(saved) = self.sidecars.receive() {
             if let Some(path) = &self.selected {
@@ -1517,7 +1501,6 @@ impl eframe::App for App {
         self.preferences.direct_color = editor::direct_color::configuration(ctx);
         if std::mem::take(&mut self.browser.clear_selection) {
             self.clear_selection();
-            self.status = "No visible photographs".into();
         } else if let Some(path) = self.comparison_selection.take() {
             self.select(path, true);
         } else if let Some(selection) = select {

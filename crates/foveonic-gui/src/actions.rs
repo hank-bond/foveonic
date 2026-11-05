@@ -96,7 +96,7 @@ impl App {
                     {
                         Ok(recipe) => {
                             ctx.copy_text(recipe);
-                            self.status = "Copied image settings".into();
+                            self.activity.operation("Copied image settings");
                         }
                         Err(error) => {
                             self.fail(format!("Cannot copy settings: {error}"));
@@ -130,7 +130,8 @@ impl App {
                                 }
                                 self.sidecars.apply(path, settings);
                             }
-                            self.status = format!("Applied settings to {count} photos");
+                            self.activity
+                                .operation(format!("Applied settings to {count} photos"));
                         }
                         Err(error) => {
                             self.fail(format!("Cannot paste settings: {error}"));

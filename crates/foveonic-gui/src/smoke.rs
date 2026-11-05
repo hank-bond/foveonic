@@ -125,6 +125,12 @@ const DEHAZE_TARGETS: &[&str] = &[
     "dehaze-off",
     "dehaze-reset",
 ];
+const WHITE_BALANCE_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "white-balance-picked",
+    "white-balance-reset",
+];
 const DIRECT_COLOR_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -342,7 +348,8 @@ pub struct Smoke {
 }
 impl Smoke {
     pub fn inject_direct_color(&mut self, input: &mut egui::RawInput, ctx: &egui::Context) {
-        if self.targets == DIRECT_COLOR_TARGETS
+        if self.targets == WHITE_BALANCE_TARGETS
+            || self.targets == DIRECT_COLOR_TARGETS
             || self.targets == DEHAZE_TARGETS
             || self.targets == ADVANCED_COLOR_TARGETS
             || self.targets == CROP_TARGETS
@@ -360,7 +367,9 @@ impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_STATUS").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_WHITE_BALANCE").is_some() {
+                WHITE_BALANCE_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_STATUS").is_some() {
                 STATUS_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_CROP").is_some() {
                 CROP_TARGETS
@@ -1140,6 +1149,30 @@ impl App {
                         .push(crate::editor::Action::Reset(scope, false));
                     assert!(self.apply_editor_actions(ctx));
                     assert!(self.settings.dehaze.shadow.is_some());
+                    self.submit(None);
+                }
+                "white-balance-picked" => {
+                    crate::editor::white_balance::toggle(ctx);
+                    let position = self.viewport.position_at_uv([0.82, 0.04]).unwrap();
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    smoke.direct_events.extend([
+                        vec![egui::Event::PointerMoved(position), button(true)],
+                        vec![button(false)],
+                    ]);
+                }
+                "white-balance-reset" => {
+                    assert!(self.settings.white_balance_bias.neutral.is_some());
+                    let scope = crate::editor::Scope::Tool(crate::editor::Section::WhiteBalance);
+                    self.editor_ui
+                        .actions
+                        .push(crate::editor::Action::Reset(scope, false));
+                    assert!(self.apply_editor_actions(ctx));
+                    assert!(self.settings.white_balance_bias.is_neutral());
                     self.submit(None);
                 }
                 "dehaze-picked" => {
@@ -2060,6 +2093,13 @@ impl App {
                     "renaming must not submit an image job"
                 );
             }
+            let ready = ready
+                && (smoke.targets != WHITE_BALANCE_TARGETS
+                    || smoke.targets[smoke.index] != "white-balance-picked"
+                    || (self.settings.white_balance_bias.neutral.is_some()
+                        && !crate::editor::white_balance::active(ctx)
+                        && !crate::editor::white_balance::pending(ctx)
+                        && smoke.direct_events.is_empty()));
             let ready = ready
                 && (smoke.targets != DEHAZE_TARGETS
                     || smoke.targets[smoke.index] != "dehaze-picked"

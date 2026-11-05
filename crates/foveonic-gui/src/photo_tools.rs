@@ -23,7 +23,10 @@ impl Tool {
 }
 
 pub fn active(ctx: &egui::Context) -> bool {
-    crop_tool::active(ctx) || editor::direct_color::active(ctx) || editor::dehaze::active(ctx)
+    crop_tool::active(ctx)
+        || editor::direct_color::active(ctx)
+        || editor::dehaze::active(ctx)
+        || editor::white_balance::active(ctx)
 }
 pub fn menu_open(ctx: &egui::Context) -> bool {
     crop_tool::menu_open(ctx) || editor::direct_color::menu_open(ctx)
@@ -32,11 +35,13 @@ pub fn hand(ctx: &egui::Context) {
     crop_tool::exit(ctx);
     editor::direct_color::exit(ctx);
     editor::dehaze::exit(ctx);
+    editor::white_balance::exit(ctx);
 }
 pub fn escape(ctx: &egui::Context) {
     crop_tool::escape(ctx);
     editor::direct_color::exit(ctx);
     editor::dehaze::exit(ctx);
+    editor::white_balance::exit(ctx);
 }
 
 pub fn show(

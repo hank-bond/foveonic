@@ -159,10 +159,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let preview = settings.color_range_preview.filter(|i| *i < ranges.count);
     changed |= preview != settings.color_range_preview;
     settings.color_range_preview = preview;
-    let notice = direct_color::notice(ui.ctx());
-    if !notice.is_empty() {
-        ui.weak(notice);
-    }
+
     tool::store(ui.ctx(), s);
     changed
 }

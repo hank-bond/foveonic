@@ -18,10 +18,9 @@ struct Estimate {
     color: Option<[f32; 3]>,
 }
 #[derive(Clone, Default)]
-pub struct State {
-    pub picking: bool,
+struct State {
+    picking: bool,
     pressed: bool,
-    pub notice: String,
     generation: u64,
     pending: Option<Pending>,
     source: Option<PathBuf>,
@@ -30,7 +29,7 @@ pub struct State {
 fn id() -> egui::Id {
     egui::Id::new("Dehaze shadow picker")
 }
-pub fn state(ctx: &egui::Context) -> State {
+fn state(ctx: &egui::Context) -> State {
     ctx.data_mut(|d| d.get_temp(id())).unwrap_or_default()
 }
 fn store(ctx: &egui::Context, s: State) {
@@ -93,17 +92,16 @@ pub fn exit(ctx: &egui::Context) {
     s.pressed = false;
     s.pending = None;
     s.generation += 1;
-    s.notice.clear();
     store(ctx, s);
 }
 pub fn toggle(ctx: &egui::Context) {
+    super::white_balance::exit(ctx);
     crate::crop_tool::exit(ctx);
     let mut s = state(ctx);
     s.picking = !s.picking;
     s.pressed = false;
     s.pending = None;
     s.generation += 1;
-    s.notice.clear();
     store(ctx, s);
 }
 pub fn receive(ctx: &egui::Context, reply: &ColorPickReply) -> bool {
@@ -156,9 +154,14 @@ pub fn photo(
             Ok(rgb) => {
                 changed = settings.dehaze.shadow != Some(rgb);
                 settings.dehaze.shadow = Some(rgb);
-                s.notice.clear();
+                crate::activity::communicate(
+                    ui.ctx(),
+                    crate::activity::Event::Operation("Haze color selected.".into()),
+                );
             }
-            Err(error) => s.notice = error,
+            Err(error) => {
+                crate::activity::communicate(ui.ctx(), crate::activity::Event::Error(error));
+            }
         }
     }
     let pan = ui.input(|i| i.key_down(egui::Key::Space));
@@ -191,7 +194,10 @@ pub fn photo(
                 settings: settings.clone(),
                 uv,
             });
-            s.notice = "Selecting haze color…".into();
+            crate::activity::communicate(
+                ui.ctx(),
+                crate::activity::Event::Operation("Selecting haze color…".into()),
+            );
         }
     }
     store(ui.ctx(), s);

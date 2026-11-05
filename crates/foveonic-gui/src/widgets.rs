@@ -534,7 +534,18 @@ pub fn button_sized(ui: &mut egui::Ui, label: &str, on: bool, size: ControlSize)
 
 /// Square icon controls share padding and interaction states across sizes.
 pub fn icon_button(ui: &mut egui::Ui, label: &str, on: bool, size: ControlSize) -> egui::Response {
-    let response = button_sized(ui, "", on, size);
+    icon_button_with_height(ui, label, on, size.side())
+}
+
+/// Keep an adjacent icon square and aligned with a measured control height.
+pub fn icon_button_with_height(
+    ui: &mut egui::Ui,
+    label: &str,
+    on: bool,
+    height: f32,
+) -> egui::Response {
+    let (_, response) = ui.allocate_exact_size(egui::vec2(height, height), egui::Sense::click());
+    paint(ui, &response, on);
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
     });

@@ -170,6 +170,7 @@ pub enum ColorPickTool {
     Basic,
     Advanced,
     Dehaze,
+    WhiteBalance,
 }
 
 pub struct ColorPickRequest {
@@ -539,10 +540,10 @@ fn pick_color(
         .render_session(
             session,
             &settings,
-            &[if request.tool == ColorPickTool::Dehaze {
-                "dehaze.input"
-            } else {
-                "color-editor.guide"
+            &[match request.tool {
+                ColorPickTool::Dehaze => "dehaze.input",
+                ColorPickTool::WhiteBalance => "linear.base",
+                _ => "color-editor.guide",
             }],
             &cancel,
             &mut Profile::default(),
@@ -558,7 +559,14 @@ fn pick_color(
     else {
         return Err("color selection requires a guide image".into());
     };
-    if request.tool == ColorPickTool::Dehaze {
+    if request.tool == ColorPickTool::WhiteBalance {
+        let balance = engine.pick_white_balance(&guide, request.uv)?;
+        let xyz = balance.neutral.ok_or("missing sampled neutral")?;
+        Ok(foveonic::render::ColorRangeSample {
+            weights: [0.; 8],
+            color: [xyz[0], xyz[1], xyz[2], 1.],
+        })
+    } else if request.tool == ColorPickTool::Dehaze {
         let rgb = engine.pick_haze_color(&guide, request.uv)?;
         Ok(foveonic::render::ColorRangeSample {
             weights: [0.; 8],

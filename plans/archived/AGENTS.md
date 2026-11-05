@@ -129,6 +129,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[unified-highlight-control](./unified-highlight-control.md)** _(archived)._ Replace neutral restraint with a bounded color-consistency cutoff and share one Highlights/A row across Classic, Local and Global.
 - **[viewport-scopes](./viewport-scopes.md)** _(archived)._ Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
 - **[visibility-tone-experiment](./visibility-tone-experiment.md)** _(archived)._ Historical visibility-tone experiments led to the selected regional Adaptive tone response.
+- **[white-balance-picker](./white-balance-picker.md)** _(archived)._ Implement and verify a shared neutral-patch white-balance eyedropper and saved Custom balance.
 - **[workspace-status](./workspace-status.md)** _(archived)._ Separate browser-footer progress, concise live activity and acknowledged session history.
 
 <!-- INDEX:END -->

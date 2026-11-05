@@ -24,5 +24,6 @@ Reset and comparison baselines must come from the camera adapter. Keep display-o
 - **[mod.rs](./mod.rs)** Owns editing-tool identities, scoped recipes and application presets separately from rendered images.
 - **[recipes.rs](./recipes.rs)** Stores named scoped presets and camera-family defaults in application preferences.
 - **[sections.rs](./sections.rs)** Maintains visual editing-tool order using processing-owned photographic section identities.
+- **[white_balance.rs](./white_balance.rs)** Selects a neutral patch asynchronously and keeps Custom balance separate from camera presets.
 
 <!-- INDEX:END -->

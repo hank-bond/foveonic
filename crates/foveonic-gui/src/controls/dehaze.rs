@@ -40,10 +40,6 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 editor::dehaze::toggle(ui.ctx());
             }
         });
-        let s = editor::dehaze::state(ui.ctx());
-        if !s.notice.is_empty() {
-            ui.weak(s.notice);
-        }
     });
     changed
 }

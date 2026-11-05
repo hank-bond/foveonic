@@ -29,6 +29,7 @@ impl State {
         if active {
             editor::direct_color::exit(ctx);
             editor::dehaze::exit(ctx);
+            editor::white_balance::exit(ctx);
         }
     }
 }

@@ -66,8 +66,8 @@ pub fn editing(label: &str) -> Option<&'static str> {
         "White balance" => {
             "Corrects the color cast of the light so whites and grays look neutral. Choose a preset close to the lighting, then judge skin tones and neutral objects. It also affects how color noise is treated."
         }
-        "Warmth" => "Biases the selected white balance toward warm or cool light. Zero retains As Shot or the chosen camera preset. This is a relative adjustment, not a recorded Kelvin temperature. DNG retains an editable neutral and profile interpretation.",
-        "Tint" => "Biases the selected white balance toward magenta or green. Zero preserves the selected balance. It shares the same linear adjustment in display, TIFF and DNG.",
+        "Warmth" => "Biases the selected white balance toward warm or cool light. Zero retains Custom, As Shot or the chosen camera preset. This is a relative adjustment, not a recorded Kelvin temperature. DNG retains an editable neutral and profile interpretation.",
+        "Tint" => "Biases the selected white balance toward magenta or green. Zero preserves the selected or sampled Custom balance. It shares the same linear adjustment in display, TIFF and DNG.",
         "Rendering" => {
             "Color reconstructs a color photograph. Monochrome uses the camera family’s dedicated mixing, filtering and detail processing. Merrill captures recorded as Monochrome open here automatically. Switching to Color keeps a normal color look and retains your saved saturation and color choices. Switching does not discard source color."
         }

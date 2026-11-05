@@ -65,6 +65,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Smart preview uses Fast overviews and renders compatible zoomed edits directly at Full quality, refining the visible region first where supported.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
 - **[tonal-ranges](./tonal-ranges.md)** _(accepted, conforming, reference)._ Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG.
-- **[workspace-status](./workspace-status.md)** _(accepted, conforming, reference)._ Workspace activity separates live progress from a session log of file operations and errors.
+- **[white-balance-picker](./white-balance-picker.md)** _(accepted, conforming, reference)._ A neutral-patch eyedropper saves Custom white balance with independent Warmth and Tint fine adjustments.
+- **[workspace-status](./workspace-status.md)** _(accepted, conforming, reference)._ Workspace activity separates live progress from a session log of file operations, tool communications and errors.
 
 <!-- INDEX:END -->
