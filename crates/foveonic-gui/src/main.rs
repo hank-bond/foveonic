@@ -724,13 +724,16 @@ impl App {
                     .processing_selection(self.selected.as_deref())
                     .as_slice()
                     == self.selected.as_slice();
-                let process_ready = self.import.ready(&self.browser)
-                    && (self.browser.import_mode || !only_current || export_ready);
+                let process_blocker = self.import.process_blocker(&self.browser).or_else(|| {
+                    (!self.browser.import_mode && only_current && !export_ready).then_some(
+                        "Waiting for a valid photo recipe. Check Log for edit or camera-setting errors.",
+                    )
+                });
                 let actions = toolbar::show(
                     ui,
                     toolbar::State {
                         enabled: !self.exporting,
-                        process_ready,
+                        process_blocker,
                         importing: self.browser.import_mode,
                         destination: self.preferences.processing_destination.as_deref(),
                         destination_unavailable: self.import.destination_unavailable(

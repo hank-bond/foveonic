@@ -23,6 +23,7 @@ pub struct Review {
     errors: Vec<String>,
     worker: batch::Worker,
     received_imports: usize,
+    submitted_decisions: Vec<(PathBuf, bool)>,
     destination_check: Option<(PathBuf, std::time::Instant)>,
     destination_unavailable: bool,
     events: Vec<crate::activity::Event>,
@@ -43,6 +44,7 @@ impl Review {
             errors: Vec::new(),
             worker: batch::Worker::new(engine, cache, context),
             received_imports: 0,
+            submitted_decisions: Vec::new(),
             destination_check: None,
             destination_unavailable: false,
             events: Vec::new(),
@@ -152,6 +154,12 @@ impl Review {
             }
         }
         let progress = self.worker.progress();
+        if progress.decisions_saved {
+            let decisions = std::mem::take(&mut self.submitted_decisions);
+            if browser.import_mode && progress.destination == self.scan_destination {
+                filter_changed |= acknowledge_decisions(browser, decisions);
+            }
+        }
         self.receive_events(&progress);
         if self.batch_report && !progress.running {
             self.events.push(crate::activity::Event::Operation(format!(
@@ -179,14 +187,24 @@ impl Review {
         }
     }
     pub fn ready(&self, browser: &Browser) -> bool {
-        !self.worker.summary().running
-            && !self.scanning
-            && self.scan_destination.is_some()
-            && if browser.import_mode {
-                browser.review_counts().0 > 0 || !browser.marks.is_empty()
-            } else {
-                !self.browse_selection.is_empty()
-            }
+        self.process_blocker(browser).is_none()
+    }
+    pub fn process_blocker(&self, browser: &Browser) -> Option<&'static str> {
+        if self.worker.summary().running {
+            Some("Wait for the current processing batch to finish.")
+        } else if self.scan_destination.is_none() {
+            Some("Choose a destination folder first.")
+        } else if self.scanning {
+            Some("Preparing photo settings and checking import history…")
+        } else if browser.import_mode {
+            (!has_import_work(browser)).then_some(
+                "Pick photos for import using their checkboxes or Space. Highlighting a photo only selects it for viewing.",
+            )
+        } else {
+            self.browse_selection
+                .is_empty()
+                .then_some("Select a photo to process.")
+        }
     }
     /// Directory probes share the background worker. Drawing never touches a removable drive.
     pub fn destination_unavailable(
@@ -276,8 +294,9 @@ impl Review {
         };
         for path in paths {
             let mark = browser.mark(path);
+            let hidden = hidden_change(browser, path, mark);
             let Some(source) = self.sources.get(path) else {
-                if !browser.import_mode || mark == Mark::Pick || browser.marks.contains_key(path) {
+                if !browser.import_mode || mark == Mark::Pick || hidden.is_some() {
                     self.errors.push(format!(
                         "{}: source metadata is unavailable",
                         path.display()
@@ -303,15 +322,19 @@ impl Review {
                     }),
                     Err(error) => self.errors.push(format!("{}: {error}", path.display())),
                 }
-            } else if let Some(mark) = browser.marks.get(path) {
+            } else if let Some(hidden) = hidden {
                 decisions.push(batch::Decision {
                     path: path.clone(),
                     identity: source.identity.clone(),
-                    hidden: *mark == Mark::Hidden,
+                    hidden,
                 });
             }
         }
         self.receive_events(&self.worker.progress());
+        let submitted_decisions = decisions
+            .iter()
+            .map(|d| (d.path.clone(), d.hidden))
+            .collect();
         if self.worker.submit(batch::Batch {
             calibration: self.calibration.clone(),
             destination,
@@ -333,6 +356,7 @@ impl Review {
                 conflict: settings.conflict,
             },
         }) {
+            self.submitted_decisions = submitted_decisions;
             let progress = self.worker.progress();
             self.events.push(crate::activity::Event::Operation(format!(
                 "Started {} {} photos. Destination: {}",
@@ -397,6 +421,52 @@ impl Review {
         let progress = self.worker.progress();
         !progress.running && progress.imported.len() == 1 && progress.errors.is_empty()
     }
+}
+
+fn has_import_work(browser: &Browser) -> bool {
+    browser.review_counts().0 > 0
+        || browser
+            .marks
+            .iter()
+            .any(|(path, &mark)| hidden_change(browser, path, mark).is_some())
+}
+
+fn acknowledge_decisions(browser: &mut Browser, decisions: Vec<(PathBuf, bool)>) -> bool {
+    let mut changed = false;
+    for (path, hidden) in decisions {
+        if !browser.files.contains(&path) {
+            continue;
+        }
+        let mark = if hidden { Mark::Hidden } else { Mark::Unmarked };
+        if browser.recorded_marks.get(&path) != Some(&Mark::Imported) {
+            if hidden {
+                browser.recorded_marks.insert(path.clone(), mark);
+            } else {
+                browser.recorded_marks.remove(&path);
+            }
+        }
+        // A later checkbox change belongs to the next batch.
+        if browser.marks.get(&path) == Some(&mark) {
+            browser.marks.remove(&path);
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// Picks and their reversals are temporary. Only changed hidden decisions need saving.
+fn hidden_change(browser: &Browser, path: &std::path::Path, mark: Mark) -> Option<bool> {
+    let recorded = browser
+        .recorded_marks
+        .get(path)
+        .copied()
+        .unwrap_or_default();
+    // Hiding an imported photo must retain the link to its copied original.
+    if recorded == Mark::Imported || mark == Mark::Pick {
+        return None;
+    }
+    let hidden = mark == Mark::Hidden;
+    (hidden != (recorded == Mark::Hidden)).then_some(hidden)
 }
 
 /// History replacement and completion receipt have different cursors. Replaying

@@ -161,6 +161,7 @@ const IMPORT_TARGETS: &[&str] = &[
     "browse-settings",
     "browse-processed",
     "browse-processed-again",
+    "import-open",
     "import-review",
     "import-render-options",
     "import-copied",
@@ -1541,13 +1542,16 @@ impl App {
                     self.processing_open = false;
                     self.process();
                 }
-                "import-review" => {
+                "import-open" => {
                     let destination = smoke.directory.join("imported");
                     self.open(
                         self.browser.root.clone().unwrap(),
                         crate::preferences::FolderMode::Import,
                     );
-                    self.preferences.processing_destination = Some(destination.clone());
+                    self.preferences.processing_destination = Some(destination);
+                }
+                "import-review" => {
+                    let destination = smoke.directory.join("imported");
                     self.import.smoke_prepare(&destination, &mut self.browser);
                 }
                 "import-render-options" => {
@@ -1935,6 +1939,7 @@ impl App {
             let ready = ready
                 && (smoke.targets != IMPORT_TARGETS
                     || match smoke.targets[smoke.index] {
+                        "import-open" => !self.folder_loader.loading() && self.browser.import_mode,
                         "import-review" | "import-render-options" => self.import.smoke_ready(false),
                         "import-copied" => self.import.smoke_ready(true),
                         _ => true,

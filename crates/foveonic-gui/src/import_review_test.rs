@@ -1,6 +1,68 @@
 //! Checks frozen Browse selection processing and destination-scoped import completion receipts.
 
 #[test]
+fn unpicking_disables_process_unless_a_hidden_decision_has_changed() {
+    let mut browser = Browser::new(egui::Context::default());
+    browser.import_mode = true;
+    let path = PathBuf::from("card/photo.x3f");
+    browser.files = vec![path.clone()];
+    browser.reindex_files();
+    browser.refresh_filter();
+    assert!(!has_import_work(&browser));
+
+    browser.marks.insert(path.clone(), Mark::Pick);
+    browser.refresh_filter();
+    assert!(has_import_work(&browser));
+    browser.marks.insert(path.clone(), Mark::Unmarked);
+    browser.refresh_filter();
+    assert!(
+        !has_import_work(&browser),
+        "unchecking leaves no import or decision to save"
+    );
+
+    browser.marks.insert(path.clone(), Mark::Hidden);
+    browser.refresh_filter();
+    assert!(has_import_work(&browser));
+    assert_eq!(hidden_change(&browser, &path, Mark::Hidden), Some(true));
+    browser.recorded_marks.insert(path.clone(), Mark::Hidden);
+    assert!(
+        !has_import_work(&browser),
+        "unchanged hidden history is not pending work"
+    );
+    browser.marks.insert(path.clone(), Mark::Unmarked);
+    assert!(
+        has_import_work(&browser),
+        "restoring a saved hidden decision needs saving"
+    );
+    assert_eq!(hidden_change(&browser, &path, Mark::Unmarked), Some(false));
+    browser.recorded_marks.insert(path.clone(), Mark::Imported);
+    assert!(
+        !has_import_work(&browser),
+        "restoring eligibility must retain import provenance"
+    );
+}
+
+#[test]
+fn saved_hidden_choices_stop_being_pending_without_erasing_later_picks() {
+    let mut browser = Browser::new(egui::Context::default());
+    let path = PathBuf::from("card/photo.x3f");
+    browser.files = vec![path.clone()];
+    browser.reindex_files();
+    browser.marks.insert(path.clone(), Mark::Hidden);
+    acknowledge_decisions(&mut browser, vec![(path.clone(), true)]);
+    browser.refresh_filter();
+    assert!(!has_import_work(&browser));
+    browser.marks.insert(path.clone(), Mark::Unmarked);
+    acknowledge_decisions(&mut browser, vec![(path.clone(), false)]);
+    assert!(!has_import_work(&browser));
+    browser.marks.insert(path.clone(), Mark::Pick);
+    acknowledge_decisions(&mut browser, vec![(path.clone(), true)]);
+    browser.refresh_filter();
+    assert!(has_import_work(&browser));
+    assert_eq!(browser.mark(&path), Mark::Pick);
+}
+
+#[test]
 #[ignore = "requires a GPU"]
 fn destination_probe_tracks_disconnect_reconnect_and_changed_paths_off_thread() {
     let directory = tempfile::tempdir().unwrap();

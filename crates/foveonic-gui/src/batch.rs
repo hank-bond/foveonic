@@ -74,6 +74,7 @@ pub struct Progress {
     pub total: usize,
     pub completed: usize,
     pub imported: Vec<PathBuf>,
+    pub decisions_saved: bool,
     pub errors: Vec<String>,
     pub operations: Vec<String>,
 }
@@ -363,6 +364,7 @@ fn run_batch(
                 let mut history = History::load(&batch.destination)?;
                 apply_decisions(&mut history, &batch.destination, decisions);
                 history.save(&batch.destination)?;
+                progress.lock().unwrap().decisions_saved = true;
                 Some(history)
             }
         };

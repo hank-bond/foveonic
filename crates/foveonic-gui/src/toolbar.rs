@@ -27,7 +27,7 @@ pub struct Actions {
 
 pub struct State<'a> {
     pub enabled: bool,
-    pub process_ready: bool,
+    pub process_blocker: Option<&'a str>,
     pub importing: bool,
     pub destination: Option<&'a std::path::Path>,
     pub destination_unavailable: bool,
@@ -210,13 +210,15 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
         );
         actions.destination = response.on_hover_text(destination_help).clicked();
         actions.settings = widgets::button(ui, "Processing settings…", false, egui::Vec2::ZERO).clicked();
-        actions.process = ui.add_enabled_ui(state.process_ready, |ui| {
+        actions.process = ui.add_enabled_ui(state.process_blocker.is_none(), |ui| {
             let help = if state.importing {
                 "Process picked photos and save hidden decisions using Import settings."
             } else {
                 "Process all highlighted photos using Browse settings."
             };
-            widgets::button(ui, "Process", false, egui::Vec2::ZERO).on_hover_text(help)
+            widgets::button(ui, "Process", false, egui::Vec2::ZERO)
+                .on_hover_text(help)
+                .on_disabled_hover_text(state.process_blocker.unwrap_or("Finish saving the current output first."))
         }).inner.clicked();
     });
     actions
@@ -444,7 +446,7 @@ mod tests {
                                 ui,
                                 State {
                                     enabled,
-                                    process_ready: ready,
+                                    process_blocker: (!ready).then_some("Not ready"),
                                     importing,
                                     destination: None,
                                     destination_unavailable: false,
