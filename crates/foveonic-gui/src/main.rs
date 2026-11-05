@@ -354,7 +354,6 @@ impl App {
         if export.is_some() {
             self.exit_before();
         }
-        self.detail = None;
         self.smart.reset();
         let request = if export.is_none() {
             self.smart_edit_request()
@@ -506,16 +505,6 @@ impl App {
                 continue;
             }
             if !current
-                && reply
-                    .result
-                    .as_ref()
-                    .ok()
-                    .and_then(Option::as_ref)
-                    .is_some_and(|frame| frame.artifact.settings.preview_region.is_some())
-            {
-                continue;
-            }
-            if !current
                 && !reply
                     .result
                     .as_ref()
@@ -525,11 +514,17 @@ impl App {
                         !self.exporting
                             && self.selected.as_ref() == Some(&frame.path)
                             && self.output == frame.output
+                            && smart::same_geometry(&frame.requested, &self.view_settings())
                             && (!self.comparison.requested() || frame.comparison.is_some())
                             && self
                                 .frame
                                 .as_ref()
                                 .is_none_or(|displayed| frame.revision > displayed.revision)
+                            && (frame.artifact.settings.preview_region.is_none()
+                                || self
+                                    .detail
+                                    .as_ref()
+                                    .is_none_or(|displayed| frame.revision > displayed.revision))
                     })
             {
                 continue;

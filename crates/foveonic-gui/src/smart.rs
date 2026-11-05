@@ -51,13 +51,15 @@ pub fn same_edits(a: &Settings, b: &Settings) -> bool {
     a == b
 }
 
+/// Artistic edits can keep the previous image visible. Framing changes cannot
+/// reuse a tile's old mapping into the photograph.
+pub fn same_geometry(a: &Settings, b: &Settings) -> bool {
+    a.crop == b.crop && a.output_size == b.output_size
+}
+
 impl App {
     pub(super) fn smart_detail(&self, pixels_per_point: f32) -> Option<&worker::Frame> {
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
-            || self.frame.as_ref().is_some_and(|f| {
-                f.artifact.settings.preview_quality == PreviewQuality::Full
-                    && same_edits(&f.requested, &self.view_settings())
-            })
             || self.output != "final"
             || self.comparison.requested()
             || self
@@ -69,8 +71,13 @@ impl App {
         }
         self.detail.as_ref().filter(|detail| {
             self.selected.as_ref() == Some(&detail.path)
+                && detail.output == self.output
                 && detail.rendition == self.before.active
-                && same_edits(&detail.requested, &self.view_settings())
+                && detail.crop_preview == self.crop_preview_active()
+                && same_geometry(&detail.requested, &self.view_settings())
+                // A completed newer whole image supersedes this tile even when
+                // another edit is already pending. Never rewind to an older base.
+                && self.frame.as_ref().is_none_or(|base| base.revision < detail.revision)
         })
     }
 
@@ -96,7 +103,7 @@ impl App {
                 && frame.crop_preview == self.crop_preview_active()
                 && frame.artifact.settings.output_size.is_none()
                 && requested.output_size.is_none()
-                && frame.artifact.settings.crop == requested.crop
+                && same_geometry(&frame.requested, &requested)
                 && requested.fast_preview_available(&frame.artifact.metadata)
         })?;
         let visible = self.viewport.visible_pixels()?;

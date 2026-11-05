@@ -334,6 +334,7 @@ pub struct Smoke {
     settled_frames: u8,
     fast_region: Option<crate::viewport::PixelRegion>,
     smart_full_revision: Option<u64>,
+    smart_scrub_checked: bool,
     display_revision: Option<u64>,
     authored: Option<foveonic::render::Settings>,
     name_revision: Option<u64>,
@@ -417,6 +418,7 @@ impl Smoke {
             settled_frames: 0,
             fast_region: None,
             smart_full_revision: None,
+            smart_scrub_checked: false,
             display_revision: None,
             authored: None,
             name_revision: None,
@@ -472,6 +474,38 @@ impl App {
                 crate::smart::same_edits(&detail.requested, &self.settings),
             )
         });
+        if self.smoke.as_ref().is_some_and(|smoke| {
+            smoke.targets == SMART_TARGETS
+                && smoke.index < smoke.targets.len()
+                && smoke.targets[smoke.index] == "smart-edit-detail"
+                && !smoke.smart_scrub_checked
+        }) && self
+            .smart_detail(ctx.pixels_per_point())
+            .is_some_and(|detail| detail.requested.exposure == 0.5)
+        {
+            let detail = self.smart_detail(ctx.pixels_per_point()).unwrap();
+            let revision = detail.revision;
+            let texture = detail.texture.clone();
+            // Change settings after a tile is already visible. Checking only
+            // two queued edits before any completion misses the presentation rewind.
+            for exposure in [0.625, 0.75] {
+                self.settings.exposure = exposure;
+                let retained = self
+                    .smart_detail(ctx.pixels_per_point())
+                    .expect("settings change hid the latest completed tile");
+                assert_eq!(retained.revision, revision);
+                assert!(std::sync::Arc::ptr_eq(&retained.texture, &texture));
+                self.submit(None);
+                let retained = self
+                    .smart_detail(ctx.pixels_per_point())
+                    .expect("submission hid the latest completed tile");
+                assert_eq!(retained.revision, revision);
+                assert!(std::sync::Arc::ptr_eq(&retained.texture, &texture));
+            }
+            let smoke = self.smoke.as_mut().unwrap();
+            smoke.smart_scrub_checked = true;
+            std::fs::write(smoke.directory.join("smart-scrub-retained.json"), serde_json::to_vec_pretty(&serde_json::json!({"retained_revision":revision,"retained_exposure":0.5,"requested_exposure":0.75,"requested_revision":self.revision})).unwrap()).unwrap();
+        }
         let Some(smoke) = &mut self.smoke else {
             return;
         };
@@ -824,7 +858,8 @@ impl App {
                             &previous.requested,
                             &frame.requested
                         ));
-                        assert_eq!(frame.requested.exposure, 0.5);
+                        assert!(smoke.smart_scrub_checked);
+                        assert_eq!(frame.requested.exposure, 0.75);
                     }
                     let rect = region.unwrap();
                     assert!(crate::smart::contains(
@@ -1613,6 +1648,10 @@ impl App {
                 "smart-edit" => {}
                 "smart-zoom-pending" => {
                     self.settings.exposure = 0.6;
+                    assert!(
+                        self.smart_detail(ctx.pixels_per_point()).is_none(),
+                        "a newer Full frame must supersede old detail during the next edit"
+                    );
                     self.submit(None);
                     assert!(self.busy);
                     assert!(
