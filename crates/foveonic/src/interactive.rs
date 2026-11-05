@@ -171,6 +171,7 @@ impl Settings {
             "tonal-whites"
         );
         changed!(self.output_size != next.output_size, "output-size");
+        changed!(self.rotation != next.rotation, "rotation");
         changed!(
             self.tiff_color_space != next.tiff_color_space,
             "tiff-color-space"

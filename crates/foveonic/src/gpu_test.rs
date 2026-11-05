@@ -131,6 +131,7 @@ fn shader_black_calibration_and_orientation() {
         (270, [1, 3, 0, 2]),
     ] {
         let params = EncodeParams {
+            mapping: [[0.; 4]; 2],
             source: [2, 2, rotation, 0],
             crop: [0, 0, 2, 2],
             output: [2, 2, 0, 0],

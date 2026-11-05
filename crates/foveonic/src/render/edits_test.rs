@@ -82,6 +82,10 @@ fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {
     source.adaptive_tone_tuning.natural.shadows = 0.9;
     assert_eq!(snapshot(&source).adaptive_tone_tuning, Default::default());
     let mut target = Settings {
+        rotation: crate::rotation::Rotation {
+            turns: 1,
+            degrees: 12.,
+        },
         crop: crate::crop::Crop {
             bounds: [0.1, 0.2, 0.8, 0.9],
             ..Default::default()
@@ -115,6 +119,13 @@ fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {
     );
     Scope::All.apply(&source, &mut target, ProcessingFamily::Merrill);
     assert_eq!(target.crop.bounds, [0.1, 0.2, 0.8, 0.9]);
+    assert_eq!(
+        target.rotation,
+        crate::rotation::Rotation {
+            turns: 1,
+            degrees: 12.
+        }
+    );
     assert_eq!(target.preview_quality, PreviewQuality::Fast);
     assert_eq!(target.preview_region, Some([0, 0, 20, 30]));
     assert_eq!(target.output_size, Some([200, 300]));

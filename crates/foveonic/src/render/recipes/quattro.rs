@@ -179,6 +179,7 @@ fn compose(
         &[input],
     )?;
     let mut params = EncodeParams {
+        mapping: [[0.; 4]; 2],
         source: [width * 2, height * 2, source.metadata.rotation, 0],
         crop: [0, 0, width * 2, height * 2],
         output: [width * 2, height * 2, 0, 0],

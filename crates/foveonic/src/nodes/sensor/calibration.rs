@@ -38,6 +38,8 @@ pub struct ColorParams {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct EncodeParams {
+    /// Optional output-to-storage affine rows. A nonzero fourth slot enables them.
+    pub mapping: [[f32; 4]; 2],
     pub source: [u32; 4],
     pub crop: [u32; 4],
     pub output: [u32; 4],
@@ -200,6 +202,7 @@ pub fn encode(metadata: &Metadata, space: ColorSpace) -> Result<EncodeParams> {
         (w, h)
     };
     Ok(EncodeParams {
+        mapping: [[0.; 4]; 2],
         source: [metadata.width as u32, metadata.height as u32, rotation, 0],
         crop,
         output: [width, height, space as u32, 0],

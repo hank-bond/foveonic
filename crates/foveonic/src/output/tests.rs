@@ -5,6 +5,7 @@ use std::io::Cursor;
 
 fn fixture() -> (EncodeParams, Vec<u8>, Vec<u16>) {
     let params = EncodeParams {
+        mapping: [[0.; 4]; 2],
         source: [17, 9, 0, 0],
         crop: [0, 0, 17, 9],
         output: [17, 9, 0, 0],
@@ -335,6 +336,7 @@ fn lossy_jxl_preserves_wide_rgb_values_and_native_destination_metadata() {
             .flat_map(u16::to_le_bytes)
             .collect();
         let params = EncodeParams {
+            mapping: [[0.; 4]; 2],
             source: [64, 64, 0, 0],
             crop: [0, 0, 64, 64],
             output: [64, 64, space.encoding_code(true), 0],

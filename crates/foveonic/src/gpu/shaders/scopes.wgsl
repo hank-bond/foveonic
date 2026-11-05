@@ -3,6 +3,11 @@
 @group(0) @binding(3) var<uniform> region: vec4<f32>;
 
 fn sample_region(id: vec2<u32>) -> vec3<f32> {
+    if params.mapping[0].w != 0. {
+        let uv=mix(region.xy,region.zw,(vec2<f32>(id)+0.5)/vec2<f32>(params.output_size.xy));
+        let q=vec3(uv,1.);
+        return sample_storage(vec2(dot(params.mapping[0].xyz,q),dot(params.mapping[1].xyz,q)));
+    }
     let size = params.crop.zw - params.crop.xy;
     let oriented_size = select(size, size.yx, params.source.z == 90u || params.source.z == 270u);
     let start = region.xy * vec2<f32>(oriented_size);

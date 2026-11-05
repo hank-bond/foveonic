@@ -87,6 +87,7 @@ pub(crate) fn geometry(
         extent
     };
     Ok(crate::nodes::sensor::calibration::EncodeParams {
+        mapping: [[0.; 4]; 2],
         source: [metadata.width as u32, metadata.height as u32, rotation, 0],
         crop,
         output: [

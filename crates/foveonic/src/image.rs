@@ -100,7 +100,8 @@ pub struct Description {
     pub extent: [u32; 2],
     pub layout: Layout,
     pub space: Space,
-    /// Crop, rotation and output sizing have already been applied to these pixels.
+    /// The prepared camera view has been materialized into storage.
+    /// Authored composition remains a view on a rendered buffer.
     pub view_baked: bool,
 }
 
@@ -200,6 +201,22 @@ impl RenderedImage {
     pub(crate) fn buffer(&self) -> &crate::gpu::ReadGuard {
         &self.buffer
     }
+    pub(crate) fn pixel_at_uv(&self, uv: [f32; 2]) -> crate::source::Result<[u32; 2]> {
+        let view = self.view();
+        view.pixel_at_uv(uv)?;
+        let params = self.params();
+        if params.mapping[0][3] == 0. {
+            return view.pixel_at_uv(uv);
+        }
+        let q = uv.map(f64::from);
+        Ok(std::array::from_fn(|i| {
+            (f64::from(params.mapping[i][0]) * q[0]
+                + f64::from(params.mapping[i][1]) * q[1]
+                + f64::from(params.mapping[i][2]))
+            .round()
+            .clamp(f64::from(view.crop[i]), f64::from(view.crop[i + 2] - 1)) as u32
+        }))
+    }
     pub fn description(&self) -> Description {
         self.description
     }
@@ -209,15 +226,22 @@ impl RenderedImage {
             self.view
         } else {
             self.settings
-                .crop
-                .apply(self.view, self.settings.output_size)
+                .rotation
+                .view(self.view, self.settings.crop, self.settings.output_size)
         }
     }
     /// The prepared camera view before the authored crop.
     pub fn uncropped_view(&self) -> View {
         self.view
     }
-    /// Retain immutable samples while presenting the complete photograph for crop editing.
+    /// Present the camera-oriented source for draft rotation, retaining immutable samples.
+    pub fn without_composition(&self) -> Self {
+        let mut image = self.without_crop();
+        image.settings.rotation = Default::default();
+        image.settings.output_size = None;
+        image
+    }
+    /// Expand crop editing to the complete rotated photograph.
     pub fn without_crop(&self) -> Self {
         let mut image = self.clone();
         image.settings.crop = Default::default();
@@ -252,6 +276,13 @@ impl RenderedImage {
             | Space::SignedDetail => 0,
         };
         EncodeParams {
+            mapping: if self.description.space.uses_full_sensor_view()
+                || self.settings.preview_region.is_some()
+            {
+                [[0.; 4]; 2]
+            } else {
+                self.settings.rotation.mapping(view, self.settings.crop)
+            },
             source: [
                 self.description.extent[0],
                 self.description.extent[1],

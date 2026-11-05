@@ -135,6 +135,31 @@ impl Prepared {
         {
             return Err("invalid photographic resize geometry".into());
         }
+        if params.mapping[0][3] != 0. && (w > i16::MAX as u32 || h > i16::MAX as u32) {
+            return Err("photographic resize exceeds signed 16.16 coordinates".into());
+        }
+        if params.mapping[0][3] != 0. {
+            let mut rows = params.mapping;
+            for row in &mut rows {
+                row[0] /= params.output[0] as f32;
+                row[1] /= params.output[1] as f32;
+                row[2] += (row[0] + row[1]) * 0.5;
+            }
+            let scale = |axis: usize| 1. / f64::from(rows[0][axis].hypot(rows[1][axis]));
+            let fixed = |v: f32| (f64::from(v) * 65536.).round() as i32;
+            return Ok(Some(Self {
+                mapping: Mapping {
+                    origin: [fixed(rows[0][2]), fixed(rows[1][2]), 0, 0],
+                    increments: [
+                        fixed(rows[0][0]),
+                        fixed(rows[1][0]),
+                        fixed(rows[0][1]),
+                        fixed(rows[1][1]),
+                    ],
+                },
+                coefficients: coefficients(scale(0), scale(1))?,
+            }));
+        }
         let crop = [right - left, bottom - top];
         let natural = if rotation.is_multiple_of(180) {
             crop
@@ -236,6 +261,7 @@ pub(crate) fn apply(
     Ok((
         output,
         EncodeParams {
+            mapping: [[0.; 4]; 2],
             source: [ow, oh, 0, 0],
             crop: [0, 0, ow, oh],
             output: params.output,

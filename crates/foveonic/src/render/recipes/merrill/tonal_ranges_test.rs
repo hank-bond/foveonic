@@ -14,6 +14,7 @@ use std::sync::Arc;
 fn regional_tonal_support_shares_the_native_guide_grid_at_each_rotation() {
     for rotation in [0, 90, 180, 270] {
         let encode = calibration::EncodeParams {
+            mapping: [[0.; 4]; 2],
             source: [4928, 3264, rotation, 0],
             crop: [112, 64, 4816, 3200],
             output: if rotation % 180 == 0 {

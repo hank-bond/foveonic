@@ -91,6 +91,7 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
     supported.tiff_color_space = settings.tiff_color_space;
     supported.output_size = settings.output_size;
     supported.crop = settings.crop;
+    supported.rotation = settings.rotation;
     if supported == *settings {
         return false;
     }

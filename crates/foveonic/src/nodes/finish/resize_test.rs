@@ -4,6 +4,7 @@ use super::*;
 
 fn params(source: [u32; 2], crop: [u32; 4], rotation: u32, output: [u32; 2]) -> EncodeParams {
     EncodeParams {
+        mapping: [[0.; 4]; 2],
         source: [source[0], source[1], rotation, 0],
         crop,
         output: [output[0], output[1], 1, 0],

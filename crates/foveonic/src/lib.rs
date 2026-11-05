@@ -21,6 +21,7 @@ pub mod profile;
 mod recipe;
 pub mod render;
 pub mod review;
+pub mod rotation;
 pub mod scopes;
 pub mod sidecar;
 pub mod source;

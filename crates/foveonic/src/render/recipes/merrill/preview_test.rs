@@ -8,6 +8,7 @@ fn encoding(rotation: u32) -> EncodeParams {
         output.swap(0, 1);
     }
     EncodeParams {
+        mapping: [[0.; 4]; 2],
         source: [4928, 3264, rotation, 0],
         crop: [112, 64, 4816, 3200],
         output,

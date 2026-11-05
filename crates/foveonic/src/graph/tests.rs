@@ -149,6 +149,7 @@ fn rejects_wrong_space_and_forward_dependencies() {
     let source = graph.add(Operation::Source, &[]).unwrap();
     let encode = || Operation::Encode {
         params: EncodeParams {
+            mapping: [[0.; 4]; 2],
             source: [1, 1, 0, 0],
             crop: [0, 0, 1, 1],
             output: [1, 1, 0, 0],

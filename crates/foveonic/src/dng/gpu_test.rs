@@ -85,3 +85,80 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
         "image belongs to another engine"
     );
 }
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn saved_rotation_uses_the_same_samples_for_dng_and_photographic_preview() {
+    let engine = Engine::new().unwrap();
+    let source = Source::open(
+        std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+            .join("blue-parking-sign.x3f"),
+    )
+    .unwrap();
+    let settings = Settings::new("Sunlight", "Standard");
+    let mut prepared = Prepared::new(&source.metadata, &settings).unwrap();
+    prepared.mapping = Matrix::diagonal([1.; 3]);
+    prepared.neutral = [1.; 3];
+    let pixels: Vec<f32> = (0..24)
+        .flat_map(|y| {
+            (0..32).flat_map(move |x| [0.2 + x as f32 * 0.01, 0.25 + y as f32 * 0.01, 0.3])
+        })
+        .collect();
+    let mut image = RenderedImage {
+        buffer: engine.gpu.upload("DNG rotation ramp", &pixels).unwrap(),
+        description: Description {
+            linear_white: 4095,
+            view_baked: true,
+            extent: [32, 24],
+            layout: Layout::Rgb32Float,
+            space: Space::LinearRgb(ColorSpace::Srgb),
+        },
+        view: View {
+            crop: [0, 0, 32, 24],
+            rotation: 0,
+            extent: [32, 24],
+        },
+        metadata: source.metadata.clone(),
+        settings,
+        dehaze_basis: None,
+        owner: engine.owner.clone(),
+    };
+    image.settings.crop.bounds = [0.1, 0.1, 0.9, 0.9];
+    for turns in 0..4 {
+        for degrees in [0., 13., -17.] {
+            image.settings.rotation = crate::rotation::Rotation { turns, degrees };
+            for output in [None, Some([9, 7])] {
+                image.settings.output_size = output;
+                let extent = image.view().extent;
+                let texture = engine
+                    .view_texture(&image, None, &mut Profile::default())
+                    .unwrap();
+                let pitch = (extent[0] * 16).div_ceil(256) * 256;
+                let bytes = engine
+                    .gpu
+                    .readback_texture(texture.texture(), extent, pitch)
+                    .unwrap();
+                let preview: &[f32] = bytemuck::cast_slice(&bytes);
+                let (packed, scale) = engine
+                    .encode_dng_base(&image, &prepared, &mut Profile::default())
+                    .unwrap();
+                assert_eq!(packed.len(), (extent[0] * extent[1] * 8) as usize);
+                for y in 0..extent[1] {
+                    for x in 0..extent[0] {
+                        for c in 0..3 {
+                            let p = ((y * extent[0] + x) * 8 + c * 2) as usize;
+                            let actual = u16::from_le_bytes([packed[p], packed[p + 1]]) as f32
+                                / 65535.
+                                * scale;
+                            let expected = preview[(y * pitch / 4 + x * 4 + c) as usize];
+                            assert!(
+                                (actual - expected).abs() < scale / 65535.,
+                                "{turns} {degrees} {output:?} at {x},{y} channel {c}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

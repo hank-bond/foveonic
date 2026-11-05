@@ -48,6 +48,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[recipe.rs](./recipe.rs)** Encodes exact effective operation parameters for graph versioning without hashing photographic samples.
 - **[render.rs](./render.rs)** Shares GPU engine entry points for photographic rendering, inspection, display, and export.
 - **[review.rs](./review.rs)** Persists independent star ratings in a bounded per-folder review file without touching editing recipes.
+- **[rotation.rs](./rotation.rs)** Composes saved quarter turns and fine rotation with an interior photographic crop.
 - **[scopes.rs](./scopes.rs)** Builds histograms and smooth waveform traces from GPU image regions.
 - **[sidecar.rs](./sidecar.rs)** Keeps bounded editing recipes in a visible source-folder subdirectory with atomic replacement.
 - **[source.rs](./source.rs)** Owns original sensor storage layouts and typed camera metadata.

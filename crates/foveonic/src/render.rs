@@ -291,7 +291,7 @@ impl Engine {
             return Err("color pick requires a linear color guide".into());
         };
         let view = guide.view();
-        let pixel = view.pixel_at_uv(uv)?;
+        let pixel = guide.pixel_at_uv(uv)?;
         let white = guide.description().linear_white as f32;
         crate::nodes::finish::color_editor::pick(
             &self.gpu,
@@ -325,7 +325,7 @@ impl Engine {
                 image.description().extent,
                 space,
                 image.description().linear_white as f32,
-                view.pixel_at_uv(uv)?,
+                image.pixel_at_uv(uv)?,
                 view.crop,
             ),
         )
@@ -342,7 +342,7 @@ impl Engine {
             return Err("haze selection requires a linear image".into());
         };
         let view = image.view();
-        let pixel = view.pixel_at_uv(uv)?;
+        let pixel = image.pixel_at_uv(uv)?;
         let params = crate::nodes::finish::dehaze::Estimate::patch(
             image.description().extent,
             image

@@ -26,6 +26,125 @@ impl Drop for Directory {
 
 #[test]
 #[ignore = "requires a working GPU adapter"]
+fn saved_rotation_agrees_between_preview_export_and_picker_coordinates() {
+    let engine = Engine::new().unwrap();
+    let directory = Directory::new();
+    let pixels: Vec<f32> = (0..24)
+        .flat_map(|y| {
+            (0..32).flat_map(move |x| [0.2 + x as f32 * 0.01, 0.25 + y as f32 * 0.01, 0.3])
+        })
+        .collect();
+    let mut image = RenderedImage {
+        buffer: engine.gpu.upload("Rotation ramp", &pixels).unwrap(),
+        description: Description {
+            linear_white: 4095,
+            view_baked: false,
+            extent: [32, 24],
+            layout: Layout::Rgb32Float,
+            space: Space::ToneMappedRgb(ColorSpace::Srgb),
+        },
+        view: crate::image::View {
+            crop: [0, 0, 32, 24],
+            rotation: 0,
+            extent: [32, 24],
+        },
+        metadata: Arc::new(crate::source::Metadata {
+            processing_version: None,
+            width: 32,
+            height: 24,
+            rotation: 0,
+            properties: Default::default(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        }),
+        settings: Settings::new("Sunlight", "Standard"),
+        dehaze_basis: None,
+        owner: engine.owner.clone(),
+    };
+    for turns in 0..4 {
+        for degrees in [0., 13., -17.] {
+            image.settings.rotation = crate::rotation::Rotation { turns, degrees };
+            image.settings.crop.bounds = [0.1, 0.1, 0.9, 0.9];
+            let params = image.params();
+            let extent = [params.output[0], params.output[1]];
+            let texture = engine
+                .view_texture(&image, None, &mut Profile::default())
+                .unwrap();
+            let pitch = (extent[0] * 16).div_ceil(256) * 256;
+            let preview = engine
+                .gpu
+                .readback_texture(texture.texture(), extent, pitch)
+                .unwrap();
+            let preview: &[f32] = bytemuck::cast_slice(&preview);
+            let path = directory.0.join(format!("rotation-{turns}-{degrees}.tiff"));
+            assert_eq!(
+                engine
+                    .write_tiff(&image, &path, &mut Profile::default())
+                    .unwrap(),
+                extent
+            );
+            let mut decoder =
+                tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+            let tiff::decoder::DecodingResult::U16(encoded) = decoder.read_image().unwrap() else {
+                panic!("RGB16");
+            };
+            for y in [extent[1] / 4, extent[1] / 2, extent[1] * 3 / 4] {
+                for x in [extent[0] / 4, extent[0] / 2, extent[0] * 3 / 4] {
+                    let uv = [
+                        (x as f32 + 0.5) / extent[0] as f32,
+                        (y as f32 + 0.5) / extent[1] as f32,
+                    ];
+                    let physical = image.pixel_at_uv(uv).unwrap();
+                    let expected = if degrees == 0. {
+                        pixels[(physical[1] * 32 + physical[0]) as usize * 3..][..3].to_vec()
+                    } else {
+                        let q: [f32; 2] = std::array::from_fn(|i| {
+                            params.mapping[i][0] * uv[0]
+                                + params.mapping[i][1] * uv[1]
+                                + params.mapping[i][2]
+                        });
+                        assert!(
+                            (q[0] - physical[0] as f32).abs() <= 0.501
+                                && (q[1] - physical[1] as f32).abs() <= 0.501
+                        );
+                        vec![0.2 + q[0] * 0.01, 0.25 + q[1] * 0.01, 0.3]
+                    };
+                    for c in 0..3 {
+                        let actual = preview[(y * pitch / 4 + x * 4) as usize + c];
+                        assert!(
+                            (actual - expected[c]).abs() < 1e-5,
+                            "preview {turns} {degrees} {x},{y} c{c}: {actual} vs {}",
+                            expected[c]
+                        );
+                        let v = f32::from(encoded[((y * extent[0] + x) * 3) as usize + c]) / 65535.;
+                        let linear = if v <= 0.04045 {
+                            v / 12.92
+                        } else {
+                            ((v + 0.055) / 1.055).powf(2.4)
+                        };
+                        assert!(
+                            (linear - expected[c]).abs() < 0.003,
+                            "export {turns} {degrees} {x},{y} c{c}: {linear} vs {}",
+                            expected[c]
+                        );
+                    }
+                }
+            }
+            // Navigator-sized preparation must use the whole rotated view too.
+            let small = engine
+                .view_texture(&image, Some([8, 8]), &mut Profile::default())
+                .unwrap();
+            assert_eq!(small.description().extent, [8, 8]);
+        }
+    }
+    assert_eq!(
+        engine.readback_image(&image).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&pixels)
+    );
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
 fn saved_crop_exports_the_same_oriented_pixels_without_changing_the_working_image() {
     let engine = Engine::new().unwrap();
     let directory = Directory::new();

@@ -115,6 +115,7 @@ fn shader_resize_preserves_crop_orientation_and_both_transfer_routes() {
         for size in [[1, 1], [6, 4], natural] {
             for route in [0, 1] {
                 let params = EncodeParams {
+                    mapping: [[0.; 4]; 2],
                     source: [5, 4, rotation, 0],
                     crop: [1, 1, 4, 3],
                     output: [size[0], size[1], route, 0],

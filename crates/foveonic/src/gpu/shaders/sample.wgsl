@@ -1,5 +1,5 @@
 // Shared sampling of a logical crop/orientation/size from floating RGB or a scalar field.
-struct Params { source: vec4<u32>, crop: vec4<u32>, output_size: vec4<u32> };
+struct Params { mapping: array<vec4<f32>,2>, source: vec4<u32>, crop: vec4<u32>, output_size: vec4<u32> };
 @group(0) @binding(0) var<storage, read> input_pixels: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 
@@ -10,6 +10,10 @@ fn pixel(point: vec2<u32>, channel: u32) -> f32 {
 }
 
 fn sample_rgb(id: vec2<u32>) -> vec3<f32> {
+    if params.mapping[0].w != 0. {
+        let q = vec3<f32>((vec2<f32>(id)+0.5)/vec2<f32>(params.output_size.xy),1.);
+        return sample_storage(vec2(dot(params.mapping[0].xyz,q),dot(params.mapping[1].xyz,q)));
+    }
     let size = params.crop.zw - params.crop.xy;
     var oriented_size = size;
     if params.source.z == 90u || params.source.z == 270u { oriented_size = size.yx; }
@@ -30,6 +34,11 @@ fn sample_oriented(oriented: vec2<f32>) -> vec3<f32> {
         default: {}
     }
     point += vec2<f32>(params.crop.xy);
+    return sample_storage(point);
+}
+
+fn sample_storage(input_point: vec2<f32>) -> vec3<f32> {
+    let point = clamp(input_point,vec2<f32>(params.crop.xy),vec2<f32>(params.crop.zw)-1.);
     let lower = vec2<u32>(floor(point));
     let upper = min(lower + vec2<u32>(1u), params.crop.zw - vec2<u32>(1u));
     let fraction = fract(point);
