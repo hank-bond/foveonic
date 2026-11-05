@@ -11,11 +11,6 @@ fn store(x:u32,y:u32,v:vec3<f32>){let i=(y*p.shape.x+x)*3u;pixels[i]=v.x;pixels[
 fn tolerances(v:vec3<f32>)->vec3<f32>{var result:vec3<f32>;for(var c=0u;c<3u;c++){let k=c*3u;let square=fma(v[c],v[c],0.);result[c]=sqrt(fma(square,noise[k+2u],fma(abs(v[c]),noise[k+1u],noise[k])));}return result;}
 fn selected_channels(bits:u32)->vec3<bool>{if bits==0u{return vec3(true);}return vec3((bits&4u)!=0u,(bits&2u)!=0u,(bits&1u)!=0u);}
 fn finite(v:vec3<f32>)->bool{return all(v==v)&&all(abs(v)<=vec3(3.402823466e38));}
-// High/low products preserve the color projection's native Double intermediates
-// until final Float32 storage. This is the same arithmetic used by UV conversion.
-fn product(a:f32,b:f32)->vec2<f32>{let high=fma(a,b,0.);return vec2(high,fma(a,b,-high));}
-fn add_pair(a:vec2<f32>,b:vec2<f32>)->vec2<f32>{let sum=fma(1.,a.x,b.x);let vb=fma(-1.,a.x,sum);let ra=fma(-1.,fma(-1.,vb,sum),a.x);let rb=fma(-1.,vb,b.x);let error=fma(1.,fma(1.,ra,rb),fma(1.,a.y,b.y));let high=fma(1.,sum,error);return vec2(high,fma(-1.,fma(-1.,sum,high),error));}
-fn multiply_pair(a:vec2<f32>,b:f32)->vec2<f32>{return add_pair(product(a.x,b),product(a.y,b));}
 fn color(v:vec3<f32>,base:u32)->vec3<f32>{var result:vec3<f32>;for(var c=0u;c<3u;c++){let row=base+c*3u;let first=add_pair(multiply_pair(matrix[row+1u],v.y),multiply_pair(matrix[row],v.x));let total=add_pair(first,multiply_pair(matrix[row+2u],v.z));result[c]=fma(1.,total.x,total.y);}return result;}
 fn neighbors(x:u32,y:u32)->array<vec3<f32>,8>{var n:array<vec3<f32>,8>;for(var i=0u;i<8u;i++){n[i]=load(u32(i32(x)+OFFSETS[i].x),u32(i32(y)+OFFSETS[i].y));}return n;}
 fn combined(original:vec3<f32>,minimum:vec3<f32>,maximum:vec3<f32>,sigma:vec3<f32>,chosen:vec3<bool>)->bool{

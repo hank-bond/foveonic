@@ -4,6 +4,32 @@ use super::*;
 fn rejects_invalid_controls() {
     assert!(Prepared::new([4, 9], [1.; 9], 1., [0.; 9]).is_err());
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn isolated_rgb_outlier_is_repaired_unless_masked() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [9, 9];
+    let prepared =
+        Prepared::new(extent, [0.; 9], 1., [1., 0., 0., 0., 1., 0., 0., 0., 1.]).unwrap();
+    let mut values = vec![100_f32; 9 * 9 * 3];
+    let center = (4 * 9 + 4) * 3;
+    values[center..center + 3].fill(1000.);
+    let input = gpu.upload("RGB outlier fixture", &values).unwrap();
+    for masked in [false, true] {
+        let mut flags = vec![0_u32; 9 * 9];
+        flags[4 * 9 + 4] = u32::from(masked);
+        let mask = gpu.upload("RGB outlier mask", &flags).unwrap();
+        let output = apply(&gpu, &input, &mask, &prepared, &mut Default::default()).unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
+        let expected = if masked { 1000. } else { 100. };
+        for value in &actual[center..center + 3] {
+            assert!((value - expected).abs() < 0.01);
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires GPU and RGB_NATIVE_BOUNDARY"]
 fn full_immutable_pass_matches_native() {
