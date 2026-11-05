@@ -5,13 +5,19 @@ kind: reference
 
 # Changelog
 
-## Unreleased
+## 0.7.1
 
-Optimization and responsiveness improvements following the feature-focused 0.7.0 release.
+Light-appearance and processing fixes, a choice of photograph background, and smoother browsing and editing.
 
 ### Changes
 
+- Fix light appearance across shared buttons, menus, slider tracks and section headers. Switching system appearance retains consistent layout and numeric formatting.
+- Process now requires picked photos or changed hidden decisions in Import mode. Checking and then unchecking a photo no longer leaves an empty batch enabled. Successfully saved decisions stop being pending, and disabled Process states explain what is needed on hover.
+- Add a sun/moon group at the right end of the viewport control row for black or white photograph backgrounds. Remember the choice independently of system appearance, without changing photo settings or rerendering. Narrow viewport controls scroll beside the fixed group.
+- Open folders in the background and reuse browser ordering and layout so large folders keep the interface more responsive.
+- Zoomed Smart edits show Full-resolution viewport detail over the previous image before completing the whole photograph. Edits that require whole-photo processing go directly to Full.
 - Reduce Merrill Reference speckle-processing stalls at low thresholds while preserving the existing rendered result.
+- Parallelize automatic Dehaze color analysis while retaining its existing result.
 
 ## 0.7.0
 
