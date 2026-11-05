@@ -21,6 +21,7 @@ use std::{
 };
 
 pub struct Request {
+    pub crop_preview: bool,
     pub calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
     pub rendition: crate::editor::Rendition,
     pub revision: u64,
@@ -65,6 +66,8 @@ fn resolve_preview(request: &Request, settings: &mut Settings, metadata: &Metada
 }
 
 pub struct Frame {
+    pub crop_preview: bool,
+    native_extent: [u32; 2],
     pub calibration_signature: Option<String>,
     pub rendition: crate::editor::Rendition,
     pub requested: Settings,
@@ -80,13 +83,32 @@ pub struct Frame {
 impl Frame {
     /// Keep zoom coordinates native while Fast stores fewer pixels.
     pub fn display_extent(&self, input: bool) -> [u32; 2] {
+        let [l, t, r, b] = self.display_window(input);
+        [r - l, b - t]
+    }
+    pub fn uncropped_extent(&self) -> [u32; 2] {
+        self.native_extent
+    }
+    /// Native oriented bounds represented by the main texture, including crop offsets.
+    pub fn display_window(&self, input: bool) -> [u32; 4] {
+        if self.crop_preview {
+            return [0, 0, self.native_extent[0], self.native_extent[1]];
+        }
+        if self.output == "final"
+            && !input
+            && self.artifact.settings.output_size.is_none()
+            && self.artifact.settings.preview_region.is_none()
+        {
+            let extent = self.uncropped_extent();
+            return self.artifact.settings.crop.pixels(extent);
+        }
         let extent = self.view(input).description().extent;
         if self.artifact.settings.preview_quality.is_reduced()
             && self.artifact.settings.output_size.is_none()
         {
-            extent.map(|v| v * 2)
+            [0, 0, extent[0] * 2, extent[1] * 2]
         } else {
-            extent
+            [0, 0, extent[0], extent[1]]
         }
     }
     pub fn quality_label(&self) -> &'static str {
@@ -314,7 +336,7 @@ impl Worker {
                             let mut next=pending.settings.clone();
                             resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
                             resolve_preview(pending, &mut next, metadata.as_ref().unwrap());
-                            pending.rendition!=request.rendition||pending.path!=request.path||pending.output!=request.output||pending.comparison!=request.comparison||settings.preview_quality!=next.preview_quality||settings.preview_region!=next.preview_region||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
+                            pending.rendition!=request.rendition||pending.path!=request.path||pending.output!=request.output||pending.comparison!=request.comparison||pending.crop_preview!=request.crop_preview||settings.preview_quality!=next.preview_quality||settings.preview_region!=next.preview_region||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
                         })
                     };
                     let mut profile = Profile::new(crate::timing::mode());
@@ -361,9 +383,11 @@ impl Worker {
                         );
                     };
                     if cancel(){return Ok(None);}
+                    let native_extent=if root=="final" {foveonic::render::native_extent(&artifact.metadata)?} else {image.uncropped_view().extent};
                     let texture = {
                         let _span = crate::timing::Span::new(request.revision, "view_prepare_host");
-                        Arc::new(engine.view_texture(image, None, &mut profile)?)
+                        let uncropped=request.crop_preview.then(||image.without_crop());
+                        Arc::new(engine.view_texture(uncropped.as_ref().unwrap_or(image.as_ref()), None, &mut profile)?)
                     };
                     if comparison.as_ref().is_some_and(|c| c.texture.description().extent != texture.description().extent) {
                         return Err("comparison views have different geometry".into());
@@ -374,6 +398,8 @@ impl Worker {
                     }
                     if let Some(before)=view_before{crate::timing::emit("view",serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
                     Ok(Some(Frame {
+                        crop_preview: request.crop_preview,
+                        native_extent,
                         calibration_signature: request.calibration.as_ref().map(|p| p.signature().to_owned()),
                         rendition: request.rendition,
                         requested: request.settings.clone(),
@@ -651,6 +677,7 @@ mod tests {
         for (index, settings) in selections.into_iter().enumerate() {
             let destination = directory.join(format!("{index}.dng"));
             worker.submit(super::Request {
+                crop_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
@@ -711,6 +738,7 @@ mod tests {
         );
         for revision in 1..=20 {
             worker.submit(super::Request {
+                crop_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
@@ -741,6 +769,7 @@ mod tests {
             break;
         }
         worker.submit(super::Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
@@ -762,6 +791,7 @@ mod tests {
         assert_eq!(frame.artifact.settings.white_balance, "Sunlight");
         assert_eq!(frame.artifact.settings.color_mode, "Standard");
         worker.submit(super::Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
@@ -810,6 +840,7 @@ mod tests {
         {
             let revision = index as u64 + 1;
             worker.submit(super::Request {
+                crop_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
@@ -844,6 +875,7 @@ mod tests {
             );
         }
         worker.submit(super::Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
@@ -862,6 +894,7 @@ mod tests {
         assert_eq!(frame.texture.description().space, Space::CalibratedLayers);
         drop(frame);
         worker.submit(super::Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
@@ -986,6 +1019,7 @@ mod tests {
             };
             let start = std::time::Instant::now();
             worker.submit(super::Request {
+                crop_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
@@ -1066,6 +1100,7 @@ mod tests {
             settings.sharpen_amount = Some(0.75);
             let submit = |revision, settings: foveonic::render::Settings| {
                 worker.submit(super::Request {
+                    crop_preview: false,
                     calibration: None,
                     rendition: Default::default(),
                     preview_quality: crate::preferences::PreviewMode::Full,
@@ -1176,6 +1211,7 @@ mod tests {
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
         worker.submit(super::Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
@@ -1248,6 +1284,7 @@ mod tests {
         };
         for revision in 1..100 {
             worker.submit(super::Request {
+                crop_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
@@ -1274,6 +1311,7 @@ mod tests {
         let opening_began = std::time::Instant::now() - std::time::Duration::from_millis(250);
         worker.submit_at(
             super::Request {
+                crop_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
@@ -1346,6 +1384,7 @@ mod preview_tests {
             },
         );
         let mut request = Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             revision: 1,
@@ -1396,6 +1435,7 @@ mod preview_tests {
     fn fast_policy_keeps_inspection_monochrome_comparisons_and_exports_full() {
         let mut m = metadata();
         let mut r = Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             revision: 1,
@@ -1547,6 +1587,7 @@ mod preview_tests {
             export_settings.preview_region = Some([100, 100, 400, 300]);
             export_settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::ProPhotoRgb);
             worker.submit(Request {
+                crop_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 revision: index as u64 + 1,
@@ -1578,6 +1619,7 @@ mod preview_tests {
             );
         }
         worker.submit(Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             revision: 5,
@@ -1619,6 +1661,7 @@ mod color_pick_tests {
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         let worker = Worker::new(Engine::new().unwrap(), egui::Context::default());
         worker.submit(Request {
+            crop_preview: false,
             calibration: None,
             rendition: Default::default(),
             revision: 1,

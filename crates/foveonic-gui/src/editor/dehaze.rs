@@ -97,6 +97,7 @@ pub fn exit(ctx: &egui::Context) {
     store(ctx, s);
 }
 pub fn toggle(ctx: &egui::Context) {
+    crate::crop_tool::exit(ctx);
     let mut s = state(ctx);
     s.picking = !s.picking;
     s.pressed = false;

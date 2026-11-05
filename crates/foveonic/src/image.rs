@@ -157,7 +157,24 @@ impl RenderedImage {
         self.description
     }
     pub fn view(&self) -> View {
+        if self.description.space.uses_full_sensor_view() || self.settings.preview_region.is_some()
+        {
+            self.view
+        } else {
+            self.settings
+                .crop
+                .apply(self.view, self.settings.output_size)
+        }
+    }
+    /// The prepared camera view before the authored crop.
+    pub fn uncropped_view(&self) -> View {
         self.view
+    }
+    /// Retain immutable samples while presenting the complete photograph for crop editing.
+    pub fn without_crop(&self) -> Self {
+        let mut image = self.clone();
+        image.settings.crop = Default::default();
+        image
     }
     pub fn source_metadata(&self) -> &Metadata {
         &self.metadata
@@ -167,6 +184,7 @@ impl RenderedImage {
     }
 
     pub(crate) fn params(&self) -> EncodeParams {
+        let view = self.view();
         let transfer = match self.description.space {
             Space::LinearRgb(space) | Space::ToneMappedRgb(space) => space as u32,
             Space::EncodedRgb16(space) => space as u32,
@@ -190,11 +208,11 @@ impl RenderedImage {
             source: [
                 self.description.extent[0],
                 self.description.extent[1],
-                self.view.rotation,
+                view.rotation,
                 u32::from(self.description.layout == Layout::Scalar32Float),
             ],
-            crop: self.view.crop,
-            output: [self.view.extent[0], self.view.extent[1], transfer, 0],
+            crop: view.crop,
+            output: [view.extent[0], view.extent[1], transfer, 0],
         }
     }
 }

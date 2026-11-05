@@ -41,6 +41,7 @@ impl Before {
         };
         baseline.preview_quality = current.preview_quality;
         baseline.output_size = current.output_size;
+        baseline.crop = current.crop;
         Ok(baseline)
     }
 }
@@ -51,11 +52,10 @@ impl App {
         }
         if self.before.active == target {
             self.exit_before();
-            if self
-                .frame
-                .as_ref()
-                .is_none_or(|f| !crate::smart::same_edits(&f.requested, &self.settings))
-            {
+            if self.frame.as_ref().is_none_or(|f| {
+                f.crop_preview != self.crop_preview_active()
+                    || !crate::smart::same_edits(&f.requested, &self.settings)
+            }) {
                 self.submit(None);
             }
         } else {

@@ -1,4 +1,4 @@
-//! Places source opening, destination and shared processing actions on one padded toolbar row.
+//! Shares padded processing rows and a responsive right-aligned image-tool region.
 
 use crate::{preferences::FolderMode, widgets};
 use eframe::egui;
@@ -56,6 +56,82 @@ pub fn row<R>(
         egui::Layout::left_to_right(egui::Align::Center),
         contents,
     )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Area {
+    Processing,
+    Tools,
+}
+
+/// Center one compact tool group, deriving its width from the same controls that draw it.
+pub fn tool_group<R>(
+    ui: &mut egui::Ui,
+    widths: &[f32],
+    draw: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let width = widths.iter().sum::<f32>()
+        + ui.spacing().item_spacing.x * widths.len().saturating_sub(1) as f32
+        + 2. * f32::from(widgets::BUTTON_GROUP_MARGIN);
+    let rect = egui::Rect::from_center_size(
+        ui.available_rect_before_wrap().center(),
+        egui::vec2(width, widgets::ControlSize::Large.group_height()),
+    );
+    let mut group = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("image tools group")
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let result = widgets::button_group(&mut group, |ui| {
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), draw)
+            .inner
+    })
+    .inner;
+    ui.advance_cursor_after_rect(group.min_rect());
+    result
+}
+
+/// Keep a tool region at the right edge and wrap before it when processing controls need room.
+pub fn split(ui: &mut egui::Ui, tools_width: f32, mut draw: impl FnMut(&mut egui::Ui, Area)) {
+    let height = widgets::button_group_height(ui);
+    let available = ui.available_rect_before_wrap();
+    let tools_width = tools_width.min(available.width());
+    let gap = ui.spacing().item_spacing;
+    let layout = egui::Layout::left_to_right(egui::Align::Center);
+    let mut processing = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("processing row")
+            .max_rect(egui::Rect::from_min_size(
+                available.min,
+                egui::vec2((available.width() - tools_width - gap.x).max(1.), height),
+            ))
+            .layout(layout),
+    );
+    row(&mut processing, |ui| draw(ui, Area::Processing));
+    let used = processing.min_rect();
+    let y = if used.right() + gap.x + tools_width <= available.right() + 0.01 {
+        used.top()
+    } else {
+        used.bottom() + gap.y
+    };
+    let tools_rect = egui::Rect::from_min_size(
+        egui::pos2(available.right() - tools_width, y),
+        egui::vec2(tools_width, height),
+    );
+    ui.painter().vline(
+        tools_rect.left(),
+        tools_rect.y_range(),
+        ui.visuals().widgets.noninteractive.bg_stroke,
+    );
+    let mut tools = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("photo tools")
+            .max_rect(tools_rect)
+            .layout(layout),
+    );
+    row(&mut tools, |ui| draw(ui, Area::Tools));
+    ui.advance_cursor_after_rect(used.union(tools.min_rect()));
 }
 
 /// Keep status text in the row's remaining width and retain full details on hover.
@@ -164,6 +240,54 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_region_stays_right_aligned_and_wraps_after_processing() {
+        for width in [650., 1200.] {
+            let ctx = egui::Context::default();
+            let mut processing = egui::Rect::NOTHING;
+            let mut tools = egui::Rect::NOTHING;
+            let mut available = egui::Rect::NOTHING;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 200.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        available = ui.available_rect_before_wrap();
+                        split(ui, 300., |ui, area| {
+                            let rect = ui
+                                .allocate_exact_size(
+                                    egui::vec2(
+                                        if area == Area::Processing { 500. } else { 300. },
+                                        28.,
+                                    ),
+                                    egui::Sense::hover(),
+                                )
+                                .0;
+                            match area {
+                                Area::Processing => processing = rect,
+                                Area::Tools => tools = rect,
+                            }
+                        });
+                    });
+                },
+            );
+            assert!(
+                (tools.right() - available.right()).abs() < 0.01,
+                "{width}: {tools:?}"
+            );
+            if width < 800. {
+                assert!(tools.top() >= processing.bottom());
+            } else {
+                assert!((tools.center().y - processing.center().y).abs() < 0.01);
+            }
+        }
+    }
     #[test]
     fn export_requires_a_supported_photographic_output() {
         use foveonic::source::{Matrix, MatrixEncoding, PropertyList};

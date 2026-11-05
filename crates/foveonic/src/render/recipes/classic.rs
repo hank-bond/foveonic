@@ -51,6 +51,7 @@ pub(super) fn build_dng(
     )
 }
 
+pub(super) use prepare::geometry;
 pub(crate) use prepare::prepare_dng_appearance;
 pub(crate) use white_balance::estimate as estimate_white_balance;
 
@@ -65,7 +66,7 @@ fn compose(
 ) -> Result<BuiltRecipe> {
     let metadata = &source.metadata;
     let mut params = prepare::geometry(metadata)?;
-    if let Some(size) = settings.output_size {
+    if let Some(size) = settings.processing_output_size() {
         params.output[..2].copy_from_slice(&size);
     }
     engine.check_extent([params.output[0], params.output[1]])?;

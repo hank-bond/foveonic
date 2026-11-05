@@ -143,6 +143,7 @@ pub struct Preferences {
     #[serde(with = "crate::editor::storage")]
     pub editor: crate::editor::Library,
     pub direct_color: crate::editor::direct_color::Configuration,
+    pub crop_ratios: Vec<crate::crop_tool::NamedRatio>,
     pub scope: Scope,
     pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
@@ -169,6 +170,7 @@ impl Default for Preferences {
             browser_show_ratings: false,
             editor: Default::default(),
             direct_color: Default::default(),
+            crop_ratios: Vec::new(),
             scope: Scope::Histogram,
             scope_viewport: true,
             zoom_snap: ZoomPreset::default(),

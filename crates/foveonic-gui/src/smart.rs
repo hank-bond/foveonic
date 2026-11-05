@@ -103,6 +103,7 @@ impl App {
         // Recipes without regional support refine the whole frame directly.
         // Otherwise retain the first detail tile while Full completes.
         if self.detail.is_some()
+            || (frame.crop_preview && frame.artifact.settings.output_size.is_some())
             || !frame
                 .artifact
                 .settings
@@ -114,13 +115,19 @@ impl App {
         let Some(visible) = self.viewport.visible_pixels() else {
             return;
         };
+        let window = frame.display_window(false);
         let visible = [
-            visible.top_left[0],
-            visible.top_left[1],
-            visible.bottom_right[0] + 1,
-            visible.bottom_right[1] + 1,
+            visible.top_left[0] + window[0],
+            visible.top_left[1] + window[1],
+            visible.bottom_right[0] + 1 + window[0],
+            visible.bottom_right[1] + 1 + window[1],
         ];
-        if let Some(region) = self.smart.next(visible, frame.display_extent(false)) {
+        let extent = if frame.artifact.settings.output_size.is_some() {
+            frame.display_extent(false)
+        } else {
+            frame.uncropped_extent()
+        };
+        if let Some(region) = self.smart.next(visible, extent) {
             self.submit_request(None, Some(region));
         }
     }

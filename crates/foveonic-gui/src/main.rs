@@ -8,6 +8,7 @@ mod capture;
 mod chromaticity;
 mod comparison_view;
 mod controls;
+mod crop_tool;
 mod display;
 mod display_image;
 mod editor;
@@ -22,6 +23,7 @@ mod metadata;
 mod mixer;
 mod navigator;
 mod noise_calibration;
+mod photo_tools;
 mod preferences;
 mod preview_image;
 mod previews;
@@ -50,6 +52,8 @@ use std::{path::PathBuf, sync::Arc};
 // Keep folder readiness responsive during prefetch without polling idle folders at frame rate.
 const CACHE_ACTIVE_POLL: std::time::Duration = std::time::Duration::from_millis(150);
 const CACHE_IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+const TOOLS_MIN_WIDTH: f32 = 300.;
+const TOOLS_DEFAULT_WIDTH: f32 = 330.;
 
 /// Opening starts at selection, including recipe reads before worker submission.
 struct Opening {
@@ -58,6 +62,7 @@ struct Opening {
 }
 
 struct App {
+    context: egui::Context,
     noise_calibration: noise_calibration::State,
     comparison_selection: Option<PathBuf>,
     comparison_zoom: f32,
@@ -172,6 +177,7 @@ impl App {
                 .map(|p| p.signature().to_owned()),
         );
         let mut app = Self {
+            context: cc.egui_ctx.clone(),
             noise_calibration,
             comparison_selection: None,
             comparison_zoom: 1.,
@@ -370,6 +376,7 @@ impl App {
             let mut requested = self.view_settings();
             requested.preview_region = region;
             let request = worker::Request {
+                crop_preview: export.is_none() && self.crop_preview_active(),
                 calibration: self
                     .noise_calibration
                     .selected(self.preferences.noise_profile),
@@ -467,6 +474,15 @@ impl App {
                                 .as_ref()
                                 .map(|p| p.signature())
                     })
+            {
+                continue;
+            }
+            if reply
+                .result
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .is_some_and(|frame| frame.crop_preview != self.crop_preview_active())
             {
                 continue;
             }
@@ -599,12 +615,16 @@ impl App {
         }
     }
     fn update_scopes(&mut self, ctx: &egui::Context) {
+        let window = self
+            .frame
+            .as_ref()
+            .map_or([0; 4], |f| f.display_window(false));
         let visible = self.viewport.visible_pixels().map(|p| {
             [
-                p.top_left[0],
-                p.top_left[1],
-                p.bottom_right[0] + 1,
-                p.bottom_right[1] + 1,
+                p.top_left[0] + window[0],
+                p.top_left[1] + window[1],
+                p.bottom_right[0] + 1 + window[0],
+                p.bottom_right[1] + 1 + window[1],
             ]
         });
         let detail = self.smart_detail(ctx.pixels_per_point()).filter(|detail| {
@@ -656,7 +676,11 @@ impl App {
         // Keep the previous plots visible while the worker prepares their replacement.
         self.worker.submit_scopes(worker::ScopeRequest {
             key,
-            image: (**image).clone(),
+            image: if frame.crop_preview {
+                image.without_crop()
+            } else {
+                (**image).clone()
+            },
         });
         self.scope_key = Some(key);
     }
@@ -674,11 +698,23 @@ impl App {
             },
         );
     }
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
+    fn toolbar(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
         self.import
             .prepare_browse(&self.browser, self.selected.as_deref());
         toolbar::container(ui, |ui| {
-            toolbar::row(ui, |ui| {
+            let pane_left =
+                egui::containers::panel::PanelState::load(ui.ctx(), egui::Id::new("settings"))
+                    .map_or(
+                        ui.ctx().screen_rect().right() - TOOLS_DEFAULT_WIDTH,
+                        |state| state.rect.left(),
+                    );
+            let tools_width = ui.available_rect_before_wrap().right() - pane_left;
+            toolbar::split(ui, tools_width, |ui, area| {
+                if area == toolbar::Area::Tools {
+                    changed |= self.photo_toolbar(ui);
+                    return;
+                }
                 let export_ready = self.sidecars.ready()
                     && self.selected.is_some()
                     && toolbar::can_export(&self.settings, self.metadata.as_deref());
@@ -760,6 +796,7 @@ impl App {
                 &mut self.preferences.browse_processing
             },
         );
+        changed
     }
     fn toolbar_status(&mut self, ui: &mut egui::Ui) {
         let warning = self.sidecars.warning();
@@ -787,6 +824,36 @@ impl App {
             self.sidecars.retry();
         }
         toolbar::status(ui, &messages.join("\n"), error);
+    }
+
+    fn crop_preview_active(&self) -> bool {
+        crop_tool::active(&self.context)
+            && self.output == "final"
+            && self.before.active == editor::Rendition::Current
+            && !self.comparison.requested()
+    }
+
+    fn photo_toolbar(&mut self, ui: &mut egui::Ui) -> bool {
+        let extent = self
+            .frame
+            .as_ref()
+            .filter(|f| {
+                self.selected.as_ref() == Some(&f.path)
+                    && f.output == "final"
+                    && f.rendition == editor::Rendition::Current
+                    && self.output == "final"
+                    && self.before.active == editor::Rendition::Current
+                    && !self.comparison.requested()
+                    && self.sidecars.ready()
+            })
+            .map(worker::Frame::uncropped_extent);
+        photo_tools::show(
+            ui,
+            !self.exporting,
+            &mut self.settings.crop,
+            extent,
+            &mut self.preferences.crop_ratios,
+        )
     }
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
         match section {
@@ -995,6 +1062,9 @@ impl App {
                 });
             },
         );
+        if crop_tool::active(ui.ctx()) && !self.crop_preview_active() {
+            crop_tool::exit(ui.ctx());
+        }
         let mapping = self.displayed_mapping();
         if mapping.difference_gain > 0. {
             let frame = self.frame.as_ref().unwrap();
@@ -1117,7 +1187,8 @@ impl App {
             && !mapping.input
             && mapping.difference_gain == 0.
             && self.frame.as_ref().is_some_and(|f| {
-                self.selected.as_ref() == Some(&f.path)
+                !f.crop_preview
+                    && self.selected.as_ref() == Some(&f.path)
                     && f.output == "final"
                     && f.rendition == editor::Rendition::Current
             })
@@ -1125,8 +1196,10 @@ impl App {
 
     fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) -> bool {
         let allowed = self.color_tool_available(mapping, ui.ctx());
-        self.viewport.editing =
-            (editor::direct_color::active(ui.ctx()) || editor::dehaze::active(ui.ctx())) && allowed;
+        let crop_active = self.crop_preview_active() && !self.exporting && self.sidecars.ready();
+        self.viewport.editing = crop_active
+            || (editor::direct_color::active(ui.ctx()) || editor::dehaze::active(ui.ctx()))
+                && allowed;
         if let Some(frame) = &self.frame {
             self.viewport.show(
                 ui,
@@ -1142,7 +1215,7 @@ impl App {
                     ui,
                     detail.texture.clone(),
                     detail.artifact.settings.preview_region.unwrap(),
-                    frame.display_extent(false),
+                    frame.display_window(false),
                     mapping,
                     self.srgb_target,
                     detail.revision,
@@ -1150,8 +1223,16 @@ impl App {
             }
         } else if let Some(path) = &self.selected {
             if let Some(preview) = self.browser.preview(path) {
-                self.viewport
-                    .show_preview(ui, &preview.texture, preview.native_extent);
+                self.viewport.show_preview(
+                    ui,
+                    &preview.texture,
+                    preview.native_extent,
+                    if crop_active {
+                        Default::default()
+                    } else {
+                        self.settings.crop
+                    },
+                );
             }
         } else {
             ui.centered_and_justified(|ui| {
@@ -1167,6 +1248,24 @@ impl App {
             self.viewport
                 .pointer(ui.input(|i| i.pointer.interact_pos())),
         ) {
+            if crop_active {
+                if let (Some(frame), Some((canvas, image))) = (
+                    self.frame
+                        .as_ref()
+                        .filter(|f| f.crop_preview && &f.path == path),
+                    self.viewport.image_rectangles(),
+                ) {
+                    return crop_tool::photo(
+                        ui,
+                        &response,
+                        canvas,
+                        image,
+                        frame.uncropped_extent(),
+                        &mut self.settings.crop,
+                    );
+                }
+                return false;
+            }
             // Existing gestures can continue while their render catches up. Start a new
             // selection only from a frame that represents the current authored recipe.
             let uv = uv.filter(|_| {
@@ -1233,6 +1332,7 @@ impl eframe::App for App {
             });
         }
         editor::dehaze::source(ctx, self.selected.as_deref());
+        crop_tool::source(ctx, self.selected.as_deref());
         if let Some(saved) = self.sidecars.receive() {
             if let Some(path) = &self.selected {
                 if let Some(opening) = &self.opening {
@@ -1292,7 +1392,9 @@ impl eframe::App for App {
         editor::advanced_color::sync_photo(ctx, self.selected.as_deref());
         let previous_settings = self.settings.clone();
         let previous_selection = self.selected.clone();
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui));
+        let toolbar_changed = egui::TopBottomPanel::top("toolbar")
+            .show(ctx, |ui| self.toolbar(ui))
+            .inner;
         let previous_gamut = self.preferences.display_gamut;
         let previous_limits = self.preferences.adaptive_tone_tuning;
         application_settings::show(
@@ -1348,15 +1450,15 @@ impl eframe::App for App {
             self.browser.invalidate_previews();
             self.previews.invalidate();
         }
-        let mut changed = normalized || actions_changed || tuning_changed;
-        let tools_limit = (ctx.available_rect().width() - 240.).clamp(300., 600.);
+        let mut changed = normalized || actions_changed || tuning_changed || toolbar_changed;
+        let tools_limit = (ctx.available_rect().width() - 240.).clamp(TOOLS_MIN_WIDTH, 600.);
         egui::SidePanel::right("settings")
             .default_width(
                 screenshot
                     .as_ref()
-                    .map_or(330., |recipe| recipe.tools_width),
+                    .map_or(TOOLS_DEFAULT_WIDTH, |recipe| recipe.tools_width),
             )
-            .width_range(300. ..=tools_limit)
+            .width_range(TOOLS_MIN_WIDTH..=tools_limit)
             .resizable(true)
             .show(ctx, |ui| {
                 changed |= self.tools(ui);
@@ -1370,6 +1472,10 @@ impl eframe::App for App {
                 changed |= self.central(ui);
             });
         self.browser.finish_previews();
+        if crop_tool::take_view_change(ctx) {
+            self.viewport.reset();
+            changed = true;
+        }
         if previous_selection == self.selected && (normalized || previous_settings != self.settings)
         {
             self.exit_before();

@@ -8,7 +8,8 @@ fn available() -> Availability {
         browser: true,
         import: true,
         settings: true,
-        color_tool_active: false,
+        photo_tool_active: false,
+        crop_active: false,
     }
 }
 #[test]
@@ -36,6 +37,25 @@ fn key(key: Key, modifiers: Modifiers) -> egui::Event {
         pressed: true,
         repeat: false,
         modifiers,
+    }
+}
+
+#[test]
+fn enter_finishes_crop_only_while_the_crop_tool_is_active() {
+    let ctx = egui::Context::default();
+    for crop_active in [false, true] {
+        let mut input = egui::RawInput {
+            events: vec![key(Key::Enter, Modifiers::NONE)],
+            ..Default::default()
+        };
+        let mut availability = available();
+        availability.crop_active = crop_active;
+        let actions = capture(&ctx, &mut input, availability);
+        assert_eq!(actions.len(), usize::from(crop_active));
+        assert_eq!(input.events.is_empty(), crop_active);
+        if crop_active {
+            assert_eq!(actions[0].action, Action::FinishCrop);
+        }
     }
 }
 
@@ -158,7 +178,7 @@ fn text_editors_menus_and_modals_keep_clipboard_commands() {
 fn direct_color_leaves_space_for_panning_in_import_without_disabling_hide() {
     let ctx = egui::Context::default();
     let mut availability = available();
-    availability.color_tool_active = true;
+    availability.photo_tool_active = true;
     let mut input = egui::RawInput {
         events: vec![
             key(Key::Space, Modifiers::NONE),

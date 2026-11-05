@@ -36,6 +36,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[color-field-determinism](./color-field-determinism.md)** _(archived)._ Make color-field GPU solver row ordering deterministic without changing equations, tolerances, Classic processing or per-image controls.
 - **[color-field-selectivity](./color-field-selectivity.md)** _(archived)._ Experiment with local color-evidence acceptance thresholds, without added neutral bias, to reduce bleeding while preserving compatible reconstructed color.
 - **[color-field-speed](./color-field-speed.md)** _(archived)._ Measure simple color-field optimizations while preserving recovery equations, solver limits and numerical acceptance.
+- **[cropping](./cropping.md)** _(archived)._ Add saved crop geometry, a shared viewport tool strip and direct crop gestures.
 - **[decode-cache-and-smart-preview](./decode-cache-and-smart-preview.md)** _(archived)._ Implement bounded decoded-source disk reuse, app settings and Quattro regional Smart refinement.
 - **[decode-cache-module](./decode-cache-module.md)** _(archived)._ Gather decoded-cache implementation and tests into a directory module for release 0.5.0.
 - **[despeckle](./despeckle.md)** _(archived)._ GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.

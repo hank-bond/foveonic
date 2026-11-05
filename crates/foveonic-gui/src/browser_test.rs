@@ -305,7 +305,8 @@ impl Fixture {
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
                 settings: false,
-                color_tool_active: false,
+                photo_tool_active: false,
+                crop_active: false,
             },
         ) {
             if let crate::shortcuts::Action::Browser(action) = invocation.action {

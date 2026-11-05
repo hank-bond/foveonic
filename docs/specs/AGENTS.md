@@ -22,6 +22,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[color-editor](./color-editor.md)** _(accepted, conforming, reference)._ A shared linear Color Editor adjusts eight subject-color ranges with Hue, Saturation and Lightness controls.
 - **[color-field](./color-field.md)** _(accepted, incomplete, reference)._ Color-field highlight reconstruction separates brightness and color in GPU passes with immutable source reliability, bounded boundary recovery and optional local color-evidence selection.
 - **[column-conditioning](./column-conditioning.md)** _(accepted, conforming, reference)._ GPU column conditioning corrects raw processing tiles after base filtering and before luminance/detail estimation, retaining native windows, cuts, ordered means, strict eligibility, and clipping.
+- **[cropping](./cropping.md)** _(accepted, conforming, reference)._ A saved rectangular crop shares oriented framing across preview, navigation and exports.
 - **[decode-cache](./decode-cache.md)** _(accepted, conforming, reference)._ A bounded temporary disk LRU reuses decoded sources, originals, selection metadata and previews with per-family workspace controls.
 - **[dehaze](./dehaze.md)** _(accepted, incomplete, reference)._ Dehaze adds automatic haze-color estimation and manual shadow-color picking in Corrections.
 - **[despeckle](./despeckle.md)** _(accepted, conforming, reference)._ Full-image GPU despeckling detects channel extrema and corrects them in deterministic reference order, independently of camera-record repair.

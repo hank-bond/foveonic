@@ -106,6 +106,7 @@ pub fn notice(ctx: &egui::Context) -> String {
     state(ctx).notice
 }
 fn toggle_target(ctx: &egui::Context, target: Target) {
+    crate::crop_tool::exit(ctx);
     let mut s = state(ctx);
     s.active = !(s.active && s.target == target);
     s.target = target;

@@ -84,7 +84,9 @@ impl Scope {
                 let color_preview = target.color_range_preview;
                 let dehaze_estimate = target.dehaze_estimate;
                 let adaptive_limits = target.adaptive_tone_tuning;
+                let crop = target.crop;
                 *target = source.clone();
+                target.crop = crop;
                 target.color_range_preview = color_preview;
                 target.dehaze_estimate = dehaze_estimate;
                 target.adaptive_tone_tuning = adaptive_limits;

@@ -17,7 +17,7 @@ pub enum Edit {
 impl App {
     pub fn capture_actions(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         self.actions.clear();
-        if crate::editor::direct_color::menu_open(ctx) {
+        if crate::photo_tools::menu_open(ctx) {
             self.browser.set_actions(Vec::new());
             return;
         }
@@ -30,8 +30,8 @@ impl App {
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
                 settings: self.selected.is_some() && self.sidecars.ready(),
-                color_tool_active: crate::editor::direct_color::active(ctx)
-                    || crate::editor::dehaze::active(ctx),
+                photo_tool_active: crate::photo_tools::active(ctx),
+                crop_active: crate::crop_tool::active(ctx),
             },
         ) {
             match invocation.action {
@@ -46,8 +46,17 @@ impl App {
                     }
                 }
                 Action::ExitTool => {
-                    crate::editor::dehaze::exit(ctx);
-                    crate::editor::direct_color::exit(ctx);
+                    crate::photo_tools::escape(ctx);
+                }
+                Action::Crop => {
+                    self.exit_before();
+                    self.output = "final".into();
+                    self.channel = -1;
+                    self.comparison = Default::default();
+                    crate::crop_tool::toggle(ctx);
+                }
+                Action::Hand | Action::FinishCrop => {
+                    crate::photo_tools::hand(ctx);
                 }
                 Action::CopySettings => self.actions.push(Edit::CopySettings),
                 Action::PasteSettings => {

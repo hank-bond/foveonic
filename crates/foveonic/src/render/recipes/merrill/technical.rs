@@ -37,12 +37,12 @@ pub(super) fn build(
         && !settings.is_monochrome()
         && (names == ["final"] || names == ["linear.base"])
         && settings.preview_region.is_none())
-    .then(|| preview::Grid::new(params, settings.output_size))
+    .then(|| preview::Grid::new(params, settings.processing_output_size()))
     .transpose()?;
     if let Some(grid) = &preview {
         params = grid.encode;
     }
-    if let Some(size) = settings.output_size {
+    if let Some(size) = settings.processing_output_size() {
         params.output[..2].copy_from_slice(&size);
     }
     let region = settings

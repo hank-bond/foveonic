@@ -54,6 +54,18 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
         .map(|v| (v / scale * 65535. + 0.5).floor() as u16)
         .to_vec();
     assert_eq!(actual, expected);
+    let mut cropped = base.clone();
+    cropped.settings.crop.bounds = [0.5, 0., 1., 1.];
+    let (packed, scale) = engine
+        .encode_dng_base(&cropped, &prepared, &mut Profile::default())
+        .unwrap();
+    assert_eq!(packed.len(), 8, "one cropped pixel");
+    assert_eq!(scale, 4_f32 * 1.001);
+    let actual: Vec<u16> = [0, 2, 4]
+        .map(|i| u16::from_le_bytes([packed[i], packed[i + 1]]))
+        .into();
+    let expected = [1.; 3].map(|v| (v / scale * 65535. + 0.5).floor() as u16);
+    assert_eq!(actual, expected);
     let black = image(&[0.; 6]);
     let (pixels, scale) = engine
         .encode_dng_base(&black, &prepared, &mut Profile::default())

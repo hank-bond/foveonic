@@ -527,7 +527,7 @@ fn compose(
     params.source[..2].copy_from_slice(&grid.extent(physical_extent));
     let output_extent = grid.extent([params.output[0], params.output[1]]);
     params.output[..2].copy_from_slice(&output_extent);
-    if let Some(size) = settings.output_size {
+    if let Some(size) = settings.processing_output_size() {
         params.output[..2].copy_from_slice(&size);
     }
     let region = settings

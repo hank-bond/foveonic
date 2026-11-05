@@ -26,6 +26,87 @@ impl Drop for Directory {
 
 #[test]
 #[ignore = "requires a working GPU adapter"]
+fn saved_crop_exports_the_same_oriented_pixels_without_changing_the_working_image() {
+    let engine = Engine::new().unwrap();
+    let directory = Directory::new();
+    let pixels: Vec<f32> = (0..8 * 6 * 3).map(|i| (i + 1) as f32 / 160.).collect();
+    let mut image = RenderedImage {
+        buffer: engine.gpu.upload("Crop fixture", &pixels).unwrap(),
+        description: Description {
+            linear_white: 4095,
+            view_baked: false,
+            extent: [8, 6],
+            layout: Layout::Rgb32Float,
+            space: Space::ToneMappedRgb(ColorSpace::Srgb),
+        },
+        view: crate::image::View {
+            crop: [1, 1, 7, 5],
+            rotation: 0,
+            extent: [6, 4],
+        },
+        metadata: Arc::new(crate::source::Metadata {
+            processing_version: None,
+            width: 8,
+            height: 6,
+            rotation: 0,
+            properties: Default::default(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        }),
+        settings: Settings::new("Sunlight", "Standard"),
+        dehaze_basis: None,
+        owner: engine.owner.clone(),
+    };
+    let read = |image: &RenderedImage, name: &str| {
+        let path = directory.0.join(name);
+        engine
+            .write_tiff(image, &path, &mut Default::default())
+            .unwrap();
+        let mut decoder = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+        let extent = decoder.dimensions().unwrap();
+        let tiff::decoder::DecodingResult::U16(pixels) = decoder.read_image().unwrap() else {
+            panic!("RGB16")
+        };
+        (extent, pixels)
+    };
+    for rotation in [0, 90, 180, 270] {
+        image.view.rotation = rotation;
+        image.view.extent = if rotation % 180 == 0 { [6, 4] } else { [4, 6] };
+        image.settings.crop = Default::default();
+        let ((width, _), full) = read(&image, &format!("full-{rotation}.tiff"));
+        image.settings.crop.bounds = [0.25, 0.25, 0.75, 0.75];
+        let [l, t, r, b] = image.settings.crop.pixels(image.view.extent);
+        let (extent, cropped) = read(&image, &format!("cropped-{rotation}.tiff"));
+        assert_eq!(extent, (r - l, b - t));
+        let expected: Vec<u16> = (t..b)
+            .flat_map(|y| {
+                full[((y * width + l) * 3) as usize..((y * width + r) * 3) as usize]
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        assert_eq!(cropped, expected, "rotation {rotation}");
+        assert_eq!(
+            engine
+                .view_texture(&image, None, &mut Default::default())
+                .unwrap()
+                .description()
+                .extent,
+            [r - l, b - t]
+        );
+        image.settings.output_size = Some([12, 8]);
+        assert_eq!(read(&image, &format!("resized-{rotation}.tiff")).0, (12, 8));
+        assert_eq!(image.without_crop().settings.crop, Default::default());
+        image.settings.output_size = None;
+        assert_eq!(
+            engine.readback_image(&image).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&pixels)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
 fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() {
     let engine = Engine::new().unwrap();
     let directory = Directory::new();

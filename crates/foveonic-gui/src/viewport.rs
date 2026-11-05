@@ -600,6 +600,13 @@ impl Viewport {
         }
         self.response = Some(response.clone());
         let navigation = !self.editing || ui.input(|i| i.key_down(egui::Key::Space));
+        if navigation && response.hovered() {
+            ui.ctx().set_cursor_icon(if response.dragged() {
+                egui::CursorIcon::Grabbing
+            } else {
+                egui::CursorIcon::Grab
+            });
+        }
         if response.dragged() && navigation {
             self.scale.get_or_insert(fit);
             self.pan += ui.input(|i| i.pointer.delta());
@@ -644,8 +651,10 @@ impl Viewport {
         ui: &mut egui::Ui,
         texture: impl Into<egui::load::SizedTexture>,
         native_extent: [u32; 2],
+        crop: foveonic::crop::Crop,
     ) {
-        let (canvas, image) = self.layout(ui, native_extent);
+        let [l, t, r, b] = crop.pixels(native_extent);
+        let (canvas, image) = self.layout(ui, [r - l, b - t]);
         let painter = ui
             .painter()
             .with_clip_rect(canvas.intersect(ui.clip_rect()));
@@ -653,7 +662,16 @@ impl Viewport {
         painter.image(
             texture.into().id,
             image,
-            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+            egui::Rect::from_min_max(
+                egui::pos2(
+                    l as f32 / native_extent[0] as f32,
+                    t as f32 / native_extent[1] as f32,
+                ),
+                egui::pos2(
+                    r as f32 / native_extent[0] as f32,
+                    b as f32 / native_extent[1] as f32,
+                ),
+            ),
             egui::Color32::WHITE,
         );
     }
@@ -708,6 +726,10 @@ impl Viewport {
         Some((response, uv))
     }
 
+    pub fn image_rectangles(&self) -> Option<(egui::Rect, egui::Rect)> {
+        self.last_image
+    }
+
     pub fn visible_uv(&self) -> egui::Rect {
         let Some((size, extent)) = self.last_canvas else {
             return egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.));
@@ -743,7 +765,7 @@ impl Viewport {
         ui: &mut egui::Ui,
         texture: Arc<ImageTexture>,
         region: [u32; 4],
-        native: [u32; 2],
+        window: [u32; 4],
         mapping: Mapping,
         srgb_target: bool,
         revision: u64,
@@ -754,8 +776,8 @@ impl Viewport {
         let position = |x, y| {
             image.min
                 + egui::vec2(
-                    x as f32 / native[0] as f32 * image.width(),
-                    y as f32 / native[1] as f32 * image.height(),
+                    (x as f32 - window[0] as f32) / (window[2] - window[0]) as f32 * image.width(),
+                    (y as f32 - window[1] as f32) / (window[3] - window[1]) as f32 * image.height(),
                 )
         };
         let tile = egui::Rect::from_min_max(
@@ -763,7 +785,7 @@ impl Viewport {
             position(region[2], region[3]),
         );
         let Some((visible, params)) = Params::clipped(
-            canvas.intersect(tile),
+            canvas.intersect(image).intersect(tile),
             tile,
             ui.clip_rect().intersect(ui.ctx().screen_rect()),
             texture.description().space,
@@ -1932,8 +1954,9 @@ mod tests {
                 ..Default::default()
             };
             let preview = ctx.run(input.clone(), |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| viewport.show_preview(ui, &thumb, extent));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    viewport.show_preview(ui, &thumb, extent, Default::default())
+                });
             });
             let mesh = preview
                 .shapes
@@ -1976,8 +1999,9 @@ mod tests {
                 ..Default::default()
             };
             let resized_preview = ctx.run(resized_input.clone(), |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| viewport.show_preview(ui, &thumb, extent));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    viewport.show_preview(ui, &thumb, extent, Default::default())
+                });
             });
             let resized_mesh = resized_preview
                 .shapes

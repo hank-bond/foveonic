@@ -368,6 +368,10 @@ impl ControlSize {
     pub const fn group_height(self) -> f32 {
         self.side() + 2. * BUTTON_GROUP_MARGIN as f32
     }
+
+    pub const fn split_width(self) -> f32 {
+        self.side() * 1.75
+    }
 }
 
 fn menu_label(ui: &egui::Ui, label: &str) -> std::sync::Arc<egui::Galley> {
@@ -581,6 +585,59 @@ pub fn icon_menu_button<R>(
         egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
     });
     result
+}
+
+/// Keep a tool action and its options in one frame, with separate primary-click targets.
+pub fn split_icon_button<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    on: bool,
+    size: ControlSize,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> (egui::Response, egui::InnerResponse<Option<R>>) {
+    let background = ui.painter().add(egui::Shape::Noop);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(size.split_width(), size.side()),
+        egui::Sense::hover(),
+    );
+    let split = rect.left() + size.side();
+    let action = ui.interact(
+        egui::Rect::from_min_max(rect.min, egui::pos2(split, rect.bottom())),
+        response.id.with("action"),
+        egui::Sense::click(),
+    );
+    let options = ui.interact(
+        egui::Rect::from_min_max(egui::pos2(split, rect.top()), rect.max),
+        response.id.with("options"),
+        egui::Sense::click(),
+    );
+    let menu = menu_response(ui, options, contents);
+    let combined = action.clone().union(menu.response.clone());
+    ui.painter().set(
+        background,
+        frame(ui, &combined, on || menu.inner.is_some(), rect),
+    );
+    let center = menu.response.rect.center();
+    ui.painter().add(egui::Shape::line(
+        vec![
+            center + egui::vec2(-2.5, -1.5),
+            center + egui::vec2(0., 1.5),
+            center + egui::vec2(2.5, -1.5),
+        ],
+        egui::Stroke::new(1.2_f32, visuals(ui, &combined, on).text_color()),
+    ));
+    action.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
+    });
+    menu.response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            menu.inner.is_some(),
+            format!("{label} options"),
+        )
+    });
+    (action, menu)
 }
 
 /// Center a square glyph using the standard vertical padding on all four sides.

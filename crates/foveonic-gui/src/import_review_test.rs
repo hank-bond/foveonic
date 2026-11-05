@@ -101,7 +101,8 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
             browser: true,
             import: browser.import_mode,
             settings: false,
-            color_tool_active: false,
+            photo_tool_active: false,
+            crop_active: false,
         },
     ) {
         if let crate::shortcuts::Action::Browser(action) = invocation.action {

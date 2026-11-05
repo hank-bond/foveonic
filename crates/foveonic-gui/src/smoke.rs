@@ -7,6 +7,19 @@ use crate::{
 use eframe::egui;
 use std::path::PathBuf;
 
+const CROP_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "crop-ready",
+    "crop-drag",
+    "crop-applied",
+    "crop-hand",
+    "crop-reopen",
+    "crop-fast",
+    "crop-smart",
+    "crop-tile",
+    "crop-detail",
+];
 const FAST_PREVIEW_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -312,6 +325,7 @@ impl Smoke {
         if self.targets == DIRECT_COLOR_TARGETS
             || self.targets == DEHAZE_TARGETS
             || self.targets == ADVANCED_COLOR_TARGETS
+            || self.targets == CROP_TARGETS
         {
             // Inject focused input without moving the owner's system pointer or focus.
             input.focused = true;
@@ -325,7 +339,9 @@ impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_EXPOSURE_AUTO").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_CROP").is_some() {
+                CROP_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_EXPOSURE_AUTO").is_some() {
                 EXPOSURE_AUTO_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DEHAZE").is_some() {
                 DEHAZE_TARGETS
@@ -451,6 +467,47 @@ impl App {
             })
         });
         if let Some(image) = screenshot {
+            if smoke.targets == CROP_TARGETS && !smoke.preview_pending() {
+                let frame = self.frame.as_ref().unwrap();
+                let target = smoke.targets[smoke.index];
+                if target.starts_with("crop-") {
+                    assert_eq!(
+                        frame.crop_preview,
+                        matches!(
+                            target,
+                            "crop-ready" | "crop-drag" | "crop-applied" | "crop-reopen"
+                        )
+                    );
+                    assert_eq!(crate::crop_tool::active(ctx), frame.crop_preview);
+                    assert_eq!(
+                        self.settings.crop.is_full(),
+                        matches!(target, "crop-ready" | "crop-drag")
+                    );
+                    assert_eq!(frame.artifact.settings.crop, self.settings.crop);
+                    if target == "crop-tile" && regional_smart {
+                        let detail = self.detail.as_ref().unwrap();
+                        let visible = self.viewport.visible_pixels().unwrap();
+                        let window = frame.display_window(false);
+                        assert!(crate::smart::contains(
+                            detail.artifact.settings.preview_region.unwrap(),
+                            [
+                                visible.top_left[0] + window[0],
+                                visible.top_left[1] + window[1],
+                                visible.bottom_right[0] + 1 + window[0],
+                                visible.bottom_right[1] + 1 + window[1],
+                            ]
+                        ));
+                    }
+                    if frame.crop_preview {
+                        assert_eq!(frame.display_extent(false), frame.uncropped_extent());
+                    }
+                    std::fs::write(
+                        smoke.directory.join(format!("{target}.json")),
+                        serde_json::to_vec_pretty(&self.settings.crop).unwrap(),
+                    )
+                    .unwrap();
+                }
+            }
             if smoke.targets == COMPARISON_TARGETS
                 && smoke.targets[smoke.index] == "comparison-switch"
             {
@@ -813,6 +870,61 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "crop-fast" => {
+                    crate::crop_tool::exit(ctx);
+                    self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;
+                }
+                "crop-smart" => {
+                    self.preferences.preview_quality = crate::preferences::PreviewMode::Smart;
+                    self.viewport.one_to_one = true;
+                    self.submit(None);
+                }
+                "crop-tile" => self.viewport.zoom_by(2.),
+                "crop-detail" => {}
+                "crop-ready" | "crop-reopen" | "crop-hand" => {
+                    let key = if smoke.targets[smoke.index] == "crop-hand" {
+                        egui::Key::H
+                    } else {
+                        egui::Key::C
+                    };
+                    smoke.direct_events.push_back(
+                        [true, false]
+                            .map(|pressed| egui::Event::Key {
+                                key,
+                                physical_key: None,
+                                pressed,
+                                repeat: false,
+                                modifiers: Default::default(),
+                            })
+                            .into(),
+                    );
+                }
+                "crop-drag" | "crop-applied" => {
+                    let target = smoke.targets[smoke.index];
+                    let point = self
+                        .viewport
+                        .position_at_uv(if target == "crop-drag" {
+                            [0.002, 0.002]
+                        } else {
+                            [0.18, 0.18]
+                        })
+                        .unwrap();
+                    smoke.direct_events.push_back(vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed: target == "crop-drag",
+                            modifiers: Default::default(),
+                        },
+                    ]);
+                    if target == "crop-drag" {
+                        let end = self.viewport.position_at_uv([0.18, 0.18]).unwrap();
+                        smoke
+                            .direct_events
+                            .push_back(vec![egui::Event::PointerMoved(end)]);
+                    }
+                }
                 "dehaze-auto" => {
                     self.viewport.reset();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title(
@@ -1595,6 +1707,11 @@ impl App {
                 self.selected
                     .as_ref()
                     .is_some_and(|p| self.browser.thumbnail(p).is_some())
+            } else if smoke.targets == CROP_TARGETS
+                && smoke.targets[smoke.index] == "crop-tile"
+                && regional_smart
+            {
+                self.detail.is_some()
             } else if smoke.targets == DEHAZE_TARGETS {
                 // These controls require the current photo, independently of ancillary panels.
                 !self.busy
@@ -1618,6 +1735,7 @@ impl App {
                             && (frame.rendition != crate::editor::Rendition::Current
                                 || frame.output != "final"
                                 || frame.artifact.settings.color_range_preview.is_some()
+                                || frame.crop_preview
                                 || self.browser.rendered_revision(&frame.path)
                                     == Some(frame.revision))
                     })
@@ -1716,6 +1834,53 @@ impl App {
                         "direct-color-exit" => !crate::editor::direct_color::active(ctx),
                         _ => true,
                     });
+            let ready = ready
+                && (smoke.targets != CROP_TARGETS
+                    || (smoke.direct_events.is_empty()
+                        && match smoke.targets[smoke.index] {
+                            "crop-ready" | "crop-drag" => {
+                                crate::crop_tool::active(ctx)
+                                    && self.frame.as_ref().is_some_and(|f| f.crop_preview)
+                            }
+                            "crop-applied" | "crop-reopen" => {
+                                !self.settings.crop.is_full()
+                                    && self.frame.as_ref().is_some_and(|f| f.crop_preview)
+                            }
+                            "crop-hand" => {
+                                !crate::crop_tool::active(ctx)
+                                    && self.frame.as_ref().is_some_and(|f| !f.crop_preview)
+                            }
+                            "crop-fast" => self.frame.as_ref().is_some_and(|f| {
+                                !f.crop_preview
+                                    && f.revision == self.revision
+                                    && (!f
+                                        .artifact
+                                        .settings
+                                        .fast_preview_available(&f.artifact.metadata)
+                                        || f.artifact.settings.preview_quality
+                                            == foveonic::render::PreviewQuality::Fast)
+                            }),
+                            "crop-smart" => self
+                                .frame
+                                .as_ref()
+                                .is_some_and(|f| f.revision == self.revision && !f.crop_preview),
+                            "crop-tile" => {
+                                if regional_smart {
+                                    self.detail.is_some()
+                                } else {
+                                    self.frame.as_ref().is_some_and(|f| {
+                                        f.artifact.settings.preview_quality
+                                            == foveonic::render::PreviewQuality::Full
+                                    })
+                                }
+                            }
+                            "crop-detail" => self.frame.as_ref().is_some_and(|f| {
+                                f.revision == self.revision
+                                    && f.artifact.settings.preview_quality
+                                        == foveonic::render::PreviewQuality::Full
+                            }),
+                            _ => true,
+                        }));
             if ready {
                 if smoke.targets == DIRECT_COLOR_TARGETS
                     && smoke.targets[smoke.index] == "direct-color-settings"

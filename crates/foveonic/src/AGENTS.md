@@ -28,6 +28,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 - **[background.rs](./background.rs)** Prioritizes selected photos and thumbnails over batches and interruptible speculative work.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
+- **[crop.rs](./crop.rs)** Composes saved oriented crop coordinates with camera framing and final output sizing.
 - **[decode_pool.rs](./decode_pool.rs)** Shares a bounded FIFO sensor-layer pool across ordered speculative photo loads.
 - **[dng.rs](./dng.rs)** Exports original-derived linear DNG samples with explicit baked edits and separate camera appearance.
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.

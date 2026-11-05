@@ -20,6 +20,14 @@ pub(super) enum Recipe<'a> {
     DngBase,
 }
 
+pub(super) fn native_extent(metadata: &crate::source::Metadata) -> Result<[u32; 2]> {
+    let params = match metadata.processing_family()? {
+        crate::source::ProcessingFamily::Classic => classic::geometry(metadata)?,
+        _ => calibration::encode(metadata, crate::color_space::ColorSpace::Srgb)?,
+    };
+    Ok([params.output[0], params.output[1]])
+}
+
 struct BuiltRecipe {
     graph: Graph,
     final_id: usize,

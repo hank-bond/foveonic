@@ -19,6 +19,9 @@ pub enum Action {
     BeforeCamera,
     BeforeDefaults,
     DirectColor,
+    Crop,
+    Hand,
+    FinishCrop,
     ExitTool,
 }
 
@@ -68,6 +71,9 @@ impl Binding {
 }
 
 const BINDINGS: &[Binding] = &[
+    Binding::new(Key::C, Modifiers::NONE, Action::Crop),
+    Binding::new(Key::H, Modifiers::NONE, Action::Hand),
+    Binding::new(Key::Enter, Modifiers::NONE, Action::FinishCrop),
     Binding::new(Key::D, Modifiers::NONE, Action::DirectColor),
     Binding::new(Key::Escape, Modifiers::NONE, Action::ExitTool),
     Binding::new(Key::Y, Modifiers::NONE, Action::BeforeCamera),
@@ -143,18 +149,22 @@ pub struct Availability {
     pub browser: bool,
     pub import: bool,
     pub settings: bool,
-    pub color_tool_active: bool,
+    pub photo_tool_active: bool,
+    pub crop_active: bool,
 }
 impl Availability {
     fn allows(&self, action: Action) -> bool {
         self.enabled
             && match action {
                 Action::Browser(BrowserAction::TogglePick) => {
-                    self.browser && self.import && !self.color_tool_active
+                    self.browser && self.import && !self.photo_tool_active
                 }
                 Action::Browser(BrowserAction::Hide) => self.browser && self.import,
                 Action::Browser(_) => self.browser,
+                Action::FinishCrop => self.settings && self.crop_active,
                 Action::DirectColor
+                | Action::Crop
+                | Action::Hand
                 | Action::ExitTool
                 | Action::CopySettings
                 | Action::PasteSettings

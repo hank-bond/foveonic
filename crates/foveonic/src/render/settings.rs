@@ -86,6 +86,7 @@ impl Default for ProcessingSections {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub crop: crate::crop::Crop,
     pub dehaze: DehazeControls,
     /// Request the automatic shadow tone as transient control metadata, even at zero Amount.
     #[serde(skip)]
@@ -219,6 +220,7 @@ impl Default for Settings {
             sharpen_amount: None,
             tiff_color_space: None,
             output_size: None,
+            crop: Default::default(),
         }
     }
 }
@@ -265,6 +267,7 @@ impl Settings {
     /// Color recipes can refine native viewport detail before the whole frame.
     pub fn regional_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
         !self.adaptive_tone_active()
+            && (self.crop.is_full() || self.output_size.is_none())
             && !self.is_monochrome()
             && (super::recipes::quattro::fast_available(metadata)
                 || (self.output_size.is_none()
@@ -276,6 +279,11 @@ impl Settings {
             && self.processing_sections.tone
             && self.photographic.tone_method == PhotographicMethod::Universal
             && self.photographic.base_response.is_adaptive()
+    }
+
+    /// An authored crop must precede resizing, including recipes that bake camera framing.
+    pub(crate) fn processing_output_size(&self) -> Option<[u32; 2]> {
+        self.crop.is_full().then_some(self.output_size).flatten()
     }
 
     pub fn dehaze_auto(&self) -> bool {
@@ -633,6 +641,7 @@ impl Settings {
         if self.output_size.is_some_and(|size| size.contains(&0)) {
             return Err("output dimensions must be nonzero".into());
         }
+        self.crop.validate()?;
         Ok(())
     }
 }

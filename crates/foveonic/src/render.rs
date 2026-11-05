@@ -20,6 +20,10 @@ mod edits;
 mod execute;
 mod recipes;
 mod settings;
+/// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
+pub fn native_extent(metadata: &crate::source::Metadata) -> crate::source::Result<[u32; 2]> {
+    recipes::native_extent(metadata)
+}
 pub use crate::nodes::finish::base_response::{
     BaseResponse, Limits as AdaptiveToneLimits, Tuning as AdaptiveToneTuning,
 };
@@ -569,7 +573,7 @@ impl Engine {
             &[encoded],
         )?;
         self.execute(Input::Rendered(image), &graph, &[file], profile)?;
-        Ok(image.view.extent)
+        Ok(image.view().extent)
     }
 
     /// Materializes the logical view as an RGBA32Float texture on GPU.

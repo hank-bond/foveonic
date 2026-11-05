@@ -43,6 +43,11 @@ fn edited() -> Settings {
     settings.color_field.selectivity = 0.5;
     settings.color_field.approach = crate::render::ColorFieldApproach::LocalGradient;
     settings.output_size = Some([313, 470]);
+    settings.crop = crate::crop::Crop {
+        bounds: [0.1, 0.2, 0.8, 0.9],
+        aspect: crate::crop::Aspect::Ratio([4., 5.]),
+        flipped: true,
+    };
     let mut controls = noise::Controls {
         chroma: 4,
         luminance: 0,
