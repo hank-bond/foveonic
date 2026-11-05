@@ -39,18 +39,19 @@ pub fn header(ui: &mut egui::Ui, section: Section, collapsed: bool) -> egui::Res
         ui.interact(rect, ui.id().with("header"), egui::Sense::click_and_drag())
     };
     crate::widgets::paint(ui, &response, false);
+    let visuals = crate::widgets::visuals(ui, &response, false);
     disclosure_icon(
         ui,
         rect.left_center() + egui::vec2(11., 0.),
         collapsed,
-        egui::Color32::GRAY,
+        visuals.text_color(),
     );
     ui.painter().text(
         rect.left_center() + egui::vec2(24., 0.),
         egui::Align2::LEFT_CENTER,
         section.title(),
         egui::FontId::proportional(13.),
-        egui::Color32::LIGHT_GRAY,
+        visuals.text_color(),
     );
     grip_icon(ui, rect.right_center() + egui::vec2(-12., 0.), 1.);
     response.dnd_set_drag_payload(section);
@@ -63,7 +64,7 @@ pub fn grip_icon(ui: &egui::Ui, center: egui::Pos2, scale: f32) {
             ui.painter().circle_filled(
                 center + egui::vec2(x, y) * scale,
                 scale,
-                egui::Color32::GRAY,
+                ui.visuals().weak_text_color(),
             );
         }
     }

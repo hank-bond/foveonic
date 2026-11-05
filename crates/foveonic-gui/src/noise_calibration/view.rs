@@ -228,7 +228,7 @@ impl State {
                 "Add lens-cap X3Fs: at least 7 per camera/ISO/shutter combination, 14 recommended.",
             );
                 egui::Frame::group(ui.style())
-                    .fill(widgets::MENU_BACKGROUND)
+                    .fill(ui.visuals().widgets.inactive.bg_fill)
                     .inner_margin(PROFILE_GROUP_PADDING)
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());

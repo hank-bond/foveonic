@@ -110,7 +110,7 @@ pub fn footer(ui: &mut egui::Ui) -> (egui::Rect, egui::Response) {
     );
     ui.painter().line_segment(
         [rect.left_top(), rect.right_top()],
-        egui::Stroke::new(1_f32, egui::Color32::from_gray(40)),
+        ui.visuals().widgets.noninteractive.bg_stroke,
     );
     (rect, response)
 }
@@ -137,10 +137,10 @@ pub fn notice_button(ui: &mut egui::Ui, label: &str, error: bool) -> egui::Respo
 }
 pub const BUTTON_GROUP_MARGIN: i8 = 4;
 pub const MEDIUM_CONTROL_GAP: f32 = 6.;
-pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);
-const PARAMETER_SUBGROUP_BACKGROUND: egui::Color32 = egui::Color32::from_gray(36);
 /// Keep slider tracks distinct from both linked groups and the main panel.
-pub const SLIDER_TRACK_FILL: egui::Color32 = egui::Color32::from_gray(60);
+pub fn slider_track_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    egui::Color32::from_gray(if visuals.dark_mode { 60 } else { 185 })
+}
 
 /// Give related controls a shared padded background without changing their spacing.
 pub fn button_group<R>(
@@ -151,7 +151,7 @@ pub fn button_group<R>(
         ui,
         egui::Margin::same(BUTTON_GROUP_MARGIN),
         egui::Margin::ZERO,
-        MENU_BACKGROUND,
+        ui.visuals().widgets.inactive.bg_fill,
         contents,
     )
 }
@@ -165,7 +165,7 @@ pub fn parameter_group<R>(
         ui,
         egui::Margin::same(BUTTON_GROUP_MARGIN),
         egui::Margin::symmetric(-BUTTON_GROUP_MARGIN, 0),
-        MENU_BACKGROUND,
+        ui.visuals().widgets.inactive.bg_fill,
         contents,
     )
 }
@@ -179,7 +179,7 @@ pub fn parameter_subgroup<R>(
         ui,
         egui::Margin::same(BUTTON_GROUP_MARGIN),
         egui::Margin::symmetric(-BUTTON_GROUP_MARGIN, 0),
-        PARAMETER_SUBGROUP_BACKGROUND,
+        ui.visuals().faint_bg_color,
         contents,
     )
 }
@@ -225,39 +225,61 @@ pub fn disclosure<R>(
 }
 
 pub fn install_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = egui::Color32::from_gray(22);
-    visuals.window_fill = egui::Color32::from_gray(22);
-    visuals.extreme_bg_color = egui::Color32::from_gray(12);
-    visuals.selection.bg_fill = egui::Color32::from_rgb(35, 65, 100);
-    visuals.selection.stroke = egui::Stroke::new(1_f32, egui::Color32::from_rgb(100, 160, 245));
-    for (widget, fill, border) in [
-        (&mut visuals.widgets.inactive, 29, 70),
-        (&mut visuals.widgets.hovered, 34, 130),
-        (&mut visuals.widgets.active, 24, 170),
-        (&mut visuals.widgets.open, 34, 130),
-        (&mut visuals.widgets.noninteractive, 22, 50),
-    ] {
-        widget.bg_fill = egui::Color32::from_gray(fill);
-        widget.weak_bg_fill = widget.bg_fill;
-        widget.bg_stroke = egui::Stroke::new(1_f32, egui::Color32::from_gray(border));
-        widget.corner_radius = egui::CornerRadius::same(RADIUS);
-        widget.expansion = 0.;
-    }
-    visuals.collapsing_header_frame = true;
-    style.visuals = visuals;
-    style.spacing.item_spacing = egui::vec2(7., 6.);
-    style
-        .text_styles
-        .insert(egui::TextStyle::Body, egui::FontId::proportional(13.));
-    // Leave one body em between a disclosure line and its child controls.
-    style.spacing.indent = egui::TextStyle::Body.resolve(&style).size;
-    style.visuals.indent_has_left_vline = true;
-    ctx.set_style(style);
-    // A system theme change must not restore egui's full-precision hints or
-    // default formatting on widgets outside the photographic control rows.
+    // Egui switches between separate styles when the system appearance changes.
+    // Install the shared geometry and palette in both, including the inactive theme.
     ctx.all_styles_mut(|style| {
+        let dark = style.visuals.dark_mode;
+        let gray = |dark_value, light_value| {
+            egui::Color32::from_gray(if dark { dark_value } else { light_value })
+        };
+        let mut visuals = if dark {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+        visuals.panel_fill = gray(22, 245);
+        visuals.window_fill = visuals.panel_fill;
+        visuals.extreme_bg_color = gray(12, 255);
+        visuals.faint_bg_color = gray(36, 225);
+        visuals.selection.bg_fill = if dark {
+            egui::Color32::from_rgb(35, 65, 100)
+        } else {
+            egui::Color32::from_rgb(202, 223, 249)
+        };
+        visuals.selection.stroke = egui::Stroke::new(
+            1_f32,
+            if dark {
+                egui::Color32::from_rgb(100, 160, 245)
+            } else {
+                egui::Color32::from_rgb(45, 105, 185)
+            },
+        );
+        for (widget, fill, border) in [
+            (&mut visuals.widgets.inactive, gray(29, 235), gray(70, 170)),
+            (&mut visuals.widgets.hovered, gray(34, 225), gray(130, 100)),
+            (&mut visuals.widgets.active, gray(24, 215), gray(170, 75)),
+            (&mut visuals.widgets.open, gray(34, 225), gray(130, 100)),
+            (
+                &mut visuals.widgets.noninteractive,
+                gray(22, 245),
+                gray(50, 195),
+            ),
+        ] {
+            widget.bg_fill = fill;
+            widget.weak_bg_fill = fill;
+            widget.bg_stroke = egui::Stroke::new(1_f32, border);
+            widget.corner_radius = egui::CornerRadius::same(RADIUS);
+            widget.expansion = 0.;
+        }
+        visuals.collapsing_header_frame = true;
+        visuals.indent_has_left_vline = true;
+        style.visuals = visuals;
+        style.spacing.item_spacing = egui::vec2(7., 6.);
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, egui::FontId::proportional(13.));
+        // Leave one body em between a disclosure line and its child controls.
+        style.spacing.indent = egui::TextStyle::Body.resolve(style).size;
         style.explanation_tooltips = false;
         style.number_formatter = egui::style::NumberFormatter::new(|value, decimals| {
             format_numeric_value(value, *decimals.end() == 0)
@@ -281,7 +303,11 @@ pub fn visuals(ui: &egui::Ui, response: &egui::Response, on: bool) -> egui::styl
     visuals.corner_radius = egui::CornerRadius::same(RADIUS);
     if on {
         visuals.bg_fill = if pressed {
-            egui::Color32::from_rgb(24, 45, 72)
+            if ui.visuals().dark_mode {
+                egui::Color32::from_rgb(24, 45, 72)
+            } else {
+                ui.visuals().selection.bg_fill.gamma_multiply(0.9)
+            }
         } else {
             ui.visuals().selection.bg_fill
         };
@@ -289,7 +315,11 @@ pub fn visuals(ui: &egui::Ui, response: &egui::Response, on: bool) -> egui::styl
         visuals.bg_stroke = egui::Stroke::new(
             1_f32,
             if hovered && response.enabled() {
-                egui::Color32::from_rgb(140, 190, 255)
+                if ui.visuals().dark_mode {
+                    egui::Color32::from_rgb(140, 190, 255)
+                } else {
+                    egui::Color32::from_rgb(30, 80, 150)
+                }
             } else {
                 ui.visuals().selection.stroke.color
             },
@@ -788,13 +818,17 @@ pub fn menu_cell(ui: &egui::Ui, response: &egui::Response, selected: bool) -> eg
     let background = if selected {
         ui.visuals().selection.bg_fill
     } else if hovered {
-        egui::Color32::from_gray(60)
+        slider_track_fill(ui.visuals())
     } else {
-        MENU_BACKGROUND
+        ui.visuals().widgets.inactive.bg_fill
     };
     ui.painter()
         .rect_filled(response.rect, egui::CornerRadius::ZERO, background);
-    egui::Color32::from_gray(if hovered { 240 } else { 180 })
+    if hovered {
+        ui.visuals().widgets.hovered.text_color()
+    } else {
+        ui.visuals().widgets.inactive.text_color()
+    }
 }
 
 pub fn menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
@@ -853,6 +887,84 @@ pub fn menu_value<T: PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn switching_appearances_keeps_shared_geometry_and_readable_custom_controls() {
+        let ctx = egui::Context::default();
+        install_style(&ctx);
+        let mut baseline = None;
+        for theme in [egui::Theme::Light, egui::Theme::Dark, egui::Theme::Light] {
+            ctx.set_theme(theme);
+            let style = ctx.style();
+            assert_eq!(style.spacing.item_spacing, egui::vec2(7., 6.));
+            assert_eq!(egui::TextStyle::Body.resolve(&style).size, 13.);
+            let mut rects = Vec::new();
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    rects.push(
+                        crate::sections::header(ui, crate::preferences::Section::Navigator, false)
+                            .rect,
+                    );
+                    button_group(ui, |ui| {
+                        rects.push(button(ui, "Ordinary", false, egui::Vec2::ZERO).rect);
+                        rects.push(button(ui, "Selected", true, egui::Vec2::ZERO).rect);
+                    });
+                    for selected in [false, true] {
+                        rects.push(
+                            menu_row(
+                                ui,
+                                if selected { "Chosen option" } else { "Option" },
+                                selected,
+                            )
+                            .rect,
+                        );
+                    }
+                });
+            });
+            let geometry: Vec<_> = rects.iter().map(|r| r.size()).collect();
+            if let Some(baseline) = &baseline {
+                assert_eq!(&geometry, baseline, "{theme:?} changed control geometry");
+            } else {
+                baseline = Some(geometry);
+            }
+            for shape in &output.shapes {
+                let egui::Shape::Text(text) = &shape.shape else {
+                    continue;
+                };
+                let center = text.pos + text.galley.size() * 0.5;
+                let background = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) if r.rect.contains(center) && r.fill.a() == 255 => {
+                            Some(r)
+                        }
+                        _ => None,
+                    })
+                    .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
+                    .unwrap()
+                    .fill;
+                let color = text.galley.job.sections[0].format.color;
+                let color = if color == egui::Color32::PLACEHOLDER {
+                    text.fallback_color
+                } else {
+                    color
+                };
+                let luminance = |color| {
+                    let rgb = egui::Rgba::from(color);
+                    0.2126 * rgb.r() + 0.7152 * rgb.g() + 0.0722 * rgb.b()
+                };
+                let a = luminance(color);
+                let b = luminance(background);
+                let contrast = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                assert!(
+                    contrast >= 4.5,
+                    "{theme:?}: {} contrast {contrast}",
+                    text.galley.text()
+                );
+            }
+        }
+    }
 
     #[test]
     fn inline_menu_choices_fit_labels_indent_options_and_keep_heading_inert() {

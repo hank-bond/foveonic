@@ -3697,7 +3697,9 @@ fn parameter_groups_extend_backgrounds_without_moving_controls() {
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::Rect(rect) if rect.fill == crate::widgets::MENU_BACKGROUND => {
+            egui::Shape::Rect(rect)
+                if rect.fill == ctx.style().visuals.widgets.inactive.bg_fill =>
+            {
                 Some(rect.rect)
             }
             _ => None,
@@ -4175,7 +4177,7 @@ fn exposure_auto_is_editable_toggled_and_reset_in_both_tone_methods() {
             .iter()
             .find_map(|shape| match &shape.shape {
                 egui::Shape::Rect(r)
-                    if r.fill == crate::widgets::SLIDER_TRACK_FILL
+                    if r.fill == crate::widgets::slider_track_fill(&ctx.style().visuals)
                         && r.rect.height() < 12.
                         && r.rect.width() > 35.
                         && (r.rect.center().y - row_y).abs() < 3. =>
@@ -4592,7 +4594,7 @@ fn resizing_only_shortens_rows_that_need_more_label_space_and_restores_them() {
                 .iter()
                 .filter_map(|s| match &s.shape {
                     egui::Shape::Rect(r)
-                        if r.fill == crate::widgets::SLIDER_TRACK_FILL
+                        if r.fill == crate::widgets::slider_track_fill(&ctx.style().visuals)
                             && r.rect.width() > 35.
                             && r.rect.height() < 12. =>
                     {

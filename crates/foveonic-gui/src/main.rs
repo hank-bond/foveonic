@@ -139,6 +139,10 @@ impl App {
         widgets::install_style(&cc.egui_ctx);
         if smoke::screenshot_active() {
             cc.egui_ctx.set_theme(egui::Theme::Dark);
+        } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_some()
+            && std::env::var_os("FOVEONIC_GUI_SMOKE_LIGHT").is_some()
+        {
+            cc.egui_ctx.set_theme(egui::Theme::Light);
         }
         let engine = Engine::from_device_profiled(
             rs.device.clone(),

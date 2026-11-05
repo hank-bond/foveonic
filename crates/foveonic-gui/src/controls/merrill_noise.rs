@@ -393,7 +393,8 @@ mod tests {
                     .iter()
                     .filter_map(|s| match &s.shape {
                         egui::Shape::Rect(r)
-                            if r.fill == crate::widgets::SLIDER_TRACK_FILL
+                            if r.fill
+                                == crate::widgets::slider_track_fill(&ctx.style().visuals)
                                 && r.rect.width() > 40.
                                 && r.rect.height() < 12. =>
                         {

@@ -390,7 +390,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                         // Apply to every editing slider while leaving adjacent
                         // value fields, buttons and group backgrounds unchanged.
                         ui.visuals_mut().widgets.inactive.bg_fill =
-                            crate::widgets::SLIDER_TRACK_FILL;
+                            crate::widgets::slider_track_fill(ui.visuals());
                         let before_slider = value.to_f64();
                         let mut slider =
                             crate::widgets::slider(value, range.clone()).show_value(false);
