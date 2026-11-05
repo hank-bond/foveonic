@@ -327,8 +327,11 @@ impl Session {
         }
     }
     pub fn warning(&self) -> Option<String> {
+        self.warnings().next()
+    }
+    pub fn warnings(&self) -> impl Iterator<Item = String> + '_ {
         self.errors
-            .first_key_value()
+            .iter()
             .map(|(path, error)| format!("{}: {error}", path.display()))
     }
     pub fn can_retry(&self) -> bool {

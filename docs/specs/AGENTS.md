@@ -65,5 +65,6 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Smart preview shows denoised Fast before Full detail, with viewport-first refinement where the recipe supports it.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
 - **[tonal-ranges](./tonal-ranges.md)** _(accepted, conforming, reference)._ Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG.
+- **[workspace-status](./workspace-status.md)** _(accepted, conforming, reference)._ Workspace activity separates live progress from a session log of file operations and errors.
 
 <!-- INDEX:END -->

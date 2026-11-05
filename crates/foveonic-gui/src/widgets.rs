@@ -100,6 +100,41 @@ pub(crate) fn format_parameter_value(value: f64) -> String {
 }
 
 const RADIUS: u8 = 4;
+pub const FOOTER_HEIGHT: f32 = 26.;
+
+/// Bottom readouts share one height and separator across the browser and photograph.
+pub fn footer(ui: &mut egui::Ui) -> (egui::Rect, egui::Response) {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), FOOTER_HEIGHT),
+        egui::Sense::hover(),
+    );
+    ui.painter().line_segment(
+        [rect.left_top(), rect.right_top()],
+        egui::Stroke::new(1_f32, egui::Color32::from_gray(40)),
+    );
+    (rect, response)
+}
+
+/// Unread errors and unavailable destinations share one notification treatment.
+pub fn notice_style(ui: &egui::Ui, label: impl Into<String>, error: bool) -> egui::Button<'static> {
+    let color = ui.visuals().error_fg_color;
+    let label = egui::RichText::new(label.into());
+    let mut button = egui::Button::new(if error { label.color(color) } else { label });
+    if error {
+        button = button
+            .fill(color.gamma_multiply(0.15))
+            .stroke(egui::Stroke::new(1_f32, color));
+    }
+    button
+}
+pub fn notice_button(ui: &mut egui::Ui, label: &str, error: bool) -> egui::Response {
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding = button_padding(ui);
+        let button = notice_style(ui, label, error);
+        ui.add_sized(egui::vec2(0., control_height(ui)), button)
+    })
+    .inner
+}
 pub const BUTTON_GROUP_MARGIN: i8 = 4;
 pub const MEDIUM_CONTROL_GAP: f32 = 6.;
 pub const MENU_BACKGROUND: egui::Color32 = egui::Color32::from_gray(29);

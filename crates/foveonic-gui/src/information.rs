@@ -4,7 +4,7 @@ use crate::viewport::PixelRegion;
 use eframe::egui;
 use std::collections::BTreeMap;
 
-pub const HEIGHT: f32 = 26.;
+pub const HEIGHT: f32 = crate::widgets::FOOTER_HEIGHT;
 
 pub fn capture(properties: &BTreeMap<String, String>) -> String {
     crate::metadata::capture_values(properties).join("  ")
@@ -24,14 +24,7 @@ pub fn show(
 ) {
     let left = properties.map(capture).unwrap_or_default();
     let right = region.map(region_text).unwrap_or_default();
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), HEIGHT),
-        egui::Sense::hover(),
-    );
-    ui.painter().line_segment(
-        [rect.left_top(), rect.right_top()],
-        egui::Stroke::new(1_f32, egui::Color32::from_gray(40)),
-    );
+    let (rect, response) = crate::widgets::footer(ui);
     let color = ui.visuals().text_color();
     let font = egui::TextStyle::Body.resolve(ui.style());
     let right_font = egui::FontId::monospace(font.size);

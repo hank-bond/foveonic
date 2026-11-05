@@ -1,6 +1,7 @@
 //! Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
 mod actions;
+mod activity;
 mod application_settings;
 mod batch;
 mod browser;
@@ -98,7 +99,7 @@ struct App {
     exporting: bool,
     preferences: preferences::Preferences,
     status: String,
-    status_error: bool,
+    activity: activity::Log,
     srgb_target: bool,
     display: display::Host,
     render_state: egui_wgpu::RenderState,
@@ -217,7 +218,7 @@ impl App {
             exporting: false,
             preferences,
             status: "Open a folder of X3F photographs".into(),
-            status_error: false,
+            activity: Default::default(),
             srgb_target: rs.target_format.is_srgb(),
             display,
             render_state: rs.clone(),
@@ -249,7 +250,6 @@ impl App {
         Ok(app)
     }
     fn open(&mut self, path: PathBuf, mode: FolderMode) {
-        self.status_error = false;
         match self.browser.open(&path) {
             Ok(()) => {
                 // Commit the policy only after the folder can be opened, and
@@ -274,7 +274,6 @@ impl App {
                 } else {
                     self.clear_selection();
                     self.status = "No X3F files in this folder".into();
-                    self.status_error = true;
                 }
                 self.import.rescan(
                     &mut self.browser,
@@ -282,8 +281,7 @@ impl App {
                 );
             }
             Err(e) => {
-                self.status = format!("Cannot open {}: {e}", path.display());
-                self.status_error = true;
+                self.fail(format!("Cannot open {}: {e}", path.display()));
             }
         }
     }
@@ -357,20 +355,15 @@ impl App {
         }
         if let Some(path) = &self.selected {
             self.revision += 1;
-            self.status_error = false;
+
             self.busy = true;
             self.exporting = export.is_some();
             self.status = if let Some(export) = &export {
-                format!("Processing {}…", export.format.label())
-            } else if let Some(frame) = &self.frame {
-                format!(
-                    "Updating {}; displaying {} · {}",
-                    self.output,
-                    frame.quality_label(),
-                    frame.artifact.name
-                )
+                format!("Saving {}…", export.format.label())
+            } else if self.frame.is_some() {
+                "Updating photo…".into()
             } else {
-                format!("Loading {}…", self.output)
+                "Loading photo…".into()
             };
             timing::requested(self.revision, path, &self.output, &self.settings);
             let mut requested = self.view_settings();
@@ -451,8 +444,7 @@ impl App {
                             }
                             Err(error) => {
                                 if !self.busy {
-                                    self.status = format!("Scope analysis: {error}");
-                                    self.status_error = true;
+                                    self.fail(format!("Scope analysis: {error}"));
                                 }
                             }
                         }
@@ -555,26 +547,12 @@ impl App {
                             .retain_current(&mut self.frame, &mut self.detail);
                     }
                     timing::event(frame.revision, "image_received");
-                    self.status = if smoke::screenshot_active() {
-                        format!("Displaying {}", frame.artifact.name)
-                    } else {
-                        format!(
-                            "Displaying {} · {} · {:.0} ms",
-                            frame.quality_label(),
-                            frame.artifact.name,
-                            frame.milliseconds
-                        )
-                    };
+                    self.status.clear();
                     if self.smoke.is_some() {
                         eprintln!("{}: {:.0} ms", frame.artifact.name, frame.milliseconds);
                     }
                     if !current {
-                        self.status = format!(
-                            "Updating {}; displaying {} · {}",
-                            self.output,
-                            frame.quality_label(),
-                            frame.artifact.name
-                        );
+                        self.status = "Updating photo…".into();
                     }
                     timing::image_received(
                         frame.revision,
@@ -598,18 +576,18 @@ impl App {
                     }
                 }
                 Ok(None) => {
-                    self.status = match reply.exported {
-                        Some(format) => format!("{} saved", format.label()),
-                        None => "Request superseded".into(),
-                    };
-                    if reply.exported.is_some() {
+                    if let Some(export) = &reply.exported {
+                        self.activity.operation(format!(
+                            "Saved {}: {}",
+                            export.format.label(),
+                            export.path.display()
+                        ));
                         self.submit(None);
                     }
                 }
                 Err(e) => {
                     assert!(self.smoke.is_none(), "native smoke processing failed: {e}");
-                    self.status = e;
-                    self.status_error = true;
+                    self.fail(e);
                 }
             }
         }
@@ -770,12 +748,6 @@ impl App {
                 if actions.process {
                     self.process();
                 }
-                progress::show(
-                    ui,
-                    self.worker.progress.snapshot(),
-                    !smoke::screenshot_active(),
-                )
-                .on_hover_text(&self.status);
                 if widgets::button(ui, "Settings", self.settings_open, egui::Vec2::ZERO).clicked() {
                     self.settings_open = !self.settings_open;
                 }
@@ -798,32 +770,27 @@ impl App {
         );
         changed
     }
+    fn fail(&mut self, message: impl Into<String>) {
+        self.activity.error(message);
+        self.status = "Operation failed".into();
+    }
     fn toolbar_status(&mut self, ui: &mut egui::Ui) {
-        let warning = self.sidecars.warning();
-        let processing = self.import.status(ui.ctx());
-        let error = warning.is_some()
-            || self.status_error
-            || processing.as_ref().is_some_and(|(_, error)| *error);
-        let mut messages = Vec::new();
-        if let Some(warning) = &warning {
-            messages.push(warning.clone());
-        }
-        if self.status_error {
-            messages.push(self.status.clone());
-        }
-        if let Some((message, _)) = processing {
-            messages.push(message);
-        }
-        if !self.status_error && !self.status.is_empty() {
-            messages.push(self.status.clone());
-        }
-        if warning.is_some()
+        let processing = self.import.status(ui.ctx(), &mut self.activity);
+        self.activity
+            .observe(activity::Origin::Edits, self.sidecars.warnings());
+        self.activity.button(ui);
+        if self.sidecars.warning().is_some()
             && self.sidecars.can_retry()
             && widgets::button(ui, "Retry saving edits", false, egui::Vec2::ZERO).clicked()
         {
             self.sidecars.retry();
         }
-        toolbar::status(ui, &messages.join("\n"), error);
+        let message = if self.sidecars.warning().is_some() {
+            "Edits need attention"
+        } else {
+            processing.as_deref().unwrap_or(&self.status)
+        };
+        toolbar::status(ui, message);
     }
 
     fn crop_preview_active(&self) -> bool {
@@ -1301,10 +1268,13 @@ impl eframe::App for App {
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        if let Err(error) = self.display.refresh(frame) {
-            self.status = format!("Display color management: {error}");
-            self.status_error = true;
-        }
+        self.activity.observe(
+            activity::Origin::Display,
+            self.display
+                .refresh(frame)
+                .err()
+                .map(|error| format!("Display color management: {error}")),
+        );
         let began = std::time::Instant::now();
         if timing::enabled() {
             let gap = self
@@ -1414,7 +1384,10 @@ impl eframe::App for App {
         let screenshot = smoke::screenshot_active().then(smoke::screenshot_recipe);
         let organizer_minimum = browser::minimum_panel_width(&ctx.style());
         let organizer_limit = (ctx.available_rect().width() - 540.).clamp(organizer_minimum, 650.);
+        let mut organizer_frame = egui::Frame::side_top_panel(&ctx.style());
+        organizer_frame.inner_margin.bottom = 0;
         egui::SidePanel::left("organizer")
+            .frame(organizer_frame)
             .default_width(
                 screenshot
                     .as_ref()
@@ -1423,6 +1396,16 @@ impl eframe::App for App {
             .width_range(organizer_minimum..=organizer_limit)
             .resizable(true)
             .show(ctx, |ui| {
+                egui::TopBottomPanel::bottom("browser progress")
+                    .frame(egui::Frame::NONE)
+                    .exact_height(information::HEIGHT)
+                    .show_inside(ui, |ui| {
+                        progress::show(
+                            ui,
+                            self.worker.progress.snapshot(),
+                            !smoke::screenshot_active(),
+                        );
+                    });
                 let browser_focus = ui.make_persistent_id("organizer focus");
                 self.browser.sort = self.preferences.browser_sort;
                 self.browser.show_ratings = self.preferences.browser_show_ratings;
@@ -1485,7 +1468,6 @@ impl eframe::App for App {
         if std::mem::take(&mut self.browser.clear_selection) {
             self.clear_selection();
             self.status = "No visible photographs".into();
-            self.status_error = false;
         } else if let Some(path) = self.comparison_selection.take() {
             self.select(path, true);
         } else if let Some(selection) = select {
@@ -1500,6 +1482,7 @@ impl eframe::App for App {
                 .prefetch_window(paths, self.selected.clone());
         }
         self.editor_ui.dialog(ctx, &mut self.preferences.editor);
+        self.activity.show(ctx);
         self.update_smart(ctx);
         self.update_scopes(ctx);
         self.smoke_check_scope_retention();

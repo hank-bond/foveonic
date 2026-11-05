@@ -25,6 +25,10 @@ pub struct Review {
     received_imports: usize,
     destination_check: Option<(PathBuf, std::time::Instant)>,
     destination_unavailable: bool,
+    events: Vec<crate::activity::Event>,
+    batch_report: bool,
+    received_errors: usize,
+    received_operations: usize,
 }
 impl Review {
     pub fn new(engine: Engine, cache: Arc<Cache>, context: egui::Context) -> Self {
@@ -41,6 +45,10 @@ impl Review {
             received_imports: 0,
             destination_check: None,
             destination_unavailable: false,
+            events: Vec::new(),
+            batch_report: false,
+            received_errors: 0,
+            received_operations: 0,
         }
     }
     pub fn set_noise_calibration(
@@ -143,6 +151,20 @@ impl Review {
             }
         }
         let progress = self.worker.progress();
+        self.receive_events(&progress);
+        if self.batch_report && !progress.running {
+            self.events.push(crate::activity::Event::Operation(format!(
+                "Processing finished: {} of {} photos, {} errors. Destination: {}",
+                progress.completed,
+                progress.total,
+                progress.errors.len(),
+                progress
+                    .destination
+                    .as_ref()
+                    .map_or_else(String::new, |p| p.display().to_string())
+            )));
+            self.batch_report = false;
+        }
         filter_changed |= apply_imports(
             browser,
             &progress,
@@ -200,35 +222,36 @@ impl Review {
         ctx.request_repaint_after(DESTINATION_POLL);
         self.destination_unavailable
     }
-    pub fn status(&self, context: &egui::Context) -> Option<(String, bool)> {
+    pub fn status(
+        &mut self,
+        context: &egui::Context,
+        log: &mut crate::activity::Log,
+    ) -> Option<String> {
         let progress = self.worker.progress();
-        let errors: Vec<_> = self.errors.iter().chain(&progress.errors).collect();
-        let mut messages = Vec::new();
-        if let Some(first) = errors.first() {
-            messages.push(format!("Processing errors ({}): {first}", errors.len()));
+        self.receive_events(&progress);
+        for event in self.events.drain(..) {
+            log.record(event);
+        }
+        log.observe(
+            crate::activity::Origin::Processing,
+            self.errors.iter().cloned().chain(
+                self.destination_check
+                    .as_ref()
+                    .filter(|_| self.destination_unavailable)
+                    .map(|(path, _)| format!("Destination folder unavailable: {}", path.display())),
+            ),
+        );
+        if progress.running {
+            context.request_repaint_after(STATUS_POLL);
+            return Some(format!(
+                "Processing {} / {} photos",
+                progress.completed, progress.total
+            ));
         }
         if self.scanning && self.browse_selection.is_empty() {
-            messages.push("Checking import history…".into());
+            return Some("Checking import history…".into());
         }
-        // Batch results stay available after opening another folder with Browse.
-        if progress.running || progress.total > 0 || !progress.errors.is_empty() {
-            let label = if progress.running {
-                "Processing"
-            } else {
-                "Processing finished"
-            };
-            messages.push(format!(
-                "{label} · {}/{} photos · {} errors",
-                progress.completed,
-                progress.total,
-                progress.errors.len()
-            ));
-            if progress.running {
-                context.request_repaint_after(STATUS_POLL);
-            }
-        }
-        messages.extend(errors.iter().skip(1).map(|message| (*message).clone()));
-        (!messages.is_empty()).then(|| (messages.join("\n"), !errors.is_empty()))
+        None
     }
     pub fn submit(
         &mut self,
@@ -288,6 +311,7 @@ impl Review {
                 });
             }
         }
+        self.receive_events(&self.worker.progress());
         if self.worker.submit(batch::Batch {
             calibration: self.calibration.clone(),
             destination,
@@ -309,8 +333,46 @@ impl Review {
                 conflict: settings.conflict,
             },
         }) {
+            let progress = self.worker.progress();
+            self.events.push(crate::activity::Event::Operation(format!(
+                "Started {} {} photos. Destination: {}",
+                if browser.import_mode {
+                    "importing"
+                } else {
+                    "processing"
+                },
+                progress.total,
+                progress
+                    .destination
+                    .as_ref()
+                    .map_or_else(String::new, |p| p.display().to_string())
+            )));
+            self.batch_report = true;
+            self.received_errors = 0;
+            self.received_operations = 0;
             self.received_imports = 0;
         }
+    }
+
+    fn receive_events(&mut self, progress: &batch::Progress) {
+        self.events.extend(
+            progress
+                .operations
+                .iter()
+                .skip(self.received_operations)
+                .cloned()
+                .map(crate::activity::Event::Operation),
+        );
+        self.received_operations = progress.operations.len();
+        self.events.extend(
+            progress
+                .errors
+                .iter()
+                .skip(self.received_errors)
+                .cloned()
+                .map(crate::activity::Event::Error),
+        );
+        self.received_errors = progress.errors.len();
     }
 
     /// Used only by the opt-in native smoke sequence with an isolated destination.

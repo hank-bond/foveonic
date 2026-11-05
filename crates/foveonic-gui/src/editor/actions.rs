@@ -13,11 +13,11 @@ impl App {
             self.editor_ui.actions.clear();
             return false;
         }
-        let Some(metadata) = self.metadata.as_deref() else {
+        let Some(metadata) = self.metadata.clone() else {
             self.editor_ui.actions.clear();
             return false;
         };
-        let Ok(capabilities) = ControlCapabilities::from_metadata(metadata) else {
+        let Ok(capabilities) = ControlCapabilities::from_metadata(&metadata) else {
             self.editor_ui.actions.clear();
             return false;
         };
@@ -36,7 +36,7 @@ impl App {
                 }
                 Action::Reset(scope, camera) => {
                     let rendering = (scope != Scope::All).then_some(self.settings.rendering);
-                    match camera_settings(metadata, rendering) {
+                    match camera_settings(&metadata, rendering) {
                         Ok(baseline) => {
                             let baseline = if camera {
                                 baseline
@@ -52,8 +52,7 @@ impl App {
                             }
                         }
                         Err(error) => {
-                            self.status = error.to_string();
-                            self.status_error = true;
+                            self.fail(error.to_string());
                         }
                     }
                 }
@@ -78,7 +77,7 @@ impl App {
             &self.settings,
             &mut self.output,
             &mut self.channel,
-            Some(metadata),
+            Some(&metadata),
             None,
         );
         if previous_defaults != self.preferences.editor.defaults {

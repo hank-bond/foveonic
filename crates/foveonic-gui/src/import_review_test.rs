@@ -184,6 +184,13 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
     assert_eq!(progress.completed, 2);
     assert!(progress.errors.is_empty(), "{:?}", progress.errors);
     assert!(progress.imported.is_empty());
+    assert_eq!(progress.operations.len(), 2);
+    for name in ["photo.tiff", "photo-1.tiff"] {
+        assert!(progress
+            .operations
+            .iter()
+            .any(|entry| entry.contains(&destination.join(name).display().to_string())));
+    }
     for path in &paths {
         assert!(
             cache.open_cached(path, |_| {}).is_none(),

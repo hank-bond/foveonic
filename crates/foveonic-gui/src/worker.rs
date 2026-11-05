@@ -1,7 +1,9 @@
 //! Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
+#[cfg(test)]
+use crate::export::ExportFormat;
 use crate::{
-    export::{self, resolve_camera_settings, Export, ExportFormat},
+    export::{self, resolve_camera_settings, Export},
     preferences::PreviewMode,
 };
 use eframe::egui;
@@ -137,7 +139,7 @@ pub struct Reply {
     pub metadata: Option<Arc<Metadata>>,
     pub settings: Settings,
     pub result: Result<Option<Frame>, String>,
-    pub exported: Option<ExportFormat>,
+    pub exported: Option<crate::export::Export>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -436,7 +438,7 @@ impl Worker {
                         metadata,
                         settings,
                         result,
-                        exported: request.export.as_ref().map(|e| e.format),
+                        exported: request.export.clone(),
                     })))
                     .is_err()
                 {
@@ -705,7 +707,10 @@ mod tests {
                 }
             };
             assert_eq!(reply.revision, index as u64 + 1);
-            assert_eq!(reply.exported, Some(super::ExportFormat::Dng));
+            assert_eq!(
+                reply.exported.map(|e| e.format),
+                Some(super::ExportFormat::Dng)
+            );
             assert!(reply.result.expect("Quattro DNG export").is_none());
             assert_eq!(reply.settings.rendering, settings.rendering);
             assert_eq!(reply.settings.exposure, settings.exposure);
@@ -1607,7 +1612,7 @@ mod preview_tests {
             });
             let exported = receive();
             assert!(exported.result.unwrap().is_none());
-            assert_eq!(exported.exported, Some(format));
+            assert_eq!(exported.exported.map(|e| e.format), Some(format));
             assert_eq!(
                 exported.settings.tiff_color_space,
                 Some(foveonic::render::TiffColorSpace::ProPhotoRgb)

@@ -120,21 +120,37 @@ impl Reporter {
 }
 
 pub fn show(ui: &mut egui::Ui, snapshot: Option<Snapshot>, show_time: bool) -> egui::Response {
-    let fraction = snapshot.map_or(0., |s| s.fraction);
-    let mut bar = egui::ProgressBar::new(fraction)
-        .desired_width(180.)
-        .desired_height(ui.spacing().interact_size.y)
-        .animate(false);
-    if snapshot.is_some_and(|s| s.failed) {
-        bar = bar.fill(ui.visuals().error_fg_color);
-    }
-    let response = ui.add(bar);
-    if show_time {
-        ui.monospace(format!(
-            "{:.0} ms",
-            snapshot.map_or(0., Snapshot::milliseconds)
-        ));
-    }
+    let (rect, response) = crate::widgets::footer(ui);
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| {
+            let elapsed = format!("{:.0} ms", snapshot.map_or(0., Snapshot::milliseconds));
+            let text = ui.painter().layout_no_wrap(
+                elapsed,
+                egui::TextStyle::Monospace.resolve(ui.style()),
+                ui.visuals().text_color(),
+            );
+            let reserved = if show_time {
+                text.size().x + ui.spacing().item_spacing.x
+            } else {
+                0.
+            };
+            let width = (rect.width() - reserved).max(1.);
+            let mut bar = egui::ProgressBar::new(snapshot.map_or(0., |s| s.fraction))
+                .desired_width(width)
+                .desired_height(14.)
+                .animate(false);
+            if snapshot.is_some_and(|s| s.failed) {
+                bar = bar.fill(ui.visuals().error_fg_color);
+            }
+            ui.add(bar);
+            if show_time {
+                ui.label(text);
+            }
+        },
+    );
     if snapshot.is_some_and(Snapshot::running) && show_time {
         // Only the elapsed label ticks. Progress changes solely at completed stages.
         ui.ctx().request_repaint_after(ELAPSED_REFRESH);

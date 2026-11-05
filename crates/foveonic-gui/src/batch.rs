@@ -75,6 +75,7 @@ pub struct Progress {
     pub completed: usize,
     pub imported: Vec<PathBuf>,
     pub errors: Vec<String>,
+    pub operations: Vec<String>,
 }
 #[derive(Default)]
 struct Pending {
@@ -380,7 +381,24 @@ fn run_batch(
                         Ok(())
                     },
                 )
-                .map(|_| ())
+                .map(|original| {
+                    let mut status = progress.lock().unwrap();
+                    status.operations.push(format!(
+                        "Imported: {}",
+                        batch.destination.join(&original).display()
+                    ));
+                    for format in &batch.output.formats {
+                        let path = batch
+                            .destination
+                            .join(original.file_name().unwrap())
+                            .with_extension(format.extension());
+                        status.operations.push(format!(
+                            "Saved {}: {}",
+                            format.label(),
+                            path.display()
+                        ));
+                    }
+                })
             } else {
                 export_photo(
                     engine,
@@ -389,6 +407,13 @@ fn run_batch(
                     &batch.destination,
                     &batch.output,
                     &mut reserved,
+                    |path| {
+                        progress
+                            .lock()
+                            .unwrap()
+                            .operations
+                            .push(format!("Saved: {}", path.display()))
+                    },
                 )
             };
             if let Some(started) = started {
@@ -429,6 +454,7 @@ fn export_photo(
     destination: &std::path::Path,
     output: &Output,
     reserved: &mut HashSet<PathBuf>,
+    record: impl Fn(&std::path::Path),
 ) -> Result<()> {
     // Exports consume cache hits without filling the browsing cache on a miss.
     // Writing a whole decode/preview bundle here competes with the requested output.
@@ -446,7 +472,7 @@ fn export_photo(
             &mut session,
             photo,
             &Export {
-                path,
+                path: path.clone(),
                 format,
                 tiff_color_space: output.tiff_color_space,
                 encoding: output.encoding,
@@ -454,6 +480,7 @@ fn export_photo(
                 conflict: output.conflict,
             },
         )?;
+        record(&path);
     }
     Ok(())
 }

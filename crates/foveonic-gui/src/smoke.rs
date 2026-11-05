@@ -20,6 +20,14 @@ const CROP_TARGETS: &[&str] = &[
     "crop-tile",
     "crop-detail",
 ];
+const STATUS_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "status-error",
+    "status-log",
+    "status-read",
+    "status-new-error",
+];
 const FAST_PREVIEW_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -326,6 +334,7 @@ impl Smoke {
             || self.targets == DEHAZE_TARGETS
             || self.targets == ADVANCED_COLOR_TARGETS
             || self.targets == CROP_TARGETS
+            || self.targets == STATUS_TARGETS
         {
             // Inject focused input without moving the owner's system pointer or focus.
             input.focused = true;
@@ -339,7 +348,9 @@ impl Smoke {
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
             directory: directory.into(),
-            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_CROP").is_some() {
+            targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_STATUS").is_some() {
+                STATUS_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_CROP").is_some() {
                 CROP_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_EXPOSURE_AUTO").is_some() {
                 EXPOSURE_AUTO_TARGETS
@@ -467,6 +478,20 @@ impl App {
             })
         });
         if let Some(image) = screenshot {
+            if smoke.targets == STATUS_TARGETS {
+                match smoke.targets[smoke.index] {
+                    "status-error" | "status-new-error" => assert!(self.activity.unread_errors()),
+                    "status-log" => {
+                        assert!(self.activity.is_open());
+                        assert!(!self.activity.unread_errors());
+                    }
+                    "status-read" => {
+                        assert!(!self.activity.is_open());
+                        assert!(!self.activity.unread_errors());
+                    }
+                    _ => {}
+                }
+            }
             if smoke.targets == CROP_TARGETS && !smoke.preview_pending() {
                 let frame = self.frame.as_ref().unwrap();
                 let target = smoke.targets[smoke.index];
@@ -870,6 +895,24 @@ impl App {
                 return;
             }
             match smoke.targets[smoke.index] {
+                "status-error" | "status-new-error" => {
+                    let path = smoke.directory.join(smoke.targets[smoke.index]);
+                    self.open(path, crate::preferences::FolderMode::Browse);
+                }
+                "status-log" => self.activity.open(),
+                "status-read" => {
+                    smoke.direct_events.push_back(
+                        [true, false]
+                            .map(|pressed| egui::Event::Key {
+                                key: egui::Key::Escape,
+                                physical_key: None,
+                                pressed,
+                                repeat: false,
+                                modifiers: Default::default(),
+                            })
+                            .into(),
+                    );
+                }
                 "crop-fast" => {
                     crate::crop_tool::exit(ctx);
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;
@@ -1881,6 +1924,8 @@ impl App {
                             }),
                             _ => true,
                         }));
+            let ready =
+                ready && (smoke.targets != STATUS_TARGETS || smoke.direct_events.is_empty());
             if ready {
                 if smoke.targets == DIRECT_COLOR_TARGETS
                     && smoke.targets[smoke.index] == "direct-color-settings"

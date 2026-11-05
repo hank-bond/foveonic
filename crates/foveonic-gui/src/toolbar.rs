@@ -135,14 +135,10 @@ pub fn split(ui: &mut egui::Ui, tools_width: f32, mut draw: impl FnMut(&mut egui
 }
 
 /// Keep status text in the row's remaining width and retain full details on hover.
-pub fn status(ui: &mut egui::Ui, message: &str, error: bool) -> egui::Response {
+pub fn status(ui: &mut egui::Ui, message: &str) -> egui::Response {
     let line = message.lines().collect::<Vec<_>>().join(" · ");
     let text = egui::RichText::new(line);
-    let text = if error {
-        text.color(ui.visuals().error_fg_color)
-    } else {
-        text.weak()
-    };
+    let text = text.weak();
     ui.add(egui::Label::new(text).truncate())
         .on_hover_text(message)
 }
@@ -196,18 +192,7 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
                 )
                 .size()
                 .x + 2. * widgets::button_padding(ui).x;
-            let error = ui.visuals().error_fg_color;
-            let text = if destination_unavailable {
-                egui::RichText::new(label).color(error)
-            } else {
-                egui::RichText::new(label)
-            };
-            let mut button = egui::Button::new(text).truncate();
-            if destination_unavailable {
-                button = button
-                    .fill(error.gamma_multiply(0.15))
-                    .stroke(egui::Stroke::new(1_f32, error));
-            }
+            let button = widgets::notice_style(ui, label, destination_unavailable).truncate();
             ui.add_sized(
                 egui::vec2(width.min(DESTINATION_MAX_WIDTH), widgets::control_height(ui)),
                 button,
@@ -400,7 +385,7 @@ mod tests {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         toolbar = row(ui, |ui| {
                             settings = widgets::button(ui, "Settings", false, egui::Vec2::ZERO).rect;
-                            status = super::status(ui, message, !message.is_empty()).rect;
+                            status = super::status(ui, message).rect;
                         }).response.rect;
                     });
                 });

@@ -97,11 +97,9 @@ impl App {
                         Ok(recipe) => {
                             ctx.copy_text(recipe);
                             self.status = "Copied image settings".into();
-                            self.status_error = false;
                         }
                         Err(error) => {
-                            self.status = format!("Cannot copy settings: {error}");
-                            self.status_error = true;
+                            self.fail(format!("Cannot copy settings: {error}"));
                         }
                     }
                 }
@@ -133,11 +131,9 @@ impl App {
                                 self.sidecars.apply(path, settings);
                             }
                             self.status = format!("Applied settings to {count} photos");
-                            self.status_error = false;
                         }
                         Err(error) => {
-                            self.status = format!("Cannot paste settings: {error}");
-                            self.status_error = true;
+                            self.fail(format!("Cannot paste settings: {error}"));
                         }
                     }
                 }
