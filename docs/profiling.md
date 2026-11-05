@@ -17,6 +17,10 @@ Use CLI `--profile wall` or `--profile gpu`. For the GUI, set `FOVEONIC_PROFILE=
 
 Reports are JSON lines with `foveonic_profile: 1`, `event`, `mode`, `synchronized`, and `data`. Other stderr remains ordinary text. The core owns host/GPU stage vectors and engine activity; frontend reports add source, settings, execution and revision context. Loading appears in its own event, not in every warm render. GUI request settings may contain unresolved camera defaults; processing reports contain the selected WB/mode and controls. Derived camera tables are reproduced from the recorded source, not dumped into logs.
 
+## Shared build artifacts
+
+When switching worktrees that share a Cargo target, ensure the selected crate inputs are newer than cached artifacts before building. Touch that checkout's crate source inputs without changing contents, or clean only the affected package if needed. Verify compilation used the intended checkout and that the expected named tests ran with a nonzero count. A zero-test filtered result is not validation. Copy each measured executable before another worktree builds, and retain its hash and the relevant source hashes. Shared dependency artifacts may remain in place.
+
 ## Completed full processing
 
 Build with `cargo build --release -p foveonic --example profile_pipeline`. Use a new export directory:
@@ -44,6 +48,12 @@ cargo run --offline --release -p foveonic --example profile_smart_preview -- \
 ```
 
 The report destination must be new. Use `--region-first exposure --fractions 0.25,0.5 --repeats 3` for bounded regional comparisons. Add `--direct-only -- --tone-method universal --base-response natural` to measure a Fast-to-Full transition with Adaptive; regional Adaptive is unsupported. Render options after `--` override the camera settings used by every route. Each trial records epoch-millisecond bounds for its whole route, including the prior image and any verification, while reported durations use a monotonic clock. These bounds conservatively identify potential workload overlap.
+
+For a separate instrumented region-first edit, add `--diagnostic wall` or `--diagnostic gpu` with `--region-first exposure` or `noise`. The first fraction selects the diagnostic viewport. `--diagnostic-only wall` or `gpu` skips the Off timing pairs. Pass `-- --merrill-banding-method directional` to select the Merrill directional method with its default row and column controls. The prior image uses Off. Diagnostic durations are not comparison timings. Node records distinguish required and available cached outputs, requested execution, published outputs, nested pass ranges, and shared executor pass ranges. Shared ranges are available only after successful graph trace resolution. Host durations exclude recipe preparation, cache storage and submission-window waits.
+
+For a separate Full-to-Full warm edit, use `--full-edit exposure --diagnostic-only wall` or `gpu`. The available edits are exposure and noise. The initial Full image runs with Off, followed by the instrumented Full edit in the same session. This does not cover every control invalidation.
+
+A Full-to-Full exposure sequence can be measured with`profile_smart_preview INPUT.x3f REPORT.json --full-edit exposure --benchmark-off --repeats 8 --diagnostic wall -- --reconstruction`. It primes a Full session, retains each previous image and texture through the next completed render, alternates +0.5 and original exposure, and excludes two warmup edits. The Off-mode runs report completed engine/view times. The optional Wall diagnostic runs separately in a newly primed session and records preparation spans; its durations are not Off-mode baselines. Source decoding and GPU initialization are outside both timings.
 
 The default command uses Sunlight/Standard with camera-default controls and a central 992×1002 native-pixel detail tile. It excludes source decoding and GPU initialization. Each route starts from its own completed Fast overview. Five measured pairs follow one warmup pair, with alternating route order. Completed processing and display-texture preparation use profiling Off and retain the overview/detail textures as the GUI does. Separate GPU diagnostic runs contain stage timings and transfer/activity counters. Compare the first detail, direct Full, and additional Full continuation independently. Add the two progressive durations to measure when the whole image becomes Full. These are engine-to-ready measurements, not input-to-screen latency. Stored camera adjustments and different viewport sizes can change native app costs.
 

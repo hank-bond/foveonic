@@ -18,6 +18,10 @@ pub(crate) struct GpuTrace {
 }
 
 impl GpuTrace {
+    pub(crate) fn len(&self) -> usize {
+        self.labels.len()
+    }
+
     fn writes(&mut self, kernel: Kernel) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
         let query = self.query.as_ref()?;
         let index = self.labels.len() as u32 * 2;

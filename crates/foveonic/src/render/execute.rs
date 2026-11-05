@@ -93,6 +93,7 @@ impl Engine {
         };
         // A cached main output does not guarantee that a side output is cached.
         // Request only what is missing so a partial run cannot replace retained values.
+        let reachable = profile.mode.enabled().then(|| required.clone());
         let required: Vec<bool> = required
             .iter()
             .zip(&cached)
@@ -131,9 +132,45 @@ impl Engine {
                 });
             }
         }
+        let mut shared_ranges = profile.mode.gpu().then(Vec::new);
         for (node_index, node) in graph.nodes.iter().enumerate() {
             execution.check()?;
-            if !node.outputs.iter().any(|id| required[*id] && !cached[*id]) {
+            let run = node.outputs.iter().any(|id| required[*id] && !cached[*id]);
+            let diagnostic = if let Some(reachable) = &reachable {
+                Some((
+                    crate::profile::NodeObservation {
+                        ordinal: node_index,
+                        operation: node.operation.kind(),
+                        outputs: node
+                            .outputs
+                            .iter()
+                            .map(|&id| crate::profile::NodeOutput {
+                                name: graph.outputs[id].cache_name(),
+                                required: reachable[id],
+                                cached_available: cached[id],
+                                requested_for_execution: run && required[id],
+                                published: false,
+                            })
+                            .collect(),
+                        executed: run,
+                        host_milliseconds: None,
+                        activity: None,
+                        nested_gpu_start: profile.gpu.len(),
+                        nested_gpu_end: profile.gpu.len(),
+                        shared_gpu_start: None,
+                        shared_gpu_end: None,
+                    },
+                    Instant::now(),
+                    gpu.activity(),
+                    profile.mode.gpu().then(|| trace.len()),
+                ))
+            } else {
+                None
+            };
+            if !run {
+                if let Some((observation, _, _, _)) = diagnostic {
+                    profile.nodes.push(observation);
+                }
                 continue;
             }
             let index = node.outputs[0];
@@ -1681,6 +1718,13 @@ impl Engine {
                     None
                 }
             };
+            let diagnostic = diagnostic.map(|(mut observation, started, before, shared_start)| {
+                observation.host_milliseconds = Some(started.elapsed().as_secs_f64() * 1000.);
+                observation.activity = Some(gpu.activity().since(before));
+                observation.nested_gpu_end = profile.gpu.len();
+                let shared_end = profile.mode.gpu().then(|| trace.len());
+                (observation, shared_start.zip(shared_end))
+            });
             if !matches!(node.operation, Operation::WriteImage { .. }) {
                 profile.record(node.operation.label(), start);
             }
@@ -1689,6 +1733,15 @@ impl Engine {
                     buffer,
                     description: desc,
                 });
+            }
+            if let Some((mut observation, shared_range)) = diagnostic {
+                for (output, &id) in observation.outputs.iter_mut().zip(&node.outputs) {
+                    output.published = !cached[id] && values[id].is_some();
+                }
+                if let (Some(ranges), Some((start, end))) = (&mut shared_ranges, shared_range) {
+                    ranges.push((profile.nodes.len(), start, end));
+                }
+                profile.nodes.push(observation);
             }
             for &id in &node.outputs {
                 if let Some(value) = values[id].as_ref() {
@@ -1736,11 +1789,220 @@ impl Engine {
                 }
             }
         }
+        let shared_gpu_base = profile.mode.gpu().then_some(profile.gpu.len());
         gpu.finish_trace(&trace, profile)?;
+        if let (Some(base), Some(ranges)) = (shared_gpu_base, shared_ranges) {
+            for (index, start, end) in ranges {
+                profile.nodes[index].shared_gpu_start = Some(base + start);
+                profile.nodes[index].shared_gpu_end = Some(base + end);
+            }
+        }
         if profile.mode.enabled() {
             profile.scratch_allocations += scratch.allocations;
             profile.scratch_reuses += scratch.reuses;
         }
         Ok(targets.iter().filter_map(|id| values[*id].take()).collect())
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+    use crate::{
+        image::{Description, Space, View},
+        interactive::Cache,
+        nodes::finish::root_detail,
+        profile::Mode,
+        render::Settings,
+    };
+    use std::sync::Arc;
+
+    #[test]
+    #[ignore = "requires a GPU with timestamps"]
+    fn cancelled_graph_never_publishes_unresolved_shared_trace_indices() {
+        let engine = Engine::new().unwrap();
+        assert!(
+            engine
+                .device()
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY),
+            "this ignored test requires GPU timestamp-query support"
+        );
+        let extent = [8, 8];
+        let image = RenderedImage {
+            buffer: engine
+                .gpu
+                .upload("calibrated fixture", &[1_f32; 8 * 8 * 3])
+                .unwrap(),
+            description: Description::new(extent, Space::CalibratedLayers),
+            view: View {
+                crop: [0, 0, 8, 8],
+                rotation: 0,
+                extent,
+            },
+            metadata: Arc::new(Metadata {
+                processing_version: None,
+                width: 8,
+                height: 8,
+                rotation: 0,
+                properties: Default::default(),
+                matrices: Default::default(),
+                lists: Default::default(),
+            }),
+            settings: Settings::new("Sunlight", "Standard"),
+            owner: engine.owner.clone(),
+            dehaze_basis: None,
+        };
+        let mut graph = Graph::default();
+        let input = graph
+            .add(
+                Operation::RenderedInput {
+                    data: DataType::CalibratedLayers,
+                },
+                &[],
+            )
+            .unwrap();
+        let space = crate::color_space::ColorSpace::Srgb;
+        let color = graph
+            .add(
+                Operation::Color {
+                    params: bytemuck::Zeroable::zeroed(),
+                    space,
+                },
+                &[input],
+            )
+            .unwrap();
+        let target = graph
+            .add(
+                Operation::ImageAlias {
+                    dehaze_basis: None,
+                    data: DataType::LinearRgb(space),
+                    output: "cancel.target",
+                },
+                &[color],
+            )
+            .unwrap();
+        let checks = std::cell::Cell::new(0);
+        let cancel = || {
+            let n = checks.get() + 1;
+            checks.set(n);
+            n == 3
+        };
+        let mut execution = Execution {
+            cancel: Some(&cancel),
+            ..Default::default()
+        };
+        let mut profile = Profile::new(Mode::Gpu);
+        let result = engine.execute_controlled(
+            Input::Rendered(&image),
+            &graph,
+            &[target],
+            &mut profile,
+            &mut execution,
+        );
+        assert!(result.is_err());
+        assert!(profile
+            .nodes
+            .iter()
+            .any(|node| node.operation == "Color" && node.executed));
+        assert!(profile
+            .nodes
+            .iter()
+            .all(|node| node.shared_gpu_start.is_none() && node.shared_gpu_end.is_none()));
+    }
+
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn cached_main_and_missing_side_preserve_main_and_report_partial_publication() {
+        let engine = Engine::new().unwrap();
+        let extent = [8, 8];
+        let image = RenderedImage {
+            buffer: engine
+                .gpu
+                .upload("linear fixture", &[100_i32; 8 * 8 * 3])
+                .unwrap(),
+            description: Description::new(extent, Space::LinearCodeRgb),
+            view: View {
+                crop: [0, 0, 8, 8],
+                rotation: 0,
+                extent,
+            },
+            metadata: Arc::new(Metadata {
+                processing_version: None,
+                width: 8,
+                height: 8,
+                rotation: 0,
+                properties: Default::default(),
+                matrices: Default::default(),
+                lists: Default::default(),
+            }),
+            settings: Settings::new("Sunlight", "Standard"),
+            owner: engine.owner.clone(),
+            dehaze_basis: None,
+        };
+        let mut graph = Graph::default();
+        let input = graph
+            .add(
+                Operation::RenderedInput {
+                    data: DataType::LinearCodeRgb,
+                },
+                &[],
+            )
+            .unwrap();
+        let prepared = root_detail::Prepared::new(extent, [0, 0, 8, 8], 0.5, 100, 1.).unwrap();
+        let main = graph
+            .add(Operation::RootDetail(prepared), &[input])
+            .unwrap();
+        let side = graph.named_output(main, "detail.signal").unwrap();
+        graph.retain_for_session(main);
+        let mut cache = Cache::default();
+        let mut execution = Execution {
+            cache: Some(&mut cache),
+            ..Default::default()
+        };
+        execution.plan(&graph, &[main]).unwrap();
+        let retained = engine
+            .execute_controlled(
+                Input::Rendered(&image),
+                &graph,
+                &[main],
+                &mut Profile::default(),
+                &mut execution,
+            )
+            .unwrap()
+            .remove(0);
+        execution.plan(&graph, &[main, side]).unwrap();
+        let mut profile = Profile::new(Mode::Wall);
+        let results = engine
+            .execute_controlled(
+                Input::Rendered(&image),
+                &graph,
+                &[main, side],
+                &mut profile,
+                &mut execution,
+            )
+            .unwrap();
+        assert!(retained.buffer.shares_storage(&results[0].buffer));
+        let observation = profile
+            .nodes
+            .iter()
+            .find(|node| node.operation == "RootDetail")
+            .unwrap();
+        assert!(observation.executed);
+        assert_eq!(observation.outputs.len(), 2);
+        let first = &observation.outputs[0];
+        assert!(
+            first.required
+                && first.cached_available
+                && !first.requested_for_execution
+                && !first.published
+        );
+        let second = &observation.outputs[1];
+        assert!(
+            second.required
+                && !second.cached_available
+                && second.requested_for_execution
+                && second.published
+        );
     }
 }

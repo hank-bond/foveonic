@@ -100,11 +100,42 @@ impl Timing {
     }
 }
 
+/// Output reachability and cache availability observed at graph execution start.
+#[derive(Debug, serde::Serialize)]
+pub struct NodeOutput {
+    pub name: String,
+    pub required: bool,
+    pub cached_available: bool,
+    /// A missing required output requested from this operation.
+    pub requested_for_execution: bool,
+    /// A new value was published into the executor for this output.
+    pub published: bool,
+}
+
+/// Diagnostic observations for one graph node. GPU indices cover only nested
+/// traces resolved during this node. Shared trace indices are separately
+/// resolved at graph completion. Both ranges are end-exclusive indices into gpu.
+#[derive(Debug, serde::Serialize)]
+pub struct NodeObservation {
+    pub ordinal: usize,
+    pub operation: &'static str,
+    pub outputs: Vec<NodeOutput>,
+    pub executed: bool,
+    pub host_milliseconds: Option<f64>,
+    pub activity: Option<GpuActivity>,
+    pub nested_gpu_start: usize,
+    pub nested_gpu_end: usize,
+    pub shared_gpu_start: Option<usize>,
+    pub shared_gpu_end: Option<usize>,
+}
+
 #[derive(Default, Debug, serde::Serialize)]
 pub struct Profile {
     pub mode: Mode,
     pub host: Vec<Timing>,
     pub gpu: Vec<Timing>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<NodeObservation>,
     pub scratch_allocations: u32,
     pub scratch_reuses: u32,
 }

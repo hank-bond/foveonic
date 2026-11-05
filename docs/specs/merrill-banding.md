@@ -50,3 +50,5 @@ Each spatial band's estimate must remain distinct so strength tuning does not re
 Wider supports must exclude inactive sensor margins from their measurement. Photographic comparisons must assess fine-band compatibility separately from changes to physical-edge handling.
 
 Banding choices and their enable state must work in Color and Monochrome. Turning Banding off must preserve valid signed sensor samples and must not create extreme colored points during texture restoration. Color proportions derived from unfiltered layers must use their nonnegative signal components with a protected normalization denominator. This must not change the accepted Banding-on rendering.
+
+The CLI accepts `--merrill-banding-method reference|directional`. Selecting either method enables banding and preserves its row and column controls.

@@ -26,6 +26,11 @@ fn off_executes_work_without_collecting_timings() {
     assert_eq!(profile.measure("work", || 42), 42);
     assert!(profile.host.is_empty());
     assert!(profile.gpu.is_empty());
+    assert!(profile.nodes.is_empty());
+    assert!(serde_json::to_value(&profile)
+        .unwrap()
+        .get("nodes")
+        .is_none());
 }
 #[test]
 fn wall_collects_current_host_stages_and_serializable_settings() {
