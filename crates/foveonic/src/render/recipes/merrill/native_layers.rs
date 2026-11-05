@@ -5,7 +5,7 @@ use super::layer_noise;
 use crate::{
     graph::{Graph, Operation},
     interactive::Execution,
-    nodes::sensor::{banding, calibration, camera_repair, color_field, despeckle, highlight},
+    nodes::sensor::{banding, calibration, color_field, despeckle, highlight},
     profile::Profile,
     render::Settings,
     source::{Result, Source},
@@ -163,7 +163,7 @@ pub(super) fn build(
     let unrepaired = calibrated;
     if let Some(threshold) = settings.repair {
         let prepared = profile.measure("prepare repair records", || {
-            camera_repair::prepare(&source.metadata, threshold)
+            execution.prepare_repair(&source.metadata, threshold)
         })?;
         calibrated = graph.add(Operation::Repair(prepared), &[calibrated, input])?;
         finish!();

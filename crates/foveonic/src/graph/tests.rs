@@ -190,7 +190,9 @@ fn rejects_wrong_space_and_forward_dependencies() {
         .unwrap();
     assert!(graph
         .add(
-            Operation::Repair(crate::nodes::sensor::camera_repair::Prepared::default()),
+            Operation::Repair(std::sync::Arc::new(
+                crate::nodes::sensor::camera_repair::Prepared::default()
+            )),
             &[linear, source]
         )
         .is_err());

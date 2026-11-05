@@ -115,7 +115,7 @@ pub enum Operation {
         params: ColorParams,
         space: ColorSpace,
     },
-    Repair(camera_repair::Prepared),
+    Repair(std::sync::Arc<camera_repair::Prepared>),
     Despeckle(despeckle::Prepared),
     Highlights(std::sync::Arc<highlight::Prepared>),
     HighlightDensity(std::sync::Arc<highlight::Prepared>),

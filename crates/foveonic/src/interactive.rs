@@ -1,4 +1,4 @@
-//! Reuses unchanged inputs for the current edit while keeping earlier images safe.
+//! Reuses active-edit GPU inputs and bounded repair preparation while preserving earlier images.
 
 use crate::{
     graph::{DataType, Graph},
@@ -33,6 +33,10 @@ impl RenderSession {
     }
     pub fn cached_bytes(&self) -> u64 {
         self.cache.bytes()
+    }
+    /// Logical CPU bytes retained for prepared repair, excluding allocator overhead.
+    pub fn cached_preparation_bytes(&self) -> usize {
+        self.cache.repair.as_ref().map_or(0, |entry| entry.bytes)
     }
     /// These identities help replace pending requests. Processing stages still
     /// decide which parameter changes invalidate their own results.
@@ -232,9 +236,16 @@ struct Entry {
     generation: u64,
     value: Value,
 }
+struct RepairSlot {
+    threshold: crate::nodes::sensor::repair::Threshold,
+    prepared: Arc<crate::nodes::sensor::camera_repair::Prepared>,
+    bytes: usize,
+}
+
 #[derive(Default)]
 pub(crate) struct Cache {
     owner: Option<Arc<()>>,
+    repair: Option<RepairSlot>,
     versions: HashMap<String, Version>,
     counter: u64,
     entries: Vec<Entry>,
@@ -242,6 +253,27 @@ pub(crate) struct Cache {
 }
 impl Cache {
     const LIMIT: u64 = 1024 * 1024 * 1024;
+    const REPAIR_LIMIT: usize = 4 * 1024 * 1024;
+
+    fn retain_repair(
+        &mut self,
+        threshold: crate::nodes::sensor::repair::Threshold,
+        prepared: &Arc<crate::nodes::sensor::camera_repair::Prepared>,
+    ) {
+        // Two counters form the Arc header. Allocator rounding and bookkeeping
+        // are outside this logical limit, as are graph-version keys.
+        let bytes = prepared
+            .retained_bytes()
+            .and_then(|n| n.checked_add(2 * std::mem::size_of::<usize>()))
+            .and_then(|n| n.checked_add(std::mem::size_of::<Option<RepairSlot>>()));
+        self.repair = bytes
+            .filter(|&n| n <= Self::REPAIR_LIMIT)
+            .map(|bytes| RepairSlot {
+                threshold,
+                prepared: prepared.clone(),
+                bytes,
+            });
+    }
     pub(crate) fn bind(&mut self, owner: &Arc<()>) {
         if self
             .owner
@@ -497,6 +529,27 @@ pub(crate) struct Execution<'a> {
     pub progress: Option<&'a dyn Fn(crate::render::RenderProgress)>,
 }
 impl Execution<'_> {
+    pub(crate) fn prepare_repair(
+        &mut self,
+        metadata: &crate::source::Metadata,
+        threshold: crate::nodes::sensor::repair::Threshold,
+    ) -> crate::source::Result<Arc<crate::nodes::sensor::camera_repair::Prepared>> {
+        self.check()?;
+        if let Some(entry) = self.cache.as_ref().and_then(|cache| cache.repair.as_ref()) {
+            if entry.threshold == threshold {
+                return Ok(entry.prepared.clone());
+            }
+        }
+        let prepared = Arc::new(crate::nodes::sensor::camera_repair::prepare(
+            metadata, threshold,
+        )?);
+        self.check()?;
+        if let Some(cache) = &mut self.cache {
+            cache.retain_repair(threshold, &prepared);
+        }
+        Ok(prepared)
+    }
+
     pub fn check(&self) -> crate::source::Result<()> {
         if self.cancel.is_some_and(|cancel| cancel()) {
             Err(Box::new(Superseded))
@@ -523,6 +576,89 @@ impl Execution<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repair_slot_is_bounded_and_reset_for_another_engine() {
+        use crate::nodes::sensor::{camera_repair::Prepared, repair::Threshold};
+        let mut cache = Cache::default();
+        let first_owner = Arc::new(());
+        let second_owner = Arc::new(());
+        cache.bind(&first_owner);
+        let small = Arc::new(Prepared::default());
+        cache.retain_repair(Threshold::Camera, &small);
+        let slot = cache.repair.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&slot.prepared, &small));
+        assert!(slot.bytes <= Cache::REPAIR_LIMIT);
+        cache.bind(&first_owner);
+        assert!(Arc::ptr_eq(
+            &cache.repair.as_ref().unwrap().prepared,
+            &small
+        ));
+        let oversized = Arc::new(Prepared::oversized_for_test());
+        cache.retain_repair(Threshold::Manual(0), &oversized);
+        assert!(cache.repair.is_none());
+        assert_eq!(Arc::strong_count(&oversized), 1);
+        cache.retain_repair(Threshold::Camera, &small);
+        cache.bind(&second_owner);
+        assert!(cache.repair.is_none());
+    }
+
+    #[test]
+    fn repair_slot_error_and_cancel_preserve_valid_entry() {
+        use crate::nodes::sensor::{camera_repair::Prepared, repair::Threshold};
+        let mut cache = Cache::default();
+        let saved = Arc::new(Prepared::default());
+        cache.retain_repair(Threshold::Camera, &saved);
+        let metadata = crate::source::Metadata {
+            width: 1,
+            height: 1,
+            rotation: 0,
+            processing_version: None,
+            properties: Default::default(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        };
+        let mut execution = Execution {
+            cache: Some(&mut cache),
+            ..Execution::default()
+        };
+        let hit = execution
+            .prepare_repair(&metadata, Threshold::Camera)
+            .unwrap();
+        assert!(Arc::ptr_eq(&hit, &saved));
+        let error = execution
+            .prepare_repair(&metadata, Threshold::Manual(16))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("badness"));
+        assert!(Arc::ptr_eq(
+            &execution
+                .cache
+                .as_ref()
+                .unwrap()
+                .repair
+                .as_ref()
+                .unwrap()
+                .prepared,
+            &saved
+        ));
+        let cancel = || true;
+        execution.cancel = Some(&cancel);
+        assert!(execution
+            .prepare_repair(&metadata, Threshold::Camera)
+            .is_err());
+        assert!(Arc::ptr_eq(
+            &execution
+                .cache
+                .as_ref()
+                .unwrap()
+                .repair
+                .as_ref()
+                .unwrap()
+                .prepared,
+            &saved
+        ));
+    }
+
     fn graph_for_detail(amount: f32) -> (Graph, usize) {
         use crate::{graph::Operation as O, noise::Parameters};
         use bytemuck::Zeroable;
