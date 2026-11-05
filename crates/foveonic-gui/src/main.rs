@@ -14,6 +14,7 @@ mod display;
 mod display_image;
 mod editor;
 mod export;
+mod folder_loader;
 mod help;
 mod help_examples;
 mod icon;
@@ -75,6 +76,7 @@ struct App {
     processing_open: bool,
     opening: Option<Opening>,
     browser: browser::Browser,
+    folder_loader: folder_loader::Loader,
     worker: worker::Worker,
     capture: capture::Loader,
     sidecars: sidecars::Session,
@@ -105,6 +107,7 @@ struct App {
     render_state: egui_wgpu::RenderState,
     smoke: Option<smoke::Smoke>,
     last_frame: Option<std::time::Instant>,
+    startup_ready: Option<std::time::Instant>,
 }
 impl App {
     fn new(
@@ -112,6 +115,8 @@ impl App {
         path: Option<PathBuf>,
         settings: Settings,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let startup_began = timing::enabled().then(std::time::Instant::now);
+        let mut startup_profile = foveonic::profile::Profile::new(timing::mode());
         let rs = cc
             .wgpu_render_state
             .as_ref()
@@ -135,10 +140,11 @@ impl App {
         if smoke::screenshot_active() {
             cc.egui_ctx.set_theme(egui::Theme::Dark);
         }
-        let engine = Engine::from_device(
+        let engine = Engine::from_device_profiled(
             rs.device.clone(),
             rs.queue.clone(),
             rs.adapter.get_info().name,
+            &mut startup_profile,
         )?;
         let engine = if let Some(directory) = std::env::var_os("FOVEONIC_CALIBRATION_RESOURCES") {
             engine.with_calibration_resources(directory)?
@@ -152,7 +158,6 @@ impl App {
             preferences.preview_quality = preferences::PreviewMode::Smart;
         }
         viewport::set_gamut(rs, preferences.display_gamut);
-        let folder = preferences.startup_folder(path);
         let training_engine = engine.executor();
         let batch_engine = engine.executor();
         let worker = worker::Worker::new(engine, cc.egui_ctx.clone());
@@ -190,6 +195,7 @@ impl App {
             processing_open: false,
             opening: None,
             browser,
+            folder_loader: folder_loader::Loader::new(cc.egui_ctx.clone()),
             previews,
             capture: capture::Loader::new(cc.egui_ctx.clone(), worker.cache.clone()),
             sidecars: sidecars::Session::new(
@@ -224,6 +230,7 @@ impl App {
             render_state: rs.clone(),
             smoke: smoke::Smoke::from_env(),
             last_frame: None,
+            startup_ready: None,
         };
         app.import.set_noise_calibration(
             app.noise_calibration
@@ -244,31 +251,39 @@ impl App {
             app.preferences.processing_destination.as_deref(),
         );
         app.viewport.zoom_snap = app.preferences.zoom_snap;
-        if let Some((path, mode)) = folder {
-            app.open(path, mode);
+        if let Some((path, mode)) = app.preferences.startup_request(path) {
+            app.folder_loader.request(path, mode);
+        }
+        if let Some(began) = startup_began {
+            timing::emit(
+                "startup",
+                serde_json::json!({"phase":"app_constructed", "elapsed_ms": began.elapsed().as_secs_f64() * 1000., "profile": startup_profile}),
+            );
+            app.startup_ready = Some(std::time::Instant::now());
         }
         Ok(app)
     }
     fn open(&mut self, path: PathBuf, mode: FolderMode) {
-        match self.browser.open(&path) {
-            Ok(()) => {
-                // Commit the policy only after the folder can be opened, and
-                // before any of its photographs can load or queue edits.
+        self.folder_loader
+            .request(path, folder_loader::Mode::Fixed(mode));
+    }
+    fn receive_folder(&mut self) {
+        if self.exporting {
+            return;
+        }
+        let Some(reply) = self.folder_loader.receive() else {
+            return;
+        };
+        let path = reply.path.clone();
+        match self.browser.finish_open(reply) {
+            Ok((selected, mode, canonical)) => {
+                // The old source-write policy stays in force until discovery succeeds.
                 self.browser.import_mode = mode == FolderMode::Import;
                 self.sidecars.set_memory_only(self.browser.import_mode);
-                let folder = if path.is_dir() {
-                    path.as_path()
-                } else {
-                    path.parent()
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .unwrap_or(std::path::Path::new("."))
-                };
-                self.preferences.remember_folder(folder, mode);
-                let selected = if path.is_file() {
-                    Some(path)
-                } else {
-                    self.browser.files.first().cloned()
-                };
+                if let Some(folder) = canonical {
+                    self.preferences.last_folder = Some(folder);
+                    self.preferences.last_folder_mode = mode;
+                }
                 if let Some(path) = selected {
                     self.select(path, false);
                 } else {
@@ -280,9 +295,7 @@ impl App {
                     self.preferences.processing_destination.as_deref(),
                 );
             }
-            Err(e) => {
-                self.fail(format!("Cannot open {}: {e}", path.display()));
-            }
+            Err(error) => self.fail(format!("Cannot open {}: {error}", path.display())),
         }
     }
     fn clear_selection(&mut self) {
@@ -339,7 +352,13 @@ impl App {
         }
         self.detail = None;
         self.smart.reset();
-        self.submit_request(export, None);
+        let request = if export.is_none() {
+            self.smart_edit_request()
+        } else {
+            None
+        };
+        let (quality, region) = request.unwrap_or((self.preferences.preview_quality, None));
+        self.submit_with_quality(export, region, quality);
     }
     fn submit_request(&mut self, export: Option<export::Export>, region: Option<[u32; 4]>) {
         self.submit_with_quality(export, region, self.preferences.preview_quality);
@@ -787,6 +806,8 @@ impl App {
         }
         let message = if self.sidecars.warning().is_some() {
             "Edits need attention"
+        } else if self.folder_loader.loading() {
+            "Opening folder…"
         } else {
             processing.as_deref().unwrap_or(&self.status)
         };
@@ -1268,6 +1289,12 @@ impl eframe::App for App {
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(ready) = self.startup_ready.take() {
+            timing::emit(
+                "startup",
+                serde_json::json!({"phase":"first_update", "since_constructed_ms": ready.elapsed().as_secs_f64() * 1000.}),
+            );
+        }
         self.activity.observe(
             activity::Origin::Display,
             self.display
@@ -1288,6 +1315,7 @@ impl eframe::App for App {
                 self.busy,
             );
         }
+        self.receive_folder();
         self.capture.receive();
         self.import.update(&mut self.browser);
         let cache_status = self.worker.cache.status();

@@ -49,49 +49,66 @@ impl Browser {
     }
     /// Export highlights in browser order, with the viewed photo as an empty-selection fallback.
     pub fn processing_selection(&self, active: Option<&Path>) -> Vec<PathBuf> {
-        let paths: Vec<_> = self
-            .files
+        // A full-folder selection is already in the required order in `files`.
+        if !self.files.is_empty() && self.highlighted.len() == self.files.len() {
+            let paths: Vec<_> = self
+                .files
+                .iter()
+                .filter(|path| self.highlighted.contains(*path) && !self.excluded.contains(*path))
+                .cloned()
+                .collect();
+            if !paths.is_empty() {
+                return paths;
+            }
+        }
+        let mut paths: Vec<_> = self
+            .highlighted
             .iter()
-            .filter(|path| self.highlighted.contains(*path) && !self.excluded.contains(*path))
-            .cloned()
+            .filter_map(|path| {
+                self.file_order
+                    .get(path)
+                    .filter(|_| !self.excluded.contains(path))
+                    .map(|index| (*index, path))
+            })
             .collect();
+        paths.sort_unstable_by_key(|(index, _)| *index);
         if paths.is_empty() {
             active
                 .filter(|path| {
-                    self.files.iter().any(|p| p == path) && !self.excluded.contains(*path)
+                    self.file_order.contains_key(*path) && !self.excluded.contains(*path)
                 })
                 .map(Path::to_owned)
                 .into_iter()
                 .collect()
         } else {
-            paths
+            paths.into_iter().map(|(_, path)| path.clone()).collect()
         }
     }
 
     pub fn review_counts(&self) -> (usize, usize) {
-        self.files.iter().fold((0, 0), |(picked, hidden), path| {
-            let mark = self.mark(path);
-            (
-                picked + usize::from(mark == Mark::Pick),
-                hidden + usize::from(mark.hidden()),
-            )
-        })
+        self.review_counts
     }
 
     pub fn refresh_filter(&mut self) {
+        let mut counts = (0, 0);
         let excluded = self
             .files
             .iter()
             .filter(|path| {
-                (self.import_mode && self.hide_reviewed && self.mark(path).hidden())
+                let mark = self.mark(path);
+                counts.0 += usize::from(mark == Mark::Pick);
+                counts.1 += usize::from(mark.hidden());
+                (self.import_mode && self.hide_reviewed && mark.hidden())
                     || !self
                         .filter
                         .matches(path, self.root.as_deref(), self.records.get(*path))
             })
             .cloned()
             .collect();
+        self.review_counts = counts;
         if self.excluded != excluded {
             self.excluded = excluded;
+            self.invalidate_organizer();
             self.invalidate_prefetch();
         }
         self.highlighted
@@ -227,6 +244,7 @@ impl Browser {
                 if check { Mark::Pick } else { Mark::Unmarked },
             );
         }
+        self.refresh_filter();
     }
 
     pub(super) fn hide_highlighted(&mut self, files: &[PathBuf]) {

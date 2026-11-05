@@ -121,14 +121,35 @@ impl Engine {
         queue: wgpu::Queue,
         adapter_name: String,
     ) -> Result<Self> {
+        Self::from_device_profiled(
+            device,
+            queue,
+            adapter_name,
+            &mut crate::profile::Profile::default(),
+        )
+    }
+
+    /// Record startup host work without adding GPU synchronization.
+    pub fn from_device_profiled(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_name: String,
+        profile: &mut crate::profile::Profile,
+    ) -> Result<Self> {
+        let began = profile.mode.enabled().then(std::time::Instant::now);
+        let gpu = Gpu::from_device_profiled(device, queue, adapter_name, profile)?;
+        let calibration_resources = profile.measure("bundled calibration maps", || {
+            recipes::quattro::resources::ResourceDirectory::bundled()
+        })?;
+        if let Some(began) = began {
+            profile.record("engine initialization", began);
+        }
         Ok(Self {
-            gpu: Gpu::from_device(device, queue, adapter_name)?,
+            gpu,
             noise_calibration: None,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
-            calibration_resources: Some(Arc::new(
-                recipes::quattro::resources::ResourceDirectory::bundled()?,
-            )),
+            calibration_resources: Some(Arc::new(calibration_resources)),
         })
     }
     /// Override bundled calibration maps with an immutable snapshot of supplied maps.

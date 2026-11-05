@@ -302,9 +302,11 @@ pub(super) fn build(
         let amount = profile.measure("prepare sharpening amount", || {
             settings.effective_sharpen_amount(&source.metadata)
         })?;
-        let signal = signal.ok_or("missing sharpening signal")?;
-        linear = graph.add(Operation::Sharpen { amount, space }, &[linear, signal])?;
-        finish!();
+        if amount != 0. || names.contains(&"sharpen.rgb") {
+            let signal = signal.ok_or("missing sharpening signal")?;
+            linear = graph.add(Operation::Sharpen { amount, space }, &[linear, signal])?;
+            finish!();
+        }
     }
     Ok(Prepared::Linear(
         BuiltRecipe {

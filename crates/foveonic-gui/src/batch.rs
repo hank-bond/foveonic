@@ -77,6 +77,21 @@ pub struct Progress {
     pub errors: Vec<String>,
     pub operations: Vec<String>,
 }
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct Summary {
+    pub running: bool,
+    pub total: usize,
+    pub completed: usize,
+}
+impl Progress {
+    fn summary(&self) -> Summary {
+        Summary {
+            running: self.running,
+            total: self.total,
+            completed: self.completed,
+        }
+    }
+}
 #[derive(Default)]
 struct Pending {
     scan: Option<Scan>,
@@ -199,6 +214,9 @@ impl Worker {
     }
     pub fn progress(&self) -> Progress {
         self.progress.lock().unwrap().clone()
+    }
+    pub fn summary(&self) -> Summary {
+        self.progress.lock().unwrap().summary()
     }
 }
 impl Drop for Worker {

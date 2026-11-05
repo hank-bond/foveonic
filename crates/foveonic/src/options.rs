@@ -63,7 +63,7 @@ pub(crate) fn parse_settings_for_camera(
     Ok((settings, paths, profiling))
 }
 
-fn parse_settings_with_noise_defaults(
+pub(crate) fn parse_settings_with_noise_defaults(
     args: impl Iterator<Item = OsString>,
     noise_defaults: foveonic::noise::Controls,
     mut settings: Settings,
@@ -367,6 +367,20 @@ fn parse_method(value: &str) -> Result<foveonic::render::PhotographicMethod> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_noop_preserves_seeded_settings() {
+        let mut initial = foveonic::render::Settings::new("Sunlight", "Standard");
+        initial.reconstruction = Some(Default::default());
+        let (actual, _, _) = super::parse_settings_with_noise_defaults(
+            ["--exposure", "0"]
+                .into_iter()
+                .map(std::ffi::OsString::from),
+            Default::default(),
+            initial.clone(),
+        )
+        .unwrap();
+        assert_eq!(actual, initial);
+    }
     #[test]
     fn dehaze_cli_preserves_auto_and_manual_shadow_tones() {
         let parse = |args: &[&str]| {

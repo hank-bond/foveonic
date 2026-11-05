@@ -90,6 +90,7 @@ impl Review {
         let recorded = browser.recorded_marks.clone();
         self.rescan(browser, destination);
         browser.recorded_marks = recorded;
+        browser.refresh_filter();
     }
     /// Prepare only the highlighted Browse photos, away from the UI thread.
     /// Recipes are ready before Process is enabled so later edits cannot alter a submitted job.
@@ -178,7 +179,7 @@ impl Review {
         }
     }
     pub fn ready(&self, browser: &Browser) -> bool {
-        !self.worker.progress().running
+        !self.worker.summary().running
             && !self.scanning
             && self.scan_destination.is_some()
             && if browser.import_mode {
@@ -227,8 +228,7 @@ impl Review {
         context: &egui::Context,
         log: &mut crate::activity::Log,
     ) -> Option<String> {
-        let progress = self.worker.progress();
-        self.receive_events(&progress);
+        let progress = self.worker.summary();
         for event in self.events.drain(..) {
             log.record(event);
         }

@@ -2,6 +2,7 @@
 
 import argparse
 import ctypes
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -33,6 +34,66 @@ def recording_environment(home, mode):
     return env
 
 
+def source_tree_hash(root):
+    """Hash nonignored Rust, shader, Cargo and bundled asset inputs before launch."""
+    names = subprocess.check_output(
+        ['git', '-C', str(root), 'ls-files', '--cached', '--others', '--exclude-standard', '-z']
+    ).split(b'\0')
+    paths = []
+    for raw in names:
+        if not raw:
+            continue
+        name = os.fsdecode(raw)
+        path = Path(name)
+        if (path.suffix in ('.rs', '.wgsl') or path.name in ('Cargo.toml', 'Cargo.lock')
+                or name.startswith(('.cargo/', 'crates/foveonic/assets/',
+                                    'crates/foveonic-gui/assets/'))):
+            paths.append(name)
+    digest = hashlib.sha256()
+    for name in sorted(set(paths)):
+        path = root / name
+        # Preserve removal and symlink identity without following external targets.
+        if path.is_symlink():
+            data = os.fsencode(os.readlink(path))
+            kind = b'link'
+        elif path.is_file():
+            data = path.read_bytes()
+            kind = b'file'
+        else:
+            data = b''
+            kind = b'missing'
+        for part in (os.fsencode(name), kind, data):
+            digest.update(len(part).to_bytes(8, 'big'))
+            digest.update(part)
+    return digest.hexdigest()
+
+
+@contextmanager
+def workload_monitor(output, cancelled=lambda: False):
+    tool = Path(__file__).with_name('watch_workloads.py').resolve()
+    process = subprocess.Popen([sys.executable, str(tool), str(output)], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 5.
+        while not output.exists() or output.stat().st_size == 0:
+            if cancelled():
+                raise KeyboardInterrupt
+            if process.poll() is not None:
+                raise RuntimeError('workload monitor exited before its first sample')
+            if time.monotonic() >= deadline:
+                raise RuntimeError('workload monitor did not produce its first sample')
+            time.sleep(.01)
+        if cancelled():
+            raise KeyboardInterrupt
+        yield tool
+    finally:
+        failed = process.poll() is not None
+        if not failed:
+            process.terminate()
+        process.wait()
+        if failed and sys.exc_info()[0] is None:
+            raise RuntimeError('workload monitor exited during recording')
+
+
 def record(args):
     directory = args.directory.resolve()
     directory.mkdir(parents=True, exist_ok=False)
@@ -44,40 +105,56 @@ def record(args):
     # and do not label the later app read as cold media access.
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     source_hash = hashlib.sha256(fixture.read_bytes()).hexdigest()
-    with (directory / 'stderr.jsonl').open('x') as events:
-        process = subprocess.Popen([str(binary), str(fixture)],
-                                   env=recording_environment(home, args.mode),
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                   text=True, bufsize=1)
-        manifest = {'pid': process.pid, 'binary': str(binary), 'fixture': str(fixture),
-                    'binary_sha256': binary_hash, 'source_sha256': source_hash,
-                    'home': str(home), 'started_monotonic_ns': time.monotonic_ns(),
-                    'mode': args.mode, 'smoke_enabled': False, 'repaint_override': False}
-        (directory / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        print(json.dumps(manifest), flush=True)
-        stopped = False
+    source_tree = source_tree_hash(Path(__file__).resolve().parents[2])
+    monitor_output = directory / 'workloads.jsonl'
+    stopped = False
+    process = None
 
-        def stop(_signum, _frame):
-            nonlocal stopped
-            stopped = True
+    def stop(_signum, _frame):
+        nonlocal stopped
+        stopped = True
+        if process is not None and process.poll() is None:
             process.terminate()  # only the child this recorder owns
 
-        previous = signal.signal(signal.SIGTERM, stop)
-        try:
-            for line in process.stderr:
-                append_event(events, line=line.rstrip('\n'))
-            process.wait()
-        except KeyboardInterrupt:
-            stop(None, None)
-            process.wait()
-        finally:
-            signal.signal(signal.SIGTERM, previous)
-            if process.poll() is None:
-                stop(None, None)
-                process.wait()
-            append_event(events, kind='recorder_exit', returncode=process.returncode)
-        if not stopped and process.returncode:
-            raise SystemExit(process.returncode)
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        with workload_monitor(monitor_output, lambda: stopped) as monitor_tool:
+            if stopped:
+                return
+            with (directory / 'stderr.jsonl').open('x') as events:
+                process = subprocess.Popen([str(binary), str(fixture)],
+                                           env=recording_environment(home, args.mode),
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                           text=True, bufsize=1)
+                try:
+                    if stopped:
+                        stop(None, None)
+                    manifest = {'pid': process.pid, 'binary': str(binary), 'fixture': str(fixture),
+                                'binary_sha256': binary_hash, 'source_sha256': source_hash,
+                                'source_tree_sha256': source_tree,
+                                'source_tree_scope': 'nonignored Rust, WGSL, Cargo and bundled asset inputs',
+                                'workload_monitor': {'tool': str(monitor_tool), 'output': str(monitor_output),
+                                                     'interval_seconds': .5},
+                                'home': str(home), 'started_monotonic_ns': time.monotonic_ns(),
+                                'mode': args.mode, 'smoke_enabled': False, 'repaint_override': False}
+                    (directory / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+                    print(json.dumps(manifest), flush=True)
+                    for line in process.stderr:
+                        append_event(events, line=line.rstrip('\n'))
+                    process.wait()
+                except KeyboardInterrupt:
+                    stop(None, None)
+                finally:
+                    if process.poll() is None:
+                        stop(None, None)
+                    process.wait()
+                    append_event(events, kind='recorder_exit', returncode=process.returncode)
+                if not stopped and process.returncode:
+                    raise SystemExit(process.returncode)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def drag(args):

@@ -219,6 +219,16 @@ pub(crate) fn estimate(
     p: Estimate,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
+    estimate_impl(gpu, input, p, profile, true)
+}
+
+fn estimate_impl(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    p: Estimate,
+    profile: &mut Profile,
+    partitioned: bool,
+) -> Result<ReadGuard> {
     if input.size() != u64::from(p.shape[0]) * u64::from(p.shape[1]) * 12 {
         return Err("Dehaze analysis geometry mismatch".into());
     }
@@ -232,7 +242,7 @@ pub(crate) fn estimate(
     )?;
     let mut output = gpu.storage("Dehaze estimate", 32)?;
     let groups = [p.shape[2].div_ceil(8), p.shape[3].div_ceil(8)];
-    let mut trace = gpu.trace(profile.mode.gpu(), 4);
+    let mut trace = gpu.trace(profile.mode.gpu(), 5);
     gpu.dispatch(
         Kernel::DehazePrepare,
         &mut [
@@ -266,17 +276,55 @@ pub(crate) fn estimate(
             &mut trace,
         );
     }
-    gpu.dispatch(
-        Kernel::DehazeEstimate,
-        &mut [
-            (1, Read(&uniform)),
-            (2, Read(&pixels)),
-            (4, Read(&dark)),
-            (5, Write(output.write())),
-        ],
-        [1, 1],
-        &mut trace,
-    );
+    #[cfg(test)]
+    if !partitioned {
+        gpu.dispatch(
+            Kernel::DehazeEstimate,
+            &mut [
+                (1, Read(&uniform)),
+                (2, Read(&pixels)),
+                (4, Read(&dark)),
+                (5, Write(output.write())),
+            ],
+            [1, 1],
+            &mut trace,
+        );
+        gpu.finish_trace(&trace, profile)?;
+        return Ok(output);
+    }
+    #[cfg(not(test))]
+    let _ = partitioned;
+    {
+        let mut heaps = gpu.storage("haze candidate heaps", 16 * 1000 * 16)?;
+        let mut histograms = gpu.storage("haze partial histograms", 16 * 256 * 16)?;
+        let mut counts = gpu.storage("haze candidate counts", 16 * 4)?;
+        gpu.dispatch(
+            Kernel::DehazePartition,
+            &mut [
+                (1, Read(&uniform)),
+                (2, Read(&pixels)),
+                (4, Read(&dark)),
+                (6, Write(heaps.write())),
+                (7, Write(histograms.write())),
+                (8, Write(counts.write())),
+            ],
+            [16, 1],
+            &mut trace,
+        );
+        gpu.dispatch(
+            Kernel::DehazeMerge,
+            &mut [
+                (1, Read(&uniform)),
+                (2, Read(&pixels)),
+                (5, Write(output.write())),
+                (6, Read(&heaps)),
+                (7, Read(&histograms)),
+                (8, Read(&counts)),
+            ],
+            [1, 1],
+            &mut trace,
+        );
+    }
     gpu.finish_trace(&trace, profile)?;
     Ok(output)
 }

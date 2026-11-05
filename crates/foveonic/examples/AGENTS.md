@@ -25,7 +25,7 @@ Setup reports complete file-read, in-memory decode and total source-open wall ti
 - **[measure_color_field_controls.rs](./measure_color_field_controls.rs)** Measures highlight selectivity in fresh/cached float outputs and RGB16, with matched preview regions.
 - **[profile_noise_resources.rs](./profile_noise_resources.rs)** Compares completed Merrill fresh and staged processing, with optional settled-memory sampling boundaries.
 - **[profile_pipeline.rs](./profile_pipeline.rs)** Measures completed fresh processing with normal photographic controls, separate GPU diagnostics and optional exact goldens.
-- **[profile_smart_preview.rs](./profile_smart_preview.rs)** Compares completed detail-first and direct Full latency from matched camera-default Fast sessions.
+- **[profile_smart_preview.rs](./profile_smart_preview.rs)** Compares completed Smart transitions and regional-first feedback in matched sessions.
 - **[train_noise_calibration.rs](./train_noise_calibration.rs)** Fits a user cap calibration from a JSON array of X3F paths using the app's Rust/GPU trainer.
 
 <!-- INDEX:END -->

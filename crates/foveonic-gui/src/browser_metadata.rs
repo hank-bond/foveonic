@@ -232,7 +232,9 @@ impl super::Browser {
                     path,
                     mut entry,
                     error,
-                } if generation == self.metadata_generation && self.files.contains(&path) => {
+                } if generation == self.metadata_generation
+                    && self.file_order.contains_key(&path) =>
+                {
                     if let Some(old) = self.records.get(&path) {
                         entry.extent = old.extent;
                     }
@@ -272,11 +274,13 @@ impl super::Browser {
     pub(super) fn apply_query(&mut self) {
         if self.query_dirty || self.sort != self.applied_sort {
             self.list_columns = None;
+            self.invalidate_organizer();
             self.query_dirty = false;
             // Metadata arrivals cannot change a filename sort. Avoid rebuilding
             // the whole decode neighborhood as each thumbnail acquires metadata.
             if self.sort != self.applied_sort || self.sort.field != super::query::Field::Name {
                 super::query::sort(&mut self.files, &self.records, self.sort);
+                self.reindex_files();
                 self.invalidate_prefetch();
             }
             self.applied_sort = self.sort;

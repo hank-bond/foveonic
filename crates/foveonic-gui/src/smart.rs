@@ -55,7 +55,8 @@ impl App {
     pub(super) fn smart_detail(&self, pixels_per_point: f32) -> Option<&worker::Frame> {
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.frame.as_ref().is_some_and(|f| {
-                f.artifact.settings.preview_quality == foveonic::render::PreviewQuality::Full
+                f.artifact.settings.preview_quality == PreviewQuality::Full
+                    && same_edits(&f.requested, &self.view_settings())
             })
             || self.output != "final"
             || self.comparison.requested()
@@ -73,6 +74,47 @@ impl App {
         })
     }
 
+    /// Keep the previous image visible while a zoomed edit renders at Full quality.
+    pub(super) fn smart_edit_request(
+        &mut self,
+    ) -> Option<(preferences::PreviewMode, Option<[u32; 4]>)> {
+        if self.preferences.preview_quality != preferences::PreviewMode::Smart
+            || self.output != "final"
+            || self.comparison.requested()
+            || !self
+                .viewport
+                .zoom_percent(self.context.pixels_per_point())
+                .is_some_and(|z| z > 100.)
+        {
+            return None;
+        }
+        let requested = self.view_settings();
+        let frame = self.frame.as_ref().filter(|frame| {
+            self.selected.as_ref() == Some(&frame.path)
+                && frame.output == self.output
+                && frame.rendition == self.before.active
+                && frame.crop_preview == self.crop_preview_active()
+                && frame.artifact.settings.output_size.is_none()
+                && requested.output_size.is_none()
+                && frame.artifact.settings.crop == requested.crop
+                && requested.fast_preview_available(&frame.artifact.metadata)
+        })?;
+        let visible = self.viewport.visible_pixels()?;
+        if !requested.regional_preview_available(&frame.artifact.metadata) {
+            return Some((preferences::PreviewMode::Full, None));
+        }
+        let window = frame.display_window(false);
+        let rect = [
+            visible.top_left[0] + window[0],
+            visible.top_left[1] + window[1],
+            visible.bottom_right[0] + 1 + window[0],
+            visible.bottom_right[1] + 1 + window[1],
+        ];
+        self.smart
+            .next(rect, frame.uncropped_extent())
+            .map(|region| (preferences::PreviewMode::Smart, Some(region)))
+    }
+
     pub(super) fn update_smart(&mut self, ctx: &egui::Context) {
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.exporting
@@ -84,6 +126,22 @@ impl App {
                     .zoom_percent(ctx.pixels_per_point())
                     .is_some_and(|zoom| zoom > 100.))
         {
+            return;
+        }
+        if !self.busy
+            && self.detail.as_ref().is_some_and(|detail| {
+                let full_completed = self.frame.as_ref().is_some_and(|frame| {
+                    frame.revision > detail.revision
+                        && frame.artifact.settings.preview_quality == PreviewQuality::Full
+                        && same_edits(&frame.requested, &self.view_settings())
+                });
+                !full_completed
+                    && self.selected.as_ref() == Some(&detail.path)
+                    && detail.rendition == self.before.active
+                    && same_edits(&detail.requested, &self.view_settings())
+            })
+        {
+            self.submit_with_quality(None, None, preferences::PreviewMode::Full);
             return;
         }
         let Some(frame) = self.frame.as_ref().filter(|f| {

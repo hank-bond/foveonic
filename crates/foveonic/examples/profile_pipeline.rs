@@ -23,6 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     let mut warm = 2usize;
     let mut goldens = None;
+    let mut capture = None;
     let mut preview_quality = foveonic::render::PreviewQuality::Full;
     let mut controls = Vec::<OsString>::new();
     while let Some(arg) = args.next() {
@@ -39,6 +40,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .into_string()
                 .map_err(|_| "warm count must be UTF-8")?
                 .parse()?;
+        } else if arg == "--capture-float" {
+            let name = args
+                .next()
+                .ok_or("missing capture output name")?
+                .into_string()
+                .map_err(|_| "capture name must be UTF-8")?;
+            let path = PathBuf::from(args.next().ok_or("missing capture file")?);
+            capture = Some((name, path));
         } else if arg == "--goldens" {
             goldens = Some(PathBuf::from(
                 args.next().ok_or("missing golden directory")?,
@@ -46,6 +55,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         } else {
             controls.push(arg);
         }
+    }
+    if capture.as_ref().is_some_and(|(_, path)| path.exists()) {
+        return Err("capture destination must be new".into());
     }
     let source = Source::open(&input)?;
     let (mut settings, paths, mode) =
@@ -144,6 +156,44 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 )
             );
         }
+    }
+    if let Some((name, path)) = capture {
+        use foveonic::inspection::Content;
+        use std::io::Write;
+        let mut artifacts =
+            engine.render_artifacts(&source, &settings, &[&name], &mut Profile::default())?;
+        let Content::Image(image) = artifacts.remove(0).content else {
+            return Err("capture output is not an image".into());
+        };
+        let description = image.description();
+        if !matches!(
+            description.layout,
+            foveonic::image::Layout::Rgb32Float | foveonic::image::Layout::Scalar32Float
+        ) {
+            return Err("capture output must use float RGB or scalar storage".into());
+        }
+        let view = image.view();
+        let pixels = engine.readback_image(&image)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&pixels)?;
+        println!(
+            "{}",
+            profile::report(
+                "capture",
+                Mode::Off,
+                serde_json::json!({
+                    "source": input, "settings": settings, "output": name, "file": path, "extent": description.extent,
+                    "dtype": "f32", "endianness": if cfg!(target_endian = "little") {"little"} else {"big"},
+                    "layout": format!("{:?}", description.layout), "space": format!("{:?}", description.space),
+                    "linear_white": description.linear_white, "view_crop": view.crop,
+                    "rotation": view.rotation, "view_extent": view.extent,
+                    "outside_timing": true
+                })
+            )
+        );
     }
     Ok(())
 }

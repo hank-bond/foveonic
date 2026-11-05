@@ -864,3 +864,56 @@ fn shadow_protector_stays_continuous_when_an_input_channel_crosses_zero() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn partitioned_estimate_matches_serial_for_ties_empty_and_saturation() {
+    let gpu = Gpu::new().unwrap();
+    // Tiny overviews leave some partitions empty. The uneven overview checks
+    // partition boundaries; 512 squared reaches the largest analysis and K.
+    for extent in [[1, 1], [7, 3], [257, 193], [512, 512]] {
+        for mode in 0..5 {
+            let values: Vec<f32> = (0..extent[0] * extent[1])
+                .flat_map(|i| match mode {
+                    0 => [0.; 3],
+                    1 => [0.08, 0.1, 0.12],
+                    2 => [1.5, -0.2, 0.9],
+                    3 => [0.7, 0.8, 0.9],
+                    _ => {
+                        let v = ((i * 73 + i / 17) % 256) as f32 / 1024.;
+                        [v, v * 0.8, v * 0.6]
+                    }
+                })
+                .collect();
+            let input = gpu.upload("partition trial", &values).unwrap();
+            for auto in [false, true] {
+                for mono in [false, true] {
+                    let basis = if mono {
+                        Basis::monochrome()
+                    } else {
+                        Basis::new(
+                            ColorSpace::Srgb,
+                            [2., -1., 0., -1., 2., 0., 0., -1., 2.],
+                            [0.299, 0.587, 0.114],
+                        )
+                        .unwrap()
+                    };
+                    let mut p =
+                        Estimate::new(extent, basis, 1., mono, [0, 0, extent[0], extent[1]])
+                            .with_color_estimation(auto);
+                    // Patch estimation permits bright candidates that Auto excludes.
+                    if mode == 3 {
+                        p.selection[1] = 65535;
+                    }
+                    let a = estimate_impl(&gpu, &input, p, &mut Profile::default(), false).unwrap();
+                    let b = estimate_impl(&gpu, &input, p, &mut Profile::default(), true).unwrap();
+                    assert_eq!(
+                        gpu.readback(&a).unwrap(),
+                        gpu.readback(&b).unwrap(),
+                        "extent {extent:?}, mode {mode}, auto {auto}, mono {mono}"
+                    );
+                }
+            }
+        }
+    }
+}

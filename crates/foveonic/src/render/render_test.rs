@@ -943,6 +943,49 @@ fn automatic_color_dq_matches_native_gain_manual_override_and_preserves_source()
 
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn merrill_auto_zero_sharpen_skips_signal_for_final_but_keeps_inspection() {
+    let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(dir.join("blue-parking-sign.x3f")).unwrap();
+    let engine = Engine::new().unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    assert_eq!(
+        settings.effective_sharpen_amount(&source.metadata).unwrap(),
+        0.
+    );
+    let mut profile = Profile::new(crate::profile::Mode::Gpu);
+    let auto = engine.render(&source, &settings, &mut profile).unwrap();
+    assert!(!profile
+        .gpu
+        .iter()
+        .any(|t| t.stage == "native mono high-pass"));
+    settings.sharpen_amount = Some(0.);
+    let off = engine
+        .render(&source, &settings, &mut Profile::default())
+        .unwrap();
+    assert_eq!(
+        engine.readback_image(&auto).unwrap(),
+        engine.readback_image(&off).unwrap()
+    );
+
+    settings.sharpen_amount = None;
+    let mut profile = Profile::new(crate::profile::Mode::Gpu);
+    let artifacts = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["detail.signal", "sharpen.rgb"],
+            &mut profile,
+        )
+        .unwrap();
+    assert_eq!(artifacts.len(), 2);
+    assert!(profile
+        .gpu
+        .iter()
+        .any(|t| t.stage == "native mono high-pass"));
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable() {
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = Source::open(dir.join("blue-parking-sign.x3f")).unwrap();

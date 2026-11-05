@@ -28,8 +28,8 @@ impl Browser {
         } else {
             format!("{visible} / {} images", self.files.len())
         };
-        let (picked, hidden) = self.review_counts();
         let combined = if self.import_mode {
+            let (picked, hidden) = self.review_counts();
             format!("{count} | {picked} picked, {hidden} hidden")
         } else {
             count.clone()

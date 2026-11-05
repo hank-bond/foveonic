@@ -82,6 +82,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
     let mut review = Review::new(engine.executor(), cache.clone(), context.clone());
     let mut browser = Browser::new(context.clone());
     browser.files = paths.clone();
+    browser.reindex_files();
     let mut input = egui::RawInput {
         events: vec![egui::Event::Key {
             key: egui::Key::A,
@@ -218,6 +219,7 @@ fn stale_scan_replays_completions_without_erasing_later_picks_or_hidden_choices(
     browser.import_mode = true;
     let path = PathBuf::from("card/image.x3f");
     browser.files = vec![path.clone()];
+    browser.reindex_files();
     browser.marks.insert(path.clone(), Mark::Pick);
     let progress = batch::Progress {
         destination: Some("photos".into()),

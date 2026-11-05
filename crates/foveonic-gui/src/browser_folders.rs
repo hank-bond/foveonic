@@ -9,7 +9,7 @@ use std::{
 
 /// Keep files in their own folder before visiting its sorted subdirectories.
 /// Hidden metadata entries and symbolic links do not belong to the photo tree.
-pub(super) fn discover(root: &Path) -> io::Result<Vec<PathBuf>> {
+pub(crate) fn discover(root: &Path) -> io::Result<Vec<PathBuf>> {
     let mut pending = vec![root.to_owned()];
     let mut files = Vec::new();
     while let Some(directory) = pending.pop() {

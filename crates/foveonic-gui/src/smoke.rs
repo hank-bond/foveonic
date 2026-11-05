@@ -45,7 +45,16 @@ const SMART_TARGETS: &[&str] = &[
     "smart-detail",
     "smart-full",
     "smart-pan",
+    "smart-edit-detail",
     "smart-edit",
+    "smart-zoom-pending",
+    "smart-crop-zoom",
+    "smart-crop-enter",
+    "smart-crop-active-zoom",
+    "smart-crop-leave",
+    "smart-transition-full",
+    "smart-adaptive-zoom",
+    "smart-adaptive-edit",
     "smart-fit",
     "cache-settings",
     "cache-list",
@@ -441,6 +450,9 @@ impl App {
     }
 
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
+        if self.smoke.is_none() {
+            return;
+        }
         let mapping = self.displayed_mapping();
         let quattro_smart = self.frame.as_ref().is_some_and(|frame| {
             frame.artifact.metadata.processing_family().ok()
@@ -451,6 +463,12 @@ impl App {
                 .artifact
                 .settings
                 .regional_preview_available(&frame.artifact.metadata)
+        });
+        let shown_detail = self.smart_detail(ctx.pixels_per_point()).map(|detail| {
+            (
+                detail.crop_preview,
+                crate::smart::same_edits(&detail.requested, &self.settings),
+            )
         });
         let Some(smoke) = &mut self.smoke else {
             return;
@@ -467,6 +485,44 @@ impl App {
         if smoke.index >= smoke.targets.len() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
+        }
+        if smoke.targets == SMART_TARGETS
+            && matches!(
+                smoke.targets[smoke.index],
+                "smart-zoom-pending" | "smart-crop-enter" | "smart-crop-leave"
+            )
+        {
+            if let Some((crop_preview, current)) = shown_detail {
+                assert!(current, "obsolete regional detail was presented");
+                assert_eq!(
+                    crop_preview,
+                    crate::crop_tool::active(ctx),
+                    "detail used the wrong crop view"
+                );
+            }
+            if self
+                .viewport
+                .zoom_percent(ctx.pixels_per_point())
+                .is_some_and(|z| z <= 100.)
+            {
+                assert!(
+                    shown_detail.is_none(),
+                    "regional detail remained visible at Fit"
+                );
+            }
+        }
+        if smoke.targets == SMART_TARGETS && smoke.targets[smoke.index] == "smart-adaptive-edit" {
+            if let Some(frame) = self.frame.as_ref().filter(|frame| {
+                crate::smart::same_edits(&frame.requested, &self.settings)
+                    && self.settings.adaptive_tone_active()
+            }) {
+                assert_eq!(
+                    frame.artifact.settings.preview_quality,
+                    foveonic::render::PreviewQuality::Full,
+                    "zoomed Adaptive edits must not replace the previous image with Fast"
+                );
+                assert!(frame.artifact.settings.preview_region.is_none());
+            }
         }
         let screenshot = ctx.input(|i| {
             i.events.iter().find_map(|e| {
@@ -742,7 +798,8 @@ impl App {
             }
             if smoke.targets == SMART_TARGETS && !smoke.preview_pending() {
                 let target = smoke.targets[smoke.index];
-                let regional = target == "smart-detail" && regional_smart;
+                let regional =
+                    matches!(target, "smart-detail" | "smart-edit-detail") && regional_smart;
                 let frame = if regional {
                     self.detail.as_ref().unwrap()
                 } else {
@@ -755,6 +812,18 @@ impl App {
                     assert!(frame.artifact.settings.reconstruction.is_some());
                 }
                 if regional {
+                    if target == "smart-edit-detail" {
+                        let previous = self.frame.as_ref().unwrap();
+                        assert_eq!(
+                            previous.artifact.settings.preview_quality,
+                            foveonic::render::PreviewQuality::Full
+                        );
+                        assert!(!crate::smart::same_edits(
+                            &previous.requested,
+                            &frame.requested
+                        ));
+                        assert_eq!(frame.requested.exposure, 0.5);
+                    }
                     let rect = region.unwrap();
                     assert!(crate::smart::contains(
                         rect,
@@ -780,7 +849,14 @@ impl App {
                             | "smart-detail"
                             | "smart-full"
                             | "smart-pan"
+                            | "smart-edit-detail"
                             | "smart-edit"
+                            | "smart-zoom-pending"
+                            | "smart-crop-zoom"
+                            | "smart-crop-active-zoom"
+                            | "smart-adaptive-zoom"
+                            | "smart-transition-full"
+                            | "smart-adaptive-edit"
                             | "smart-fit"
                             | "cache-settings"
                             | "cache-list"
@@ -799,6 +875,24 @@ impl App {
                             smoke.smart_full_revision,
                             Some(frame.revision),
                             "panning submitted more render work"
+                        );
+                    }
+                }
+                if matches!(
+                    target,
+                    "smart-zoom-pending"
+                        | "smart-crop-enter"
+                        | "smart-crop-leave"
+                        | "smart-transition-full"
+                ) {
+                    assert_eq!(frame.revision, self.revision);
+                    assert!(crate::smart::same_edits(&frame.requested, &self.settings));
+                    assert_eq!(frame.crop_preview, target == "smart-crop-enter");
+                    assert_eq!(self.scope_key.map(|key| key.revision), Some(frame.revision));
+                    if !frame.crop_preview {
+                        assert_eq!(
+                            self.browser.rendered_revision(&frame.path),
+                            Some(frame.revision)
                         );
                     }
                 }
@@ -1504,8 +1598,55 @@ impl App {
                 "smart-detail" => self.viewport.zoom_by(2.),
                 "smart-full" => {}
                 "smart-pan" => self.viewport.pan_to(egui::vec2(0.8, 0.7)),
-                "smart-edit" => {
+                "smart-edit-detail" => {
+                    self.settings.exposure = 0.25;
+                    self.submit(None);
                     self.settings.exposure = 0.5;
+                    self.submit(None);
+                }
+                "smart-edit" => {}
+                "smart-zoom-pending" => {
+                    self.settings.exposure = 0.6;
+                    self.submit(None);
+                    assert!(self.busy);
+                    assert!(
+                        self.smart.next([0, 0, 1, 1], [1, 1]).is_none(),
+                        "edit did not queue regional work"
+                    );
+                    self.viewport.reset();
+                }
+                "smart-crop-zoom" | "smart-crop-active-zoom" | "smart-adaptive-zoom" => {
+                    self.viewport.zoom_by(6.);
+                }
+                "smart-crop-enter" => {
+                    self.settings.exposure = 0.7;
+                    self.submit(None);
+                    assert!(self.busy);
+                    assert!(
+                        self.smart.next([0, 0, 1, 1], [1, 1]).is_none(),
+                        "edit did not queue regional work"
+                    );
+                    crate::crop_tool::toggle(ctx);
+                }
+                "smart-crop-leave" => {
+                    self.settings.exposure = 0.8;
+                    self.submit(None);
+                    assert!(self.busy);
+                    assert!(
+                        self.smart.next([0, 0, 1, 1], [1, 1]).is_none(),
+                        "edit did not queue regional work"
+                    );
+                    crate::crop_tool::exit(ctx);
+                }
+                "smart-transition-full" => {
+                    self.submit_with_quality(None, None, crate::preferences::PreviewMode::Full)
+                }
+                "smart-adaptive-edit" => {
+                    self.settings.photographic.tone_method =
+                        foveonic::render::PhotographicMethod::Universal;
+                    self.settings.photographic.base_response =
+                        foveonic::render::BaseResponse::Natural;
+                    assert!(self.settings.adaptive_tone_active());
                     self.submit(None);
                 }
                 "smart-fit" => self.viewport.reset(),
@@ -1764,7 +1905,10 @@ impl App {
                             && frame.revision == self.revision
                     })
             } else if smoke.targets == SMART_TARGETS
-                && smoke.targets[smoke.index] == "smart-detail"
+                && matches!(
+                    smoke.targets[smoke.index],
+                    "smart-detail" | "smart-edit-detail"
+                )
                 && regional_smart
             {
                 self.detail.is_some()
@@ -1798,10 +1942,25 @@ impl App {
             let ready = ready
                 && (smoke.targets != SMART_TARGETS
                     || match smoke.targets[smoke.index] {
-                        "smart-detail" if regional_smart => self.detail.is_some(),
-                        "smart-detail" => self.frame.as_ref().is_some_and(|f| {
-                            f.artifact.settings.preview_quality
-                                == foveonic::render::PreviewQuality::Full
+                        "smart-detail" | "smart-edit-detail" if regional_smart => {
+                            self.detail.as_ref().is_some_and(|detail| {
+                                crate::smart::same_edits(&detail.requested, &self.settings)
+                            })
+                        }
+                        "smart-detail" | "smart-edit-detail" => {
+                            self.frame.as_ref().is_some_and(|f| {
+                                f.artifact.settings.preview_quality
+                                    == foveonic::render::PreviewQuality::Full
+                            })
+                        }
+                        "smart-zoom-pending"
+                        | "smart-crop-enter"
+                        | "smart-crop-leave"
+                        | "smart-transition-full" => self.frame.as_ref().is_some_and(|frame| {
+                            frame.revision == self.revision
+                                && crate::smart::same_edits(&frame.requested, &self.settings)
+                                && frame.crop_preview
+                                    == (smoke.targets[smoke.index] == "smart-crop-enter")
                         }),
                         "smart-full" | "smart-edit" => self.frame.as_ref().is_some_and(|f| {
                             f.artifact.settings.preview_quality

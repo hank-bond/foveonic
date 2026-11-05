@@ -212,42 +212,26 @@ impl Preferences {
             }
         }
     }
-    /// An explicit path takes precedence. Reopening the remembered folder keeps
-    /// its source-write policy, including when launching one of its X3Fs.
-    pub fn startup_folder(
+    /// Resolve startup intent without probing the filesystem on the UI thread.
+    pub fn startup_request(
         &self,
         explicit: Option<std::path::PathBuf>,
-    ) -> Option<(std::path::PathBuf, FolderMode)> {
-        match explicit {
-            Some(path) => {
-                let folder = if path.is_dir() {
-                    path.as_path()
-                } else {
-                    path.parent()
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .unwrap_or(std::path::Path::new("."))
-                };
-                let mode = if std::fs::canonicalize(folder).ok().is_some_and(|folder| {
-                    self.last_folder
-                        .as_ref()
-                        .is_some_and(|root| folder.starts_with(root))
-                }) {
-                    self.last_folder_mode
-                } else {
-                    FolderMode::Browse
-                };
-                Some((path, mode))
-            }
-            None => self
-                .last_folder
-                .clone()
-                .map(|path| (path, self.last_folder_mode)),
-        }
-    }
-    pub fn remember_folder(&mut self, path: &std::path::Path, mode: FolderMode) {
-        if let Ok(folder) = std::fs::canonicalize(path) {
-            self.last_folder = Some(folder);
-            self.last_folder_mode = mode;
+    ) -> Option<(std::path::PathBuf, crate::folder_loader::Mode)> {
+        if let Some(path) = explicit {
+            Some((
+                path,
+                crate::folder_loader::Mode::Explicit {
+                    previous_folder: self.last_folder.clone(),
+                    previous_mode: self.last_folder_mode,
+                },
+            ))
+        } else {
+            self.last_folder.clone().map(|path| {
+                (
+                    path,
+                    crate::folder_loader::Mode::Fixed(self.last_folder_mode),
+                )
+            })
         }
     }
     pub fn save(&self, storage: &mut dyn eframe::Storage) {
@@ -301,63 +285,34 @@ mod tests {
         }
     }
     #[test]
-    fn last_folder_survives_restart_and_explicit_launch_wins() {
-        let mut prefs = Preferences::default();
-        let folder = std::fs::canonicalize(std::env::temp_dir()).unwrap();
-        prefs.remember_folder(&folder, FolderMode::Browse);
-        prefs.remember_folder(
-            &folder.join("foveonic-nonexistent-saved-folder"),
-            FolderMode::Import,
-        );
-        assert_eq!(prefs.last_folder.as_ref(), Some(&folder));
+    fn startup_request_preserves_remembered_mode_and_explicit_precedence() {
+        let folder = std::path::PathBuf::from("card");
+        let prefs = Preferences {
+            last_folder: Some(folder.clone()),
+            last_folder_mode: FolderMode::Import,
+            ..Default::default()
+        };
         let mut store = Storage::default();
         prefs.save(&mut store);
         let loaded = Preferences::load(Some(&store));
         assert_eq!(
-            loaded.startup_folder(None),
-            Some((folder, FolderMode::Browse))
+            loaded.startup_request(None),
+            Some((
+                folder.clone(),
+                crate::folder_loader::Mode::Fixed(FolderMode::Import)
+            ))
         );
         let explicit = std::path::PathBuf::from("explicit.x3f");
         assert_eq!(
-            loaded.startup_folder(Some(explicit.clone())),
-            Some((explicit, FolderMode::Browse))
+            loaded.startup_request(Some(explicit.clone())),
+            Some((
+                explicit,
+                crate::folder_loader::Mode::Explicit {
+                    previous_folder: Some(folder),
+                    previous_mode: FolderMode::Import
+                }
+            ))
         );
-    }
-    #[test]
-    fn remembered_import_folder_keeps_its_write_policy_on_restart_and_direct_file_launch() {
-        let directory = tempfile::tempdir().unwrap();
-        let card = directory.path().join("card");
-        let library = directory.path().join("library");
-        std::fs::create_dir(&card).unwrap();
-        std::fs::create_dir(&library).unwrap();
-        let card = std::fs::canonicalize(card).unwrap();
-        let mut prefs = Preferences::default();
-        prefs.remember_folder(&card, FolderMode::Import);
-        let mut store = Storage::default();
-        prefs.save(&mut store);
-        let mut restored = Preferences::load(Some(&store));
-        assert_eq!(
-            restored.startup_folder(None),
-            Some((card.clone(), FolderMode::Import))
-        );
-        let nested = card.join("DCIM").join("100SIGMA");
-        std::fs::create_dir_all(&nested).unwrap();
-        for explicit in [
-            card.clone(),
-            card.join("photo.x3f"),
-            nested.join("photo.x3f"),
-        ] {
-            assert_eq!(
-                restored.startup_folder(Some(explicit.clone())),
-                Some((explicit, FolderMode::Import))
-            );
-        }
-        assert_eq!(
-            restored.startup_folder(Some(library.clone())),
-            Some((library, FolderMode::Browse))
-        );
-        restored.remember_folder(&directory.path().join("missing"), FolderMode::Browse);
-        assert_eq!(restored.last_folder_mode, FolderMode::Import);
         store
             .0
             .insert(STORAGE_KEY.into(), "(last_folder:Some(\"card\"))".into());

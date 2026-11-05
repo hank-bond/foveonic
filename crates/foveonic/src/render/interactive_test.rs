@@ -159,6 +159,34 @@ fn session_image(
 }
 
 #[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn merrill_auto_zero_sharpen_session_matches_fresh_and_explicit_off() {
+    let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let engine = Engine::new().unwrap();
+    let mut session = RenderSession::new(Source::open(dir.join("blue-parking-sign.x3f")).unwrap());
+    let mut settings = Settings::new("Sunlight", "Standard");
+    let fresh = engine
+        .render(&session.source, &settings, &mut Profile::default())
+        .unwrap();
+    let expected = engine.readback_image(&fresh).unwrap();
+    for _ in 0..2 {
+        let image = session_image(&engine, &mut session, &settings);
+        assert_same_pixels(
+            "Auto session/fresh",
+            &engine.readback_image(&image).unwrap(),
+            &expected,
+        );
+    }
+    settings.sharpen_amount = Some(0.);
+    let image = session_image(&engine, &mut session, &settings);
+    assert_same_pixels(
+        "explicit off/Auto",
+        &engine.readback_image(&image).unwrap(),
+        &expected,
+    );
+}
+
+#[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; checks all six full-resolution originals"]
 fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());

@@ -16,7 +16,10 @@ pub enum Kernel {
     DehazePrepare,
     DehazeHorizontal,
     DehazeVertical,
+    #[cfg(test)]
     DehazeEstimate,
+    DehazePartition,
+    DehazeMerge,
     DehazeApply,
     MonoTextureExtract,
     MonoTextureBlur,
@@ -337,7 +340,10 @@ impl Kernel {
             Self::DehazePrepare => "prepare haze analysis",
             Self::DehazeHorizontal => "horizontal haze minimum",
             Self::DehazeVertical => "vertical haze minimum",
+            #[cfg(test)]
             Self::DehazeEstimate => "estimate haze color",
+            Self::DehazePartition => "partition haze candidates",
+            Self::DehazeMerge => "merge haze candidates",
             Self::DehazeApply => "apply Dehaze",
             Self::MonoTextureExtract => "extract monochrome texture",
             Self::MonoTextureBlur => "filter monochrome texture",
@@ -654,6 +660,21 @@ impl Gpu {
         queue: wgpu::Queue,
         adapter_name: String,
     ) -> Result<Self> {
+        Self::from_device_profiled(
+            device,
+            queue,
+            adapter_name,
+            &mut crate::profile::Profile::default(),
+        )
+    }
+
+    pub(crate) fn from_device_profiled(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_name: String,
+        profile: &mut crate::profile::Profile,
+    ) -> Result<Self> {
+        let began = profile.mode.enabled().then(std::time::Instant::now);
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         let black = include_str!("../nodes/sensor/black.wgsl");
         let noise = include_str!("../nodes/color/noise_base.wgsl");
@@ -757,9 +778,18 @@ impl Gpu {
                 include_str!("../nodes/finish/dehaze_estimate.wgsl"),
                 "dehaze_vertical",
             ),
+            #[cfg(test)]
             (
                 include_str!("../nodes/finish/dehaze_estimate.wgsl"),
                 "dehaze_estimate",
+            ),
+            (
+                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+                "dehaze_partition",
+            ),
+            (
+                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+                "dehaze_merge",
             ),
             (include_str!("../nodes/finish/dehaze.wgsl"), "dehaze_apply"),
             (texture, "mono_texture_extract"),
@@ -1571,7 +1601,11 @@ impl Gpu {
                 })
             })
             .collect();
-        if let Some(error) = pollster::block_on(device.pop_error_scope()) {
+        let validation = pollster::block_on(device.pop_error_scope());
+        if let Some(began) = began {
+            profile.record("gpu pipelines and validation", began);
+        }
+        if let Some(error) = validation {
             return Err(error.into());
         }
         Ok(Self {

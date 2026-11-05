@@ -259,6 +259,7 @@ impl Fixture {
         browser.files = (0..60)
             .map(|i| PathBuf::from(format!("image-{i:02}.x3f")))
             .collect();
+        browser.reindex_files();
         // These fixtures test interaction without asynchronous file reads.
         browser.cache = browser.files.iter().map(|p| (p.clone(), None)).collect();
         Self {
@@ -1147,6 +1148,7 @@ fn folder_groups_keep_one_selection_and_keyboard_range_across_directory_boundari
         ]
         .map(PathBuf::from)
         .to_vec();
+        fixture.browser.reindex_files();
         fixture.browser.cache = fixture
             .browser
             .files
@@ -1206,4 +1208,388 @@ fn prefetch_order_tracks_visibility_and_keeps_a_concealed_active_photo() {
     browser.hide_reviewed = false;
     browser.refresh_filter();
     assert_eq!(browser.take_prefetch_order(Some(&files[3])).unwrap(), files);
+}
+
+#[test]
+fn organizer_view_reuses_layout_and_updates_after_inputs_change() {
+    let mut fixture = Fixture::new(Organizer::Large);
+    fixture.frame(vec![]);
+    let view = fixture.browser.organizer_view.as_ref().unwrap();
+    let rows = view.layout.rows.as_ptr();
+    let original_height = view.layout.height;
+    fixture.frame(vec![]);
+    assert_eq!(
+        fixture
+            .browser
+            .organizer_view
+            .as_ref()
+            .unwrap()
+            .layout
+            .rows
+            .as_ptr(),
+        rows
+    );
+
+    let path = fixture.browser.files[0].clone();
+    fixture.browser.records.entry(path).or_default().extent = Some([1, 2]);
+    fixture.browser.query_dirty = true;
+    fixture.frame(vec![]);
+    assert!(
+        fixture
+            .browser
+            .organizer_view
+            .as_ref()
+            .unwrap()
+            .layout
+            .height
+            > original_height
+    );
+    fixture.browser.filter.text = "image-00".into();
+    fixture.browser.query_dirty = true;
+    fixture.frame(vec![]);
+    assert_eq!(
+        fixture.browser.organizer_view.as_ref().unwrap().files.len(),
+        1
+    );
+    fixture.browser.filter.text.clear();
+    fixture.browser.query_dirty = true;
+    fixture.frame(vec![]);
+    assert_eq!(
+        fixture.browser.organizer_view.as_ref().unwrap().files.len(),
+        60
+    );
+    let height = fixture
+        .browser
+        .organizer_view
+        .as_ref()
+        .unwrap()
+        .layout
+        .height;
+    fixture.width = 500.;
+    fixture.frame(vec![]);
+    assert!(
+        fixture
+            .browser
+            .organizer_view
+            .as_ref()
+            .unwrap()
+            .layout
+            .height
+            > height
+    );
+    fixture.mode = Organizer::List;
+    fixture.frame(vec![]);
+    assert_eq!(
+        fixture
+            .browser
+            .organizer_view
+            .as_ref()
+            .unwrap()
+            .layout
+            .rows
+            .len(),
+        60
+    );
+}
+
+#[test]
+#[ignore = "explicit CPU timing for organizer frames"]
+fn organizer_view_cpu_timing() {
+    for count in [1_000, 10_000] {
+        let mut fixture = Fixture::new(Organizer::List);
+        fixture.browser.files = (0..count)
+            .map(|i| PathBuf::from(format!("image-{i:05}.x3f")))
+            .collect();
+        fixture.browser.reindex_files();
+        fixture.browser.cache = fixture
+            .browser
+            .files
+            .iter()
+            .map(|p| (p.clone(), None))
+            .collect();
+        fixture.frame(vec![]);
+        let mut samples = [Vec::new(), Vec::new()];
+        for batch in 0..6 {
+            for rebuild in if batch % 2 == 0 {
+                [true, false]
+            } else {
+                [false, true]
+            } {
+                let start = std::time::Instant::now();
+                for _ in 0..50 {
+                    if rebuild {
+                        fixture.browser.organizer_view = None;
+                    }
+                    fixture.frame(vec![]);
+                }
+                samples[usize::from(rebuild)].push(start.elapsed() / 50);
+            }
+        }
+        for (rebuild, times) in samples.iter_mut().enumerate() {
+            times.sort();
+            eprintln!(
+                "organizer {count} rebuild={rebuild}: median {:?}, range {:?}–{:?}/frame",
+                times[3], times[0], times[5]
+            );
+        }
+    }
+}
+
+#[test]
+fn cached_review_counts_follow_overrides_and_history_changes() {
+    let mut fixture = Fixture::new(Organizer::List);
+    let paths = fixture.browser.files[..3].to_vec();
+    fixture
+        .browser
+        .recorded_marks
+        .insert(paths[0].clone(), Mark::Imported);
+    fixture
+        .browser
+        .recorded_marks
+        .insert(paths[1].clone(), Mark::Hidden);
+    fixture.browser.marks.insert(paths[0].clone(), Mark::Pick);
+    fixture
+        .browser
+        .marks
+        .insert(paths[1].clone(), Mark::Unmarked);
+    fixture.browser.refresh_filter();
+    assert_eq!(fixture.browser.review_counts(), (1, 0));
+    fixture.browser.marks.remove(&paths[0]);
+    fixture.browser.recorded_marks.remove(&paths[1]);
+    fixture.browser.refresh_filter();
+    assert_eq!(fixture.browser.review_counts(), (0, 1));
+    fixture.browser.recorded_marks.clear();
+    fixture.browser.refresh_filter();
+    assert_eq!(fixture.browser.review_counts(), (0, 0));
+}
+
+#[test]
+#[ignore = "explicit headless browser CPU profiling"]
+fn browser_cpu_profile() {
+    use std::{hint::black_box, time::Instant};
+    for count in [1_000, 10_000, 50_000] {
+        let mut browser = Browser::new(egui::Context::default());
+        browser.files = (0..count)
+            .map(|i| PathBuf::from(format!("card/{:03}/image-{i:05}.x3f", i / 1000)))
+            .collect();
+        browser.reindex_files();
+        browser.import_mode = true;
+        let selected = browser.files[count / 2].clone();
+        browser.highlighted.insert(selected.clone());
+        browser.marks.insert(selected.clone(), Mark::Pick);
+        browser.refresh_filter();
+        for operation in [
+            "selection",
+            "selection_scan",
+            "selection_100",
+            "selection_100_scan",
+            "selection_all",
+            "selection_all_scan",
+            "counts",
+            "counts_scan",
+            "membership",
+            "membership_scan",
+            "filter",
+            "index",
+            "sort",
+        ] {
+            if operation.starts_with("selection_100") {
+                browser.highlighted = browser.files.iter().take(100).cloned().collect();
+            } else if operation.starts_with("selection_all") {
+                browser.highlighted = browser.files.iter().cloned().collect();
+            } else if operation == "counts" {
+                browser.highlighted.clear();
+                browser.highlighted.insert(selected.clone());
+            }
+            let iterations = if matches!(
+                operation,
+                "filter" | "index" | "sort" | "selection_all" | "selection_all_scan"
+            ) {
+                1
+            } else {
+                200
+            };
+            let mut samples = Vec::new();
+            for batch in 0..8 {
+                let start = Instant::now();
+                for i in 0..iterations {
+                    match operation {
+                        "selection" | "selection_100" | "selection_all" => {
+                            black_box(
+                                black_box(&browser)
+                                    .processing_selection(Some(black_box(&selected))),
+                            );
+                        }
+                        "counts" => {
+                            black_box(black_box(&browser).review_counts());
+                        }
+                        "membership" => {
+                            black_box(
+                                black_box(&browser.file_order).contains_key(black_box(&selected)),
+                            );
+                        }
+                        "selection_scan" | "selection_100_scan" | "selection_all_scan" => {
+                            black_box(
+                                black_box(&browser)
+                                    .files
+                                    .iter()
+                                    .filter(|p| {
+                                        browser.highlighted.contains(*p)
+                                            && !browser.excluded.contains(*p)
+                                    })
+                                    .cloned()
+                                    .collect::<Vec<_>>(),
+                            );
+                        }
+                        "counts_scan" => {
+                            black_box(black_box(&browser).files.iter().fold(
+                                (0usize, 0usize),
+                                |(picked, hidden), p| {
+                                    let mark = browser.mark(p);
+                                    (
+                                        picked + usize::from(mark == Mark::Pick),
+                                        hidden + usize::from(mark.hidden()),
+                                    )
+                                },
+                            ));
+                        }
+                        "membership_scan" => {
+                            black_box(black_box(&browser.files).contains(black_box(&selected)));
+                        }
+                        "filter" => {
+                            browser.marks.insert(
+                                selected.clone(),
+                                if (batch + i) % 2 == 0 {
+                                    Mark::Pick
+                                } else {
+                                    Mark::Hidden
+                                },
+                            );
+                            browser.refresh_filter();
+                        }
+                        "index" => {
+                            browser.reindex_files();
+                        }
+                        "sort" => {
+                            browser.sort.reverse = !browser.sort.reverse;
+                            browser.apply_query();
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                if batch > 0 {
+                    samples.push(start.elapsed().as_nanos() / iterations as u128);
+                }
+            }
+            samples.sort();
+            eprintln!(
+                "{}",
+                serde_json::json!({"event":"browser_cpu", "paths":count, "operation":operation, "iterations_per_batch":iterations, "samples_ns":samples})
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit local folder discovery profiling"]
+fn browser_discovery_profile() {
+    use std::{hint::black_box, time::Instant};
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let local = repo.join(".local");
+    std::fs::create_dir_all(&local).unwrap();
+    let fixture = tempfile::Builder::new()
+        .prefix("browser-profile-")
+        .tempdir_in(local)
+        .unwrap();
+    for (folders, per_folder) in [(1, 1_000), (100, 100)] {
+        let root = fixture.path().join(format!("{folders}-{per_folder}"));
+        std::fs::create_dir(&root).unwrap();
+        for folder in 0..folders {
+            let directory = root.join(format!("folder-{folder:03}"));
+            std::fs::create_dir(&directory).unwrap();
+            for file in 0..per_folder {
+                std::fs::File::create(directory.join(format!("photo-{file:05}.x3f"))).unwrap();
+            }
+        }
+        let mut browser = Browser::new(egui::Context::default());
+        for operation in ["discover", "browser_open"] {
+            let mut samples = Vec::new();
+            for trial in 0..6 {
+                let start = Instant::now();
+                if operation == "discover" {
+                    assert_eq!(
+                        black_box(super::folders::discover(&root).unwrap()).len(),
+                        folders * per_folder
+                    );
+                } else {
+                    browser.open(black_box(&root)).unwrap();
+                    assert_eq!(browser.files.len(), folders * per_folder);
+                }
+                let elapsed = start.elapsed().as_nanos();
+                if trial > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort();
+            eprintln!(
+                "{}",
+                serde_json::json!({"event":"browser_discovery", "directories":folders + 1, "paths":folders * per_folder, "operation":operation, "samples_ns":samples})
+            );
+        }
+    }
+}
+
+#[test]
+fn full_selection_respects_exclusion_and_fallback_with_stale_highlights() {
+    let mut fixture = Fixture::new(Organizer::List);
+    let paths = fixture.browser.files.clone();
+    fixture.browser.highlighted = paths.iter().cloned().collect();
+    fixture.browser.excluded.insert(paths[1].clone());
+    assert_eq!(
+        fixture.browser.processing_selection(Some(&paths[0])),
+        paths
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != 1)
+            .map(|(_, path)| path.clone())
+            .collect::<Vec<_>>()
+    );
+    fixture.browser.highlighted = (0..paths.len())
+        .map(|i| PathBuf::from(format!("stale-{i}.x3f")))
+        .collect();
+    assert_eq!(
+        fixture.browser.processing_selection(Some(&paths[0])),
+        vec![paths[0].clone()]
+    );
+    assert!(fixture
+        .browser
+        .processing_selection(Some(&paths[1]))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "explicit folder snapshot installation profiling"]
+fn browser_snapshot_profile() {
+    use std::time::Instant;
+    for count in [1_000, 10_000] {
+        let files: Vec<_> = (0..count)
+            .map(|i| PathBuf::from(format!("missing/{:03}/image-{i:05}.x3f", i / 1000)))
+            .collect();
+        let mut browser = Browser::new(egui::Context::default());
+        let mut samples = Vec::new();
+        for trial in 0..6 {
+            let owned = files.clone();
+            let start = Instant::now();
+            browser.open_discovered("missing".into(), owned);
+            let elapsed = start.elapsed().as_nanos();
+            if trial > 0 {
+                samples.push(elapsed);
+            }
+        }
+        samples.sort();
+        eprintln!(
+            "{}",
+            serde_json::json!({"event":"browser_snapshot", "paths":count, "operation":"install", "samples_ns":samples})
+        );
+    }
 }

@@ -12,7 +12,7 @@ use std::{
 #[path = "browser_chrome.rs"]
 mod chrome;
 #[path = "browser_folders.rs"]
-mod folders;
+pub(crate) mod folders;
 #[path = "browser_items.rs"]
 mod items;
 #[path = "browser_loader.rs"]
@@ -84,7 +84,27 @@ impl Mark {
         matches!(self, Self::Hidden | Self::Imported)
     }
 }
+#[derive(PartialEq)]
+struct OrganizerLayoutKey {
+    revision: u64,
+    width: u32,
+    folder_height: u32,
+    gap: u32,
+    columns: usize,
+    list: bool,
+    icons: bool,
+    captions: bool,
+}
+
+struct OrganizerView {
+    key: OrganizerLayoutKey,
+    files: Vec<PathBuf>,
+    layout: folders::Layout,
+}
+
 pub struct Browser {
+    organizer_revision: u64,
+    organizer_view: Option<OrganizerView>,
     metadata_loader: metadata_loader::Loader,
     metadata_generation: u64,
     records: HashMap<PathBuf, query::Entry>,
@@ -98,6 +118,8 @@ pub struct Browser {
     query_dirty: bool,
     render_state: Option<eframe::egui_wgpu::RenderState>,
     pub files: Vec<PathBuf>,
+    file_order: HashMap<PathBuf, usize>,
+    review_counts: (usize, usize),
     pub root: Option<PathBuf>,
     pub import_mode: bool,
     pub marks: HashMap<PathBuf, Mark>,
@@ -166,6 +188,8 @@ impl Browser {
         );
         let preview_worker = Loader::start(Kind::Preview, cache, context, ready);
         Self {
+            organizer_revision: 0,
+            organizer_view: None,
             metadata_loader,
             metadata_generation: 0,
             records: HashMap::new(),
@@ -179,6 +203,8 @@ impl Browser {
             query_dirty: false,
             render_state,
             files: Vec::new(),
+            file_order: HashMap::new(),
+            review_counts: (0, 0),
             root: None,
             import_mode: false,
             marks: HashMap::new(),
@@ -219,21 +245,26 @@ impl Browser {
             reveal_selection: false,
         }
     }
+    #[cfg(test)]
     pub fn open(&mut self, path: &Path) -> std::io::Result<()> {
-        let info = std::fs::metadata(path)?;
-        let dir = if info.is_dir() {
-            path
-        } else if info.is_file() {
-            path.parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(Path::new("."))
-        } else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "not a file or folder",
-            ));
-        };
-        let files = folders::discover(dir)?;
+        let scan = crate::folder_loader::discover(path)?;
+        self.open_discovered(scan.folder, scan.files);
+        Ok(())
+    }
+    pub(crate) fn finish_open(
+        &mut self,
+        ready: crate::folder_loader::Ready,
+    ) -> std::io::Result<(
+        Option<PathBuf>,
+        crate::preferences::FolderMode,
+        Option<PathBuf>,
+    )> {
+        let (discovery, mode) = ready.result?;
+        self.open_discovered(discovery.folder, discovery.files);
+        let selected = discovery.selected.or_else(|| self.files.first().cloned());
+        Ok((selected, mode, discovery.canonical))
+    }
+    pub(crate) fn open_discovered(&mut self, dir: PathBuf, files: Vec<PathBuf>) {
         self.thumbnail_worker.replace(Vec::new(), &[]);
         self.preview_worker.replace(Vec::new(), &[]);
         self.thumbnail_pass = true;
@@ -243,11 +274,14 @@ impl Browser {
         self.records.clear();
         self.metadata_loaded.clear();
         query::sort(&mut self.files, &self.records, self.sort);
+        self.reindex_files();
+        self.review_counts = (0, 0);
         self.rating_changes.clear();
         self.rating_errors.clear();
         self.query_dirty = true;
-        self.prefetch_dirty = true;
-        self.root = Some(dir.to_owned());
+        self.invalidate_organizer();
+        self.invalidate_prefetch();
+        self.root = Some(dir);
         self.marks.clear();
         self.recorded_marks.clear();
         self.excluded.clear();
@@ -268,7 +302,15 @@ impl Browser {
         self.preview_attempts.clear();
         self.rendered_revisions.clear();
         self.order.clear();
-        Ok(())
+    }
+    pub(crate) fn reindex_files(&mut self) {
+        self.file_order = self
+            .files
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, path)| (path, index))
+            .collect();
     }
     pub fn set_actions(&mut self, actions: Vec<(BrowserAction, egui::Modifiers)>) {
         self.actions = actions;
@@ -292,6 +334,10 @@ impl Browser {
         self.rendered_revisions.clear();
         self.order.clear();
         self.thumbnail_pass = true;
+    }
+    fn invalidate_organizer(&mut self) {
+        self.organizer_revision = self.organizer_revision.wrapping_add(1);
+        self.organizer_view = None;
     }
     pub fn invalidate_prefetch(&mut self) {
         self.prefetch_dirty = true;
@@ -601,12 +647,6 @@ impl Browser {
             }
             self.last_active = selected.map(Path::to_owned);
         }
-        let files: Vec<_> = self
-            .files
-            .iter()
-            .filter(|path| !self.excluded.contains(*path))
-            .cloned()
-            .collect();
         // Rows come and go as the list scrolls. A stable organizer-level focus
         // target keeps keyboard selection working when the focused row disappears.
         let focus = ui.interact(
@@ -640,26 +680,54 @@ impl Browser {
         let header_height = if list { items::LIST_HEADER } else { 0. };
         let tile_width = width / columns as f32;
         let tile_height = items::dense_height(tile_width);
-        let layout = folders::Layout::new(
-            &files,
-            self.root.as_deref(),
+        let folder_height =
+            ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+        let gap = if icons {
+            0.
+        } else {
+            ui.spacing().item_spacing.y
+        };
+        let key = OrganizerLayoutKey {
+            revision: self.organizer_revision,
+            width: width.to_bits(),
+            folder_height: folder_height.to_bits(),
+            gap: gap.to_bits(),
             columns,
-            |range| {
-                if icons {
-                    tile_height
-                } else if list {
-                    LIST_ROW_HEIGHT
-                } else {
-                    self.large_height(&files[range.start], width)
-                }
-            },
-            ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y,
-            if icons {
-                0.
-            } else {
-                ui.spacing().item_spacing.y
-            },
-        );
+            list,
+            icons,
+            captions: self.import_mode || self.show_ratings,
+        };
+        let view = self
+            .organizer_view
+            .take()
+            .filter(|view| view.key == key)
+            .unwrap_or_else(|| {
+                let files: Vec<_> = self
+                    .files
+                    .iter()
+                    .filter(|path| !self.excluded.contains(*path))
+                    .cloned()
+                    .collect();
+                let layout = folders::Layout::new(
+                    &files,
+                    self.root.as_deref(),
+                    columns,
+                    |range| {
+                        if icons {
+                            tile_height
+                        } else if list {
+                            LIST_ROW_HEIGHT
+                        } else {
+                            self.large_height(&files[range.start], width)
+                        }
+                    },
+                    folder_height,
+                    gap,
+                );
+                OrganizerView { key, files, layout }
+            });
+        let files = &view.files;
+        let layout = &view.layout;
         let mut active = selected.and_then(|path| files.iter().position(|p| p == path));
         let actions = std::mem::take(&mut self.actions);
         if !actions.is_empty() {
@@ -680,9 +748,9 @@ impl Browser {
                                 }
                             }
                             if matches!(action, BrowserAction::TogglePick) {
-                                self.toggle_highlighted(&files);
+                                self.toggle_highlighted(files);
                             } else {
-                                self.hide_highlighted(&files);
+                                self.hide_highlighted(files);
                             }
                         }
                     }
@@ -695,7 +763,7 @@ impl Browser {
                                 preserve_viewport: modifiers.alt,
                             });
                             if let Some(selection) = &chosen {
-                                self.highlight(&selection.path, &files, modifiers);
+                                self.highlight(&selection.path, files, modifiers);
                             }
                         }
                     }
@@ -805,7 +873,7 @@ impl Browser {
                                 .clicked()
                                 && !self.review_clicked
                             {
-                                self.highlight(path, &files, ui.input(|input| input.modifiers));
+                                self.highlight(path, files, ui.input(|input| input.modifiers));
                                 if self.highlighted.contains(path) {
                                     chosen = Some(Selection {
                                         path: path.clone(),
@@ -833,7 +901,7 @@ impl Browser {
                                     {
                                         self.highlight(
                                             path,
-                                            &files,
+                                            files,
                                             ui.input(|input| input.modifiers),
                                         );
                                         if self.highlighted.contains(path) {
@@ -877,6 +945,9 @@ impl Browser {
         }
         if self.review_clicked {
             ui.ctx().request_repaint();
+        }
+        if self.organizer_revision == view.key.revision {
+            self.organizer_view = Some(view);
         }
         chosen.filter(|selection| Some(selection.path.as_path()) != selected)
     }

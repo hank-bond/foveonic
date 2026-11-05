@@ -429,3 +429,69 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
         source_sidecar
     );
 }
+
+#[test]
+#[ignore = "explicit batch progress CPU profiling"]
+fn batch_progress_profile() {
+    use std::hint::black_box;
+    for count in [1_000, 10_000, 50_000] {
+        let progress = Progress {
+            running: true,
+            total: count,
+            completed: count / 2,
+            imported: (0..count)
+                .map(|i| PathBuf::from(format!("card/DCIM/{i:05}.x3f")))
+                .collect(),
+            errors: (0..count / 100)
+                .map(|i| format!("Failed to process photograph {i:05}"))
+                .collect(),
+            operations: (0..count * 2)
+                .map(|i| format!("Imported: photos/image-{i:05}.x3f"))
+                .collect(),
+            ..Default::default()
+        };
+        for operation in ["clone", "summary"] {
+            let mut samples = Vec::new();
+            let iterations = if count == 50_000 { 5 } else { 20 };
+            for trial in 0..8 {
+                let began = Instant::now();
+                for _ in 0..iterations {
+                    if operation == "clone" {
+                        black_box(black_box(&progress).clone());
+                    } else {
+                        black_box(black_box(&progress).summary());
+                    }
+                }
+                if trial > 0 {
+                    samples.push(began.elapsed().as_nanos() / iterations);
+                }
+            }
+            samples.sort();
+            eprintln!(
+                "{}",
+                serde_json::json!({"event":"batch_progress_cpu", "imported":count, "errors":count/100, "operations":count*2, "operation":operation, "iterations_per_batch":iterations, "samples_ns":samples})
+            );
+        }
+    }
+}
+
+#[test]
+fn progress_summary_tracks_status_without_history() {
+    let progress = Progress {
+        running: true,
+        total: 8,
+        completed: 3,
+        imported: vec!["card/a.x3f".into()],
+        errors: vec!["failed".into()],
+        operations: vec!["saved".into()],
+        ..Default::default()
+    };
+    assert_eq!(
+        progress.summary(),
+        Summary {
+            running: true,
+            total: 8,
+            completed: 3
+        }
+    );
+}

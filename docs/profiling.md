@@ -30,6 +30,8 @@ python3 scripts/profiling/summarize.py .local/profile-method-a.jsonl
 
 The runner shares the normal photographic option parser, so new algorithm controls should be added there once. Each iteration executes the complete selected final recipe from the decoded source, without an interactive retained boundary. Its first iteration is cold; warm repetitions are separate in the summary. GPU initialization is outside render intervals, and source file-cache state is uncontrolled. Choose enough repetitions for the actual comparison; one method/recipe per dataset is easiest to interpret.
 
+Use `--capture-float OUTPUT NEW_FILE` to render a named floating image output after all timed iterations. The capture record includes source, settings, storage extent, color space, nominal linear white, active crop, rotation, data type and byte order. Raw samples use the recorded physical layout; apply the recorded view when comparing photographs. This separate render and readback are outside timing. The destination must not already exist.
+
 Request `--profile gpu` for one additional synchronized diagnostic iteration after the ordinary warm repetitions. Its results remain in a separate mode group. Render and TIFF export have separate profiles/activity deltas. Optional `--goldens DIR` compares or creates full-float snapshots outside timed intervals; choose a distinct golden directory per intended recipe. Byte equality applies to output-equivalent optimizations, not to different denoisers or recovery methods. Evaluate photographic quality separately.
 
 ## Smart preview transitions
@@ -41,7 +43,9 @@ cargo run --offline --release -p foveonic --example profile_smart_preview -- \
   INPUT.x3f .local/smart-transitions.json
 ```
 
-The report destination must be new. The example uses Sunlight/Standard with camera-default controls and a central 992×1002 native-pixel detail tile. It excludes source decoding and GPU initialization. Each route starts from its own completed Fast overview. Five measured pairs follow one warmup pair, with alternating route order. Completed processing and display-texture preparation use profiling Off and retain the overview/detail textures as the GUI does. Separate GPU diagnostic runs contain stage timings and transfer/activity counters. Compare the first detail, direct Full, and additional Full continuation independently. Add the two progressive durations to measure when the whole image becomes Full. These are engine-to-ready measurements, not input-to-screen latency. Stored camera adjustments and different viewport sizes can change native app costs.
+The report destination must be new. Use `--region-first exposure --fractions 0.25,0.5 --repeats 3` for bounded regional comparisons. Add `--direct-only -- --tone-method universal --base-response natural` to measure a Fast-to-Full transition with Adaptive; regional Adaptive is unsupported. Render options after `--` override the camera settings used by every route. Each trial records epoch-millisecond bounds for its whole route, including the prior image and any verification, while reported durations use a monotonic clock. These bounds conservatively identify potential workload overlap.
+
+The default command uses Sunlight/Standard with camera-default controls and a central 992×1002 native-pixel detail tile. It excludes source decoding and GPU initialization. Each route starts from its own completed Fast overview. Five measured pairs follow one warmup pair, with alternating route order. Completed processing and display-texture preparation use profiling Off and retain the overview/detail textures as the GUI does. Separate GPU diagnostic runs contain stage timings and transfer/activity counters. Compare the first detail, direct Full, and additional Full continuation independently. Add the two progressive durations to measure when the whole image becomes Full. These are engine-to-ready measurements, not input-to-screen latency. Stored camera adjustments and different viewport sizes can change native app costs.
 
 ## Resource overlap
 
@@ -68,11 +72,7 @@ python3 scripts/profiling/native.py record \
   --fixture INPUT.x3f --directory .local/native-method-a --mode wall
 ```
 
-The recorder starts only its own app with isolated preferences, explicit mode, no smoke automation and no repaint override. It stores the raw stderr, source/binary hashes and a manifest. Ctrl-C stops that app, not an existing owner process. To flag known overlapping programs separately:
-
-```sh
-python3 scripts/profiling/watch_workloads.py .local/native-method-a/workloads.jsonl
-```
+The recorder starts only its own app with isolated preferences, explicit mode, no smoke automation and no repaint override. It starts the workload monitor before the app, records raw stderr and observations, and stops both owned processes on exit. Its manifest includes binary and fixture hashes, plus a fingerprint of nonignored Rust, WGSL, Cargo and bundled asset inputs at recording time. The fingerprint does not prove the binary was built from those inputs and excludes ignored generated inputs. Ctrl-C stops the recorded app, not an existing owner process.
 
 Set up the desired source, full-quality controls, window geometry, navigator/scopes and view scale. Warm up first and retain screenshots/settings evidence. Supply actual screen coordinates for the desired slider; they are not guessed or embedded in the tool:
 
@@ -104,3 +104,17 @@ FOVEONIC_PROFILE=wall cargo run --release -p foveonic-gui 2> target/interactive-
 ```
 
 Launch the executable directly through Cargo so its environment and stderr stay attached to the terminal. Use Browse or Import normally and quit after reproducing the stall. Ordinary build messages may share this file with the marked JSON records. `selection` reports the start and recipe-ready delay before image submission. `worker_started` reports queue delay. `source_load.input` distinguishes `decoded-cache` from `original`, with separate cached identity lookup, header, payload read/checksum and camera-metadata timings. Existing processing and presentation events cover the remaining path. Nested durations overlap. Logging remains opt-in and creates no profiling-only GPU waits.
+
+## Headless browser CPU work
+
+Run `cargo test --release -p foveonic-gui browser_cpu_profile -- --ignored --nocapture` without concurrent measured work. The synthetic 1,000, 10,000 and 50,000-path folders report JSON lines with seven per-operation batch samples in nanoseconds after one warmup. They cover one, 100 and all selected photographs, review counts, membership, alternating import marks, index rebuilding and reverse sorting. The `_scan` operations model the former folder-wide work; they do not run an earlier binary. This isolates host-side browser operations and does not measure native input, drawing, file discovery or GPU work. Run separate trials for comparisons and retain the complete output and build context.
+
+Run `cargo test --release -p foveonic-gui browser_discovery_profile -- --ignored --nocapture` to measure recursive discovery and `Browser::open` separately on generated empty files. The test creates and removes its own repository-local fixture. It reports five timed samples after warmup for 1,000 files in one child folder and 10,000 files across 100 child folders. `Browser::open` also starts metadata work, which may overlap its measurements. Filesystem and OS caches are uncontrolled; these local results do not establish removable-card or network-drive latency.
+
+Run `cargo test --release -p foveonic-gui browser_snapshot_profile -- --ignored --nocapture` to measure applying an already-discovered folder on the UI thread. The synthetic paths do not exist, so background metadata failures and worker overlap may affect timings. Cloning the input fixture occurs outside each timed interval. This records snapshot installation only, not native input or rendering.
+
+Run `cargo test --release -p foveonic-gui batch_progress_profile -- --ignored --nocapture` to compare cloning completed batch history with reading its small status summary. Synthetic records contain one imported path and two operation messages per photo, with one error per hundred photos. The test reports host-only batch samples; it does not include locking, real imports or native interaction. The UI still clones full progress once per frame for import-history replay and event collection.
+
+## Startup host work
+
+With `FOVEONIC_PROFILE=wall`, the GUI emits `startup` records for App construction and the first update. Construction begins after eframe has created the window and device. Its nested host spans separate GPU pipeline creation including the existing validation-scope completion from bundled calibration-map parsing and total engine initialization. These spans overlap and must not be added. The first update is not a presentation or scanout measurement. Wall mode adds no profiling-only GPU waits. Use an isolated native launch and retain the executable and source hashes with the raw JSON.
