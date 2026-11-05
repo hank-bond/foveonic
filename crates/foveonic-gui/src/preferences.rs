@@ -148,6 +148,7 @@ pub struct Preferences {
     pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
     pub preview_quality: PreviewMode,
+    pub white_viewport_background: bool,
     pub decode_cache: foveonic::decode_cache::Settings,
     pub thumbnail_cache_bytes: u64,
     pub noise_profile: crate::noise_calibration::Slot,
@@ -175,6 +176,7 @@ impl Default for Preferences {
             scope_viewport: true,
             zoom_snap: ZoomPreset::default(),
             preview_quality: PreviewMode::Full,
+            white_viewport_background: false,
             decode_cache: Default::default(),
             thumbnail_cache_bytes: DEFAULT_THUMBNAIL_BYTES,
             noise_profile: Default::default(),
@@ -524,6 +526,7 @@ mod preview_tests {
         assert_eq!(Preferences::default().preview_quality, PreviewMode::Full);
         let prefs = Preferences {
             preview_quality: PreviewMode::Fast,
+            white_viewport_background: true,
             ..Default::default()
         };
         let bytes = serde_json::to_vec(&prefs).unwrap();

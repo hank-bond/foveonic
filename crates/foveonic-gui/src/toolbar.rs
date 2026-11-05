@@ -58,6 +58,47 @@ pub fn row<R>(
     )
 }
 
+/// Keep the trailing group fixed while a narrow leading strip scrolls horizontally.
+pub fn row_with_trailing(
+    ui: &mut egui::Ui,
+    trailing_width: f32,
+    leading: impl FnOnce(&mut egui::Ui),
+    trailing: impl FnOnce(&mut egui::Ui),
+) {
+    let available = ui.available_rect_before_wrap();
+    let height = widgets::button_group_height(ui);
+    let width = trailing_width.min(available.width());
+    let mut start = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("row start")
+            .max_rect(egui::Rect::from_min_size(
+                available.min,
+                egui::vec2(
+                    (available.width() - width - ui.spacing().item_spacing.x).max(1.),
+                    height,
+                ),
+            ))
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    egui::ScrollArea::horizontal()
+        .id_salt("row overflow")
+        .auto_shrink([false, true])
+        .show(&mut start, |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), leading);
+        });
+    let mut end = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("row end")
+            .max_rect(egui::Rect::from_min_size(
+                egui::pos2(available.right() - width, available.top()),
+                egui::vec2(width, height),
+            ))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    trailing(&mut end);
+    ui.advance_cursor_after_rect(start.min_rect().union(end.min_rect()));
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Area {
     Processing,
@@ -227,6 +268,81 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_group_stays_on_the_first_row_at_the_right_edge_and_both_buttons_work() {
+        for width in [300., 1000.] {
+            let ctx = egui::Context::default();
+            widgets::install_style(&ctx);
+            let mut white = false;
+            let mut frame = |time, events| {
+                let mut first = egui::Rect::NOTHING;
+                let mut group = egui::Rect::NOTHING;
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 200.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let right = ui.available_rect_before_wrap().right();
+                            row_with_trailing(
+                                ui,
+                                50.,
+                                |ui| {
+                                    widgets::button_group(ui, |ui| {
+                                        widgets::centered_control_row(ui, |ui| {
+                                            first = widgets::button(
+                                                ui,
+                                                "Preview",
+                                                false,
+                                                egui::Vec2::ZERO,
+                                            )
+                                            .rect;
+                                        });
+                                    });
+                                    widgets::button_group(ui, |ui| {
+                                        widgets::centered_control_row(ui, |ui| {
+                                            widgets::button(
+                                                ui,
+                                                "Inspect Input Output Difference",
+                                                false,
+                                                egui::Vec2::ZERO,
+                                            );
+                                        });
+                                    });
+                                },
+                                |ui| {
+                                    group = crate::inspect::background(ui, &mut white).rect;
+                                },
+                            );
+                            assert!((group.right() - right).abs() < 1.);
+                            assert!((group.center().y - first.center().y).abs() < 1.);
+                        });
+                    },
+                );
+                (group, white)
+            };
+            let (group, _) = frame(0., vec![]);
+            let sun = group.left_center() + egui::vec2(13., 0.);
+            let moon = group.right_center() - egui::vec2(13., 0.);
+            for (time, point, expected) in [(1., sun, true), (2., moon, false)] {
+                let event = |pressed| egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame(time, vec![egui::Event::PointerMoved(point), event(true)]);
+                assert_eq!(frame(time + 0.1, vec![event(false)]).1, expected);
+            }
+        }
+    }
 
     #[test]
     fn tool_region_stays_right_aligned_and_wraps_after_processing() {

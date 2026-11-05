@@ -712,6 +712,36 @@ pub fn icon_rect(ui: &egui::Ui, response: &egui::Response) -> egui::Rect {
     egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(side))
 }
 
+/// Sun and moon glyphs share icon-button geometry and the active appearance's colors.
+pub fn appearance_icon(ui: &egui::Ui, response: &egui::Response, selected: bool, light: bool) {
+    let rect = icon_rect(ui, response);
+    let center = rect.center();
+    let side = rect.width();
+    let visual = visuals(ui, response, selected);
+    let color = visual.text_color();
+    if light {
+        let stroke = egui::Stroke::new(1.2_f32, color);
+        ui.painter().circle_stroke(center, side * 0.22, stroke);
+        for ray in 0..8 {
+            let direction = egui::Vec2::angled(ray as f32 * std::f32::consts::TAU / 8.);
+            ui.painter().line_segment(
+                [
+                    center + direction * side * 0.34,
+                    center + direction * side * 0.48,
+                ],
+                stroke,
+            );
+        }
+    } else {
+        ui.painter().circle_filled(center, side * 0.44, color);
+        ui.painter().circle_filled(
+            center + egui::vec2(side * 0.25, -side * 0.2),
+            side * 0.4,
+            visual.weak_bg_fill,
+        );
+    }
+}
+
 pub fn checkbox(
     ui: &mut egui::Ui,
     value: &mut bool,

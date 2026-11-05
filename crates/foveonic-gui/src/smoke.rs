@@ -158,6 +158,7 @@ const IMPORT_WIDE_BROWSER_WIDTH: f32 = 600.;
 const IMPORT_TARGETS: &[&str] = &[
     "preview",
     "final",
+    "white-background",
     "browse-settings",
     "browse-processed",
     "browse-processed-again",
@@ -1538,6 +1539,7 @@ impl App {
                     self.preferences.browse_processing = Default::default();
                     self.processing_open = true;
                 }
+                "white-background" => self.preferences.white_viewport_background = true,
                 "browse-processed" | "browse-processed-again" => {
                     self.processing_open = false;
                     self.process();

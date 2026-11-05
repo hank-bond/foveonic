@@ -29,7 +29,8 @@ fn encode(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(v, vec3(1./2.4)
 fn encode_extended(v: vec3<f32>) -> vec3<f32> { return sign(v) * encode(abs(v)); }
 @fragment fn fs(v: Vertex) -> @location(0) vec4<f32> {
     let uv = (v.uv - params.rect.xy) / params.rect.zw;
-    if any(uv < vec2(0.)) || any(uv > vec2(1.)) { return vec4(select(vec3(0.055), vec3(0.0044), params.options.w > 0.), 1.); }
+    // The workspace owns the photograph's surround, including its chosen background.
+    if any(uv < vec2(0.)) || any(uv > vec2(1.)) { discard; }
     var rgb = sample_at(uv);
     // Bound SDR in the image's own primaries before converting it. The converted
     // components can be negative or above one without representing HDR white.

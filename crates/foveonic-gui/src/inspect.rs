@@ -1,4 +1,4 @@
-//! Groups viewport preview quality, pipeline views, and display-only Input/Output and Difference comparisons.
+//! Groups viewport background, preview quality, pipeline views, and display-only comparisons.
 
 use crate::{help, sections, widgets};
 use eframe::egui;
@@ -10,6 +10,24 @@ use foveonic::{
 
 // Amplify small diagnostic differences without changing photographic output.
 const DEFAULT_DIFFERENCE_GAIN: f32 = 32.;
+
+pub fn background(ui: &mut egui::Ui, white: &mut bool) -> egui::Response {
+    widgets::button_group(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = widgets::MEDIUM_CONTROL_GAP;
+        widgets::centered_control_row(ui, |ui| {
+            for (light, label) in [(true, "White background"), (false, "Black background")] {
+                let selected = *white == light;
+                let response =
+                    widgets::icon_button(ui, label, selected, widgets::ControlSize::Medium);
+                widgets::appearance_icon(ui, &response, selected, light);
+                if response.on_hover_text(label).clicked() {
+                    *white = light;
+                }
+            }
+        });
+    })
+    .response
+}
 
 pub fn components(channels: Channels) -> &'static [(i32, &'static str)] {
     match channels {

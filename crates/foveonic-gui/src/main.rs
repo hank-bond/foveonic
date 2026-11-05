@@ -1003,11 +1003,12 @@ impl App {
     }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        // Reserve both groups before drawing so later dropdowns cannot shift Preview vertically.
-        let group_height = widgets::button_group_height(ui);
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), group_height),
-            egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+        let background_width = 2. * widgets::ControlSize::Medium.side()
+            + widgets::MEDIUM_CONTROL_GAP
+            + 2. * f32::from(widgets::BUTTON_GROUP_MARGIN);
+        toolbar::row_with_trailing(
+            ui,
+            background_width,
             |ui| {
                 changed |= inspect::preview_quality(
                     ui,
@@ -1055,6 +1056,9 @@ impl App {
                         });
                     });
                 });
+            },
+            |ui| {
+                inspect::background(ui, &mut self.preferences.white_viewport_background);
             },
         );
         if crop_tool::active(ui.ctx()) && !self.crop_preview_active() {
@@ -1134,6 +1138,19 @@ impl App {
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 ui.set_min_height(height);
+                let canvas = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), height),
+                );
+                ui.painter().rect_filled(
+                    canvas,
+                    0.,
+                    if self.preferences.white_viewport_background {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::BLACK
+                    },
+                );
                 let paths = self.browser.processing_selection(self.selected.as_deref());
                 if paths.len() > 1
                     && self
@@ -1144,10 +1161,6 @@ impl App {
                     changed |= self.comparison_view(ui, &paths);
                     return;
                 }
-                let canvas = egui::Rect::from_min_size(
-                    ui.cursor().min,
-                    egui::vec2(ui.available_width(), height),
-                );
                 changed |= self.show_photo(ui, mapping);
                 self.before_badge(ui, canvas);
             },
@@ -1231,11 +1244,18 @@ impl App {
             }
         } else {
             ui.centered_and_justified(|ui| {
-                ui.weak(if self.browser.files.is_empty() {
+                let message = if self.browser.files.is_empty() {
                     "Open a folder of X3F photographs"
                 } else {
                     "No visible photographs"
-                });
+                };
+                ui.label(egui::RichText::new(message).color(
+                    if self.preferences.white_viewport_background {
+                        egui::Color32::DARK_GRAY
+                    } else {
+                        egui::Color32::LIGHT_GRAY
+                    },
+                ));
             });
         }
         if let (Some(path), Some((response, uv))) = (

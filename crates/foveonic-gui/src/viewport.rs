@@ -658,7 +658,6 @@ impl Viewport {
         let painter = ui
             .painter()
             .with_clip_rect(canvas.intersect(ui.clip_rect()));
-        painter.rect_filled(canvas, 0., egui::Color32::from_gray(14));
         painter.image(
             texture.into().id,
             image,
