@@ -5,6 +5,29 @@ kind: reference
 
 # Changelog
 
+## 0.7.0
+
+Adaptive starting renders, dehaze, saved crops and more export formats, with improved colour controls and a quieter workspace.
+
+### Changes
+
+- Adaptive tone offers Natural and Strong starting renders on Classic, Merrill and Quattro. Regional analysis brings shadow detail into view and compresses bright detail, responding to Exposure without changing the artistic tone sliders. Shared profile limits remain available for tuning.
+- Dehaze adds automatic or picked shadow colour and a shared dark-signal protector across camera families. Zero Amount bypasses the operation, and automatic colour estimation runs only when selected.
+- Exposure's A button compensates for recorded dial, bracket or combined exposure compensation. Manual edits release A, clicking A again returns to zero, and camera defaults retain the automatic choice rather than one photograph's measured value.
+- Advanced Color Range offers a centred colour wheel, named custom ranges, direct photograph picking and dragging, and one selected-range preview at a time. Basic and Advanced share consistent controls and clipping protection.
+- Prevent saturation clipping is enabled by default and shared by Reference, Universal and Color Range saturation. Turning it off retains the preference for boosting muted colours while allowing stronger colourfulness and possible hue shifts. Saturation sliders use a symmetric displayed range with a stronger positive response.
+- Crop photographs with corner and edge handles, a dragging grid, original or custom aspect ratios, and an orientation switch. Saved crops apply to previews and every export format. C selects Crop, H or Enter returns to Hand, and a double-click in Crop resets to the full photograph.
+- Export JPEG, RGB8/RGB16 PNG and lossless or lossy JPEG XL alongside TIFF and DNG. JPEG XL offers adjustable quality and encoding effort, including its slow archival setting. Colour-managed exports preserve the selected destination space, including wide-gamut JPEG XL in ordinary image viewers. TIFF adds LZW and ZIP compression.
+- Full, Fast and Smart previews share denoised rendering where reduced previews are supported. Smart refines visible detail before the full photograph, and Draft is removed.
+- Merrill Compact speckle repair replaces all three layers with shared donor pixels. Its threshold slider now starts at 0.2. Neutralize and its three range controls share one visible group.
+- Improve Color Field recovery at clipped highlight boundaries and correct sd Quattro sparse sites before reduced previews.
+- Shared control sizes, responsive rows, compact menus and a centred photograph toolbar improve editing consistency. Local Contrast is labelled Clarity. Processing one selected photograph now enables Process when its recipe and destination are ready.
+- Progress and latency move below the browser. A session Log retains file operations and errors. New errors highlight Log in red until it is opened, and successful rendering no longer clears their history.
+
+### Alpha settings
+
+Retired experimental settings and migration readers have been removed. Older editing sidecars or presets containing those fields may need to be reset.
+
 ## 0.6.0
 
 <!-- Add your release introduction here. -->
