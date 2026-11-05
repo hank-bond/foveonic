@@ -214,8 +214,7 @@ fn views(
 }
 pub(super) fn seed(session: &mut RenderSession, buffer: ReadGuard) -> Result<()> {
     let name = "texture.layers-tiles";
-    let generation = session
-        .cache
+    let generation = session.cache.working[session.cache.active]
         .versions
         .get(name)
         .ok_or("texture checkpoint")?

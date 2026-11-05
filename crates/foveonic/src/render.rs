@@ -477,6 +477,9 @@ impl Engine {
         progress: Option<&dyn Fn(RenderProgress)>,
     ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
         session.cache.bind(&self.owner);
+        session
+            .cache
+            .select(settings.preview_quality, settings.preview_region);
         session.last_settings = Some(settings.clone());
         let mut execution = Execution {
             cache: Some(&mut session.cache),

@@ -119,6 +119,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[signed-releases](./signed-releases.md)** _(archived)._ Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases.
 - **[single-read-cache](./single-read-cache.md)** _(archived)._ Prepare all browsing and rendering inputs from one original read and keep cache hits independent of card I/O.
 - **[smart-preview-response](./smart-preview-response.md)** _(archived)._ Show Full viewport detail first for zoomed Smart edits while retaining the previous image.
+- **[smart-preview-reuse](./smart-preview-reuse.md)** _(archived)._ Preserve completed Smart detail during scrubbing and reuse warm regional and whole-frame inputs across refinement.
 - **[thumbnail-and-preview-cache](./thumbnail-and-preview-cache.md)** _(archived)._ Refresh rendered thumbnails, cache sharper asynchronous previews, and collect recipes in a visible source-folder directory.
 - **[thumbnail-priority](./thumbnail-priority.md)** _(archived)._ Load visible thumbnails first, greedily prepare the folder, and coordinate work behind the selected photo.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** _(archived)._ Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
