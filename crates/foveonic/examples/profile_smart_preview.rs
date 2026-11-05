@@ -42,26 +42,8 @@ fn completed(
     settings: &Settings,
     mode: Mode,
 ) -> Result<(Completed, ImageTexture)> {
-    let started = Instant::now();
-    let before = engine.gpu_activity();
-    let mut profile = Profile::new(mode);
-    let mut artifacts = engine
-        .render_session(session, settings, &["final"], || false, &mut profile)?
-        .ok_or("render superseded")?;
-    let Content::Image(image) = artifacts.pop().ok_or("missing image")?.content else {
-        return Err("image expected".into());
-    };
-    let texture = engine.view_texture(&image, None, &mut profile)?;
-    engine.device().poll(wgpu::Maintain::Wait);
-    Ok((
-        Completed {
-            milliseconds: started.elapsed().as_secs_f64() * 1000.,
-            extent: texture.description().extent,
-            activity: engine.gpu_activity().since(before),
-            profile,
-        },
-        texture,
-    ))
+    let (measurement, texture, _) = completed_image(engine, session, settings, mode)?;
+    Ok((measurement, texture))
 }
 fn route(
     engine: &Engine,
@@ -97,7 +79,7 @@ fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let source_path = PathBuf::from(
         args.next()
-            .ok_or("usage: profile_smart_preview ORIGINAL.x3f REPORT.json [--region-first [fresh|exposure|noise] | --direct-only] [--fractions LIST] [--repeats N] [-- RENDER_OPTIONS]")?,
+            .ok_or("usage: profile_smart_preview ORIGINAL.x3f REPORT.json [--region-first [fresh|exposure|noise] | --direct-only | --warm-edits] [--fractions LIST] [--repeats N] [-- RENDER_OPTIONS]")?,
     );
     let destination = PathBuf::from(args.next().ok_or("missing report destination")?);
     if destination.exists() {
@@ -116,6 +98,7 @@ fn main() -> Result<()> {
     };
     let mut region_mode = false;
     let mut direct_only = false;
+    let mut warm_edits = false;
     let mut scenario = "fresh";
     let mut repeats = 5usize;
     let mut fractions = vec![0.25, 0.5, 0.75];
@@ -124,6 +107,7 @@ fn main() -> Result<()> {
     while let Some(arg) = runner.next() {
         match arg.to_str() {
             Some("--direct-only") => direct_only = true,
+            Some("--warm-edits") => warm_edits = true,
             Some("--region-first") => {
                 region_mode = true;
                 if let Some(value) = runner.peek().and_then(|v| v.to_str()) {
@@ -169,6 +153,9 @@ fn main() -> Result<()> {
     if direct_only && region_mode {
         return Err("direct-only cannot be combined with region-first".into());
     }
+    if warm_edits && (direct_only || region_mode || fractions_set) {
+        return Err("warm-edits cannot be combined with other routes or fractions".into());
+    }
     let source = Arc::new(Source::open(&source_path)?);
     let settings = if controls.is_empty() {
         camera_settings(&source)?
@@ -193,6 +180,9 @@ fn main() -> Result<()> {
         return Err("this camera recipe does not support regional Smart preview".into());
     }
     let engine = Engine::new()?;
+    if warm_edits {
+        return warm_edit_benchmark(&engine, source, source_path, destination, settings, repeats);
+    }
     if region_mode {
         return region_benchmark(
             &engine,
@@ -232,15 +222,77 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn warm_edit_benchmark(
+    engine: &Engine,
+    source: Arc<Source>,
+    source_path: PathBuf,
+    destination: PathBuf,
+    mut settings: Settings,
+    repeats: usize,
+) -> Result<()> {
+    let initial = settings.clone();
+    let mut session = RenderSession::new(source);
+    settings.preview_quality = PreviewQuality::Fast;
+    let overview = region_completed(engine, &mut session, &settings)?;
+    let extent = overview.0.extent.map(|v| v * 2);
+    let size = [992.min(extent[0]), 1002.min(extent[1])];
+    let origin = [(extent[0] - size[0]) / 2, (extent[1] - size[1]) / 2];
+    let region = Some([
+        origin[0],
+        origin[1],
+        origin[0] + size[0],
+        origin[1] + size[1],
+    ]);
+    settings.preview_quality = PreviewQuality::Full;
+    settings.preview_region = region;
+    let mut detail = region_completed(engine, &mut session, &settings)?;
+    settings.preview_region = None;
+    let mut full = region_completed(engine, &mut session, &settings)?;
+    let mut runs = Vec::new();
+    for round in 0..repeats {
+        settings.exposure = initial.exposure + (round + 1) as f32 * 0.1;
+        let started = Instant::now();
+        settings.preview_region = region;
+        detail = region_completed(engine, &mut session, &settings)?;
+        settings.preview_region = None;
+        full = region_completed(engine, &mut session, &settings)?;
+        let total_ms = started.elapsed().as_secs_f64() * 1000.;
+        eprintln!(
+            "warm edit {round}: slice {:.1} ms, Full {:.1} ms, total {total_ms:.1} ms",
+            detail.0.milliseconds, full.0.milliseconds
+        );
+        runs.push(serde_json::json!({"round":round, "exposure":settings.exposure, "slice":detail.0, "full":full.0, "total_ms":total_ms, "cached_bytes":session.cached_bytes()}));
+    }
+    settings.exposure += 0.1;
+    settings.preview_region = region;
+    let diagnostic_slice = completed(engine, &mut session, &settings, Mode::Wall)?;
+    settings.preview_region = None;
+    let diagnostic_full = completed(engine, &mut session, &settings, Mode::Wall)?;
+    // Retain both displayed artifacts through the complete handoff.
+    drop((overview, detail, full));
+    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":initial, "region":region, "timing":"completed warm slice and Full continuation with view preparation, source decode and initial grid priming excluded, previous displayed artifacts retained, no scopes or physical presentation", "runs":runs, "wall_diagnostics":{"slice":diagnostic_slice.0,"full":diagnostic_full.0}});
+    std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
+    Ok(())
+}
+
 // The image and texture stay alive through continuation, matching foreground ownership.
 fn region_completed(
     engine: &Engine,
     session: &mut RenderSession,
     settings: &Settings,
 ) -> Result<(Completed, ImageTexture, RenderedImage)> {
+    completed_image(engine, session, settings, Mode::Off)
+}
+
+fn completed_image(
+    engine: &Engine,
+    session: &mut RenderSession,
+    settings: &Settings,
+    mode: Mode,
+) -> Result<(Completed, ImageTexture, RenderedImage)> {
     let started = Instant::now();
     let before = engine.gpu_activity();
-    let mut profile = Profile::new(Mode::Off);
+    let mut profile = Profile::new(mode);
     let mut artifacts = engine
         .render_session(session, settings, &["final"], || false, &mut profile)?
         .ok_or("render superseded")?;

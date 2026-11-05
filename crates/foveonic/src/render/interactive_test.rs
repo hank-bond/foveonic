@@ -460,7 +460,7 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
 
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_CACHE_X3F"]
-fn first_exposure_edit_reuses_finishing_input_and_matches_fresh() {
+fn exposure_edits_reuse_both_smart_grids_and_match_fresh() {
     let source = Source::open(std::env::var_os("FOVEONIC_CACHE_X3F").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
     let mut session = RenderSession::new(source);
@@ -470,8 +470,20 @@ fn first_exposure_edit_reuses_finishing_input_and_matches_fresh() {
     let retained_pixels = engine.readback_image(&retained).unwrap();
     let initial_bytes = session.cached_bytes();
     assert!(initial_bytes <= 1024 * 1024 * 1024);
-    for exposure in [0.5, 0.75] {
+    let [width, height] = retained.description().extent;
+    let region = Some([width / 4, height / 4, width / 2, height / 2]);
+    // Smart initializes Fast, a native detail tile, and then whole Full. Each
+    // subsequent exposure edit must reuse both native finishing boundaries.
+    settings.preview_quality = PreviewQuality::Fast;
+    session_image(&engine, &mut session, &settings);
+    settings.preview_quality = PreviewQuality::Full;
+    settings.preview_region = region;
+    session_image(&engine, &mut session, &settings);
+    settings.preview_region = None;
+    session_image(&engine, &mut session, &settings);
+    for (exposure, rect) in [(0.5, region), (0.5, None), (0.75, region), (0.75, None)] {
         settings.exposure = exposure;
+        settings.preview_region = rect;
         let mut profile = Profile::new(crate::profile::Mode::Gpu);
         let results = engine
             .render_session(&mut session, &settings, &["final"], || false, &mut profile)
@@ -484,7 +496,7 @@ fn first_exposure_edit_reuses_finishing_input_and_matches_fresh() {
         assert_eq!(
             profile.gpu.len(),
             1,
-            "exposure should dispatch only its photographic response: {:?}",
+            "warm slice/Full exposure should dispatch only its photographic response: {:?}",
             profile.gpu
         );
         let actual = engine.readback_image(cached).unwrap();
@@ -497,7 +509,37 @@ fn first_exposure_edit_reuses_finishing_input_and_matches_fresh() {
             &engine.readback_image(&fresh).unwrap(),
         );
         assert_eq!(engine.readback_image(&retained).unwrap(), retained_pixels);
+        assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
     }
+    // A cancelled reconstruction edit in one grid must not poison either
+    // grid's generations. Resuming both must use the new noise settings.
+    settings.reconstruction.as_mut().unwrap().chroma = 4;
+    settings.preview_region = region;
+    let before = engine.gpu_activity();
+    assert!(engine
+        .render_session(
+            &mut session,
+            &settings,
+            &["final"],
+            || engine.gpu_activity().since(before).dispatches >= 2,
+            &mut Profile::default(),
+        )
+        .unwrap()
+        .is_none());
+    for rect in [region, None] {
+        settings.preview_region = rect;
+        let cached = session_image(&engine, &mut session, &settings);
+        let fresh = engine
+            .render(&session.source, &settings, &mut Profile::default())
+            .unwrap();
+        assert_same_pixels(
+            "resumed noise edit across Smart grids",
+            &engine.readback_image(&cached).unwrap(),
+            &engine.readback_image(&fresh).unwrap(),
+        );
+        assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
+    }
+    assert_eq!(engine.readback_image(&retained).unwrap(), retained_pixels);
 }
 
 #[test]

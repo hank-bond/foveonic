@@ -233,12 +233,20 @@ struct Entry {
     value: Value,
 }
 #[derive(Default)]
+struct WorkingSet {
+    versions: HashMap<String, Version>,
+    selected: Vec<String>,
+    primary: Vec<String>,
+    grid: Option<(crate::render::PreviewQuality, Option<[u32; 4]>)>,
+    prime: bool,
+}
+#[derive(Default)]
 pub(crate) struct Cache {
     owner: Option<Arc<()>>,
-    versions: HashMap<String, Version>,
+    working: [WorkingSet; 2],
+    active: usize,
     counter: u64,
     entries: Vec<Entry>,
-    selected: Vec<String>,
 }
 impl Cache {
     const LIMIT: u64 = 1024 * 1024 * 1024;
@@ -253,6 +261,19 @@ impl Cache {
                 ..Default::default()
             };
         }
+    }
+    /// Native Full and the active preview grid keep their own restart boundaries.
+    /// Matching upstream generations still share one set of buffers and one budget.
+    pub(crate) fn select(
+        &mut self,
+        quality: crate::render::PreviewQuality,
+        region: Option<[u32; 4]>,
+    ) {
+        self.active = usize::from(quality.is_reduced() || region.is_some());
+        let working = &mut self.working[self.active];
+        let grid = (quality, region);
+        working.prime |= working.grid != Some(grid);
+        working.grid = Some(grid);
     }
     fn bytes(&self) -> u64 {
         self.entries
@@ -276,94 +297,90 @@ impl Cache {
     /// because those positions may change between renders.
     fn plan(&mut self, graph: &Graph, targets: &[usize]) -> crate::source::Result<Vec<usize>> {
         let required = graph.required(targets)?;
-        let initial = self.versions.is_empty();
-        let mut dirty = vec![false; graph.outputs.len()];
-        let mut local_changes = Vec::new();
-        for (id, output) in graph.outputs.iter().enumerate() {
-            let inputs = output
-                .dependencies
-                .iter()
-                .map(|input| {
-                    let name = graph.outputs[*input].cache_name();
-                    (name.clone(), self.versions[&name].generation)
-                })
-                .collect();
-            let recipe = Recipe {
-                operation: std::mem::discriminant(&graph.nodes[output.producer].operation),
-                parameters: graph.nodes[output.producer].operation.key(output.name),
-                data: output.data,
-                inputs,
-            };
-            let old = self.versions.get(&output.cache_name());
-            let local_changed = old.is_none_or(|old| {
-                old.recipe.operation != recipe.operation
-                    || old.recipe.parameters != recipe.parameters
-                    || old.recipe.data != recipe.data
-                    || !old
-                        .recipe
-                        .inputs
-                        .iter()
-                        .map(|i| &i.0)
-                        .eq(recipe.inputs.iter().map(|i| &i.0))
-            });
-            dirty[id] = local_changed || output.dependencies.iter().any(|input| dirty[*input]);
-            if local_changed && required[id] {
-                local_changes.push(id);
-            }
-            let generation = if let Some(old) = old.filter(|old| old.recipe == recipe) {
-                old.generation
+        {
+            let [full, preview] = &mut self.working;
+            let (working, other) = if self.active == 0 {
+                (full, &*preview)
             } else {
-                self.counter += 1;
-                self.counter
+                (preview, &*full)
             };
-            self.versions
-                .insert(output.cache_name(), Version { recipe, generation });
-        }
-        if initial {
-            // Keep the inputs of adjustable reconstruction ready for its first edit.
-            // Guided reconstruction also owns the luminance filter selection.
-            let node = graph
-                .nodes
-                .iter()
-                .find(|node| {
-                    matches!(
-                        node.operation,
-                        crate::graph::Operation::Texture { .. }
-                            | crate::graph::Operation::BlueGuidedReconstruct(_)
-                    ) && required[node.outputs[0]]
-                })
-                .unwrap_or(&graph.nodes[graph.outputs[targets[0]].producer]);
-            let pivot_producer = graph.outputs[node.outputs[0]].producer;
-            // Preserve all input branches, including those consumed after the pivot.
-            // Mark its side outputs dirty too: they must share the restart boundary.
+            let initial = working.versions.is_empty();
+            let mut dirty = vec![false; graph.outputs.len()];
+            let mut local_changes = Vec::new();
             for (id, output) in graph.outputs.iter().enumerate() {
-                dirty[id] = output.producer == pivot_producer
-                    || output.dependencies.iter().any(|input| dirty[*input]);
-            }
-        }
-        if initial || !local_changes.is_empty() {
-            let mut frontier = Vec::new();
-            for (_, output) in graph
-                .outputs
-                .iter()
-                .enumerate()
-                .filter(|(id, _)| required[*id] && dirty[*id])
-            {
-                for &input in &output.dependencies {
-                    if !dirty[input]
-                        && required[input]
-                        && !frontier.contains(&graph.outputs[input].cache_name())
-                    {
-                        frontier.push(graph.outputs[input].cache_name());
-                    }
+                let inputs = output
+                    .dependencies
+                    .iter()
+                    .map(|input| {
+                        let name = graph.outputs[*input].cache_name();
+                        (name.clone(), working.versions[&name].generation)
+                    })
+                    .collect();
+                let recipe = Recipe {
+                    operation: std::mem::discriminant(&graph.nodes[output.producer].operation),
+                    parameters: graph.nodes[output.producer].operation.key(output.name),
+                    data: output.data,
+                    inputs,
+                };
+                let old = working.versions.get(&output.cache_name());
+                let local_changed = old.is_none_or(|old| {
+                    old.recipe.operation != recipe.operation
+                        || old.recipe.parameters != recipe.parameters
+                        || old.recipe.data != recipe.data
+                        || !old
+                            .recipe
+                            .inputs
+                            .iter()
+                            .map(|i| &i.0)
+                            .eq(recipe.inputs.iter().map(|i| &i.0))
+                });
+                dirty[id] = local_changed || output.dependencies.iter().any(|input| dirty[*input]);
+                if local_changed && required[id] {
+                    local_changes.push(id);
                 }
+                let generation = if let Some(old) = old.filter(|old| old.recipe == recipe) {
+                    old.generation
+                } else if let Some(shared) = other
+                    .versions
+                    .get(&output.cache_name())
+                    .filter(|old| old.recipe == recipe)
+                {
+                    shared.generation
+                } else {
+                    self.counter += 1;
+                    self.counter
+                };
+                working
+                    .versions
+                    .insert(output.cache_name(), Version { recipe, generation });
             }
             if initial {
-                // Exposure and tone usually change before reconstruction controls.
-                // Also retain their linear input so that first edit needs no warm-up.
-                // The ordinary bounded cache admission still applies to both boundaries.
-                for node in &graph.nodes {
-                    if matches!(
+                // Keep the inputs of adjustable reconstruction ready for its first edit.
+                // Guided reconstruction also owns the luminance filter selection.
+                let node = graph
+                    .nodes
+                    .iter()
+                    .find(|node| {
+                        matches!(
+                            node.operation,
+                            crate::graph::Operation::Texture { .. }
+                                | crate::graph::Operation::BlueGuidedReconstruct(_)
+                        ) && required[node.outputs[0]]
+                    })
+                    .unwrap_or(&graph.nodes[graph.outputs[targets[0]].producer]);
+                let pivot_producer = graph.outputs[node.outputs[0]].producer;
+                // Preserve all input branches, including those consumed after the pivot.
+                // Mark its side outputs dirty too: they must share the restart boundary.
+                for (id, output) in graph.outputs.iter().enumerate() {
+                    dirty[id] = output.producer == pivot_producer
+                        || output.dependencies.iter().any(|input| dirty[*input]);
+                }
+            }
+            let finishing: Vec<_> = graph
+                .nodes
+                .iter()
+                .filter(|node| {
+                    matches!(
                         node.operation,
                         crate::graph::Operation::Tone { .. }
                             | crate::graph::Operation::TonalRanges { .. }
@@ -372,39 +389,70 @@ impl Cache {
                             | crate::graph::Operation::LinearCodeResponse { .. }
                             | crate::graph::Operation::CodeResponse { .. }
                     ) && required[node.outputs[0]]
-                    {
-                        for &input in &node.inputs {
-                            let name = graph.outputs[input].cache_name();
-                            if !frontier.contains(&name) {
-                                frontier.push(name);
-                            }
+                })
+                .flat_map(|node| {
+                    node.inputs
+                        .iter()
+                        .map(|&input| graph.outputs[input].cache_name())
+                })
+                .collect();
+            if initial || working.prime || !local_changes.is_empty() {
+                let mut frontier = Vec::new();
+                for (_, output) in graph
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .filter(|(id, _)| required[*id] && dirty[*id])
+                {
+                    for &input in &output.dependencies {
+                        if !dirty[input]
+                            && required[input]
+                            && !frontier.contains(&graph.outputs[input].cache_name())
+                        {
+                            frontier.push(graph.outputs[input].cache_name());
                         }
                     }
                 }
+                if initial || working.prime {
+                    // Exposure and tone usually change before reconstruction controls.
+                    // Also retain their linear input so that first edit needs no warm-up.
+                    // The ordinary bounded cache admission still applies to both boundaries.
+                    for name in &finishing {
+                        if !frontier.contains(name) {
+                            frontier.push(name.clone());
+                        }
+                    }
+                }
+                working.selected = frontier;
             }
-            self.selected = frontier;
-        }
-        for &id in &graph.session_outputs {
-            let name = graph.outputs[id].cache_name();
-            if required[id] && !self.selected.iter().any(|n| n == &name) {
-                self.selected.push(name);
+            working.primary = finishing
+                .into_iter()
+                .filter(|name| working.selected.contains(name))
+                .collect();
+            for &id in &graph.session_outputs {
+                let name = graph.outputs[id].cache_name();
+                if required[id] {
+                    if !working.primary.contains(&name) {
+                        working.primary.push(name.clone());
+                    }
+                    if !working.selected.contains(&name) {
+                        working.selected.push(name);
+                    }
+                }
             }
+            // Explicit downstream editing boundaries take admission priority over
+            // speculative initial frontiers. Later declarations are closer to the edit.
+            working.selected.sort_by_key(|name| {
+                graph
+                    .session_outputs
+                    .iter()
+                    .rev()
+                    .position(|id| graph.outputs[*id].cache_name() == *name)
+                    .unwrap_or(usize::MAX)
+            });
+            working.prime = false;
         }
-        // Explicit downstream editing boundaries take admission priority over
-        // speculative initial frontiers. Later declarations are closer to the edit.
-        self.selected.sort_by_key(|name| {
-            graph
-                .session_outputs
-                .iter()
-                .rev()
-                .position(|id| graph.outputs[*id].cache_name() == *name)
-                .unwrap_or(usize::MAX)
-        });
-        self.entries.retain(|entry| {
-            self.versions
-                .get(&entry.name)
-                .is_some_and(|version| version.generation == entry.generation)
-        });
+        self.retain_selected();
         // An editing boundary can make earlier checkpoints unnecessary. If an
         // earlier entry was evicted, asking for it as another root would rerun
         // upstream processing just to refill a cache that already serves this edit.
@@ -419,22 +467,26 @@ impl Cache {
             .iter()
             .enumerate()
             .filter_map(|(id, output)| {
-                (needed[id] && self.selected.contains(&output.cache_name())).then_some(id)
+                (needed[id]
+                    && self.working[self.active]
+                        .selected
+                        .contains(&output.cache_name()))
+                .then_some(id)
             })
             .collect())
     }
     fn get(&self, name: &str) -> Option<Value> {
-        let generation = self.versions.get(name)?.generation;
+        let generation = self.working[self.active].versions.get(name)?.generation;
         self.entries
             .iter()
             .find(|entry| entry.name == name && entry.generation == generation)
             .map(|entry| entry.value.clone())
     }
     fn put(&mut self, name: &str, value: &Value) {
-        if !self.selected.iter().any(|n| n == name) {
+        if !self.working[self.active].selected.iter().any(|n| n == name) {
             return;
         }
-        let generation = self.versions[name].generation;
+        let generation = self.working[self.active].versions[name].generation;
         if self
             .entries
             .iter()
@@ -443,20 +495,17 @@ impl Cache {
             return;
         }
         if !self.room_for(value) {
-            self.entries
-                .retain(|entry| self.selected.contains(&entry.name));
+            self.retain_selected();
         }
         if !self.room_for(value) {
-            let priority = self.selected.iter().position(|n| n == name).unwrap();
+            let priority = self.priority(name, generation).unwrap();
             while !self.room_for(value) {
                 let candidate = self
                     .entries
                     .iter()
                     .enumerate()
                     .filter_map(|(i, entry)| {
-                        self.selected
-                            .iter()
-                            .position(|n| *n == entry.name)
+                        self.priority(&entry.name, entry.generation)
                             .filter(|rank| *rank > priority)
                             .map(|rank| (i, rank))
                     })
@@ -476,8 +525,40 @@ impl Cache {
         }
     }
     pub(crate) fn finish(&mut self) {
-        self.entries
-            .retain(|entry| self.selected.contains(&entry.name));
+        self.retain_selected();
+    }
+    fn priority(&self, name: &str, generation: u64) -> Option<(u8, u8, usize)> {
+        self.working
+            .iter()
+            .enumerate()
+            .filter_map(|(index, working)| {
+                working
+                    .versions
+                    .get(name)
+                    .filter(|version| version.generation == generation)?;
+                let rank = working
+                    .selected
+                    .iter()
+                    .position(|selected| selected == name)?;
+                Some((
+                    u8::from(!working.primary.iter().any(|primary| primary == name)),
+                    u8::from(index != self.active),
+                    rank,
+                ))
+            })
+            .min()
+    }
+    fn retain_selected(&mut self) {
+        let working = &self.working;
+        self.entries.retain(|entry| {
+            working.iter().any(|state| {
+                state.selected.contains(&entry.name)
+                    && state
+                        .versions
+                        .get(&entry.name)
+                        .is_some_and(|version| version.generation == entry.generation)
+            })
+        });
     }
 }
 
@@ -609,17 +690,67 @@ mod tests {
             .map(|id| {
                 (
                     first.outputs[*id].name,
-                    cache.versions[first.outputs[*id].name].generation,
+                    cache.working[cache.active].versions[first.outputs[*id].name].generation,
                 )
             })
             .collect();
-        let previous = cache.versions["texture.layers-tiles"].generation;
+        let previous = cache.working[cache.active].versions["texture.layers-tiles"].generation;
         let (second, root) = graph_for_detail(1.2);
         cache.plan(&second, &[root]).unwrap();
         for (name, version) in inputs {
-            assert_eq!(cache.versions[name].generation, version);
+            assert_eq!(
+                cache.working[cache.active].versions[name].generation,
+                version
+            );
         }
-        assert_ne!(cache.versions["texture.layers-tiles"].generation, previous);
+        assert_ne!(
+            cache.working[cache.active].versions["texture.layers-tiles"].generation,
+            previous
+        );
+    }
+    #[test]
+    fn preview_and_full_share_matching_inputs_without_replacing_each_others_versions() {
+        use crate::render::PreviewQuality;
+        let mut cache = Cache::default();
+        let (full, root) = graph_for_detail(1.);
+        cache.select(PreviewQuality::Full, None);
+        cache.plan(&full, &[root]).unwrap();
+        let input = cache.working[0].versions["noise.tiles"].generation;
+        let full_result = cache.working[0].versions["texture.layers-tiles"].generation;
+        let (preview, root) = graph_for_detail(1.2);
+        cache.select(PreviewQuality::Full, Some([8, 8, 32, 32]));
+        cache.plan(&preview, &[root]).unwrap();
+        assert_eq!(cache.working[1].versions["noise.tiles"].generation, input);
+        assert_ne!(
+            cache.working[1].versions["texture.layers-tiles"].generation,
+            full_result
+        );
+        cache.select(PreviewQuality::Full, None);
+        cache.plan(&full, &[root]).unwrap();
+        assert_eq!(
+            cache.working[0].versions["texture.layers-tiles"].generation,
+            full_result
+        );
+        // Invalidating an upstream recipe in Full must also invalidate preview
+        // when it next runs, without falsely adopting an unrelated generation.
+        let (mut changed, root) = graph_for_detail(1.);
+        let crate::graph::Operation::NoiseBase(params) = &mut changed.nodes[1].operation else {
+            panic!("expected noise base");
+        };
+        params.reduction[0] = 0.25;
+        cache.plan(&changed, &[root]).unwrap();
+        let new_input = cache.working[0].versions["noise.tiles"].generation;
+        assert_ne!(new_input, input);
+        cache.select(PreviewQuality::Full, Some([8, 8, 32, 32]));
+        cache.plan(&changed, &[root]).unwrap();
+        assert_eq!(
+            cache.working[1].versions["noise.tiles"].generation,
+            new_input
+        );
+        assert_ne!(
+            cache.working[1].versions["texture.layers-tiles"].generation,
+            full_result
+        );
     }
     #[test]
     fn texture_edits_invalidate_color_and_sharpening_but_reuse_filtering() {
@@ -675,7 +806,7 @@ mod tests {
         let inputs = graph.nodes[detail_node].inputs.clone();
         let frontier = cache.plan(&graph, &[final_id]).unwrap();
         assert!(inputs.iter().all(|id| frontier.contains(id)));
-        let old_signal = cache.versions["detail.signal"].generation;
+        let old_signal = cache.working[cache.active].versions["detail.signal"].generation;
         graph.nodes[detail_node].operation = O::Texture {
             params,
             prepared: crate::nodes::color::texture::Prepared::new(
@@ -693,7 +824,10 @@ mod tests {
         };
         let frontier = cache.plan(&graph, &[final_id]).unwrap();
         assert!(inputs.iter().all(|id| frontier.contains(id)));
-        assert_ne!(old_signal, cache.versions["detail.signal"].generation);
+        assert_ne!(
+            old_signal,
+            cache.working[cache.active].versions["detail.signal"].generation
+        );
         graph.nodes[graph.outputs[final_id].producer].operation = O::Tone {
             curve: vec![0., 1.],
             exposure: 0.5,
@@ -762,14 +896,17 @@ mod tests {
         let mut cache = Cache::default();
         let frontier = cache.plan(&graph, &[root]).unwrap();
         assert_eq!(frontier, vec![rgb, blue, mask]);
-        let previous = cache.versions["residual.rgb"].generation;
+        let previous = cache.working[cache.active].versions["residual.rgb"].generation;
         graph.nodes[graph.outputs[root].producer].operation = finish(1.2);
         // A detail edit can use the initial checkpoints before reconstruction.
         assert_eq!(
             cache.plan(&graph, &[root]).unwrap(),
             vec![reconstructed, residual, mask]
         );
-        assert_ne!(cache.versions["residual.rgb"].generation, previous);
+        assert_ne!(
+            cache.working[cache.active].versions["residual.rgb"].generation,
+            previous
+        );
         graph.nodes[graph.outputs[reconstructed].producer].operation = O::BlueGuidedReconstruct(
             Arc::new(blue_guided_reconstruct::Prepared::new([8, 8], 0.5, [0.; 3], None).unwrap()),
         );
