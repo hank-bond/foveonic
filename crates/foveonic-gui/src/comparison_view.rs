@@ -62,7 +62,7 @@ impl App {
                         // Ordinary comparison navigation belongs to the canvas. The
                         // active photo alone accepts direct color gestures.
                         if !(crate::editor::direct_color::active(ui.ctx()) || crate::editor::dehaze::active(ui.ctx()))
-                            || !self.color_tool_available(mapping, ui.ctx())
+                            || !self.photo_interaction_available(mapping)
                         {
                             child.disable();
                         }

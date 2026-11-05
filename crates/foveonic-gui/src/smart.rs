@@ -54,12 +54,13 @@ pub fn same_edits(a: &Settings, b: &Settings) -> bool {
 /// Artistic edits can keep the previous image visible. Framing changes cannot
 /// reuse a tile's old mapping into the photograph.
 pub fn same_geometry(a: &Settings, b: &Settings) -> bool {
-    a.crop == b.crop && a.output_size == b.output_size
+    a.crop == b.crop && a.rotation == b.rotation && a.output_size == b.output_size
 }
 
 impl App {
     pub(super) fn smart_detail(&self, pixels_per_point: f32) -> Option<&worker::Frame> {
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
+            || self.framing_preview_active()
             || self.output != "final"
             || self.comparison.requested()
             || self
@@ -73,7 +74,7 @@ impl App {
             self.selected.as_ref() == Some(&detail.path)
                 && detail.output == self.output
                 && detail.rendition == self.before.active
-                && detail.crop_preview == self.crop_preview_active()
+                && detail.framing_preview == self.framing_preview_active()
                 && same_geometry(&detail.requested, &self.view_settings())
                 // A completed newer whole image supersedes this tile even when
                 // another edit is already pending. Never rewind to an older base.
@@ -85,6 +86,11 @@ impl App {
     pub(super) fn smart_edit_request(
         &mut self,
     ) -> Option<(preferences::PreviewMode, Option<[u32; 4]>)> {
+        if self.framing_preview_active()
+            && self.preferences.preview_quality == preferences::PreviewMode::Smart
+        {
+            return Some((preferences::PreviewMode::Full, None));
+        }
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.output != "final"
             || self.comparison.requested()
@@ -100,7 +106,7 @@ impl App {
             self.selected.as_ref() == Some(&frame.path)
                 && frame.output == self.output
                 && frame.rendition == self.before.active
-                && frame.crop_preview == self.crop_preview_active()
+                && frame.framing_preview == self.framing_preview_active()
                 && frame.artifact.settings.output_size.is_none()
                 && requested.output_size.is_none()
                 && same_geometry(&frame.requested, &requested)
@@ -124,6 +130,7 @@ impl App {
 
     pub(super) fn update_smart(&mut self, ctx: &egui::Context) {
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
+            || self.framing_preview_active()
             || self.exporting
             || self.output != "final"
             || self.comparison.requested()
@@ -168,7 +175,7 @@ impl App {
         // Recipes without regional support refine the whole frame directly.
         // Otherwise retain the first detail tile while Full completes.
         if self.detail.is_some()
-            || (frame.crop_preview && frame.artifact.settings.output_size.is_some())
+            || (frame.framing_preview && frame.artifact.settings.output_size.is_some())
             || !frame
                 .artifact
                 .settings

@@ -12,7 +12,7 @@ Run source decoding and processing on the background image worker. Keep one acti
 
 Photographic data stays on the GPU. Small tables and embedded previews may use CPU decoding/readback. Display mapping preserves buffer samples. Preserve the configuration behind the currently displayed artifact while another request is pending.
 
-Keep photograph toolbar composition and common tool routing in `photo_tools.rs`. Each tool owns its interaction and options. Use `toolbar.rs` for strip placement and grouping and `widgets.rs` for control geometry and menus. Return edit changes through the drawing result rather than adding tool-specific dirty checks to the app loop.
+Keep photograph-tool selection, cancellation, pointer routing and toolbar composition in `photo_tools.rs`. It owns the single selected tool. Tool modules own their gestures, pending replies and options and must not activate or cancel their peers. Use `framing.rs` for the common Crop/Rotate presentation and overlay, `toolbar.rs` for strip placement and grouping, and `widgets.rs` for control geometry and menus. Return edit changes through the drawing result rather than adding tool-specific dirty checks to the app loop.
 
 The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures real egui/wgpu frames and closes the window. Never enable it by default. The explicit [README screenshot task](../../../docs/gui-screenshot.md) uses the same isolated capture path with a checked-in recipe. Keep sidecar access disabled and processing durations out of that documentation capture.
 
@@ -45,11 +45,12 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[chromaticity.rs](./chromaticity.rs)** Draws a CIE 1931 xy guide with fixed visual anchors for the layer mixer.
 - **[comparison_view.rs](./comparison_view.rs)** Presents highlighted photos together while the active photo keeps the shared editor and RAW renderer.
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
-- **[crop_tool.rs](./crop_tool.rs)** Owns crop activation, aspect controls and pointer drafts while settings retain saved framing.
+- **[crop_tool.rs](./crop_tool.rs)** Owns crop gestures and aspect options within the shared photograph-tool lifecycle.
 - **[display.rs](./display.rs)** Declares the window's display encoding and tags its native Metal layer for host color matching.
 - **[display_image.rs](./display_image.rs)** Uploads bounded linear-light photographic previews without clipping them to sRGB.
 - **[export.rs](./export.rs)** Shares camera-choice resolution and Full photographic and DNG exports between interactive and batch workers.
 - **[folder_loader.rs](./folder_loader.rs)** Discovers folder snapshots away from the UI and publishes only the newest request.
+- **[framing.rs](./framing.rs)** Shares the rotated editing plane, crop frame, exterior shading and dimensions across framing tools.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
 - **[help_examples.rs](./help_examples.rs)** Presents embedded photographic comparisons through one image-switching popover template.
 - **[icon.rs](./icon.rs)** Loads the window icon while leaving macOS Dock appearances to the app bundle.
@@ -60,12 +61,13 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
 - **[mixer.rs](./mixer.rs)** Edits layer proportions inside a fixed dashed triangle on a CIE xy guide.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
-- **[photo_tools.rs](./photo_tools.rs)** Composes the photograph toolbar and shares Hand, Escape and tool-availability routing.
+- **[photo_tools.rs](./photo_tools.rs)** Owns photograph-tool selection, cancellation and pointer routing, and composes the toolbar.
 - **[preferences.rs](./preferences.rs)** Persists workspace, display, cache and per-mode processing preferences separately from image edits.
 - **[preview_image.rs](./preview_image.rs)** Prepares oriented display thumbnails and larger previews away from the UI thread.
 - **[previews.rs](./previews.rs)** Refreshes browser previews from complete photographic frames after foreground work yields.
 - **[processing.rs](./processing.rs)** Remembers per-mode output choices and edits them independently of photographic recipes.
 - **[progress.rs](./progress.rs)** Shows request-to-image time and discrete completed loading and rendering stages.
+- **[rotate_tool.rs](./rotate_tool.rs)** Owns line and freehand rotation gestures within the shared photograph-tool lifecycle.
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
 - **[shortcuts.rs](./shortcuts.rs)** Defines workspace actions and routes their keys before widgets, preserving text and modal input.

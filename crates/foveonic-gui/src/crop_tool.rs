@@ -1,11 +1,11 @@
-//! Owns crop activation, aspect controls and pointer drafts while settings retain saved framing.
+//! Owns crop gestures and aspect options within the shared photograph-tool lifecycle.
 
 mod gesture;
 mod ratios;
 pub use ratios::NamedRatio;
 
 use crate::{
-    editor,
+    photo_tools::{self, Tool},
     widgets::{self, ControlSize},
 };
 use eframe::egui;
@@ -14,24 +14,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Default)]
 struct State {
-    active: bool,
     source: Option<PathBuf>,
     drag: Option<gesture::Drag>,
     dialog: Option<ratios::Dialog>,
     menu_open: bool,
-    view_changed: bool,
-}
-impl State {
-    fn set_active(&mut self, ctx: &egui::Context, active: bool) {
-        self.view_changed |= self.active != active;
-        self.active = active;
-        self.drag = None;
-        if active {
-            editor::direct_color::exit(ctx);
-            editor::dehaze::exit(ctx);
-            editor::white_balance::exit(ctx);
-        }
-    }
 }
 fn id() -> egui::Id {
     egui::Id::new("crop tool")
@@ -44,7 +30,7 @@ fn store(ctx: &egui::Context, state: State) {
 }
 
 pub fn active(ctx: &egui::Context) -> bool {
-    state(ctx).active
+    photo_tools::selected(ctx) == Tool::Crop
 }
 pub fn menu_open(ctx: &egui::Context) -> bool {
     let s = state(ctx);
@@ -59,28 +45,31 @@ pub fn source(ctx: &egui::Context, path: Option<&Path>) {
         store(ctx, s);
     }
 }
-pub fn exit(ctx: &egui::Context) {
+pub(crate) fn cancel(ctx: &egui::Context) {
     let mut s = state(ctx);
-    s.set_active(ctx, false);
+    s.drag = None;
+    s.dialog = None;
+    s.menu_open = false;
     store(ctx, s);
+}
+pub fn exit(ctx: &egui::Context) {
+    cancel(ctx);
+    photo_tools::release(ctx, Tool::Crop);
 }
 pub fn escape(ctx: &egui::Context) {
     let mut s = state(ctx);
     if s.drag.take().is_none() {
-        s.set_active(ctx, false);
+        exit(ctx);
+    } else {
+        store(ctx, s);
     }
-    store(ctx, s);
 }
 pub fn toggle(ctx: &egui::Context) {
-    let mut s = state(ctx);
-    s.set_active(ctx, !s.active);
-    store(ctx, s);
+    photo_tools::select(ctx, if active(ctx) { Tool::Hand } else { Tool::Crop });
 }
-pub fn take_view_change(ctx: &egui::Context) -> bool {
-    let mut s = state(ctx);
-    let changed = std::mem::take(&mut s.view_changed);
-    store(ctx, s);
-    changed
+pub fn displayed(ctx: &egui::Context, crop: Crop) -> (Crop, bool) {
+    let s = state(ctx);
+    (s.drag.as_ref().map_or(crop, |d| d.draft), s.drag.is_some())
 }
 
 pub fn button(ui: &mut egui::Ui, crop: &mut Crop, extent: Option<[u32; 2]>, custom: &[NamedRatio]) {
@@ -88,15 +77,16 @@ pub fn button(ui: &mut egui::Ui, crop: &mut Crop, extent: Option<[u32; 2]>, cust
     ui.add_enabled_ui(extent.is_some(), |ui| {
         let mut action = None;
         let (button, menu) =
-            widgets::split_icon_button(ui, "Crop", s.active, ControlSize::Large, |ui| {
+            widgets::split_icon_button(ui, "Crop", active(ui.ctx()), ControlSize::Large, |ui| {
                 action = ratios::menu(ui, *crop, custom, &mut s.dialog);
             });
-        crop_icon(ui, &button, s.active);
+        crop_icon(ui, &button, active(ui.ctx()));
         if button
             .on_hover_text("Crop (C) · Drag handles to resize, or drag inside to move")
             .clicked()
         {
-            s.set_active(ui.ctx(), !s.active);
+            toggle(ui.ctx());
+            s = state(ui.ctx());
         }
         s.menu_open = menu.inner.is_some();
         menu.response.on_hover_text("Aspect ratios and crop reset");
@@ -112,7 +102,8 @@ pub fn button(ui: &mut egui::Ui, crop: &mut Crop, extent: Option<[u32; 2]>, cust
                     *crop = gesture::fit(*crop, extent);
                 }
             }
-            s.set_active(ui.ctx(), true);
+            photo_tools::select(ui.ctx(), Tool::Crop);
+            s = state(ui.ctx());
         }
     });
     store(ui.ctx(), s);
@@ -129,7 +120,8 @@ pub fn dialog(
         if let Some(extent) = extent {
             crop.aspect = aspect;
             *crop = gesture::fit(*crop, extent);
-            s.set_active(ctx, true);
+            photo_tools::select(ctx, Tool::Crop);
+            s = state(ctx);
         }
     }
     store(ctx, s);
@@ -138,13 +130,12 @@ pub fn dialog(
 pub fn photo(
     ui: &mut egui::Ui,
     response: &egui::Response,
-    canvas: egui::Rect,
     image: egui::Rect,
     extent: [u32; 2],
     crop: &mut Crop,
 ) -> bool {
     let mut s = state(ui.ctx());
-    if !s.active || extent.contains(&0) {
+    if !active(ui.ctx()) || extent.contains(&0) {
         return false;
     }
     if s.drag.as_ref().is_some_and(|drag| drag.original != *crop) {
@@ -160,7 +151,7 @@ pub fn photo(
             let native = egui::Pos2::ZERO
                 + (position - image.min) / image.size()
                     * egui::vec2(extent[0] as f32, extent[1] as f32);
-            let rect = gesture::screen_rect(*crop, extent, image);
+            let rect = crate::framing::crop_rect(*crop, extent, image);
             let handle = gesture::hit(rect, position);
             if response.hovered()
                 && image.contains(position)
@@ -189,8 +180,6 @@ pub fn photo(
             changed = drag.original != drag.draft;
         }
     }
-    let displayed = s.drag.as_ref().map_or(*crop, |d| d.draft);
-    gesture::paint(ui, canvas, image, displayed, extent, s.drag.is_some());
     store(ui.ctx(), s);
     changed
 }
@@ -217,7 +206,7 @@ mod tests {
         let ctx = egui::Context::default();
         toggle(&ctx);
         assert!(active(&ctx));
-        assert!(take_view_change(&ctx));
+        assert!(crate::photo_tools::take_view_change(&ctx));
         let mut s = state(&ctx);
         s.drag = Some(gesture::Drag::new(
             Crop::default(),
@@ -228,9 +217,9 @@ mod tests {
         store(&ctx, s);
         escape(&ctx);
         assert!(active(&ctx));
-        assert!(!take_view_change(&ctx));
+        assert!(!crate::photo_tools::take_view_change(&ctx));
         escape(&ctx);
         assert!(!active(&ctx));
-        assert!(take_view_change(&ctx));
+        assert!(crate::photo_tools::take_view_change(&ctx));
     }
 }

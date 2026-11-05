@@ -3,7 +3,7 @@
 override EXTENDED_DISPLAY: bool = false;
 // Small native textures retain linear light for egui texture interpolation.
 override LINEAR_OUTPUT: bool = false;
-struct Params { rect: vec4<f32>, options: vec4<f32>, primaries: array<vec4<f32>, 3>, color_transform: ColorTransform }
+struct Params { rotation: array<vec4<f32>,2>, rect: vec4<f32>, options: vec4<f32>, primaries: array<vec4<f32>, 3>, color_transform: ColorTransform }
 @group(0) @binding(0) var image: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var input_image: texture_2d<f32>;
@@ -28,7 +28,8 @@ fn sample_at(uv: vec2<f32>) -> vec3<f32> {
 fn encode(v: vec3<f32>) -> vec3<f32> { return select(1.055 * pow(v, vec3(1./2.4)) - 0.055, v * 12.92, v <= vec3(0.0031308)); }
 fn encode_extended(v: vec3<f32>) -> vec3<f32> { return sign(v) * encode(abs(v)); }
 @fragment fn fs(v: Vertex) -> @location(0) vec4<f32> {
-    let uv = (v.uv - params.rect.xy) / params.rect.zw;
+    let shown = vec3((v.uv - params.rect.xy) / params.rect.zw,1.);
+    let uv = vec2(dot(params.rotation[0].xyz,shown),dot(params.rotation[1].xyz,shown));
     // The workspace owns the photograph's surround, including its chosen background.
     if any(uv < vec2(0.)) || any(uv > vec2(1.)) { discard; }
     var rgb = sample_at(uv);

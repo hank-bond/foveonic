@@ -1,6 +1,9 @@
 //! Routes on-image color gestures into existing range sliders using asynchronous guide picks.
 
-use crate::worker::{ColorPickReply, ColorPickRequest, ColorPickTool};
+use crate::{
+    photo_tools::{self, Tool},
+    worker::{ColorPickReply, ColorPickRequest, ColorPickTool},
+};
 use eframe::egui;
 use foveonic::render::{ColorEditorControls, Settings};
 use std::path::{Path, PathBuf};
@@ -65,7 +68,6 @@ struct Drag {
 
 #[derive(Clone, Default)]
 struct State {
-    active: bool,
     target: Target,
     configuration_menu: bool,
     context_menu: bool,
@@ -86,7 +88,7 @@ fn store(ctx: &egui::Context, state: State) {
 }
 
 pub fn active(ctx: &egui::Context) -> bool {
-    state(ctx).active
+    photo_tools::selected(ctx) == Tool::ColorRange
 }
 pub fn menu_open(ctx: &egui::Context) -> bool {
     let s = state(ctx);
@@ -100,26 +102,28 @@ pub fn toggle_advanced(ctx: &egui::Context) {
 }
 pub fn advanced_active(ctx: &egui::Context) -> bool {
     let s = state(ctx);
-    s.active && s.target == Target::Advanced
+    active(ctx) && s.target == Target::Advanced
 }
 
 fn toggle_target(ctx: &egui::Context, target: Target) {
-    crate::crop_tool::exit(ctx);
-    super::white_balance::exit(ctx);
+    let on = active(ctx) && state(ctx).target == target;
+    photo_tools::select(ctx, if on { Tool::Hand } else { Tool::ColorRange });
     let mut s = state(ctx);
-    s.active = !(s.active && s.target == target);
     s.target = target;
+    store(ctx, s);
+}
+pub(crate) fn cancel(ctx: &egui::Context) {
+    super::advanced_color::cancel_rename(ctx);
+    let mut s = state(ctx);
     s.drag = None;
+    s.configuration_menu = false;
+    s.context_menu = false;
     s.generation += 1;
     store(ctx, s);
 }
 pub fn exit(ctx: &egui::Context) {
-    super::advanced_color::cancel_rename(ctx);
-    let mut s = state(ctx);
-    s.active = false;
-    s.drag = None;
-    s.generation += 1;
-    store(ctx, s);
+    cancel(ctx);
+    photo_tools::release(ctx, Tool::ColorRange);
 }
 pub fn selection(ctx: &egui::Context) -> (usize, [f32; 8]) {
     let s = state(ctx);
@@ -147,17 +151,12 @@ pub fn dragging(ctx: &egui::Context) -> bool {
 }
 pub fn button(ui: &mut egui::Ui) {
     let mut s = state(ui.ctx());
-    let (toggle, opened) = settings::tools(ui, s.active, &mut s.configuration);
+    let (toggle, opened) = settings::tools(ui, active(ui.ctx()), &mut s.configuration);
     s.configuration_menu = opened;
-    if toggle {
-        super::dehaze::exit(ui.ctx());
-        super::white_balance::exit(ui.ctx());
-        s.active = !s.active;
-        s.target = Target::Basic;
-        s.drag = None;
-        s.generation += 1;
-    }
     store(ui.ctx(), s);
+    if toggle {
+        toggle_target(ui.ctx(), Target::Basic);
+    }
 }
 
 pub fn receive(ctx: &egui::Context, reply: ColorPickReply) {
@@ -271,8 +270,12 @@ pub fn photo(
     settings: &mut Settings,
     allowed: bool,
 ) -> (bool, Option<ColorPickRequest>) {
+    if !settings.color_editor_enabled {
+        exit(ui.ctx());
+        return (false, None);
+    }
     let mut s = state(ui.ctx());
-    if (!s.active && s.drag.is_none()) || !allowed {
+    if (!active(ui.ctx()) && s.drag.is_none()) || !allowed {
         s.drag = None;
         s.context_menu = false;
         store(ui.ctx(), s);
@@ -286,14 +289,14 @@ pub fn photo(
             i.key_down(egui::Key::Space),
         )
     });
-    if s.active {
+    if active(ui.ctx()) {
         response.context_menu(|ui| settings::controls(ui, &mut s.configuration));
     }
-    s.context_menu = s.active && response.context_menu_opened();
-    if s.active && response.hovered() && !pan {
+    s.context_menu = active(ui.ctx()) && response.context_menu_opened();
+    if active(ui.ctx()) && response.hovered() && !pan {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
-    if pan && s.active {
+    if pan && active(ui.ctx()) {
         s.drag = None;
         store(ui.ctx(), s);
         return (false, None);
@@ -313,7 +316,7 @@ pub fn photo(
     if pressed && !response.is_pointer_button_down_on() {
         s.drag = None;
     }
-    if s.active && pressed && response.is_pointer_button_down_on() && !pan {
+    if active(ui.ctx()) && pressed && response.is_pointer_button_down_on() && !pan {
         if let (Some(uv), Some(anchor)) = (uv, position) {
             s.generation += 1;
             s.drag = Some(Drag {
@@ -408,7 +411,7 @@ pub fn photo(
         }
         drag.released |= !down;
         if drag.released {
-            s.active = false;
+            photo_tools::release(ui.ctx(), Tool::ColorRange);
         }
         if drag.released && drag.weights.is_some() {
             s.drag = None;

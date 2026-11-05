@@ -9,7 +9,7 @@ fn available() -> Availability {
         import: true,
         settings: true,
         photo_tool_active: false,
-        crop_active: false,
+        framing_active: false,
     }
 }
 #[test]
@@ -41,20 +41,39 @@ fn key(key: Key, modifiers: Modifiers) -> egui::Event {
 }
 
 #[test]
-fn enter_finishes_crop_only_while_the_crop_tool_is_active() {
+fn rotation_invoke_and_cycle_keep_their_modifier_bindings_distinct() {
     let ctx = egui::Context::default();
-    for crop_active in [false, true] {
+    let mut input = egui::RawInput {
+        events: vec![
+            key(Key::R, Modifiers::NONE),
+            key(Key::R, Modifiers::SHIFT),
+            key(Key::R, Modifiers::ALT),
+        ],
+        ..Default::default()
+    };
+    let actions = capture(&ctx, &mut input, available());
+    assert_eq!(
+        actions.iter().map(|a| a.action).collect::<Vec<_>>(),
+        [Action::Rotate, Action::CycleRotate]
+    );
+    assert_eq!(input.events.len(), 1);
+}
+
+#[test]
+fn enter_finishes_only_while_a_framing_tool_is_active() {
+    let ctx = egui::Context::default();
+    for framing_active in [false, true] {
         let mut input = egui::RawInput {
             events: vec![key(Key::Enter, Modifiers::NONE)],
             ..Default::default()
         };
         let mut availability = available();
-        availability.crop_active = crop_active;
+        availability.framing_active = framing_active;
         let actions = capture(&ctx, &mut input, availability);
-        assert_eq!(actions.len(), usize::from(crop_active));
-        assert_eq!(input.events.is_empty(), crop_active);
-        if crop_active {
-            assert_eq!(actions[0].action, Action::FinishCrop);
+        assert_eq!(actions.len(), usize::from(framing_active));
+        assert_eq!(input.events.is_empty(), framing_active);
+        if framing_active {
+            assert_eq!(actions[0].action, Action::FinishTool);
         }
     }
 }

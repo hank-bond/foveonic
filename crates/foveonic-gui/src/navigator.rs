@@ -36,16 +36,23 @@ struct Key {
     mapping: viewport::Mapping,
     extent: [u32; 2],
     space: Space,
+    rotation: Option<foveonic::rotation::Rotation>,
 }
 impl Key {
     fn new(frame: &Frame, mapping: viewport::Mapping) -> Self {
+        let rotation = frame.framing_preview.then_some(frame.requested.rotation);
+        let mut extent = frame.view(mapping.input).description().extent;
+        if let Some(rotation) = rotation {
+            extent = rotation.oriented_extent(extent);
+        }
         Self {
+            rotation,
             revision: frame.revision,
             source: SourceId(frame.artifact.metadata.clone()),
             path: frame.path.clone(),
             root: frame.output.clone(),
             mapping,
-            extent: frame.view(mapping.input).description().extent,
+            extent,
             space: frame.view(mapping.input).description().space,
         }
     }
@@ -56,6 +63,7 @@ impl Key {
             && self.mapping == new.mapping
             && self.extent == new.extent
             && self.space == new.space
+            && self.rotation == new.rotation
             && self.revision <= new.revision
     }
 }
@@ -124,6 +132,12 @@ impl Navigator {
                 &texture,
                 job.key.mapping,
                 job.input.as_ref().map(|image| image.texture()),
+                job.key
+                    .rotation
+                    .map(|rotation| crate::framing::Presentation {
+                        rotation,
+                        native_extent: job.source.description().extent,
+                    }),
             );
             gpu.device.poll(wgpu::Maintain::Wait);
             if crate::timing::enabled() {
@@ -280,6 +294,7 @@ mod tests {
     fn revision_pairing_allows_only_same_photo_root_mapping_and_geometry() {
         let a = Key {
             revision: 1,
+            rotation: None,
             source: SourceId(Arc::new(foveonic::source::Metadata {
                 processing_version: None,
                 width: 3136,

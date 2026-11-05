@@ -7,6 +7,27 @@ use crate::{
 use eframe::egui;
 use std::path::PathBuf;
 
+const ROTATE_TARGETS: &[&str] = &[
+    "preview",
+    "final",
+    "rotate-ready",
+    "rotate-draft",
+    "rotate-straight",
+    "rotate-first-click",
+    "rotate-click-line",
+    "rotate-click-applied",
+    "rotate-quarter",
+    "rotate-freehand-draft",
+    "rotate-freehand",
+    "rotate-hand",
+    "rotate-reopen",
+    "rotate-fast",
+    "rotate-smart",
+    "rotate-shared-zoom",
+    "rotate-crop",
+    "rotate-return",
+    "rotate-done",
+];
 const CROP_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -128,6 +149,7 @@ const DEHAZE_TARGETS: &[&str] = &[
 const WHITE_BALANCE_TARGETS: &[&str] = &[
     "preview",
     "final",
+    "white-balance-ready",
     "white-balance-picked",
     "white-balance-reset",
 ];
@@ -353,6 +375,7 @@ impl Smoke {
             || self.targets == DEHAZE_TARGETS
             || self.targets == ADVANCED_COLOR_TARGETS
             || self.targets == CROP_TARGETS
+            || self.targets == ROTATE_TARGETS
             || self.targets == STATUS_TARGETS
         {
             // Inject focused input without moving the owner's system pointer or focus.
@@ -371,6 +394,8 @@ impl Smoke {
                 WHITE_BALANCE_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_STATUS").is_some() {
                 STATUS_TARGETS
+            } else if std::env::var_os("FOVEONIC_GUI_SMOKE_ROTATE").is_some() {
+                ROTATE_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_CROP").is_some() {
                 CROP_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_EXPOSURE_AUTO").is_some() {
@@ -479,7 +504,7 @@ impl App {
         });
         let shown_detail = self.smart_detail(ctx.pixels_per_point()).map(|detail| {
             (
-                detail.crop_preview,
+                detail.framing_preview,
                 crate::smart::same_edits(&detail.requested, &self.settings),
             )
         });
@@ -537,10 +562,10 @@ impl App {
                 "smart-zoom-pending" | "smart-crop-enter" | "smart-crop-leave"
             )
         {
-            if let Some((crop_preview, current)) = shown_detail {
+            if let Some((framing_preview, current)) = shown_detail {
                 assert!(current, "obsolete regional detail was presented");
                 assert_eq!(
-                    crop_preview,
+                    framing_preview,
                     crate::crop_tool::active(ctx),
                     "detail used the wrong crop view"
                 );
@@ -593,18 +618,120 @@ impl App {
                     _ => {}
                 }
             }
+            if smoke.targets == ROTATE_TARGETS && smoke.targets[smoke.index].starts_with("rotate-")
+            {
+                let target = smoke.targets[smoke.index];
+                let frame = self.frame.as_ref().unwrap();
+                assert_eq!(frame.requested.rotation, self.settings.rotation);
+                match target {
+                    "rotate-draft" => {
+                        assert!(
+                            self.settings.rotation.is_neutral(),
+                            "draft must not render or save"
+                        );
+                        assert_eq!(
+                            crate::rotate_tool::displayed(ctx, self.settings.rotation),
+                            self.settings.rotation
+                        );
+                    }
+                    "rotate-straight" => {
+                        assert!(self.settings.rotation.degrees < -1.);
+                        smoke.authored = Some(self.settings.clone());
+                    }
+                    "rotate-first-click" | "rotate-click-line" => {
+                        assert_eq!(
+                            self.settings.rotation,
+                            smoke.authored.as_ref().unwrap().rotation
+                        );
+                        assert_eq!(
+                            crate::rotate_tool::displayed(ctx, self.settings.rotation),
+                            self.settings.rotation
+                        );
+                    }
+                    "rotate-click-applied" => {
+                        assert!(
+                            self.settings.rotation.degrees
+                                < smoke.authored.as_ref().unwrap().rotation.degrees - 1.
+                        );
+                        smoke.authored = Some(self.settings.clone());
+                    }
+                    "rotate-quarter" | "rotate-freehand-draft" => {
+                        assert_eq!(self.settings.rotation.turns, 1);
+                        assert_eq!(
+                            self.settings.rotation.degrees,
+                            smoke.authored.as_ref().unwrap().rotation.degrees
+                        );
+                    }
+                    "rotate-freehand" => {
+                        assert_eq!(self.settings.rotation.turns, 1);
+                        assert!(
+                            self.settings.rotation.degrees
+                                > smoke.authored.as_ref().unwrap().rotation.degrees
+                        );
+                        smoke.authored = Some(self.settings.clone());
+                    }
+                    "rotate-hand" | "rotate-reopen" | "rotate-fast" | "rotate-smart"
+                    | "rotate-crop" | "rotate-done" => {
+                        assert_eq!(
+                            self.settings.rotation,
+                            smoke.authored.as_ref().unwrap().rotation
+                        );
+                    }
+                    _ => {}
+                }
+                if target == "rotate-fast"
+                    && self
+                        .settings
+                        .fast_preview_available(&frame.artifact.metadata)
+                {
+                    assert!(frame.artifact.settings.preview_quality.is_reduced());
+                }
+                if target == "rotate-smart" {
+                    assert_eq!(
+                        frame.artifact.settings.preview_quality,
+                        foveonic::render::PreviewQuality::Full
+                    );
+                    assert!(frame.artifact.settings.preview_region.is_none());
+                }
+                if target == "rotate-shared-zoom" {
+                    smoke.name_revision = Some(frame.revision);
+                    smoke.current_texture = Some(frame.texture.clone());
+                    smoke.fast_region = self.viewport.visible_pixels();
+                }
+                if matches!(target, "rotate-crop" | "rotate-return") {
+                    assert_eq!(
+                        Some(frame.revision),
+                        smoke.name_revision,
+                        "switching tools submitted a render"
+                    );
+                    assert!(std::sync::Arc::ptr_eq(
+                        smoke.current_texture.as_ref().unwrap(),
+                        &frame.texture
+                    ));
+                    assert_eq!(
+                        self.viewport.visible_pixels(),
+                        smoke.fast_region,
+                        "switching tools reset pan or zoom"
+                    );
+                }
+                std::fs::write(
+                    smoke.directory.join(format!("{target}.json")),
+                    serde_json::to_vec_pretty(&self.settings.rotation).unwrap(),
+                )
+                .unwrap();
+            }
             if smoke.targets == CROP_TARGETS && !smoke.preview_pending() {
                 let frame = self.frame.as_ref().unwrap();
                 let target = smoke.targets[smoke.index];
                 if target.starts_with("crop-") {
                     assert_eq!(
-                        frame.crop_preview,
+                        frame.framing_preview,
                         matches!(
                             target,
                             "crop-ready" | "crop-drag" | "crop-applied" | "crop-reopen"
                         )
                     );
-                    assert_eq!(crate::crop_tool::active(ctx), frame.crop_preview);
+                    assert_eq!(crate::crop_tool::active(ctx), frame.framing_preview);
                     assert_eq!(
                         self.settings.crop.is_full(),
                         matches!(target, "crop-ready" | "crop-drag")
@@ -624,8 +751,8 @@ impl App {
                             ]
                         ));
                     }
-                    if frame.crop_preview {
-                        assert_eq!(frame.display_extent(false), frame.uncropped_extent());
+                    if frame.framing_preview {
+                        assert_eq!(frame.display_extent(false), frame.editing_extent());
                     }
                     std::fs::write(
                         smoke.directory.join(format!("{target}.json")),
@@ -843,8 +970,9 @@ impl App {
             }
             if smoke.targets == SMART_TARGETS && !smoke.preview_pending() {
                 let target = smoke.targets[smoke.index];
-                let regional =
-                    matches!(target, "smart-detail" | "smart-edit-detail") && regional_smart;
+                let regional = matches!(target, "smart-detail" | "smart-edit-detail")
+                    && regional_smart
+                    && shown_detail.is_some();
                 let frame = if regional {
                     self.detail.as_ref().unwrap()
                 } else {
@@ -863,10 +991,10 @@ impl App {
                             previous.artifact.settings.preview_quality,
                             foveonic::render::PreviewQuality::Full
                         );
-                        assert!(!crate::smart::same_edits(
-                            &previous.requested,
-                            &frame.requested
-                        ));
+                        assert!(
+                            previous.revision < frame.revision,
+                            "detail must not rewind a newer Full frame"
+                        );
                         assert!(smoke.smart_scrub_checked);
                         assert_eq!(frame.requested.exposure, 0.75);
                     }
@@ -899,6 +1027,7 @@ impl App {
                             | "smart-edit"
                             | "smart-zoom-pending"
                             | "smart-crop-zoom"
+                            | "smart-crop-enter"
                             | "smart-crop-active-zoom"
                             | "smart-adaptive-zoom"
                             | "smart-transition-full"
@@ -933,9 +1062,9 @@ impl App {
                 ) {
                     assert_eq!(frame.revision, self.revision);
                     assert!(crate::smart::same_edits(&frame.requested, &self.settings));
-                    assert_eq!(frame.crop_preview, target == "smart-crop-enter");
+                    assert_eq!(frame.framing_preview, target == "smart-crop-enter");
                     assert_eq!(self.scope_key.map(|key| key.revision), Some(frame.revision));
-                    if !frame.crop_preview {
+                    if !frame.framing_preview {
                         assert_eq!(
                             self.browser.rendered_revision(&frame.path),
                             Some(frame.revision)
@@ -1053,6 +1182,123 @@ impl App {
                             .into(),
                     );
                 }
+                "rotate-ready" | "rotate-reopen" | "rotate-hand" | "rotate-crop"
+                | "rotate-return" | "rotate-done" => {
+                    let key = match smoke.targets[smoke.index] {
+                        "rotate-hand" | "rotate-done" => egui::Key::H,
+                        "rotate-crop" => egui::Key::C,
+                        _ => egui::Key::R,
+                    };
+                    smoke.direct_events.push_back(
+                        [true, false]
+                            .map(|pressed| egui::Event::Key {
+                                key,
+                                physical_key: None,
+                                pressed,
+                                repeat: false,
+                                modifiers: Default::default(),
+                            })
+                            .into(),
+                    );
+                }
+                "rotate-shared-zoom" => {
+                    self.viewport.zoom_by(1.3);
+                    self.viewport.pan_to(egui::vec2(0.57, 0.45));
+                }
+                "rotate-fast" | "rotate-smart" => {
+                    self.preferences.preview_quality =
+                        if smoke.targets[smoke.index] == "rotate-fast" {
+                            crate::preferences::PreviewMode::Fast
+                        } else {
+                            crate::preferences::PreviewMode::Smart
+                        };
+                    self.submit(None);
+                }
+                "rotate-first-click" | "rotate-click-applied" => {
+                    let point = self
+                        .viewport
+                        .position_at_uv(if smoke.targets[smoke.index] == "rotate-first-click" {
+                            [0.25, 0.4]
+                        } else {
+                            [0.75, 0.5]
+                        })
+                        .unwrap();
+                    for pressed in [true, false] {
+                        smoke.direct_events.push_back(vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: Default::default(),
+                            },
+                        ]);
+                    }
+                }
+                "rotate-click-line" => {
+                    let point = self.viewport.position_at_uv([0.75, 0.5]).unwrap();
+                    smoke
+                        .direct_events
+                        .push_back(vec![egui::Event::PointerMoved(point)]);
+                }
+                "rotate-quarter" => {
+                    self.settings.rotation.turn(true, &mut self.settings.crop);
+                    self.submit(None);
+                }
+                "rotate-draft" | "rotate-freehand-draft" => {
+                    let freehand = smoke.targets[smoke.index] == "rotate-freehand-draft";
+                    if freehand {
+                        smoke.direct_events.push_back(
+                            [true, false]
+                                .map(|pressed| egui::Event::Key {
+                                    key: egui::Key::R,
+                                    physical_key: None,
+                                    pressed,
+                                    repeat: false,
+                                    modifiers: egui::Modifiers::SHIFT,
+                                })
+                                .into(),
+                        );
+                    }
+                    let start = self
+                        .viewport
+                        .position_at_uv(if freehand { [0.75, 0.5] } else { [0.25, 0.4] })
+                        .unwrap();
+                    let end = self
+                        .viewport
+                        .position_at_uv(if freehand { [0.74, 0.6] } else { [0.75, 0.5] })
+                        .unwrap();
+                    smoke.direct_events.push_back(vec![
+                        egui::Event::PointerMoved(start),
+                        egui::Event::PointerButton {
+                            pos: start,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Default::default(),
+                        },
+                    ]);
+                    smoke
+                        .direct_events
+                        .push_back(vec![egui::Event::PointerMoved(end)]);
+                }
+                "rotate-straight" | "rotate-freehand" => {
+                    let point = self
+                        .viewport
+                        .position_at_uv(if smoke.targets[smoke.index] == "rotate-freehand" {
+                            [0.74, 0.6]
+                        } else {
+                            [0.75, 0.5]
+                        })
+                        .unwrap();
+                    smoke
+                        .direct_events
+                        .push_back(vec![egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: Default::default(),
+                        }]);
+                }
                 "crop-fast" => {
                     crate::crop_tool::exit(ctx);
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;
@@ -1149,6 +1395,10 @@ impl App {
                         .push(crate::editor::Action::Reset(scope, false));
                     assert!(self.apply_editor_actions(ctx));
                     assert!(self.settings.dehaze.shadow.is_some());
+                    self.submit(None);
+                }
+                "white-balance-ready" => {
+                    self.settings.color_editor_enabled = false;
                     self.submit(None);
                 }
                 "white-balance-picked" => {
@@ -1710,10 +1960,6 @@ impl App {
                     self.settings.exposure = 0.8;
                     self.submit(None);
                     assert!(self.busy);
-                    assert!(
-                        self.smart.next([0, 0, 1, 1], [1, 1]).is_none(),
-                        "edit did not queue regional work"
-                    );
                     crate::crop_tool::exit(ctx);
                 }
                 "smart-transition-full" => {
@@ -2000,7 +2246,7 @@ impl App {
                             && (frame.rendition != crate::editor::Rendition::Current
                                 || frame.output != "final"
                                 || frame.artifact.settings.color_range_preview.is_some()
-                                || frame.crop_preview
+                                || frame.framing_preview
                                 || self.browser.rendered_revision(&frame.path)
                                     == Some(frame.revision))
                     })
@@ -2038,7 +2284,7 @@ impl App {
                         | "smart-transition-full" => self.frame.as_ref().is_some_and(|frame| {
                             frame.revision == self.revision
                                 && crate::smart::same_edits(&frame.requested, &self.settings)
-                                && frame.crop_preview
+                                && frame.framing_preview
                                     == (smoke.targets[smoke.index] == "smart-crop-enter")
                         }),
                         "smart-full" | "smart-edit" => self.frame.as_ref().is_some_and(|f| {
@@ -2128,18 +2374,18 @@ impl App {
                         && match smoke.targets[smoke.index] {
                             "crop-ready" | "crop-drag" => {
                                 crate::crop_tool::active(ctx)
-                                    && self.frame.as_ref().is_some_and(|f| f.crop_preview)
+                                    && self.frame.as_ref().is_some_and(|f| f.framing_preview)
                             }
                             "crop-applied" | "crop-reopen" => {
                                 !self.settings.crop.is_full()
-                                    && self.frame.as_ref().is_some_and(|f| f.crop_preview)
+                                    && self.frame.as_ref().is_some_and(|f| f.framing_preview)
                             }
                             "crop-hand" => {
                                 !crate::crop_tool::active(ctx)
-                                    && self.frame.as_ref().is_some_and(|f| !f.crop_preview)
+                                    && self.frame.as_ref().is_some_and(|f| !f.framing_preview)
                             }
                             "crop-fast" => self.frame.as_ref().is_some_and(|f| {
-                                !f.crop_preview
+                                !f.framing_preview
                                     && f.revision == self.revision
                                     && (!f
                                         .artifact
@@ -2151,7 +2397,7 @@ impl App {
                             "crop-smart" => self
                                 .frame
                                 .as_ref()
-                                .is_some_and(|f| f.revision == self.revision && !f.crop_preview),
+                                .is_some_and(|f| f.revision == self.revision && !f.framing_preview),
                             "crop-tile" => {
                                 if regional_smart {
                                     self.detail.is_some()
@@ -2169,6 +2415,52 @@ impl App {
                             }),
                             _ => true,
                         }));
+            let ready = ready
+                && (smoke.targets != ROTATE_TARGETS
+                    || smoke.preview_pending()
+                    || (smoke.direct_events.is_empty()
+                        && match smoke.targets[smoke.index] {
+                            "rotate-draft" => ctx.input(|i| i.pointer.primary_down()),
+                            "rotate-freehand-draft" => {
+                                crate::rotate_tool::displayed(ctx, self.settings.rotation)
+                                    != self.settings.rotation
+                            }
+                            "rotate-straight" => self.settings.rotation.degrees < -1.,
+                            "rotate-click-applied" => {
+                                self.settings.rotation.degrees
+                                    < smoke.authored.as_ref().unwrap().rotation.degrees - 1.
+                            }
+                            "rotate-crop" => crate::crop_tool::active(ctx),
+                            "rotate-return" => crate::rotate_tool::editing(ctx),
+                            "rotate-freehand" => {
+                                self.settings.rotation.degrees
+                                    > smoke.authored.as_ref().unwrap().rotation.degrees
+                            }
+                            _ => true,
+                        }
+                        && self.frame.as_ref().is_some_and(|f| {
+                            f.revision == self.revision
+                                && crate::smart::same_edits(&f.requested, &self.settings)
+                                && f.framing_preview
+                                    == matches!(
+                                        smoke.targets[smoke.index],
+                                        "rotate-ready"
+                                            | "rotate-draft"
+                                            | "rotate-straight"
+                                            | "rotate-first-click"
+                                            | "rotate-click-line"
+                                            | "rotate-click-applied"
+                                            | "rotate-quarter"
+                                            | "rotate-freehand-draft"
+                                            | "rotate-freehand"
+                                            | "rotate-reopen"
+                                            | "rotate-fast"
+                                            | "rotate-smart"
+                                            | "rotate-crop"
+                                            | "rotate-shared-zoom"
+                                            | "rotate-return"
+                                    )
+                        })));
             let ready =
                 ready && (smoke.targets != STATUS_TARGETS || smoke.direct_events.is_empty());
             if ready {

@@ -2,6 +2,25 @@
 
 use eframe::egui;
 
+/// Context labels share a fixed viewport anchor and remain independent of photograph geometry.
+pub fn overlay_badge(ui: &egui::Ui, canvas: egui::Rect, text: impl Into<String>) {
+    let painter = ui
+        .painter()
+        .with_clip_rect(canvas.intersect(ui.clip_rect()));
+    let galley = painter.layout_no_wrap(
+        text.into(),
+        egui::FontId::proportional(14.),
+        egui::Color32::WHITE,
+    );
+    let origin = canvas.min + egui::vec2(12., 12.);
+    painter.rect_filled(
+        egui::Rect::from_min_size(origin, galley.size() + egui::vec2(16., 8.)),
+        4.,
+        egui::Color32::from_black_alpha(200),
+    );
+    painter.galley(origin + egui::vec2(8., 4.), galley, egui::Color32::WHITE);
+}
+
 /// Reserve one quarter of a form row for labels. A label may take more space
 /// only when it cannot fit, temporarily reducing that row's control span.
 pub fn form_label_width(ui: &egui::Ui, labels: &[&str], toggle: Option<&str>) -> f32 {
@@ -435,7 +454,7 @@ impl ControlSize {
     }
 
     pub const fn split_width(self) -> f32 {
-        self.side() * 1.75
+        self.side() * 1.6
     }
 }
 
@@ -584,6 +603,15 @@ fn menu_response<R>(
     response: egui::Response,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
+    let anchor = response.rect;
+    menu_response_at(ui, response, anchor, contents)
+}
+fn menu_response_at<R>(
+    ui: &mut egui::Ui,
+    response: egui::Response,
+    anchor: egui::Rect,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
     let id = response.id.with("workspace menu");
     if response.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
@@ -594,7 +622,7 @@ fn menu_response<R>(
     }
     let root = ui
         .data_mut(|d| d.get_temp::<egui::menu::MenuRoot>(id))
-        .unwrap_or_else(|| egui::menu::MenuRoot::new(response.rect.left_bottom(), response.id));
+        .unwrap_or_else(|| egui::menu::MenuRoot::new(anchor.left_bottom(), response.id));
     // egui 0.31 returns contents only when closing. Retain them while open too.
     let mut inner = None;
     let (close, _) = root.show(&response, |ui| {
@@ -687,7 +715,7 @@ pub fn split_icon_button<R>(
         response.id.with("options"),
         egui::Sense::click(),
     );
-    let menu = menu_response(ui, options, contents);
+    let menu = menu_response_at(ui, options, rect, contents);
     let combined = action.clone().union(menu.response.clone());
     ui.painter().set(
         background,
@@ -873,9 +901,33 @@ pub fn menu_cell(ui: &egui::Ui, response: &egui::Response, selected: bool) -> eg
 }
 
 pub fn menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    menu_row_content(ui, label, selected, false).0
+}
+pub fn menu_icon_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    paint: impl FnOnce(&egui::Painter, egui::Rect, egui::Color32),
+) -> egui::Response {
+    let (response, rect, color) = menu_row_content(ui, label, selected, true);
+    paint(ui.painter(), rect, color);
+    response
+}
+fn menu_row_content(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    icon: bool,
+) -> (egui::Response, egui::Rect, egui::Color32) {
     let padding = button_padding(ui);
     let galley = menu_label(ui, label);
-    let intrinsic_width = galley.size().x + 2. * padding.x;
+    let icon_side = ControlSize::Medium.side();
+    let leading = if icon {
+        icon_side + ui.spacing().item_spacing.x
+    } else {
+        0.
+    };
+    let intrinsic_width = galley.size().x + 2. * padding.x + leading;
     // Popup sizing passes measure content before the available width is known.
     // Filling egui's provisional 400-point menu width here makes that width permanent.
     let width = if ui.is_sizing_pass() {
@@ -894,7 +946,7 @@ pub fn menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Respons
     let color = menu_cell(ui, &response, selected);
     ui.painter().galley(
         egui::pos2(
-            rect.left() + padding.x,
+            rect.left() + padding.x + leading,
             rect.center().y - galley.size().y * 0.5,
         ),
         galley,
@@ -908,7 +960,11 @@ pub fn menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Respons
             label,
         )
     });
-    response
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + padding.x + icon_side * 0.5, rect.center().y),
+        egui::Vec2::splat(icon_side),
+    );
+    (response, icon_rect, color)
 }
 
 pub fn menu_value<T: PartialEq>(
@@ -929,6 +985,69 @@ pub fn menu_value<T: PartialEq>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn split_button_menu_anchors_to_the_whole_button_and_keeps_arrow_clicks_separate() {
+        let ctx = egui::Context::default();
+        install_style(&ctx);
+        let draw = |time, events| {
+            let mut geometry = None;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 400.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.add_space(40.);
+                        ui.horizontal(|ui| {
+                            ui.add_space(60.);
+                            let mut content_left = None;
+                            let (action, menu) = split_icon_button(
+                                ui,
+                                "Test tool",
+                                false,
+                                ControlSize::Large,
+                                |ui| {
+                                    content_left = Some(ui.min_rect().left());
+                                    ui.label("Menu option");
+                                },
+                            );
+                            geometry = Some((
+                                action.rect.union(menu.response.rect),
+                                menu.response.rect,
+                                content_left,
+                                action.clicked(),
+                            ));
+                        });
+                    });
+                },
+            );
+            geometry.unwrap()
+        };
+        let (button, arrow, _, _) = draw(0., vec![]);
+        let click = |pressed| egui::Event::PointerButton {
+            pos: arrow.center(),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        draw(
+            0.1,
+            vec![egui::Event::PointerMoved(arrow.center()), click(true)],
+        );
+        let (_, _, _, activated) = draw(0.2, vec![click(false)]);
+        assert!(!activated, "opening options must not invoke the tool");
+        let (_, _, left, _) = draw(0.3, vec![]);
+        assert!(
+            (left.unwrap() - button.left()).abs() < button.height() * 0.5,
+            "menu started at the arrow instead of the complete button"
+        );
+    }
     #[test]
     fn switching_appearances_keeps_shared_geometry_and_readable_custom_controls() {
         let ctx = egui::Context::default();

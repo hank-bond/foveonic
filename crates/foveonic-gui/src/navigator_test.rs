@@ -114,6 +114,7 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
             &target,
             viewport::Mapping::normal(channel),
             None,
+            None,
         );
         let buffer = rs.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Synthetic navigator pixels"),
@@ -178,6 +179,7 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
         &target,
         viewport::Mapping::normal(-1),
         None,
+        None,
     );
     rs.device.poll(wgpu::Maintain::Wait);
     let start = Instant::now();
@@ -188,6 +190,7 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
             Space::ScalarField,
             &target,
             viewport::Mapping::normal(-1),
+            None,
             None,
         );
         rs.device.poll(wgpu::Maintain::Wait);

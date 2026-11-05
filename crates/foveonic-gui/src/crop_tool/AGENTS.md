@@ -12,7 +12,7 @@ Keep crop gestures in oriented native coordinates. Pointer updates draw a draft 
 
 ### Source files
 
-- **[gesture.rs](./gesture.rs)** Resizes and moves crop rectangles in native coordinates and paints their viewport overlay.
+- **[gesture.rs](./gesture.rs)** Resizes and moves crop rectangles in native coordinates within the shared framing plane.
 - **[ratios.rs](./ratios.rs)** Presents shared crop constraints and stores named custom ratios in application preferences.
 
 <!-- INDEX:END -->

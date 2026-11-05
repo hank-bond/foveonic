@@ -41,6 +41,7 @@ impl Mapping {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
+    rotation: [[f32; 4]; 2],
     rect: [f32; 4],
     options: [f32; 4],
     primaries: [[f32; 4]; 3],
@@ -67,6 +68,19 @@ impl Params {
         })
     }
 
+    fn rotate(&mut self, degrees: f32, input: [u32; 2], output: [u32; 2]) {
+        let (sn, cs) = degrees.to_radians().sin_cos();
+        let input = input.map(|v| v as f32);
+        let output = output.map(|v| v as f32);
+        let a = cs * output[0] / input[0];
+        let b = sn * output[1] / input[0];
+        let c = -sn * output[0] / input[1];
+        let d = cs * output[1] / input[1];
+        self.rotation = [
+            [a, b, 0.5 - (a + b) * 0.5, 0.],
+            [c, d, 0.5 - (c + d) * 0.5, 0.],
+        ];
+    }
     fn new(
         canvas: egui::Rect,
         image: egui::Rect,
@@ -90,6 +104,7 @@ impl Params {
                 | Space::CorrectedSensorRgb
         );
         Self {
+            rotation: [[1., 0., 0., 0.], [0., 1., 0., 0.]],
             rect: [
                 origin.x / canvas.width(),
                 origin.y / canvas.height(),
@@ -281,10 +296,18 @@ pub(crate) fn prepare_preview(
     target: &wgpu::Texture,
     mapping: Mapping,
     input: Option<&wgpu::Texture>,
+    framing: Option<crate::framing::Presentation>,
 ) {
     use wgpu::util::DeviceExt;
     let full = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.));
-    let params = mapping.apply(Params::new(full, full, space, mapping.channel, true));
+    let mut params = mapping.apply(Params::new(full, full, space, mapping.channel, true));
+    if let Some(view) = framing {
+        params.rotate(
+            view.angle(),
+            [source.width(), source.height()],
+            view.extent(),
+        );
+    }
     let uniform = rs
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -425,6 +448,7 @@ pub struct Viewport {
     scale: Option<f32>,
     pub pan: egui::Vec2,
     pub editing: bool,
+    pub framing: Option<crate::framing::Presentation>,
     response: Option<egui::Response>,
     pub one_to_one: bool,
     pub zoom_snap: ZoomPreset,
@@ -440,6 +464,7 @@ impl Default for Viewport {
             scale: None,
             pan: egui::Vec2::ZERO,
             editing: false,
+            framing: None,
             response: None,
             one_to_one: false,
             zoom_snap: ZoomPreset::default(),
@@ -688,7 +713,7 @@ impl Viewport {
     ) {
         let (rect, image) = self.layout(ui, display_extent);
         self.last_image = Some((rect, image));
-        let Some((visible, params)) = Params::clipped(
+        let Some((visible, mut params)) = Params::clipped(
             rect,
             image,
             ui.clip_rect().intersect(ui.ctx().screen_rect()),
@@ -698,6 +723,9 @@ impl Viewport {
         ) else {
             return;
         };
+        if let Some(view) = self.framing {
+            params.rotate(view.angle(), view.native_extent, view.extent());
+        }
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             visible,
             Draw {

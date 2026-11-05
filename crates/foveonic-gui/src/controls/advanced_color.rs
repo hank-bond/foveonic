@@ -101,7 +101,6 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 )
                 .clicked()
             {
-                crate::editor::dehaze::exit(ui.ctx());
                 direct_color::toggle_advanced(ui.ctx());
             }
             let remove = ui

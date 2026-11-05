@@ -15,6 +15,7 @@ mod display_image;
 mod editor;
 mod export;
 mod folder_loader;
+mod framing;
 mod help;
 mod help_examples;
 mod icon;
@@ -31,6 +32,7 @@ mod preview_image;
 mod previews;
 mod processing;
 mod progress;
+mod rotate_tool;
 mod scopes;
 mod sections;
 mod shortcuts;
@@ -381,7 +383,7 @@ impl App {
             let mut requested = self.view_settings();
             requested.preview_region = region;
             let request = worker::Request {
-                crop_preview: export.is_none() && self.crop_preview_active(),
+                framing_preview: export.is_none() && self.framing_preview_active(),
                 calibration: self
                     .noise_calibration
                     .selected(self.preferences.noise_profile),
@@ -488,7 +490,7 @@ impl App {
                 .as_ref()
                 .ok()
                 .and_then(Option::as_ref)
-                .is_some_and(|frame| frame.crop_preview != self.crop_preview_active())
+                .is_some_and(|frame| frame.framing_preview != self.framing_preview_active())
             {
                 continue;
             }
@@ -622,7 +624,31 @@ impl App {
             return;
         };
         let region = if self.preferences.scope_viewport {
-            if let Some(rect) = frame.artifact.settings.preview_region {
+            if frame.framing_preview {
+                // Drafts only move the texture. Analyze the visible part of the saved framing.
+                let foveonic::inspection::Content::Image(image) = &frame.artifact.content else {
+                    return;
+                };
+                let [l, t, r, b] = frame
+                    .requested
+                    .rotation
+                    .framing_bounds(frame.camera_extent(), frame.requested.crop)
+                    .map(|v| v as f32);
+                let framing = egui::Rect::from_min_max(egui::pos2(l, t), egui::pos2(r, b));
+                let visible = self.viewport.visible_uv().intersect(framing);
+                if !visible.is_positive() {
+                    return;
+                }
+                let min = (visible.min - framing.min) / framing.size();
+                let max = (visible.max - framing.min) / framing.size();
+                let [w, h] = image.view().extent;
+                Some([
+                    (min.x * w as f32).floor().max(0.) as u32,
+                    (min.y * h as f32).floor().max(0.) as u32,
+                    ((max.x * w as f32).ceil() as u32).min(w),
+                    ((max.y * h as f32).ceil() as u32).min(h),
+                ])
+            } else if let Some(rect) = frame.artifact.settings.preview_region {
                 let visible = visible.unwrap();
                 Some([
                     visible[0] - rect[0],
@@ -660,11 +686,7 @@ impl App {
         // Keep the previous plots visible while the worker prepares their replacement.
         self.worker.submit_scopes(worker::ScopeRequest {
             key,
-            image: if frame.crop_preview {
-                image.without_crop()
-            } else {
-                (**image).clone()
-            },
+            image: (**image).clone(),
         });
         self.scope_key = Some(key);
     }
@@ -797,8 +819,8 @@ impl App {
         self.activity.status(ui);
     }
 
-    fn crop_preview_active(&self) -> bool {
-        crop_tool::active(&self.context)
+    fn framing_preview_active(&self) -> bool {
+        photo_tools::framing(&self.context)
             && self.output == "final"
             && self.before.active == editor::Rendition::Current
             && !self.comparison.requested()
@@ -817,11 +839,12 @@ impl App {
                     && !self.comparison.requested()
                     && self.sidecars.ready()
             })
-            .map(worker::Frame::uncropped_extent);
+            .map(|frame| self.settings.rotation.extent(frame.camera_extent()));
         photo_tools::show(
             ui,
             !self.exporting,
             &mut self.settings.crop,
+            &mut self.settings.rotation,
             extent,
             &mut self.preferences.crop_ratios,
         )
@@ -1037,8 +1060,11 @@ impl App {
                 inspect::background(ui, &mut self.preferences.white_viewport_background);
             },
         );
-        if crop_tool::active(ui.ctx()) && !self.crop_preview_active() {
+        if crop_tool::active(ui.ctx()) && !self.framing_preview_active() {
             crop_tool::exit(ui.ctx());
+        }
+        if rotate_tool::active(ui.ctx()) && !self.framing_preview_active() {
+            rotate_tool::exit(ui.ctx());
         }
         let mapping = self.displayed_mapping();
         if mapping.difference_gain > 0. {
@@ -1160,18 +1186,15 @@ impl App {
         changed
     }
 
-    fn color_tool_available(&self, mapping: viewport::Mapping, ctx: &egui::Context) -> bool {
+    fn photo_interaction_available(&self, mapping: viewport::Mapping) -> bool {
         !self.exporting
             && self.sidecars.ready()
-            && (editor::dehaze::active(ctx)
-                || editor::dehaze::pending(ctx)
-                || self.settings.color_editor_enabled)
             && self.before.active == editor::Rendition::Current
             && self.output == "final"
             && !mapping.input
             && mapping.difference_gain == 0.
             && self.frame.as_ref().is_some_and(|f| {
-                !f.crop_preview
+                !f.framing_preview
                     && self.selected.as_ref() == Some(&f.path)
                     && f.output == "final"
                     && f.rendition == editor::Rendition::Current
@@ -1179,16 +1202,32 @@ impl App {
     }
 
     fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) -> bool {
-        let allowed = self.color_tool_available(mapping, ui.ctx());
-        let crop_active = self.crop_preview_active() && !self.exporting && self.sidecars.ready();
-        self.viewport.editing = crop_active
-            || (editor::direct_color::active(ui.ctx()) || editor::dehaze::active(ui.ctx()))
-                && allowed;
+        let allowed = self.photo_interaction_available(mapping);
+        let framing_active =
+            self.framing_preview_active() && !self.exporting && self.sidecars.ready();
+        let crop_active = framing_active && crop_tool::active(ui.ctx());
+        self.viewport.framing = self
+            .frame
+            .as_ref()
+            .filter(|f| framing_active && f.framing_preview)
+            .map(|frame| framing::Presentation {
+                rotation: rotate_tool::displayed(ui.ctx(), self.settings.rotation),
+                native_extent: frame.camera_extent(),
+            });
+        self.viewport.editing = photo_tools::takes_pointer(ui.ctx())
+            && if photo_tools::framing(ui.ctx()) {
+                framing_active
+            } else {
+                allowed
+            };
         if let Some(frame) = &self.frame {
             self.viewport.show(
                 ui,
                 frame.view(mapping.input).clone(),
-                frame.display_extent(mapping.input),
+                self.viewport.framing.map_or_else(
+                    || frame.display_extent(mapping.input),
+                    framing::Presentation::extent,
+                ),
                 frame.comparison.as_ref().map(|c| c.texture.clone()),
                 mapping,
                 self.srgb_target,
@@ -1239,20 +1278,21 @@ impl App {
             self.viewport
                 .pointer(ui.input(|i| i.pointer.interact_pos())),
         ) {
-            if crop_active {
+            if framing_active {
                 if let (Some(frame), Some((canvas, image))) = (
                     self.frame
                         .as_ref()
-                        .filter(|f| f.crop_preview && &f.path == path),
+                        .filter(|f| f.framing_preview && &f.path == path),
                     self.viewport.image_rectangles(),
                 ) {
-                    return crop_tool::photo(
+                    return framing::photo(
                         ui,
                         &response,
                         canvas,
                         image,
-                        frame.uncropped_extent(),
+                        frame.camera_extent(),
                         &mut self.settings.crop,
+                        &mut self.settings.rotation,
                     );
                 }
                 return false;
@@ -1264,15 +1304,8 @@ impl App {
                     .as_ref()
                     .is_some_and(|f| f.requested == self.settings)
             });
-            let (changed, request) = if editor::white_balance::active(ui.ctx())
-                || editor::white_balance::pending(ui.ctx())
-            {
-                editor::white_balance::photo(ui, &response, uv, path, &mut self.settings, allowed)
-            } else if editor::dehaze::active(ui.ctx()) || editor::dehaze::pending(ui.ctx()) {
-                editor::dehaze::photo(ui, &response, uv, path, &mut self.settings, allowed)
-            } else {
-                editor::direct_color::photo(ui, &response, uv, path, &mut self.settings, allowed)
-            };
+            let (changed, request) =
+                photo_tools::pick(ui, &response, uv, path, &mut self.settings, allowed);
             if let Some(request) = request {
                 self.worker.pick_color(request);
             }
@@ -1334,9 +1367,7 @@ impl eframe::App for App {
                 CACHE_IDLE_POLL
             });
         }
-        editor::dehaze::source(ctx, self.selected.as_deref());
-        editor::white_balance::source(ctx, self.selected.as_deref());
-        crop_tool::source(ctx, self.selected.as_deref());
+        photo_tools::source(ctx, self.selected.as_deref());
         if let Some(saved) = self.sidecars.receive() {
             if let Some(path) = &self.selected {
                 if let Some(opening) = &self.opening {
@@ -1489,7 +1520,7 @@ impl eframe::App for App {
                 changed |= self.central(ui);
             });
         self.browser.finish_previews();
-        if crop_tool::take_view_change(ctx) {
+        if photo_tools::take_view_change(ctx) {
             self.viewport.reset();
             changed = true;
         }

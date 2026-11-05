@@ -115,7 +115,9 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
 - **[responsiveness-campaign](./responsiveness-campaign.md)** _(archived)._ Coordinate measured startup, browsing and rendering optimization trials, including rejected approaches and integration evidence.
+- **[rotation-tool](./rotation-tool.md)** _(archived)._ Implement a shared saved rotation transform and Straighten/Freehand toolbar gestures.
 - **[saturation-closeout](./saturation-closeout.md)** _(archived)._ Separated Tone, Saturation and Color Range with independent methods, presets, bypasses and exports.
+- **[shared-framing-plane](./shared-framing-plane.md)** _(archived)._ Unify Crop and Rotate presentation while keeping their drag controls independent.
 - **[shared-linear-edits](./shared-linear-edits.md)** _(archived)._ Shared pre-curve edits and DNG baking cover Classic, Merrill and Quattro with per-output section choices.
 - **[signed-releases](./signed-releases.md)** _(archived)._ Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases.
 - **[single-read-cache](./single-read-cache.md)** _(archived)._ Prepare all browsing and rendering inputs from one original read and keep cache hits independent of card I/O.
@@ -126,6 +128,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** _(archived)._ Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.
 - **[tiger-integration](./tiger-integration.md)** _(archived)._ Complete Tiger's native full-resolution rendering before consolidating and evaluating portable methods on ordinary Quattro.
 - **[tiger-smart-preview](./tiger-smart-preview.md)** _(archived)._ Enable Tiger Fast and Smart previews through the shared overview, regional refinement and whole-frame continuation.
+- **[tool-foundation-cleanup](./tool-foundation-cleanup.md)** _(archived)._ Consolidate photograph-tool ownership, shared framing and menu geometry, then verify and commit.
 - **[unified-highlight-control](./unified-highlight-control.md)** _(archived)._ Replace neutral restraint with a bounded color-consistency cutoff and share one Highlights/A row across Classic, Local and Global.
 - **[viewport-scopes](./viewport-scopes.md)** _(archived)._ Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
 - **[visibility-tone-experiment](./visibility-tone-experiment.md)** _(archived)._ Historical visibility-tone experiments led to the selected regional Adaptive tone response.

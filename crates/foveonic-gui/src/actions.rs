@@ -10,6 +10,8 @@ use foveonic::{render::Settings, sidecar};
 
 pub enum Edit {
     CopySettings,
+    Rotate,
+    CycleRotate,
     PasteSettings(String),
     Before(crate::editor::Rendition),
 }
@@ -31,13 +33,12 @@ impl App {
                 import: self.browser.import_mode,
                 settings: self.selected.is_some() && self.sidecars.ready(),
                 photo_tool_active: crate::photo_tools::active(ctx),
-                crop_active: crate::crop_tool::active(ctx),
+                framing_active: crate::crop_tool::active(ctx) || crate::rotate_tool::active(ctx),
             },
         ) {
             match invocation.action {
                 Action::Browser(action) => browser.push((action, invocation.modifiers)),
                 Action::DirectColor => {
-                    crate::editor::dehaze::exit(ctx);
                     self.exit_before();
                     if crate::editor::advanced_color::state(ctx).advanced {
                         crate::editor::direct_color::toggle_advanced(ctx);
@@ -48,6 +49,8 @@ impl App {
                 Action::ExitTool => {
                     crate::photo_tools::escape(ctx);
                 }
+                Action::Rotate => self.actions.push(Edit::Rotate),
+                Action::CycleRotate => self.actions.push(Edit::CycleRotate),
                 Action::Crop => {
                     self.exit_before();
                     self.output = "final".into();
@@ -55,7 +58,7 @@ impl App {
                     self.comparison = Default::default();
                     crate::crop_tool::toggle(ctx);
                 }
-                Action::Hand | Action::FinishCrop => {
+                Action::Hand | Action::FinishTool => {
                     crate::photo_tools::hand(ctx);
                 }
                 Action::CopySettings => self.actions.push(Edit::CopySettings),
@@ -87,8 +90,24 @@ impl App {
             return false;
         }
         let before = self.settings.clone();
+        let before_output = self.output.clone();
         for edit in std::mem::take(&mut self.actions) {
             match edit {
+                edit @ (Edit::Rotate | Edit::CycleRotate) => {
+                    self.exit_before();
+                    self.output = "final".into();
+                    self.channel = -1;
+                    self.comparison = Default::default();
+                    if matches!(edit, Edit::CycleRotate) {
+                        crate::rotate_tool::cycle(ctx);
+                    } else {
+                        crate::rotate_tool::invoke(
+                            ctx,
+                            &mut self.settings.rotation,
+                            &mut self.settings.crop,
+                        );
+                    }
+                }
                 Edit::Before(target) => self.toggle_before(target),
                 Edit::CopySettings => {
                     match sidecar::encode(&self.settings)
@@ -140,7 +159,7 @@ impl App {
                 }
             }
         }
-        self.settings != before
+        self.settings != before || self.output != before_output
     }
 }
 

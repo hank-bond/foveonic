@@ -1,60 +1,140 @@
-//! Composes the photograph toolbar and shares Hand, Escape and tool-availability routing.
+//! Owns photograph-tool selection, cancellation and pointer routing, and composes the toolbar.
 
 use crate::{
-    crop_tool, editor, toolbar,
+    crop_tool, editor, rotate_tool, toolbar,
     widgets::{self, ControlSize},
 };
 use eframe::egui;
 use foveonic::crop::Crop;
 
-#[derive(Clone, Copy)]
-enum Tool {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Tool {
+    #[default]
     Hand,
     Crop,
+    Rotate,
+    ColorRange,
+    Dehaze,
+    WhiteBalance,
 }
 impl Tool {
-    const ALL: [Self; 2] = [Self::Hand, Self::Crop];
+    const ALL: [Self; 6] = [
+        Self::Hand,
+        Self::Crop,
+        Self::Rotate,
+        Self::ColorRange,
+        Self::Dehaze,
+        Self::WhiteBalance,
+    ];
+    const TOOLBAR: [Self; 3] = [Self::Hand, Self::Crop, Self::Rotate];
     fn width(self) -> f32 {
         match self {
-            Self::Hand => ControlSize::Large.side(),
-            Self::Crop => ControlSize::Large.split_width(),
+            Self::Crop | Self::Rotate => ControlSize::Large.split_width(),
+            _ => ControlSize::Large.side(),
+        }
+    }
+    fn cancel(self, ctx: &egui::Context) {
+        match self {
+            Self::Hand => {}
+            Self::Crop => crop_tool::cancel(ctx),
+            Self::Rotate => rotate_tool::cancel(ctx),
+            Self::ColorRange => editor::direct_color::cancel(ctx),
+            Self::Dehaze => editor::dehaze::cancel(ctx),
+            Self::WhiteBalance => editor::white_balance::cancel(ctx),
         }
     }
 }
-
+pub fn selected(ctx: &egui::Context) -> Tool {
+    ctx.data_mut(|data| data.get_temp(egui::Id::new("photograph tool")))
+        .unwrap_or_default()
+}
+/// Explicit selection cancels both gestures and delayed picker replies, including disarmed pickers.
+pub fn select(ctx: &egui::Context, tool: Tool) {
+    for previous in Tool::ALL {
+        previous.cancel(ctx);
+    }
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("photograph tool"), tool));
+    ctx.request_repaint();
+}
+/// A one-shot picker returns to Hand while its validated asynchronous result is still pending.
+pub fn release(ctx: &egui::Context, tool: Tool) {
+    if selected(ctx) == tool {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("photograph tool"), Tool::Hand));
+        ctx.request_repaint();
+    }
+}
+pub fn source(ctx: &egui::Context, path: Option<&std::path::Path>) {
+    crop_tool::source(ctx, path);
+    rotate_tool::source(ctx, path);
+    editor::dehaze::source(ctx, path);
+    editor::white_balance::source(ctx, path);
+}
+pub fn takes_pointer(ctx: &egui::Context) -> bool {
+    match selected(ctx) {
+        Tool::Hand => false,
+        Tool::Rotate => rotate_tool::editing(ctx),
+        Tool::Crop | Tool::ColorRange | Tool::Dehaze | Tool::WhiteBalance => true,
+    }
+}
+/// Released pickers still consume their pending reply. Selecting another tool cancels that reply.
+pub fn pick(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    uv: Option<[f32; 2]>,
+    path: &std::path::Path,
+    settings: &mut foveonic::render::Settings,
+    allowed: bool,
+) -> (bool, Option<crate::worker::ColorPickRequest>) {
+    if editor::white_balance::active(ui.ctx()) || editor::white_balance::pending(ui.ctx()) {
+        editor::white_balance::photo(ui, response, uv, path, settings, allowed)
+    } else if editor::dehaze::active(ui.ctx()) || editor::dehaze::pending(ui.ctx()) {
+        editor::dehaze::photo(ui, response, uv, path, settings, allowed)
+    } else {
+        editor::direct_color::photo(ui, response, uv, path, settings, allowed)
+    }
+}
+pub fn framing(ctx: &egui::Context) -> bool {
+    matches!(selected(ctx), Tool::Crop | Tool::Rotate)
+}
+/// A shared presentation changes only when entering or leaving framing.
+pub fn take_view_change(ctx: &egui::Context) -> bool {
+    let current = framing(ctx);
+    ctx.data_mut(|data| {
+        let id = egui::Id::new("framing plane");
+        let previous = data.get_temp::<bool>(id).unwrap_or(false);
+        data.insert_temp(id, current);
+        previous != current
+    })
+}
 pub fn active(ctx: &egui::Context) -> bool {
-    crop_tool::active(ctx)
-        || editor::direct_color::active(ctx)
-        || editor::dehaze::active(ctx)
-        || editor::white_balance::active(ctx)
+    selected(ctx) != Tool::Hand
 }
 pub fn menu_open(ctx: &egui::Context) -> bool {
-    crop_tool::menu_open(ctx) || editor::direct_color::menu_open(ctx)
+    crop_tool::menu_open(ctx) || rotate_tool::menu_open(ctx) || editor::direct_color::menu_open(ctx)
 }
 pub fn hand(ctx: &egui::Context) {
-    crop_tool::exit(ctx);
-    editor::direct_color::exit(ctx);
-    editor::dehaze::exit(ctx);
-    editor::white_balance::exit(ctx);
+    select(ctx, Tool::Hand);
 }
 pub fn escape(ctx: &egui::Context) {
-    crop_tool::escape(ctx);
-    editor::direct_color::exit(ctx);
-    editor::dehaze::exit(ctx);
-    editor::white_balance::exit(ctx);
+    match selected(ctx) {
+        Tool::Crop => crop_tool::escape(ctx),
+        Tool::Rotate => rotate_tool::escape(ctx),
+        _ => hand(ctx),
+    }
 }
 
 pub fn show(
     ui: &mut egui::Ui,
     enabled: bool,
     crop: &mut Crop,
+    rotation: &mut foveonic::rotation::Rotation,
     extent: Option<[u32; 2]>,
     custom: &mut Vec<crop_tool::NamedRatio>,
 ) -> bool {
-    let before = *crop;
-    toolbar::tool_group(ui, &Tool::ALL.map(Tool::width), |ui| {
+    let before = (*crop, *rotation);
+    toolbar::tool_group(ui, &Tool::TOOLBAR.map(Tool::width), |ui| {
         ui.add_enabled_ui(enabled, |ui| {
-            for tool in Tool::ALL {
+            for tool in Tool::TOOLBAR {
                 match tool {
                     Tool::Hand => {
                         let selected = !active(ui.ctx());
@@ -65,12 +145,18 @@ pub fn show(
                         }
                     }
                     Tool::Crop => crop_tool::button(ui, crop, extent, custom),
+                    Tool::Rotate => {
+                        ui.add_enabled_ui(extent.is_some(), |ui| {
+                            rotate_tool::button(ui, rotation, crop)
+                        });
+                    }
+                    _ => unreachable!("only photograph toolbar buttons are listed"),
                 }
             }
         });
     });
     crop_tool::dialog(ui.ctx(), crop, extent, custom);
-    before != *crop
+    before != (*crop, *rotation)
 }
 
 fn hand_icon(ui: &egui::Ui, response: &egui::Response, on: bool) {
@@ -117,4 +203,70 @@ fn hand_icon(ui: &egui::Ui, response: &egui::Response, on: bool) {
         points,
         egui::Stroke::new(1.15_f32, widgets::visuals(ui, response, on).text_color()),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn every_activation_path_selects_only_its_own_tool() {
+        type Activate = fn(&egui::Context);
+        let entries: [(Tool, Activate); 5] = [
+            (Tool::Crop, crop_tool::toggle),
+            (Tool::Rotate, |ctx| {
+                rotate_tool::activate(ctx, rotate_tool::Mode::Straighten)
+            }),
+            (Tool::ColorRange, editor::direct_color::toggle),
+            (Tool::Dehaze, editor::dehaze::toggle),
+            (Tool::WhiteBalance, editor::white_balance::toggle),
+        ];
+        for previous in Tool::ALL {
+            for (target, activate) in entries {
+                let ctx = egui::Context::default();
+                select(&ctx, previous);
+                activate(&ctx);
+                let expected = if previous == target && target != Tool::Rotate {
+                    Tool::Hand
+                } else {
+                    target
+                };
+                assert_eq!(selected(&ctx), expected, "{previous:?} -> {target:?}");
+                let active_flags = [
+                    crop_tool::active(&ctx),
+                    rotate_tool::active(&ctx),
+                    editor::direct_color::active(&ctx),
+                    editor::dehaze::active(&ctx),
+                    editor::white_balance::active(&ctx),
+                ];
+                assert_eq!(
+                    active_flags.iter().filter(|on| **on).count(),
+                    usize::from(expected != Tool::Hand)
+                );
+                release(&ctx, Tool::Hand);
+                assert_eq!(selected(&ctx), expected);
+            }
+        }
+    }
+    #[test]
+    fn crop_and_rotation_switch_controls_without_changing_the_shared_plane() {
+        let ctx = egui::Context::default();
+        crop_tool::toggle(&ctx);
+        assert!(take_view_change(&ctx));
+        rotate_tool::activate(&ctx, rotate_tool::Mode::Straighten);
+        assert!(!crop_tool::active(&ctx));
+        assert!(!take_view_change(&ctx));
+        for mode in [
+            rotate_tool::Mode::Freehand,
+            rotate_tool::Mode::Left,
+            rotate_tool::Mode::Right,
+        ] {
+            rotate_tool::activate(&ctx, mode);
+            assert!(!take_view_change(&ctx));
+        }
+        crop_tool::toggle(&ctx);
+        assert!(!rotate_tool::active(&ctx));
+        assert!(!take_view_change(&ctx));
+        hand(&ctx);
+        assert!(take_view_change(&ctx));
+    }
 }

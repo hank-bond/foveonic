@@ -1,6 +1,9 @@
 //! Tracks automatic shadow colors and asynchronous patch picking while rejecting stale replies.
 
-use crate::worker::{ColorPickReply, ColorPickRequest, ColorPickTool};
+use crate::{
+    photo_tools::{self, Tool},
+    worker::{ColorPickReply, ColorPickRequest, ColorPickTool},
+};
 use eframe::egui;
 use foveonic::render::Settings;
 use std::path::{Path, PathBuf};
@@ -19,7 +22,6 @@ struct Estimate {
 }
 #[derive(Clone, Default)]
 struct State {
-    picking: bool,
     pressed: bool,
     generation: u64,
     pending: Option<Pending>,
@@ -44,6 +46,7 @@ pub fn source(ctx: &egui::Context, path: Option<&Path>) {
             ..Default::default()
         };
         store(ctx, s);
+        photo_tools::release(ctx, Tool::Dehaze);
     }
 }
 fn estimate_settings(settings: &Settings) -> Settings {
@@ -81,28 +84,31 @@ pub fn set_auto(ctx: &egui::Context, settings: &mut Settings, automatic: bool) -
     changed
 }
 pub fn active(ctx: &egui::Context) -> bool {
-    state(ctx).picking
+    photo_tools::selected(ctx) == Tool::Dehaze
 }
 pub fn pending(ctx: &egui::Context) -> bool {
     state(ctx).pending.is_some()
 }
-pub fn exit(ctx: &egui::Context) {
+pub(crate) fn cancel(ctx: &egui::Context) {
     let mut s = state(ctx);
-    s.picking = false;
     s.pressed = false;
     s.pending = None;
     s.generation += 1;
     store(ctx, s);
 }
+pub fn exit(ctx: &egui::Context) {
+    cancel(ctx);
+    photo_tools::release(ctx, Tool::Dehaze);
+}
 pub fn toggle(ctx: &egui::Context) {
-    super::white_balance::exit(ctx);
-    crate::crop_tool::exit(ctx);
-    let mut s = state(ctx);
-    s.picking = !s.picking;
-    s.pressed = false;
-    s.pending = None;
-    s.generation += 1;
-    store(ctx, s);
+    photo_tools::select(
+        ctx,
+        if active(ctx) {
+            Tool::Hand
+        } else {
+            Tool::Dehaze
+        },
+    );
 }
 pub fn receive(ctx: &egui::Context, reply: &ColorPickReply) -> bool {
     if reply.tool != ColorPickTool::Dehaze {
@@ -165,15 +171,15 @@ pub fn photo(
         }
     }
     let pan = ui.input(|i| i.key_down(egui::Key::Space));
-    if s.picking && response.hovered() && !pan {
+    if active(ui.ctx()) && response.hovered() && !pan {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     let mut request = None;
     if s.pressed && ui.input(|i| i.pointer.primary_released()) {
-        s.picking = false;
+        photo_tools::release(ui.ctx(), Tool::Dehaze);
         s.pressed = false;
     }
-    if s.picking
+    if active(ui.ctx())
         && !pan
         && response.is_pointer_button_down_on()
         && ui.input(|i| i.pointer.primary_pressed())
@@ -346,8 +352,8 @@ mod tests {
             let ctx = egui::Context::default();
             let mut settings = Settings::default();
             settings.dehaze.shadow = None;
+            photo_tools::select(&ctx, Tool::Dehaze);
             let mut s = state(&ctx);
-            s.picking = true;
             s.pending = Some(Pending {
                 token: 7,
                 path: "first.x3f".into(),

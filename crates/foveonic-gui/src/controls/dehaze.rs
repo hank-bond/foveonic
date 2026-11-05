@@ -36,7 +36,6 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             let button = widgets::icon_button(ui, "Pick haze shadow tone", active, widgets::ControlSize::Large);
             widgets::eyedropper_icon(ui, &button, active);
             if help::control(button, "Haze shadow tone").clicked() {
-                editor::direct_color::exit(ui.ctx());
                 editor::dehaze::toggle(ui.ctx());
             }
         });

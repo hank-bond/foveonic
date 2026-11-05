@@ -42,6 +42,7 @@ impl Before {
         baseline.preview_quality = current.preview_quality;
         baseline.output_size = current.output_size;
         baseline.crop = current.crop;
+        baseline.rotation = current.rotation;
         Ok(baseline)
     }
 }
@@ -53,7 +54,7 @@ impl App {
         if self.before.active == target {
             self.exit_before();
             if self.frame.as_ref().is_none_or(|f| {
-                f.crop_preview != self.crop_preview_active()
+                f.framing_preview != self.framing_preview_active()
                     || !crate::smart::same_edits(&f.requested, &self.settings)
             }) {
                 self.submit(None);
@@ -107,19 +108,7 @@ impl App {
         {
             return;
         }
-        let galley = ui.painter().layout_no_wrap(
-            "Before".into(),
-            egui::FontId::proportional(14.),
-            egui::Color32::WHITE,
-        );
-        let origin = rect.min + egui::vec2(12., 12.);
-        ui.painter().rect_filled(
-            egui::Rect::from_min_size(origin, galley.size() + egui::vec2(16., 8.)),
-            4.,
-            egui::Color32::from_black_alpha(200),
-        );
-        ui.painter()
-            .galley(origin + egui::vec2(8., 4.), galley, egui::Color32::WHITE);
+        crate::widgets::overlay_badge(ui, rect, "Before");
     }
 }
 

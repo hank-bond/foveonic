@@ -1,6 +1,9 @@
 //! Selects a neutral patch asynchronously and keeps Custom balance separate from camera presets.
 
-use crate::worker::{ColorPickReply, ColorPickRequest, ColorPickTool};
+use crate::{
+    photo_tools::{self, Tool},
+    worker::{ColorPickReply, ColorPickRequest, ColorPickTool},
+};
 use eframe::egui;
 use foveonic::render::{Settings, WhiteBalanceBias};
 use std::path::{Path, PathBuf};
@@ -15,7 +18,6 @@ struct Pending {
 
 #[derive(Clone, Default)]
 struct State {
-    active: bool,
     token: u64,
     source: Option<PathBuf>,
     pending: Option<Pending>,
@@ -28,12 +30,12 @@ fn store(ctx: &egui::Context, s: State) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("White balance picker"), s));
 }
 pub fn active(ctx: &egui::Context) -> bool {
-    state(ctx).active
+    photo_tools::selected(ctx) == Tool::WhiteBalance
 }
 pub fn pending(ctx: &egui::Context) -> bool {
     state(ctx).pending.is_some()
 }
-pub fn exit(ctx: &egui::Context) {
+pub(crate) fn cancel(ctx: &egui::Context) {
     let s = state(ctx);
     store(
         ctx,
@@ -43,6 +45,10 @@ pub fn exit(ctx: &egui::Context) {
             ..Default::default()
         },
     );
+}
+pub fn exit(ctx: &egui::Context) {
+    cancel(ctx);
+    photo_tools::release(ctx, Tool::WhiteBalance);
 }
 pub fn source(ctx: &egui::Context, path: Option<&Path>) {
     if state(ctx).source.as_deref() != path {
@@ -64,11 +70,14 @@ pub fn button(ui: &mut egui::Ui, height: f32) {
     }
 }
 pub fn toggle(ctx: &egui::Context) {
-    let on = active(ctx);
-    crate::photo_tools::hand(ctx);
-    let mut s = state(ctx);
-    s.active = !on;
-    store(ctx, s);
+    photo_tools::select(
+        ctx,
+        if active(ctx) {
+            Tool::Hand
+        } else {
+            Tool::WhiteBalance
+        },
+    );
 }
 pub fn receive(ctx: &egui::Context, reply: &ColorPickReply) -> bool {
     if reply.tool != ColorPickTool::WhiteBalance {
@@ -133,11 +142,11 @@ pub fn photo(
         }
     }
     let pan = ui.input(|i| i.key_down(egui::Key::Space));
-    if s.active && response.hovered() && !pan {
+    if active(ui.ctx()) && response.hovered() && !pan {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     let mut request = None;
-    if s.active && allowed && !settings.is_monochrome() && !pan && response.clicked() {
+    if active(ui.ctx()) && allowed && !settings.is_monochrome() && !pan && response.clicked() {
         if let Some(uv) = uv {
             s.token += 1;
             s.pending = Some(Pending {
@@ -157,7 +166,7 @@ pub fn photo(
                 settings: settings.clone(),
                 uv,
             });
-            s.active = false;
+            photo_tools::release(ui.ctx(), Tool::WhiteBalance);
         }
     }
     store(ui.ctx(), s);
@@ -168,16 +177,39 @@ pub fn photo(
 mod tests {
     use super::*;
     #[test]
+    fn selecting_another_tool_cancels_a_disarmed_picker_and_its_late_reply() {
+        let ctx = egui::Context::default();
+        toggle(&ctx);
+        let mut s = state(&ctx);
+        s.pending = Some(Pending {
+            token: s.token,
+            path: "photo.x3f".into(),
+            expected: Settings::default(),
+            result: None,
+        });
+        let token = s.token;
+        store(&ctx, s);
+        photo_tools::release(&ctx, Tool::WhiteBalance);
+        assert!(pending(&ctx));
+        assert_eq!(photo_tools::selected(&ctx), Tool::Hand);
+        photo_tools::select(&ctx, Tool::Crop);
+        receive(
+            &ctx,
+            &ColorPickReply {
+                tool: ColorPickTool::WhiteBalance,
+                token,
+                path: "photo.x3f".into(),
+                sample: Err("late reply".into()),
+            },
+        );
+        assert!(!pending(&ctx));
+        assert_eq!(photo_tools::selected(&ctx), Tool::Crop);
+    }
+    #[test]
     fn selection_waits_for_release_and_rejects_changed_settings() {
         for stale in [false, true] {
             let ctx = egui::Context::default();
-            store(
-                &ctx,
-                State {
-                    active: true,
-                    ..Default::default()
-                },
-            );
+            toggle(&ctx);
             let mut settings = Settings::default();
             let mut tick = 0.;
             let mut frame = |settings: &mut Settings, events: Vec<egui::Event>| {
@@ -247,13 +279,7 @@ mod tests {
             assert_eq!(frame(&mut settings, vec![]).0, !stale);
             assert_eq!(settings.white_balance_bias.neutral.is_some(), !stale);
             assert!(!pending(&ctx));
-            store(
-                &ctx,
-                State {
-                    active: true,
-                    ..state(&ctx)
-                },
-            );
+            toggle(&ctx);
             crate::photo_tools::hand(&ctx);
             assert!(!active(&ctx));
         }

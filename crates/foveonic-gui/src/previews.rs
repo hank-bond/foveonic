@@ -132,7 +132,7 @@ impl Previews {
     pub fn update(&mut self, frame: Option<&Frame>, busy: bool, context: &egui::Context) {
         let Some(frame) = frame.filter(|f| {
             f.rendition == crate::editor::Rendition::Current
-                && !f.crop_preview
+                && !f.framing_preview
                 && f.output == "final"
                 && f.artifact.settings.color_range_preview.is_none()
                 && f.artifact.settings.preview_region.is_none()
@@ -216,6 +216,7 @@ fn downsample_texture(
         space,
         &target,
         viewport::Mapping::normal(-1),
+        None,
         None,
     );
     let row = (size[0] * RGBA_BYTES).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)

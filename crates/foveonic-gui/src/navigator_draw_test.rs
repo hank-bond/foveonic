@@ -110,6 +110,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
                             signal_scale: 1.,
                         },
                         Some(&input),
+                        None,
                     );
                     let bytes = pixels(&rs, &target);
                     for value in &bytes[..3] {
@@ -133,6 +134,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
         &target,
         viewport::Mapping::normal(1),
         Some(&input),
+        None,
     );
     assert!(pixels(&rs, &target)[0].abs_diff(137) <= 1);
     viewport::prepare_preview(
@@ -145,6 +147,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
             ..viewport::Mapping::normal(1)
         },
         Some(&input),
+        None,
     );
     assert!(pixels(&rs, &target)[0].abs_diff(243) <= 1);
 }
@@ -193,6 +196,7 @@ fn romm_presentation_converts_and_clips_without_changing_float_source() {
             Space::ToneMappedRgb(foveonic::image::ColorSpace::ProPhotoRgb),
             &target,
             viewport::Mapping::normal(-1),
+            None,
             None,
         );
         let displayed = pixels(&rs, &target);
@@ -270,6 +274,7 @@ fn ordinary_navigator_drawing_cost() {
         &tile,
         viewport::Mapping::normal(-1),
         None,
+        None,
     );
     rs.device.poll(wgpu::Maintain::Wait);
     let id = rs.renderer.write().register_native_texture(
@@ -328,6 +333,7 @@ fn ordinary_navigator_drawing_cost() {
             &old_target,
             viewport::Mapping::normal(-1),
             None,
+            None,
         );
     };
     draw_old();
@@ -371,4 +377,68 @@ fn ordinary_navigator_drawing_cost() {
         old_ms[2], new_ms[2]
     );
     rs.renderer.write().free_texture(&id);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn rotation_presentation_preserves_quarter_turn_pixel_locations() {
+    let rs = state();
+    let source = texture(
+        &rs,
+        [4, 3],
+        wgpu::TextureFormat::Rgba32Float,
+        wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let values: Vec<f32> = (0..12)
+        .flat_map(|i| [0.1 + i as f32 * 0.04, 0.25, 0.5, 1.])
+        .collect();
+    rs.queue.write_texture(
+        source.as_image_copy(),
+        bytemuck::cast_slice(&values),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(64),
+            rows_per_image: Some(3),
+        },
+        source.size(),
+    );
+    for turns in 0..4 {
+        let extent = if turns % 2 == 0 { [4, 3] } else { [3, 4] };
+        let target = texture(
+            &rs,
+            extent,
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        viewport::prepare_preview(
+            &rs,
+            &source,
+            Space::ToneMappedRgb(foveonic::image::ColorSpace::Srgb),
+            &target,
+            viewport::Mapping::normal(-1),
+            None,
+            Some(crate::framing::Presentation {
+                rotation: foveonic::rotation::Rotation { turns, degrees: 0. },
+                native_extent: [4, 3],
+            }),
+        );
+        let bytes = pixels(&rs, &target);
+        for y in 0..extent[1] {
+            for x in 0..extent[0] {
+                let [sx, sy] = match turns {
+                    0 => [x, y],
+                    1 => [y, 2 - x],
+                    2 => [3 - x, 2 - y],
+                    _ => [3 - y, x],
+                };
+                let v = values[((sy * 4 + sx) * 4) as usize];
+                let offset = (y * 256 + x * 8) as usize;
+                let actual = half::f16::from_le_bytes([bytes[offset], bytes[offset + 1]]).to_f32();
+                assert!(
+                    (actual - v).abs() < 0.0005,
+                    "turns {turns} {x},{y}: {actual} vs {v}"
+                );
+            }
+        }
+    }
 }
