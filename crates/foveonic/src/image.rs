@@ -136,6 +136,53 @@ pub struct View {
     pub extent: [u32; 2],
 }
 
+impl View {
+    /// Map a picker position in the oriented crop back into physical storage.
+    pub(crate) fn pixel_at_uv(self, uv: [f32; 2]) -> crate::source::Result<[u32; 2]> {
+        if uv.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v)) {
+            return Err("Pick inside the photograph.".into());
+        }
+        let [l, t, r, b] = self.crop;
+        if l >= r || t >= b {
+            return Err("Cannot sample an empty image.".into());
+        }
+        let [w, h] = if matches!(self.rotation, 90 | 270) {
+            [b - t, r - l]
+        } else {
+            [r - l, b - t]
+        };
+        let x = ((uv[0] * w as f32) as u32).min(w - 1);
+        let y = ((uv[1] * h as f32) as u32).min(h - 1);
+        match self.rotation {
+            0 => Ok([l + x, t + y]),
+            90 => Ok([l + y, b - 1 - x]),
+            180 => Ok([r - 1 - x, b - 1 - y]),
+            270 => Ok([r - 1 - y, t + x]),
+            _ => Err("Unsupported picker orientation.".into()),
+        }
+    }
+}
+
+#[test]
+fn picker_coordinates_follow_crop_rotation_and_inclusive_uv_edges() {
+    for (rotation, first, last) in [
+        (0, [10, 20], [29, 49]),
+        (90, [10, 49], [29, 20]),
+        (180, [29, 49], [10, 20]),
+        (270, [29, 20], [10, 49]),
+    ] {
+        let view = View {
+            crop: [10, 20, 30, 50],
+            rotation,
+            extent: [20, 30],
+        };
+        assert_eq!(view.pixel_at_uv([0., 0.]).unwrap(), first);
+        assert_eq!(view.pixel_at_uv([1., 1.]).unwrap(), last);
+        assert!(view.pixel_at_uv([f32::NAN, 0.]).is_err());
+        assert!(view.pixel_at_uv([-0.1, 0.]).is_err());
+    }
+}
+
 /// An immutable GPU snapshot with source metadata and rendering settings.
 /// Its read claim keeps the samples unchanged even when later renders reuse storage.
 #[derive(Clone)]

@@ -291,26 +291,7 @@ impl Engine {
             return Err("color pick requires a linear color guide".into());
         };
         let view = guide.view();
-        let [l, t, r, b] = view.crop;
-        if l >= r || t >= b {
-            return Err("color guide has an empty crop".into());
-        }
-        let [width, height] = if matches!(view.rotation, 90 | 270) {
-            [b - t, r - l]
-        } else {
-            [r - l, b - t]
-        };
-        let [x, y] = [
-            ((uv[0] * width as f32) as u32).min(width - 1),
-            ((uv[1] * height as f32) as u32).min(height - 1),
-        ];
-        let pixel = match view.rotation {
-            0 => [l + x, t + y],
-            90 => [l + y, b - 1 - x],
-            180 => [r - 1 - x, b - 1 - y],
-            270 => [r - 1 - y, t + x],
-            _ => return Err("unsupported color pick orientation".into()),
-        };
+        let pixel = view.pixel_at_uv(uv)?;
         let white = guide.description().linear_white as f32;
         crate::nodes::finish::color_editor::pick(
             &self.gpu,
@@ -320,6 +301,31 @@ impl Engine {
                 space,
                 white,
                 pixel,
+                view.crop,
+            ),
+        )
+    }
+
+    /// Pick a neutral patch before shared edits. Only a small XYZ statistic leaves the GPU.
+    pub fn pick_white_balance(
+        &self,
+        image: &RenderedImage,
+        uv: [f32; 2],
+    ) -> Result<WhiteBalanceBias> {
+        self.check_owner(image)?;
+        use crate::nodes::finish::white_balance::{self, PickParams};
+        let crate::image::Space::LinearRgb(space) = image.description().space else {
+            return Err("White balance requires a linear color image.".into());
+        };
+        let view = image.view();
+        white_balance::pick(
+            &self.gpu,
+            image.buffer(),
+            PickParams::new(
+                image.description().extent,
+                space,
+                image.description().linear_white as f32,
+                view.pixel_at_uv(uv)?,
                 view.crop,
             ),
         )
@@ -336,24 +342,7 @@ impl Engine {
             return Err("haze selection requires a linear image".into());
         };
         let view = image.view();
-        let [l, t, r, b] = view.crop;
-        if l >= r || t >= b {
-            return Err("haze selection has an empty crop".into());
-        }
-        let [width, height] = if matches!(view.rotation, 90 | 270) {
-            [b - t, r - l]
-        } else {
-            [r - l, b - t]
-        };
-        let x = ((uv[0] * width as f32) as u32).min(width - 1);
-        let y = ((uv[1] * height as f32) as u32).min(height - 1);
-        let pixel = match view.rotation {
-            0 => [l + x, t + y],
-            90 => [l + y, b - 1 - x],
-            180 => [r - 1 - x, b - 1 - y],
-            270 => [r - 1 - y, t + x],
-            _ => return Err("unsupported haze pick orientation".into()),
-        };
+        let pixel = view.pixel_at_uv(uv)?;
         let params = crate::nodes::finish::dehaze::Estimate::patch(
             image.description().extent,
             image

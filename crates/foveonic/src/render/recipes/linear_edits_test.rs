@@ -835,6 +835,7 @@ fn check_chromatic_dng_reprojection(perceptual: bool, prevent: bool) {
     }
     settings.photographic.color_editor.master.hue = 0.3;
     settings.white_balance_bias = crate::render::WhiteBalanceBias {
+        neutral: None,
         warmth: 0.35,
         tint: -0.2,
     };
@@ -984,6 +985,12 @@ fn original_color_editor_bypass_is_independent_in_photos_and_dng() {
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
 fn original_white_balance_bias_keeps_technical_dng_samples_and_changes_editable_neutral() {
+    for custom in [false, true] {
+        check_white_balance_dng(custom);
+    }
+}
+
+fn check_white_balance_dng(custom: bool) {
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
@@ -1021,6 +1028,7 @@ fn original_white_balance_bias_keeps_technical_dng_samples_and_changes_editable_
     let baseline_pixels = engine.readback_image(&baseline).unwrap();
     drop(baseline);
     settings.white_balance_bias = crate::render::WhiteBalanceBias {
+        neutral: custom.then_some([1.1, 1., 0.7]),
         warmth: 0.35,
         tint: -0.2,
     };

@@ -11,6 +11,7 @@ pub enum Kernel {
     ColorEditorFilter,
     ColorEditorApply,
     ColorEditorPick,
+    WhiteBalancePick,
     PerceptualGrade,
     AdvancedColor,
     DehazePrepare,
@@ -335,6 +336,7 @@ impl Kernel {
             Self::ColorEditorMap => "map Color Editor",
             Self::ColorEditorFilter => "stabilize Color Editor",
             Self::ColorEditorApply => "apply Color Editor",
+            Self::WhiteBalancePick => "pick White Balance",
             Self::ColorEditorPick => "pick Color Range",
             Self::PerceptualGrade => "perceptual grading",
             Self::AdvancedColor => "Advanced Color Range",
@@ -775,6 +777,10 @@ impl Gpu {
             (color_editor.as_str(), "color_editor_filter"),
             (color_editor.as_str(), "color_editor_apply"),
             (color_pick.as_str(), "color_editor_pick"),
+            (
+                include_str!("../nodes/finish/white_balance_pick.wgsl"),
+                "white_balance_pick",
+            ),
             (perceptual.as_str(), "perceptual_grade"),
             (advanced.as_str(), "advanced_color"),
             (

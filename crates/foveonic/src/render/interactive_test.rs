@@ -35,6 +35,127 @@ fn assert_same_pixels(label: &str, actual: &[u8], expected: &[u8]) {
 }
 
 #[test]
+#[ignore = "requires GPU and FOVEONIC_CACHE_X3F"]
+fn white_balance_patch_samples_linear_input_and_rejects_invalid_samples() {
+    let source = Source::open(std::env::var_os("FOVEONIC_CACHE_X3F").unwrap()).unwrap();
+    let engine = Engine::new().unwrap();
+    let settings = Settings::new("Sunlight", "Standard");
+    let mut artifacts = engine
+        .render_artifacts(
+            &source,
+            &settings,
+            &["linear.base"],
+            &mut Profile::default(),
+        )
+        .unwrap();
+    let crate::inspection::Content::Image(mut guide) = artifacts.remove(0).content else {
+        panic!("linear guide");
+    };
+    let original = engine.readback_image(&guide).unwrap();
+    let retained = guide.clone();
+    guide.description.extent = [12, 10];
+    guide.view.crop = [1, 1, 11, 9];
+    let white = guide.description.linear_white as f32;
+    for rgb in [
+        [0.4, 0.3, 0.2],
+        [1.; 3],
+        [1.6, 0.8, 2.2],
+        [0.; 3],
+        [f32::NAN; 3],
+        [f32::INFINITY; 3],
+    ] {
+        let pixels: Vec<_> = (0..120).flat_map(|_| rgb.map(|v| v * white)).collect();
+        guide.buffer = engine
+            .gpu
+            .upload("white balance test patch", &pixels)
+            .unwrap();
+        for rotation in [0, 90, 180, 270] {
+            guide.view.rotation = rotation;
+            let picked = engine.pick_white_balance(&guide, [0.5, 0.5]);
+            if rgb[0].is_finite() && rgb[0] > 0. {
+                let controls = picked.unwrap();
+                assert!(controls.neutral.is_some());
+                let space = match guide.description.space {
+                    crate::image::Space::LinearRgb(space) => space,
+                    _ => panic!("linear"),
+                };
+                let rows = controls.rows(space);
+                let output: [f32; 3] =
+                    std::array::from_fn(|r| (0..3).map(|c| rows[r][c] * rgb[c]).sum());
+                assert!(
+                    (output[0] - output[1]).abs() < 1e-5 && (output[2] - output[1]).abs() < 1e-5
+                );
+            } else {
+                assert!(picked.is_err());
+            }
+        }
+    }
+    assert_eq!(engine.readback_image(&retained).unwrap(), original);
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
+fn bright_neutral_patches_above_nominal_white_remain_sampleable() {
+    let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let engine = Engine::new().unwrap();
+    for (file, preset) in [
+        ("blue-parking-sign.x3f", "Incandescent"),
+        ("sd10.x3f", "Sunlight"),
+    ] {
+        let source = Source::open(dir.join(file)).unwrap();
+        let settings = Settings::new(preset, "Standard");
+        let mut artifacts = engine
+            .render_artifacts(
+                &source,
+                &settings,
+                &["linear.base"],
+                &mut Profile::default(),
+            )
+            .unwrap();
+        let crate::inspection::Content::Image(guide) = artifacts.remove(0).content else {
+            panic!("linear guide");
+        };
+        let bytes = engine.readback_image(&guide).unwrap();
+        let pixels: &[[f32; 3]] = bytemuck::cast_slice(&bytes);
+        let view = guide.view();
+        let width = guide.description().extent[0] as usize;
+        let white = guide.description().linear_white as f32;
+        let mut candidate = None;
+        'scan: for y in 1..40 {
+            for x in 1..40 {
+                let uv = [x as f32 / 40., y as f32 / 40.];
+                let [px, py] = view.pixel_at_uv(uv).unwrap();
+                if px < view.crop[0] + 2
+                    || py < view.crop[1] + 2
+                    || px + 2 >= view.crop[2]
+                    || py + 2 >= view.crop[3]
+                {
+                    continue;
+                }
+                let usable = (py - 2..=py + 2).all(|row| {
+                    (px - 2..=px + 2).all(|col| {
+                        let rgb = pixels[row as usize * width + col as usize];
+                        let lo = rgb.into_iter().fold(f32::INFINITY, f32::min);
+                        let hi = rgb.into_iter().fold(0_f32, f32::max);
+                        rgb.iter().all(|v| v.is_finite()) && lo > hi * 0.15 && hi >= white * 0.98
+                    })
+                });
+                if usable {
+                    candidate = Some(uv);
+                    break 'scan;
+                }
+            }
+        }
+        let uv = candidate
+            .expect("fixture must contain a bright patch rejected by the old nominal-white cutoff");
+        engine
+            .pick_white_balance(&guide, uv)
+            .unwrap_or_else(|e| panic!("{file} {preset} at {uv:?}: {e}"));
+        eprintln!("{file} {preset}: usable highlight at {uv:?}");
+    }
+}
+
+#[test]
 fn column_banding_changes_have_a_distinct_parameter_identity() {
     let settings = Settings {
         reconstruction: Some(Default::default()),
