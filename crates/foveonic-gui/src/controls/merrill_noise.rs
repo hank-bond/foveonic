@@ -118,40 +118,43 @@ fn noise_method(ui: &mut egui::Ui, settings: &mut Settings, column: LabelColumn)
 fn neutralize_shadows(ui: &mut egui::Ui, settings: &mut Settings, column: LabelColumn) -> bool {
     let controls = &mut settings.neutralize_shadows;
     let defaults = ShadowNeutralizeControls::default();
-    let mut changed = column.adjustment(
-        ui,
-        ("Neutralize shadows", "Neutralize"),
-        &mut controls.strength,
-        ShadowNeutralizeControls::STRENGTH_RANGE,
-        defaults.strength,
-    );
-    crate::widgets::disclosure(
-        ui,
-        egui::CollapsingHeader::new("Neutral Range").id_salt("shadow-neutrality-options"),
-        |ui| {
-            changed |= column.adjustment(
-                ui,
-                ("Shadow limit", "Shadow limit"),
-                &mut controls.shadow_ev,
-                ShadowNeutralizeControls::SHADOW_EV_RANGE,
-                defaults.shadow_ev,
-            );
-            changed |= column.adjustment(
-                ui,
-                ("Color tolerance", "Color tolerance"),
-                &mut controls.color_tolerance,
-                ShadowNeutralizeControls::COLOR_TOLERANCE_RANGE,
-                defaults.color_tolerance,
-            );
-            changed |= column.adjustment(
-                ui,
-                ("Hue width", "Hue width"),
-                &mut controls.hue_width,
-                ShadowNeutralizeControls::HUE_WIDTH_RANGE,
-                defaults.hue_width,
-            );
-        },
-    );
+    let mut changed = false;
+    crate::widgets::parameter_group(ui, |ui| {
+        changed |= column.adjustment(
+            ui,
+            ("Neutralize shadows", "Neutralize"),
+            &mut controls.strength,
+            ShadowNeutralizeControls::STRENGTH_RANGE,
+            defaults.strength,
+        );
+        crate::widgets::disclosure(
+            ui,
+            egui::CollapsingHeader::new("Neutral Range").id_salt("shadow-neutrality-options"),
+            |ui| {
+                changed |= column.adjustment(
+                    ui,
+                    ("Shadow limit", "Shadow limit"),
+                    &mut controls.shadow_ev,
+                    ShadowNeutralizeControls::SHADOW_EV_RANGE,
+                    defaults.shadow_ev,
+                );
+                changed |= column.adjustment(
+                    ui,
+                    ("Color tolerance", "Color tolerance"),
+                    &mut controls.color_tolerance,
+                    ShadowNeutralizeControls::COLOR_TOLERANCE_RANGE,
+                    defaults.color_tolerance,
+                );
+                changed |= column.adjustment(
+                    ui,
+                    ("Hue width", "Hue width"),
+                    &mut controls.hue_width,
+                    ShadowNeutralizeControls::HUE_WIDTH_RANGE,
+                    defaults.hue_width,
+                );
+            },
+        );
+    });
     changed
 }
 
@@ -181,11 +184,17 @@ fn speckles(ui: &mut egui::Ui, settings: &mut Settings, column: LabelColumn) -> 
             });
         });
         ui.add_enabled_ui(settings.despeckle, |ui| {
+            let threshold_range =
+                if settings.merrill_speckles.method == MerrillSpeckleMethod::Compact {
+                    0.2..=*MerrillSpeckleControls::THRESHOLD_RANGE.end()
+                } else {
+                    MerrillSpeckleControls::THRESHOLD_RANGE
+                };
             changed |= column.adjustment(
                 ui,
                 ("Speckle threshold", "Threshold"),
                 &mut settings.merrill_speckles.threshold,
-                MerrillSpeckleControls::THRESHOLD_RANGE,
+                threshold_range,
                 defaults.threshold,
             );
             if settings.merrill_speckles.method == MerrillSpeckleMethod::Compact {
