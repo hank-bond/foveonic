@@ -3,7 +3,7 @@
 use super::Engine;
 use crate::{
     nodes::{color::color_mode, finish::tone, sensor::highlight},
-    recipe::{Key, Shared},
+    recipe::{Key, RetainedBytes, Shared},
     source::{Metadata, Result},
 };
 use std::sync::{Arc, Weak};
@@ -29,26 +29,44 @@ impl Cache {
             };
         }
     }
+    fn account(&self, retained: &mut RetainedBytes) {
+        for (key, table) in &self.tones {
+            key.account(retained);
+            table.account(retained);
+        }
+        if let Some((_, prepared)) = &self.highlights {
+            prepared.flags.account(retained);
+        }
+    }
+    #[cfg(test)]
     fn bytes(&self) -> usize {
-        self.tones
-            .iter()
-            .map(|(_, table)| table.retained_bytes())
-            .sum::<usize>()
-            + self
-                .highlights
-                .as_ref()
-                .map_or(0, |(_, prepared)| prepared.flags.retained_bytes())
+        let mut retained = RetainedBytes::default();
+        self.account(&mut retained);
+        retained.bytes()
     }
 }
 
 impl Engine {
-    /// Logical retained numerical payloads, excluding allocation/Arc overhead and
-    /// any preparations still owned by graph keys or rendered artifacts.
-    pub fn cached_preparation_bytes(&self) -> usize {
+    /// Adds cached payloads to a shared inventory of engine and session ownership.
+    pub(crate) fn account_preparation(&self, retained: &mut RetainedBytes) {
         self.preparation
             .lock()
             .expect("metadata preparation cache")
-            .bytes()
+            .account(retained);
+    }
+
+    /// Logical retained payloads and key-part storage, excluding allocator/Arc
+    /// overhead and preparations owned only by sessions or rendered artifacts.
+    pub fn cached_preparation_bytes(&self) -> usize {
+        let mut retained = RetainedBytes::default();
+        self.account_preparation(&mut retained);
+        retained.bytes()
+    }
+
+    /// Drops engine-owned preparation when the working-set budget needs space.
+    /// Existing graph keys remain immutable readers until their owners release them.
+    pub fn clear_preparation(&self) {
+        *self.preparation.lock().expect("metadata preparation cache") = Cache::default();
     }
 
     /// A sealed reduced checkpoint does not need the full sensor's clipping map.

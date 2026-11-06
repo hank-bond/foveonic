@@ -2,7 +2,7 @@
 
 use bytemuck::Pod;
 use std::{
-    collections::hash_map::DefaultHasher,
+    collections::{hash_map::DefaultHasher, HashMap},
     fmt,
     hash::{Hash, Hasher},
     ops::Deref,
@@ -37,6 +37,26 @@ impl<T: Pod + Send + Sync> Payload for Data<T> {
     }
 }
 
+/// Counts retained immutable payloads once across numerical tables and their keys.
+/// Owners stay alive during the inventory so allocation addresses cannot be reused.
+#[derive(Default)]
+pub(crate) struct RetainedBytes {
+    bytes: usize,
+    payloads: HashMap<usize, Arc<dyn Payload>>,
+}
+impl RetainedBytes {
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+    fn payload(&mut self, payload: Arc<dyn Payload>) {
+        let address = Arc::as_ptr(&payload) as *const () as usize;
+        self.payloads.entry(address).or_insert_with(|| {
+            self.bytes += payload.bytes().len();
+            payload
+        });
+    }
+}
+
 /// An immutable numerical table whose fingerprint is calculated only on creation.
 /// Keys share its allocation and still compare exact bits after a fingerprint match.
 pub(crate) struct Shared<T>(Arc<Data<T>>);
@@ -52,8 +72,12 @@ impl<T: Pod + Send + Sync + 'static> Shared<T> {
     pub fn shares_storage(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
+    #[cfg(test)]
     pub fn retained_bytes(&self) -> usize {
         std::mem::size_of_val(&*self.0.values)
+    }
+    pub fn account(&self, retained: &mut RetainedBytes) {
+        retained.payload(self.0.clone());
     }
 }
 impl<T: Pod + Send + Sync + 'static> From<Vec<T>> for Shared<T> {
@@ -133,6 +157,17 @@ impl fmt::Debug for Key {
     }
 }
 impl Key {
+    /// Includes the key's owned part storage and shared numerical payloads.
+    /// Inline key structs and allocator overhead belong to their containing owner.
+    pub fn account(&self, retained: &mut RetainedBytes) {
+        retained.bytes += self.parts.capacity() * std::mem::size_of::<Part>();
+        for part in &self.parts {
+            match part {
+                Part::Payload(payload) => retained.payload(payload.clone()),
+                Part::Joined(key) => key.account(retained),
+            }
+        }
+    }
     fn payload(payload: Arc<dyn Payload>) -> Self {
         Self {
             fingerprint: combined(0, payload.fingerprint(), 0),
@@ -206,5 +241,30 @@ mod tests {
         let recreated: Shared<u32> = vec![1, 2, 3].into();
         assert_eq!(a, recreated.key());
         assert_eq!(a, Key::default().slice(&[1_u32, 2, 3]));
+    }
+
+    #[test]
+    fn retained_inventory_counts_shared_payloads_once_and_keeps_owners_alive() {
+        let values: Shared<u32> = vec![1, 2, 3].into();
+        let key = values.key();
+        let mut retained = RetainedBytes::default();
+        values.account(&mut retained);
+        key.account(&mut retained);
+        assert_eq!(
+            retained.bytes(),
+            values.retained_bytes() + key.parts.capacity() * std::mem::size_of::<Part>()
+        );
+        assert_eq!(Arc::strong_count(&values.0), 3);
+        let recreated: Shared<u32> = vec![1, 2, 3].into();
+        recreated.account(&mut retained);
+        assert_eq!(
+            retained.bytes(),
+            2 * values.retained_bytes() + key.parts.capacity() * std::mem::size_of::<Part>()
+        );
+        let weak = Arc::downgrade(&recreated.0);
+        drop(recreated);
+        assert!(weak.upgrade().is_some());
+        drop(retained);
+        assert!(weak.upgrade().is_none());
     }
 }

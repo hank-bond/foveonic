@@ -76,7 +76,7 @@ fn tone_preparation_reuses_exact_inputs_and_bounds_changed_responses() {
             &*changed,
             tone::prepare(&metadata, &mode(), controls).unwrap()
         );
-        assert!(cache.bytes() <= TONE_CAPACITY * 65536 * 4);
+        assert!(cache.bytes() <= TONE_CAPACITY * (65536 * 4 + 1024));
     }
     let mut selected = mode();
     selected.contrast = 0.1;
@@ -142,4 +142,26 @@ fn highlight_thresholds_share_clipping_evidence_and_remain_exact() {
     let other = Arc::new((*metadata).clone());
     let changed_source = cache.highlights(&other, Some(-1.)).unwrap();
     assert!(!changed_source.flags.shares_storage(&changed.flags));
+}
+
+#[test]
+fn preparation_inventory_deduplicates_payloads_retained_by_graph_keys() {
+    let metadata = metadata();
+    let mut cache = Cache::default();
+    let curve = cache
+        .tone(&metadata, &mode(), Default::default(), false)
+        .unwrap();
+    let highlights = cache.highlights(&metadata, None).unwrap();
+    let curve_key = curve.key();
+    let highlight_key = highlights.key();
+    let mut retained = RetainedBytes::default();
+    cache.account(&mut retained);
+    let before = retained.bytes();
+    curve.account(&mut retained);
+    highlights.flags.account(&mut retained);
+    assert_eq!(retained.bytes(), before);
+    curve_key.account(&mut retained);
+    highlight_key.account(&mut retained);
+    // Additional graph-owned key vectors and scalar parameters remain small.
+    assert!(retained.bytes() - before < 1024);
 }
