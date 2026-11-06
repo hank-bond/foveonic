@@ -318,7 +318,7 @@ impl App {
         self.scope_snapshot = None;
         self.scope_key = None;
         self.busy = false;
-        self.worker.clear();
+        self.worker.clear_all();
         self.viewport.reset();
         viewport::clear(&self.render_state);
     }

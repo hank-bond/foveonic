@@ -25,6 +25,15 @@ use std::{
     thread,
 };
 
+#[cfg(test)]
+#[derive(Default)]
+struct Checks {
+    source_loads: std::sync::atomic::AtomicU64,
+    recipes: Mutex<Vec<(u64, u64)>>,
+}
+#[cfg(test)]
+thread_local! { static CHECKS: std::cell::RefCell<Option<Arc<Checks>>> = const { std::cell::RefCell::new(None) }; }
+
 pub struct Request {
     pub framing_preview: bool,
     pub calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
@@ -229,8 +238,11 @@ struct Pending {
     queued_at: Option<std::time::Instant>,
     stop: bool,
     clear: bool,
+    clear_all: bool,
 }
 pub struct Worker {
+    #[cfg(test)]
+    checks: Arc<Checks>,
     pending: Arc<(Mutex<Pending>, Condvar)>,
     pub replies: mpsc::Receiver<Update>,
     pub progress: crate::progress::Tracker,
@@ -249,6 +261,7 @@ impl Worker {
                 queued_at: None,
                 stop: false,
                 clear: false,
+                clear_all: false,
             }),
             Condvar::new(),
         ));
@@ -259,7 +272,13 @@ impl Worker {
         let repaint = context.clone();
         let (tx, replies) = mpsc::sync_channel(2);
         let slot = pending.clone();
+        #[cfg(test)]
+        let checks = Arc::new(Checks::default());
+        #[cfg(test)]
+        let observations = checks.clone();
         thread::spawn(move || {
+            #[cfg(test)]
+            CHECKS.with(|slot| *slot.borrow_mut() = Some(observations.clone()));
             let mut engine = engine;
             let mut source: Option<(PathBuf, RenderSession)> = None;
             let mut reduced = reduced::Photos::default();
@@ -280,9 +299,14 @@ impl Worker {
                     }
                     if state.clear {
                         state.clear = false;
+                        let clear_all = std::mem::take(&mut state.clear_all);
                         drop(state);
-                        source = None;
-                        reduced.clear(&engine);
+                        if let Some((_, previous)) = source.take() {
+                            engine.release_native_preparation(previous.metadata());
+                        }
+                        if clear_all {
+                            reduced.clear(&engine);
+                        }
                         continue;
                     }
                     if let Some(pick) = state.color_pick.take() {
@@ -411,6 +435,8 @@ impl Worker {
                     };
                     let mut roots = vec![root];
                     if let Some(input) = input { roots.push(input); }
+                    #[cfg(test)]
+                    let recipe_before = engine.gpu_activity();
                     let rendered = {
                         // Timing a host span must not add a GPU wait and change the
                         // responsiveness we are trying to measure.
@@ -429,6 +455,8 @@ impl Worker {
                             engine.render_session_with_progress(&mut source.as_mut().unwrap().1, &settings, &roots, cancel, &mut profile, |stage| reporter.rendered(stage))?
                         }
                     };
+                    #[cfg(test)]
+                    observations.recipes.lock().unwrap().push((request.revision, engine.gpu_activity().since(recipe_before).dispatches));
                     if let Some(before) = before {
                         crate::timing::emit("processing", serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"outputs":roots,"settings":settings,"execution":if used_reduced {"reduced-session"} else {"session"},"status":if rendered.is_some(){"complete"}else{"superseded"},"cache_before_bytes":cache_before,"cache_after_bytes":if used_reduced {reduced.cached_bytes_for_path(&request.path)} else {source.as_ref().unwrap().1.cached_bytes()},"profile":profile,"activity":engine.gpu_activity().since(before)}));
                     }
@@ -520,6 +548,8 @@ impl Worker {
             }
         });
         Self {
+            #[cfg(test)]
+            checks,
             pending,
             replies,
             progress,
@@ -541,10 +571,17 @@ impl Worker {
         pending.activity = None;
     }
     pub fn clear(&self) {
+        self.clear_with_cache(false);
+    }
+    pub fn clear_all(&self) {
+        self.clear_with_cache(true);
+    }
+    fn clear_with_cache(&self, all: bool) {
         self.progress.clear();
         let (lock, wake) = &*self.pending;
         let mut state = lock.lock().unwrap();
         state.clear = true;
+        state.clear_all |= all;
         state.color_pick = None;
         state.request = None;
         state.activity = None;
@@ -603,6 +640,14 @@ fn load_native_source(
 }
 
 fn record_source_load(revision: u64, path: &std::path::Path, loaded: &foveonic::source::Source) {
+    #[cfg(test)]
+    CHECKS.with(|slot| {
+        if let Some(checks) = slot.borrow().as_ref() {
+            checks
+                .source_loads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
     if crate::timing::enabled() {
         crate::timing::emit(
             "source_load",
@@ -1373,9 +1418,65 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn photo_selection_clears_native_source_and_keeps_reduced_lru_until_explicit_clear() {
+        use std::sync::atomic::Ordering;
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let paths = [
+            root.join("blue-parking-sign.x3f"),
+            root.join("merrill-hazy-coast.x3f"),
+        ];
+        let worker = super::Worker::new(
+            foveonic::render::Engine::new().unwrap(),
+            eframe::egui::Context::default(),
+        );
+        let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        settings.reconstruction = Some(Default::default());
+        let request = |revision: u64, index: usize| super::Request {
+            framing_preview: false,
+            calibration: None,
+            rendition: Default::default(),
+            revision,
+            path: paths[index].clone(),
+            settings: settings.clone(),
+            preview_quality: crate::preferences::PreviewMode::Thumb,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        };
+        for (round, index) in [0, 1, 0].into_iter().enumerate() {
+            worker.clear();
+            worker.submit(request(round as u64 + 1, index));
+            let reply = receive(&worker);
+            assert_eq!(reply.revision, round as u64 + 1);
+            let frame = reply.result.unwrap().unwrap();
+            assert_eq!(frame.path, paths[index]);
+            assert_eq!(
+                frame.artifact.settings.preview_quality,
+                foveonic::render::PreviewQuality::Thumb
+            );
+            assert_eq!(
+                worker.checks.source_loads.load(Ordering::Relaxed),
+                [1, 2, 2][round]
+            );
+        }
+        let history = worker.checks.recipes.lock().unwrap().clone();
+        assert!(
+            history[2].1 < history[0].1,
+            "returning to A must skip native preparation"
+        );
+        worker.clear_all();
+        worker.clear(); // A later source reset must not weaken an already pending full clear.
+        worker.submit(request(4, 0));
+        assert!(receive(&worker).result.unwrap().is_some());
+        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
     fn pending_requests_replace_not_accumulate() {
         let (_, replies) = std::sync::mpsc::channel();
         let worker = super::Worker {
+            checks: Default::default(),
             pending: std::sync::Arc::new((
                 std::sync::Mutex::new(super::Pending {
                     cancel_before: 0,
@@ -1386,6 +1487,7 @@ mod tests {
                     scopes: None,
                     stop: false,
                     clear: false,
+                    clear_all: false,
                 }),
                 std::sync::Condvar::new(),
             )),
