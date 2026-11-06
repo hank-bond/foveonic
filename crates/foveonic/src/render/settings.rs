@@ -296,6 +296,9 @@ impl Settings {
             Ok(crate::source::ProcessingFamily::Classic) => {
                 super::recipes::classic::preview_available(metadata, self, quality)
             }
+            Ok(crate::source::ProcessingFamily::Quattro) => {
+                super::recipes::quattro::small_preview_available(metadata, quality)
+            }
             _ => false,
         }
     }
