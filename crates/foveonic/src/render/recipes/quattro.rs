@@ -219,7 +219,7 @@ fn compose(
     )?;
     // Fast skips general high-blue repairs. A later Full request needs the original
     // cells, even when its reconstruction inputs differ from the Fast graph.
-    if names == ["final"] && fast_available(&source.metadata) {
+    if names == ["final"] && fast_available(&source.metadata) && !small {
         graph.retain_for_session(input);
     }
     let raw_params = phase_extraction::Params::new(width, height)?;
@@ -545,6 +545,11 @@ fn compose(
             &[native_highlight_mask],
             "preview-highlight",
         )?;
+        // These corrected small histories are the restart frontier for the first
+        // downstream edit. Native cells remain available through the source.
+        for input in [rgb, blue, mask] {
+            graph.retain_for_session(input);
+        }
         (rgb, blue, mask)
     } else {
         (restored, mismatch, native_highlight_mask)

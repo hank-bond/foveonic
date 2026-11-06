@@ -422,3 +422,80 @@ fn small_composition_preserves_native_metadata_and_full_inspection() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires GPU and QUATTRO_X3F ordinary DP or sd HIGH original"]
+fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention() {
+    let source =
+        std::sync::Arc::new(Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap());
+    let engine = Engine::new().unwrap();
+    let native_cell_bytes = source.samples().len() as u64 * 4;
+    for quality in [PreviewQuality::Draft, PreviewQuality::Thumb] {
+        for noise_edit in [false, true] {
+            let mut settings = Settings::new("Auto", "Standard");
+            settings.preview_quality = quality;
+            settings.reconstruction = Some(controls::default_noise_controls());
+            let mut session = crate::interactive::RenderSession::new(source.clone());
+            let initial = engine
+                .render_session(
+                    &mut session,
+                    &settings,
+                    &["final"],
+                    || false,
+                    &mut Profile::default(),
+                )
+                .unwrap()
+                .unwrap()
+                .pop()
+                .unwrap();
+            let Content::Image(initial) = initial.content else {
+                panic!("initial image")
+            };
+            let initial_bytes = engine.readback_image(&initial).unwrap();
+            assert!(
+                session.cached_bytes() < native_cell_bytes,
+                "initial small preparation must not retain native cells"
+            );
+            if noise_edit {
+                settings.reconstruction.as_mut().unwrap().chroma = 4;
+            } else {
+                settings.exposure = 0.25;
+            }
+            let mut profile = Profile::new(crate::profile::Mode::Wall);
+            let before = engine.gpu_activity();
+            let edited = engine
+                .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+                .unwrap()
+                .unwrap()
+                .pop()
+                .unwrap();
+            let activity = engine.gpu_activity().since(before);
+            let Content::Image(edited) = edited.content else {
+                panic!("edited image")
+            };
+            let noise = profile
+                .nodes
+                .iter()
+                .position(|n| n.operation == "TwoScaleNoise")
+                .unwrap();
+            assert!(
+                profile.nodes[..noise].iter().all(|n| !n.executed),
+                "native correction and pooling must be cached on the first edit"
+            );
+            assert_eq!(profile.nodes[noise].executed, noise_edit);
+            assert!(
+                session.cached_bytes() < native_cell_bytes,
+                "a small restart must not retain the native cells"
+            );
+            assert!(activity.upload_bytes < native_cell_bytes);
+            let fresh = engine
+                .render(&source, &settings, &mut Profile::default())
+                .unwrap();
+            assert!(
+                engine.readback_image(&edited).unwrap() == engine.readback_image(&fresh).unwrap()
+            );
+            assert!(engine.readback_image(&initial).unwrap() == initial_bytes);
+            eprintln!("{quality:?} noise_edit={noise_edit} GPU cache={} native_cells={native_cell_bytes} uploads={} dispatches={}", session.cached_bytes(), activity.upload_bytes, activity.dispatches);
+        }
+    }
+}
