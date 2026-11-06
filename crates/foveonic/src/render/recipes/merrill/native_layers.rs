@@ -24,7 +24,12 @@ impl Policy {
         Self {
             multiscale: settings.multiscale_noise_selected(),
             directional_banding: settings.directional_banding_selected(),
-            reference_rows: settings.reference_rows_selected() && !reduced,
+            reference_rows: settings.reference_rows_selected()
+                && (!reduced
+                    || matches!(
+                        settings.preview_quality,
+                        crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
+                    )),
             retain_calibrated,
         }
     }
@@ -217,8 +222,8 @@ pub(super) fn build(
     if policy.retain_calibrated {
         graph.retain_for_session(calibrated);
     }
-    // Reduced browsing omits the expensive native row-bias estimate. Keep the
-    // requested edit intact so Full and inspection still apply its correction.
+    // Reviewed Fast omits the native row estimate. Draft and Thumb apply the
+    // selected native correction before pooling the calibrated layers.
     if policy.reference_rows {
         let prepared = profile.measure("prepare row correction", || {
             banding::prepare(&source.metadata, calibration_gains)
@@ -236,4 +241,31 @@ pub(super) fn build(
         },
         couplings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::{MerrillBandingMethod, PreviewQuality};
+
+    #[test]
+    fn small_previews_keep_native_rows_while_reviewed_fast_stays_unchanged() {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.row_correction = true;
+        settings.merrill_banding.enabled = true;
+        settings.merrill_banding.method = MerrillBandingMethod::Reference;
+        settings.reconstruction = Some(Default::default());
+        for quality in [
+            PreviewQuality::Full,
+            PreviewQuality::Fast,
+            PreviewQuality::Draft,
+            PreviewQuality::Thumb,
+        ] {
+            settings.preview_quality = quality;
+            let policy = Policy::new(&settings, quality.is_reduced(), false);
+            assert_eq!(policy.reference_rows, quality != PreviewQuality::Fast);
+        }
+        settings.processing_sections.noise = false;
+        assert!(!Policy::new(&settings, true, false).reference_rows);
+    }
 }
