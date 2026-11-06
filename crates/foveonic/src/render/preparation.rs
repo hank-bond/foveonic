@@ -8,34 +8,39 @@ use crate::{
 };
 use std::sync::{Arc, Weak};
 
-const TONE_CAPACITY: usize = 2;
+const TONES_PER_SOURCE: usize = 2;
+// Eight photos can each retain their Adaptive basis and adjusted response.
+const TONE_CAPACITY: usize = 16;
+
+struct Tone {
+    metadata: Weak<Metadata>,
+    key: Key,
+    table: Shared<f32>,
+}
+struct Highlights {
+    metadata: Weak<Metadata>,
+    threshold: Option<u32>,
+    prepared: Arc<highlight::Prepared>,
+}
+fn same_metadata(previous: &Weak<Metadata>, metadata: &Arc<Metadata>) -> bool {
+    previous
+        .upgrade()
+        .is_some_and(|old| Arc::ptr_eq(&old, metadata))
+}
 
 #[derive(Default)]
 pub(super) struct Cache {
-    metadata: Weak<Metadata>,
-    tones: Vec<(Key, Shared<f32>)>,
-    highlights: Option<(Option<u32>, Arc<highlight::Prepared>)>,
+    tones: Vec<Tone>,
+    highlights: Option<Highlights>,
 }
 impl Cache {
-    fn select(&mut self, metadata: &Arc<Metadata>) {
-        if !self
-            .metadata
-            .upgrade()
-            .is_some_and(|old| Arc::ptr_eq(&old, metadata))
-        {
-            *self = Self {
-                metadata: Arc::downgrade(metadata),
-                ..Self::default()
-            };
-        }
-    }
     fn account(&self, retained: &mut RetainedBytes) {
-        for (key, table) in &self.tones {
-            key.account(retained);
-            table.account(retained);
+        for entry in &self.tones {
+            entry.key.account(retained);
+            entry.table.account(retained);
         }
-        if let Some((_, prepared)) = &self.highlights {
-            prepared.flags.account(retained);
+        if let Some(entry) = &self.highlights {
+            entry.prepared.flags.account(retained);
         }
     }
     #[cfg(test)]
@@ -74,9 +79,9 @@ impl Engine {
     pub fn release_native_preparation(&self, metadata: &Arc<Metadata>) {
         let mut cache = self.preparation.lock().expect("metadata preparation cache");
         if cache
-            .metadata
-            .upgrade()
-            .is_some_and(|old| Arc::ptr_eq(&old, metadata))
+            .highlights
+            .as_ref()
+            .is_some_and(|entry| same_metadata(&entry.metadata, metadata))
         {
             cache.highlights = None;
         }
@@ -119,10 +124,15 @@ impl Cache {
             .with(&u32::from(monochrome))
             .with(&if monochrome { 0 } else { mode.tone_index })
             .with(&if monochrome { 0. } else { mode.contrast });
-        self.select(metadata);
-        if let Some(index) = self.tones.iter().position(|(old, _)| *old == key) {
+        self.tones
+            .retain(|entry| entry.metadata.strong_count() != 0);
+        if let Some(index) = self
+            .tones
+            .iter()
+            .position(|entry| same_metadata(&entry.metadata, metadata) && entry.key == key)
+        {
             let entry = self.tones.remove(index);
-            let value = entry.1.clone();
+            let value = entry.table.clone();
             self.tones.push(entry);
             return Ok(value);
         }
@@ -132,10 +142,28 @@ impl Cache {
             tone::prepare(metadata, mode, controls)?
         }
         .into();
+        if self
+            .tones
+            .iter()
+            .filter(|entry| same_metadata(&entry.metadata, metadata))
+            .count()
+            == TONES_PER_SOURCE
+        {
+            let index = self
+                .tones
+                .iter()
+                .position(|entry| same_metadata(&entry.metadata, metadata))
+                .unwrap();
+            self.tones.remove(index);
+        }
         if self.tones.len() == TONE_CAPACITY {
             self.tones.remove(0);
         }
-        self.tones.push((key, table.clone()));
+        self.tones.push(Tone {
+            metadata: Arc::downgrade(metadata),
+            key,
+            table: table.clone(),
+        });
         Ok(table)
     }
 
@@ -145,17 +173,26 @@ impl Cache {
         threshold: Option<f32>,
     ) -> Result<Arc<highlight::Prepared>> {
         let key = threshold.map(f32::to_bits);
-        self.select(metadata);
-        if let Some((_, value)) = self.highlights.as_ref().filter(|(old, _)| *old == key) {
-            return Ok(value.clone());
+        let previous = self
+            .highlights
+            .as_ref()
+            .filter(|entry| same_metadata(&entry.metadata, metadata));
+        if let Some(entry) = previous.filter(|entry| entry.threshold == key) {
+            return Ok(entry.prepared.clone());
         }
-        let prepared = Arc::new(match &self.highlights {
-            Some((_, previous)) => {
-                highlight::prepare_with_flags(metadata, threshold, Some(previous.flags.clone()))?
-            }
+        let prepared = Arc::new(match previous {
+            Some(entry) => highlight::prepare_with_flags(
+                metadata,
+                threshold,
+                Some(entry.prepared.flags.clone()),
+            )?,
             None => highlight::prepare(metadata, threshold)?,
         });
-        self.highlights = Some((key, prepared.clone()));
+        self.highlights = Some(Highlights {
+            metadata: Arc::downgrade(metadata),
+            threshold: key,
+            prepared: prepared.clone(),
+        });
         Ok(prepared)
     }
 }

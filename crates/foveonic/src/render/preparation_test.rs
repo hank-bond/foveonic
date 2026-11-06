@@ -76,7 +76,7 @@ fn tone_preparation_reuses_exact_inputs_and_bounds_changed_responses() {
             &*changed,
             tone::prepare(&metadata, &mode(), controls).unwrap()
         );
-        assert!(cache.bytes() <= TONE_CAPACITY * (65536 * 4 + 1024));
+        assert!(cache.bytes() <= TONES_PER_SOURCE * (65536 * 4 + 1024));
     }
     let mut selected = mode();
     selected.contrast = 0.1;
@@ -114,7 +114,7 @@ fn immutable_metadata_identity_separates_sources_without_retaining_them() {
         .unwrap();
     assert!(!a.shares_storage(&b));
     assert_eq!(a, b);
-    assert_eq!(cache.tones.len(), 1);
+    assert_eq!(cache.tones.len(), 2);
     assert_eq!(Arc::strong_count(&first), 1);
     assert_eq!(Arc::strong_count(&second), 1);
 }
@@ -164,4 +164,42 @@ fn preparation_inventory_deduplicates_payloads_retained_by_graph_keys() {
     highlight_key.account(&mut retained);
     // Additional graph-owned key vectors and scalar parameters remain small.
     assert!(retained.bytes() - before < 1024);
+}
+
+#[test]
+fn alternating_photos_reuse_both_curves_with_bounded_weak_ownership() {
+    let photos: Vec<_> = (0..8).map(|_| metadata()).collect();
+    let mut cache = Cache::default();
+    let adjusted = tone::Controls {
+        contrast: 0.25,
+        ..Default::default()
+    };
+    let mut curves = Vec::new();
+    for photo in &photos {
+        curves.push([
+            cache
+                .tone(photo, &mode(), Default::default(), false)
+                .unwrap(),
+            cache.tone(photo, &mode(), adjusted, false).unwrap(),
+        ]);
+    }
+    assert_eq!(cache.tones.len(), TONE_CAPACITY);
+    for (photo, previous) in photos.iter().zip(curves) {
+        assert!(previous[0].shares_storage(
+            &cache
+                .tone(photo, &mode(), Default::default(), false)
+                .unwrap()
+        ));
+        assert!(previous[1].shares_storage(&cache.tone(photo, &mode(), adjusted, false).unwrap()));
+        assert_eq!(Arc::strong_count(photo), 1);
+    }
+    let extra = metadata();
+    cache
+        .tone(&extra, &mode(), Default::default(), false)
+        .unwrap();
+    assert_eq!(cache.tones.len(), TONE_CAPACITY);
+    assert!(cache.bytes() <= TONE_CAPACITY * (65536 * 4 + 1024));
+    drop(photos);
+    cache.tone(&extra, &mode(), adjusted, false).unwrap();
+    assert_eq!(cache.tones.len(), TONES_PER_SOURCE);
 }
