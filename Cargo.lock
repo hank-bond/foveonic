@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic-gui"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "bytemuck",
  "eframe",

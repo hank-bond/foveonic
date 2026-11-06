@@ -5,6 +5,20 @@ kind: reference
 
 # Changelog
 
+## 0.8.0
+
+White balance picking, rotation and support for smaller RAW files.
+
+### Changes
+
+- Pick a neutral area directly in the photograph to set Custom white balance. The eyedropper sits beside White Balance Mode and works across supported camera families, with independent Warmth and Tint adjustments and saved settings for previews and exports.
+- Add Straighten, Rotate Freehand and relative 90-degree Rotate Left/Right tools. Use R for the selected rotation tool and Shift+R to cycle tools. Straighten accepts either a dragged line or two clicks and aligns the line to the nearest horizontal or vertical axis.
+- Crop and rotation share one editing view, with automatic interior framing to avoid black corners. Saved rotation, crops and output dimensions stay consistent across Full, Fast and Smart previews, photographic exports and editable DNGs.
+- Refine the photograph toolbar with distinct rotation icons, compact split buttons and menus aligned to their buttons. Show recent tool messages beside Log, and clear that status when Log is opened.
+- Support Merrill MED and LOW RAW files, including SD1 Merrill LOW. Preserve the photograph's aspect ratio when stored sensor samples have different horizontal and vertical spacing, including crop, rotation and export geometry. Rows + Columns noise cleanup remains unavailable for LOW Merrill files.
+- Add reduced RAW processing for Classic SLR MED/LOW and Quattro LOW through their existing camera recipes. These paths have reference-derived and synthetic rendering/export checks. Independent reduced Classic and Quattro originals remain unverified.
+- Report damaged or incomplete X3F files by name with advice to copy or download the original again. Keep unsupported formats and file-access errors distinct, and retain technical causes for diagnosis.
+
 ## 0.7.2
 
 Smoother Smart preview editing and faster repeated Merrill edits.
