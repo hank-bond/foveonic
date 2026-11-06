@@ -25,6 +25,7 @@ pub struct Prepared {
 }
 impl Prepared {
     /// Buffers retain sensor geometry. Detail borders clamp to the visible crop.
+    /// Scale is filter variance in working pixels squared, with native variance one.
     pub(crate) fn new(
         extent: [u32; 2],
         crop: [u32; 4],

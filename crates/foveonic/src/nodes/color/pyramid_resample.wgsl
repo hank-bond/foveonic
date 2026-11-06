@@ -36,6 +36,11 @@ fn pyramid_resample(@builtin(global_invocation_id) id: vec3<u32>) {
         let term = fma(value, vec3<f32>(weights[k]), vec3<f32>(0.0));
         total = fma(vec3<f32>(1.0), total, term);
     }
+    // Signed-code consumers narrow integers. Round once after both filter axes
+    // so negative fractional codes do not acquire a truncation bias.
+    if vertical && params.controls.z != 0u {
+        total = sign(total) * floor(abs(total) + vec3<f32>(0.5));
+    }
     let out = (id.y * out_width + id.x) * 3u;
     destination[out] = total.x;
     destination[out+1u] = total.y;

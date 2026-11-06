@@ -31,7 +31,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             preview_quality = match args.next().and_then(|v| v.into_string().ok()).as_deref() {
                 Some("full") => foveonic::render::PreviewQuality::Full,
                 Some("fast") => foveonic::render::PreviewQuality::Fast,
-                _ => return Err("preview quality requires full or fast".into()),
+                Some("draft") => foveonic::render::PreviewQuality::Draft,
+                Some("thumb") => foveonic::render::PreviewQuality::Thumb,
+                _ => return Err("preview quality requires full, fast, draft or thumb".into()),
             };
         } else if arg == "--warm" {
             warm = args
@@ -113,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             profile::report(
                 "processing",
                 sample_mode,
-                serde_json::json!({"source":input,"settings":settings,"output":"final","execution":"fresh","iteration":iteration,"cold":iteration==0,"render_call_ms":render_call,"completed_ms":completed,"profile":profile,"activity":activity})
+                serde_json::json!({"source":input,"settings":settings,"effective_quality":image.settings().preview_quality,"output":"final","execution":"fresh","iteration":iteration,"cold":iteration==0,"render_call_ms":render_call,"completed_ms":completed,"profile":profile,"activity":activity})
             )
         );
         let mut profile = Profile::new(sample_mode);
@@ -185,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "capture",
                 Mode::Off,
                 serde_json::json!({
-                    "source": input, "settings": settings, "output": name, "file": path, "extent": description.extent,
+                    "source": input, "settings": settings, "effective_quality": image.settings().preview_quality, "output": name, "file": path, "extent": description.extent,
                     "dtype": "f32", "endianness": if cfg!(target_endian = "little") {"little"} else {"big"},
                     "layout": format!("{:?}", description.layout), "space": format!("{:?}", description.space),
                     "linear_white": description.linear_white, "view_crop": view.crop,

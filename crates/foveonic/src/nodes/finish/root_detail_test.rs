@@ -111,3 +111,15 @@ fn gpu_detail_axis_order_matches_native_quarter_turns() {
         }
     }
 }
+
+#[test]
+fn preview_detail_preserves_filter_variance_in_native_pixels() {
+    for divisor in [1, 4, 8] {
+        let d = f64::from(divisor);
+        let prepared = Prepared::new([32, 24], [0, 0, 32, 24], 0.001, 200, 1. / (d * d)).unwrap();
+        let [center, near, far, _] = prepared.params.filter;
+        assert_eq!(center + 2 * (near + far), 4096);
+        let working_variance = f64::from(2 * (near + 4 * far)) / 4096.;
+        assert!((working_variance * d * d - 1.).abs() < 0.04);
+    }
+}

@@ -121,6 +121,18 @@ impl Prepared {
             tables,
         })
     }
+    /// Preserve filter variance in native pixels when calibrated codes are pooled.
+    /// Short kernels use a three-tap working-grid approximation with the same
+    /// second moment. Noise lookup amplitudes retain their requested values.
+    pub(crate) fn on_grid(mut self, extent: [u32; 2], divisor: u32) -> Result<Self> {
+        if extent.contains(&0) || ![1, 2, 4, 8].contains(&divisor) || self.params.shape[2] > 1 {
+            return Err("unsupported reduced signed chroma support".into());
+        }
+        self.params.shape[..2].copy_from_slice(&extent);
+        self.params.correction[2] = divisor;
+        Ok(self)
+    }
+
     pub(crate) fn key(&self) -> crate::recipe::Key {
         crate::recipe::Key::pod(&self.params).slice(&self.tables)
     }

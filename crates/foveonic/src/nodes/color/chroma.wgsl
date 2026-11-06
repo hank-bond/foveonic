@@ -25,6 +25,16 @@ fn horizontal(@builtin(global_invocation_id) id:vec3<u32>) {
     let x=i32(id.x); let y=i32(id.y); let p=position(x,y);
     for(var c=0u;c<3u;c++) {
         var sum=0;
+        if params.correction.z > 1u {
+            let d=i32(params.correction.z);
+            // Binomial3 variance is 1/2. Box5 variance is 2 per axis.
+            let side=select(1024,4096,params.shape.z==1u)/(d*d);
+            let center=4096-2*side;
+            sum=side*i32(source[position(x-1,y)+c])+center*i32(source[p+c])+side*i32(source[position(x+1,y)+c]);
+            if params.shape.z==0u { blurred[p+c]=narrow((sum+2048)>>12u); }
+            else { blurred[p+c]=narrow((sum*5+8192)>>14u); }
+            continue;
+        }
         if params.shape.z==0u {
             sum=i32(source[position(x-1,y)+c])+2*i32(source[p+c])+i32(source[position(x+1,y)+c]);
         } else {
@@ -40,7 +50,14 @@ fn apply(@builtin(global_invocation_id) id:vec3<u32>) {
     var old:array<i32,3>;var smoothed:array<i32,3>;var corrections:array<i32,3>;
     for(var c=0u;c<3u;c++) {
         old[c]=i32(source[p+c]);
-        if params.shape.z==0u {
+        if params.correction.z > 1u {
+            let d=i32(params.correction.z);
+            let side=select(1024,4096,params.shape.z==1u)/(d*d);
+            let center=4096-2*side;
+            let sum=side*blurred[position(x,y-1)+c]+center*blurred[p+c]+side*blurred[position(x,y+1)+c];
+            if params.shape.z==0u { smoothed[c]=sum>>12u; }
+            else { smoothed[c]=(sum*5)>>12u; }
+        } else if params.shape.z==0u {
             smoothed[c]=(blurred[position(x,y-1)+c]+2*blurred[p+c]+blurred[position(x,y+1)+c])>>2u;
         } else {
             smoothed[c]=0;

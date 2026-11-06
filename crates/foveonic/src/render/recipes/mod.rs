@@ -112,9 +112,7 @@ impl Engine {
         if matches!(
             settings.preview_quality,
             super::PreviewQuality::Draft | super::PreviewQuality::Thumb
-        ) && (source.metadata().processing_family()? != crate::source::ProcessingFamily::Merrill
-            || !merrill::preview_available(source.metadata(), settings.preview_quality)
-            || !settings.fast_preview_available(source.metadata())
+        ) && (!settings.small_preview_available(source.metadata(), settings.preview_quality)
             || settings.preview_region.is_some()
             || settings.output_size.is_some()
             || names != ["final"]

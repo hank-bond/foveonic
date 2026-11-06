@@ -15,7 +15,22 @@ pub(crate) fn prepare_root(
     crop: [u32; 4],
     rotation: u32,
 ) -> Result<root_detail::Prepared> {
-    let extent = [metadata.width as u32, metadata.height as u32];
+    prepare_root_on_grid(
+        metadata,
+        crop,
+        rotation,
+        [metadata.width as u32, metadata.height as u32],
+        1.,
+    )
+}
+
+pub(crate) fn prepare_root_on_grid(
+    metadata: &Metadata,
+    crop: [u32; 4],
+    rotation: u32,
+    extent: [u32; 2],
+    scale: f64,
+) -> Result<root_detail::Prepared> {
     let mut green = scalar(metadata, "GreenWeight", 0.)?;
     let mut high = scalar(metadata, "GreenHighLimit", 0.)? as i32;
     let low = scalar(metadata, "GreenLowLimit", 0.)? as i32;
@@ -23,7 +38,7 @@ pub(crate) fn prepare_root(
         green = 0.001;
         high = 200;
     }
-    let root = root_detail::Prepared::new(extent, crop, green, high, 1.)?;
+    let root = root_detail::Prepared::new(extent, crop, green, high, scale)?;
     let root = if matches!(rotation % 360, 90 | 270) {
         root.with_horizontal_first()
     } else {

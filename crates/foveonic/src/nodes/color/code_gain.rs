@@ -29,6 +29,14 @@ impl Prepared {
         })
     }
 
+    pub(crate) fn with_extent(mut self, extent: [u32; 2]) -> Result<Self> {
+        if extent.contains(&0) {
+            return Err("invalid signed code gain extent".into());
+        }
+        self.shape[..2].copy_from_slice(&extent);
+        Ok(self)
+    }
+
     pub(crate) fn key(&self) -> crate::recipe::Key {
         crate::recipe::Key::pod(self)
     }

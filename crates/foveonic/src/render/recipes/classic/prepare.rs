@@ -136,7 +136,9 @@ mod calibration;
 mod color;
 mod reconstruction;
 
-pub(crate) use appearance::{prepare_dng_appearance, prepare_photographic, prepare_root};
+pub(crate) use appearance::{
+    prepare_dng_appearance, prepare_photographic, prepare_root, prepare_root_on_grid,
+};
 pub(crate) use calibration::{
     geometry, prepare, prepare_despeckle, prepare_red_detail, prepare_with_white_balance,
 };

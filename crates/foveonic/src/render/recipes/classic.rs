@@ -4,6 +4,8 @@ mod correction;
 mod highlight;
 mod inspection;
 mod policy;
+mod preview;
+pub(in crate::render) use preview::available as preview_available;
 mod prepare;
 mod range;
 mod reference;
@@ -66,6 +68,17 @@ fn compose(
 ) -> Result<BuiltRecipe> {
     let metadata = &source.metadata;
     let mut params = prepare::geometry(metadata)?;
+    let preview = (!dng
+        && matches!(
+            settings.preview_quality,
+            crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
+        )
+        && names == ["final"]
+        && settings.preview_region.is_none()
+        && settings.output_size.is_none()
+        && preview::available(metadata, settings, settings.preview_quality))
+    .then(|| preview::Grid::new(params, settings.preview_quality))
+    .transpose()?;
     if let Some(size) = settings.processing_output_size() {
         params.output[..2].copy_from_slice(&size);
     }
@@ -94,7 +107,7 @@ fn compose(
     let route = route::Route::new(metadata, settings);
     let white_balance = route.white_balance(settings);
     let neutral = white_balance::estimate(engine, source, white_balance, profile)?;
-    let prepared = profile.measure("prepare fixed-point camera recipe", || {
+    let mut prepared = profile.measure("prepare fixed-point camera recipe", || {
         prepare::prepare_with_white_balance(metadata, white_balance, neutral)
     })?;
     let gains = prepared.final_gain;
@@ -127,6 +140,11 @@ fn compose(
         )?;
         finish!();
     }
+    if let Some(grid) = &preview {
+        final_id = grid.append(&mut graph, final_id)?;
+        params = grid.encode;
+        prepared.color.extent = grid.extent().map(|v| v as usize);
+    }
     let mut dehaze_matrix = None;
     if route.high_iso()? {
         if super::linear_edits::needs_dehaze(settings, names) && !settings.is_monochrome() {
@@ -150,6 +168,11 @@ fn compose(
     } else {
         if route.small_chroma()? {
             for p in prepare::prepare_chroma(metadata, gains, route.monochrome)? {
+                let p = if let Some(grid) = &preview {
+                    p.on_grid(grid.extent(), grid.divisor)?
+                } else {
+                    p
+                };
                 final_id = graph.add(Operation::ChromaSmooth(p), &[final_id])?;
                 finish!();
             }
@@ -178,6 +201,10 @@ fn compose(
                 color.matrix_green_sum,
                 color.digital_gain,
             )? {
+                let mut fir = fir;
+                if let Some(grid) = &preview {
+                    fir.extent = grid.extent();
+                }
                 let corrected = graph.named_output(final_id, "color.corrected-layers")?;
                 final_id = graph.add(Operation::LogReconstruct(fir), &[final_id, corrected])?;
                 finish!();
@@ -191,6 +218,11 @@ fn compose(
                 // The filtered reference path fuses this required color gain into
                 // its final integer reconstruction. Bypassing spatial filtering
                 // must retain that gain without changing enabled-path rounding.
+                let gain = if let Some(grid) = &preview {
+                    gain.with_extent(grid.extent())?
+                } else {
+                    gain
+                };
                 final_id = graph.add(Operation::CodeGain(gain), &[final_id])?;
                 finish!();
             }
@@ -202,7 +234,17 @@ fn compose(
             }
         }
     }
-    let root = prepare::prepare_root(metadata, params.crop, params.source[2])?;
+    let root = if let Some(grid) = &preview {
+        prepare::prepare_root_on_grid(
+            metadata,
+            params.crop,
+            params.source[2],
+            grid.extent(),
+            1. / f64::from(grid.divisor * grid.divisor),
+        )?
+    } else {
+        prepare::prepare_root(metadata, params.crop, params.source[2])?
+    };
     final_id = graph.add(Operation::RootDetail(root), &[final_id])?;
     let detail = graph.named_output(final_id, "detail.signal")?;
     finish!();
@@ -221,7 +263,8 @@ fn compose(
             rgb_bounds: params.crop,
         });
     }
-    if super::linear_edits::active(settings)
+    if preview.is_some()
+        || super::linear_edits::active(settings)
         || names
             .iter()
             .any(|n| super::linear_edits::requested_output(n))
@@ -247,6 +290,9 @@ fn compose(
             rgb_extent: [params.source[0], params.source[1]],
             rgb_bounds: params.crop,
         };
+        if let Some(grid) = &preview {
+            grid.frame(&mut recipe)?;
+        }
         super::linear_edits::alias(&mut recipe, space, "linear.base")?;
         if requested(&recipe.graph, names) {
             return Ok(recipe);
@@ -288,7 +334,7 @@ fn compose(
             space,
             white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
             guide_white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
-            scale: 1.,
+            scale: preview.as_ref().map_or(1., |grid| 1. / grid.divisor as f32),
         };
         let context_white = context.white;
         super::linear_edits::build(

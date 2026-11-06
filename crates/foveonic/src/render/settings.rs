@@ -279,6 +279,27 @@ impl Settings {
                 || super::recipes::quattro::fast_available(metadata))
     }
 
+    /// Validated sensor-level Draft and Thumb grids for the selected camera route.
+    pub fn small_preview_available(
+        &self,
+        metadata: &crate::source::Metadata,
+        quality: PreviewQuality,
+    ) -> bool {
+        if self.is_monochrome() || !matches!(quality, PreviewQuality::Draft | PreviewQuality::Thumb)
+        {
+            return false;
+        }
+        match metadata.processing_family() {
+            Ok(crate::source::ProcessingFamily::Merrill) => {
+                super::recipes::merrill::preview_available(metadata, quality)
+            }
+            Ok(crate::source::ProcessingFamily::Classic) => {
+                super::recipes::classic::preview_available(metadata, self, quality)
+            }
+            _ => false,
+        }
+    }
+
     /// Color recipes can refine native viewport detail before the whole frame.
     pub fn regional_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
         self.rotation.is_neutral()
