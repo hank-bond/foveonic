@@ -115,6 +115,7 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
         .add(
             Operation::SharpSignal {
                 space: ColorSpace::Srgb,
+                scale: 1.,
             },
             &[restored],
         )
@@ -223,6 +224,7 @@ fn rejects_wrong_space_and_forward_dependencies() {
         .add(
             Operation::SharpSignal {
                 space: ColorSpace::Srgb,
+                scale: 1.,
             },
             &[linear],
         )
@@ -469,4 +471,17 @@ fn companion_branches_share_inputs_but_keep_distinct_edit_identities() {
     );
     assert!(graph.session_outputs.contains(&mapping[guide]));
     graph.required(&[main, mapping[guide]]).unwrap();
+}
+
+#[test]
+fn high_pass_working_scale_invalidates_its_stage_identity() {
+    let full = Operation::SharpSignal {
+        space: ColorSpace::Srgb,
+        scale: 1.,
+    };
+    let thumb = Operation::SharpSignal {
+        space: ColorSpace::Srgb,
+        scale: 0.125,
+    };
+    assert_ne!(full.key("detail.signal"), thumb.key("detail.signal"));
 }

@@ -176,6 +176,8 @@ pub enum Operation {
     },
     SharpSignal {
         space: ColorSpace,
+        /// High-pass spatial scale. One preserves the established Full/Fast kernels.
+        scale: f32,
     },
     Sharpen {
         amount: f32,
@@ -331,10 +333,8 @@ impl Operation {
             Self::SpatialColorGain { prepared, .. } => prepared.key(),
             Self::RawColorBlend(prepared) => prepared.key(),
             Self::SectorColor(prepared) => prepared.key(),
-            Self::Source
-            | Self::SourcePhaseCells
-            | Self::RenderedInput { .. }
-            | Self::SharpSignal { .. } => Key::default(),
+            Self::Source | Self::SourcePhaseCells | Self::RenderedInput { .. } => Key::default(),
+            Self::SharpSignal { scale, .. } => Key::pod(scale),
             Self::ByteMaskDouble(p) => p.key(),
             Self::MaskImage { params, .. } => params.key(),
             Self::BlueGuidedReconstruct(p) => p.key(),
@@ -944,7 +944,7 @@ impl Operation {
             Self::TiledColorDq { space, .. } => (vec![ColorTiles(*space)], ColorTiles(*space)),
             Self::ColorDq { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::Saturation { space, .. } => (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space)),
-            Self::SharpSignal { space } => (vec![LinearRgb(*space)], SignedDetail),
+            Self::SharpSignal { space, .. } => (vec![LinearRgb(*space)], SignedDetail),
             Self::Sharpen { space, .. } => {
                 (vec![LinearRgb(*space), SignedDetail], LinearRgb(*space))
             }

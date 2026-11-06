@@ -1644,14 +1644,17 @@ impl Engine {
                     );
                     Some(output)
                 }
-                Operation::SharpSignal { .. } => {
+                Operation::SharpSignal { scale, .. } => {
+                    if !scale.is_finite() || *scale <= 0. || *scale > 1. {
+                        return Err("invalid high-pass working scale".into());
+                    }
                     let mut output = gpu.storage(
                         "Native signed mono high-pass",
                         u64::from(inherited[0]) * u64::from(inherited[1]) * 4,
                     )?;
                     let uniform = gpu.uniform(&ScalarParams {
                         source: dimensions,
-                        value: [0.; 4],
+                        value: [*scale, 0., 0., 0.],
                     });
                     dispatch(
                         Kernel::SharpSignal,

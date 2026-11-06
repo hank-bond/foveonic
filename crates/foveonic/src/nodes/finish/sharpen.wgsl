@@ -11,9 +11,14 @@ fn brightness(p:u32)->f32{let v=max(color(p),vec3(0.0));return min((v.x+v.y)+v.z
 fn signal(@builtin(global_invocation_id)id:vec3<u32>){
     let w=params.source.x;let h=params.source.y;if id.x>=w || id.y>=h{return;}
     let p=id.y*w+id.x;var value=0.0;
-    if id.x>=2u && id.x+2u<w && id.y>=2u && id.y+2u<h{
+    let scale=params.value.x;
+    let margin=u32(max(1.0,ceil(2.0*scale)));
+    if id.x>=margin && id.x+margin<w && id.y>=margin && id.y+margin<h{
         var sum=0.0;for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){sum+=brightness(u32(i32(p)+y*i32(w)+x));}}
         value=brightness(p)-sum/9.0;
+        // The unresolved subpixel box retains its native second moment.
+        // Keep native arithmetic untouched at scale one.
+        if scale<1.0 { value*=scale*scale; }
     }
     output_pixels[p]=value;
 }

@@ -433,6 +433,7 @@ fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
         .add(
             Operation::SharpSignal {
                 space: ColorSpace::Srgb,
+                scale: 1.,
             },
             &[input],
         )

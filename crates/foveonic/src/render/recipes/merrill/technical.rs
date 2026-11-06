@@ -330,7 +330,16 @@ pub(super) fn build(
     // Final sharpening uses the actual reconstructed RGB, independently of
     // denoising and texture restoration. Inspection can request it without sharpening.
     let signal = if settings.sharpen_selected() || names.contains(&"detail.signal") {
-        let signal = graph.add(Operation::SharpSignal { space }, &[linear])?;
+        let scale = if matches!(
+            settings.preview_quality,
+            crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
+        ) && preview.is_some()
+        {
+            1. / settings.preview_quality.divisor() as f32
+        } else {
+            1.
+        };
+        let signal = graph.add(Operation::SharpSignal { space, scale }, &[linear])?;
         finish!();
         Some(signal)
     } else {

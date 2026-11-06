@@ -955,7 +955,13 @@ mod tests {
             )
             .unwrap();
         let signal = graph
-            .add(O::SharpSignal { space: C::Srgb }, &[rgb])
+            .add(
+                O::SharpSignal {
+                    space: C::Srgb,
+                    scale: 1.,
+                },
+                &[rgb],
+            )
             .unwrap();
         let sharpened = graph
             .add(

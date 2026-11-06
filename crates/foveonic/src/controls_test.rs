@@ -32,7 +32,7 @@ fn shader_native_high_pass_and_final_sharpen_match_reference_limits_and_packing(
     let mut signal = gpu
         .storage("Native high-pass fixture", 24 * 20 * 4)
         .unwrap();
-    let p = uniform(0.);
+    let p = uniform(1.);
     gpu.dispatch(
         Kernel::SharpSignal,
         &mut [(0, Read(&input)), (2, Read(&p)), (3, Write(signal.write()))],
@@ -224,6 +224,64 @@ fn shader_color_dq_matches_signed_lookup_math() {
                 actual[c],
                 original[c] - table.values[((residual[c] - mean) & mask) as usize * 3 + c] as f32
             );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn small_high_pass_preserves_native_quadratic_support_and_scaled_borders() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [17_u32, 17];
+    for divisor in [1_u32, 4, 8] {
+        let scale = 1. / divisor as f32;
+        for constant in [false, true] {
+            let pixels: Vec<f32> = (0..extent[1])
+                .flat_map(|y| {
+                    (0..extent[0]).flat_map(move |x| {
+                        let code = if constant {
+                            30.
+                        } else {
+                            10. + (divisor * divisor * (x * x + y * y)) as f32 / 64.
+                        };
+                        [code; 3]
+                    })
+                })
+                .collect();
+            let input = gpu.upload("Physical quadratic high-pass", &pixels).unwrap();
+            let mut output = gpu
+                .storage(
+                    "Physical quadratic signal",
+                    u64::from(extent[0] * extent[1]) * 4,
+                )
+                .unwrap();
+            let mut bytes = Vec::new();
+            bytes.extend(bytemuck::bytes_of(&[extent[0], extent[1], 0, 0]));
+            bytes.extend(bytemuck::bytes_of(&[scale, 0., 0., 0.]));
+            let uniform = gpu.uniform(&<[u8; 32]>::try_from(bytes).unwrap());
+            gpu.dispatch(
+                Kernel::SharpSignal,
+                &mut [
+                    (0, Read(&input)),
+                    (2, Read(&uniform)),
+                    (3, Write(output.write())),
+                ],
+                [3, 3],
+                &mut Default::default(),
+            );
+            let actual = floats(&gpu, &output);
+            let margin = if divisor == 1 { 2 } else { 1 };
+            for y in 0..17 {
+                for x in 0..17 {
+                    let interior = x >= margin && x + margin < 17 && y >= margin && y + margin < 17;
+                    let expected = if interior && !constant { -0.0625 } else { 0. };
+                    assert!(
+                        (actual[y * 17 + x] - expected).abs() < 0.0003,
+                        "divisor {divisor}, constant {constant}, ({x},{y}): {} vs {expected}",
+                        actual[y * 17 + x]
+                    );
+                }
+            }
         }
     }
 }
