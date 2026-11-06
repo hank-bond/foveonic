@@ -80,16 +80,21 @@ fn apply(@builtin(global_invocation_id) id:vec3<u32>) {
     for(var c=0u;c<3u;c++) { destination[p+c]=f32(narrow(old[c]+corrections[c]-shared_correction)); }
 }
 
+fn coarse_group()->u32 { return select(params.correction.w,4u,params.correction.w==0u); }
+
 @compute @workgroup_size(64)
 fn recursive_init(@builtin(global_invocation_id) id:vec3<u32>) {
- let coarse_width=(params.shape.x+3u)/4u;let coarse_height=(params.shape.y+3u)/4u;
+ let group=coarse_group();
+ let coarse_width=(params.shape.x+group-1u)/group;let coarse_height=(params.shape.y+group-1u)/group;
  if id.x>=coarse_width {return;}
  var state:array<i32,3>;
  for(var row=i32(coarse_height)-1;row>=0;row--) {
   for(var c=0u;c<3u;c++) {
    var sum=0;
-   for(var dy=0;dy<4;dy++) {for(var dx=0;dx<4;dx++) {sum+=i32(source[position(i32(id.x)*4+dx,row*4+dy)+c]);}}
-   sum=min(sum,32767);
+   for(var dy=0;dy<i32(group);dy++) {for(var dx=0;dx<i32(group);dx++) {sum+=i32(source[position(i32(id.x*group)+dx,row*i32(group)+dy)+c]);}}
+   // Keep the reference coarse carrier's sixteen-sample code scale. Pooling
+   // changes spatial coverage, not the lookup or brightness regularizer units.
+   sum=min(sum*i32(16u/(group*group)),32767);
    state[c]=narrow((params.coarse_decay.x*sum+params.coarse_decay.y*state[c])>>8u);
    blurred[(u32(row)*coarse_width+id.x)*3u+c]=state[c];
   }
@@ -98,15 +103,16 @@ fn recursive_init(@builtin(global_invocation_id) id:vec3<u32>) {
 
 @compute @workgroup_size(64)
 fn recursive_horizontal_pass(@builtin(global_invocation_id) id:vec3<u32>) {
- let coarse_width=(params.shape.x+3u)/4u;let coarse_height=(params.shape.y+3u)/4u;
+ let group=coarse_group();
+ let coarse_width=(params.shape.x+group-1u)/group;let coarse_height=(params.shape.y+group-1u)/group;
  if id.x>=coarse_height {return;}
  for(var c=0u;c<3u;c++) {
   var state=0;
-  for(var group=i32(coarse_width)-1;group>=0;group--) {
-   let sample=blurred[(id.x*coarse_width+u32(group))*3u+c];
+  for(var cell=i32(coarse_width)-1;cell>=0;cell--) {
+   let sample=blurred[(id.x*coarse_width+u32(cell))*3u+c];
    // A partial coarse group repeats writes to the final full-resolution column.
-   for(var dx=3;dx>=0;dx--) {
-    let x=min(u32(group*4+dx),params.shape.x-1u);
+   for(var dx=i32(group)-1;dx>=0;dx--) {
+    let x=min(u32(cell*i32(group)+dx),params.shape.x-1u);
     state=(params.decay.x*sample+params.decay.y*state)>>8u;
     recursive_horizontal[(id.x*params.shape.x+x)*3u+c]=narrow(state);
    }
@@ -123,10 +129,11 @@ fn recursive_horizontal_pass(@builtin(global_invocation_id) id:vec3<u32>) {
 @compute @workgroup_size(64)
 fn recursive_apply(@builtin(global_invocation_id) id:vec3<u32>) {
  if id.x>=params.shape.x {return;}
+ let group=coarse_group();
  var state:array<i32,3>;
  for(var y=0u;y<params.shape.y;y++) {
   let pixel_index=(y*params.shape.x+id.x)*3u;
-  let horizontal_index=((y/4u)*params.shape.x+id.x)*3u;
+  let horizontal_index=((y/group)*params.shape.x+id.x)*3u;
   var signal:array<i32,3>;var old:array<i32,3>;
   for(var c=0u;c<3u;c++) {
    let accumulated=params.decay.w*state[c]+params.decay.z*recursive_horizontal[horizontal_index+c];

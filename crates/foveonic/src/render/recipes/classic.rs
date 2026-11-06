@@ -229,6 +229,11 @@ fn compose(
         }
         if route.recursive_chroma()? {
             if let Some(chroma) = prepare::prepare_recursive_chroma(metadata, gains)? {
+                let chroma = if let Some(grid) = &preview {
+                    chroma.on_grid(grid.extent(), grid.divisor)?
+                } else {
+                    chroma
+                };
                 final_id = graph.add(Operation::CodeChromaSmooth(chroma), &[final_id])?;
                 finish!();
             }

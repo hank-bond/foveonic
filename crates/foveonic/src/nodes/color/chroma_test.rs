@@ -110,7 +110,7 @@ fn reduced_chroma_changes_geometry_and_spatial_identity_only() {
     }
     let recursive =
         Prepared::new([128, 96], [16.; 3], [0.8; 3], 128, 3, Support::Recursive).unwrap();
-    assert!(recursive.on_grid([16, 12], 8).is_err());
+    assert!(recursive.on_grid([16, 12], 8).is_ok());
 }
 
 #[test]
@@ -158,5 +158,97 @@ fn reduced_chroma_contracts_spatial_support_without_changing_noise_tables() {
                 .sum::<f32>()
         };
         assert!(difference(&reduced) < difference(&native));
+    }
+}
+
+#[test]
+fn recursive_decay_retains_physical_distances_and_sixteen_sample_units() {
+    let native = Prepared::new([128, 96], [16.; 3], [0.8; 3], 128, 3, Support::Recursive).unwrap();
+    for divisor in [4, 8] {
+        let reduced = native.clone().on_grid([32, 24], divisor).unwrap();
+        let native_beta = f64::from(native.params.decay[1]) / 256.;
+        let beta = f64::from(reduced.params.decay[1]) / 256.;
+        assert!((beta - native_beta.powi(divisor as i32)).abs() < 0.015);
+        let group = reduced.params.correction[3];
+        assert_eq!(group, 1);
+        assert_eq!(16 / (group * group), 16);
+        assert_eq!(native.tables, reduced.tables);
+        if divisor == 4 {
+            assert_eq!(native.params.coarse_decay, reduced.params.coarse_decay);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn reduced_recursive_chroma_keeps_neutral_constants_and_channel_symmetry() {
+    let gpu = Gpu::new().unwrap();
+    let native = Prepared::new([136, 88], [16.; 3], [0.8; 3], 128, 3, Support::Recursive).unwrap();
+    for divisor in [4, 8] {
+        let prepared = native.clone().on_grid([17, 11], divisor).unwrap();
+        for code in [-100_f32, 0., 512., 1024.] {
+            let pixels = vec![code; 17 * 11 * 3];
+            let input = gpu.upload("Reduced recursive neutral", &pixels).unwrap();
+            let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+            let bytes = gpu.readback(&output).unwrap();
+            for (index, rgb) in bytemuck::cast_slice::<u8, f32>(&bytes)
+                .chunks_exact(3)
+                .enumerate()
+            {
+                assert_eq!(rgb[0], rgb[1]);
+                assert_eq!(rgb[1], rgb[2]);
+                if code < 0. {
+                    // Negative brightness selects a zero normalization ratio.
+                    // The unchanged lookup and shared-channel units determine
+                    // this response independently of the spatial recurrence.
+                    let correction = prepared.tables[(-code) as usize];
+                    let shared = (3 * correction) >> prepared.params.correction[1];
+                    assert_eq!(rgb[0], code + (correction - shared) as f32);
+                } else if code == 0. {
+                    assert_eq!(rgb, [0.; 3]);
+                } else {
+                    // The original IIR starts from zero at its edges. Check a
+                    // settled flat interior separately from those transients.
+                    let interior =
+                        (3..14).contains(&(index % 17)) && (3..8).contains(&(index / 17));
+                    let lookup_limit = prepared.tables.iter().map(|v| v.abs()).max().unwrap();
+                    let limit = if interior {
+                        2
+                    } else {
+                        lookup_limit + ((3 * lookup_limit) >> prepared.params.correction[1])
+                    };
+                    assert!(
+                        (rgb[0] - code).abs() <= limit as f32,
+                        "divisor {divisor} code {code} pixel {index}: {rgb:?}"
+                    );
+                }
+            }
+        }
+        let pixels: Vec<f32> = (0..17 * 11)
+            .flat_map(|i| {
+                if i % 17 < 8 {
+                    [960., 1024., 1088.]
+                } else {
+                    [1088., 1024., 960.]
+                }
+            })
+            .collect();
+        let swapped: Vec<f32> = pixels
+            .chunks_exact(3)
+            .flat_map(|rgb| [rgb[2], rgb[1], rgb[0]])
+            .collect();
+        let filter = |pixels: &[f32]| {
+            let input = gpu
+                .upload("Reduced recursive chromatic edge", pixels)
+                .unwrap();
+            let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+            let bytes = gpu.readback(&output).unwrap();
+            bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()
+        };
+        let original = filter(&pixels);
+        let permuted = filter(&swapped);
+        for (a, b) in original.chunks_exact(3).zip(permuted.chunks_exact(3)) {
+            assert_eq!(a, &[b[2], b[1], b[0]]);
+        }
     }
 }

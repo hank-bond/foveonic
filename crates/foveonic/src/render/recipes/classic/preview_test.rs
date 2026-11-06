@@ -83,12 +83,12 @@ fn unvalidated_classic_routes_report_full_fallback() {
         values,
     };
     let mut metadata = Metadata {
-        width: 256,
-        height: 192,
+        width: 2688,
+        height: 1792,
         rotation: 0,
         processing_version: None,
         properties: [
-            ("CAMMODEL".into(), "SIGMA SD9".into()),
+            ("CAMMODEL".into(), "SIGMA DP1S".into()),
             ("ISO".into(), "100".into()),
         ]
         .into(),
@@ -104,9 +104,17 @@ fn unvalidated_classic_routes_report_full_fallback() {
     metadata
         .matrices
         .insert("ChromaBlur".into(), matrix(vec![101.]));
-    assert!(!settings.small_preview_available(&metadata, PreviewQuality::Thumb));
+    assert!(settings.small_preview_available(&metadata, PreviewQuality::Thumb));
     settings.reconstruction = None;
     assert!(settings.small_preview_available(&metadata, PreviewQuality::Thumb));
+    metadata
+        .properties
+        .insert("RESOLUTION".into(), "MED".into());
+    assert!(!settings.small_preview_available(&metadata, PreviewQuality::Thumb));
+    metadata.properties.remove("RESOLUTION");
+    metadata.width = 1344;
+    assert!(!settings.small_preview_available(&metadata, PreviewQuality::Thumb));
+    metadata.width = 2688;
     settings.rendering = crate::render::Rendering::Monochrome;
     assert!(!settings.small_preview_available(&metadata, PreviewQuality::Thumb));
 }
@@ -152,6 +160,7 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
                 continue;
             }
             supported += 1;
+            eprintln!("Classic {quality:?} original: {}", path.display());
             let full = super::super::prepare::geometry(&source.metadata).unwrap();
             let recipe = super::super::build(
                 &engine,

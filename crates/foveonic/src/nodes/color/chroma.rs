@@ -23,7 +23,7 @@ pub(crate) enum Support {
 pub(crate) struct Params {
     /// Width, height, support selector, per-channel lookup length.
     pub shape: [u32; 4],
-    /// Brightness regularizer, common-channel right shift, then reserved words.
+    /// Brightness regularizer, common-channel right shift, preview divisor and coarse group.
     pub correction: [u32; 4],
     /// Horizontal alpha/beta and vertical alpha/beta in Q8.
     pub decay: [i32; 4],
@@ -125,11 +125,28 @@ impl Prepared {
     /// Short kernels use a three-tap working-grid approximation with the same
     /// second moment. Noise lookup amplitudes retain their requested values.
     pub(crate) fn on_grid(mut self, extent: [u32; 2], divisor: u32) -> Result<Self> {
-        if extent.contains(&0) || ![1, 2, 4, 8].contains(&divisor) || self.params.shape[2] > 1 {
+        if extent.contains(&0) || ![1, 2, 4, 8].contains(&divisor) || self.params.shape[2] > 2 {
             return Err("unsupported reduced signed chroma support".into());
         }
         self.params.shape[..2].copy_from_slice(&extent);
         self.params.correction[2] = divisor;
+        if self.params.shape[2] == 2 && divisor > 1 {
+            let group = (4 / divisor).max(1);
+            self.params.correction[3] = group;
+            // Each working pixel spans divisor native pixels. Retain the same
+            // physical IIR decay instead of widening it with the reduced grid.
+            let beta = (-f64::from(divisor) / 5.).exp();
+            let a = ((1. - beta) * 256. + 0.5) as i32;
+            let b = (beta * 256. + 0.5) as i32;
+            self.params.decay = [a, 256 - a, a, b];
+            let coarse_beta = (-f64::from(group * divisor) / 5.).exp();
+            self.params.coarse_decay = [
+                ((1. - coarse_beta) * 256. + 0.5) as i32,
+                (coarse_beta * 256. + 0.5) as i32,
+                0,
+                0,
+            ];
+        }
         Ok(self)
     }
 
@@ -187,8 +204,12 @@ fn apply_recursive(
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
     let [width, height, _, _] = p.params.shape;
-    let coarse_width = width.div_ceil(4);
-    let coarse_height = height.div_ceil(4);
+    let group = match p.params.correction[3] {
+        0 => 4,
+        group => group,
+    };
+    let coarse_width = width.div_ceil(group);
+    let coarse_height = height.div_ceil(group);
     let mut coarse = gpu.storage(
         "Recursive chroma coarse",
         u64::from(coarse_width) * u64::from(coarse_height) * 12,

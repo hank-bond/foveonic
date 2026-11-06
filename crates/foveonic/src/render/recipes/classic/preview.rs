@@ -14,14 +14,22 @@ pub(in crate::render) fn available(
     settings: &Settings,
     quality: PreviewQuality,
 ) -> bool {
-    // Recursive and high-ISO spatial workers retain native-only support until
-    // their reduced-grid equations have independent photographic validation.
+    // High-ISO range reconstruction keeps its native grid until its reduced
+    // spatial equations have independent photographic validation.
     !settings.is_monochrome()
+        && matches!(
+            (metadata.width, metadata.height),
+            (2304, 1531) | (2688, 1792)
+        )
+        && metadata
+            .properties
+            .get("RESOLUTION")
+            .is_none_or(|resolution| {
+                !resolution.trim().eq_ignore_ascii_case("MED")
+                    && !resolution.trim().eq_ignore_ascii_case("LOW")
+            })
         && super::prepare::capture_iso(metadata)
             .is_ok_and(|iso| iso < super::reference::RANGE_RECONSTRUCTION_ISO)
-        && super::route::Route::new(metadata, settings)
-            .recursive_chroma()
-            .is_ok_and(|selected| !selected)
         && super::prepare::geometry(metadata)
             .and_then(|encode| Grid::new(encode, quality))
             .is_ok()
