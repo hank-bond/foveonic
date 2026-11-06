@@ -180,7 +180,7 @@ fn compose(
     let small = small_preview_available(&source.metadata, settings.preview_quality)
         && !dng
         && !settings.is_monochrome()
-        && names == ["final"]
+        && (names == ["final"] || names == ["linear.base"])
         && settings.preview_region.is_none()
         && settings.output_size.is_none();
     let fast = settings.preview_quality == crate::render::PreviewQuality::Fast

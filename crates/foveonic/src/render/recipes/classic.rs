@@ -73,7 +73,7 @@ fn compose(
             settings.preview_quality,
             crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
         )
-        && names == ["final"]
+        && (names == ["final"] || names == ["linear.base"])
         && settings.preview_region.is_none()
         && settings.output_size.is_none()
         && preview::available(metadata, settings, settings.preview_quality))

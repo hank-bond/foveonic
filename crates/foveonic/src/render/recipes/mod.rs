@@ -200,10 +200,13 @@ pub(super) fn build_camera(
         names
     };
     let mut request = std::borrow::Cow::Borrowed(settings);
+    // Internal color guides share the photographic working grid. Public
+    // inspection requests already select Full at the render_recipe boundary.
     if matches!(
         settings.preview_quality,
         super::PreviewQuality::Draft | super::PreviewQuality::Thumb
     ) && names != ["final"]
+        && names != ["linear.base"]
     {
         request.to_mut().preview_quality = super::PreviewQuality::Full;
     }
