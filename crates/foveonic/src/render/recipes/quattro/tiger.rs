@@ -11,7 +11,8 @@ pub(super) fn supported(metadata: &Metadata) -> bool {
         .processing_version
         .is_some_and(|v| v[0] == PROCESSING_MAJOR)
         && metadata.scalar("CAMERAID").is_ok_and(|id| id == CAMERA_ID)
-        && [metadata.width, metadata.height] == SENSOR_EXTENT
+        && ([metadata.width, metadata.height] == SENSOR_EXTENT
+            || [metadata.width, metadata.height] == SENSOR_EXTENT.map(|v| v / 2))
 }
 
 /// These request gains are independent of sensor-adjustment shading gains.
@@ -65,13 +66,18 @@ pub(super) fn chroma(metadata: &Metadata) -> Result<crate::nodes::sensor::fppd::
         let knots = metadata.fixed::<GAIN_KNOTS>(&format!("StillFPPDGain_{channel}"))?;
         gains.extend(expand(&knots.map(|v| v as f32))?);
     }
-    crate::nodes::sensor::fppd::Prepared::new(
-        [(metadata.width / 2) as u32, (metadata.height / 2) as u32],
+    let prepared = crate::nodes::sensor::fppd::Prepared::new(
+        super::calibration::color_extent(metadata)?,
         CHROMA_GRID,
         [CORRECTION_COLUMNS, CORRECTION_ROWS],
         gains,
         false,
-    )
+    )?;
+    Ok(if metadata.is_quattro_low() {
+        prepared.without_blue()
+    } else {
+        prepared
+    })
 }
 
 pub(super) fn luma(metadata: &Metadata) -> Result<crate::nodes::sensor::fppd::Prepared> {

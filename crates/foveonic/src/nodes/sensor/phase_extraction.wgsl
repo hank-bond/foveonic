@@ -17,17 +17,24 @@ fn phase_extraction(@builtin(global_invocation_id) id: vec3<u32>) {
     let width = params.shape.x;
     if id.x >= width || id.y >= params.shape.y { return; }
     let cell = id.y * width + id.x;
-    let packed = cell * 6u;
+    let triplets = params.shape.w == 3u;
+    let packed = cell * select(6u, 3u, triplets);
     let output = cell * 3u;
     let b00 = source[packed + 2u];
-    let b01 = source[packed + 3u];
-    let b10 = source[packed + 4u];
-    let b11 = source[packed + 5u];
+    var b01 = b00;
+    var b10 = b00;
+    var b11 = b00;
+    if !triplets {
+        b01 = source[packed + 3u];
+        b10 = source[packed + 4u];
+        b11 = source[packed + 5u];
+    }
     var red = source[packed];
     var green = source[packed + 1u];
     var mean_blue = (((b00 + b01) + b10) + b11) * 0.25;
+    if triplets { mean_blue = b00; }
     var phases = vec4<f32>(b00, b01, b10, b11);
-    if params.shape.z == CHANNEL_GAIN_CALIBRATION {
+    if params.shape.z == CHANNEL_GAIN_CALIBRATION && !triplets {
         // This overload scales each blue phase before summing its mean.
         mean_blue = (((b00 * 0.25 + b01 * 0.25) + b10 * 0.25) + b11 * 0.25);
     }
@@ -52,9 +59,13 @@ fn phase_extraction(@builtin(global_invocation_id) id: vec3<u32>) {
     rgb[output] = red;
     rgb[output + 1u] = green;
     rgb[output + 2u] = mean_blue;
-    let top = (id.y * 2u) * (width * 2u) + id.x * 2u;
-    blue[top] = phases.x;
-    blue[top + 1u] = phases.y;
-    blue[top + width * 2u] = phases.z;
-    blue[top + width * 2u + 1u] = phases.w;
+    if triplets {
+        blue[cell] = mean_blue;
+    } else {
+        let top = (id.y * 2u) * (width * 2u) + id.x * 2u;
+        blue[top] = phases.x;
+        blue[top + 1u] = phases.y;
+        blue[top + width * 2u] = phases.z;
+        blue[top + width * 2u + 1u] = phases.w;
+    }
 }

@@ -16,7 +16,7 @@ const HP_GRID_COLUMNS: usize = 13;
 const HP_HORIZONTAL_KNOT_PERIOD: usize = 16;
 const HP_VERTICAL_KNOT_PERIOD: f32 = 32.;
 
-/// Select the ordinary model-22 HI route without preparing tables or resources.
+/// Select the ordinary model-22 route without preparing tables or resources.
 pub(super) fn supported(metadata: &Metadata) -> bool {
     super::calibration::is_ordinary_dp(metadata)
         && super::calibration::normalization(metadata).is_ok_and(|v| v <= 8.)
@@ -45,9 +45,9 @@ pub(super) fn recorded_balance(metadata: &Metadata) -> Result<&'static str> {
 
 pub(super) fn prepare(metadata: &Metadata) -> Result<Prepared> {
     if !supported(metadata) {
-        return Err("sparse HLP calibration requires the supported DP Quattro HI route".into());
+        return Err("sparse HLP calibration requires the supported DP Quattro route".into());
     }
-    let extent = [(metadata.width / 2) as u32, (metadata.height / 2) as u32];
+    let extent = super::calibration::color_extent(metadata)?;
     let special = metadata.fixed::<4>("HighlightPixelsInfo")?;
     if special
         .iter()
@@ -92,7 +92,12 @@ pub(super) fn prepare_for(
     }
     let spatial = spatial(m, aperture as f32)?;
     let color = color(m, white_balance, "B")?;
-    let phases = ["R", "G", "BAVE", "B0", "B1", "B2", "B3"];
+    let low = m.is_quattro_low();
+    let phases = if low {
+        &["R", "G", "BAVE"][..]
+    } else {
+        &["R", "G", "BAVE", "B0", "B1", "B2", "B3"][..]
+    };
     let hp: Vec<_> = phases
         .iter()
         .map(|p| hp_grid(m, aperture as f32, p))
@@ -151,7 +156,9 @@ pub(super) fn prepare_for(
                 let gain = &mut gains[iy * nx + ix];
                 let p = pair(rgb);
                 gain.ordinary[slot * 2..slot * 2 + 2].copy_from_slice(&p);
-                gain.mono[slot] = mono;
+                if !low {
+                    gain.mono[slot] = mono;
+                }
                 rgb += slope;
                 mono += mono_slope;
             }
@@ -173,8 +180,10 @@ pub(super) fn prepare_for(
             g.red_green[..2].copy_from_slice(&pair(current[0]));
             g.red_green[2..].copy_from_slice(&pair(current[1]));
             g.blue[..2].copy_from_slice(&pair(current[2]));
-            for c in 0..4 {
-                g.phases[c] = rows[c + 3][ix / HP_HORIZONTAL_KNOT_PERIOD];
+            if !low {
+                for c in 0..4 {
+                    g.phases[c] = rows[c + 3][ix / HP_HORIZONTAL_KNOT_PERIOD];
+                }
             }
             for c in 0..3 {
                 current[c] += f64::from(slope[c]);
@@ -186,14 +195,18 @@ pub(super) fn prepare_for(
         return Err("invalid blue sensor adjustment".into());
     }
     let normalization = super::calibration::normalization(m)?;
-    Prepared::new(
+    let prepared = Prepared::new(
         extent,
         special,
         correction_lut(m)?,
         gains,
         (f64::from(normalization) / adjustment) as f32,
-    )?
-    .with_blue_ceiling(14300. / normalization)
+    )?;
+    if low {
+        Ok(prepared.with_same_size_blue())
+    } else {
+        prepared.with_blue_ceiling(14300. / normalization)
+    }
 }
 fn optional(m: &Metadata, name: &str, default: f64) -> Result<f64> {
     if m.matrix(name).is_some() {
@@ -290,9 +303,14 @@ fn hp_row(g: &Grid, iy: usize) -> Result<Vec<f32>> {
     row(g, iy as f32 * (1. / HP_VERTICAL_KNOT_PERIOD))
 }
 fn correction_lut(m: &Metadata) -> Result<Vec<u32>> {
+    let name = if m.is_quattro_low() {
+        "LUT_LOW_RR_x1"
+    } else {
+        "LUT_HI_RR_x1"
+    };
     let matrix = m
-        .matrix("LUT_HI_RR_x1")
-        .ok_or("missing HI blue correction LUT")?;
+        .matrix(name)
+        .ok_or_else(|| format!("missing blue correction LUT {name}"))?;
     if matrix.encoding != MatrixEncoding::Uint16
         || matrix.dimensions.len() != 2
         || matrix.dimensions[0] != 3
@@ -369,6 +387,62 @@ fn correction_lut(m: &Metadata) -> Result<Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires GPU, QUATTRO_X3F DP2 original and matching LOW_HLP_REFERENCE worker fixtures"]
+    fn low_calibration_matches_reference_rgb_blue_and_scratch() {
+        let source = crate::source::Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
+        let mut metadata = (*source.metadata).clone();
+        metadata.width /= 2;
+        metadata.height /= 2;
+        let root = std::path::PathBuf::from(std::env::var_os("LOW_HLP_REFERENCE").unwrap());
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
+        let gpu = crate::gpu::Gpu::new().unwrap();
+        for case in manifest["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let read = |kind: &str| {
+                let bytes = std::fs::read(root.join(format!("{name}-{kind}.f32"))).unwrap();
+                bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()
+            };
+            let rgb = gpu.upload("LOW reference RGB", &read("rgb-input")).unwrap();
+            let blue = gpu
+                .upload("LOW reference blue", &read("blue-input"))
+                .unwrap();
+            let prepared = prepare_for(
+                &metadata,
+                [112, 76],
+                [0, 0, 16, 4],
+                case["aperture"].as_f64().unwrap(),
+                "Sunlight",
+            )
+            .unwrap();
+            let output = crate::nodes::sensor::hlp_calibration::apply(
+                &gpu,
+                &rgb,
+                &blue,
+                &prepared,
+                &mut Default::default(),
+            )
+            .unwrap();
+            for (kind, plane) in [
+                ("rgb", output.rgb),
+                ("blue", output.blue),
+                ("scratch", output.scratch),
+            ] {
+                let bytes = gpu.readback(&plane).unwrap();
+                let actual: &[f32] = bytemuck::cast_slice(&bytes);
+                let reference = read(kind);
+                assert_eq!(actual.len(), reference.len());
+                let maximum = actual
+                    .iter()
+                    .zip(&reference)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0_f32, f32::max);
+                eprintln!("LOW {name} {kind} max {maximum}");
+                assert!(maximum <= 0.008, "{name} {kind}: {maximum}");
+            }
+        }
+    }
     #[test]
     #[ignore = "requires GPU, QUATTRO_X3F DP3 original and NONUNIT_HLP_REFERENCE native LUT/wrapper fixtures"]
     fn nonunit_lut_and_complete_wrapper_match_native_boundaries() {

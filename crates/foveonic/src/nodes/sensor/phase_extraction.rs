@@ -1,4 +1,4 @@
-//! Separates six-sample cells into RGB and spatial blue codes with affine or channel-gain calibration.
+//! Extracts RGB and blue codes from triplets or phase cells with affine or channel-gain calibration.
 
 use crate::{
     gpu::{
@@ -12,7 +12,7 @@ use crate::{
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Params {
-    /// Cell width and height, calibration mode, reserved.
+    /// Cell width and height, calibration mode, optional triplet layout.
     shape: [u32; 4],
     /// Offset, scale, calibrated upper bound, reserved.
     calibration: [f32; 4],
@@ -99,6 +99,21 @@ impl Params {
         self.shape[2] != 0
     }
 
+    /// Equal-resolution RGB has one blue sample per pixel, without averaging.
+    pub(crate) fn with_triplets(mut self) -> Self {
+        self.shape[3] = 3;
+        self
+    }
+
+    pub(crate) fn is_triplets(&self) -> bool {
+        self.shape[3] == 3
+    }
+
+    pub(crate) fn blue_extent(&self) -> [u32; 2] {
+        let scale = if self.is_triplets() { 1 } else { 2 };
+        self.extent().map(|v| v * scale)
+    }
+
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.shape[0], self.shape[1]]
     }
@@ -117,11 +132,16 @@ pub(crate) fn apply(
 ) -> Result<(ReadGuard, ReadGuard)> {
     let [width, height] = params.extent();
     let cells = u64::from(width) * u64::from(height);
-    if input.size() != cells * 24 {
-        return Err("six-sample input size does not match its cell extent".into());
+    let components = if params.is_triplets() { 3 } else { 6 };
+    if input.size() != cells * components * 4 {
+        return Err("sensor input size does not match its extraction layout".into());
     }
     let mut rgb = gpu.storage("Extracted RGB codes", cells * 12)?;
-    let mut blue = gpu.storage("Extracted blue codes", cells * 16)?;
+    let blue_extent = params.blue_extent();
+    let mut blue = gpu.storage(
+        "Extracted blue codes",
+        u64::from(blue_extent[0]) * u64::from(blue_extent[1]) * 4,
+    )?;
     let uniform = gpu.uniform(params);
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(

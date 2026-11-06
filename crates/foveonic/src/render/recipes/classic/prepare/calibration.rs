@@ -80,7 +80,9 @@ pub(crate) fn geometry(
     if ![0, 90, 180, 270].contains(&rotation) {
         return Err("unsupported image orientation".into());
     }
-    let extent = [crop[2] - crop[0], crop[3] - crop[1]];
+    let extent = metadata
+        .recorded_extent()
+        .unwrap_or([crop[2] - crop[0], crop[3] - crop[1]]);
     let extent = if matches!(rotation, 90 | 270) {
         [extent[1], extent[0]]
     } else {

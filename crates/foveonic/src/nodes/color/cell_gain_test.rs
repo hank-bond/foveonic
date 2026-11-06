@@ -1,6 +1,23 @@
-//! Compares native native two-by-two gain recurrence, including the complete blue plane.
+//! Checks spatial gain layout identities and native two-by-two gain recurrence.
 
 use super::*;
+
+#[test]
+fn pixel_gains_are_distinct_and_cell_gains_keep_the_established_key() {
+    let grid = || Grid {
+        extent: [2, 2],
+        values: vec![1., 2., 3., 4.],
+    };
+    let cells = Prepared::new([8, 8], grid()).unwrap();
+    let pixels = Prepared::pixels([4, 4], grid()).unwrap();
+    let established = Key::pod(&cells.shape)
+        .with(&cells.spacing)
+        .slice(&cells.grid)
+        .slice(&cells.rows)
+        .slice(&cells.segments);
+    assert!(cells.key() == established);
+    assert!(cells.key() != pixels.key());
+}
 
 #[test]
 #[ignore = "requires a GPU and CELL_GAIN_REFERENCE native shading fixtures"]

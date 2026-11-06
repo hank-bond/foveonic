@@ -4,7 +4,7 @@ summary: "Photographic and DNG-base builders compose shared technical nodes befo
 
 # Authored recipes
 
-Each family owns a recipe entry point and its preparation modules. The dispatcher selects the family once. Recipes choose processing order and pass numerical parameters to camera-unaware operations. Stop construction as soon as all requested intermediate outputs exist. Keep metadata preparation lazy so an earlier output does not require later calibration or appearance data.
+Each family owns a recipe entry point and its preparation modules. The dispatcher selects the family once. The shared render boundary resolves processing policy and retains whole-frame rendering when regional detail is unsupported. Recipes choose processing order and pass numerical parameters to camera-unaware operations. Stop construction as soon as all requested intermediate outputs exist. Keep metadata preparation lazy so an earlier output does not require later calibration or appearance data.
 
 Merrill shares its technical construction between photographic and DNG output. Its monochrome route branches after sensor corrections. Classic owns its signed-code calibration and reconstruction routes. Quattro owns its mixed-resolution calibration and later reconstruction. Share numerical operations where their contracts agree, while keeping camera interpretation beside each recipe.
 

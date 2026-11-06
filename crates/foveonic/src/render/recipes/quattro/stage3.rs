@@ -36,7 +36,7 @@ const KNOT_POSITIONS: [usize; 15] = [
 ];
 fn extent(metadata: &Metadata, grid: WorkingGrid) -> Result<[u32; 2]> {
     if !super::defects::supported(metadata) {
-        return Err("Stage3 requires ordinary full-size Quattro controls".into());
+        return Err("Stage3 requires supported Quattro controls".into());
     }
     Ok(grid.extent([
         u32::try_from(metadata.width)?,
@@ -81,7 +81,12 @@ pub(super) fn prepare_lce(
             limit: DETAIL_LIMITS[i],
             slope: DETAIL_SLOPES[i],
         }),
-        lowest_kernel(level, mode == "Portrait", lowest_factor, grid)?,
+        lowest_kernel(
+            level,
+            mode == "Portrait",
+            lowest_factor,
+            metadata.is_quattro_low() || grid.is_half(),
+        )?,
         LCE_RELATIVE_BOUND,
     )
 }
@@ -89,7 +94,7 @@ fn lowest_kernel(
     level: usize,
     portrait: bool,
     supplied_factor: Option<f32>,
-    grid: WorkingGrid,
+    reduced_detail: bool,
 ) -> Result<[f32; 9]> {
     let factor = supplied_factor.unwrap_or(
         *LEVEL_FACTORS
@@ -104,7 +109,7 @@ fn lowest_kernel(
     } else {
         LOWEST_UNSHARP_BASE
     };
-    let base = if grid.is_half() {
+    let base = if reduced_detail {
         base * HALF_GRID_LOWEST_UNSHARP_SCALE
     } else {
         base
@@ -178,7 +183,7 @@ pub(super) fn prepare_sharpen(
         iso_gain,
         absolute_limit,
         SHARPEN_LUMA_LIMIT,
-        if grid.is_half() {
+        if grid.is_half() || metadata.is_quattro_low() {
             HALF_GRID_SHARPEN_SCALE
         } else {
             1.
@@ -196,7 +201,12 @@ pub(super) fn color_sharpen_amount(metadata: &Metadata, mode: &str, base: f32) -
         1.
     };
     let base = f64::from(base);
-    Ok((base + base * 0.5 * f64::from(caller_amount)) as f32 / iso_gain.sqrt())
+    let scale = if metadata.is_quattro_low() {
+        HALF_GRID_SHARPEN_SCALE
+    } else {
+        1.
+    };
+    Ok(((base + base * 0.5 * f64::from(caller_amount)) as f32 / iso_gain.sqrt()) * scale)
 }
 
 fn capture_iso_gain(metadata: &Metadata) -> Result<f32> {
@@ -220,7 +230,7 @@ pub(super) fn prepare_box_contrast(
         return Err("unsupported local contrast level".into());
     }
     let control = level as f32 / 3.;
-    let radii = if grid.is_half() {
+    let radii = if grid.is_half() || metadata.is_quattro_low() {
         HALF_BOX_RADII
     } else {
         FULL_BOX_RADII

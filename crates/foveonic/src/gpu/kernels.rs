@@ -26,7 +26,7 @@ pub enum Kernel {
     MonoTextureBlur,
     MonoTextureApply,
     CodeChannelMap,
-    ChannelNoiseExtract,
+    ExtractBlue,
     ChannelNoiseReplace,
     NeighborhoodNoiseStats,
     NeighborhoodDecorrelate,
@@ -108,6 +108,7 @@ pub enum Kernel {
     SectorColor,
     CodeResponse,
     HistogramBilateral,
+    ScalarBilateral,
     BlueGuideVertical,
     BlueGuideHorizontal,
     BlueOutliers,
@@ -352,7 +353,7 @@ impl Kernel {
             Self::MonoTextureBlur => "filter monochrome texture",
             Self::MonoTextureApply => "apply monochrome texture",
             Self::CodeChannelMap => "map integral color channels",
-            Self::ChannelNoiseExtract => "extract a noise guide channel",
+            Self::ExtractBlue => "extract a noise guide channel",
             Self::ChannelNoiseReplace => "replace and clamp corrected channels",
             Self::NeighborhoodNoiseStats => "measure neighborhood noise",
             Self::NeighborhoodDecorrelate => "decorrelate neighborhood noise",
@@ -445,6 +446,7 @@ impl Kernel {
             Self::SectorColor => "apply chroma sector matrices",
             Self::CodeResponse => "apply unsigned code response",
             Self::HistogramBilateral => "filter and blend quantized scalar noise",
+            Self::ScalarBilateral => "filter and blend continuous scalar noise",
             Self::BlueGuideVertical => "resize signed guide vertically",
             Self::BlueGuideHorizontal => "resize signed guide horizontally",
             Self::BlueOutliers => "repair isolated blue extrema",
@@ -693,6 +695,10 @@ impl Gpu {
         let dng = include_str!("../dng/dng.wgsl");
         let mono = include_str!("../nodes/monochrome/mono.wgsl");
         let sensor_pair = include_str!("../nodes/sensor/pair_arithmetic.wgsl");
+        let scalar_bilateral = format!(
+            "{sensor_pair}\n{}",
+            include_str!("../nodes/color/scalar_bilateral.wgsl")
+        );
         let chroma_repair = format!(
             "{sensor_pair}\n{}",
             include_str!("../nodes/sensor/chroma_repair.wgsl")
@@ -817,8 +823,8 @@ impl Gpu {
                 "code_channel_map",
             ),
             (
-                include_str!("../nodes/color/channel_noise.wgsl"),
-                "channel_noise_extract",
+                include_str!("../nodes/color/extract_blue.wgsl"),
+                "extract_blue",
             ),
             (
                 include_str!("../nodes/color/channel_noise_replace.wgsl"),
@@ -1129,6 +1135,7 @@ impl Gpu {
                 include_str!("../nodes/color/histogram_bilateral.wgsl"),
                 "histogram_bilateral",
             ),
+            (&scalar_bilateral, "scalar_bilateral"),
             (
                 include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
                 "blue_guide_vertical",

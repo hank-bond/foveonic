@@ -78,19 +78,7 @@ pub(crate) fn apply(
         return Err("channel noise input geometry mismatch".into());
     }
     let uniform = gpu.uniform(&[w, h, 0, 0]);
-    let mut blue = gpu.storage("Extracted blue channel", bytes)?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 1);
-    gpu.dispatch(
-        Kernel::ChannelNoiseExtract,
-        &mut [
-            (0, Read(input)),
-            (1, Read(&uniform)),
-            (2, Write(blue.write())),
-        ],
-        [w.div_ceil(8), h.div_ceil(8)],
-        &mut trace,
-    );
-    gpu.finish_trace(&trace, profile)?;
+    let blue = super::extract_blue::apply(gpu, input, [w, h], profile)?;
     let blue = blue_despeckle::apply(gpu, &blue, &p.despeckle, profile)?;
     let mut replaced = gpu.storage("Nonnegative repaired channels", bytes * 3)?;
     let mut trace = gpu.trace(profile.mode.gpu(), 1);

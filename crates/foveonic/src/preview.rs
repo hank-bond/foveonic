@@ -67,8 +67,10 @@ pub fn read_full(path: &Path) -> Result<Preview> {
 }
 
 fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
-    let mut file = File::open(path)?;
-    read_reader(&mut file, selection)
+    crate::input_error::read(path, || {
+        let mut file = File::open(path)?;
+        read_reader(&mut file, selection)
+    })
 }
 
 pub(crate) fn from_original(bytes: &[u8], full: bool) -> Result<Preview> {
@@ -89,14 +91,18 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
     crate::background::checkpoint_or_cancel()?;
     let length = file.seek(SeekFrom::End(0))?;
     file.seek(SeekFrom::Start(0))?;
-    if !((BASE_HEADER_BYTES as u64 + DIRECTORY_POINTER_BYTES)..=MAX_FILE_BYTES).contains(&length) {
+    if length < BASE_HEADER_BYTES as u64 + DIRECTORY_POINTER_BYTES {
+        return Err(crate::input_error::damaged("truncated X3F header"));
+    }
+    if length > MAX_FILE_BYTES {
         return Err("unsupported X3F size".into());
     }
     let mut header = [0; V4_HEADER_BYTES];
     file.read_exact(&mut header[..BASE_HEADER_BYTES])?;
-    if &header[..4] != b"FOVb"
-        || !crate::x3f::SUPPORTED_FILE_VERSIONS.contains(&u32_at(&header, VERSION_OFFSET))
-    {
+    if &header[..4] != b"FOVb" {
+        return Err(crate::input_error::damaged("invalid X3F signature"));
+    }
+    if !crate::x3f::SUPPORTED_FILE_VERSIONS.contains(&u32_at(&header, VERSION_OFFSET)) {
         return Err("unsupported X3F header".into());
     }
     if u32_at(&header, VERSION_OFFSET) >= V4_VERSION {
@@ -111,7 +117,7 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
     if directory < BASE_HEADER_BYTES as u64
         || directory + DIRECTORY_HEADER_BYTES as u64 > length - DIRECTORY_POINTER_BYTES
     {
-        return Err("invalid X3F directory".into());
+        return Err(crate::input_error::damaged("invalid X3F directory"));
     }
     file.seek(SeekFrom::Start(directory))?;
     let mut index = [0; DIRECTORY_HEADER_BYTES];
@@ -124,7 +130,7 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
         || directory + DIRECTORY_HEADER_BYTES as u64 + count as u64 * DIRECTORY_ENTRY_BYTES as u64
             > length - DIRECTORY_POINTER_BYTES
     {
-        return Err("invalid X3F directory".into());
+        return Err(crate::input_error::damaged("invalid X3F directory"));
     }
     let mut entries = vec![0; count * DIRECTORY_ENTRY_BYTES];
     file.read_exact(&mut entries)?;
@@ -150,13 +156,13 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
             || size < IMAGE_HEADER_BYTES
             || offset + size as u64 > directory
         {
-            return Err("invalid X3F image section".into());
+            return Err(crate::input_error::damaged("invalid X3F image section"));
         }
         file.seek(SeekFrom::Start(offset))?;
         let mut image = [0; IMAGE_HEADER_BYTES];
         file.read_exact(&mut image)?;
         if &image[..4] != b"SECi" {
-            return Err("invalid X3F image".into());
+            return Err(crate::input_error::damaged("invalid X3F image"));
         }
         if u32_at(&image, IMAGE_TYPE_OFFSET) != PREVIEW_IMAGE_TYPE {
             continue;
@@ -167,7 +173,9 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
         ];
         let pixels = u64::from(extent[0]) * u64::from(extent[1]);
         if pixels == 0 || pixels > MAX_PIXELS {
-            return Err("invalid embedded preview dimensions".into());
+            return Err(crate::input_error::damaged(
+                "invalid embedded preview dimensions",
+            ));
         }
         if header_extent.is_none()
             && pixels > u64::from(native_extent[0]) * u64::from(native_extent[1])
@@ -337,9 +345,11 @@ impl Embedded {
             let required = self
                 .stride
                 .checked_mul(self.extent[1] as usize)
-                .ok_or("invalid embedded bitmap stride")?;
+                .ok_or_else(|| crate::input_error::damaged("invalid embedded bitmap stride"))?;
             if self.stride < row_bytes || required > encoded.len() {
-                return Err("invalid embedded bitmap stride or length".into());
+                return Err(crate::input_error::damaged(
+                    "invalid embedded bitmap stride or length",
+                ));
             }
             let mut rgb = Vec::with_capacity(self.pixels() as usize * 3);
             for row in encoded[..required].chunks_exact(self.stride) {
@@ -356,7 +366,9 @@ impl Embedded {
             limits.max_alloc = Some(MAX_BYTES as u64);
             decoder.set_limits(limits)?;
             if decoder.dimensions() != (self.extent[0], self.extent[1]) {
-                return Err("embedded JPEG dimensions disagree with section header".into());
+                return Err(crate::input_error::damaged(
+                    "embedded JPEG dimensions disagree with section header",
+                ));
             }
             let rgb = image::DynamicImage::from_decoder(decoder)?
                 .into_rgb8()

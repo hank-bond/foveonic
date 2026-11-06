@@ -35,7 +35,7 @@ pub(super) fn enabled(metadata: &Metadata) -> bool {
 }
 
 pub(super) fn prepare(metadata: &Metadata, mode: &str) -> Result<Prepared> {
-    let extent = super::calibration::full_extent(metadata)?;
+    let extent = super::calibration::color_extent(metadata)?;
     let sectors = sectors(metadata, mode)?;
     Prepared::new(extent, RGB_TO_CHROMA, CHROMA_BIN_BOUNDARIES, sectors)
 }

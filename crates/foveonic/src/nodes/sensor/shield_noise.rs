@@ -20,7 +20,14 @@ pub(crate) struct Regions {
 impl Regions {
     pub(crate) fn from_metadata(metadata: &Metadata) -> Result<Self> {
         let active = calibration::rectangle(metadata, "ActiveImageArea")?;
-        let bottom = calibration::rectangle(metadata, "DarkShieldTop")?;
+        let shield = calibration::rectangle(metadata, "DarkShieldTop")?;
+        // DP Merrill stores this region below the active image. SD1 uses the
+        // literal top edge, so select its separate lower shield for columns.
+        let bottom = if shield[1] >= active[3] {
+            shield
+        } else {
+            calibration::rectangle(metadata, "DarkShieldBottom")?
+        };
         let ranges = metadata.fixed::<4>("DarkShieldColRange")?;
         if ranges
             .iter()
@@ -73,6 +80,9 @@ impl Params {
         } = regions;
         let valid =
             |r: [u32; 4]| r[0] < r[2] && r[1] < r[3] && r[2] <= extent[0] && r[3] <= extent[1];
+        if columns && active[2].saturating_sub(active[0]) != COLUMN_REFERENCE_LENGTH as u32 {
+            return Err("Rows + Columns cleanup currently requires a full-resolution Merrill RAW. Choose Reference or Multiscale: Rows for this file.".into());
+        }
         if !valid(active)
             || !valid(bottom)
             || !valid(right)
@@ -84,7 +94,6 @@ impl Params {
             || right[1] != active[1]
             || right[3] != active[3]
             || right[0] < active[2]
-            || (columns && active[2] - active[0] != COLUMN_REFERENCE_LENGTH as u32)
             || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / LAYERS
         {
             return Err("invalid shield-noise geometry".into());

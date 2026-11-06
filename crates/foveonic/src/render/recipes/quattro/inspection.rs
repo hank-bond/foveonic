@@ -182,42 +182,54 @@ pub(crate) fn outputs(metadata: Option<&Metadata>) -> Vec<ImageOutput> {
     outputs.extend(EXTRACTED);
     let is_dp = super::calibration::is_ordinary_dp(metadata);
     let is_sd = super::calibration::is_ordinary_sd(metadata) || super::tiger::supported(metadata);
+    let low = metadata.is_quattro_low();
     if is_dp {
-        outputs.push(PHASE_GAIN);
-        outputs.push(ImageOutput {
-            name: "blue-refresh.rgb",
-            channels: Channels::Layers,
-        });
+        if !low {
+            outputs.push(PHASE_GAIN);
+            outputs.push(ImageOutput {
+                name: "blue-refresh.rgb",
+                channels: Channels::Layers,
+            });
+        }
         if super::hlp::supported(metadata) {
             outputs.extend(DP_CALIBRATED);
         }
     }
     if is_sd {
-        outputs.extend([
-            ImageOutput {
-                name: "phase-detection.rgb",
-                channels: Channels::Layers,
-            },
-            ImageOutput {
+        outputs.push(ImageOutput {
+            name: "phase-detection.rgb",
+            channels: Channels::Layers,
+        });
+        if !low {
+            outputs.push(ImageOutput {
                 name: "phase-detection.blue",
                 channels: Channels::Scalar,
-            },
-        ]);
-        if metadata.scalar("CaptureAperture").is_ok_and(|v| v < 6.) {
-            outputs.push(ImageOutput {
-                name: "blue-pattern.blue",
-                channels: Channels::Scalar,
             });
+            if metadata.scalar("CaptureAperture").is_ok_and(|v| v < 6.) {
+                outputs.push(ImageOutput {
+                    name: "blue-pattern.blue",
+                    channels: Channels::Scalar,
+                });
+            }
         }
     }
     let calibrated = is_sd || (is_dp && super::hlp::supported(metadata));
     if calibrated && super::defects::supported(metadata) {
         outputs.extend(FACTORY_REPAIRED.into_iter().filter(|output| {
-            (output.name != "blue-mismatch.blue" || !super::tiger::supported(metadata))
+            (!low
+                || output.name.starts_with("chroma-")
+                || output.name == "highlight-restoration.rgb")
+                && (output.name != "blue-mismatch.blue" || !super::tiger::supported(metadata))
                 && (output.name != "blue-mismatch.blue"
                     || super::calibration::normalization(metadata)
                         .is_ok_and(|v| (v - 1.).abs() < f32::EPSILON))
         }));
+        if low {
+            outputs.push(ImageOutput {
+                name: "blue-channel.codes",
+                channels: Channels::Scalar,
+            });
+        }
         if metadata.scalar("CAMERAID").is_ok_and(|id| id == 80.) {
             outputs.push(ImageOutput {
                 name: "purple-fringe.rgb",
@@ -252,6 +264,13 @@ fn has_shading(metadata: &Metadata) -> bool {
 }
 
 pub(crate) fn comparison_input(metadata: &Metadata, output: &str) -> Option<&'static str> {
+    if metadata.is_quattro_low() {
+        match output {
+            "blue-channel.codes" => return Some("extraction.blue"),
+            "shading.blue" => return Some("blue-channel.codes"),
+            _ => {}
+        }
+    }
     let is_sd = super::calibration::is_ordinary_sd(metadata) || super::tiger::supported(metadata);
     let blue = if is_sd {
         if metadata.scalar("CaptureAperture").is_ok_and(|v| v < 6.) {

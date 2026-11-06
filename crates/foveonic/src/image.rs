@@ -281,7 +281,9 @@ impl RenderedImage {
             {
                 [[0.; 4]; 2]
             } else {
-                self.settings.rotation.mapping(view, self.settings.crop)
+                self.settings
+                    .rotation
+                    .mapping(self.view, self.settings.crop)
             },
             source: [
                 self.description.extent[0],

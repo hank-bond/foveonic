@@ -35,6 +35,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[graph.rs](./graph.rs)** Builds typed dependency-ordered graphs and validates connections between operation ports.
 - **[image.rs](./image.rs)** Keeps GPU images with their photo settings and defines crop and orientation views.
 - **[importing.rs](./importing.rs)** Copies originals, publishes complete outputs, and stores destination import and hidden decisions.
+- **[input_error.rs](./input_error.rs)** Adds actionable file-read messages while retaining typed damage evidence and technical causes.
 - **[inspection.rs](./inspection.rs)** Describes named inspection artifacts and preserves the configuration behind each result.
 - **[interactive.rs](./interactive.rs)** Reuses active-edit GPU inputs and bounded repair preparation while preserving earlier images.
 - **[lib.rs](./lib.rs)** Shares X3F decoding and GPU photo processing between photographic and DNG exports.

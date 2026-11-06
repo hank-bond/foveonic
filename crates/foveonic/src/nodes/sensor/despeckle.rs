@@ -64,7 +64,7 @@ fn parameters(width: u32, height: u32, active: [u32; 4]) -> Result<Params> {
     if width < 16
         || height < 16
         || !height.is_multiple_of(BANKS)
-        || !(count / BANKS).is_multiple_of(BLOCK)
+        || !count.is_multiple_of(BLOCK)
         || active[0] < 5
         || active[1] < 6
         || active[0] >= width / 2
@@ -73,7 +73,12 @@ fn parameters(width: u32, height: u32, active: [u32; 4]) -> Result<Params> {
         return Err("unsupported despeckle geometry".into());
     }
     Ok(Params {
-        source: [width, height, count / BLOCK, CAPACITY.min(count / BANKS)],
+        source: [
+            width,
+            height,
+            count / BLOCK,
+            CAPACITY.min((count / BLOCK).div_ceil(BANKS) * BLOCK),
+        ],
         detector: [0, 1, 0, 0],
         area: [
             active[0] - 4,

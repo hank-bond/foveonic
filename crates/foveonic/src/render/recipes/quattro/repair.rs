@@ -29,7 +29,12 @@ pub(super) const BLUE_NOISE: [f32; 3] = [20.843, 0.4342, 0.0000008];
 pub(super) fn prepare(metadata: &Metadata, color_hp_correction: bool) -> Result<Prepared> {
     let extent = super::calibration::ordinary_dp_extent(metadata)?;
     let scale = super::calibration::normalization(metadata)?;
-    Prepared::new(extent, RGB_NOISE, BLUE_NOISE, scale, !color_hp_correction)
+    let prepared = Prepared::new(extent, RGB_NOISE, BLUE_NOISE, scale, !color_hp_correction)?;
+    Ok(if metadata.is_quattro_low() {
+        prepared.with_rgb_only()
+    } else {
+        prepared
+    })
 }
 
 #[cfg(test)]

@@ -72,12 +72,7 @@ impl Rotation {
         if self.degrees == 0. {
             return crop.apply(view, output);
         }
-        let [l, t, r, b] = view.crop;
-        let base = if view.rotation.is_multiple_of(180) {
-            [r - l, b - t]
-        } else {
-            [b - t, r - l]
-        };
+        let base = view.extent;
         let scale = self.interior_scale(base);
         let natural = base.map(|v| (f64::from(v) * scale).floor().max(1.) as u32);
         let [x0, y0, x1, y1] = crop.pixels(natural);
@@ -85,17 +80,20 @@ impl Rotation {
         view
     }
     /// Map normalized output coordinates directly to physical storage. The fourth slot enables mapping.
-    pub(crate) fn mapping(self, view: View, crop: Crop) -> [[f32; 4]; 2] {
+    pub(crate) fn mapping(self, mut view: View, crop: Crop) -> [[f32; 4]; 2] {
         if self.degrees == 0. {
             return [[0.; 4]; 2];
         }
+        view.rotation = (view.rotation + u32::from(self.turns) * 90) % 360;
+        let size = self.oriented_extent(view.extent).map(f64::from);
         let [l, t, r, b] = view.crop;
-        let size = if view.rotation.is_multiple_of(180) {
+        let storage = if view.rotation.is_multiple_of(180) {
             [r - l, b - t]
         } else {
             [b - t, r - l]
         }
         .map(f64::from);
+        let pixel_scale = [storage[0] / size[0], storage[1] / size[1]];
         let scale = self.interior_scale(size.map(|v| v as u32));
         let (s, c) = self.degrees.to_radians().sin_cos();
         let point = |u: f64, v: f64| {
@@ -104,8 +102,8 @@ impl Rotation {
                 (v * (crop.bounds[3] - crop.bounds[1]) + crop.bounds[1] - 0.5) * size[1] * scale,
             ];
             let p = [
-                c * q[0] + s * q[1] + (size[0] - 1.) * 0.5,
-                -s * q[0] + c * q[1] + (size[1] - 1.) * 0.5,
+                (c * q[0] + s * q[1]) * pixel_scale[0] + (storage[0] - 1.) * 0.5,
+                (-s * q[0] + c * q[1]) * pixel_scale[1] + (storage[1] - 1.) * 0.5,
             ];
             let p = match view.rotation {
                 90 => [p[1], f64::from(b - t - 1) - p[0]],
@@ -170,16 +168,14 @@ mod tests {
         for turns in 0..4 {
             for degrees in [-45., -13., 0.1, 22., 45.] {
                 let rotation = Rotation { turns, degrees };
-                let view = rotation.view(
+                let mapping = rotation.mapping(
                     View {
                         crop: [10, 20, 1010, 1520],
                         rotation: 90,
                         extent: [1500, 1000],
                     },
                     Crop::default(),
-                    None,
                 );
-                let mapping = rotation.mapping(view, Crop::default());
                 for x in [0., 1.] {
                     for y in [0., 1.] {
                         let point: [f64; 2] = std::array::from_fn(|i| {
@@ -195,6 +191,45 @@ mod tests {
                             "{rotation:?} {point:?}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fine_rotation_uses_photographic_angles_with_rectangular_sensor_pixels() {
+        let view = View {
+            crop: [64, 18, 4768, 1586],
+            rotation: 90,
+            extent: [2176, 3264],
+        };
+        for turns in 0..4 {
+            let rotation = Rotation {
+                turns,
+                degrees: 17.,
+            };
+            let size = rotation.extent(view.extent);
+            assert_eq!(rotation.view(view, Crop::default(), None).extent, size);
+            let mapping = rotation.mapping(view, Crop::default());
+            let point = |u: f32, v: f32| -> [f64; 2] {
+                std::array::from_fn(|i| {
+                    f64::from(mapping[i][0] * u + mapping[i][1] * v + mapping[i][2])
+                })
+            };
+            let left = point(0., 0.5);
+            let right = point(1., 0.5);
+            // Measure the mapped horizontal axis back in photographic pixels.
+            let dx = (right[0] - left[0]) * 3264. / 4704.;
+            let dy = (right[1] - left[1]) * 2176. / 1568.;
+            let angle = dy.atan2(dx).to_degrees();
+            let expected = -90. + f64::from(turns) * -90. - 17.;
+            let error = (angle - expected + 180.).rem_euclid(360.) - 180.;
+            assert!(error.abs() < 0.001, "{turns}: {angle} vs {expected}");
+            for u in [0., 1.] {
+                for v in [0., 1.] {
+                    let [x, y] = point(u, v);
+                    assert!((63.49..=4768.01).contains(&x));
+                    assert!((17.49..=1586.01).contains(&y));
                 }
             }
         }

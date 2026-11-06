@@ -76,7 +76,8 @@ impl WorkingGrid {
     }
 }
 pub(in crate::render) fn fast_available(metadata: &crate::source::Metadata) -> bool {
-    calibration::is_ordinary_dp(metadata) || calibration::is_interchangeable(metadata)
+    !metadata.is_quattro_low()
+        && (calibration::is_ordinary_dp(metadata) || calibration::is_interchangeable(metadata))
 }
 
 pub(super) fn build(
@@ -145,8 +146,14 @@ fn compose(
         selected.reconstruction = Some(controls);
     }
     let settings = &selected;
-    if source.storage() != SourceStorage::PackedRgbBluePhases {
-        return Err("sensor plane inspection requires six-sample cells".into());
+    let low = source.metadata.is_quattro_low();
+    let storage = if low {
+        SourceStorage::InterleavedRgb
+    } else {
+        SourceStorage::PackedRgbBluePhases
+    };
+    if source.storage() != storage {
+        return Err("Quattro sensor storage does not match its resolution".into());
     }
     let fast = settings.preview_quality.is_reduced()
         && !dng
@@ -168,21 +175,34 @@ fn compose(
     }
     let [width, height] = source.storage_extent().map(|v| v as u32);
     let mut graph = Graph::default();
-    let input = graph.add(Operation::SourcePhaseCells, &[])?;
+    let input = graph.add(
+        if low {
+            Operation::Source
+        } else {
+            Operation::SourcePhaseCells
+        },
+        &[],
+    )?;
     // Fast skips general high-blue repairs. A later Full request needs the original
     // cells, even when its reconstruction inputs differ from the Fast graph.
     if names == ["final"] && fast_available(&source.metadata) {
         graph.retain_for_session(input);
     }
+    let raw_params = phase_extraction::Params::new(width, height)?;
     let raw = graph.add(
-        Operation::PhaseExtraction(phase_extraction::Params::new(width, height)?),
+        Operation::PhaseExtraction(if low {
+            raw_params.with_triplets()
+        } else {
+            raw_params
+        }),
         &[input],
     )?;
+    let factor = if low { 1 } else { 2 };
     let mut params = EncodeParams {
         mapping: [[0.; 4]; 2],
-        source: [width * 2, height * 2, source.metadata.rotation, 0],
-        crop: [0, 0, width * 2, height * 2],
-        output: [width * 2, height * 2, 0, 0],
+        source: [width * factor, height * factor, source.metadata.rotation, 0],
+        crop: [0, 0, width * factor, height * factor],
+        output: [width * factor, height * factor, 0, 0],
     };
     macro_rules! finish {
         ($output:expr) => {
@@ -229,18 +249,24 @@ fn compose(
         (rgb, graph.named_output(extracted, "extraction.blue")?)
     } else {
         let blue = graph.named_output(extracted, "extraction.blue")?;
-        let gain =
-            calibration::phase_gain(&source.metadata, engine.calibration_resources.as_deref())?;
-        let corrected_blue = graph.add(Operation::PhaseGain(std::sync::Arc::new(gain)), &[blue])?;
-        finish!(corrected_blue);
+        let (refreshed, corrected_blue) = if low {
+            (extracted, blue)
+        } else {
+            let gain =
+                calibration::phase_gain(&source.metadata, engine.calibration_resources.as_deref())?;
+            let corrected_blue =
+                graph.add(Operation::PhaseGain(std::sync::Arc::new(gain)), &[blue])?;
+            finish!(corrected_blue);
 
-        let refreshed = graph.add(
-            Operation::BlueRefresh(crate::nodes::sensor::blue_refresh::Params::new([
-                width, height,
-            ])?),
-            &[extracted, corrected_blue],
-        )?;
-        finish!(refreshed);
+            let refreshed = graph.add(
+                Operation::BlueRefresh(crate::nodes::sensor::blue_refresh::Params::new([
+                    width, height,
+                ])?),
+                &[extracted, corrected_blue],
+            )?;
+            finish!(refreshed);
+            (refreshed, corrected_blue)
+        };
 
         let prepared = hlp::prepare(&source.metadata)?;
         let calibrated = graph.add(
@@ -296,7 +322,7 @@ fn compose(
     };
     // Sparse phase-detection sites survive a 2x2 mean on both sd models.
     // Apply their own native-grid correction before any preview reduction.
-    let phase_corrected_blue = if is_interchangeable {
+    let phase_corrected_blue = if is_interchangeable && !low {
         let corrected = graph.add(
             Operation::Fppd(std::sync::Arc::new(if is_tiger {
                 tiger::luma(&source.metadata)?
@@ -310,7 +336,7 @@ fn compose(
     } else {
         sparse_blue
     };
-    let mismatch = if fast {
+    let mismatch = if fast || low {
         phase_corrected_blue
     } else {
         let blue = if is_interchangeable {
@@ -417,6 +443,11 @@ fn compose(
         finish!(mask);
     }
     finish!(restored);
+    let mismatch = if low {
+        graph.add(Operation::ExtractBlue([width, height]), &[restored])?
+    } else {
+        mismatch
+    };
     let recorded_color_mode;
     let color_mode = if settings.is_monochrome() || dng {
         "Standard"

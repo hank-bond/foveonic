@@ -25,6 +25,9 @@ fn divide(a:f32,b:f32)->f32 {
     return plus(q,fma(-q,b,a)/b);
 }
 fn point(x:u32,y:u32)->u32 { return y*params.shape.x+x; }
+fn rgb_only()->bool { return params.controls.w!=0.; }
+fn classification_base()->u32 { return select(params.offsets.x*4u, 0u, rgb_only()); }
+fn feature_count()->u32 { return select(6u, 3u, rgb_only()); }
 fn phase_position(p:vec2<u32>,phase:u32)->u32 { return (p.y*2u+phase/2u)*params.shape.x*2u+p.x*2u+phase%2u; }
 fn selected(p:vec2<u32>)->bool { return p.x>=16u && p.x+1u<params.shape.x && p.y>=4u && p.x%16u==0u && p.y%4u==0u; }
 fn interior(p:vec2<u32>)->bool { return p.x>0u && p.y>0u && p.x+1u<params.shape.x && p.y+1u<params.shape.y; }
@@ -32,6 +35,7 @@ fn current_rgb(i:u32)->vec3<f32> { return vec3(rgb[i*3u],rgb[i*3u+1u],rgb[i*3u+2
 fn store_rgb(i:u32,v:vec3<f32>) { rgb[i*3u]=v.x;rgb[i*3u+1u]=v.y;rgb[i*3u+2u]=v.z; }
 fn feature(p:vec2<u32>,snapshot:bool)->Feature {
     let i=point(p.x,p.y);var result:Feature;result.value[0]=rgb[i*3u];result.value[1]=rgb[i*3u+1u];
+    if rgb_only() {result.value[2]=rgb[i*3u+2u];return result;}
     for(var k=0u;k<4u;k++) {
         if snapshot { result.value[k+2u]=scratch.values[k*params.offsets.x+i]; }
         else { result.value[k+2u]=input_blue[phase_position(p,k)]; }
@@ -63,6 +67,7 @@ fn area(p:vec2<u32>)->bool {
 }
 fn hot_pixel(p:vec2<u32>) {
     if !selected(p) || !interior(p) { return; }
+    if rgb_only() { hot_rgb(p); return; }
     let i=point(p.x,p.y);
     var low_rg=vec2<f32>(3.402823e38);var high_rg=vec2<f32>(-3.402823e38);
     var low_blue=vec4<f32>(3.402823e38);var high_blue=vec4<f32>(-3.402823e38);
@@ -86,14 +91,31 @@ fn hot_pixel(p:vec2<u32>) {
     if params.shape.w!=0u || !saturated { rgb[i*3u+2u]=product(plus(plus(plus(corrected.x,corrected.y),corrected.z),corrected.w),.25); }
     for(var k=0u;k<4u;k++) { blue[phase_position(p,k)]=corrected[k]; }
 }
+fn hot_rgb(p:vec2<u32>) {
+    let i=point(p.x,p.y);
+    var low=vec3<f32>(3.402823e38);var high=vec3<f32>(-3.402823e38);
+    for(var dy=-1;dy<=1;dy++) {for(var dx=-1;dx<=1;dx++) {
+        if dx==0&&dy==0 {continue;}
+        let q=vec2<u32>(vec2<i32>(p)+vec2(dx,dy));let j=point(q.x,q.y)*3u;
+        let value=vec3(input_rgb[j],input_rgb[j+1u],input_rgb[j+2u]);
+        low=min(low,value);high=max(high,value);
+    }}
+    let original=vec3(input_rgb[i*3u],input_rgb[i*3u+1u],input_rgb[i*3u+2u]);
+    scratch.values[classification_base()+i]=f32(u32(all(original>high)));
+    var corrected=original;
+    for(var c=0u;c<3u;c++) {corrected[c]=range_clamp(original[c],low[c],high[c],sigma(original[c],params.noise_rgb[c],true));}
+    let saturated=area(p);
+    if params.shape.w!=0u&&saturated {corrected=high;}
+    if params.shape.w!=0u||!saturated {store_rgb(i,corrected);}
+}
 fn fill_mask(p:vec2<u32>) {
-    let n=params.offsets.x;let i=point(p.x,p.y);var mask=u32(scratch.values[n*4u+i]);
+    let n=params.offsets.x;let i=point(p.x,p.y);var mask=u32(scratch.values[classification_base()+i]);
     if p.y>=4u && p.y+4u<params.shape.y && p.x>0u && p.x+1u<params.shape.x && selected(p) {
         var count=0u;
         for(var dy=-16;dy<=16;dy+=4) { for(var dx=-16;dx<=16;dx+=16) {
             // The source casts to unsigned before clamping negative coordinates.
             let q=min(vec2<u32>(vec2<i32>(p)+vec2(dx,dy)),params.shape.xy-vec2(1u));
-            count+=u32(scratch.values[n*4u+point(q.x,q.y)])&1u;
+            count+=u32(scratch.values[classification_base()+point(q.x,q.y)])&1u;
         }}
         if count>=2u { mask|=4u; }if count>=7u { mask|=2u; }
     }
@@ -101,9 +123,9 @@ fn fill_mask(p:vec2<u32>) {
 }
 fn is_defect(p:vec2<u32>)->bool { return selected(p) && (defects[point(p.x,p.y)]&3u)!=0u; }
 fn distance(a:Feature,b:Feature)->f32 {
-    var delta:array<f32,6>;for(var k=0u;k<6u;k++) {delta[k]=minus(a.value[k],b.value[k]);}
+    var delta:array<f32,6>;for(var k=0u;k<feature_count();k++) {delta[k]=minus(a.value[k],b.value[k]);}
     var sum=fma(delta[0],delta[0],product(delta[1],delta[1]));
-    for(var k=2u;k<6u;k++) {sum=fma(delta[k],delta[k],sum);}
+    for(var k=2u;k<feature_count();k++) {sum=fma(delta[k],delta[k],sum);}
     return sum;
 }
 fn count_eligible(p:vec2<u32>) {
@@ -125,12 +147,13 @@ fn ghost_interpolate(p:vec2<u32>) {
             var samples:array<Feature,3>;var weights:vec3<f32>;
             for(var c=0u;c<3u;c++) {samples[c]=feature(vec2<u32>(vec2<i32>(p)+candidates[direction*3u+c]),false);weights[c]=divide(1.,plus(distance(center,samples[c]),1.));}
             let total=plus(weights.x,plus(weights.y,weights.z));var output:vec3<f32>;
-            for(var k=0u;k<2u;k++) {output[k]=divide(plus(product(samples[0].value[k],weights.x),plus(product(samples[1].value[k],weights.y),product(samples[2].value[k],weights.z))),total);}
-            var values:vec4<f32>;for(var k=0u;k<4u;k++) {
+            for(var k=0u;k<select(2u,3u,rgb_only());k++) {output[k]=divide(plus(product(samples[0].value[k],weights.x),plus(product(samples[1].value[k],weights.y),product(samples[2].value[k],weights.z))),total);}
+            if !rgb_only() {var values:vec4<f32>;for(var k=0u;k<4u;k++) {
                 values[k]=divide(fma(samples[0].value[k+2u],weights.x,fma(samples[2].value[k+2u],weights.z,product(samples[1].value[k+2u],weights.y))),total);
                 blue[phase_position(neighbor_position,k)]=values[k];
             }
-            output.z=product(plus(plus(plus(values.x,values.y),values.z),values.w),.25);store_rgb(point(neighbor_position.x,neighbor_position.y),output);
+            output.z=product(plus(plus(plus(values.x,values.y),values.z),values.w),.25);}
+            store_rgb(point(neighbor_position.x,neighbor_position.y),output);
         }
 }
 fn rg_energy(a:Feature,b:Feature)->f32 {let r=minus(a.value[0],b.value[0]);let g=minus(a.value[1],b.value[1]);return fma(r,r,product(g,g));}
@@ -141,9 +164,9 @@ fn directional_energy(p:vec2<u32>,horizontal:bool)->f32 {
     var a:array<Feature,4>;var b:array<Feature,4>;
     for(var edge=0u;edge<4u;edge++) {a[edge]=feature(vec2<u32>(vec2<i32>(p)+starts[edge]),true);b[edge]=feature(vec2<u32>(vec2<i32>(p)+ends[edge]),true);}
     var sum=plus(rg_energy(a[0],b[0]),rg_energy(a[1],b[1]));
-    for(var k=2u;k<6u;k++) {for(var edge=0u;edge<2u;edge++) {let d=minus(a[edge].value[k],b[edge].value[k]);sum=fma(d,d,sum);}}
+    if !rgb_only() {for(var k=2u;k<6u;k++) {for(var edge=0u;edge<2u;edge++) {let d=minus(a[edge].value[k],b[edge].value[k]);sum=fma(d,d,sum);}}}
     for(var edge=2u;edge<4u;edge++) {sum=plus(sum,rg_energy(a[edge],b[edge]));}
-    for(var k=2u;k<6u;k++) {for(var edge=2u;edge<4u;edge++) {let d=minus(a[edge].value[k],b[edge].value[k]);sum=fma(d,d,sum);}}
+    if !rgb_only() {for(var k=2u;k<6u;k++) {for(var edge=2u;edge<4u;edge++) {let d=minus(a[edge].value[k],b[edge].value[k]);sum=fma(d,d,sum);}}}
     return sum;
 }
 fn directional_clamp(p:vec2<u32>) {
@@ -152,6 +175,7 @@ fn directional_clamp(p:vec2<u32>) {
     var delta=vec2<u32>(0,1);if horizontal<=vertical {delta=vec2(1,0);}
     let a=p-delta;let b=p+delta;let i=point(p.x,p.y);
     store_rgb(i,min(current_rgb(i),product_vec(plus_vec(current_rgb(point(a.x,a.y)),current_rgb(point(b.x,b.y))),.5)));
+    if rgb_only() {return;}
     var values:vec4<f32>;for(var k=0u;k<4u;k++) {
         values[k]=min(scratch.values[k*params.offsets.x+i],product(plus(scratch.values[k*params.offsets.x+point(a.x,a.y)],scratch.values[k*params.offsets.x+point(b.x,b.y)]),.5));blue[phase_position(p,k)]=values[k];
     }
@@ -235,12 +259,12 @@ fn sparse_repair(@builtin(global_invocation_id) id:vec3<u32>) {
     let phase=params.shape.z;
     if phase==7u {density_bucket(id.x,id.y);return;}
     if any(id.xy>=params.shape.xy) {return;}let p=id.xy;let i=point(p.x,p.y);let n=params.offsets.x;
-    if phase==0u {if i==0u {atomicStore(&scratch.eligible,0u);}for(var k=0u;k<3u;k++) {rgb[i*3u+k]=input_rgb[i*3u+k];}for(var k=0u;k<4u;k++) {let j=phase_position(p,k);blue[j]=input_blue[j];}scratch.values[n*4u+i]=0.;scratch.values[n*5u+i]=0.;defects[i]=0u;}
+    if phase==0u {if i==0u {atomicStore(&scratch.eligible,0u);}for(var k=0u;k<3u;k++) {rgb[i*3u+k]=input_rgb[i*3u+k];}if !rgb_only(){for(var k=0u;k<4u;k++) {let j=phase_position(p,k);blue[j]=input_blue[j];}}scratch.values[classification_base()+i]=0.;if !rgb_only(){scratch.values[n*5u+i]=0.;}defects[i]=0u;}
     else if phase==1u {hot_pixel(p);}
     else if phase==2u {fill_mask(p);}
     else if phase==3u {count_eligible(p);}
     else if phase==4u {ghost_interpolate(p);}
-    else if phase==5u || phase==8u {for(var k=0u;k<4u;k++) {scratch.values[k*n+i]=blue[phase_position(p,k)];}if phase==5u {scratch.values[n*4u+i]=f32(defects[i]);}}
+    else if phase==5u || phase==8u {if !rgb_only(){for(var k=0u;k<4u;k++) {scratch.values[k*n+i]=blue[phase_position(p,k)];}}if phase==5u {scratch.values[classification_base()+i]=f32(defects[i]);}}
     else if phase==6u {directional_clamp(p);}
     else if phase==9u {phase_pattern(p);}
     else if phase==10u {median_blue(p);}

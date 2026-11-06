@@ -28,6 +28,7 @@ pub enum Operation {
     },
     CodeChannelMap(std::sync::Arc<crate::nodes::finish::code_channel_map::Prepared>),
     ChannelNoise(std::sync::Arc<crate::nodes::color::channel_noise::Prepared>),
+    ExtractBlue([u32; 2]),
     BoxContrast(std::sync::Arc<crate::nodes::finish::box_contrast::Prepared>),
     ColumnGain(std::sync::Arc<crate::nodes::sensor::column_gain::Prepared>),
     CalibratedDefects(std::sync::Arc<crate::nodes::sensor::calibrated_defects::Prepared>),
@@ -314,6 +315,7 @@ impl Operation {
             Self::WaveletContrast(p) => p.key(),
             Self::CodeChannelMap(p) => p.key(),
             Self::ChannelNoise(p) => p.key(),
+            Self::ExtractBlue(extent) => Key::pod(extent),
             Self::ColorSharpen(p) => p.key(),
             Self::ProportionalSharpen(p) => p.key(),
             Self::CellGain(prepared) => prepared.key(),
@@ -473,6 +475,7 @@ impl Operation {
             Self::LinearCodeRgb { .. } => "LinearCodeRgb",
             Self::CodeChannelMap(_) => "CodeChannelMap",
             Self::ChannelNoise(_) => "ChannelNoise",
+            Self::ExtractBlue(_) => "ExtractBlue",
             Self::BoxContrast(_) => "BoxContrast",
             Self::ColumnGain(_) => "ColumnGain",
             Self::CalibratedDefects(_) => "CalibratedDefects",
@@ -601,6 +604,7 @@ impl Operation {
             Self::WaveletContrast(_) => "apply wavelet local contrast",
             Self::CodeChannelMap(_) => "map integral color channels",
             Self::ChannelNoise(_) => "filter channel noise",
+            Self::ExtractBlue(_) => "extract blue channel",
             Self::ColorSharpen(_) => "sharpen individual RGB channels",
             Self::ProportionalSharpen(_) => "apply adaptive proportional sharpening",
             Self::BoxContrast(_) => "apply averaged local contrast",
@@ -728,6 +732,7 @@ impl Operation {
             Self::BoxContrast(_) => (vec![UnsignedCodeRgb], UnsignedCodeRgb),
             Self::WaveletContrast(_) => (vec![PackedLabCodes], PackedLabCodes),
             Self::ChannelNoise(_) => (vec![CorrectedSensorRgb], CorrectedSensorRgb),
+            Self::ExtractBlue(_) => (vec![CorrectedSensorRgb], CorrectedSensorBlue),
             Self::CodeChannelMap(_) | Self::ColorSharpen(_) => {
                 (vec![UnsignedCodeRgb], UnsignedCodeRgb)
             }
@@ -777,7 +782,14 @@ impl Operation {
             Self::Multiscale(_) => (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers),
             Self::ShieldNoise(_) => (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers),
             Self::RowGuard(_) => (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers),
-            Self::ColumnGain(_) => (vec![PhaseCells], PhaseCells),
+            Self::ColumnGain(p) => {
+                let data = if p.is_triplets() {
+                    SensorLayers
+                } else {
+                    PhaseCells
+                };
+                (vec![data], data)
+            }
             Self::SourcePhaseCells => (vec![], PhaseCells),
             Self::EmptyDefectFlags(_) => (vec![], DefectFlags),
             Self::CodeCrop(_) => (vec![UnsignedCodeRgb], UnsignedCodeRgb),
@@ -808,7 +820,11 @@ impl Operation {
                 CorrectedSensorRgb,
             ),
             Self::PhaseExtraction(p) => (
-                vec![PhaseCells],
+                vec![if p.is_triplets() {
+                    SensorLayers
+                } else {
+                    PhaseCells
+                }],
                 if p.is_calibrated() {
                     CorrectedSensorRgb
                 } else {
@@ -1115,7 +1131,13 @@ impl Operation {
                 }
             }
             Self::BoxContrast(_) => "local-contrast.rgb",
-            Self::ColumnGain(_) => "column-gain.phase-cells",
+            Self::ColumnGain(p) => {
+                if p.is_triplets() {
+                    "column-gain.layers"
+                } else {
+                    "column-gain.phase-cells"
+                }
+            }
             Self::BluePattern(_) => "blue-pattern.blue",
             Self::CalibratedDefects(p) => p.output(),
             Self::Multiscale(_) => "multiscale.layers",
@@ -1162,6 +1184,7 @@ impl Operation {
             Self::BlueMismatch(_) => "blue-mismatch.blue",
             Self::HighlightRestoration(_) => "highlight-restoration.rgb",
             Self::TwoScaleNoise(_) | Self::ChannelNoise(_) => "noise.rgb",
+            Self::ExtractBlue(_) => "blue-channel.codes",
             Self::SparseRepair(_) => "hlp-repair.rgb",
             Self::RgbDespeckle(_) => "chroma-despeckle.rgb",
             Self::ChromaClusters(_) => "chroma-clusters.rgb",

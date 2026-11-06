@@ -23,7 +23,7 @@ const NEIGHBORHOOD_INTENSITY_LAST: f32 = f32::from_bits(0x3f7ffaa6);
 const RANGE_RADIUS: u32 = 7;
 
 pub(super) fn prepare_stage1(metadata: &Metadata) -> Result<channel_noise::Prepared> {
-    let extent = super::calibration::full_extent(metadata)?;
+    let extent = super::calibration::color_extent(metadata)?;
     let despeckle = blue_despeckle::Prepared::new(
         extent,
         BLUE_SPECKLE_MODEL,
@@ -98,7 +98,8 @@ pub(super) fn prepare_stage2b(
 ) -> Result<super::stage2b::Prepared> {
     let mut prepared = super::stage2b::prepare(metadata, controls, mode)?;
     let iso = (metadata.scalar("CaptureISO")? / 100.) as f32;
-    let (sharp, adaptive) = residual_controls(iso, controls, mode == "Portrait")?;
+    let (sharp, adaptive) =
+        residual_controls(iso, controls, mode == "Portrait", metadata.is_quattro_low())?;
     prepared.reconstruct = super::stage2b::prepare_reconstruction(
         metadata,
         controls.luma,
@@ -145,6 +146,7 @@ fn residual_controls(
     iso: f32,
     controls: super::stage2b::Controls,
     portrait: bool,
+    low: bool,
 ) -> Result<(f32, f32)> {
     const RESIDUAL_POWERS: [f32; 7] = [0., 0.1, 0.2, 0.3, 1., 1.25, 1.5];
     const NOISE_THRESHOLD_FACTORS: [f32; 5] = [1., 1., 1.2, 1.5, 2.];
@@ -157,8 +159,8 @@ fn residual_controls(
     {
         return Err("invalid channel-mixed reconstruction controls".into());
     }
-    let log_iso = iso.log2();
-    let sharp = (((log_iso * -15.) * log_iso) / 36. + 16.)
+    let log_iso = if low { iso.ln() } else { iso.log2() };
+    let sharp = ((((log_iso * -15.) * log_iso) / 36. + 16.) * if low { 0.5 } else { 1. })
         * NOISE_THRESHOLD_FACTORS[usize::from(controls.luma)];
     let ramp = (iso - 1.).mul_add(-0.125, 1.);
     let base = 0.3_f32.mul_add(ramp, 1.1).max(1.1);
@@ -205,7 +207,11 @@ pub(super) fn prepare_sharpen(
         normalization,
         2000.,
         0.2,
-        1.,
+        if metadata.is_quattro_low() {
+            super::stage3::HALF_GRID_SHARPEN_SCALE
+        } else {
+            1.
+        },
         false,
     )
 }
@@ -401,7 +407,7 @@ mod tests {
     fn original_decorrelation_and_range_boundaries_match_native() {
         let root = std::path::PathBuf::from(std::env::var_os("QUATTRO_MONO_IMAGES").unwrap());
         let source = crate::source::Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
-        let extent = super::super::calibration::full_extent(&source.metadata).unwrap();
+        let extent = super::super::calibration::color_extent(&source.metadata).unwrap();
         let gpu = crate::gpu::Gpu::new().unwrap();
         let (_, range) = super::super::stage1::conditioning(0., false);
         let decorrelate = neighborhood_decorrelate::Prepared::new(
@@ -491,12 +497,12 @@ mod tests {
             residual_level: 3,
             grid: super::super::WorkingGrid::Full,
         };
-        let low = residual_controls(1., controls, false).unwrap();
+        let low = residual_controls(1., controls, false, false).unwrap();
         assert_eq!(low.0, 16. * 1.2);
         assert!(low.1 > 1.);
-        let high = residual_controls(32., controls, false).unwrap();
+        let high = residual_controls(32., controls, false, false).unwrap();
         assert!(high.1 > 1.);
-        assert!(residual_controls(0., controls, false).is_err());
+        assert!(residual_controls(0., controls, false, false).is_err());
     }
 
     #[test]
@@ -504,7 +510,8 @@ mod tests {
     fn channel_mixed_residuals_match_native_default_controls() {
         let root = std::path::PathBuf::from(std::env::var_os("QUATTRO_MONO_STAGE2B").unwrap());
         let (sharp, adaptive) =
-            residual_controls(1., super::super::stage2b::Controls::default(), false).unwrap();
+            residual_controls(1., super::super::stage2b::Controls::default(), false, false)
+                .unwrap();
         let params = std::fs::read(root.join("parameters-entry.bin")).unwrap();
         assert_eq!(
             sharp,

@@ -35,7 +35,7 @@ fn tiger_metadata_preparation_matches_original_native_helper() {
         bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()
     };
     let controls = Controls {
-        extent: super::super::calibration::full_extent(&source.metadata).unwrap(),
+        extent: super::super::calibration::color_extent(&source.metadata).unwrap(),
         white_balance: std::array::from_fn(|i| case["white_balance"][i].as_f64().unwrap() as f32),
         normalization: scalar("normalization"),
         neutral_low: scalar("neutral_low"),

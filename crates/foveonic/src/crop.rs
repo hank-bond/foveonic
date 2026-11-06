@@ -103,7 +103,8 @@ impl Crop {
                 _ => [x0, y0, x1, y1],
             };
             view.crop = [l + local[0], t + local[1], l + local[2], t + local[3]];
-            view.extent = [x1 - x0, y1 - y0];
+            let [u0, v0, u1, v1] = self.pixels(view.extent);
+            view.extent = [u1 - u0, v1 - v0];
         }
         if let Some(size) = output {
             view.extent = size;
@@ -131,7 +132,11 @@ mod tests {
             let base = View {
                 crop: [10, 20, 110, 220],
                 rotation,
-                extent: [100, 200],
+                extent: if matches!(rotation, 90 | 270) {
+                    [200, 100]
+                } else {
+                    [100, 200]
+                },
             };
             assert_eq!(Crop::default().apply(base, None), base);
             let result = crop.apply(base, None);
@@ -147,6 +152,23 @@ mod tests {
             assert_eq!(resized.crop, physical);
             assert_eq!(resized.extent, [600, 400]);
         }
+    }
+
+    #[test]
+    fn rectangular_sensor_pixels_keep_photographic_crop_dimensions() {
+        let crop = Crop {
+            bounds: [0.25, 0.25, 0.75, 0.75],
+            ..Default::default()
+        };
+        let view = View {
+            crop: [64, 18, 4768, 1586],
+            rotation: 90,
+            extent: [2176, 3264],
+        };
+        let result = crop.apply(view, None);
+        assert_eq!(result.crop, [1240, 410, 3592, 1194]);
+        assert_eq!(result.extent, [1088, 1632]);
+        assert_eq!(crop.apply(view, Some([600, 900])).extent, [600, 900]);
     }
 
     #[test]

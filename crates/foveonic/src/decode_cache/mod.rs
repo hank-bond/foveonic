@@ -385,9 +385,7 @@ impl Cache {
             .enabled
             .then(|| Identity::read(path).ok())
             .flatten();
-        let (source, original) = crate::x3f::read_owned(path, || progress(LoadStage::FileRead))?;
-        source.validate()?;
-        progress(LoadStage::Decoded);
+        let (source, original) = Source::open_with_original(path, progress)?;
         let source = Arc::new(source);
         if let Some(identity) = identity {
             let mut control = self.control.lock().unwrap();

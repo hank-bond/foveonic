@@ -31,11 +31,12 @@ fn cell_gain(@builtin(global_invocation_id) id: vec3<u32>) {
     var gain = fma(fraction, fma(-1.0, a, b), a);
     let second = fma(fraction, fma(-1.0, c, d), c);
     let slope = divide(fma(-1.0, gain, second), bitcast<f32>(params.spacing.x));
+    let scale = params.spacing.y;
     for (var x = segment.x;x<segment.y;x++) {
-        let base = (id.y * 2u * shape.x * 2u + x * 2u);
-        for (var dy = 0u;dy<2u;dy++) {
-            for (var dx = 0u;dx<2u;dx++) {
-                let i = base + dy * shape.x * 2u + dx;
+        let base = (id.y * scale * shape.x * scale + x * scale);
+        for (var dy = 0u;dy<scale;dy++) {
+            for (var dx = 0u;dx<scale;dx++) {
+                let i = base + dy * shape.x * scale + dx;
                 destination[i] = fma(gain, source[i], 0.0);
             }
         }

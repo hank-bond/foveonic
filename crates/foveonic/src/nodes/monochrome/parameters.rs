@@ -63,13 +63,11 @@ impl Prepared {
         let cols = metadata.fixed::<4>("DarkShieldColRange")?;
         let area = [
             cols[1] as u32 + 6,
-            active[1]
-                .checked_sub(32)
-                .ok_or("mono working top underflow")?,
+            active[1].saturating_sub(32),
             (cols[2] as u32)
                 .checked_sub(8)
                 .ok_or("mono working right underflow")?,
-            active[3] + 32,
+            (active[3] + 32).min(height),
         ];
         if area[0] >= area[2] || area[1] >= area[3] || area[2] > width || area[3] > height {
             return Err("invalid mono working borders".into());

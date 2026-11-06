@@ -21,8 +21,11 @@ fn hlp_calibration(@builtin(global_invocation_id) id:vec3<u32>){
     let w=p.shape.x;let h=p.shape.y;if id.x>=w||id.y>=h{return;}
     let offset=(id.y*w+id.x)*3u;
     var color=vec3<f32>(rgb[offset],rgb[offset+1u],rgb[offset+2u]);
+    let same_size=p.controls.w!=0.;
     let first=(id.y*2u)*(w*2u)+id.x*2u;
-    var phases=vec4<f32>(blue[first],blue[first+1u],blue[first+w*2u],blue[first+w*2u+1u]);
+    var phases:vec4<f32>;
+    if same_size { phases=vec4(blue[id.y*w+id.x]); }
+    else { phases=vec4<f32>(blue[first],blue[first+1u],blue[first+w*2u],blue[first+w*2u+1u]); }
     let sparse=id.x>=p.special.x&&id.y>=p.special.y&&(id.x-p.special.x)%p.special.z==0u&&(id.y-p.special.y)%p.special.w==0u;
     var gain:Gain;
     if sparse {
@@ -32,6 +35,7 @@ fn hlp_calibration(@builtin(global_invocation_id) id:vec3<u32>){
         for(var c=0u;c<4u;c++) {let v=max(phases[c]*p.controls.x,0.);codes[c]=f32(lut[min(u32(v),32767u)]);phases[c]=p.controls.y*codes[c];}
         let total=((codes.x+codes.y)+codes.z)+codes.w;
         color.b=(p.controls.y*total)*0.25;
+        if same_size { color.b=p.controls.y*codes.x; }
         color.b=multiply_pair(color.b,gain.ordinary.xy);
         phases=phases*gain.mono.x;
     }
@@ -47,7 +51,8 @@ fn hlp_calibration(@builtin(global_invocation_id) id:vec3<u32>){
         color.b=multiply_pair(color.b,gain.blue.xy);
         phases=phases*gain.phases;
     }
-    phases=min(phases,vec4<f32>(p.controls.z));
+    if !same_size { phases=min(phases,vec4<f32>(p.controls.z)); }
     out_rgb[offset]=color.r;out_rgb[offset+1u]=color.g;out_rgb[offset+2u]=color.b;
-    out_blue[first]=phases.x;out_blue[first+1u]=phases.y;out_blue[first+w*2u]=phases.z;out_blue[first+w*2u+1u]=phases.w;
+    if same_size { out_blue[id.y*w+id.x]=color.b; }
+    else { out_blue[first]=phases.x;out_blue[first+1u]=phases.y;out_blue[first+w*2u]=phases.z;out_blue[first+w*2u+1u]=phases.w; }
 }

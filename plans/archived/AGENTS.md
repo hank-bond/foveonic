@@ -99,6 +99,8 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[quattro-performance-and-fast-preview](./quattro-performance-and-fast-preview.md)** _(archived)._ Measure Quattro latency and retain simple optimizations that preserve demonstrated photographic output.
 - **[quattro-review](./quattro-review.md)** _(archived)._ Review Quattro Fast integration for recipe ownership, named numerical controls, clear geometry and preserved output.
 - **[quattro-smart-special-pixels](./quattro-smart-special-pixels.md)** _(archived)._ Correct sd Quattro sparse sensor sites before reduced Smart and Fast reconstruction.
+- **[reduced-raw](./reduced-raw.md)** _(archived)._ Reduced RAW modes use shared family recipes with real Merrill and synthetic Classic/Quattro validation.
+- **[reduced-raw-review](./reduced-raw-review.md)** _(archived)._ Reduced RAW integration keeps family recipes, shared preview policy and numerical node contracts consistent.
 - **[release-0.1.1](./release-0.1.1.md)** _(archived)._ Release v0.1.1 passed local and hosted checks and was published as GitHub's Latest application release.
 - **[release-0.3.0](./release-0.3.0.md)** _(archived)._ Prepare and verify the signed v0.3.0 macOS release with Import, cache scheduling and Merrill Smart previews.
 - **[release-0.4.0](./release-0.4.0.md)** _(archived)._ Prepare and verify the signed v0.4.0 draft with Merrill viewport-first Smart previews and managed display colors.
@@ -117,6 +119,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[responsiveness-campaign](./responsiveness-campaign.md)** _(archived)._ Coordinate measured startup, browsing and rendering optimization trials, including rejected approaches and integration evidence.
 - **[rotation-tool](./rotation-tool.md)** _(archived)._ Implement a shared saved rotation transform and Straighten/Freehand toolbar gestures.
 - **[saturation-closeout](./saturation-closeout.md)** _(archived)._ Separated Tone, Saturation and Color Range with independent methods, presets, bypasses and exports.
+- **[sd1-input](./sd1-input.md)** _(archived)._ Validate SD1 Merrill HI and LOW originals and make damaged-file failures actionable across input readers.
 - **[shared-framing-plane](./shared-framing-plane.md)** _(archived)._ Unify Crop and Rotate presentation while keeping their drag controls independent.
 - **[shared-linear-edits](./shared-linear-edits.md)** _(archived)._ Shared pre-curve edits and DNG baking cover Classic, Merrill and Quattro with per-output section choices.
 - **[signed-releases](./signed-releases.md)** _(archived)._ Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases.

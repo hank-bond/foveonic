@@ -77,6 +77,11 @@ impl Prepared {
         self.defects = positions;
         Ok(self)
     }
+    /// Correct R/G at the supplied sites while retaining the original blue channel.
+    pub(crate) fn without_blue(mut self) -> Self {
+        self.params.shape[3] = 1;
+        self
+    }
     #[cfg(test)]
     pub(crate) fn gains(&self) -> &[f32] {
         &self.gains

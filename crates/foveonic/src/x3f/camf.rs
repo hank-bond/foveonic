@@ -4,6 +4,7 @@
 
 use super::bytes::{product, Bytes};
 use super::huffman::Table;
+use crate::input_error::damaged;
 use crate::source::{Matrix, MatrixEncoding, PropertyList, Result};
 use std::collections::BTreeMap;
 
@@ -19,7 +20,7 @@ const BYTE_METADATA_CAPACITY: usize = 0x85bcb8;
 pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
     let bytes = Bytes(section);
     if bytes.range(0, 4)? != b"SECc" {
-        return Err("invalid camera metadata signature".into());
+        return Err(damaged("invalid camera metadata signature"));
     }
     if bytes.u32(8)? == 2 {
         let input = bytes.range(
@@ -27,10 +28,10 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
             section
                 .len()
                 .checked_sub(28)
-                .ok_or("truncated legacy camera metadata")?,
+                .ok_or_else(|| damaged("truncated legacy camera metadata"))?,
         )?;
         if !(BLOCK_HEADER_BYTES..=MAXIMUM_DECODED_BYTES).contains(&input.len()) {
-            return Err("invalid legacy camera metadata size".into());
+            return Err(damaged("invalid legacy camera metadata size"));
         }
         let mut state = bytes.u32(24)?;
         // Recovered legacy CAMB byte stream. Multiplication wraps before the
@@ -46,7 +47,7 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
     if bytes.u32(8)? == 5 {
         let declared = bytes.offset(12)?;
         if !(BLOCK_HEADER_BYTES..=BYTE_METADATA_CAPACITY).contains(&declared) {
-            return Err("invalid camera metadata size".into());
+            return Err(damaged("invalid camera metadata size"));
         }
         let words = (0..9)
             .map(|i| bytes.u16(28 + i * 2))
@@ -72,11 +73,11 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
     if seed > super::huffman::SAMPLE_MAX
         || !(BLOCK_HEADER_BYTES..=MAXIMUM_DECODED_BYTES).contains(&declared)
     {
-        return Err("invalid camera metadata size or seed".into());
+        return Err(damaged("invalid camera metadata size or seed"));
     }
     let count = product(width, height)?;
     if !count.is_multiple_of(2) || declared > product(count / 2, 3)? {
-        return Err("invalid packed camera metadata geometry".into());
+        return Err(damaged("invalid packed camera metadata geometry"));
     }
     let mut codes = Vec::new();
     for i in 0..13 {
@@ -84,7 +85,7 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
         codes.push(((pair[1] as u16) << 4, pair[0]));
     }
     if bytes.u16(54)? != 0 {
-        return Err("unterminated camera metadata code table".into());
+        return Err(damaged("unterminated camera metadata code table"));
     }
     let input = bytes.range(60, bytes.offset(56)?)?;
     let plane = Table::new(&codes)?.decode(input, width, height, seed as u16)?;
@@ -110,13 +111,13 @@ pub(crate) fn parse(data: &[u8]) -> Result<(BTreeMap<String, Matrix>, Lists)> {
         let kind = remaining.range(0, 4)?;
         let size = remaining.offset(8)?;
         if size < BLOCK_HEADER_BYTES {
-            return Err("invalid camera metadata block size".into());
+            return Err(damaged("invalid camera metadata block size"));
         }
         let block = Bytes(remaining.range(0, size)?);
         let name = block.text(block.offset(12)?)?;
         let payload = block.offset(16)?;
         if payload < BLOCK_HEADER_BYTES || payload > size || name.is_empty() {
-            return Err("invalid camera metadata block header".into());
+            return Err(damaged("invalid camera metadata block header"));
         }
         match kind {
             b"CMbM" => {
@@ -128,7 +129,7 @@ pub(crate) fn parse(data: &[u8]) -> Result<(BTreeMap<String, Matrix>, Lists)> {
                     .keys()
                     .any(|key: &String| key.eq_ignore_ascii_case(&name))
                 {
-                    return Err("duplicate camera matrix name".into());
+                    return Err(damaged("duplicate camera matrix name"));
                 }
                 matrices.insert(name, matrix);
             }
@@ -147,17 +148,17 @@ pub(crate) fn parse(data: &[u8]) -> Result<(BTreeMap<String, Matrix>, Lists)> {
                     let key = block.text(
                         strings
                             .checked_add(block.offset(entry)?)
-                            .ok_or("list offset overflow")?,
+                            .ok_or_else(|| damaged("list offset overflow"))?,
                     )?;
                     let value = block.text(
                         strings
                             .checked_add(block.offset(entry + 4)?)
-                            .ok_or("list offset overflow")?,
+                            .ok_or_else(|| damaged("list offset overflow"))?,
                     )?;
                     entries.push((key, value));
                 }
                 if lists.insert(name, PropertyList::new(entries)?).is_some() {
-                    return Err("duplicate camera list name".into());
+                    return Err(damaged("duplicate camera list name"));
                 }
             }
             b"CMbT" | b"CMbB" => (),
@@ -206,7 +207,7 @@ fn matrix(block: Bytes<'_>, payload: usize) -> Result<Matrix> {
             MatrixEncoding::Uint16 => raw.u16(position)? as f64,
         };
         if !value.is_finite() {
-            return Err("nonfinite camera matrix".into());
+            return Err(damaged("nonfinite camera matrix"));
         }
         values.push(value);
     }

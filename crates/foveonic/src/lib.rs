@@ -10,6 +10,7 @@ mod gpu;
 mod graph;
 pub mod image;
 pub mod importing;
+mod input_error;
 pub mod inspection;
 mod interactive;
 mod nodes;

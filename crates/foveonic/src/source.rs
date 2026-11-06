@@ -301,6 +301,23 @@ impl CaptureAdjustments {
 }
 
 impl Metadata {
+    /// Equal-resolution RGB storage used by Quattro LOW captures.
+    pub(crate) fn is_quattro_low(&self) -> bool {
+        self.processing_family().ok() == Some(ProcessingFamily::Quattro)
+            && matches!(
+                [self.width, self.height],
+                [2944, 1836] | [2944, 1888] | [3328, 2240]
+            )
+    }
+
+    /// Unrotated photographic dimensions declared by the file, independent of sensor sampling.
+    pub fn recorded_extent(&self) -> Option<[u32; 2]> {
+        Some([
+            self.properties.get("X3F_IMAGE_WIDTH")?.parse().ok()?,
+            self.properties.get("X3F_IMAGE_HEIGHT")?.parse().ok()?,
+        ])
+    }
+
     /// Read saved numeric choices without substituting family defaults.
     pub fn capture_adjustments(&self) -> Result<CaptureAdjustments> {
         CaptureAdjustments::from_properties(&self.properties)
@@ -430,12 +447,15 @@ impl Metadata {
 /// Rendering still needs a full `Source`. This lighter read lets capture details
 /// appear while sensor samples and calibration are still loading.
 pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String, String>> {
-    let mut file = std::fs::File::open(path)?;
-    let properties = crate::x3f::capture::read(&mut file)?;
-    if family(properties.get("CAMMODEL").map(String::as_str)).is_none() {
-        return Err("unsupported camera family".into());
-    }
-    Ok(properties)
+    let path = path.as_ref();
+    crate::input_error::read(path, || {
+        let mut file = std::fs::File::open(path)?;
+        let properties = crate::x3f::capture::read(&mut file)?;
+        if family(properties.get("CAMMODEL").map(String::as_str)).is_none() {
+            return Err("unsupported camera family".into());
+        }
+        Ok(properties)
+    })
 }
 
 /// Physical ordering of immutable samples returned by `Source::samples`.
@@ -497,38 +517,59 @@ impl Source {
         path: impl AsRef<Path>,
         progress: impl Fn(LoadStage),
     ) -> Result<Self> {
-        crate::background::decode_priority();
-        let source = crate::x3f::read(path.as_ref(), || progress(LoadStage::FileRead))?;
-        source.validate()?;
-        progress(LoadStage::Decoded);
-        Ok(source)
+        Self::open_with_original(path.as_ref(), progress).map(|(source, _)| source)
+    }
+
+    /// Cache population shares decoding, validation and progress with ordinary loading.
+    pub(crate) fn open_with_original(
+        path: &Path,
+        progress: impl Fn(LoadStage),
+    ) -> Result<(Self, Vec<u8>)> {
+        crate::input_error::read(path, || {
+            crate::background::decode_priority();
+            let (source, original) =
+                crate::x3f::read_owned(path, || progress(LoadStage::FileRead))?;
+            source.validate()?;
+            progress(LoadStage::Decoded);
+            Ok((source, original))
+        })
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
         match self.metadata.processing_family()? {
             ProcessingFamily::Merrill => {
-                if self.metadata.width != SENSOR_WIDTH || self.metadata.height != SENSOR_HEIGHT {
-                    return Err("unsupported Merrill full-sensor geometry".into());
+                let extent = [self.metadata.width, self.metadata.height];
+                let reduced = matches!(
+                    (
+                        self.metadata
+                            .properties
+                            .get("RESOLUTION")
+                            .map(String::as_str),
+                        extent
+                    ),
+                    (Some("LOW"), [2464, 1632]) | (Some("MED"), [4928, 1632])
+                );
+                if extent != [SENSOR_WIDTH, SENSOR_HEIGHT] && !reduced {
+                    return Err(format!(
+                        "Merrill RAW resolution {}×{} is not supported yet.",
+                        extent[0], extent[1]
+                    )
+                    .into());
                 }
             }
             ProcessingFamily::Classic => {
-                let model = self
-                    .metadata
-                    .properties
-                    .get("CAMMODEL")
-                    .map(|m| m.trim().to_ascii_uppercase());
-                let expected = if matches!(model.as_deref(), Some("SIGMA SD9" | "SIGMA SD10")) {
-                    [2304, 1531]
-                } else {
-                    [2688, 1792]
-                };
-                if [self.metadata.width, self.metadata.height] != expected {
-                    return Err("unsupported Classic full-sensor geometry".into());
+                if !classic_extent_supported(&self.metadata) {
+                    return Err("unsupported Classic RAW resolution or sensor geometry".into());
                 }
             }
             ProcessingFamily::Quattro => {
-                if self.storage != SourceStorage::PackedRgbBluePhases {
-                    return Err("unsupported Quattro sensor layout".into());
+                let expected = if self.metadata.is_quattro_low() {
+                    SourceStorage::InterleavedRgb
+                } else {
+                    SourceStorage::PackedRgbBluePhases
+                };
+                if self.storage != expected {
+                    return Err("Quattro sensor storage does not match its resolution".into());
                 }
             }
         }
@@ -543,6 +584,48 @@ impl Source {
         }
         Ok(())
     }
+}
+
+fn classic_extent_supported(metadata: &Metadata) -> bool {
+    let model = metadata
+        .properties
+        .get("CAMMODEL")
+        .map(|m| m.trim().to_ascii_uppercase());
+    let early = matches!(model.as_deref(), Some("SIGMA SD9" | "SIGMA SD10"));
+    let full = if early { [2304, 1531] } else { [2688, 1792] };
+    let stored = [metadata.width, metadata.height];
+    if stored == full {
+        return true;
+    }
+    if !matches!(
+        model.as_deref(),
+        Some("SIGMA SD9" | "SIGMA SD10" | "SIGMA SD14" | "SIGMA SD15")
+    ) || stored.contains(&0)
+        || stored[0] > full[0]
+        || stored[1] > full[1]
+    {
+        return false;
+    }
+    // Reduced storage is described by each file's CAMF rectangles. The reference
+    // manager selects these photograph sizes independently of that storage.
+    let photograph = match metadata.properties.get("RESOLUTION").map(String::as_str) {
+        Some("MED") => {
+            if early {
+                [1512, 1008]
+            } else {
+                [1776, 1184]
+            }
+        }
+        Some("LOW") => {
+            if early {
+                [1134, 756]
+            } else {
+                [1296, 864]
+            }
+        }
+        _ => return false,
+    };
+    metadata.recorded_extent() == Some(photograph)
 }
 
 fn family(model: Option<&str>) -> Option<ProcessingFamily> {

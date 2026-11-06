@@ -1,4 +1,4 @@
-//! Prepares full-size Quattro and Tiger two-pass noise controls and exposure-guided filtering.
+//! Prepares Quattro and Tiger two-pass noise controls and exposure-guided filtering.
 
 use crate::source::{MatrixEncoding, Metadata, Result};
 
@@ -38,7 +38,7 @@ pub(super) struct Stage1Controls {
     pub highlight_preservation: [f32; 3],
 }
 
-/// Prepare the demonstrated single-input HI color route. This does not perform filtering.
+/// Prepare the single-input color filter for its recorded RGB grid.
 /// The color chroma slider selects these strengths. The reference descriptor's
 /// internal slider order differs from its public adjustment order: public chroma
 /// is at packed offset 0xf0, while public luminance is at 0xf8. This helper
@@ -47,7 +47,7 @@ pub(super) fn prepare(metadata: &Metadata, chroma_step: u8) -> Result<Stage1Cont
     if chroma_step > MAXIMUM_NOISE_STEP {
         return Err("chroma noise step must be between zero and four".into());
     }
-    let extent = super::calibration::full_extent(metadata)?;
+    let extent = super::calibration::color_extent(metadata)?;
     let version = metadata.fixed::<3>("CamsysVersion")?;
     if version[0] * 1_000_000. + version[1] * 1000. + version[2] < FIRST_SUPPORTED_GAIN_VERSION
         || optional(metadata, "ISOrange", 0.)? != 0.

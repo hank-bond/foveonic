@@ -108,18 +108,21 @@ pub(crate) fn prepare(metadata: &Metadata, threshold_ev: Option<f32>) -> Result<
     if metadata.width < 5 || metadata.height < 5 || count > u32::MAX as usize / 3 {
         return Err("unsupported highlight geometry".into());
     }
-    let active = metadata.fixed::<4>("ActiveImageArea")?;
+    let active = super::calibration::rectangle(metadata, "ActiveImageArea")?;
     let columns = metadata.fixed::<4>("DarkShieldColRange")?;
-    let top = unsigned(active[1])?;
-    let bottom = unsigned(active[3])?;
+    let top = active[1];
+    let bottom = active[3];
     let left = unsigned(columns[1])?;
     let right = unsigned(columns[2])?;
-    let area = [
+    let mut area = [
         left.checked_add(6).ok_or("highlight left overflow")?,
-        top.checked_sub(32).ok_or("highlight top underflow")?,
+        top.saturating_sub(32).max(2),
         right.checked_sub(8).ok_or("highlight right underflow")?,
-        bottom.checked_add(33).ok_or("highlight bottom overflow")?,
+        bottom.checked_add(32).ok_or("highlight bottom overflow")?,
     ];
+    // Reduced captures leave less padding. Keep the work region inside the
+    // sensor while reserving the kernel’s two-pixel halo.
+    area[3] = area[3].min(metadata.height as u32 - 3);
     if area[0] < 2
         || area[1] < 2
         || area[0] > area[2]

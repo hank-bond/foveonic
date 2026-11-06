@@ -18,7 +18,7 @@ The parent recipe wires stages and stops once the requested outputs exist. Calib
 - **[calibration.rs](./calibration.rs)** Resolves Quattro extraction, phase gain and selected rendering color calibration.
 - **[color_shading.rs](./color_shading.rs)** Decodes and combines ordinary metadata shading grids for explicit channels and white balance.
 - **[controls.rs](./controls.rs)** Resolves saved Quattro adjustments, preset choices and supported control domains.
-- **[defects.rs](./defects.rs)** Expands camera defect records and prepares full-size Quattro chroma repair controls.
+- **[defects.rs](./defects.rs)** Expands camera defect records and prepares Quattro chroma repair controls.
 - **[dng.rs](./dng.rs)** Prepares camera-like Quattro DNG coordinates and a deferred sampled appearance.
 - **[highlights.rs](./highlights.rs)** Prepares shared highlight restoration, Tiger channel limits and ordinary blue mismatch controls.
 - **[hlp.rs](./hlp.rs)** Prepares the selected ordinary DP sparse blue LUT and ordered ordinary/HP shading gains.
@@ -31,9 +31,9 @@ The parent recipe wires stages and stops once the requested outputs exist. Calib
 - **[repair.rs](./repair.rs)** Prepares the ordinary DP sparse-repair noise model and correction switch.
 - **[resources.rs](./resources.rs)** Loads bundled or explicitly overridden blue calibration maps and prepares aperture/focus blends.
 - **[sd.rs](./sd.rs)** Prepares interchangeable-lens Quattro sparse phase-detection correction tables.
-- **[stage1.rs](./stage1.rs)** Prepares full-size Quattro and Tiger two-pass noise controls and exposure-guided filtering.
+- **[stage1.rs](./stage1.rs)** Prepares Quattro and Tiger two-pass noise controls and exposure-guided filtering.
 - **[stage2.rs](./stage2.rs)** Prepares Quattro and Tiger color shading, masked raw response and chroma sectors.
-- **[stage2b.rs](./stage2b.rs)** Prepares Full and reduced preview reconstruction, luminance filtering and residual detail.
+- **[stage2b.rs](./stage2b.rs)** Prepares Quattro reconstruction, luminance filtering and residual detail on native or preview grids.
 - **[stage3.rs](./stage3.rs)** Prepares local contrast and adaptive sharpening for Full and reduced preview grids.
 - **[tiger.rs](./tiger.rs)** Prepares Tiger's gain-bearing calibration and camera-specific numerical contracts.
 

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn rejects_unestablished_formats_and_geometry() {
-    for format in [31, 32, 34, 36, 38, 40, 41, 42] {
+    for format in [32, 34, 36, 38, 40, 42] {
         assert!(decode(&[], 5888, 3672, format).is_err(), "format {format}");
     }
     for (width, height, format) in [
@@ -44,7 +44,8 @@ fn packed_sensor_matches_every_reference_word() {
         header.offset(20).unwrap(),
         header.u32(12).unwrap(),
     )
-    .unwrap();
+    .unwrap()
+    .pixels;
     let reference = std::fs::read(std::env::var_os("QUATTRO_NATIVE_SENSOR").unwrap()).unwrap();
     assert!(reference.len() >= output.len() * 4);
     for (index, (actual, expected)) in output
@@ -113,7 +114,7 @@ fn packed_sensor_matches_serial_planes() {
     let mut timings = Vec::new();
     for _ in 0..3 {
         let start = std::time::Instant::now();
-        let output = decode(section, width, height, format).unwrap();
+        let output = decode(section, width, height, format).unwrap().pixels;
         timings.push(start.elapsed().as_secs_f64() * 1000.);
         for (index, cell) in output.as_chunks::<6>().0.iter().enumerate() {
             let x = index % (width / 2);
@@ -158,7 +159,7 @@ fn independent_planes_preserve_order_and_report_bounded_errors() {
     }
     section[48..50].copy_from_slice(&1u16.to_le_bytes());
     assert_eq!(
-        decode(&section, 2, 2, 37).unwrap(),
+        decode(&section, 2, 2, 37).unwrap().pixels,
         [10., 20., 30., 30., 30., 30.]
     );
     assert!(decode(&section[..129], 2, 2, 37).is_err());
@@ -167,4 +168,100 @@ fn independent_planes_preserve_order_and_report_bounded_errors() {
     section[128] = 0;
     section[44..46].copy_from_slice(&16384u16.to_le_bytes());
     assert!(decode(&section, 2, 2, 37).is_err());
+}
+
+// Independently encode zero and unit differences, including the parity predictors.
+fn unsigned_fixture(width: usize, height: usize, packed: bool, extra: usize) -> Vec<u8> {
+    let low = if packed { 2 } else { 1 };
+    let shapes = [
+        (width / low, height / low),
+        (width / low, height / low),
+        (width + extra, height),
+    ];
+    let mut section = vec![0; 96];
+    section[48..50].copy_from_slice(&1u16.to_le_bytes());
+    section[50..52].copy_from_slice(&0x8001u16.to_le_bytes());
+    for (channel, (w, h)) in shapes.into_iter().enumerate() {
+        section[28 + channel * 4..30 + channel * 4].copy_from_slice(&(w as u16).to_le_bytes());
+        section[30 + channel * 4..32 + channel * 4].copy_from_slice(&(h as u16).to_le_bytes());
+        let seed = (channel as u16 + 1) * 10;
+        section[40 + channel * 2..42 + channel * 2].copy_from_slice(&seed.to_le_bytes());
+        let mut plane = vec![i32::from(seed); w * h];
+        if channel == 2 && extra != 0 {
+            plane[width] += 1;
+            plane[width + 1] -= 1;
+        }
+        let mut bits = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let predicted = if x >= 2 {
+                    plane[y * w + x - 2]
+                } else if y >= 2 {
+                    plane[(y - 2) * w + x]
+                } else {
+                    i32::from(seed)
+                };
+                let difference = plane[y * w + x] - predicted;
+                match difference {
+                    0 => bits.push(false),
+                    1 => bits.extend([true, true]),
+                    -1 => bits.extend([true, false]),
+                    _ => panic!("fixture needs a larger difference category"),
+                }
+            }
+        }
+        let mut stream = vec![0u8; bits.len().div_ceil(8) + 2];
+        for (i, value) in bits.into_iter().enumerate() {
+            stream[i / 8] |= u8::from(value) << (7 - i % 8);
+        }
+        section[84 + channel * 4..88 + channel * 4]
+            .copy_from_slice(&(stream.len() as u32).to_le_bytes());
+        stream.resize(stream.len().div_ceil(16) * 16, 0);
+        section.extend(stream);
+    }
+    section
+}
+
+#[test]
+fn unsigned_equal_resolution_planes_keep_rgb_and_reduced_special_columns() {
+    for format in [31, 35, 37, 39, 41] {
+        let extra = if format == 35 { 2 } else { 0 };
+        let section = unsigned_fixture(32, 8, false, extra);
+        let decoded = decode(&section, 32, 8, format).unwrap();
+        assert_eq!(
+            decoded.storage,
+            crate::source::SourceStorage::InterleavedRgb
+        );
+        assert_eq!(decoded.pixels.len(), 32 * 8 * 3);
+        for (i, rgb) in decoded.pixels.as_chunks::<3>().0.iter().enumerate() {
+            let blue = if extra != 0 && i == 0 {
+                31.
+            } else if extra != 0 && i == 16 {
+                29.
+            } else {
+                30.
+            };
+            assert_eq!(*rgb, [10., 20., blue], "format {format}, pixel {i}");
+        }
+        if extra != 0 {
+            assert!(decode(&section, 32, 8, 37).is_err());
+        }
+    }
+}
+
+#[test]
+fn packed_special_columns_still_replace_physical_pairs() {
+    let section = unsigned_fixture(64, 8, true, 4);
+    let decoded = decode(&section, 64, 8, 35).unwrap();
+    assert_eq!(
+        decoded.storage,
+        crate::source::SourceStorage::PackedRgbBluePhases
+    );
+    assert_eq!(decoded.pixels.len(), 32 * 4 * 6);
+    assert_eq!(&decoded.pixels[..6], &[10., 20., 31., 29., 30., 30.]);
+    assert!(decoded.pixels[6..]
+        .as_chunks::<6>()
+        .0
+        .iter()
+        .all(|v| *v == [10., 20., 30., 30., 30., 30.]));
 }

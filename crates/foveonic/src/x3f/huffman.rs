@@ -3,6 +3,7 @@
 //! Imported from Foveonic's X3F reader.
 
 use super::bytes::product;
+use crate::input_error::damaged;
 use crate::source::Result;
 
 pub(super) const SAMPLE_MAX: u32 = 4095;
@@ -33,15 +34,15 @@ impl Table {
         }; PREFIX_TABLE_ENTRIES];
         for (category, &(code, length)) in codes.iter().enumerate() {
             if !(1..=12).contains(&length) {
-                return Err("invalid Huffman code length".into());
+                return Err(damaged("invalid Huffman code length"));
             }
             let span = 1usize << (12 - length);
             if code as usize >= table.len() || !(code as usize).is_multiple_of(span) {
-                return Err("invalid Huffman code alignment".into());
+                return Err(damaged("invalid Huffman code alignment"));
             }
             for entry in &mut table[code as usize..code as usize + span] {
                 if entry.length != 0 {
-                    return Err("overlapping Huffman codes".into());
+                    return Err(damaged("overlapping Huffman codes"));
                 }
                 *entry = Symbol {
                     length,
@@ -55,7 +56,7 @@ impl Table {
     fn difference(&self, stream: &mut Bits<'_>) -> Result<i16> {
         let symbol = self.0[stream.peek() as usize];
         if symbol.length == 0 {
-            return Err("invalid Huffman prefix".into());
+            return Err(damaged("invalid Huffman prefix"));
         }
         stream.advance(symbol.length)?;
         if symbol.category == 0 {
@@ -91,7 +92,7 @@ impl Table {
             for (destination, source) in table.iter_mut().zip(single.0) {
                 if source.length != 0 {
                     if destination.length != 0 {
-                        return Err("overlapping Huffman codes".into());
+                        return Err(damaged("overlapping Huffman codes"));
                     }
                     *destination = Symbol {
                         length,
@@ -160,7 +161,7 @@ impl Table {
                 };
                 let value = (predictor as i16).wrapping_add(self.difference(&mut bits)?);
                 if value as u16 > maximum {
-                    return Err("decoded sample outside declared range".into());
+                    return Err(damaged("decoded sample outside declared range"));
                 }
                 let value = value as u16;
                 horizontal[x & 1] = value;
@@ -217,7 +218,7 @@ impl<'a> Bits<'a> {
     }
     fn advance(&mut self, count: u8) -> Result<()> {
         if count as usize > self.total_bits - self.position {
-            return Err("truncated Huffman stream".into());
+            return Err(damaged("truncated Huffman stream"));
         }
         self.position += count as usize;
         Ok(())

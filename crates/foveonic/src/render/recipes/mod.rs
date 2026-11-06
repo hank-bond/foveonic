@@ -64,6 +64,15 @@ impl Engine {
         if names.is_empty() {
             return Ok(Vec::new());
         }
+        // Image artifacts must describe the region actually rendered, so
+        // whole-frame fallback still applies saved crop and rotation.
+        let mut request = std::borrow::Cow::Borrowed(settings);
+        if settings.preview_region.is_some()
+            && !settings.regional_preview_available(&source.metadata)
+        {
+            request.to_mut().preview_region = None;
+        }
+        let settings = request.as_ref();
         let resolved = settings.resolved_exposure(&source.metadata);
         let dng_settings;
         let input = if matches!(recipe, Recipe::DngBase) {

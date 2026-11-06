@@ -67,10 +67,11 @@ fn rank_block(layers: u32, p: u32, local: u32, block: u32) {
 }
 @compute @workgroup_size(1)
 fn prefix(@builtin(workgroup_id)group:vec3<u32>) {
-    let blocks = params.source.z / 8u;
+    let first = group.x * params.source.z / 8u;
+    let end = (group.x + 1u) * params.source.z / 8u;
     let bank=group.x;
         var sum=0u;
-        for (var block=bank*blocks; block<(bank+1u)*blocks; block++) {
+        for (var block=first; block<end; block++) {
             let count=counts[block]; counts[block]=sum; sum+=count;
         }
         counts[params.source.z+bank]=min(sum,params.source.w);
@@ -83,7 +84,7 @@ fn scatter(@builtin(global_invocation_id) id: vec3<u32>, @builtin(workgroup_id) 
     let rank=counts[group.x]+(mark>>RANK_SHIFT)-1u;
     // Dropped detections must not block retained repairs, including across banks.
     if rank >= params.source.w { return; }
-    let bank=group.x/(params.source.z/8u);
+    let bank=((group.x+1u)*8u-1u)/params.source.z;
     records[bank*params.source.w+rank]=vec2(id.x,mark&LAYER_MASK);
     marks[id.x]=mark&LAYER_MASK;
 }

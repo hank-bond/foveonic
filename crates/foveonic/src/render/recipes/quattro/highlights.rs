@@ -11,11 +11,12 @@ fn rectangle(metadata: &Metadata) -> Result<[u32; 4]> {
     {
         return Err("invalid highlight active rectangle".into());
     }
+    let divisor = if metadata.is_quattro_low() { 1 } else { 2 };
     Ok([
-        area[0] as u32 / 2,
-        area[1] as u32 / 2,
-        (area[2] as u32).div_ceil(2),
-        (area[3] as u32).div_ceil(2),
+        area[0] as u32 / divisor,
+        area[1] as u32 / divisor,
+        (area[2] as u32).div_ceil(divisor),
+        (area[3] as u32).div_ceil(divisor),
     ])
 }
 pub(super) fn prepare_blue(metadata: &Metadata) -> Result<blue_mismatch::Prepared> {
@@ -42,13 +43,10 @@ pub(super) fn prepare_blue(metadata: &Metadata) -> Result<blue_mismatch::Prepare
 }
 pub(super) fn prepare_restoration(metadata: &Metadata) -> Result<highlight_restoration::Prepared> {
     if !super::defects::supported(metadata) {
-        return Err("highlight restoration requires a supported full-size Quattro route".into());
+        return Err("highlight restoration requires a supported Quattro route".into());
     }
     let prepared = highlight_restoration::Prepared::new(
-        [
-            u32::try_from(metadata.width / 2)?,
-            u32::try_from(metadata.height / 2)?,
-        ],
+        super::calibration::color_extent(metadata)?,
         rectangle(metadata)?,
         super::calibration::normalization(metadata)?,
         metadata.fixed::<3>("AutoWBGain")?.map(|v| v as f32),

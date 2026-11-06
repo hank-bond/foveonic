@@ -58,13 +58,18 @@ pub(super) fn chroma(m: &Metadata) -> Result<fppd::Prepared> {
                 .take(CORRECTION_COLUMNS),
         );
     }
-    fppd::Prepared::new(
-        [(m.width / 2) as u32, (m.height / 2) as u32],
+    let prepared = fppd::Prepared::new(
+        super::calibration::color_extent(m)?,
         CHROMA_GRID,
         [CORRECTION_COLUMNS as u32, CORRECTION_ROWS],
         gains,
         false,
-    )
+    )?;
+    Ok(if m.is_quattro_low() {
+        prepared.without_blue()
+    } else {
+        prepared
+    })
 }
 
 pub(super) fn luma(m: &Metadata) -> Result<fppd::Prepared> {

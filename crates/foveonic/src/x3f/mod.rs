@@ -11,6 +11,7 @@ mod format31;
 mod format6;
 mod huffman;
 
+use crate::input_error::damaged;
 use crate::profile::Timing;
 use crate::source::{Metadata, Result, Source, SourceStorage};
 use bytes::{product, Bytes};
@@ -74,10 +75,6 @@ pub(crate) use camf::parse as cached_camera_metadata;
 pub(crate) use exif::color_space as jpeg_color_space;
 pub(crate) use exif::thumbnail as jpeg_thumbnail;
 
-pub(crate) fn read(path: &Path, read_complete: impl FnOnce()) -> Result<Source> {
-    read_owned(path, read_complete).map(|(source, _)| source)
-}
-
 /// Cache preparation also uses the already-read original to build display assets.
 pub(crate) fn read_owned(path: &Path, read_complete: impl FnOnce()) -> Result<(Source, Vec<u8>)> {
     let (data, read) = read_original(path, read_complete)?;
@@ -105,7 +102,10 @@ fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, 
     let start = Instant::now();
     let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
-    if !(MINIMUM_FILE_BYTES..=MAXIMUM_FILE_BYTES).contains(&length) {
+    if length < MINIMUM_FILE_BYTES {
+        return Err(damaged("truncated X3F header"));
+    }
+    if length > MAXIMUM_FILE_BYTES {
         return Err("unsupported X3F file size".into());
     }
     let mut data = Vec::with_capacity(length as usize);
@@ -145,7 +145,10 @@ fn decode_owned(data: Vec<u8>, read: Timing) -> Result<(Source, Vec<u8>)> {
 
 fn decode(data: &[u8]) -> Result<Source> {
     let bytes = Bytes(data);
-    if bytes.range(0, 4)? != b"FOVb" || !SUPPORTED_FILE_VERSIONS.contains(&bytes.u32(4)?) {
+    if bytes.range(0, 4)? != b"FOVb" {
+        return Err(damaged("invalid X3F signature"));
+    }
+    if !SUPPORTED_FILE_VERSIONS.contains(&bytes.u32(4)?) {
         return Err("unsupported X3F header".into());
     }
     let rotation = rotation(data)?;
@@ -153,18 +156,21 @@ fn decode(data: &[u8]) -> Result<Source> {
     let end = data
         .len()
         .checked_sub(4)
-        .ok_or("truncated X3F directory pointer")?;
+        .ok_or_else(|| damaged("truncated X3F directory pointer"))?;
     let directory = bytes.offset(end)?;
     if directory < BASE_HEADER_BYTES || directory > end {
-        return Err("X3F directory outside file".into());
+        return Err(damaged("X3F directory outside file"));
     }
     let index = Bytes(bytes.range(directory, end - directory)?);
-    if index.range(0, 4)? != b"SECd" || index.u32(4)? != SECTION_VERSION {
+    if index.range(0, 4)? != b"SECd" {
+        return Err(damaged("invalid X3F directory signature"));
+    }
+    if index.u32(4)? != SECTION_VERSION {
         return Err("unsupported X3F directory".into());
     }
     let count = index.offset(8)?;
     if count == 0 || count > MAXIMUM_DIRECTORY_ENTRIES {
-        return Err("invalid X3F directory count".into());
+        return Err(damaged("invalid X3F directory count"));
     }
     // Directory offsets: count 8, then twelve-byte (offset, size, identifier) entries.
     index.range(
@@ -181,9 +187,11 @@ fn decode(data: &[u8]) -> Result<Source> {
         let entry = DIRECTORY_HEADER_BYTES + i * DIRECTORY_ENTRY_BYTES;
         let start = index.offset(entry)?;
         let length = index.offset(entry + 4)?;
-        let stop = start.checked_add(length).ok_or("section size overflow")?;
+        let stop = start
+            .checked_add(length)
+            .ok_or_else(|| damaged("section size overflow"))?;
         if start < BASE_HEADER_BYTES || length < 8 || stop > directory {
-            return Err("X3F section outside data area".into());
+            return Err(damaged("X3F section outside data area"));
         }
         ranges.push((start, stop));
         let section = bytes.range(start, length)?;
@@ -192,7 +200,7 @@ fn decode(data: &[u8]) -> Result<Source> {
             b"IMAG" | b"IMA2" => {
                 let image = Bytes(section);
                 if image.range(0, 4)? != b"SECi" {
-                    return Err("invalid image section signature".into());
+                    return Err(damaged("invalid image section signature"));
                 }
                 if image.u32(8)? == 2 && image.u32(12)? == 18 {
                     let area = u64::from(image.u32(16)?) * u64::from(image.u32(20)?);
@@ -216,10 +224,10 @@ fn decode(data: &[u8]) -> Result<Source> {
     }
     ranges.sort_unstable();
     if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
-        return Err("overlapping X3F sections".into());
+        return Err(damaged("overlapping X3F sections"));
     }
     if properties.is_none() && bytes.u32(4)? < 0x40000 {
-        return Err("missing X3F properties".into());
+        return Err(damaged("missing X3F properties"));
     }
     let mut properties = properties
         .map(read_properties)
@@ -234,15 +242,11 @@ fn decode(data: &[u8]) -> Result<Source> {
     }
     properties.extend(adjustments::read(&data[..ranges[0].0])?);
     properties.insert("X3F_MARK_BITS".into(), mark_bits(data)?.to_string());
-    let raw = raw.ok_or("missing X3F sensor image")?;
-    let storage = if [35, 37, 39].contains(&Bytes(raw).u32(12)?) {
-        SourceStorage::PackedRgbBluePhases
-    } else {
-        SourceStorage::InterleavedRgb
-    };
-    let (width, height, pixels, mut timings) = read_pixels(raw)?;
+    record_image_extent(&mut properties, data)?;
+    let raw = raw.ok_or_else(|| damaged("missing X3F sensor image"))?;
+    let (width, height, storage, pixels, mut timings) = read_pixels(raw)?;
     let start = Instant::now();
-    let camf = camf::decompress(camera.ok_or("missing X3F camera metadata")?)?;
+    let camf = camf::decompress(camera.ok_or_else(|| damaged("missing X3F camera metadata"))?)?;
     timings.push(Timing::elapsed("CAMF decompress", start));
     let start = Instant::now();
     let (matrices, lists) = camf::parse(&camf)?;
@@ -278,6 +282,24 @@ fn merge_preview_properties(
     );
 }
 
+/// Keep the declared photograph size separate from compressed sensor storage.
+fn record_image_extent(properties: &mut BTreeMap<String, String>, header: &[u8]) -> Result<()> {
+    let bytes = Bytes(header);
+    let offset = if bytes.u32(4)? >= 0x40000 { 40 } else { 28 };
+    let extent = [bytes.u32(offset)?, bytes.u32(offset + 4)?];
+    if extent.contains(&0) {
+        return Ok(());
+    }
+    if extent.iter().any(|v| *v > u16::MAX as u32)
+        || u64::from(extent[0]) * u64::from(extent[1]) > huffman::MAXIMUM_PLANE_SAMPLES as u64
+    {
+        return Err(damaged("invalid X3F photograph dimensions"));
+    }
+    properties.insert("X3F_IMAGE_WIDTH".into(), extent[0].to_string());
+    properties.insert("X3F_IMAGE_HEIGHT".into(), extent[1].to_string());
+    Ok(())
+}
+
 /// Clockwise presentation degrees. Version 4 moves image geometry twelve bytes
 /// later to make room for processing-version and camera identity fields.
 pub(crate) fn rotation(header: &[u8]) -> Result<u32> {
@@ -309,7 +331,7 @@ pub(super) fn processing_version(header: &[u8]) -> Result<Option<[u16; 4]>> {
 
 fn insert<'a>(slot: &mut Option<&'a [u8]>, section: &'a [u8]) -> Result<()> {
     if slot.replace(section).is_some() {
-        return Err("duplicate X3F input section".into());
+        return Err(damaged("duplicate X3F input section"));
     }
     Ok(())
 }
@@ -341,20 +363,20 @@ fn read_properties(section: &[u8]) -> Result<BTreeMap<String, String>> {
             2,
         )?)?;
         if key.is_empty() || properties.insert(key, value).is_some() {
-            return Err("invalid or duplicate X3F property".into());
+            return Err(damaged("invalid or duplicate X3F property"));
         }
     }
     Ok(properties)
 }
 
-type SensorRead = (usize, usize, Vec<f32>, Vec<Timing>);
+type SensorRead = (usize, usize, SourceStorage, Vec<f32>, Vec<Timing>);
 
 fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     let bytes = Bytes(section);
     if bytes.range(0, 4)? != b"SECi"
         || bytes.u32(4)? != SECTION_VERSION
         || !SENSOR_IMAGE_TYPES.contains(&bytes.u32(8)?)
-        || ![6, SENSOR_HUFFMAN_FORMAT, 35, 37, 39].contains(&bytes.u32(12)?)
+        || ![6, SENSOR_HUFFMAN_FORMAT, 31, 35, 37, 39, 41].contains(&bytes.u32(12)?)
     {
         return Err("unsupported sensor compression".into());
     }
@@ -370,14 +392,15 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     {
         return Err("unsupported sensor geometry".into());
     }
-    if [35, 37, 39].contains(&bytes.u32(12)?) {
+    if [31, 35, 37, 39, 41].contains(&bytes.u32(12)?) {
         let start = Instant::now();
-        let pixels = format31::decode(section, width, height, bytes.u32(12)?)?;
+        let decoded = format31::decode(section, width, height, bytes.u32(12)?)?;
         return Ok((
             width,
             height,
-            pixels,
-            vec![Timing::elapsed("sensor packed planes", start)],
+            decoded.storage,
+            decoded.pixels,
+            vec![Timing::elapsed("sensor compressed planes", start)],
         ));
     }
     if bytes.u32(12)? == 6 {
@@ -386,6 +409,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
         return Ok((
             width,
             height,
+            SourceStorage::InterleavedRgb,
             pixels,
             vec![Timing::elapsed("sensor interleaved Huffman", start)],
         ));
@@ -398,7 +422,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
         codes.push((packed >> 4, (packed & 0b1111) as u8));
     }
     if bytes.u16(62)? != 0 {
-        return Err("unterminated sensor code table".into());
+        return Err(damaged("unterminated sensor code table"));
     }
     let table = Table::new(&codes)?;
     // Validate all plane slices before starting the three bounded, independent workers.
@@ -407,14 +431,19 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     for (channel, input) in inputs.iter_mut().enumerate() {
         let length = bytes.offset(64 + channel * 4)?;
         if length == 0 {
-            return Err("empty compressed sensor plane".into());
+            return Err(damaged("empty compressed sensor plane"));
         }
         *input = (
             bytes.range(start, length)?,
             bytes.u16(28 + channel * 2)? & 0b11_1111_1111,
         );
-        let aligned = length.checked_add(15).ok_or("plane length overflow")? & !0b1111;
-        start = start.checked_add(aligned).ok_or("plane offset overflow")?;
+        let aligned = length
+            .checked_add(15)
+            .ok_or_else(|| damaged("plane length overflow"))?
+            & !0b1111;
+        start = start
+            .checked_add(aligned)
+            .ok_or_else(|| damaged("plane offset overflow"))?;
     }
     let start_time = Instant::now();
     let planes = decode_planes(|channel| {
@@ -456,12 +485,40 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
         }
     }
     timings.push(Timing::elapsed("sensor interleave", start_time));
-    Ok((width, height, pixels, timings))
+    Ok((
+        width,
+        height,
+        SourceStorage::InterleavedRgb,
+        pixels,
+        timings,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn photograph_dimensions_keep_rectangular_sensor_pixels_separate_from_storage() {
+        for version in SUPPORTED_FILE_VERSIONS {
+            let mut header = [0_u8; 52];
+            header[4..8].copy_from_slice(&version.to_le_bytes());
+            let offset = if version >= 0x40000 { 40 } else { 28 };
+            header[offset..offset + 4].copy_from_slice(&3264_u32.to_le_bytes());
+            header[offset + 4..offset + 8].copy_from_slice(&2176_u32.to_le_bytes());
+            let mut properties = BTreeMap::new();
+            record_image_extent(&mut properties, &header).unwrap();
+            assert_eq!(properties["X3F_IMAGE_WIDTH"], "3264");
+            assert_eq!(properties["X3F_IMAGE_HEIGHT"], "2176");
+            assert!(record_image_extent(&mut properties, &header[..offset + 7]).is_err());
+            header[offset..offset + 4].fill(255);
+            assert!(record_image_extent(&mut properties, &header).is_err());
+            header[offset..offset + 8].fill(0);
+            let mut properties = BTreeMap::new();
+            record_image_extent(&mut properties, &header).unwrap();
+            assert!(properties.is_empty());
+        }
+    }
+
     #[test]
     fn rotation_uses_the_file_version_geometry_offset() {
         for version in SUPPORTED_FILE_VERSIONS {

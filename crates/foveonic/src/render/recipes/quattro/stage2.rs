@@ -18,7 +18,7 @@ pub(super) fn prepare(
     selected: &str,
     mode: &str,
 ) -> Result<Prepared> {
-    let extent = super::calibration::full_extent(metadata)?;
+    let extent = super::calibration::color_extent(metadata)?;
     if !highlight_amount.is_finite() || !(0. ..=1.).contains(&highlight_amount) {
         return Err("invalid highlight-neutralization amount".into());
     }
@@ -93,7 +93,7 @@ pub(super) fn prepare_shading(
     selected: &str,
 ) -> Result<Option<crate::nodes::color::spatial_color_gain::Prepared>> {
     use crate::nodes::color::spatial_color_gain::Prepared;
-    let extent = super::calibration::full_extent(metadata)?;
+    let extent = super::calibration::color_extent(metadata)?;
     // The ordinary sd catalogue has no legacy color-shading tables. The native
     // table generator returns no correction for this catalogue.
     if super::calibration::is_interchangeable(metadata)
@@ -186,8 +186,13 @@ pub(super) fn build_signals(
             },
             &[calibrated],
         )?;
+        let prepare_blue_gain = if metadata.is_quattro_low() {
+            cell_gain::Prepared::pixels
+        } else {
+            cell_gain::Prepared::new
+        };
         let blue = graph.add(
-            Operation::CellGain(Arc::new(cell_gain::Prepared::new(
+            Operation::CellGain(Arc::new(prepare_blue_gain(
                 [metadata.width as u32, metadata.height as u32],
                 compensation_grid(metadata, selected, "B")?,
             )?)),

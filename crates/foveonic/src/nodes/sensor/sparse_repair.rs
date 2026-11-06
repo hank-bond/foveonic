@@ -1,4 +1,4 @@
-//! Repairs sparse RGB and four-phase blue defects through ordered ghost and pattern passes.
+//! Repairs sparse RGB defects with optional four-phase blue ghost and pattern passes.
 
 use crate::{
     gpu::{
@@ -83,6 +83,18 @@ impl Prepared {
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }
+    pub(crate) fn with_rgb_only(mut self) -> Self {
+        self.params.controls[3] = 1.;
+        self.scratch_words = self.params.offsets[0] * 2 + 4;
+        self
+    }
+    pub(crate) fn rgb_only(&self) -> bool {
+        self.params.controls[3] != 0.
+    }
+    pub(crate) fn blue_extent(&self) -> [u32; 2] {
+        let factor = if self.rgb_only() { 1 } else { 2 };
+        self.extent().map(|v| v * factor)
+    }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params).slice(&self.lut)
     }
@@ -104,19 +116,20 @@ pub(crate) fn apply(
 ) -> Result<Output> {
     let [width, height] = prepared.extent();
     let n = u64::from(width) * u64::from(height);
-    if rgb.size() != n * 12 || blue.size() != n * 16 {
+    let [bw, bh] = prepared.blue_extent();
+    if rgb.size() != n * 12 || blue.size() != u64::from(bw) * u64::from(bh) * 4 {
         return Err("sparse repair inputs do not match their extents".into());
     }
     let mut output_rgb = gpu.storage("Sparse repaired RGB", n * 12)?;
-    let mut work_blue = gpu.storage("Sparse repaired blue before smoothing", n * 16)?;
-    let mut final_blue = gpu.storage("Sparse repaired blue", n * 16)?;
+    let blue_bytes = if prepared.rgb_only() { 4 } else { n * 16 };
+    let mut work_blue = gpu.storage("Sparse repaired blue before smoothing", blue_bytes)?;
+    let mut final_blue = gpu.storage("Sparse repaired blue", blue_bytes)?;
     let mut defects = gpu.storage("Sparse defect mask", n * 4)?;
     let mut scratch = gpu.storage(
         "Sparse repair phase snapshots and density",
         u64::from(prepared.scratch_words) * 4 + 4,
     )?;
     let lut = gpu.upload("Ghost pattern response", &prepared.lut)?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 12);
     // The sparse grid separates interpolation stores from neighboring reads.
     // Density reconstructs the ordered mask bits from an immutable snapshot.
     enum Phase {
@@ -133,7 +146,7 @@ pub(crate) fn apply(
         MedianGuide,
         SmoothResidual,
     }
-    for phase in [
+    let phases = [
         Phase::Initialize,
         Phase::HotPixels,
         Phase::AugmentMask,
@@ -146,9 +159,17 @@ pub(crate) fn apply(
         Phase::PatternCorrection,
         Phase::MedianGuide,
         Phase::SmoothResidual,
-    ] {
+    ];
+    let count = if prepared.rgb_only() {
+        Phase::Density as usize
+    } else {
+        phases.len()
+    };
+    let mut trace = gpu.trace(profile.mode.gpu(), count as u32);
+    for phase in phases.into_iter().take(count) {
+        let phase = phase as u32;
         let mut params = prepared.params;
-        params.shape[2] = phase as u32;
+        params.shape[2] = phase;
         let uniform = gpu.uniform(&params);
         gpu.dispatch(
             Kernel::SparseRepair,
@@ -170,7 +191,11 @@ pub(crate) fn apply(
     gpu.finish_trace(&trace, profile)?;
     Ok(Output {
         rgb: output_rgb,
-        blue: final_blue,
+        blue: if prepared.rgb_only() {
+            blue.clone()
+        } else {
+            final_blue
+        },
         defects,
     })
 }

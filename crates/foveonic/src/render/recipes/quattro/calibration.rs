@@ -14,21 +14,26 @@ const BLUE_CLIP_AT_UNIT_SCALE: f32 = 14300.;
 // The blue-map operation uses this fixed cutoff on its already-scaled input.
 const PHASE_GAIN_CUTOFF: f32 = 14300.;
 
-/// Ordinary full-size DP cameras share plane geometry. Calibration tables still
+/// Ordinary DP cameras share the HI and LOW geometry contracts. Calibration tables still
 /// come from the individual model and file.
 pub(super) fn is_ordinary_dp(metadata: &Metadata) -> bool {
     supports_extraction(metadata)
         && metadata
             .scalar("CAMERAID")
             .is_ok_and(|id| matches!(id, 80. | 81. | 82. | 83.))
-        && [metadata.width, metadata.height] == [5888, 3672]
+        && [metadata.width, metadata.height]
+            == if metadata.is_quattro_low() {
+                [2944, 1836]
+            } else {
+                [5888, 3672]
+            }
 }
 
 pub(super) fn ordinary_dp_extent(metadata: &Metadata) -> Result<[u32; 2]> {
     if !is_ordinary_dp(metadata) {
-        return Err("this operation requires ordinary full-size DP Quattro input".into());
+        return Err("this operation requires ordinary DP Quattro input".into());
     }
-    Ok([(metadata.width / 2) as u32, (metadata.height / 2) as u32])
+    color_extent(metadata)
 }
 
 /// The interchangeable-lens model has additional masked rows and its own
@@ -36,19 +41,28 @@ pub(super) fn ordinary_dp_extent(metadata: &Metadata) -> Result<[u32; 2]> {
 pub(super) fn is_ordinary_sd(metadata: &Metadata) -> bool {
     supports_extraction(metadata)
         && metadata.scalar("CAMERAID").is_ok_and(|id| id == 40.)
-        && [metadata.width, metadata.height] == [5888, 3776]
+        && [metadata.width, metadata.height]
+            == if metadata.is_quattro_low() {
+                [2944, 1888]
+            } else {
+                [5888, 3776]
+            }
 }
 
 pub(super) fn is_interchangeable(metadata: &Metadata) -> bool {
     is_ordinary_sd(metadata) || super::tiger::supported(metadata)
 }
 
-pub(super) fn full_extent(metadata: &Metadata) -> Result<[u32; 2]> {
+pub(super) fn color_extent(metadata: &Metadata) -> Result<[u32; 2]> {
     if !is_ordinary_dp(metadata) && !is_ordinary_sd(metadata) && !super::tiger::supported(metadata)
     {
-        return Err("this operation requires supported full-size Quattro input".into());
+        return Err("this operation requires supported Quattro input".into());
     }
-    Ok([(metadata.width / 2) as u32, (metadata.height / 2) as u32])
+    let divisor = if metadata.is_quattro_low() { 1 } else { 2 };
+    Ok([
+        (metadata.width / divisor) as u32,
+        (metadata.height / divisor) as u32,
+    ])
 }
 
 /// Version-three extraction and the calibrated Tiger variant have explicit contracts.
@@ -66,22 +80,29 @@ pub(super) fn extraction(metadata: &Metadata) -> Result<phase_extraction::Params
     }
     let normalization = normalization(metadata)?;
     let scale = 1. / normalization;
-    if super::tiger::supported(metadata) {
-        return phase_extraction::Params::channel_calibrated(
-            (metadata.width / 2) as u32,
-            (metadata.height / 2) as u32,
+    let [width, height] = color_extent(metadata)?;
+    let params = if super::tiger::supported(metadata) {
+        phase_extraction::Params::channel_calibrated(
+            width,
+            height,
             offset as u32,
             scale,
             super::tiger::digital_gains(metadata)?,
-        );
-    }
-    phase_extraction::Params::calibrated(
-        (metadata.width / 2) as u32,
-        (metadata.height / 2) as u32,
-        offset as u32,
-        scale,
-        BLUE_CLIP_AT_UNIT_SCALE * scale,
-    )
+        )?
+    } else {
+        phase_extraction::Params::calibrated(
+            width,
+            height,
+            offset as u32,
+            scale,
+            BLUE_CLIP_AT_UNIT_SCALE * scale,
+        )?
+    };
+    Ok(if metadata.is_quattro_low() {
+        params.with_triplets()
+    } else {
+        params
+    })
 }
 
 pub(super) fn normalization(metadata: &Metadata) -> Result<f32> {
@@ -119,22 +140,32 @@ pub(super) fn column_gain(metadata: &Metadata) -> Result<Option<column_gain::Pre
     if table.encoding != crate::source::MatrixEncoding::Float32 {
         return Ok(None);
     }
-    let width = metadata.width / 2;
+    let [width, height] = color_extent(metadata)?;
+    let width = width as usize;
+    let channels = if metadata.is_quattro_low() { 3 } else { 6 };
+    let rows = table.dimensions.first().copied();
+    let compatible_rows = if metadata.is_quattro_low() {
+        matches!(rows, Some(3 | 6))
+    } else {
+        rows == Some(6)
+    };
     if width == 0
         || !width.is_multiple_of(8)
-        || table.dimensions != [6, width]
-        || table.values.len() != width * 6
+        || !compatible_rows
+        || table.dimensions.len() != 2
+        || table.dimensions[1] != width
+        || table.values.len() != width * rows.unwrap_or(0)
     {
         return Err("invalid column gain table dimensions".into());
     }
     // Native group order is [1,5,2,6,3,7,4,8]. This inverse maps physical
     // segments to their interleaved metadata group.
     let groups = [0usize, 2, 4, 6, 1, 3, 5, 7];
-    let mut gains = Vec::with_capacity(width * 6);
+    let mut gains = Vec::with_capacity(width * channels);
     for x in 0..width {
         let group = groups[x / (width / 8)];
         let index = group + 8 * (x % (width / 8));
-        for channel in 0..6 {
+        for channel in 0..channels {
             let gain = table.values[channel * width + index] as f32;
             let factor = (1. - gain) / (1. + gain);
             if !factor.is_finite() {
@@ -143,8 +174,13 @@ pub(super) fn column_gain(metadata: &Metadata) -> Result<Option<column_gain::Pre
             gains.push(factor);
         }
     }
-    Ok(Some(column_gain::Prepared::new(
-        [u32::try_from(width)?, u32::try_from(metadata.height / 2)?],
+    let prepare = if metadata.is_quattro_low() {
+        column_gain::Prepared::triplets
+    } else {
+        column_gain::Prepared::new
+    };
+    Ok(Some(prepare(
+        [u32::try_from(width)?, height],
         raw_offset(metadata)? as u32,
         gains,
     )?))

@@ -1,6 +1,7 @@
 //! Reads scalar version-4 header adjustments into retained capture properties.
 
 use super::bytes::{product, Bytes};
+use crate::input_error::damaged;
 use crate::source::Result;
 use std::collections::BTreeMap;
 
@@ -55,7 +56,7 @@ pub(super) fn read(header: &[u8]) -> Result<BTreeMap<String, String>> {
     }
     let entries_end = ENTRY_START
         .checked_add(product(count, ENTRY_BYTES)?)
-        .ok_or("X3F adjustment size overflow")?;
+        .ok_or_else(|| damaged("X3F adjustment size overflow"))?;
     bytes.range(ENTRY_START, entries_end - ENTRY_START)?;
     let mut properties = BTreeMap::new();
     for i in 0..count {
@@ -63,7 +64,7 @@ pub(super) fn read(header: &[u8]) -> Result<BTreeMap<String, String>> {
         let tag = bytes.u16(entry)?;
         let Some(name) = name(tag) else { continue };
         if bytes.u32(entry + 4)? != 1 {
-            return Err("X3F scalar adjustment has an invalid count".into());
+            return Err(damaged("X3F scalar adjustment has an invalid count"));
         }
         let kind = bytes.u16(entry + 2)?;
         let value = if tag <= 2 {
@@ -84,12 +85,12 @@ pub(super) fn read(header: &[u8]) -> Result<BTreeMap<String, String>> {
             }
             let offset = bytes.offset(entry + 8)?;
             if offset < entries_end {
-                return Err("X3F adjustment value overlaps header entries".into());
+                return Err(damaged("X3F adjustment value overlaps header entries"));
             }
             let numerator = i32::from_le_bytes(bytes.range(offset, 4)?.try_into()?);
             let denominator = i32::from_le_bytes(bytes.range(offset + 4, 4)?.try_into()?);
             if denominator == 0 {
-                return Err("X3F adjustment has a zero denominator".into());
+                return Err(damaged("X3F adjustment has a zero denominator"));
             }
             (f64::from(numerator) / f64::from(denominator)).to_string()
         };
@@ -97,7 +98,7 @@ pub(super) fn read(header: &[u8]) -> Result<BTreeMap<String, String>> {
             .insert(format!("{PROPERTY_PREFIX}{name}"), value)
             .is_some()
         {
-            return Err("duplicate X3F header adjustment".into());
+            return Err(damaged("duplicate X3F header adjustment"));
         }
     }
     Ok(properties)

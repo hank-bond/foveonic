@@ -886,3 +886,31 @@ fn parallel_speckle_originals_match_serial_and_measure_completed_work() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn unequal_speckle_banks_include_the_last_detector_block() {
+    let gpu = Gpu::new().unwrap();
+    let (width, height) = (64, 72);
+    let mut pixels = vec![1000_f32; width * height * 3];
+    // Eighteen workgroups split unevenly across eight banks. Include a peak in
+    // the last group so rounding down cannot silently lose its detections.
+    for y in [6, 14, 22, 30, 38, 46, 54, 62, 68] {
+        pixels[(y * width + 30) * 3] = 4000.;
+    }
+    let input = gpu.upload("unequal bank peaks", &pixels).unwrap();
+    let prepared = Prepared {
+        params: parameters(width as u32, height as u32, [8, 8, 56, 64]).unwrap(),
+        tables: vec![0.; 3 * 4096],
+    };
+    let actual = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+    assert!(
+        bytemuck::cast_slice::<u8, f32>(&gpu.readback(&actual).unwrap())
+            .iter()
+            .all(|v| *v == 1000.)
+    );
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&pixels)
+    );
+}

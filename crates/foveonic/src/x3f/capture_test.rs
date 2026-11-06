@@ -33,7 +33,8 @@ fn fixture() -> Tracked {
     put(&mut properties, 20, strings.len() as u32);
     properties.extend(strings.into_iter().flat_map(u16::to_le_bytes));
     // Intentionally invalid sensor/CAMF payloads: the capture reader must never parse them.
-    let mut bytes = vec![0xaa; 40 + 65536 + 1024];
+    let mut bytes = vec![0xaa; 52 + 65536 + 1024];
+    bytes[..52].fill(0);
     bytes[..4].copy_from_slice(b"FOVb");
     put(&mut bytes, 4, 0x20003);
     let prop_start = bytes.len();
@@ -43,8 +44,8 @@ fn fixture() -> Tracked {
     bytes.extend(SECTION_VERSION.to_le_bytes());
     bytes.extend(3_u32.to_le_bytes());
     for (offset, size, kind) in [
-        (40, 65536, *b"IMA2"),
-        (40 + 65536, 1024, *b"CAMF"),
+        (52, 65536, *b"IMA2"),
+        (52 + 65536, 1024, *b"CAMF"),
         (prop_start, properties.len(), *b"PROP"),
     ] {
         bytes.extend((offset as u32).to_le_bytes());
@@ -74,7 +75,7 @@ fn reads_only_header_directory_and_properties_and_supports_original_versions() {
         assert!(reader
             .reads
             .iter()
-            .all(|range| range.end <= 40 || range.start >= 40 + 65536 + 1024));
+            .all(|range| range.end <= 52 || range.start >= 52 + 65536 + 1024));
         assert!(
             reader
                 .reads
@@ -106,6 +107,7 @@ fn rejects_missing_duplicate_overlapping_and_out_of_bounds_sections() {
 #[test]
 fn rejects_oversized_properties_before_reading_the_payload() {
     let mut bytes = vec![0; 40 + MAXIMUM_PROPERTY_BYTES + 1];
+    bytes[..52].fill(0);
     bytes[..4].copy_from_slice(b"FOVb");
     put(&mut bytes, 4, 0x20003);
     let directory = bytes.len();
@@ -127,7 +129,7 @@ fn rejects_oversized_properties_before_reading_the_payload() {
     assert!(reader
         .reads
         .iter()
-        .all(|range| range.end <= 40 || range.start >= directory as u64));
+        .all(|range| range.end <= 52 || range.start >= directory as u64));
 }
 
 #[test]
@@ -146,7 +148,7 @@ fn rejects_truncated_headers_invalid_directories_and_bad_properties() {
                 put(bytes, end, u32::MAX);
             }
             2 => put(bytes, d + 8, u32::MAX),
-            3 => put(bytes, 40 + 65536 + 1024 + 28, u32::MAX),
+            3 => put(bytes, 52 + 65536 + 1024 + 28, u32::MAX),
             _ => put(bytes, d + 4, 0),
         }
         assert!(read(&mut reader).is_err(), "case {case}");

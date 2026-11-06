@@ -88,6 +88,14 @@ impl Prepared {
         self.params.controls[2] = ceiling;
         Ok(self)
     }
+    pub(crate) fn with_same_size_blue(mut self) -> Self {
+        self.params.controls[3] = 1.;
+        self
+    }
+    pub(crate) fn blue_extent(&self) -> [u32; 2] {
+        let scale = if self.params.controls[3] != 0. { 1 } else { 2 };
+        self.extent().map(|v| v * scale)
+    }
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }
@@ -115,11 +123,13 @@ pub(crate) fn apply(
 ) -> Result<Output> {
     let [w, h] = prepared.extent();
     let cells = u64::from(w) * u64::from(h);
-    if rgb.size() != cells * 12 || blue.size() != cells * 16 {
+    let [bw, bh] = prepared.blue_extent();
+    let blue_bytes = u64::from(bw) * u64::from(bh) * 4;
+    if rgb.size() != cells * 12 || blue.size() != blue_bytes {
         return Err("sparse calibration input extent mismatch".into());
     }
     let mut out_rgb = gpu.storage("Sparse corrected RGB", cells * 12)?;
-    let mut out_blue = gpu.storage("Sparse corrected blue", cells * 16)?;
+    let mut out_blue = gpu.storage("Sparse corrected blue", blue_bytes)?;
     let [sw, sh] = prepared.scratch_extent();
     let mut scratch = gpu.storage(
         "Pre-color shading samples",

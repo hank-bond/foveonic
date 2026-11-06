@@ -17,6 +17,7 @@ use crate::{
 // Kept in the parameter key so same-size and doubled reconstruction never alias.
 // Shader entry points are selected on the host. The flag is not a camera mode.
 const SAME_SIZE_OUTPUT: f32 = 1.;
+const NATIVE_SIZE_OUTPUT: f32 = 2.;
 // Minimum accepted low-resolution side for the 5×5 reconstruction neighborhood.
 const MIN_SIDE: u32 = 6;
 // Four output pixels per input cell, with three Float32 components per output.
@@ -35,7 +36,29 @@ struct Params {
 pub struct Prepared {
     params: Params,
     spatial: Vec<[f32; 2]>,
-    blue_filter: Option<super::histogram_bilateral::Prepared>,
+    blue_filter: Option<BlueFilter>,
+}
+
+#[derive(Clone, Debug)]
+enum BlueFilter {
+    Histogram(super::histogram_bilateral::Prepared),
+    Scalar(super::scalar_bilateral::Prepared),
+}
+impl BlueFilter {
+    fn with_extent(self, extent: [u32; 2]) -> Result<Self> {
+        Ok(match self {
+            Self::Histogram(filter) => Self::Histogram(filter.with_extent(extent)?),
+            Self::Scalar(filter) => Self::Scalar(filter.with_extent(extent)?),
+        })
+    }
+    fn apply(&self, gpu: &Gpu, input: &ReadGuard, profile: &mut Profile) -> Result<ReadGuard> {
+        match self {
+            Self::Histogram(filter) => {
+                super::histogram_bilateral::apply(gpu, input, filter, profile)
+            }
+            Self::Scalar(filter) => super::scalar_bilateral::apply(gpu, input, filter, profile),
+        }
+    }
 }
 impl Prepared {
     pub(crate) fn new(
@@ -84,7 +107,7 @@ impl Prepared {
                 ],
             },
             spatial,
-            blue_filter,
+            blue_filter: blue_filter.map(BlueFilter::Histogram),
         })
     }
     /// Average the doubled blue plane onto the color grid, then derive its
@@ -102,7 +125,21 @@ impl Prepared {
         }
         let mut value = Self::new(extent, 0., noise, None)?;
         value.params.controls[3] = SAME_SIZE_OUTPUT;
-        value.blue_filter = filter;
+        value.blue_filter = filter.map(BlueFilter::Histogram);
+        Ok(value)
+    }
+    /// Reconstruct from RGB and blue recorded on the same physical grid.
+    pub(crate) fn native_size(
+        extent: [u32; 2],
+        noise: [f64; 3],
+        filter: Option<super::scalar_bilateral::Prepared>,
+    ) -> Result<Self> {
+        if filter.as_ref().is_some_and(|f| f.extent() != extent) {
+            return Err("native reconstruction filter extent mismatch".into());
+        }
+        let mut value = Self::same_size(extent, noise, None)?;
+        value.params.controls[3] = NATIVE_SIZE_OUTPUT;
+        value.blue_filter = filter.map(BlueFilter::Scalar);
         Ok(value)
     }
     pub(crate) fn with_adaptive_range(mut self, enabled: bool) -> Self {
@@ -110,7 +147,7 @@ impl Prepared {
         self
     }
     pub(crate) fn output_extent(&self) -> [u32; 2] {
-        if self.is_same_size() {
+        if !self.doubles_output() {
             self.extent()
         } else {
             self.extent().map(|v| v * 2)
@@ -119,8 +156,15 @@ impl Prepared {
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }
-    fn is_same_size(&self) -> bool {
-        self.params.controls[3] == SAME_SIZE_OUTPUT
+    pub(crate) fn blue_extent(&self) -> [u32; 2] {
+        if self.params.controls[3] == NATIVE_SIZE_OUTPUT {
+            self.extent()
+        } else {
+            self.extent().map(|v| v * 2)
+        }
+    }
+    pub(crate) fn doubles_output(&self) -> bool {
+        self.params.controls[3] == 0.
     }
     pub(crate) fn with_extent(mut self, extent: [u32; 2]) -> Result<Self> {
         if extent.iter().any(|&v| v < MIN_SIDE)
@@ -140,7 +184,8 @@ impl Prepared {
     pub(crate) fn key(&self) -> Key {
         let key = Key::pod(&self.params).slice(&self.spatial);
         match &self.blue_filter {
-            Some(filter) => key.with(&1_u32).join(filter.key()),
+            Some(BlueFilter::Histogram(filter)) => key.with(&1_u32).join(filter.key()),
+            Some(BlueFilter::Scalar(filter)) => key.with(&2_u32).join(filter.key()),
             None => key.with(&0_u32),
         }
     }
@@ -164,11 +209,16 @@ pub(crate) fn apply(
     if guide.size() != low * 12
         || preprocessed.size() != low * 12
         || color.size() != low * 12
-        || blue.size() != high * 4
+        || blue.size()
+            != if prepared.params.controls[3] == NATIVE_SIZE_OUTPUT {
+                low * 4
+            } else {
+                high * 4
+            }
     {
         return Err("blue-guided reconstruction input geometry mismatch".into());
     }
-    if prepared.is_same_size() {
+    if !prepared.doubles_output() {
         return apply_same_size(gpu, guide, color, blue, prepared, profile);
     }
     let uniform = gpu.uniform(&prepared.params);
@@ -217,7 +267,7 @@ pub(crate) fn apply(
     // the restoration residual, so retain both immutable blue histories.
     let filtered = if let Some(filter) = &prepared.blue_filter {
         gpu.finish_trace(&trace, profile)?;
-        let output = super::histogram_bilateral::apply(gpu, &repaired, filter, profile)?;
+        let output = filter.apply(gpu, &repaired, profile)?;
         trace = gpu.trace(profile.mode.gpu(), 1);
         Some(output)
     } else {
@@ -253,25 +303,30 @@ fn apply_same_size(
     let [w, h] = prepared.extent();
     let n = u64::from(w) * u64::from(h);
     let uniform = gpu.uniform(&prepared.params);
-    let mut mean = gpu.storage("Averaged calibrated blue", n * 4)?;
     let mut rgb = gpu.storage("Same-resolution code RGB", n * 12)?;
     let mut residual = gpu.storage("Same-resolution detail residual", n * 4)?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 1);
-    gpu.dispatch(
-        Kernel::ReducedBlue,
-        &mut [
-            (0, Read(&uniform)),
-            (4, Read(blue)),
-            (7, Write(mean.write())),
-        ],
-        [w.div_ceil(8), h.div_ceil(8)],
-        &mut trace,
-    );
-    gpu.finish_trace(&trace, profile)?;
+    let mean = if prepared.params.controls[3] == NATIVE_SIZE_OUTPUT {
+        blue.clone()
+    } else {
+        let mut mean = gpu.storage("Averaged calibrated blue", n * 4)?;
+        let mut trace = gpu.trace(profile.mode.gpu(), 1);
+        gpu.dispatch(
+            Kernel::ReducedBlue,
+            &mut [
+                (0, Read(&uniform)),
+                (4, Read(blue)),
+                (7, Write(mean.write())),
+            ],
+            [w.div_ceil(8), h.div_ceil(8)],
+            &mut trace,
+        );
+        gpu.finish_trace(&trace, profile)?;
+        mean
+    };
     let filtered = prepared
         .blue_filter
         .as_ref()
-        .map(|f| super::histogram_bilateral::apply(gpu, &mean, f, profile))
+        .map(|f| f.apply(gpu, &mean, profile))
         .transpose()?;
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(

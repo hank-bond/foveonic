@@ -1,4 +1,4 @@
-//! Expands camera defect records and prepares full-size Quattro chroma repair controls.
+//! Expands camera defect records and prepares Quattro chroma repair controls.
 
 use crate::{
     nodes::sensor::chroma_repair::Prepared,
@@ -34,23 +34,18 @@ pub(super) fn supported(metadata: &Metadata) -> bool {
 }
 pub(super) fn prepare(metadata: &Metadata) -> Result<Prepared> {
     if !supported(metadata) {
-        return Err(
-            "chroma repair requires the full-size Quattro factory-calibration route".into(),
-        );
+        return Err("chroma repair requires the Quattro factory-calibration route".into());
     }
     let severity = severity(metadata)?;
     let records = expand_records(metadata, "BadPixelsChromaF23")?;
     let matrix = preprocessing_matrix(metadata)?;
     Prepared::new(
-        [
-            u32::try_from(metadata.width / 2)?,
-            u32::try_from(metadata.height / 2)?,
-        ],
+        super::calibration::color_extent(metadata)?,
         records,
         severity.pixels,
         super::repair::RGB_NOISE,
         matrix,
-        false,
+        metadata.is_quattro_low(),
         super::calibration::is_ordinary_sd(metadata) || super::tiger::supported(metadata),
     )
 }
@@ -59,19 +54,14 @@ pub(super) fn prepare_despeckle(
     metadata: &Metadata,
 ) -> Result<crate::nodes::sensor::rgb_despeckle::Prepared> {
     if !supported(metadata) {
-        return Err(
-            "RGB despeckling requires the full-size Quattro factory-calibration route".into(),
-        );
+        return Err("RGB despeckling requires the Quattro factory-calibration route".into());
     }
     const SECOND_EXTREMA_EXPOSURE_SCORE: f32 = 64000.;
     if severity(metadata)?.score > SECOND_EXTREMA_EXPOSURE_SCORE {
         return Err("long-exposure RGB despeckling is not implemented".into());
     }
     crate::nodes::sensor::rgb_despeckle::Prepared::new(
-        [
-            u32::try_from(metadata.width / 2)?,
-            u32::try_from(metadata.height / 2)?,
-        ],
+        super::calibration::color_extent(metadata)?,
         super::repair::RGB_NOISE,
         1.,
         preprocessing_matrix(metadata)?,
@@ -82,9 +72,7 @@ pub(super) fn prepare_clusters(
     metadata: &Metadata,
 ) -> Result<crate::nodes::sensor::chroma_clusters::Prepared> {
     if !supported(metadata) {
-        return Err(
-            "chroma clusters require the full-size Quattro factory-calibration route".into(),
-        );
+        return Err("chroma clusters require the Quattro factory-calibration route".into());
     }
     let severity = severity(metadata)?;
     let mut clusters = vec![];
@@ -124,10 +112,7 @@ pub(super) fn prepare_clusters(
         }
     }
     crate::nodes::sensor::chroma_clusters::Prepared::new(
-        [
-            u32::try_from(metadata.width / 2)?,
-            u32::try_from(metadata.height / 2)?,
-        ],
+        super::calibration::color_extent(metadata)?,
         clusters,
         severity.clusters,
         severity.cluster_margin,

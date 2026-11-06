@@ -687,9 +687,9 @@ impl Engine {
                     if inherited != prepared.extent()
                         || input(1).description.map(|d| d.extent) != Some(inherited)
                         || input(2).description.map(|d| d.extent) != Some(inherited)
-                        || input(3).description.map(|d| d.extent) != Some(inherited.map(|v| v * 2))
+                        || input(3).description.map(|d| d.extent) != Some(prepared.blue_extent())
                     {
-                        return Err("blue-guided reconstruction requires three matching RGB cells and a doubled blue plane".into());
+                        return Err("blue-guided reconstruction input extents do not match its sampling grid".into());
                     }
                     let output = crate::nodes::color::blue_guided_reconstruct::apply(
                         gpu,
@@ -782,10 +782,10 @@ impl Engine {
                 }
                 Operation::SparseRepair(prepared) => {
                     if inherited != prepared.extent()
-                        || input(1).description.map(|d| d.extent) != Some(inherited.map(|v| v * 2))
+                        || input(1).description.map(|d| d.extent) != Some(prepared.blue_extent())
                     {
                         return Err(
-                            "sparse repair requires RGB cells and a doubled blue plane".into()
+                            "sparse repair input extents do not match its sampling grid".into()
                         );
                     }
                     let output = crate::nodes::sensor::sparse_repair::apply(
@@ -796,7 +796,7 @@ impl Engine {
                         profile,
                     )?;
                     for (side, buffer, extent) in [
-                        (node.outputs[1], output.blue, inherited.map(|v| v * 2)),
+                        (node.outputs[1], output.blue, prepared.blue_extent()),
                         (node.outputs[2], output.defects, inherited),
                     ] {
                         if required[side] {
@@ -810,10 +810,11 @@ impl Engine {
                 }
                 Operation::HlpCalibration(prepared) => {
                     if inherited != prepared.extent()
-                        || input(1).description.map(|d| d.extent) != Some(inherited.map(|v| v * 2))
+                        || input(1).description.map(|d| d.extent) != Some(prepared.blue_extent())
                     {
                         return Err(
-                            "sparse calibration requires RGB cells and a doubled blue plane".into(),
+                            "sparse calibration input extents do not match its sampling grid"
+                                .into(),
                         );
                     }
                     let output = crate::nodes::sensor::hlp_calibration::apply(
@@ -824,7 +825,7 @@ impl Engine {
                         profile,
                     )?;
                     for (side, buffer, extent) in [
-                        (node.outputs[1], output.blue, inherited.map(|v| v * 2)),
+                        (node.outputs[1], output.blue, prepared.blue_extent()),
                         (node.outputs[2], output.scratch, prepared.scratch_extent()),
                     ] {
                         if required[side] {
@@ -863,10 +864,21 @@ impl Engine {
                             buffer: blue,
                             description: graph.outputs[side]
                                 .data
-                                .image_description(inherited.map(|v| v * 2)),
+                                .image_description(prepared.blue_extent()),
                         });
                     }
                     required[index].then_some(rgb)
+                }
+                Operation::ExtractBlue(extent) => {
+                    if inherited != *extent {
+                        return Err("blue-channel extraction extent mismatch".into());
+                    }
+                    Some(crate::nodes::color::extract_blue::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *extent,
+                        profile,
+                    )?)
                 }
                 Operation::RenderedInput { data } => {
                     let Input::Rendered(image) = &context else {

@@ -281,6 +281,15 @@ fn kept_sensor_origin_and_rotation_define_visible_extent() {
     assert_eq!(&output.output[..2], &[2268, 1512]);
     metadata.rotation = 90;
     assert_eq!(&geometry(&metadata).unwrap().output[..2], &[1512, 2268]);
+    metadata
+        .properties
+        .insert("X3F_IMAGE_WIDTH".into(), "1512".into());
+    metadata
+        .properties
+        .insert("X3F_IMAGE_HEIGHT".into(), "1008".into());
+    let output = geometry(&metadata).unwrap();
+    assert_eq!(output.crop, [18, 8, 2286, 1520]);
+    assert_eq!(&output.output[..2], &[1008, 1512]);
     metadata.matrices.get_mut("ActiveImageArea").unwrap().values[3] = 1540.;
     assert!(geometry(&metadata).is_err());
 }

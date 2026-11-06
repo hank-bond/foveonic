@@ -464,3 +464,96 @@ fn classic_monochrome_original_matches_reference_and_ignores_color_wb() {
         );
     }
 }
+#[test]
+#[ignore = "requires GPU and CLASSIC_X3F SLR original for synthetic reduced-grid rendering"]
+fn synthetic_classic_reduced_grids_preserve_declared_photograph_shape() {
+    let original = crate::source::Source::open(std::env::var_os("CLASSIC_X3F").unwrap()).unwrap();
+    let engine = Engine::new().unwrap();
+    let exports = tempfile::tempdir().unwrap();
+    let model = original.metadata.properties["CAMMODEL"].trim();
+    let early = matches!(model, "SIGMA SD9" | "SIGMA SD10");
+    assert!(early || matches!(model, "SIGMA SD14" | "SIGMA SD15"));
+    for (mode, divisor, photo) in [
+        ("MED", 1, if early { [1512, 1008] } else { [1776, 1184] }),
+        ("LOW", 2, if early { [1134, 756] } else { [1296, 864] }),
+    ] {
+        let mut metadata = (*original.metadata).clone();
+        metadata.width = metadata.width.div_ceil(divisor);
+        metadata.height = metadata.height.div_ceil(2);
+        for name in [
+            "KeepImageArea",
+            "ActiveImageArea",
+            "DarkShieldTop",
+            "DarkShieldBottom",
+        ] {
+            if let Some(matrix) = metadata.matrices.get_mut(name) {
+                for (axis, value) in matrix.values.iter_mut().enumerate() {
+                    *value = (*value
+                        / if axis.is_multiple_of(2) {
+                            divisor as f64
+                        } else {
+                            2.
+                        })
+                    .floor();
+                }
+            }
+        }
+        if let Some(matrix) = metadata.matrices.get_mut("DarkShieldColRange") {
+            for value in &mut matrix.values {
+                *value = (*value / divisor as f64).floor();
+            }
+        }
+        metadata.properties.insert("RESOLUTION".into(), mode.into());
+        metadata
+            .properties
+            .insert("X3F_IMAGE_WIDTH".into(), photo[0].to_string());
+        metadata
+            .properties
+            .insert("X3F_IMAGE_HEIGHT".into(), photo[1].to_string());
+        let mut pixels = Vec::with_capacity(metadata.width * metadata.height * 3);
+        for y in (0..original.metadata.height).step_by(2) {
+            for x in (0..original.metadata.width).step_by(divisor) {
+                let i = (y * original.metadata.width + x) * 3;
+                pixels.extend_from_slice(&original.samples()[i..i + 3]);
+            }
+        }
+        let source = crate::source::Source {
+            metadata: std::sync::Arc::new(metadata),
+            pixels,
+            storage: crate::source::SourceStorage::InterleavedRgb,
+            camf: original.camf.clone(),
+            timings: vec![],
+        };
+        source.validate().unwrap();
+        let cap = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+        let mut settings = Settings::new(
+            cap.default_white_balance(&source.metadata).unwrap(),
+            cap.default_color_mode(&source.metadata).unwrap(),
+        );
+        for rendering in [Rendering::Color, Rendering::Monochrome] {
+            settings.rendering = rendering;
+            let image = engine
+                .render(&source, &settings, &mut Profile::default())
+                .unwrap();
+            assert_eq!(
+                image.view().extent,
+                crate::render::native_extent(&source.metadata).unwrap()
+            );
+            let bytes = engine.readback_image(&image).unwrap();
+            assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
+                .iter()
+                .all(|v| v.is_finite()));
+            let expected = image.view().extent;
+            let tiff = exports.path().join(format!("{mode}-{rendering:?}.tiff"));
+            let dng = exports.path().join(format!("{mode}-{rendering:?}.dng"));
+            assert_eq!(
+                engine
+                    .write_tiff(&image, &tiff, &mut Profile::default())
+                    .unwrap(),
+                expected
+            );
+            crate::dng::write_source(&engine, &source, &settings, &dng, &mut Profile::default())
+                .unwrap();
+        }
+    }
+}

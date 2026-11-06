@@ -146,3 +146,50 @@ fn complete_original_hi_wrapper_matches_native_boundary() {
         assert_eq!(count, 0, "original {label}");
     }
 }
+#[test]
+#[ignore = "requires GPU and LOW_REPAIR_REFERENCE with bounded reference implementation RGB fixtures"]
+fn rgb_only_sparse_repair_matches_reference_workers() {
+    let root = std::path::PathBuf::from(std::env::var_os("LOW_REPAIR_REFERENCE").unwrap());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
+    let gpu = crate::gpu::Gpu::new().unwrap();
+    for case in manifest["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let extent = [
+            case["extent"][0].as_u64().unwrap() as u32,
+            case["extent"][1].as_u64().unwrap() as u32,
+        ];
+        let data = std::fs::read(root.join(format!("{name}-input.f32"))).unwrap();
+        let expected = std::fs::read(root.join(format!("{name}-rgb.f32"))).unwrap();
+        let input = gpu
+            .upload("LOW reference RGB", bytemuck::cast_slice::<u8, f32>(&data))
+            .unwrap();
+        let blue = gpu
+            .upload(
+                "LOW reference blue",
+                &vec![0_f32; extent[0] as usize * extent[1] as usize],
+            )
+            .unwrap();
+        let prepared = super::Prepared::new(
+            extent,
+            std::array::from_fn(|i| manifest["noise_rgb"][i].as_f64().unwrap() as f32),
+            [1., 0., 0.],
+            1.,
+            case["preserve"].as_bool().unwrap(),
+        )
+        .unwrap()
+        .with_rgb_only();
+        let output = super::apply(&gpu, &input, &blue, &prepared, &mut Default::default()).unwrap();
+        let bytes = gpu.readback(&output.rgb).unwrap();
+        let actual: &[f32] = bytemuck::cast_slice(&bytes);
+        let reference: &[f32] = bytemuck::cast_slice(&expected);
+        let maximum = actual
+            .iter()
+            .zip(reference)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0_f32, f32::max);
+        eprintln!("{name} maximum {maximum}");
+        assert!(maximum <= 0.001, "{name} differs by {maximum}");
+        assert_eq!(gpu.readback(&input).unwrap(), data);
+    }
+}

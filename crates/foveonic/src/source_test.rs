@@ -17,6 +17,58 @@ fn accepts_merrill_models() {
 }
 
 #[test]
+fn classic_reduced_modes_require_slr_identity_and_declared_photograph_geometry() {
+    let mut metadata = Metadata {
+        width: 1344,
+        height: 896,
+        rotation: 0,
+        processing_version: None,
+        properties: Default::default(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    for model in ["SIGMA SD9", "SIGMA SD10", "SIGMA SD14", "SIGMA SD15"] {
+        metadata.properties.insert("CAMMODEL".into(), model.into());
+        let early = matches!(model, "SIGMA SD9" | "SIGMA SD10");
+        metadata.width = if early { 1152 } else { 1344 };
+        metadata.height = if early { 766 } else { 896 };
+        for (resolution, photo) in [
+            ("LOW", if early { [1134, 756] } else { [1296, 864] }),
+            ("MED", if early { [1512, 1008] } else { [1776, 1184] }),
+        ] {
+            metadata
+                .properties
+                .insert("RESOLUTION".into(), resolution.into());
+            metadata
+                .properties
+                .insert("X3F_IMAGE_WIDTH".into(), photo[0].to_string());
+            metadata
+                .properties
+                .insert("X3F_IMAGE_HEIGHT".into(), photo[1].to_string());
+            assert!(classic_extent_supported(&metadata));
+            metadata
+                .properties
+                .insert("X3F_IMAGE_WIDTH".into(), "1".into());
+            assert!(!classic_extent_supported(&metadata));
+        }
+    }
+    metadata
+        .properties
+        .insert("CAMMODEL".into(), "SIGMA DP1".into());
+    assert!(!classic_extent_supported(&metadata));
+    metadata
+        .properties
+        .insert("CAMMODEL".into(), "SIGMA SD14".into());
+    metadata
+        .properties
+        .insert("X3F_IMAGE_WIDTH".into(), "1776".into());
+    metadata.width = 3000;
+    assert!(!classic_extent_supported(&metadata));
+    metadata.width = 0;
+    assert!(!classic_extent_supported(&metadata));
+}
+
+#[test]
 fn metadata_preserves_matrix_encoding_and_property_order() {
     for code in [0, 1, 2, 3, 5, 6] {
         let encoding = MatrixEncoding::try_from(code).unwrap();
@@ -350,4 +402,143 @@ fn decode_quattro_files_preserves_storage_and_capture_contracts() {
         checked += 1;
     }
     assert!(checked > 0);
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_MERRILL_FIXTURE_DIR with HI, MED and LOW originals"]
+fn original_merrill_resolutions_render_color_and_monochrome() {
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_MERRILL_FIXTURE_DIR").unwrap());
+    let engine = crate::render::Engine::new().unwrap();
+    for (file, model, resolution, extent) in [
+        (
+            "sd1-merrill-full.x3f",
+            "SIGMA SD1 Merrill",
+            "HI",
+            [4928, 3264],
+        ),
+        (
+            "sd1-merrill-low.x3f",
+            "SIGMA SD1 Merrill",
+            "LOW",
+            [2464, 1632],
+        ),
+        (
+            "dp3-merrill-low.x3f",
+            "SIGMA DP3 Merrill",
+            "LOW",
+            [2464, 1632],
+        ),
+        (
+            "dp3-merrill-medium.x3f",
+            "SIGMA DP3 Merrill",
+            "MED",
+            [4928, 1632],
+        ),
+    ] {
+        let source = std::sync::Arc::new(Source::open(root.join(file)).unwrap());
+        assert_eq!(source.metadata.properties["CAMMODEL"], model);
+        assert_eq!(source.metadata.properties["RESOLUTION"], resolution);
+        assert_eq!(source.storage_extent(), extent);
+        assert_eq!(source.samples().len(), extent[0] * extent[1] * 3);
+        assert!(source.samples().iter().all(|v| (0. ..=4095.).contains(v)));
+        assert!(!source.camf.is_empty());
+        let presentation = crate::render::native_extent(&source.metadata).unwrap();
+        let mut session = crate::render::RenderSession::new(source.clone());
+        for (rendering, method) in [
+            (
+                crate::render::Rendering::Color,
+                crate::render::MerrillNoiseMethod::Reference,
+            ),
+            (
+                crate::render::Rendering::Color,
+                crate::render::MerrillNoiseMethod::MultiscaleRows,
+            ),
+            (
+                crate::render::Rendering::Color,
+                crate::render::MerrillNoiseMethod::MultiscaleRowsAndColumns,
+            ),
+            (
+                crate::render::Rendering::Monochrome,
+                crate::render::MerrillNoiseMethod::Reference,
+            ),
+        ] {
+            for quality in [
+                crate::render::PreviewQuality::Full,
+                crate::render::PreviewQuality::Fast,
+            ] {
+                let mut settings = crate::render::Settings::new("Auto", "Standard");
+                settings.preview_quality = quality;
+                settings.rendering = rendering;
+                settings.merrill_noise_method = method;
+                settings.reconstruction = Some(crate::noise::Controls::default());
+                let result = engine.render_session(
+                    &mut session,
+                    &settings,
+                    &["final"],
+                    || false,
+                    &mut crate::profile::Profile::default(),
+                );
+                if extent[0] == 2464
+                    && method == crate::render::MerrillNoiseMethod::MultiscaleRowsAndColumns
+                {
+                    assert!(result
+                        .err()
+                        .unwrap()
+                        .to_string()
+                        .contains("requires a full-resolution"));
+                    continue;
+                }
+                let artifacts = result.unwrap().unwrap();
+                let crate::inspection::Content::Image(image) = &artifacts[0].content else {
+                    panic!("expected photograph");
+                };
+                let scale = if quality == crate::render::PreviewQuality::Full
+                    || rendering == crate::render::Rendering::Monochrome
+                {
+                    1
+                } else {
+                    2
+                };
+                assert_eq!(image.view().extent, presentation.map(|v| v / scale));
+                let bytes = engine.readback_image(image).unwrap();
+                if extent == [4928, 1632]
+                    && quality == crate::render::PreviewQuality::Full
+                    && rendering == crate::render::Rendering::Color
+                    && method == crate::render::MerrillNoiseMethod::Reference
+                {
+                    for composed in [false, true] {
+                        let mut detail = settings.clone();
+                        if composed {
+                            detail.crop.bounds = [0.1, 0.2, 0.9, 0.8];
+                            detail.rotation.degrees = 17.;
+                            detail.output_size = Some([700, 1050]);
+                        }
+                        let baseline = if composed {
+                            engine
+                                .render(&source, &detail, &mut Default::default())
+                                .unwrap()
+                        } else {
+                            image.as_ref().clone()
+                        };
+                        detail.preview_region = Some([32, 32, 160, 160]);
+                        assert!(!detail.regional_preview_available(&source.metadata));
+                        let whole = engine
+                            .render(&source, &detail, &mut Default::default())
+                            .unwrap();
+                        assert_eq!(whole.view(), baseline.view());
+                        assert_eq!(whole.params().mapping, baseline.params().mapping);
+                        assert_eq!(whole.settings().preview_region, None);
+                        assert_eq!(
+                            engine.readback_image(&whole).unwrap(),
+                            engine.readback_image(&baseline).unwrap()
+                        );
+                    }
+                }
+
+                assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
+                    .iter()
+                    .all(|v| v.is_finite()));
+            }
+        }
+    }
 }

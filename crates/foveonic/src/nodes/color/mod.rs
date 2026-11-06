@@ -39,9 +39,12 @@ pub(crate) mod cell_gain;
 
 pub(crate) mod histogram_bilateral;
 pub(crate) mod purple_fringe;
+pub(crate) mod scalar_bilateral;
 
 pub(crate) mod chromatic_ratio;
 
 pub(crate) mod neighborhood_decorrelate;
 
 pub(crate) mod channel_noise;
+
+pub(crate) mod extract_blue;

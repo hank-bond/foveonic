@@ -5,6 +5,7 @@ use super::{
     DIRECTORY_HEADER_BYTES, MAXIMUM_DIRECTORY_ENTRIES, MAXIMUM_FILE_BYTES, MINIMUM_FILE_BYTES,
     SECTION_VERSION, SUPPORTED_FILE_VERSIONS,
 };
+use crate::input_error::damaged;
 use crate::source::Result;
 use std::{
     collections::BTreeMap,
@@ -17,17 +18,27 @@ const MAXIMUM_PROPERTY_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, String>> {
     let length = reader.seek(SeekFrom::End(0))?;
-    if !(MINIMUM_FILE_BYTES..=MAXIMUM_FILE_BYTES).contains(&length) {
+    if length < MINIMUM_FILE_BYTES {
+        return Err(damaged("truncated X3F header"));
+    }
+    if length > MAXIMUM_FILE_BYTES {
         return Err("unsupported X3F file size".into());
     }
     reader.seek(SeekFrom::Start(0))?;
-    let mut header = [0; BASE_HEADER_BYTES];
-    reader.read_exact(&mut header)?;
+    let mut header = [0; 52];
+    reader.read_exact(&mut header[..BASE_HEADER_BYTES])?;
     let bytes = Bytes(&header);
-    if bytes.range(0, 4)? != b"FOVb" || !SUPPORTED_FILE_VERSIONS.contains(&bytes.u32(4)?) {
+    if bytes.range(0, 4)? != b"FOVb" {
+        return Err(damaged("invalid X3F signature"));
+    }
+    if !SUPPORTED_FILE_VERSIONS.contains(&bytes.u32(4)?) {
         return Err("unsupported X3F header".into());
     }
     let file_version = bytes.u32(4)?;
+    if file_version >= 0x40000 {
+        reader.read_exact(&mut header[BASE_HEADER_BYTES..])?;
+    }
+    let image_header = header;
     let mark_bits = super::mark_bits(&header)?;
     super::processing_version(&header)?;
     reader.seek(SeekFrom::End(-4))?;
@@ -37,13 +48,16 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
     if directory < BASE_HEADER_BYTES as u64
         || directory + DIRECTORY_HEADER_BYTES as u64 > length - 4
     {
-        return Err("X3F directory outside file".into());
+        return Err(damaged("X3F directory outside file"));
     }
     reader.seek(SeekFrom::Start(directory))?;
     let mut header = [0; DIRECTORY_HEADER_BYTES];
     reader.read_exact(&mut header)?;
     let index = Bytes(&header);
-    if index.range(0, 4)? != b"SECd" || index.u32(4)? != SECTION_VERSION {
+    if index.range(0, 4)? != b"SECd" {
+        return Err(damaged("invalid X3F directory signature"));
+    }
+    if index.u32(4)? != SECTION_VERSION {
         return Err("unsupported X3F directory".into());
     }
     let count = index.offset(8)?;
@@ -51,7 +65,7 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
         || count > MAXIMUM_DIRECTORY_ENTRIES
         || directory + (DIRECTORY_HEADER_BYTES + count * DIRECTORY_ENTRY_BYTES) as u64 > length - 4
     {
-        return Err("invalid X3F directory count".into());
+        return Err(damaged("invalid X3F directory count"));
     }
     let mut entries = vec![0; count * DIRECTORY_ENTRY_BYTES];
     reader.read_exact(&mut entries)?;
@@ -65,7 +79,7 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
         let size = index.offset(entry + 4)?;
         let stop = start + size as u64;
         if start < BASE_HEADER_BYTES as u64 || size < 8 || stop > directory {
-            return Err("X3F section outside data area".into());
+            return Err(damaged("X3F section outside data area"));
         }
         ranges.push((start, stop));
         if matches!(index.range(entry + 8, 4)?, b"IMAG" | b"IMA2") && size >= 28 {
@@ -76,16 +90,16 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
                 return Err("X3F capture properties too large".into());
             }
             if properties.replace((start, size)).is_some() {
-                return Err("duplicate X3F input section".into());
+                return Err(damaged("duplicate X3F input section"));
             }
         }
     }
     ranges.sort_unstable();
     if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
-        return Err("overlapping X3F sections".into());
+        return Err(damaged("overlapping X3F sections"));
     }
     if properties.is_none() && file_version < 0x40000 {
-        return Err("missing X3F properties".into());
+        return Err(damaged("missing X3F properties"));
     }
     let mut properties = if let Some((start, size)) = properties {
         reader.seek(SeekFrom::Start(start))?;
@@ -137,6 +151,7 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
         }
     }
     properties.insert("X3F_MARK_BITS".into(), mark_bits.to_string());
+    super::record_image_extent(&mut properties, &image_header)?;
     Ok(properties)
 }
 

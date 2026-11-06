@@ -5,6 +5,7 @@
 //! sixteen-bit wrapping, independently of the other channels and rows.
 
 use super::bytes::{product, Bytes};
+use crate::input_error::damaged;
 use crate::source::Result;
 
 const SYMBOLS: usize = 1024;
@@ -32,12 +33,12 @@ impl Table {
                 continue;
             }
             if length > 27 || bits >= 1 << length {
-                return Err("invalid format-6 Huffman code".into());
+                return Err(damaged("invalid format-6 Huffman code"));
             }
             let mut index = 0;
             for bit in (0..length).rev() {
                 if nodes[index].delta.is_some() {
-                    return Err("overlapping format-6 Huffman codes".into());
+                    return Err(damaged("overlapping format-6 Huffman codes"));
                 }
                 let branch = ((bits >> bit) & 1) as usize;
                 index = match nodes[index].children[branch] {
@@ -51,12 +52,12 @@ impl Table {
                 };
             }
             if nodes[index].delta.is_some() || nodes[index].children != [None; 2] {
-                return Err("overlapping format-6 Huffman codes".into());
+                return Err(damaged("overlapping format-6 Huffman codes"));
             }
             nodes[index].delta = Some(delta);
         }
         if nodes.len() == 1 {
-            return Err("empty format-6 Huffman table".into());
+            return Err(damaged("empty format-6 Huffman table"));
         }
         let prefixes = std::array::from_fn(|prefix| {
             let mut node = Some(0);
@@ -87,18 +88,18 @@ impl Table {
                 ((u32::from_be_bytes(word) << (position % 8)) >> (32 - PREFIX_BITS)) as usize;
             let (node, length) = self.prefixes[prefix];
             position += length;
-            let mut index = node.ok_or("unassigned format-6 Huffman prefix")?;
+            let mut index = node.ok_or_else(|| damaged("unassigned format-6 Huffman prefix"))?;
             while self.nodes[index].delta.is_none() {
                 if position >= total {
-                    return Err("truncated format-6 Huffman row".into());
+                    return Err(damaged("truncated format-6 Huffman row"));
                 }
                 let bit = (input[position / 8] >> (7 - position % 8)) & 1;
                 position += 1;
                 index = self.nodes[index].children[bit as usize]
-                    .ok_or("unassigned format-6 Huffman suffix")?;
+                    .ok_or_else(|| damaged("unassigned format-6 Huffman suffix"))?;
             }
             if position > total {
-                return Err("truncated format-6 Huffman row".into());
+                return Err(damaged("truncated format-6 Huffman row"));
             }
             let channel = sample % 3;
             accumulators[channel] =
@@ -115,9 +116,9 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize) -> Result<Vec<
     let directory = section
         .len()
         .checked_sub(rows_size)
-        .ok_or("truncated format-6 row directory")?;
+        .ok_or_else(|| damaged("truncated format-6 row directory"))?;
     if directory < DATA_OFFSET {
-        return Err("truncated format-6 tables".into());
+        return Err(damaged("truncated format-6 tables"));
     }
     let codes: Vec<_> = (0..SYMBOLS)
         .map(|i| bytes.u32(2076 + i * 4))
@@ -132,7 +133,7 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize) -> Result<Vec<
         .collect::<Result<_>>()?;
     rows.push(data.len());
     if rows[0] != 0 || rows.windows(2).any(|r| r[0] > r[1]) {
-        return Err("invalid format-6 row offsets".into());
+        return Err(damaged("invalid format-6 row offsets"));
     }
     let row_samples = product(width, 3)?;
     let mut output = vec![0.; product(row_samples, height)?];
@@ -184,7 +185,7 @@ mod tests {
                     .then_some(section)
             })
             .expect("format-6 section");
-        let (width, height, samples, _) = super::super::read_pixels(section).unwrap();
+        let (width, height, _, samples, _) = super::super::read_pixels(section).unwrap();
         let expected =
             std::fs::read(std::env::var("FORMAT6_REFERENCE").expect("FORMAT6_REFERENCE")).unwrap();
         assert_eq!(expected.len(), width * height * 6);

@@ -195,7 +195,9 @@ pub fn encode(metadata: &Metadata, space: ColorSpace) -> Result<EncodeParams> {
     if ![0, 90, 180, 270].contains(&rotation) {
         return Err("unsupported image orientation".into());
     }
-    let (w, h) = (crop[2] - crop[0], crop[3] - crop[1]);
+    let [w, h] = metadata
+        .recorded_extent()
+        .unwrap_or([crop[2] - crop[0], crop[3] - crop[1]]);
     let (width, height) = if rotation == 90 || rotation == 270 {
         (h, w)
     } else {

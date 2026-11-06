@@ -14,6 +14,40 @@ fn cell_extents_preserve_odd_sizes_and_reject_overflow() {
 
 #[test]
 #[ignore = "requires a GPU"]
+fn triplets_preserve_signed_rgb_and_blue_without_phase_averaging_or_clipping() {
+    let gpu = Gpu::new().unwrap();
+    let samples = [-4., 12., 17001., 41., 36., -9., 1024., 2048., 3072.];
+    let input = gpu.upload("RGB extraction fixture", &samples).unwrap();
+    for calibrated in [false, true] {
+        let params = if calibrated {
+            Params::calibrated(3, 1, 2048, 0.5, 14300.).unwrap()
+        } else {
+            Params::new(3, 1).unwrap()
+        }
+        .with_triplets();
+        let (rgb, blue) = apply(&gpu, &input, &params, &mut Default::default()).unwrap();
+        let expected: Vec<f32> = samples
+            .iter()
+            .map(|v| if calibrated { (*v - 2048.) * 0.5 } else { *v })
+            .collect();
+        assert_eq!(
+            gpu.readback(&rgb).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&expected)
+        );
+        let expected: Vec<f32> = expected.as_chunks::<3>().0.iter().map(|v| v[2]).collect();
+        assert_eq!(
+            gpu.readback(&blue).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&expected)
+        );
+    }
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&samples)
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU"]
 fn packed_cells_preserve_spatial_phases_and_rgb_average() {
     let gpu = Gpu::new().unwrap();
     for [width, height] in [[1, 1], [3, 5], [8, 6], [9, 17]] {

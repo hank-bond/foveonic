@@ -4,6 +4,30 @@ use super::*;
 fn rejects_incomplete_coefficients() {
     assert!(Prepared::new([16, 2], 2048, vec![1.; 95]).is_err());
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn rgb_column_correction_uses_three_coefficients_and_keeps_originals() {
+    let gpu = Gpu::new().unwrap();
+    let values: Vec<f32> = (0..16 * 3 * 3).map(|i| i as f32 * 123.25 - 45.).collect();
+    let gains: Vec<f32> = (0..16 * 3).map(|i| (i as f32 - 12.) * 0.001).collect();
+    let prepared = Prepared::triplets([16, 3], 2048, gains.clone()).unwrap();
+    let input = gpu.upload("RGB column fixture", &values).unwrap();
+    let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+    let expected: Vec<f32> = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| gains[i % 48].mul_add(*v - 2048., 2048.))
+        .collect();
+    assert_eq!(
+        gpu.readback(&output).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&expected)
+    );
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&values)
+    );
+}
 #[test]
 #[ignore = "requires a GPU"]
 fn affine_column_correction_preserves_native_fused_rounding() {

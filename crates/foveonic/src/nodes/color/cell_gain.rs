@@ -1,4 +1,4 @@
-//! Applies a spatial gain to each two-by-two cell with Float32 horizontal recurrence.
+//! Applies a spatial gain per pixel or two-by-two cell with Float32 horizontal recurrence.
 
 use super::spatial_color_gain::Grid;
 use crate::{
@@ -12,6 +12,7 @@ use crate::{
 };
 pub(crate) struct Prepared {
     extent: [u32; 2],
+    scale: u32,
     shape: [u32; 4],
     spacing: f32,
     grid: Vec<f32>,
@@ -20,15 +21,21 @@ pub(crate) struct Prepared {
 }
 impl Prepared {
     pub(crate) fn new(extent: [u32; 2], grid: Grid) -> Result<Self> {
-        if extent.iter().any(|v| *v < 4 || v % 2 != 0)
+        Self::prepare(extent, grid, 2)
+    }
+    pub(crate) fn pixels(extent: [u32; 2], grid: Grid) -> Result<Self> {
+        Self::prepare(extent, grid, 1)
+    }
+    fn prepare(extent: [u32; 2], grid: Grid, scale: u32) -> Result<Self> {
+        if extent.iter().any(|v| *v < scale * 2 || v % scale != 0)
             || grid.extent.iter().any(|v| *v < 2)
             || grid.values.len() != grid.extent[0] as usize * grid.extent[1] as usize
             || grid.values.iter().any(|v| !v.is_finite())
             || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX)
         {
-            return Err("invalid two-by-two cell gain geometry".into());
+            return Err("invalid spatial cell gain geometry".into());
         }
-        let cell = extent.map(|v| v / 2);
+        let cell = extent.map(|v| v / scale);
         let spacing = cell[0] as f32 / (grid.extent[0] - 1) as f32;
         let mut segments = vec![[0, 0, 0, 0]; (grid.extent[0] - 1) as usize];
         let mut knot = 0_usize;
@@ -60,6 +67,7 @@ impl Prepared {
             .collect();
         Ok(Self {
             extent,
+            scale,
             shape: [cell[0], cell[1], grid.extent[0], grid.extent[1]],
             spacing,
             grid: grid.values,
@@ -71,11 +79,17 @@ impl Prepared {
         self.extent
     }
     pub(crate) fn key(&self) -> Key {
-        Key::pod(&self.shape)
+        let key = Key::pod(&self.shape)
             .with(&self.spacing)
             .slice(&self.grid)
             .slice(&self.rows)
-            .slice(&self.segments)
+            .slice(&self.segments);
+        // Retain the established two-by-two key. Pixel-wise gains have a distinct layout.
+        if self.scale == 2 {
+            key
+        } else {
+            key.with(&self.scale)
+        }
     }
 }
 
@@ -94,7 +108,7 @@ pub(crate) fn apply(
         prepared.shape[2],
         prepared.shape[3],
         prepared.spacing.to_bits(),
-        0,
+        prepared.scale,
         0,
         0,
     ]);

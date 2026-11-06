@@ -274,7 +274,8 @@ impl Settings {
             && !self.is_monochrome()
             && (super::recipes::quattro::fast_available(metadata)
                 || (self.output_size.is_none()
-                    && super::recipes::merrill::fast_available(metadata)))
+                    && super::recipes::merrill::fast_available(metadata)
+                    && super::recipes::merrill::regional_available(metadata)))
     }
 
     pub fn adaptive_tone_active(&self) -> bool {

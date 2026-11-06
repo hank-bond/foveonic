@@ -369,3 +369,13 @@ fn gpu_highlight_restoration_matches_native_saturation_and_density() {
     assert!(result.pixels.is_none());
     assert!(result.density.is_some());
 }
+
+#[test]
+fn reduced_sensor_padding_keeps_highlight_halo_inside_the_original() {
+    let mut metadata = threshold_metadata();
+    metadata.matrices.get_mut("ActiveImageArea").unwrap().values[3] = 110.;
+    let prepared = prepare(&metadata, None).unwrap();
+    assert_eq!(prepared.params.area, [8, 2, 48, 125]);
+    metadata.matrices.get_mut("ActiveImageArea").unwrap().values[3] = 128.;
+    assert!(prepare(&metadata, None).is_err());
+}

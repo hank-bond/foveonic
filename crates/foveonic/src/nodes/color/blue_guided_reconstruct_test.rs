@@ -8,6 +8,14 @@ const BLUE_VARIANCE: [f64; 3] = [20.843, 0.4342, 8e-7];
 fn same_size_output_has_a_distinct_key_and_checks_filter_geometry() {
     let full = Prepared::new([8, 8], 0., BLUE_VARIANCE, None).unwrap();
     let same = Prepared::same_size([8, 8], BLUE_VARIANCE, None).unwrap();
+    let native = Prepared::native_size([8, 8], BLUE_VARIANCE, None).unwrap();
+    assert!(full.doubles_output());
+    assert!(!same.doubles_output());
+    assert!(!native.doubles_output());
+    assert_eq!(full.blue_extent(), [16, 16]);
+    assert_eq!(same.blue_extent(), [16, 16]);
+    assert_eq!(native.blue_extent(), [8, 8]);
+    assert!(native.key() != same.key());
     assert_eq!(full.output_extent(), [16, 16]);
     assert_eq!(same.output_extent(), [8, 8]);
     assert!(full.key() != same.key());

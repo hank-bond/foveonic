@@ -68,5 +68,6 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[tonal-ranges](./tonal-ranges.md)** _(accepted, conforming, reference)._ Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG.
 - **[white-balance-picker](./white-balance-picker.md)** _(accepted, conforming, reference)._ A neutral-patch eyedropper saves Custom white balance with independent Warmth and Tint fine adjustments.
 - **[workspace-status](./workspace-status.md)** _(accepted, conforming, reference)._ Workspace activity separates live progress from a session log of file operations, tool communications and errors.
+- **[x3f-input](./x3f-input.md)** _(accepted, conforming, reference)._ X3F loading distinguishes damaged originals from unsupported variants and preserves supported RAW resolution modes.
 
 <!-- INDEX:END -->

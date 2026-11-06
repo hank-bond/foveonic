@@ -2,6 +2,19 @@
 
 use crate::{nodes::sensor::calibration::EncodeParams, source::Result};
 
+pub(in crate::render) fn available(metadata: &crate::source::Metadata) -> bool {
+    crate::nodes::sensor::calibration::encode(metadata, crate::color_space::ColorSpace::Srgb)
+        .is_ok_and(|params| {
+            let [l, t, r, b] = params.crop;
+            let extent = if params.source[2].is_multiple_of(180) {
+                [r - l, b - t]
+            } else {
+                [b - t, r - l]
+            };
+            params.output[..2] == extent
+        })
+}
+
 // The ordinary sharpening signal reads one neighboring pixel and suppresses
 // two border pixels. Keep four pixels so the requested view never sees that edge.
 pub(super) const FINISH_SUPPORT: u32 = 4;

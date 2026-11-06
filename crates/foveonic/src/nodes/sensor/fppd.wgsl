@@ -111,7 +111,8 @@ fn fppd(@builtin(global_invocation_id) id: vec3<u32>) {
     let point = p.grid.xy+id.xy*p.grid.zw;
     let position = point.y*p.shape.x+point.x;
     if p.shape.z == 0u {
-        for(var channel = 0u;channel<3u;channel++) {
+        let channels = select(3u, 2u, p.shape.w != 0u);
+        for(var channel = 0u;channel<channels;channel++) {
             output[position*3u+channel] = mul(source[position*3u+channel], gains[channel*p.count.x+id.x]);
         }
     }

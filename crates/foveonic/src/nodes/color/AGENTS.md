@@ -14,7 +14,7 @@ Keep tiled sample meanings and side-output dependencies explicit. Noise controls
 
 - **[blue_guided_reconstruct.rs](./blue_guided_reconstruct.rs)** Reconstructs code RGB from color histories and blue at matching or doubled output resolution.
 - **[byte_mask_double.rs](./byte_mask_double.rs)** Doubles byte-valued masks with the selected cubic phases and exact integer accumulation.
-- **[cell_gain.rs](./cell_gain.rs)** Applies a spatial gain to each two-by-two cell with Float32 horizontal recurrence.
+- **[cell_gain.rs](./cell_gain.rs)** Applies a spatial gain per pixel or two-by-two cell with Float32 horizontal recurrence.
 - **[channel_noise.rs](./channel_noise.rs)** Composes blue-speckle repair, channel-ratio correction and neighborhood filtering without changing its source.
 - **[chroma.rs](./chroma.rs)** Applies signed-code chroma smoothing with caller-selected support and tapered correction tables.
 - **[chromatic_ratio.rs](./chromatic_ratio.rs)** Suppresses channel noise by blending RGB ratios toward calibrated quadratic color curves.
@@ -22,6 +22,7 @@ Keep tiled sample meanings and side-output dependencies explicit. Noise controls
 - **[color_dq.rs](./color_dq.rs)** Builds reference-derived ColorDQ lookup tables with an explicitly selected gain.
 - **[color_mode.rs](./color_mode.rs)** Resolves camera color modes and their camera-ordered tone records.
 - **[directional_banding.rs](./directional_banding.rs)** Measures native Fine bands, fits axis-coherent residual Coarse offsets, and shares their tiles with previews.
+- **[extract_blue.rs](./extract_blue.rs)** Copies the blue component of immutable RGB codes into a same-size scalar plane.
 - **[highlight_stream.rs](./highlight_stream.rs)** Executes delayed five-row highlight neutralization with explicit threshold controls.
 - **[histogram_bilateral.rs](./histogram_bilateral.rs)** Filters a scalar code plane with quantized range weights and an adaptive residual blend.
 - **[log_reconstruction.rs](./log_reconstruction.rs)** Reconstructs signed RGB from guided log residuals with caller-selected filtering controls.
@@ -38,6 +39,7 @@ Keep tiled sample meanings and side-output dependencies explicit. Noise controls
 - **[reconstruction.rs](./reconstruction.rs)** Filters camera noise, conditions brightness, and projects processing tiles on GPU.
 - **[residual_finish.rs](./residual_finish.rs)** Applies residual gains and derives signed detail from reconstructed unsigned code RGB.
 - **[rgb_prefilter.rs](./rgb_prefilter.rs)** Composes white balance, UV classification and fixed-radius range filtering in camera RGB codes.
+- **[scalar_bilateral.rs](./scalar_bilateral.rs)** Filters scalar codes with continuous noise variance and a quantized range table before adaptive blending.
 - **[sector_color.rs](./sector_color.rs)** Applies prepared chroma-sector matrices without selecting a camera or color mode.
 - **[spatial_color_gain.rs](./spatial_color_gain.rs)** Multiplies red and blue by prepared spatial gains while preserving green.
 - **[texture.rs](./texture.rs)** Restores independently cleaned brightness and chroma in sensor tiles before color conversion.
