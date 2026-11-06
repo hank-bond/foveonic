@@ -137,11 +137,33 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize) -> Result<Vec<
     }
     let row_samples = product(width, 3)?;
     let mut output = vec![0.; product(row_samples, height)?];
+    #[cfg(test)]
+    if parallel_tests::SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        decode_rows(&table, data, &rows, row_samples, &mut output)?;
+        return Ok(output);
+    }
+    crate::decode_pool::rows(&mut output, row_samples, |first_row, output| {
+        decode_rows(&table, data, &rows[first_row..], row_samples, output)
+    })?;
+    Ok(output)
+}
+
+#[cfg(test)]
+#[path = "format6_parallel_test.rs"]
+mod parallel_tests;
+
+fn decode_rows(
+    table: &Table,
+    data: &[u8],
+    rows: &[usize],
+    row_samples: usize,
+    output: &mut [f32],
+) -> Result<()> {
     for (bounds, row) in rows.windows(2).zip(output.chunks_exact_mut(row_samples)) {
         crate::background::checkpoint_or_cancel()?;
         table.row(&data[bounds[0]..bounds[1]], row)?;
     }
-    Ok(output)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -405,7 +405,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     }
     if bytes.u32(12)? == 6 {
         let start = Instant::now();
-        let pixels = crate::decode_pool::one(|| format6::decode(section, width, height))?;
+        let pixels = format6::decode(section, width, height)?;
         return Ok((
             width,
             height,

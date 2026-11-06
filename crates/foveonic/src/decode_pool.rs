@@ -1,4 +1,4 @@
-//! Shares a bounded FIFO sensor-layer pool across ordered speculative photo loads.
+//! Shares bounded FIFO sensor-plane and row work across ordered speculative photo loads.
 
 use crate::{background, source::Result};
 use std::{
@@ -119,29 +119,77 @@ impl Pool {
             })
             .collect()
     }
-    fn one<T: Send>(&self, turn: &Turn, decode: impl FnOnce() -> Result<T> + Send) -> Result<T> {
-        let mut result = None;
+    fn rows<T: Send>(
+        &self,
+        turn: &Turn,
+        output: &mut [T],
+        row_size: usize,
+        decode: &(impl Fn(usize, &mut [T]) -> Result<()> + Sync),
+    ) -> Result<()> {
+        let chunk_rows = (output.len() / row_size).div_ceil(self.threads());
+        let chunk_size = chunk_rows * row_size;
+        let mut results: Vec<_> = output.chunks(chunk_size).map(|_| None).collect();
         self.0.in_place_scope_fifo(|scope| {
-            let scheduling = background::context();
-            let result = &mut result;
-            scope.spawn_fifo(move |_| {
-                *result = Some(background::decoding(scheduling, || {
-                    background::checkpoint_or_cancel()?;
-                    decode()
-                }));
-            });
+            for (chunk, (output, result)) in
+                output.chunks_mut(chunk_size).zip(&mut results).enumerate()
+            {
+                let scheduling = background::context();
+                scope.spawn_fifo(move |_| {
+                    *result = Some(background::decoding(scheduling, || {
+                        background::checkpoint_or_cancel()?;
+                        decode(chunk * chunk_rows, output)
+                    }));
+                });
+            }
             turn.release();
         });
-        result.ok_or("missing sensor decode result")?
+        // Scope completion joins every chunk. Row order, rather than completion
+        // order, chooses the earliest damaged row when several chunks fail.
+        results
+            .into_iter()
+            .try_for_each(|result| result.ok_or("missing sensor row result")?)
     }
 }
 
-/// Classic's interleaved sensor stream is one task in the same bounded pool.
-pub(crate) fn one<T: Send>(decode: impl FnOnce() -> Result<T> + Send) -> Result<T> {
+/// Decode independent rows into disjoint output slices. Speculative photos share
+/// their configured FIFO pool. Active loads use at most four inherited workers.
+pub(crate) fn rows<T: Send>(
+    output: &mut [T],
+    row_size: usize,
+    decode: impl Fn(usize, &mut [T]) -> Result<()> + Sync,
+) -> Result<()> {
+    if output.is_empty() {
+        return Ok(());
+    }
+    assert!(row_size != 0 && output.len().is_multiple_of(row_size));
     if let Some(task) = background::decoder_context() {
-        task.pool.one(&task.turn, decode)
+        task.pool.rows(&task.turn, output, row_size, &decode)
     } else {
-        decode()
+        const FOREGROUND_WORKERS: usize = 4;
+        let chunk_rows = (output.len() / row_size).div_ceil(FOREGROUND_WORKERS);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = output
+                .chunks_mut(chunk_rows * row_size)
+                .enumerate()
+                .map(|(chunk, output)| {
+                    let scheduling = background::context();
+                    let decode = &decode;
+                    scope.spawn(move || {
+                        background::with_context(scheduling, || decode(chunk * chunk_rows, output))
+                    })
+                })
+                .collect();
+            let results: Vec<_> = workers
+                .into_iter()
+                .map(|worker| {
+                    worker
+                        .join()
+                        .map_err(|_| "sensor row decoder worker panicked".into())
+                        .and_then(|result| result)
+                })
+                .collect();
+            results.into_iter().collect()
+        })
     }
 }
 
