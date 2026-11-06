@@ -1,5 +1,8 @@
 //! Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
+#[path = "worker_reduced.rs"]
+mod reduced;
+
 #[cfg(test)]
 use crate::export::ExportFormat;
 use crate::{
@@ -39,31 +42,39 @@ fn effective_preview_quality(
     settings: &Settings,
     metadata: &Metadata,
 ) -> PreviewQuality {
-    if request.export.is_none()
-        && request.output == "final"
-        && !request.comparison
-        && settings.fast_preview_available(metadata)
-    {
-        match request.preview_quality {
-            PreviewMode::Full => PreviewQuality::Full,
-            PreviewMode::Fast => PreviewQuality::Fast,
-            PreviewMode::Draft | PreviewMode::Thumb
-                if metadata.processing_family().ok()
-                    == Some(foveonic::source::ProcessingFamily::Merrill)
-                    && request.settings.preview_region.is_none() =>
-            {
-                if request.preview_quality == PreviewMode::Draft {
-                    PreviewQuality::Draft
-                } else {
-                    PreviewQuality::Thumb
-                }
+    if request.export.is_some() || request.output != "final" || request.comparison {
+        return PreviewQuality::Full;
+    }
+    match request.preview_quality {
+        PreviewMode::Full => PreviewQuality::Full,
+        PreviewMode::Draft | PreviewMode::Thumb => {
+            if request.settings.preview_region.is_some() || settings.output_size.is_some() {
+                return PreviewQuality::Full;
             }
-            PreviewMode::Draft | PreviewMode::Thumb => PreviewQuality::Fast,
-            PreviewMode::Smart if request.settings.preview_region.is_some() => PreviewQuality::Full,
-            PreviewMode::Smart => PreviewQuality::Fast,
+            let quality = if request.preview_quality == PreviewMode::Draft {
+                PreviewQuality::Draft
+            } else {
+                PreviewQuality::Thumb
+            };
+            if settings.small_preview_available(metadata, quality) {
+                quality
+            } else if metadata.processing_family().ok()
+                == Some(foveonic::source::ProcessingFamily::Quattro)
+                && settings.fast_preview_available(metadata)
+            {
+                PreviewQuality::Fast
+            } else {
+                PreviewQuality::Full
+            }
         }
-    } else {
-        PreviewQuality::Full
+        PreviewMode::Smart if request.settings.preview_region.is_some() => PreviewQuality::Full,
+        PreviewMode::Fast | PreviewMode::Smart => {
+            if settings.fast_preview_available(metadata) {
+                PreviewQuality::Fast
+            } else {
+                PreviewQuality::Full
+            }
+        }
     }
 }
 
@@ -251,6 +262,7 @@ impl Worker {
         thread::spawn(move || {
             let mut engine = engine;
             let mut source: Option<(PathBuf, RenderSession)> = None;
+            let mut reduced = reduced::Photos::default();
             loop {
                 let (request, queued_at, _activity) = {
                     let (lock, wake) = &*slot;
@@ -268,7 +280,9 @@ impl Worker {
                     }
                     if state.clear {
                         state.clear = false;
+                        drop(state);
                         source = None;
+                        reduced.clear(&engine);
                         continue;
                     }
                     if let Some(pick) = state.color_pick.take() {
@@ -287,8 +301,21 @@ impl Worker {
                                         || r.settings.photographic_recipe() != recipe
                                 })
                         };
-                        let sample = pick_color(&engine, source.as_mut(), &pick, cancel)
-                            .map_err(|e| e.to_string());
+                        let sample = (|| {
+                            if cancel() {
+                                return Err("color selection canceled".into());
+                            }
+                            load_native_source(
+                                &decoded_cache,
+                                &engine,
+                                &mut source,
+                                &pick.path,
+                                0,
+                                |_| {},
+                            )?;
+                            pick_color(&engine, source.as_mut(), &pick, cancel)
+                        })()
+                        .map_err(|e: Box<dyn std::error::Error + Send + Sync>| e.to_string());
                         if tx
                             .send(Update::ColorPick(ColorPickReply {
                                 tool: pick.tool,
@@ -327,25 +354,22 @@ impl Worker {
                 let mut settings = request.settings.clone();
                 let mut defaults_errors = Vec::new();
                 let result = (|| -> foveonic::source::Result<Option<Frame>> {
-                    if source.as_ref().is_none_or(|(p, _)| p != &request.path) {
-                        source = None; // Avoid keeping two decoded photos in memory during a switch.
-                        let _span = crate::timing::Span::new(request.revision, "source_open");
-                        let loaded = decoded_cache.open(&request.path, |stage| reporter.loaded(stage))?;
-                        if crate::timing::enabled() {
-                            crate::timing::emit("source_load", serde_json::json!({"revision":request.revision,"source":request.path,"timings":loaded.load_timings(),"read_cache_state":"uncontrolled","input":if loaded.load_timings().iter().any(|t|t.stage=="decoded cache read"){"decoded-cache"}else{"original"},"extent":[loaded.metadata.width,loaded.metadata.height]}));
-                        }
-                        source = Some((request.path.clone(), RenderSession::new(loaded)));
+                    let mut reduced_loaded = if reduced::Photos::requested(&request) {
+                        Some(reduced.load(&request.path, request.revision, &decoded_cache, &engine, &mut source, &|stage| reporter.loaded(stage))?)
+                    } else { None };
+                    if reduced_loaded.is_none() {
+                        load_native_source(&decoded_cache, &engine, &mut source, &request.path, request.revision, |stage| reporter.loaded(stage))?;
                     }
-                    // Cached sources have already completed both loading sections.
+                    // Cached inputs have already completed both loading sections.
                     reporter.loaded(foveonic::source::LoadStage::Decoded);
-                    let session = &mut source.as_mut().unwrap().1;
-                    metadata = Some(session.metadata().clone());
-                    defaults_errors = resolve_camera_settings(&mut settings, session.metadata());
-                    resolve_preview(&request, &mut settings, session.metadata());
+                    metadata = Some(if let Some(loaded) = &reduced_loaded { loaded.metadata.clone() }
+                        else { source.as_ref().unwrap().1.metadata().clone() });
+                    defaults_errors = resolve_camera_settings(&mut settings, metadata.as_ref().unwrap());
+                    resolve_preview(&request, &mut settings, metadata.as_ref().unwrap());
                     if let Some(export) = request.export.as_ref() {
                         let mut profile=Profile::new(crate::timing::mode());
                         let before=crate::timing::enabled().then(||engine.gpu_activity());
-                        export::write(&engine, session, &settings, export, &mut profile, |stage| reporter.rendered(stage))?;
+                        export::write(&engine, &mut source.as_mut().unwrap().1, &settings, export, &mut profile, |stage| reporter.rendered(stage))?;
                         if let Some(before)=before {crate::timing::emit("export",serde_json::json!({"revision":request.revision,"source":request.path,"destination":export.path,"format":export.format.extension(),"settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
                         reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
                         return Ok(None);
@@ -353,7 +377,16 @@ impl Worker {
                     settings.dehaze_estimate = request.output == "final"
                         && request.rendition == crate::editor::Rendition::Current
                         && settings.dehaze_auto();
-                    let edit=session.changed_parameters(&settings);
+                    let native_required = Engine::reduced_session_requirement(metadata.as_ref().unwrap(), &settings).is_some();
+                    let native_history = source.as_ref().filter(|(path, _)| path == &request.path);
+                    let edit = if let Some(loaded) = &reduced_loaded {
+                        let previous = reduced.changed_parameters(loaded, &settings);
+                        match (native_required, previous, native_history) {
+                            (false, Some(previous), _) => previous,
+                            (_, _, Some((_, session))) => session.changed_parameters(&settings),
+                            (_, previous, None) => previous.unwrap_or_default(),
+                        }
+                    } else { source.as_ref().unwrap().1.changed_parameters(&settings) };
                     let cancel=||{
                         if request.export.is_some(){return false;}
                         let state=slot.0.lock().unwrap();
@@ -366,7 +399,9 @@ impl Worker {
                     };
                     let mut profile = Profile::new(crate::timing::mode());
                     let before = crate::timing::enabled().then(||engine.gpu_activity());
-                    let cache_before = before.map(|_|session.cached_bytes());
+                    let cache_before = before.map(|_|if let Some(loaded) = &reduced_loaded { reduced.cached_bytes(loaded) }
+                        else { source.as_ref().unwrap().1.cached_bytes() });
+                    let mut used_reduced = false;
                     let root=if request.export.is_some(){"final"}else{&request.output};
                     let input = if request.comparison && request.export.is_none() {
                         Some(foveonic::inspection::comparison_input(&settings, root, metadata.as_deref())
@@ -380,10 +415,22 @@ impl Worker {
                         // Timing a host span must not add a GPU wait and change the
                         // responsiveness we are trying to measure.
                         let _span = crate::timing::Span::new(request.revision, "processing");
-                        engine.render_session_with_progress(session, &settings, &roots, cancel, &mut profile, |stage| reporter.rendered(stage))?
+                        if let Some(loaded) = reduced_loaded.take() {
+                            match reduced.render(&engine, &decoded_cache, &mut source, loaded, &settings, &cancel, &mut profile,
+                                &|stage| reporter.loaded(stage), &|stage| reporter.rendered(stage))? {
+                                reduced::Attempt::Rendered(artifacts) => { used_reduced = true; artifacts },
+                                reduced::Attempt::Native(loaded) => {
+                                    if let Some(loaded) = loaded { source = Some((request.path.clone(), RenderSession::new(loaded))); }
+                                    load_native_source(&decoded_cache, &engine, &mut source, &request.path, request.revision, |stage| reporter.loaded(stage))?;
+                                    engine.render_session_with_progress(&mut source.as_mut().unwrap().1, &settings, &roots, cancel, &mut profile, |stage| reporter.rendered(stage))?
+                                },
+                            }
+                        } else {
+                            engine.render_session_with_progress(&mut source.as_mut().unwrap().1, &settings, &roots, cancel, &mut profile, |stage| reporter.rendered(stage))?
+                        }
                     };
                     if let Some(before) = before {
-                        crate::timing::emit("processing", serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"outputs":roots,"settings":settings,"execution":"session","status":if rendered.is_some(){"complete"}else{"superseded"},"cache_before_bytes":cache_before,"cache_after_bytes":session.cached_bytes(),"profile":profile,"activity":engine.gpu_activity().since(before)}));
+                        crate::timing::emit("processing", serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"outputs":roots,"settings":settings,"execution":if used_reduced {"reduced-session"} else {"session"},"status":if rendered.is_some(){"complete"}else{"superseded"},"cache_before_bytes":cache_before,"cache_after_bytes":if used_reduced {reduced.cached_bytes_for_path(&request.path)} else {source.as_ref().unwrap().1.cached_bytes()},"profile":profile,"activity":engine.gpu_activity().since(before)}));
                     }
                     let mut profile = Profile::new(crate::timing::mode());
                     let Some(mut artifacts) = rendered else { return Ok(None); };
@@ -531,6 +578,36 @@ impl Drop for Worker {
         let (lock, wake) = &*self.pending;
         lock.lock().unwrap().stop = true;
         wake.notify_one();
+    }
+}
+
+fn load_native_source(
+    cache: &foveonic::decode_cache::Cache,
+    engine: &Engine,
+    source: &mut Option<(PathBuf, RenderSession)>,
+    path: &PathBuf,
+    revision: u64,
+    progress: impl Fn(foveonic::source::LoadStage),
+) -> foveonic::source::Result<()> {
+    if source.as_ref().is_some_and(|(loaded, _)| loaded == path) {
+        return Ok(());
+    }
+    if let Some((_, previous)) = source.take() {
+        engine.release_native_preparation(previous.metadata());
+    }
+    let _span = crate::timing::Span::new(revision, "source_open");
+    let loaded = cache.open(path, progress)?;
+    record_source_load(revision, path, &loaded);
+    *source = Some((path.clone(), RenderSession::new(loaded)));
+    Ok(())
+}
+
+fn record_source_load(revision: u64, path: &std::path::Path, loaded: &foveonic::source::Source) {
+    if crate::timing::enabled() {
+        crate::timing::emit(
+            "source_load",
+            serde_json::json!({"revision":revision,"source":path,"timings":loaded.load_timings(),"read_cache_state":"uncontrolled","input":if loaded.load_timings().iter().any(|t|t.stage=="decoded cache read"){"decoded-cache"}else{"original"},"extent":[loaded.metadata.width,loaded.metadata.height]}),
+        );
     }
 }
 

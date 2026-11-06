@@ -214,7 +214,7 @@ fn reduced_session_releases_native_work_and_matches_fresh_tail_edits() {
             .unwrap(),
         ReducedRender::NeedsOriginal(NeedsOriginal::EngineChanged)
     ));
-    for case in 0..8 {
+    for case in 0..9 {
         let mut changed = settings.clone();
         match case {
             0 => {
@@ -235,7 +235,8 @@ fn reduced_session_releases_native_work_and_matches_fresh_tail_edits() {
             }
             5 => changed.reconstruction.as_mut().unwrap().banding = 4,
             6 => changed.processing_sections.noise = false,
-            _ => changed.corrections_enabled = false,
+            7 => changed.corrections_enabled = false,
+            _ => changed.row_correction = false,
         }
         let ReducedPreparation::Prepared(mut rebuilt) = engine
             .prepare_reduced_session(
@@ -320,6 +321,7 @@ fn working_set_evicts_after_insertion_and_cache_growth() {
             cache: Cache::default(),
             metadata_bytes: first.metadata_bytes,
             auto_haze: None,
+            last_settings: None,
         })
     };
     let duplicate_bytes = duplicate().retained_cpu_bytes();

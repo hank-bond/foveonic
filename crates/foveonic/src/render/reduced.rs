@@ -45,6 +45,7 @@ pub struct ReducedSession {
     cache: Cache,
     metadata_bytes: u64,
     auto_haze: Option<super::reduced_analysis::AutoHaze>,
+    last_settings: Option<Box<Settings>>,
 }
 impl ReducedSession {
     pub fn metadata(&self) -> &Arc<Metadata> {
@@ -76,6 +77,11 @@ impl ReducedSession {
             + std::mem::size_of::<Self>() as u64
             + self.sensor.settings.white_balance.capacity() as u64
             + self.sensor.settings.color_mode.capacity() as u64
+            + self.last_settings.as_ref().map_or(0, |settings| {
+                std::mem::size_of::<Settings>()
+                    + settings.white_balance.capacity()
+                    + settings.color_mode.capacity()
+            }) as u64
     }
     fn buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
         std::iter::once(&self.sensor.buffer).chain(self.cache.buffers())
@@ -106,9 +112,7 @@ fn requirements(metadata: &Metadata, settings: &Settings, names: &[&str]) -> Opt
     if metadata.processing_family().ok() != Some(ProcessingFamily::Merrill) {
         return Some(NeedsOriginal::UnsupportedFamily);
     }
-    if !recipes::merrill::preview_available(metadata, settings.preview_quality)
-        || !settings.fast_preview_available(metadata)
-    {
+    if !settings.small_preview_available(metadata, settings.preview_quality) {
         return Some(NeedsOriginal::UnsupportedGeometry);
     }
     let effective = settings.processing_settings(ProcessingFamily::Merrill);
@@ -270,6 +274,7 @@ impl Engine {
                 calibration: self.noise_calibration.as_ref().map(Arc::downgrade),
                 cache: Cache::default(),
                 auto_haze,
+                last_settings: None,
             }))),
             Err(error) if error.downcast_ref::<Superseded>().is_some() => {
                 Ok(ReducedPreparation::Superseded)
@@ -358,6 +363,7 @@ impl Engine {
         if auto_haze_requested {
             request.to_mut().dehaze_estimate = false;
         }
+        session.last_settings = Some(Box::new(settings.clone()));
         session.cache.bind(&self.owner);
         session.cache.select(settings.preview_quality, None);
         let mut execution = Execution {
@@ -421,6 +427,12 @@ impl ReducedWorkingSet {
             .iter()
             .find(|entry| entry.id == id)
             .map(|entry| entry.session.metadata())
+    }
+    pub fn last_settings(&self, id: u64) -> Option<&Settings> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.session.last_settings.as_deref())
     }
     pub fn session_bytes(&self, id: u64) -> Option<(u64, u64)> {
         self.entries
