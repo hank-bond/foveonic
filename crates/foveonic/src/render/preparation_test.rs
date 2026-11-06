@@ -203,3 +203,150 @@ fn alternating_photos_reuse_both_curves_with_bounded_weak_ownership() {
     cache.tone(&extra, &mode(), adjusted, false).unwrap();
     assert_eq!(cache.tones.len(), TONES_PER_SOURCE);
 }
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
+fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
+    use crate::{
+        image::RenderedImage,
+        inspection::Content,
+        profile::Profile,
+        render::{BaseResponse, PhotographicMethod, PreviewQuality, RenderSession, Settings},
+        source::Source,
+    };
+
+    fn cached(engine: &Engine, session: &mut RenderSession, settings: &Settings) -> RenderedImage {
+        let mut artifacts = engine
+            .render_session(
+                session,
+                settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .unwrap();
+        let Content::Image(image) = artifacts.remove(0).content else {
+            panic!("expected final image");
+        };
+        *image
+    }
+    fn compare(
+        engine: &Engine,
+        session: &mut RenderSession,
+        settings: &Settings,
+        label: &str,
+    ) -> RenderedImage {
+        let image = cached(engine, session, settings);
+        let verifier = engine.executor();
+        let fresh = verifier
+            .render(session.source(), settings, &mut Profile::default())
+            .unwrap();
+        assert_eq!(image.description(), fresh.description(), "{label}: extent");
+        assert_eq!(image.view(), fresh.view(), "{label}: view");
+        assert!(
+            engine.readback_image(&image).unwrap() == verifier.readback_image(&fresh).unwrap(),
+            "{label}: exact pixels"
+        );
+        image
+    }
+
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let first = Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
+    let second = Arc::new(Source::open(root.join("merrill-hazy-coast.x3f")).unwrap());
+    let engine = Engine::new().unwrap();
+    let mut session = RenderSession::new(first.clone());
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.preview_quality = PreviewQuality::Thumb;
+    settings.reconstruction = Some(Default::default());
+    let retained = compare(&engine, &mut session, &settings, "initial");
+    let retained_bytes = engine.readback_image(&retained).unwrap();
+    settings.exposure = 0.25;
+    compare(&engine, &mut session, &settings, "exposure");
+    settings.white_balance = first.metadata.lists["WhiteBalanceGains"]
+        .names()
+        .find(|name| *name != "Sunlight")
+        .unwrap()
+        .into();
+    compare(&engine, &mut session, &settings, "white balance");
+    settings.highlight_threshold_ev = Some(-1.);
+    compare(&engine, &mut session, &settings, "highlight threshold");
+    settings.highlight_restoration = false;
+    compare(&engine, &mut session, &settings, "highlights disabled");
+    settings.highlight_restoration = true;
+    settings.reconstruction.as_mut().unwrap().chroma = 2;
+    compare(&engine, &mut session, &settings, "noise");
+    settings.tone.contrast = 0.25;
+    settings.tone.shadows = 0.2;
+    settings.tone.highlights = -0.2;
+    compare(&engine, &mut session, &settings, "tone controls");
+    settings.color_mode = first.metadata.lists["ColorModeContrastCompensations"]
+        .names()
+        .find(|name| *name != "Standard")
+        .unwrap()
+        .into();
+    compare(&engine, &mut session, &settings, "color mode");
+    settings.photographic.tone_method = PhotographicMethod::Universal;
+    settings.photographic.base_response = BaseResponse::Natural;
+    compare(&engine, &mut session, &settings, "shared adaptive curve");
+    settings.tone.contrast = -0.25;
+    compare(
+        &engine,
+        &mut session,
+        &settings,
+        "adaptive and changed tone curves",
+    );
+    let before = engine.cached_preparation_bytes();
+    engine.release_native_preparation(&second.metadata);
+    assert_eq!(
+        engine.cached_preparation_bytes(),
+        before,
+        "other source release"
+    );
+    engine.release_native_preparation(&first.metadata);
+    assert_eq!(
+        engine.cached_preparation_bytes(),
+        before - first.metadata.width * first.metadata.height * 4
+    );
+    compare(
+        &engine,
+        &mut session,
+        &settings,
+        "recreated native preparation",
+    );
+    let selected = color_mode::prepare(&first.metadata, &settings.color_mode).unwrap();
+    let previous_curve = engine
+        .prepare_tone(&first.metadata, &selected, settings.tone, false)
+        .unwrap();
+    let mut other = RenderSession::new(second);
+    compare(
+        &engine,
+        &mut other,
+        &Settings {
+            preview_quality: PreviewQuality::Thumb,
+            ..Settings::new("Sunlight", "Standard")
+        },
+        "second source",
+    );
+    compare(&engine, &mut session, &settings, "return to first source");
+    assert!(
+        previous_curve.shares_storage(
+            &engine
+                .prepare_tone(&first.metadata, &selected, settings.tone, false)
+                .unwrap()
+        ),
+        "alternating Engine reuses first photo's curve"
+    );
+    engine.clear_preparation();
+    assert_eq!(engine.cached_preparation_bytes(), 0);
+    compare(
+        &engine,
+        &mut session,
+        &settings,
+        "released engine preparation",
+    );
+    assert!(
+        engine.readback_image(&retained).unwrap() == retained_bytes,
+        "retained image"
+    );
+}
