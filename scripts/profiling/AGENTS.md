@@ -15,6 +15,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[native.py](./native.py)** Record an owned native GUI session and inject explicit macOS pointer drags without changing app scheduling.
 - **[resources.py](./resources.py)** Sample settled macOS memory at explicit boundaries in an owned headless render run.
 - **[summarize.py](./summarize.py)** Summarize native feedback and completed-processing JSON reports, keeping modes and stage domains separate.
+- **[timeline.py](./timeline.py)** Export multi-photo host node spans to a Chrome trace without inventing GPU start times.
 - **[watch_workloads.py](./watch_workloads.py)** Flag known executing build, test and measurement programs without interpreting shell text as GPU contention.
 
 <!-- INDEX:END -->

@@ -45,6 +45,13 @@ def interaction_windows(events, settle):
     return windows
 
 
+def workload(row):
+    fields = tuple((key, row[key]) for key in ['quality', 'effective_quality', 'workers', 'edit'] if key in row)
+    if row['event'] in ['editing_photo', 'editing_group'] and 'round' in row:
+        fields += (('first_edit', row['round'] == 0),)
+    return fields
+
+
 def summarize(records, pointers=None, settle=1.):
     rows = [row for record in records if (row := parse_record(record)) is not None]
     windows = interaction_windows(pointers, settle) if pointers is not None else None
@@ -78,7 +85,7 @@ def summarize(records, pointers=None, settle=1.):
                    'prepared_to_encode_ms': stats([r['prepared_to_encode_ms'] for r in selected_rows if r['event'] == 'draw']),
                    'processing_status': dict(Counter(r.get('status', 'complete') for r in selected_rows if r['event'] == 'processing')),
                    'spans_ms': {}, 'completed_processing': [], 'stages': [],
-                   'activity_per_profile': [],
+                   'activity_per_profile': [], 'editing_groups': [], 'node_phases': [],
                    'sources': sorted({str(r['source']) for r in candidates if r.get('source') is not None})}
         for phase in sorted({r['phase'] for r in candidates if r['event'] == 'span'}):
             phase_rows = selected_rows if phase in ['draw_prepare', 'draw_encode'] else candidates
@@ -104,12 +111,30 @@ def summarize(records, pointers=None, settle=1.):
         # costs look cheaper than the work needed to show a completed image.
         profile_rows = [r for r in candidates if 'profile' in r and r.get('status') != 'superseded'
                         and (windows is None or r.get('revision') in delivered)]
-        for phase in sorted({r['event'] for r in profile_rows if 'activity' in r}):
-            phase_rows = [r for r in profile_rows if r['event'] == phase and 'activity' in r]
+        for context in sorted({workload(r) for r in selected_rows if r['event'] == 'editing_group'}):
+            samples = [r for r in selected_rows if r['event'] == 'editing_group' and workload(r) == context]
+            for count in sorted({r['photo_count'] for r in samples}):
+                matched = [r for r in samples if r['photo_count'] == count]
+                summary['editing_groups'].append({**dict(context), 'photo_count': count,
+                    'completed_ms': stats([r['completed_ms'] for r in matched]),
+                    'first_ms': stats([r['first_ms'] for r in matched]),
+                    'cache_bytes': stats([r['cache_bytes'] for r in matched])})
+        for phase, context in sorted({(r['event'], workload(r)) for r in profile_rows if 'activity' in r}):
+            phase_rows = [r for r in profile_rows if r['event'] == phase and workload(r) == context and 'activity' in r]
             fields = sorted({field for r in phase_rows for field in r['activity']})
-            summary['activity_per_profile'].append({'phase': phase, 'counts': {
+            summary['activity_per_profile'].append({'phase': phase, **dict(context), 'counts': {
                 field: stats([r['activity'][field] for r in phase_rows if field in r['activity']])
                 for field in fields}})
+        nodes = defaultdict(list)
+        for row in profile_rows:
+            for node in row['profile'].get('nodes', []):
+                nodes[(row['event'], workload(row), node['operation'])].append(node)
+        for (phase, context, operation), observations in sorted(nodes.items()):
+            executed = [n for n in observations if n['executed']]
+            summary['node_phases'].append({'phase': phase, **dict(context), 'operation': operation,
+                'executed': len(executed), 'skipped': len(observations) - len(executed),
+                'milliseconds': {key: stats([n[key] for n in executed if n.get(key) is not None])
+                    for key in ['host_milliseconds', 'publication_ms', 'completion_wait_ms', 'retirement_ms', 'total_ms']}})
         groups = defaultdict(lambda: {'passes': [], 'totals': [], 'counts': []})
         for row in profile_rows:
             for domain in ['host', 'gpu']:
@@ -117,12 +142,12 @@ def summarize(records, pointers=None, settle=1.):
                 for sample in row['profile'].get(domain, []):
                     per_report[sample['stage']].append(sample['milliseconds'])
                 for stage, values in per_report.items():
-                    group = groups[(row['event'], domain, stage)]
+                    group = groups[(row['event'], workload(row), domain, stage)]
                     group['passes'].extend(values)
                     group['totals'].append(sum(values))
                     group['counts'].append(len(values))
-        for (phase, domain, stage), group in sorted(groups.items()):
-            summary['stages'].append({'phase': phase, 'domain': domain, 'stage': stage,
+        for (phase, context, domain, stage), group in sorted(groups.items()):
+            summary['stages'].append({'phase': phase, **dict(context), 'domain': domain, 'stage': stage,
                                      'sample_ms': stats(group['passes']),
                                      'per_profile_total_ms': stats(group['totals']),
                                      'samples_per_profile': stats(group['counts'])})

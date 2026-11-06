@@ -50,8 +50,21 @@ pub enum PreviewQuality {
     Full,
     /// Reduced working grid with the requested Noise and Detail controls.
     Fast,
+    /// Prototype reconstruction at one quarter of native width and height.
+    Draft,
+    /// Prototype reconstruction at one eighth of native width and height.
+    Thumb,
 }
 impl PreviewQuality {
+    pub fn divisor(self) -> u32 {
+        match self {
+            Self::Full => 1,
+            Self::Fast => 2,
+            Self::Draft => 4,
+            Self::Thumb => 8,
+        }
+    }
+
     pub fn is_reduced(self) -> bool {
         self != Self::Full
     }

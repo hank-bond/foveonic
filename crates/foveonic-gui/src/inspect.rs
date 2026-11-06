@@ -345,7 +345,10 @@ pub fn preview_quality(
 ) -> bool {
     use crate::preferences::PreviewMode;
     let mut changed = false;
-    let effective = if available != Some(false) {
+    let prototype = std::env::var_os("FOVEONIC_SMALL_OVERVIEW").is_some();
+    let effective = if available != Some(false)
+        && (prototype || !matches!(*selected, PreviewMode::Draft | PreviewMode::Thumb))
+    {
         *selected
     } else {
         PreviewMode::Full
@@ -362,14 +365,23 @@ pub fn preview_quality(
                 (PreviewMode::Full, "Full"),
                 (PreviewMode::Fast, "Fast"),
                 (PreviewMode::Smart, "Smart"),
+                (PreviewMode::Draft, "Draft"),
+                (PreviewMode::Thumb, "Thumb"),
             ] {
+                if matches!(quality, PreviewMode::Draft | PreviewMode::Thumb) && !prototype {
+                    continue;
+                }
                 let response = ui
                     .add_enabled_ui(
                         enabled && (quality == PreviewMode::Full || available != Some(false)),
                         |ui| widgets::button(ui, label, effective == quality, egui::Vec2::ZERO),
                     )
                     .inner
-                    .on_hover_text(explanation);
+                    .on_hover_text(match quality {
+                        PreviewMode::Draft => "Prototype: Merrill sensor reconstruction at 1/4 width and height (1/16 of the pixels). Other supported color families use Fast. Zoomed views and exports use Full.",
+                        PreviewMode::Thumb => "Prototype: Merrill sensor reconstruction at 1/8 width and height (1/64 of the pixels). Other supported color families use Fast. Zoomed views and exports use Full.",
+                        _ => explanation,
+                    });
                 if response.clicked() && *selected != quality {
                     *selected = quality;
                     changed = true;

@@ -465,6 +465,7 @@ impl Engine {
         profile: &mut Profile,
         progress: Option<&dyn Fn(RenderProgress)>,
     ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
+        let preparation = profile.mode.enabled().then(std::time::Instant::now);
         session.cache.bind(&self.owner);
         session
             .cache
@@ -476,6 +477,9 @@ impl Engine {
             checkpoints: Vec::new(),
             progress,
         };
+        if let Some(start) = preparation {
+            profile.record("prepare session cache", start);
+        }
         let result = self.render_recipe(
             &session.source,
             settings,
@@ -483,7 +487,7 @@ impl Engine {
             profile,
             &mut execution,
         );
-        session.cache.finish();
+        profile.measure("finish session cache", || session.cache.finish());
         match result {
             Ok(artifacts) => Ok(Some(artifacts)),
             Err(error) if error.downcast_ref::<Superseded>().is_some() => Ok(None),

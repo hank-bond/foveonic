@@ -369,7 +369,7 @@ impl App {
         &mut self,
         export: Option<export::Export>,
         region: Option<[u32; 4]>,
-        quality: preferences::PreviewMode,
+        mut quality: preferences::PreviewMode,
     ) {
         if !self.sidecars.ready() {
             return;
@@ -381,7 +381,23 @@ impl App {
             self.exporting = export.is_some();
             timing::requested(self.revision, path, &self.output, &self.settings);
             let mut requested = self.view_settings();
+            requested.preview_quality = foveonic::render::PreviewQuality::Full;
             requested.preview_region = region;
+            let small_preview = matches!(
+                quality,
+                preferences::PreviewMode::Draft | preferences::PreviewMode::Thumb
+            );
+            let zoomed = self
+                .viewport
+                .zoom_percent(self.context.pixels_per_point())
+                .is_some_and(|z| z > 100.);
+            if small_preview
+                && (std::env::var_os("FOVEONIC_SMALL_OVERVIEW").is_none()
+                    || zoomed
+                    || self.framing_preview_active())
+            {
+                quality = preferences::PreviewMode::Full;
+            }
             let request = worker::Request {
                 framing_preview: export.is_none() && self.framing_preview_active(),
                 calibration: self

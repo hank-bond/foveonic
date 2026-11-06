@@ -37,7 +37,13 @@ pub(super) fn build(
         && !settings.is_monochrome()
         && (names == ["final"] || names == ["linear.base"])
         && settings.preview_region.is_none())
-    .then(|| preview::Grid::new(params, settings.processing_output_size()))
+    .then(|| {
+        preview::Grid::new(
+            params,
+            settings.processing_output_size(),
+            settings.preview_quality,
+        )
+    })
     .transpose()?;
     if let Some(grid) = &preview {
         params = grid.encode;
@@ -130,7 +136,7 @@ pub(super) fn build(
     }
     let native_calibrated = calibrated;
     if let Some(grid) = &preview {
-        calibrated = graph.add(Operation::ReduceLayers(grid.reduction), &[calibrated])?;
+        calibrated = grid.append(&mut graph, calibrated)?;
     }
     let noise_controls = settings.merrill_reconstruction();
     if let Some(region) = &region {
@@ -308,14 +314,15 @@ pub(super) fn build(
             finish!();
         }
     }
-    Ok(Prepared::Linear(
-        BuiltRecipe {
-            graph,
-            final_id: linear,
-            params,
-            rgb_extent: [params.source[0], params.source[1]],
-            rgb_bounds: params.crop,
-        },
-        mode,
-    ))
+    let mut recipe = BuiltRecipe {
+        graph,
+        final_id: linear,
+        params,
+        rgb_extent: [params.source[0], params.source[1]],
+        rgb_bounds: params.crop,
+    };
+    if let Some(grid) = &preview {
+        grid.frame(&mut recipe, space)?;
+    }
+    Ok(Prepared::Linear(recipe, mode))
 }

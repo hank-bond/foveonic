@@ -60,7 +60,9 @@ impl Engine {
                 roots.push(id);
             }
         }
-        execution.plan(graph, &roots)?;
+        profile.measure("plan interactive checkpoints", || {
+            execution.plan(graph, &roots)
+        })?;
         for &id in &execution.checkpoints {
             if !roots.contains(&id) {
                 roots.push(id);

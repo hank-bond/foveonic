@@ -14,6 +14,10 @@ use std::path::PathBuf;
 pub enum Operation {
     /// Low-pass calibrated layers onto a grid with half the width and height.
     ReduceLayers(crate::nodes::color::pyramid_resample::Prepared),
+    ResampleRgb {
+        params: EncodeParams,
+        space: ColorSpace,
+    },
     ImageRegion {
         prepared: crate::nodes::finish::image_region::Prepared,
         data: DataType,
@@ -289,6 +293,7 @@ impl Operation {
         use crate::{noise::RecipeStage as N, recipe::Key};
         let key = match self {
             Self::ReduceLayers(p) => p.key(),
+            Self::ResampleRgb { params, space } => Key::pod(params).with(&(*space as u32)),
             Self::ImageRegion {
                 prepared,
                 data,
@@ -470,6 +475,7 @@ impl Operation {
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::ReduceLayers(_) => "ReduceLayers",
+            Self::ResampleRgb { .. } => "ResampleRgb",
             Self::ImageRegion { .. } => "ImageRegion",
             Self::LinearCodeBase => "LinearCodeBase",
             Self::LinearCodeRgb { .. } => "LinearCodeRgb",
@@ -588,6 +594,7 @@ impl Operation {
     pub fn label(&self) -> &'static str {
         match self {
             Self::ReduceLayers(_) => "reduce calibrated preview layers",
+            Self::ResampleRgb { .. } => "frame linear photograph preview",
             Self::LinearCodeBase => "retain linear RGB code base",
             Self::LinearCodeRgb { .. } => "declare linear RGB primaries",
             Self::LinearSignedResponse(_) => "linear signed photographic response",
@@ -720,6 +727,7 @@ impl Operation {
         use DataType::*;
         match self {
             Self::ReduceLayers(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::ResampleRgb { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::ImageRegion { data, .. } => (vec![*data], *data),
             Self::PackedLab(p) => match p.direction() {
                 crate::nodes::color::packed_lab::Direction::Forward => {
@@ -1114,6 +1122,7 @@ impl Operation {
     pub fn output_name(&self) -> &'static str {
         match self {
             Self::ReduceLayers(_) => "preview.layers",
+            Self::ResampleRgb { .. } => "preview.framed-linear",
             Self::ImageRegion { output, .. } => output,
             Self::PackedLab(p) => match p.direction() {
                 crate::nodes::color::packed_lab::Direction::Forward => "local-contrast.lab",

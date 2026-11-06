@@ -128,3 +128,35 @@ Run `cargo test --release -p foveonic-gui batch_progress_profile -- --ignored --
 ## Startup host work
 
 With `FOVEONIC_PROFILE=wall`, the GUI emits `startup` records for App construction and the first update. Construction begins after eframe has created the window and device. Its nested host spans separate GPU pipeline creation including the existing validation-scope completion from bundled calibration-map parsing and total engine initialization. These spans overlap and must not be added. The first update is not a presentation or scanout measurement. Wall mode adds no profiling-only GPU waits. Use an isolated native launch and retain the executable and source hashes with the raw JSON.
+
+## Cached multi-photo edits and host scheduling
+
+Build the maintained harness once in optimized mode. Use the same executable and distinct originals for each schedule. The example below uses shell placeholders for original paths:
+
+```sh
+cargo build --offline --release -p foveonic --example profile_editing
+shasum -a 256 target/release/examples/profile_editing
+mkdir -p .local/editing-profile
+target/release/examples/profile_editing .local/editing-profile/serial.jsonl \
+  --quality thumb --workers 1 --repeats 7 --verify PHOTO_A.x3f PHOTO_B.x3f
+target/release/examples/profile_editing .local/editing-profile/concurrent.jsonl \
+  --quality thumb --workers 2 --repeats 7 --verify PHOTO_A.x3f PHOTO_B.x3f
+python3 scripts/profiling/summarize.py .local/editing-profile/serial.jsonl
+```
+
+Add up to the intended real photo-set size. The runner rejects repeated canonical paths and existing report files. It loads each original and warms one retained session on its own executor. Executors share compiled kernels and the ordered device queue. A fixed Rayon pool schedules complete renders with the requested host concurrency. Each measured edit alternates exposure by ±0.25 EV around the supplied base, or chroma reconstruction strength between 1 and 2 with `--edit noise`. Warmup sets chroma to zero for the latter. Optional photographic CLI controls follow `--`. Sidecars are not loaded. Requested/effective quality and exact settings are recorded, so unsupported reduced grids remain visible as fallbacks.
+
+The default mode is Off. Repeat a matched trial with `--mode wall` for attribution. GPU diagnostics require `--mode gpu --workers 1` because their timestamp resolution perturbs scheduling. Repeats share warm sessions, while separate invocations have independent warmups. Setup and first renders are reported separately from edits. Summaries also separate the first edit from later settled edits because restart-boundary cache priming may change its cost. `--verify` compares each final cached linear image byte for byte with an independent fresh render after the timed work. It also records CRC32 values for comparison across matched schedules. This checks cache/scheduling consistency for those samples. It does not establish photographic quality at reduced scales. Verification temporarily adds one fresh render's resources to the measured working set.
+
+The default logical retained-session budget is 2048 MiB. Override it explicitly with `--cache-budget-mib N` for an intentional larger experiment. The budget is checked after each warmup and edit group, rather than reserving device memory in advance. Originals, retained final images/textures, in-flight scratch and driver memory add to this figure. Use settled resource sampling separately. This harness does not enable a multi-photo cache in the app.
+
+Every photo reports its host start/end relative to its edit group. Whole-group completion and first-photo completion measure throughput and initial feedback separately. Existing device-wide completion waits may include other executors' work, so individual concurrent durations are not isolated GPU costs. Host concurrency does not implement stage-major scheduling across photographs. Use this baseline to justify any later executor/submission changes.
+
+For a host timeline, export one complete capture and open it in a Chrome-trace-compatible viewer:
+
+```sh
+python3 scripts/profiling/timeline.py .local/editing-profile/wall.jsonl \
+  .local/editing-profile/host-trace.json
+```
+
+Photo tracks show executed nodes with operation, publication, existing wait and retirement durations in their details. Node timestamps use each profile's host origin within its group. Groups are placed consecutively with a synthetic 1 ms gap, rather than pretending their independent clocks include report-writing and verification time. GPU pass durations remain in the raw report and summaries. They do not have a shared host-clock origin and are not plotted on this timeline.

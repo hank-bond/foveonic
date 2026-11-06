@@ -47,6 +47,18 @@ fn effective_preview_quality(
         match request.preview_quality {
             PreviewMode::Full => PreviewQuality::Full,
             PreviewMode::Fast => PreviewQuality::Fast,
+            PreviewMode::Draft | PreviewMode::Thumb
+                if metadata.processing_family().ok()
+                    == Some(foveonic::source::ProcessingFamily::Merrill)
+                    && request.settings.preview_region.is_none() =>
+            {
+                if request.preview_quality == PreviewMode::Draft {
+                    PreviewQuality::Draft
+                } else {
+                    PreviewQuality::Thumb
+                }
+            }
+            PreviewMode::Draft | PreviewMode::Thumb => PreviewQuality::Fast,
             PreviewMode::Smart if request.settings.preview_region.is_some() => PreviewQuality::Full,
             PreviewMode::Smart => PreviewQuality::Fast,
         }
@@ -115,7 +127,8 @@ impl Frame {
         if self.artifact.settings.preview_quality.is_reduced()
             && self.artifact.settings.output_size.is_none()
         {
-            [0, 0, extent[0] * 2, extent[1] * 2]
+            let divisor = self.artifact.settings.preview_quality.divisor();
+            [0, 0, extent[0] * divisor, extent[1] * divisor]
         } else {
             [0, 0, extent[0], extent[1]]
         }
@@ -124,6 +137,8 @@ impl Frame {
         match self.artifact.settings.preview_quality {
             PreviewQuality::Full => "Full",
             PreviewQuality::Fast => "Fast",
+            PreviewQuality::Draft => "Draft",
+            PreviewQuality::Thumb => "Thumb",
         }
     }
     /// Keep the output visible until its matching input is ready.
@@ -1421,10 +1436,19 @@ mod preview_tests {
         assert_eq!(resolved.preview_quality, PreviewQuality::Fast);
         assert_eq!(resolved.preview_region, None);
         assert!(resolved.row_correction && resolved.despeckle);
+        for (mode, quality) in [
+            (PreviewMode::Draft, PreviewQuality::Draft),
+            (PreviewMode::Thumb, PreviewQuality::Thumb),
+        ] {
+            request.preview_quality = mode;
+            resolve_preview(&request, &mut resolved, &metadata);
+            assert_eq!(resolved.preview_quality, quality);
+        }
         request.preview_quality = PreviewMode::Fast;
         resolve_preview(&request, &mut resolved, &metadata);
         assert_eq!(resolved.preview_quality, PreviewQuality::Fast);
         assert!(crate::smart::same_edits(&resolved, &request.settings));
+        request.settings.preview_quality = PreviewQuality::Draft;
         request.preview_quality = PreviewMode::Full;
         resolve_preview(&request, &mut resolved, &metadata);
         assert_eq!(resolved.preview_quality, PreviewQuality::Full);

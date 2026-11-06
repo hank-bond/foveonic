@@ -129,6 +129,21 @@ impl App {
     }
 
     pub(super) fn update_smart(&mut self, ctx: &egui::Context) {
+        if !self.busy
+            && self
+                .viewport
+                .zoom_percent(ctx.pixels_per_point())
+                .is_some_and(|z| z > 100.)
+            && self.frame.as_ref().is_some_and(|f| {
+                matches!(
+                    f.artifact.settings.preview_quality,
+                    PreviewQuality::Draft | PreviewQuality::Thumb
+                )
+            })
+        {
+            self.submit_with_quality(None, None, preferences::PreviewMode::Full);
+            return;
+        }
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.framing_preview_active()
             || self.exporting

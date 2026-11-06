@@ -130,3 +130,79 @@ fn gpu_profile_attaches_shared_passes_to_the_node_that_submitted_them() {
         .zip(node.shared_gpu_end)
         .is_none_or(|(start, end)| start <= end && end <= profile.gpu.len())));
 }
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn session_node_phases_preserve_work_and_exact_pixels() {
+    let directory = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source =
+        std::sync::Arc::new(Source::open(directory.join("blue-parking-sign.x3f")).unwrap());
+    let engine = Engine::new().unwrap();
+    let mut outputs = Vec::new();
+    let mut activities = Vec::new();
+    for mode in [Mode::Off, Mode::Wall] {
+        let engine = engine.executor();
+        let mut session = crate::interactive::RenderSession::new(source.clone());
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.preview_quality = crate::render::PreviewQuality::Thumb;
+        engine
+            .render_session(
+                &mut session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .unwrap();
+        settings.exposure = 0.25;
+        let before = engine.gpu_activity();
+        let mut profile = Profile::new(mode);
+        let mut artifacts = engine
+            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+            .unwrap()
+            .unwrap();
+        let activity = engine.gpu_activity().since(before);
+        activities.push((
+            activity.dispatches,
+            activity.submissions,
+            activity.readbacks,
+            activity.timestamp_resolves,
+        ));
+        let crate::inspection::Content::Image(image) = artifacts.pop().unwrap().content else {
+            panic!("image expected")
+        };
+        outputs.push(engine.readback_image(&image).unwrap());
+        if mode == Mode::Off {
+            assert!(profile.nodes.is_empty() && profile.host.is_empty());
+        } else {
+            let executed: Vec<_> = profile.nodes.iter().filter(|n| n.executed).collect();
+            assert!(!executed.is_empty());
+            for node in &executed {
+                let sum = node.host_milliseconds.unwrap()
+                    + node.publication_ms.unwrap()
+                    + node.completion_wait_ms.unwrap()
+                    + node.retirement_ms.unwrap();
+                assert!(node.total_ms.unwrap() >= sum, "{node:?}");
+            }
+            assert!(executed
+                .windows(2)
+                .all(|pair| pair[0].started_ms + pair[0].total_ms.unwrap() <= pair[1].started_ms));
+            assert_eq!(
+                executed.len(),
+                profile
+                    .host
+                    .iter()
+                    .filter(|t| t.stage == "complete interactive graph stage")
+                    .count()
+            );
+            assert!(profile
+                .nodes
+                .iter()
+                .filter(|n| !n.executed)
+                .all(|n| n.total_ms.is_none() && n.completion_wait_ms.is_none()));
+        }
+    }
+    assert_eq!(activities[0], activities[1]);
+    assert_eq!(outputs[0], outputs[1]);
+}

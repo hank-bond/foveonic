@@ -114,7 +114,7 @@ pub(super) fn append(
         }
         if let Some(grid) = request.preview {
             let native = graph.named_output(bands, "column.layers")?;
-            let reduced = graph.add(Operation::ReduceLayers(grid.reduction), &[native])?;
+            let reduced = grid.append(graph, native)?;
             graph.add(
                 Operation::DirectionalBanding {
                     stage: crate::nodes::color::directional_banding::Stage::Retile,

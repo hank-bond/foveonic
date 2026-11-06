@@ -92,7 +92,12 @@ pub(in crate::render::recipes) fn build(
         space,
         white: LINEAR_CODE_WHITE,
         guide_white: CLASSIFIER_CODE_UNIT,
-        scale: if settings.preview_region.is_some() {
+        scale: if matches!(
+            settings.preview_quality,
+            crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
+        ) {
+            1. / settings.preview_quality.divisor() as f32
+        } else if settings.preview_region.is_some() {
             1.
         } else {
             (recipe.params.source[0] as f32 / source.metadata.width as f32)

@@ -1,28 +1,60 @@
-//! Prepares Merrill's half-size calibrated preview grid without changing source metadata.
+//! Prepares filtered calibrated sensor grids and preserves fractional active-image framing.
 
+use super::super::BuiltRecipe;
 use crate::{
+    color_space::ColorSpace,
+    graph::{Graph, Operation},
     nodes::{color::pyramid_resample, sensor::calibration::EncodeParams},
+    render::PreviewQuality,
     source::Result,
 };
 
-const SCALE: u32 = 2;
-
 pub(in crate::render) fn available(metadata: &crate::source::Metadata) -> bool {
+    available_at(metadata, PreviewQuality::Fast)
+}
+
+pub(in crate::render) fn available_at(
+    metadata: &crate::source::Metadata,
+    quality: PreviewQuality,
+) -> bool {
     metadata.processing_family().ok() == Some(crate::source::ProcessingFamily::Merrill)
-        && crate::nodes::sensor::calibration::encode(metadata, crate::color_space::ColorSpace::Srgb)
-            .and_then(|encode| Grid::new(encode, None))
+        && crate::nodes::sensor::calibration::encode(metadata, ColorSpace::Srgb)
+            .and_then(|encode| Grid::new(encode, None, quality))
             .is_ok()
 }
 
 pub(super) struct Grid {
-    pub reduction: pyramid_resample::Prepared,
+    reductions: Vec<pyramid_resample::Prepared>,
+    divisor: u32,
+    native: EncodeParams,
     pub encode: EncodeParams,
 }
 impl Grid {
-    /// Apply camera noise controls to the reduced samples. Keep filter support
-    /// in working pixels and map sensor-coordinate bounds without editing metadata.
+    /// Filter calibrated layers before expensive noise and color reconstruction.
+    pub fn append(&self, graph: &mut Graph, mut input: usize) -> Result<usize> {
+        for (step, prepared) in self.reductions.iter().enumerate() {
+            input = if step == 0 {
+                graph.add(Operation::ReduceLayers(*prepared), &[input])?
+            } else {
+                graph.add_scoped(
+                    Operation::ReduceLayers(*prepared),
+                    &[input],
+                    &format!("preview.sensor.{}", 1 << (step + 1)),
+                )?
+            };
+        }
+        Ok(input)
+    }
+
+    /// Retain noise controls on a smaller grid, using complete aligned processing tiles.
     pub fn noise(&self, mut params: crate::noise::Parameters) -> Result<crate::noise::Parameters> {
-        let extent = self.reduction.output_extent();
+        let extent = self.reductions.last().unwrap().output_extent();
+        // Small previews fit one processing tile. Keeping the native 4×4 split
+        // repeats large halos and can create fractional internal resampling grids.
+        if self.divisor >= 4 {
+            params.source[2..].fill(1);
+            params.window = [0, 0, 1, 1];
+        }
         for (axis, length) in extent.into_iter().enumerate() {
             let tiles = params.source[axis + 2];
             if tiles == 0 || !length.is_multiple_of(tiles) {
@@ -30,30 +62,98 @@ impl Grid {
             }
             params.source[axis] = length;
             params.tile[axis] = length / tiles + 2 * params.tile[2];
-            params.area[axis] /= SCALE;
-            params.area[axis + 2] = params.area[axis + 2].div_ceil(SCALE);
-            params.column_area[axis] /= SCALE;
-            params.column_area[axis + 2] = params.column_area[axis + 2].div_ceil(SCALE);
+            params.area[axis] /= self.divisor;
+            params.area[axis + 2] = params.area[axis + 2].div_ceil(self.divisor);
+            params.column_area[axis] /= self.divisor;
+            params.column_area[axis + 2] = params.column_area[axis + 2].div_ceil(self.divisor);
         }
         params.region = [0, 0, extent[0], extent[1]];
-        params.reduced_tile_extent()?;
+        if let Err(error) = params.reduced_tile_extent() {
+            return Err(format!(
+                "{error}: preview source {:?}, tile {:?}, scale {:?}",
+                params.source, params.tile, params.reduction
+            )
+            .into());
+        }
         Ok(params)
     }
 
-    pub fn new(mut encode: EncodeParams, output_size: Option<[u32; 2]>) -> Result<Self> {
-        let extent = [encode.source[0], encode.source[1]];
-        // Keep framing exactly representable on the reduced grid.
-        if extent.iter().any(|v| !v.is_multiple_of(SCALE))
-            || encode.crop.iter().any(|v| !v.is_multiple_of(SCALE))
+    pub fn new(
+        mut encode: EncodeParams,
+        output_size: Option<[u32; 2]>,
+        quality: PreviewQuality,
+    ) -> Result<Self> {
+        let native = encode;
+        let divisor = quality.divisor();
+        let mut extent = [encode.source[0], encode.source[1]];
+        if divisor < 2
+            || extent.iter().any(|v| !v.is_multiple_of(divisor))
+            || (divisor == 2 && encode.crop.iter().any(|v| !v.is_multiple_of(divisor)))
         {
-            return Err("Merrill reduced preview requires even sensor dimensions and crop".into());
+            return Err(
+                "Merrill reduced preview requires aligned sensor dimensions and crop".into(),
+            );
         }
-        let reduction = pyramid_resample::Prepared::new(extent, pyramid_resample::Ratio::Half)?;
-        encode.source[..2].copy_from_slice(&reduction.output_extent());
-        encode.crop = encode.crop.map(|v| v / SCALE);
-        let output = output_size.unwrap_or([encode.output[0] / SCALE, encode.output[1] / SCALE]);
+        // Reconstruction uses eighth-quantized scales. One small tile with its
+        // retained halo must remain integral for every supported noise preset.
+        if divisor >= 4 && extent.iter().any(|v| !(v / divisor).is_multiple_of(8)) {
+            return Err("small preview requires an aligned reconstruction grid".into());
+        }
+        let mut reductions = Vec::new();
+        for _ in 0..divisor.ilog2() {
+            let reduction = pyramid_resample::Prepared::new(extent, pyramid_resample::Ratio::Half)?;
+            extent = reduction.output_extent();
+            reductions.push(reduction);
+        }
+        encode.source[..2].copy_from_slice(&extent);
+        encode.crop = std::array::from_fn(|i| {
+            if i < 2 {
+                native.crop[i] / divisor
+            } else {
+                native.crop[i].div_ceil(divisor).min(extent[i - 2])
+            }
+        });
+        let output =
+            output_size.unwrap_or([native.output[0] / divisor, native.output[1] / divisor]);
         encode.output[..2].copy_from_slice(&output);
-        Ok(Self { reduction, encode })
+        Ok(Self {
+            reductions,
+            divisor,
+            native,
+            encode,
+        })
+    }
+
+    /// Camera active edges can lie between reduced pixels. Materialize their exact
+    /// affine frame after reconstruction instead of rounding the photograph's crop.
+    pub fn frame(&self, recipe: &mut BuiltRecipe, space: ColorSpace) -> Result<()> {
+        if self.divisor == 2 {
+            return Ok(());
+        }
+        let mut output = [self.encode.output[0], self.encode.output[1]];
+        if matches!(self.native.source[2], 90 | 270) {
+            output.swap(0, 1);
+        }
+        let d = self.divisor as f32;
+        let [l, t, r, b] = self.native.crop.map(|v| v as f32 / d);
+        let extent = [self.encode.source[0], self.encode.source[1]];
+        recipe.final_id = recipe.graph.add(
+            Operation::ResampleRgb {
+                params: EncodeParams {
+                    mapping: [[r - l, 0., l, 1.], [0., b - t, t, 1.]],
+                    source: [extent[0], extent[1], 0, 0],
+                    crop: [0, 0, extent[0], extent[1]],
+                    output: [output[0], output[1], 0, 0],
+                },
+                space,
+            },
+            &[recipe.final_id],
+        )?;
+        recipe.params.source[..2].copy_from_slice(&output);
+        recipe.params.crop = [0, 0, output[0], output[1]];
+        recipe.rgb_extent = output;
+        recipe.rgb_bounds = recipe.params.crop;
+        Ok(())
     }
 }
 

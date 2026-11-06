@@ -19,25 +19,30 @@ fn encoding(rotation: u32) -> EncodeParams {
 fn half_grid_preserves_crop_orientation_and_explicit_output_size() {
     for rotation in [0, 90, 180, 270] {
         let native = encoding(rotation);
-        let grid = Grid::new(native, None).unwrap();
-        assert_eq!(grid.reduction.output_extent(), [2464, 1632]);
+        let grid = Grid::new(native, None, crate::render::PreviewQuality::Fast).unwrap();
+        assert_eq!(grid.reductions[0].output_extent(), [2464, 1632]);
         assert_eq!(grid.encode.source, [2464, 1632, rotation, 0]);
         assert_eq!(grid.encode.crop, native.crop.map(|v| v / 2));
         assert_eq!(
             grid.encode.output[..2],
             native.output[..2].iter().map(|v| v / 2).collect::<Vec<_>>()
         );
-        let sized = Grid::new(native, Some([1200, 800])).unwrap();
+        let sized = Grid::new(
+            native,
+            Some([1200, 800]),
+            crate::render::PreviewQuality::Fast,
+        )
+        .unwrap();
         assert_eq!(sized.encode.output[..2], [1200, 800]);
     }
     let mut odd = encoding(0);
     odd.crop[0] += 1;
-    assert!(Grid::new(odd, None).is_err());
+    assert!(Grid::new(odd, None, crate::render::PreviewQuality::Fast).is_err());
     let mut misaligned = encoding(0);
     misaligned.source[0] -= 1;
-    assert!(Grid::new(misaligned, None).is_err());
+    assert!(Grid::new(misaligned, None, crate::render::PreviewQuality::Fast).is_err());
     misaligned.source[0] -= 1;
-    assert!(Grid::new(misaligned, None).is_ok());
+    assert!(Grid::new(misaligned, None, crate::render::PreviewQuality::Fast).is_ok());
 }
 
 #[test]
@@ -552,4 +557,45 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
         .render(&source, &neutral, &mut Profile::default())
         .unwrap();
     assert!(engine.readback_image(&image).unwrap() == engine.readback_image(&expected).unwrap());
+}
+
+#[test]
+fn draft_and_thumb_preserve_sensor_geometry_and_require_calibrated_inputs() {
+    use crate::render::PreviewQuality;
+    let mut native = encoding(90);
+    // Thumb must retain an active edge at a half reduced pixel.
+    native.crop[1] += 4;
+    for quality in [PreviewQuality::Draft, PreviewQuality::Thumb] {
+        let grid = Grid::new(native, None, quality).unwrap();
+        let divisor = quality.divisor();
+        assert_eq!(grid.reductions.len(), divisor.ilog2() as usize);
+        assert_eq!(
+            grid.reductions.last().unwrap().output_extent(),
+            [native.source[0] / divisor, native.source[1] / divisor]
+        );
+        assert_eq!(
+            grid.encode.output[..2],
+            native.output[..2]
+                .iter()
+                .map(|v| v / divisor)
+                .collect::<Vec<_>>()
+        );
+        let mut graph = crate::graph::Graph::default();
+        let source = graph.add(crate::graph::Operation::Source, &[]).unwrap();
+        // The numerical graph requires calibrated layers at its input.
+        let layers = graph
+            .add(
+                crate::graph::Operation::ImageAlias {
+                    dehaze_basis: None,
+                    data: crate::graph::DataType::SensorLayers,
+                    output: "test.source",
+                },
+                &[source],
+            )
+            .unwrap();
+        assert!(
+            grid.append(&mut graph, layers).is_err(),
+            "sensor calibration must precede pooling"
+        );
+    }
 }

@@ -27,6 +27,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[dehaze](./dehaze.md)** Adapt recovered haze estimation and patch picking into a saved GPU Dehaze correction.
 - **[display-color-management](./display-color-management.md)** Integrate ICC-derived display limits, managed macOS presentation and gamut-preserving previews.
 - **[dng-export](./dng-export.md)** Implement uncompressed uint16 DNG export through the existing TIFF writer, with baked technical corrections and one embedded appearance; evaluate compression later.
+- **[editing-harness](./editing-harness.md)** Measure warm multi-photo editing, host scheduling and graph boundary costs before changing production execution.
 - **[editing-optimization-handoff](./editing-optimization-handoff.md)** Continue native editing measurements with guarded GPU ownership while preserving the deferred mismatch evidence.
 - **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
@@ -37,6 +38,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[release-0.7.0](./release-0.7.0.md)** Prepare, verify and publish the reviewed Adaptive, export, crop and workspace release as 0.7.0.
+- **[rotation-and-small-preview](./rotation-and-small-preview.md)** Prototype Draft and Thumb sensor reconstruction after committing rotation and preview-retention fixes.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.
 - **[shared-photographic-finishing](./shared-photographic-finishing.md)** Integrate shared photographic tone, monochrome sensitivity, local contrast and sharpening with camera recipes and bounded interactive reuse.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.

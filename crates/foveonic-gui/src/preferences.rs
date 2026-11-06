@@ -70,6 +70,8 @@ pub enum PreviewMode {
     Full,
     Fast,
     Smart,
+    Draft,
+    Thumb,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Scope {

@@ -76,6 +76,7 @@ impl Engine {
         profile: &mut Profile,
         execution: &mut Execution<'_>,
     ) -> Result<Vec<Value>> {
+        let preparation = profile.mode.enabled().then(Instant::now);
         let gpu = &self.gpu;
         let mut completed_allocation_bytes = allocated_bytes(gpu.activity());
         let mut trace = gpu.trace(profile.mode.gpu(), graph.nodes.len() as u32 * 2);
@@ -132,6 +133,9 @@ impl Engine {
                 });
             }
         }
+        if let Some(start) = preparation {
+            profile.record("prepare graph execution", start);
+        }
         let mut shared_ranges = profile.mode.gpu().then(Vec::new);
         for (node_index, node) in graph.nodes.iter().enumerate() {
             execution.check()?;
@@ -154,6 +158,11 @@ impl Engine {
                             .collect(),
                         executed: run,
                         host_milliseconds: None,
+                        started_ms: profile.elapsed_ms(),
+                        publication_ms: None,
+                        completion_wait_ms: None,
+                        retirement_ms: None,
+                        total_ms: None,
                         activity: None,
                         nested_gpu_start: profile.gpu.len(),
                         nested_gpu_end: profile.gpu.len(),
@@ -198,6 +207,7 @@ impl Engine {
                 });
             let extent = match &node.operation {
                 Operation::ReduceLayers(prepared) => prepared.output_extent(),
+                Operation::ResampleRgb { params, .. } => [params.output[0], params.output[1]],
                 Operation::AdaptiveToneOverview { source, .. } => source.map(|v| v.div_ceil(2)),
                 Operation::ToneMask { guide, .. } | Operation::AdaptiveToneGuide { guide, .. } => {
                     guide.extent()
@@ -267,6 +277,9 @@ impl Engine {
                         profile,
                     )?)
                 }
+                Operation::ResampleRgb { params, .. } => Some(
+                    crate::nodes::finish::resize::apply(gpu, &input(0).buffer, params, profile)?.0,
+                ),
                 Operation::ReduceLayers(prepared) => {
                     Some(crate::nodes::color::pyramid_resample::apply(
                         gpu,
@@ -1730,34 +1743,34 @@ impl Engine {
                     None
                 }
             };
-            let diagnostic = diagnostic.map(|(mut observation, started, before, shared_start)| {
-                observation.host_milliseconds = Some(started.elapsed().as_secs_f64() * 1000.);
-                observation.activity = Some(gpu.activity().since(before));
-                observation.nested_gpu_end = profile.gpu.len();
-                let shared_end = profile.mode.gpu().then(|| trace.len());
-                (observation, shared_start.zip(shared_end))
-            });
+            let mut diagnostic =
+                diagnostic.map(|(mut observation, started, before, shared_start)| {
+                    observation.host_milliseconds = Some(started.elapsed().as_secs_f64() * 1000.);
+                    observation.activity = Some(gpu.activity().since(before));
+                    observation.nested_gpu_end = profile.gpu.len();
+                    let shared_end = profile.mode.gpu().then(|| trace.len());
+                    (observation, started, shared_start.zip(shared_end))
+                });
             if !matches!(node.operation, Operation::WriteImage { .. }) {
                 profile.record(node.operation.label(), start);
             }
+            let publication = profile.mode.enabled().then(Instant::now);
             if !cached[index] {
                 values[index] = output.map(|buffer| Value {
                     buffer,
                     description: desc,
                 });
             }
-            if let Some((mut observation, shared_range)) = diagnostic {
-                for (output, &id) in observation.outputs.iter_mut().zip(&node.outputs) {
-                    output.published = !cached[id] && values[id].is_some();
-                }
-                if let (Some(ranges), Some((start, end))) = (&mut shared_ranges, shared_range) {
-                    ranges.push((profile.nodes.len(), start, end));
-                }
-                profile.nodes.push(observation);
-            }
             for &id in &node.outputs {
                 if let Some(value) = values[id].as_ref() {
                     execution.store(&graph.outputs[id].cache_name(), value);
+                }
+            }
+            if let Some((observation, _, _)) = &mut diagnostic {
+                observation.publication_ms =
+                    publication.map(|start| start.elapsed().as_secs_f64() * 1000.);
+                for (output, &id) in observation.outputs.iter_mut().zip(&node.outputs) {
+                    output.published = !cached[id] && values[id].is_some();
                 }
             }
             // Queuing a whole outdated render would delay both drawing and newer edits.
@@ -1775,7 +1788,12 @@ impl Engine {
                 } else {
                     "complete graph submission window"
                 };
+                let wait = profile.mode.enabled().then(Instant::now);
                 profile.measure(label, || gpu.device.poll(wgpu::Maintain::Wait));
+                if let Some((observation, _, _)) = &mut diagnostic {
+                    observation.completion_wait_ms =
+                        wait.map(|start| start.elapsed().as_secs_f64() * 1000.);
+                }
                 completed_allocation_bytes = allocated_bytes(gpu.activity());
             }
             stage_completed += 1;
@@ -1785,6 +1803,7 @@ impl Engine {
                     total: stage_total,
                 });
             }
+            let retirement = profile.mode.enabled().then(Instant::now);
             for &id in &reads[node_index] {
                 consumers[id] -= 1;
                 if consumers[id] == 0 {
@@ -1799,6 +1818,15 @@ impl Engine {
                         }
                     }
                 }
+            }
+            if let Some((mut observation, started, shared_range)) = diagnostic {
+                observation.retirement_ms =
+                    retirement.map(|start| start.elapsed().as_secs_f64() * 1000.);
+                observation.total_ms = Some(started.elapsed().as_secs_f64() * 1000.);
+                if let (Some(ranges), Some((start, end))) = (&mut shared_ranges, shared_range) {
+                    ranges.push((profile.nodes.len(), start, end));
+                }
+                profile.nodes.push(observation);
             }
         }
         let shared_gpu_base = profile.mode.gpu().then_some(profile.gpu.len());

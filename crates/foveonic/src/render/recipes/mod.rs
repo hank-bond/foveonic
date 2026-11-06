@@ -13,6 +13,9 @@ pub(super) mod classic;
 mod finishing;
 mod linear_edits;
 pub(super) mod merrill;
+#[cfg(test)]
+#[path = "preview_test.rs"]
+mod preview_tests;
 pub(super) mod quattro;
 
 pub(super) enum Recipe<'a> {
@@ -58,6 +61,7 @@ impl Engine {
             Recipe::Photographic(names) => names,
             Recipe::DngBase => &["final"],
         };
+        let preparation = profile.mode.enabled().then(std::time::Instant::now);
         execution.check()?;
         profile.mode.check_gpu_features(self.device().features())?;
         settings.validate_values()?;
@@ -71,6 +75,19 @@ impl Engine {
             && !settings.regional_preview_available(&source.metadata)
         {
             request.to_mut().preview_region = None;
+        }
+        if matches!(
+            settings.preview_quality,
+            super::PreviewQuality::Draft | super::PreviewQuality::Thumb
+        ) && (source.metadata.processing_family()? != crate::source::ProcessingFamily::Merrill
+            || !merrill::preview_available(&source.metadata, settings.preview_quality)
+            || !settings.fast_preview_available(&source.metadata)
+            || settings.preview_region.is_some()
+            || settings.output_size.is_some()
+            || names != ["final"]
+            || matches!(recipe, Recipe::DngBase))
+        {
+            request.to_mut().preview_quality = super::PreviewQuality::Full;
         }
         let settings = request.as_ref();
         let resolved = settings.resolved_exposure(&source.metadata);
@@ -112,6 +129,9 @@ impl Engine {
             Recipe::DngBase => build_dng(self, source, &effective, settings, profile, execution)?,
         };
         linear_edits::prioritize_cache(&mut built.graph);
+        if let Some(start) = preparation {
+            profile.record("prepare render recipe", start);
+        }
         if let Some(progress) = execution.progress {
             progress(super::RenderProgress::Prepared);
         }
@@ -141,6 +161,15 @@ fn build_camera(
     } else {
         names
     };
+    let mut request = std::borrow::Cow::Borrowed(settings);
+    if matches!(
+        settings.preview_quality,
+        super::PreviewQuality::Draft | super::PreviewQuality::Thumb
+    ) && names != ["final"]
+    {
+        request.to_mut().preview_quality = super::PreviewQuality::Full;
+    }
+    let settings = request.as_ref();
     match source.metadata.processing_family()? {
         crate::source::ProcessingFamily::Merrill => {
             merrill::build(engine, source, settings, names, profile, execution)

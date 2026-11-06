@@ -75,6 +75,23 @@ class SummarizeTests(unittest.TestCase):
         self.assertEqual(result['prepared_to_encode_ms']['median'], 2.)
         self.assertEqual(result['receipt_to_first_encoding_end_ms']['median'], 1.)
 
+    def test_editing_schedules_sizes_and_node_phases_stay_separate(self):
+        records = []
+        for quality, workers, milliseconds in [('Draft', 1, 40.), ('Thumb', 1, 20.), ('Thumb', 2, 15.)]:
+            context = {'quality': quality, 'workers': workers, 'edit': 'exposure'}
+            records.append(event('editing_group', {**context, 'photo_count': 8,
+                'completed_ms': milliseconds, 'first_ms': 5., 'cache_bytes': 100}))
+            records.append(event('editing_photo', {**context, 'profile': {
+                'host': [{'stage': 'prepare', 'milliseconds': milliseconds}],
+                'nodes': [{'operation': 'Tone', 'executed': True, 'host_milliseconds': 1.,
+                           'publication_ms': 2., 'completion_wait_ms': 3., 'retirement_ms': 4., 'total_ms': 10.},
+                          {'operation': 'Tone', 'executed': False}]}}))
+        result = summarize(records)['modes']['wall']
+        self.assertEqual([r['completed_ms']['median'] for r in result['editing_groups']], [40., 20., 15.])
+        self.assertEqual([r['sample_ms']['median'] for r in result['stages']], [40., 20., 15.])
+        self.assertTrue(all(r['executed'] == 1 and r['skipped'] == 1 for r in result['node_phases']))
+        self.assertEqual(result['node_phases'][0]['milliseconds']['completion_wait_ms']['median'], 3.)
+
     def test_empty_stats_and_unfinished_windows(self):
         self.assertEqual(stats([])['count'], 0)
         self.assertIsNone(stats([])['median'])

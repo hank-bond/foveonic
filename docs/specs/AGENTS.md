@@ -63,6 +63,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[row-banding](./row-banding.md)** _(accepted, conforming, reference)._ GPU row-banding correction fits the native geometric patch banks, rejects scene-correlated residuals, and subtracts bounded additive per-row sensor bias before reconstruction.
 - **[saturation](./saturation.md)** _(accepted, conforming, reference)._ Saturation is independent of Tone and Color Range, with Reference and gamut-aware Universal processing.
 - **[sensor-defect-calibration](./sensor-defect-calibration.md)** _(accepted, conforming, reference)._ User cap calibration must distinguish general noise distributions from camera-specific sparse pixel defects.
+- **[small-previews](./small-previews.md)** _(accepted, incomplete, reference)._ Draft and Thumb preview experiments reduce calibrated sensor grids before reconstruction while preserving native photographic geometry.
 - **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Smart preview uses Fast overviews and renders compatible zoomed edits directly at Full quality, refining the visible region first where supported.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
 - **[tonal-ranges](./tonal-ranges.md)** _(accepted, conforming, reference)._ Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG.

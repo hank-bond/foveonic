@@ -121,7 +121,16 @@ pub struct NodeObservation {
     pub operation: &'static str,
     pub outputs: Vec<NodeOutput>,
     pub executed: bool,
+    /// Operation encoding and any nested work. Excludes publication and retirement.
     pub host_milliseconds: Option<f64>,
+    /// Host timeline relative to this profile, including work between GPU passes.
+    pub started_ms: f64,
+    pub publication_ms: Option<f64>,
+    /// Existing completion wait, absent when this node did not wait.
+    pub completion_wait_ms: Option<f64>,
+    pub retirement_ms: Option<f64>,
+    /// Whole node elapsed time. Includes the phases above and progress callbacks.
+    pub total_ms: Option<f64>,
     pub activity: Option<GpuActivity>,
     pub nested_gpu_start: usize,
     pub nested_gpu_end: usize,
@@ -132,6 +141,8 @@ pub struct NodeObservation {
 #[derive(Default, Debug, serde::Serialize)]
 pub struct Profile {
     pub mode: Mode,
+    #[serde(skip)]
+    origin: Option<Instant>,
     pub host: Vec<Timing>,
     pub gpu: Vec<Timing>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -144,8 +155,14 @@ impl Profile {
     pub fn new(mode: Mode) -> Self {
         Self {
             mode,
+            origin: mode.enabled().then(Instant::now),
             ..Self::default()
         }
+    }
+
+    pub(crate) fn elapsed_ms(&self) -> f64 {
+        self.origin
+            .map_or(0., |start| start.elapsed().as_secs_f64() * 1000.)
     }
 
     pub(crate) fn record(&mut self, stage: &'static str, start: Instant) {
