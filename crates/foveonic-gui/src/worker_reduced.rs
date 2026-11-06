@@ -307,8 +307,8 @@ mod tests {
     fn supported_classic_small_policy_does_not_require_fast_or_reduced_session_ownership() {
         use foveonic::source::{Matrix, MatrixEncoding};
         let metadata = Metadata {
-            width: 256,
-            height: 192,
+            width: 2688,
+            height: 1792,
             rotation: 0,
             processing_version: None,
             properties: [
@@ -322,7 +322,7 @@ mod tests {
                     encoding: MatrixEncoding::Float32,
                     representation: "test",
                     dimensions: vec![4],
-                    values: vec![7., 5., 248., 186.],
+                    values: vec![8., 8., 2679., 1783.],
                 },
             )]
             .into(),
