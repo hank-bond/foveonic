@@ -239,3 +239,30 @@ fn original_tiger_stage1_preparation_and_two_pass_boundary_match() {
     eprintln!("Native Tiger two-pass Stage1 max error {maximum}");
     assert_eq!(maximum, 0.);
 }
+
+#[test]
+fn small_noise_grids_preserve_all_strength_steps_and_native_controls() {
+    use super::super::WorkingGrid;
+    let metadata = metadata();
+    for step in 0..=4 {
+        let full = prepare_filter(&metadata, step).unwrap();
+        assert!(
+            full.key()
+                == prepare_filter_on_grid(&metadata, step, WorkingGrid::Full)
+                    .unwrap()
+                    .key()
+        );
+        assert!(
+            full.key()
+                == prepare_filter_on_grid(&metadata, step, WorkingGrid::Half)
+                    .unwrap()
+                    .key()
+        );
+        let draft = prepare_filter_on_grid(&metadata, step, WorkingGrid::Quarter).unwrap();
+        let thumb = prepare_filter_on_grid(&metadata, step, WorkingGrid::Eighth).unwrap();
+        assert_eq!(draft.extent(), [1472, 918]);
+        assert_eq!(thumb.extent(), [736, 459]);
+        assert!(full.key() != draft.key());
+        assert!(draft.key() != thumb.key());
+    }
+}

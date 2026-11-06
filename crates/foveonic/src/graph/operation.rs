@@ -12,6 +12,7 @@ use crate::render::TiffColorSpace;
 use std::path::PathBuf;
 
 pub enum Operation {
+    PoolSignal(crate::nodes::sensor::pool::Prepared),
     /// Low-pass calibrated layers onto a grid with half the width and height.
     ReduceLayers(crate::nodes::color::pyramid_resample::Prepared),
     ResampleRgb {
@@ -292,6 +293,7 @@ impl Operation {
     pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {
         use crate::{noise::RecipeStage as N, recipe::Key};
         let key = match self {
+            Self::PoolSignal(p) => p.key(),
             Self::ReduceLayers(p) => p.key(),
             Self::ResampleRgb { params, space } => Key::pod(params).with(&(*space as u32)),
             Self::ImageRegion {
@@ -474,6 +476,7 @@ impl Operation {
     /// Stable exhaustive operation identity for diagnostic attribution.
     pub(crate) fn kind(&self) -> &'static str {
         match self {
+            Self::PoolSignal(_) => "PoolSignal",
             Self::ReduceLayers(_) => "ReduceLayers",
             Self::ResampleRgb { .. } => "ResampleRgb",
             Self::ImageRegion { .. } => "ImageRegion",
@@ -593,6 +596,7 @@ impl Operation {
 
     pub fn label(&self) -> &'static str {
         match self {
+            Self::PoolSignal(_) => "pool corrected preview signals",
             Self::ReduceLayers(_) => "reduce calibrated preview layers",
             Self::ResampleRgb { .. } => "frame linear photograph preview",
             Self::LinearCodeBase => "retain linear RGB code base",
@@ -726,6 +730,15 @@ impl Operation {
     pub(super) fn types(&self) -> (Vec<DataType>, DataType) {
         use DataType::*;
         match self {
+            Self::PoolSignal(p) => {
+                use crate::nodes::sensor::pool::Signal;
+                let data = match p.signal() {
+                    Signal::Rgb => CorrectedSensorRgb,
+                    Signal::Blue => CorrectedSensorBlue,
+                    Signal::Mask => HighlightMask,
+                };
+                (vec![data], data)
+            }
             Self::ReduceLayers(_) => (vec![CalibratedLayers], CalibratedLayers),
             Self::ResampleRgb { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::ImageRegion { data, .. } => (vec![*data], *data),
@@ -1121,6 +1134,7 @@ impl Operation {
 
     pub fn output_name(&self) -> &'static str {
         match self {
+            Self::PoolSignal(_) => "preview.corrected",
             Self::ReduceLayers(_) => "preview.layers",
             Self::ResampleRgb { .. } => "preview.framed-linear",
             Self::ImageRegion { output, .. } => output,

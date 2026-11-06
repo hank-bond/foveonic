@@ -206,6 +206,7 @@ impl Engine {
                     Input::Rendered(image) => image.description.extent,
                 });
             let extent = match &node.operation {
+                Operation::PoolSignal(prepared) => prepared.output_extent(),
                 Operation::ReduceLayers(prepared) => prepared.output_extent(),
                 Operation::ResampleRgb { params, .. } => [params.output[0], params.output[1]],
                 Operation::AdaptiveToneOverview { source, .. } => source.map(|v| v.div_ceil(2)),
@@ -280,6 +281,12 @@ impl Engine {
                 Operation::ResampleRgb { params, .. } => Some(
                     crate::nodes::finish::resize::apply(gpu, &input(0).buffer, params, profile)?.0,
                 ),
+                Operation::PoolSignal(prepared) => Some(crate::nodes::sensor::pool::apply(
+                    gpu,
+                    &input(0).buffer,
+                    prepared,
+                    profile,
+                )?),
                 Operation::ReduceLayers(prepared) => {
                     Some(crate::nodes::color::pyramid_resample::apply(
                         gpu,

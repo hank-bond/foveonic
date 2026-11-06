@@ -231,7 +231,28 @@ pub(super) fn prepare_filter(
     numerical(&prepare(metadata, chroma_step)?)
 }
 
+pub(super) fn prepare_filter_on_grid(
+    metadata: &Metadata,
+    chroma_step: u8,
+    grid: super::WorkingGrid,
+) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
+    if !grid.is_small() {
+        return prepare_filter(metadata, chroma_step);
+    }
+    let mut controls = prepare(metadata, chroma_step)?;
+    let divisor = grid.divisor() / 2;
+    controls.extent = controls.extent.map(|v| v / divisor);
+    numerical_scaled(&controls, divisor)
+}
+
 fn numerical(controls: &Stage1Controls) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
+    numerical_scaled(controls, 1)
+}
+
+fn numerical_scaled(
+    controls: &Stage1Controls,
+    divisor: u32,
+) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
     use crate::nodes::color::{rgb_prefilter, two_scale_noise};
     let iteration = |index: usize| -> Result<rgb_prefilter::Prepared> {
         let (intensity, range) = conditioning(
@@ -252,11 +273,18 @@ fn numerical(controls: &Stage1Controls) -> Result<crate::nodes::color::two_scale
             intensity,
             range,
             2047. / (8. / controls.bilateral_strengths[index]),
-            if index == 0 { 5 } else { 15 },
+            (if index == 0 { 5_u32 } else { 15 })
+                .div_ceil(divisor)
+                .max(1),
         )
     };
     // The recipe supplies the selected caller's highlight-preservation gains.
-    let prepared = two_scale_noise::Prepared::new(
+    let constructor = if divisor == 1 {
+        two_scale_noise::Prepared::new
+    } else {
+        two_scale_noise::Prepared::on_preview_grid
+    };
+    let prepared = constructor(
         iteration(0)?,
         iteration(1)?,
         brightness(),

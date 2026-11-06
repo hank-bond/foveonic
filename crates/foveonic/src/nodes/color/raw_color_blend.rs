@@ -177,6 +177,15 @@ impl Prepared {
     pub(crate) fn requires_highlight_mask(&self) -> bool {
         self.params.shape[2] != 0
     }
+    pub(crate) fn with_extent(mut self, extent: [u32; 2]) -> Result<Self> {
+        if extent.contains(&0)
+            || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / 3
+        {
+            return Err("invalid color working extent".into());
+        }
+        self.params.shape[..2].copy_from_slice(&extent);
+        Ok(self)
+    }
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }

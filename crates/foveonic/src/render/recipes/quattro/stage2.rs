@@ -232,6 +232,71 @@ pub(super) fn build_signals(
     })
 }
 
+/// Native coordinate compensation precedes sensor pooling in small previews.
+pub(super) fn shade_preprocessing(
+    graph: &mut crate::graph::Graph,
+    metadata: &Metadata,
+    rgb: usize,
+    blue: usize,
+    selected: &str,
+) -> Result<(usize, usize)> {
+    use crate::{graph::Operation, nodes::color::cell_gain};
+    use std::sync::Arc;
+    if let Some(prepared) = prepare_shading(metadata, selected)? {
+        let rgb = graph.add(
+            Operation::SpatialColorGain {
+                prepared: Arc::new(prepared),
+                output: "preview.shaded-rgb",
+            },
+            &[rgb],
+        )?;
+        let blue = graph.add(
+            Operation::CellGain(Arc::new(cell_gain::Prepared::new(
+                [metadata.width as u32, metadata.height as u32],
+                compensation_grid(metadata, selected, "B")?,
+            )?)),
+            &[blue],
+        )?;
+        Ok((rgb, blue))
+    } else {
+        Ok((rgb, blue))
+    }
+}
+
+pub(super) fn build_reduced_signals(
+    graph: &mut crate::graph::Graph,
+    metadata: &Metadata,
+    filtered: usize,
+    calibrated: usize,
+    blue: usize,
+    rendering: Rendering<'_>,
+) -> Result<Signals> {
+    use crate::graph::Operation;
+    use std::sync::Arc;
+    let extent = rendering.response.extent();
+    // Both histories have already received native selected-WB shading.
+    let response = graph.add(
+        Operation::RawColorBlend(Arc::new(rendering.response)),
+        &[filtered],
+    )?;
+    let processed = if super::mcc::enabled(metadata) {
+        graph.add(
+            Operation::SectorColor(Arc::new(
+                super::mcc::prepare(metadata, rendering.color_mode)?.with_extent(extent)?,
+            )),
+            &[response],
+        )?
+    } else {
+        response
+    };
+    Ok(Signals {
+        processed,
+        filtered,
+        calibrated,
+        blue,
+    })
+}
+
 fn tables(brightness_exponent: f64) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     let mut brightness: Vec<_> = (0..900)
         .map(|index| {

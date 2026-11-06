@@ -123,6 +123,35 @@ impl Prepared {
         self.kernel = interpolation_kernel(FIXED_ONE / f64::from(dx), FIXED_ONE / f64::from(dy));
         Ok(self)
     }
+    /// Map a native crop onto the centers of filtered square sensor cells.
+    pub(crate) fn on_grid(mut self, divisor: u32) -> Result<Self> {
+        if ![4, 8].contains(&divisor)
+            || self.params.shape[..2]
+                .iter()
+                .any(|v| !v.is_multiple_of(divisor))
+        {
+            return Err("scaled crop requires aligned physical dimensions".into());
+        }
+        self.params.shape[0] /= divisor;
+        self.params.shape[1] /= divisor;
+        let center = i64::from(divisor - 1) * 65536 / (2 * i64::from(divisor));
+        for value in &mut self.params.column[..2] {
+            *value = (i64::from(*value) / i64::from(divisor) - center) as u32;
+        }
+        for value in self.params.column[2..]
+            .iter_mut()
+            .chain(&mut self.params.row[..2])
+        {
+            *value = ((*value as i32) / divisor as i32) as u32;
+        }
+        self.params.row[2] = 0;
+        let dx = (self.params.column[2] as i32).unsigned_abs()
+            + (self.params.row[0] as i32).unsigned_abs();
+        let dy = (self.params.column[3] as i32).unsigned_abs()
+            + (self.params.row[1] as i32).unsigned_abs();
+        self.kernel = interpolation_kernel(FIXED_ONE / f64::from(dx), FIXED_ONE / f64::from(dy));
+        Ok(self)
+    }
     pub(crate) fn input_extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }
@@ -286,3 +315,26 @@ pub(crate) fn apply(
 #[cfg(test)]
 #[path = "code_crop_test.rs"]
 mod tests;
+
+#[cfg(test)]
+mod preview_grid_tests {
+    use super::*;
+    #[test]
+    fn scaled_crop_maps_cell_centers_in_every_orientation() {
+        for divisor in [4, 8] {
+            for rotation in [0, 90, 180, 270] {
+                let original =
+                    Prepared::new([128, 96], [16, 8, 112, 88], [24, 20], rotation, true).unwrap();
+                let native = original.params;
+                let pooled = original.on_grid(divisor).unwrap();
+                assert_eq!(pooled.input_extent(), [128 / divisor, 96 / divisor]);
+                assert_eq!(pooled.extent(), [24, 20]);
+                for axis in 0..2 {
+                    let expected = i64::from(native.column[axis]) / i64::from(divisor)
+                        - i64::from(divisor - 1) * 65536 / (2 * i64::from(divisor));
+                    assert_eq!(pooled.params.column[axis] as i32 as i64, expected);
+                }
+            }
+        }
+    }
+}

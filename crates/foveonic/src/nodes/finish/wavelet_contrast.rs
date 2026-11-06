@@ -1,4 +1,4 @@
-//! Adjusts packed-Lab lightness through six lifting levels and bounded detail gains.
+//! Adjusts packed-Lab lightness through scale-aware lifting levels and bounded detail gains.
 use crate::{
     gpu::{
         Binding::{Read, Write},
@@ -16,6 +16,7 @@ struct Params {
     shape: [u32; 4],
     crop: [u32; 4],
     controls: [f32; 4],
+    levels: [u32; 4],
 }
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BandControl {
@@ -76,6 +77,7 @@ impl Prepared {
         Ok(Self {
             params: Params {
                 shape: [pw, ph, w, h],
+                levels: [LEVELS, 0, 0, 0],
                 crop,
                 controls: [
                     bound,
@@ -87,6 +89,17 @@ impl Prepared {
             gains: bands.map(|b| [b.gain, b.limit, b.slope, 0.]),
             kernel,
         })
+    }
+    /// Preserve native band support when pixels represent pooled sensor cells.
+    pub(crate) fn on_preview_grid(mut self, divisor: u32) -> Result<Self> {
+        if ![4, 8].contains(&divisor) {
+            return Err("invalid wavelet preview divisor".into());
+        }
+        self.params.levels[0] = LEVELS - divisor.ilog2();
+        for band in &mut self.gains {
+            band[1] /= divisor as f32;
+        }
+        Ok(self)
     }
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[2], self.params.shape[3]]
@@ -155,7 +168,8 @@ pub(crate) fn apply(
     let params = gpu.uniform(&prepared.params);
     let gains = gpu.upload("Wavelet detail gains", &prepared.gains)?;
     let kernel = gpu.upload("Lowest-band sharpening kernel", &prepared.kernel)?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 27);
+    let levels = prepared.params.levels[0];
+    let mut trace = gpu.trace(profile.mode.gpu(), 4 * levels + 3);
     gpu.dispatch(
         Kernel::DwtExtract,
         &mut [(0, Read(input)), (1, Read(&params)), (3, Write(a.write()))],
@@ -164,7 +178,7 @@ pub(crate) fn apply(
     );
     // Columns precede rows. Each destination writes only the active low/low area;
     // coefficients outside it remain in the persistent first plane.
-    for level in 0..LEVELS {
+    for level in 0..levels {
         let width = pw >> level;
         let height = ph >> level;
         let column = gpu.uniform(&[width, height, 1_u32, 0]);
@@ -205,7 +219,7 @@ pub(crate) fn apply(
         &mut trace,
     );
     // Inverse rows precede columns. The second plane now retains completed bands.
-    for level in (0..LEVELS).rev() {
+    for level in (0..levels).rev() {
         let width = pw >> level;
         let height = ph >> level;
         let row = gpu.uniform(&[width, height, 0_u32, 0]);
@@ -335,4 +349,32 @@ pub(crate) fn level_gains(level: usize, portrait: bool) -> crate::source::Result
 pub(crate) fn photographic_gains() -> [f32; 6] {
     // The final reference level is a validated entry, independent of metadata.
     level_gains(6, false).expect("constant local contrast level")
+}
+
+#[cfg(test)]
+mod preview_grid_tests {
+    use super::*;
+    #[test]
+    fn small_wavelets_keep_native_band_support() {
+        let p = Prepared::new(
+            [128, 96],
+            [128, 128],
+            [0, 0, 128, 96],
+            [BandControl {
+                gain: 1.2,
+                limit: 100.,
+                slope: 0.5,
+            }; 6],
+            [0., 0., 0., 0., 1., 0., 0., 0., 0.],
+            0.35,
+        )
+        .unwrap();
+        for divisor in [4, 8] {
+            let small = p.clone().on_preview_grid(divisor).unwrap();
+            assert_eq!((1 << small.params.levels[0]) * divisor, 64);
+            assert_eq!(small.gains[0], [1.2, 100. / divisor as f32, 0.5, 0.]);
+            assert!(p.key() != small.key());
+        }
+        assert_eq!(p.params.levels[0], 6);
+    }
 }

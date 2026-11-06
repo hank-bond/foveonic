@@ -45,7 +45,7 @@ fn extent(metadata: &Metadata, grid: WorkingGrid) -> Result<[u32; 2]> {
 }
 fn lce_crop(metadata: &Metadata, grid: WorkingGrid) -> Result<[u32; 4]> {
     let mut area = metadata.fixed::<4>("ActiveImageArea")?;
-    if grid.is_half() {
+    if grid != WorkingGrid::Full {
         area = area.map(|v| (v / f64::from(grid.divisor())).floor());
     }
     if area
@@ -72,7 +72,7 @@ pub(super) fn prepare_lce(
 ) -> Result<wavelet_contrast::Prepared> {
     let extent = extent(metadata, grid)?;
     let gains = wavelet_contrast::level_gains(level, mode == "Portrait")?;
-    wavelet_contrast::Prepared::new(
+    let prepared = wavelet_contrast::Prepared::new(
         extent,
         extent.map(|v| v.div_ceil(LCE_PADDING_ALIGNMENT) * LCE_PADDING_ALIGNMENT),
         lce_crop(metadata, grid)?,
@@ -88,7 +88,12 @@ pub(super) fn prepare_lce(
             metadata.is_quattro_low() || grid.is_half(),
         )?,
         LCE_RELATIVE_BOUND,
-    )
+    )?;
+    if grid.is_small() {
+        prepared.on_preview_grid(grid.divisor())
+    } else {
+        Ok(prepared)
+    }
 }
 fn lowest_kernel(
     level: usize,
@@ -183,7 +188,9 @@ pub(super) fn prepare_sharpen(
         iso_gain,
         absolute_limit,
         SHARPEN_LUMA_LIMIT,
-        if grid.is_half() || metadata.is_quattro_low() {
+        if grid.is_small() {
+            1. / (grid.divisor() as f32).sqrt()
+        } else if grid.is_half() || metadata.is_quattro_low() {
             HALF_GRID_SHARPEN_SCALE
         } else {
             1.
@@ -230,7 +237,9 @@ pub(super) fn prepare_box_contrast(
         return Err("unsupported local contrast level".into());
     }
     let control = level as f32 / 3.;
-    let radii = if grid.is_half() || metadata.is_quattro_low() {
+    let radii = if grid.is_small() {
+        FULL_BOX_RADII.map(|v| v.div_ceil(grid.divisor()).max(1))
+    } else if grid.is_half() || metadata.is_quattro_low() {
         HALF_BOX_RADII
     } else {
         FULL_BOX_RADII

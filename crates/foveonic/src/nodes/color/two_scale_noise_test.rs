@@ -391,3 +391,39 @@ fn residual_half_integer_lut_decisions_match_native_power_rounding() {
     let bytes = gpu.readback(&output).unwrap();
     assert_eq!(bytemuck::cast_slice::<u8, f32>(&bytes), expected);
 }
+
+#[test]
+fn preview_scale_contract_restores_odd_rows_without_changing_native_alignment() {
+    for extent in [[18, 17], [19, 18], [19, 17]] {
+        let half = extent.map(|v| v / 2);
+        assert!(
+            Prepared::new(iteration(extent), iteration(half), vec![0.; 14344], [1.; 3]).is_err()
+        );
+        let prepared =
+            Prepared::on_preview_grid(iteration(extent), iteration(half), vec![0.; 14344], [1.; 3])
+                .unwrap();
+        assert_eq!(prepared.extent(), extent);
+        assert_eq!(prepared.double.output_extent(), extent);
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn preview_two_scale_filter_preserves_constant_odd_grid() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [19, 17];
+    let source = vec![300_f32; 19 * 17 * 3];
+    let input = gpu.upload("Constant odd RGB", &source).unwrap();
+    let p = Prepared::on_preview_grid(
+        iteration(extent),
+        iteration(extent.map(|v| v / 2)),
+        vec![0.; 14344],
+        [1.; 3],
+    )
+    .unwrap();
+    let result = apply(&gpu, &input, &p, &mut Profile::default()).unwrap();
+    let bytes = gpu.readback(&result.rgb).unwrap();
+    let pixels: &[f32] = bytemuck::cast_slice(&bytes);
+    assert_eq!(pixels.len(), source.len());
+    assert!(pixels.iter().all(|v| (*v - 300.).abs() <= 1.));
+}

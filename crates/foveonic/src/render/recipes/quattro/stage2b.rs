@@ -142,7 +142,11 @@ fn prepare_reconstruction_on_grid(
 ) -> Result<blue_guided_reconstruct::Prepared> {
     let physical_extent = [metadata.width as u32, metadata.height as u32];
     let output_extent = grid.extent(physical_extent);
-    let color_extent = super::calibration::color_extent(metadata)?;
+    let color_extent = if grid.is_small() {
+        output_extent
+    } else {
+        super::calibration::color_extent(metadata)?
+    };
     if metadata.is_quattro_low() {
         let iso_gain = (metadata.scalar("CaptureISO")? / 100.) as f32;
         let filter = blend
@@ -174,7 +178,10 @@ fn prepare_reconstruction_on_grid(
         .map(|table| {
             histogram_bilateral::Prepared::new(
                 output_extent,
-                if grid.is_half() {
+                if grid.is_small() {
+                    // Keep a nontrivial neighborhood after native support shrinks.
+                    (BLUE_FILTER_KERNEL.div_ceil(grid.divisor()) | 1).max(3)
+                } else if grid.is_half() {
                     HALF_GRID_BLUE_FILTER_KERNEL
                 } else {
                     BLUE_FILTER_KERNEL
@@ -183,6 +190,9 @@ fn prepare_reconstruction_on_grid(
                     // Preview noise approximation for a mean of four blue samples.
                     BLUE_VARIANCE.map(|v| v / CELL_SAMPLE_COUNT)
                 } else {
+                    // Small sensor pools retain this conservative calibrated model.
+                    // Their corrected samples are correlated, so an area-based
+                    // independent-noise reduction is not assumed.
                     BLUE_VARIANCE
                 },
                 BLUE_FILTER_STRENGTHS[usize::from(step)],
@@ -196,7 +206,7 @@ fn prepare_reconstruction_on_grid(
             )
         })
         .transpose()?;
-    if grid.is_half() {
+    if grid.is_half() || grid.is_small() {
         blue_guided_reconstruct::Prepared::same_size(color_extent, BLUE_VARIANCE, filter)
     } else {
         blue_guided_reconstruct::Prepared::new(

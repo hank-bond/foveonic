@@ -1,4 +1,4 @@
-struct Params{shape:vec4<u32>,crop:vec4<u32>,controls:vec4<f32>}
+struct Params{shape:vec4<u32>,crop:vec4<u32>,controls:vec4<f32>,levels:vec4<u32>}
 @group(0) @binding(0) var<storage,read> packed:array<f32>;
 @group(0) @binding(1) var<uniform> p:Params;
 @group(0) @binding(2) var<storage,read> source:array<f32>;
@@ -29,9 +29,9 @@ fn dwt_inverse(@builtin(global_invocation_id) id:vec3<u32>){if id.x>=step.x||id.
  destination[id.y*p.shape.x+id.x]=result;
 }
 @compute @workgroup_size(8,8)
-fn dwt_gain(@builtin(global_invocation_id) id:vec3<u32>){let x=id.x;let y=id.y;if x>=p.shape.x||y>=p.shape.y{return;}let index=y*p.shape.x+x;let lw=p.shape.x>>6u;let lh=p.shape.y>>6u;
+fn dwt_gain(@builtin(global_invocation_id) id:vec3<u32>){let x=id.x;let y=id.y;if x>=p.shape.x||y>=p.shape.y{return;}let index=y*p.shape.x+x;let lw=p.shape.x>>p.levels.x;let lh=p.shape.y>>p.levels.x;
  if x<lw&&y<lh{var total=vec2(0.);for(var ky=-1;ky<=1;ky++){for(var kx=-1;kx<=1;kx++){let sx=u32(clamp(i32(x)+kx,0,i32(lw)-1));let sy=u32(clamp(i32(y)+ky,0,i32(lh)-1));let term=fma(source[sy*p.shape.x+sx],kernel[u32((ky+1)*3+kx+1)],0.);total=add_pair(total,vec2(term,0.));}}destination[index]=fma(1.,total.x,total.y);return;}
- var result=source[index];for(var band=0u;band<6u;band++){let w=p.shape.x>>(6u-band);let h=p.shape.y>>(6u-band);if x<w*2u&&y<h*2u&&(x>=w||y>=h){let control=bands[band];let magnitude=abs(result);var amount=fma(control.x,magnitude,0.);let upper=fma(1.,magnitude,control.y);let lower=fma(-1.,control.y,magnitude);if amount<lower{amount=fma(-fma(-1.,amount,lower),control.z,lower);}if amount>upper{amount=fma(fma(-1.,upper,amount),control.z,upper);}result=select(-amount,amount,result>=0.);break;}}
+ var result=source[index];for(var band=0u;band<p.levels.x;band++){let w=p.shape.x>>(p.levels.x-band);let h=p.shape.y>>(p.levels.x-band);if x<w*2u&&y<h*2u&&(x>=w||y>=h){let control=bands[band];let magnitude=abs(result);var amount=fma(control.x,magnitude,0.);let upper=fma(1.,magnitude,control.y);let lower=fma(-1.,control.y,magnitude);if amount<lower{amount=fma(-fma(-1.,amount,lower),control.z,lower);}if amount>upper{amount=fma(fma(-1.,upper,amount),control.z,upper);}result=select(-amount,amount,result>=0.);break;}}
  destination[index]=result;
 }
 @compute @workgroup_size(8,8)

@@ -75,6 +75,7 @@ pub enum Kernel {
     HlpCalibration,
     UvConvert,
     UvClassify,
+    PoolSignal,
     PyramidResample,
     RgbPrefilterGain,
     RgbPrefilterBlend,
@@ -402,6 +403,7 @@ impl Kernel {
             Self::HlpCalibration => "calibrate sparse highlight pixels",
             Self::UvConvert => "convert camera components",
             Self::UvClassify => "classify chroma neighborhoods",
+            Self::PoolSignal => "pool corrected numerical signal",
             Self::PyramidResample => "resample RGB pyramid",
             Self::RgbPrefilterGain => "scale RGB prefilter components",
             Self::RgbPrefilterBlend => "blend repaired RGB components",
@@ -1012,6 +1014,7 @@ impl Gpu {
                 include_str!("../nodes/color/uv_repair_classify.wgsl"),
                 "uv_classify",
             ),
+            (include_str!("../nodes/sensor/pool.wgsl"), "pool_signal"),
             (
                 include_str!("../nodes/color/pyramid_resample.wgsl"),
                 "pyramid_resample",

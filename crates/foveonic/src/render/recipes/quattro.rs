@@ -60,15 +60,22 @@ pub(super) enum WorkingGrid {
     #[default]
     Full,
     Half,
+    Quarter,
+    Eighth,
 }
 impl WorkingGrid {
     fn is_half(self) -> bool {
         self == Self::Half
     }
+    fn is_small(self) -> bool {
+        matches!(self, Self::Quarter | Self::Eighth)
+    }
     fn divisor(self) -> u32 {
         match self {
             Self::Full => 1,
             Self::Half => 2,
+            Self::Quarter => 4,
+            Self::Eighth => 8,
         }
     }
     fn extent(self, native: [u32; 2]) -> [u32; 2] {
@@ -78,6 +85,21 @@ impl WorkingGrid {
 pub(in crate::render) fn fast_available(metadata: &crate::source::Metadata) -> bool {
     !metadata.is_quattro_low()
         && (calibration::is_ordinary_dp(metadata) || calibration::is_interchangeable(metadata))
+}
+
+pub(in crate::render) fn small_preview_available(
+    metadata: &crate::source::Metadata,
+    quality: crate::render::PreviewQuality,
+) -> bool {
+    let divisor = quality.divisor();
+    matches!(
+        quality,
+        crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
+    ) && (calibration::is_ordinary_dp(metadata) || calibration::is_ordinary_sd(metadata))
+        && !metadata.is_quattro_low()
+        && [metadata.width, metadata.height]
+            .iter()
+            .all(|v| *v >= (divisor * 32) as usize && v.is_multiple_of(divisor as usize))
 }
 
 pub(super) fn build(
@@ -155,13 +177,25 @@ fn compose(
     if source.storage() != storage {
         return Err("Quattro sensor storage does not match its resolution".into());
     }
-    let fast = settings.preview_quality.is_reduced()
+    let small = small_preview_available(&source.metadata, settings.preview_quality)
+        && !dng
+        && !settings.is_monochrome()
+        && names == ["final"]
+        && settings.preview_region.is_none()
+        && settings.output_size.is_none();
+    let fast = settings.preview_quality == crate::render::PreviewQuality::Fast
         && !dng
         && !settings.is_monochrome()
         && (names == ["final"] || names == ["linear.base"])
         && settings.preview_region.is_none()
         && fast_available(&source.metadata);
-    let grid = if fast {
+    let grid = if small {
+        if settings.preview_quality == crate::render::PreviewQuality::Draft {
+            WorkingGrid::Quarter
+        } else {
+            WorkingGrid::Eighth
+        }
+    } else if fast {
         WorkingGrid::Half
     } else {
         WorkingGrid::Full
@@ -471,6 +505,50 @@ fn compose(
                 .unwrap_or(0.5),
         );
     }
+    let small_white_balance = if small {
+        Some(if settings.white_balance.is_empty() {
+            default_white_balance(&source.metadata)?
+        } else {
+            settings.white_balance.clone()
+        })
+    } else {
+        None
+    };
+    let native_highlight_mask = graph.named_output(restored, "highlight-restoration.mask")?;
+    let (noise_input, mismatch, highlight_mask) = if small {
+        use crate::nodes::sensor::pool::{Prepared, Signal};
+        let (shaded, blue) = stage2::shade_preprocessing(
+            &mut graph,
+            &source.metadata,
+            restored,
+            mismatch,
+            small_white_balance.as_deref().expect("small-grid balance"),
+        )?;
+        let color_extent = calibration::color_extent(&source.metadata)?;
+        let divisor = grid.divisor() / 2;
+        let rgb = graph.add_scoped(
+            Operation::PoolSignal(Prepared::new(color_extent, divisor, Signal::Rgb)?),
+            &[shaded],
+            "preview-rgb",
+        )?;
+        let blue = graph.add_scoped(
+            Operation::PoolSignal(Prepared::new(
+                [source.metadata.width as u32, source.metadata.height as u32],
+                divisor,
+                Signal::Blue,
+            )?),
+            &[blue],
+            "preview-blue",
+        )?;
+        let mask = graph.add_scoped(
+            Operation::PoolSignal(Prepared::new(color_extent, divisor, Signal::Mask)?),
+            &[native_highlight_mask],
+            "preview-highlight",
+        )?;
+        (rgb, blue, mask)
+    } else {
+        (restored, mismatch, native_highlight_mask)
+    };
     let noise = if settings.is_monochrome() {
         graph.add(
             Operation::ChannelNoise(std::sync::Arc::new(monochrome::prepare_stage1(
@@ -480,11 +558,12 @@ fn compose(
         )?
     } else {
         graph.add(
-            Operation::TwoScaleNoise(std::sync::Arc::new(stage1::prepare_filter(
+            Operation::TwoScaleNoise(std::sync::Arc::new(stage1::prepare_filter_on_grid(
                 &source.metadata,
                 controls.chroma as u8,
+                grid,
             )?)),
-            &[restored],
+            &[noise_input],
         )?
     };
     finish!(noise);
@@ -497,6 +576,7 @@ fn compose(
     } else {
         &settings.white_balance
     };
+
     let calibrated = graph.named_output(noise, "noise.source-after")?;
     let highlight_amount = settings.highlight_amount.unwrap_or(
         source
@@ -515,12 +595,23 @@ fn compose(
             color_mode,
         )?
     };
+    let response = if small {
+        response.with_extent(
+            grid.extent([source.metadata.width as u32, source.metadata.height as u32]),
+        )?
+    } else {
+        response
+    };
     let recovery_mask = if is_tiger {
         Some(graph.named_output(restored, "highlight-restoration.recovery-flags")?)
     } else {
         None
     };
-    let signals = stage2::build_signals(
+    let signals = (if small {
+        stage2::build_reduced_signals
+    } else {
+        stage2::build_signals
+    })(
         &mut graph,
         &source.metadata,
         noise,
@@ -534,7 +625,6 @@ fn compose(
         },
     )?;
     finish!(signals.processed);
-    let highlight_mask = graph.named_output(restored, "highlight-restoration.mask")?;
     if fast && is_tiger {
         // Smart detail shares these whole-frame color histories with Fast.
         // Retain both masks so a changed WB or recovery control can reuse them too.
@@ -673,7 +763,9 @@ fn compose(
         color_mode,
         settings.effective_sharpen_amount(&source.metadata)?,
     )?;
-    let amount = if fast {
+    let amount = if small {
+        amount / (grid.divisor() as f32).sqrt()
+    } else if fast {
         amount * stage3::HALF_GRID_SHARPEN_SCALE
     } else {
         amount
@@ -724,7 +816,9 @@ fn compose(
             source.metadata.rotation,
             true,
         )?;
-        if grid.is_half() {
+        if grid.is_small() {
+            crop.on_grid(grid.divisor())?
+        } else if grid.is_half() {
             crop.on_half_grid()?
         } else {
             crop
