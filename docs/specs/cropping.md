@@ -17,4 +17,6 @@ Save the rectangle in normalized coordinates relative to the camera's active, or
 
 While editing the crop, only presentation expands to the complete photograph. This transient view must not enter saved edits, browser preview caches or exports. Scope and navigator geometry must match the displayed view. Smart must retain the previous image while preparing shared framing and use a complete frame for its editing plane. Regional detail outside framing must map into the correct crop coordinates. Other on-image tools must not stay active simultaneously.
 
+Entering, leaving and committing a crop must preserve compatible completed photographic pixels and their working resolution. These presentation changes must not reload the source or rerun photographic processing. A regional Smart tile must not replace the complete image needed for framing. Fitting a changed crop is a presentation action and must not be treated as an explicit detail zoom.
+
 Photographic section presets, camera defaults and Before comparisons must preserve composition. Whole-recipe copy/paste may include the crop. Crop reset is independent of tone and color adjustments. Straightening follows the shared rotation requirements. Print dimensions and perspective correction remain separate work.

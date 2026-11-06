@@ -1,12 +1,13 @@
 ---
 summary: "Prototype Draft and Thumb sensor reconstruction after committing rotation and preview-retention fixes."
+status: archived
 ---
 
 # Smaller sensor previews
 
-The rotation and preview-retention corrections were committed separately as `63c6ec9`. Their behavior and checks are recorded in the [completed plan](./archived/rotation-targeting-and-preview-retention.md). Keep the existing release draft and tag unchanged while reviewing this experiment. Preserve unrelated help-example changes.
+The rotation and preview-retention corrections were committed separately as `63c6ec9`. Their behavior and checks are recorded in the [completed plan](./rotation-targeting-and-preview-retention.md). The prototype kept the existing release draft and tag unchanged. Preserve unrelated help-example changes.
 
-Implements the experimental [small-preview requirements](../docs/specs/small-previews.md).
+Implements the experimental [small-preview requirements](../../docs/specs/small-previews.md).
 
 - [x] Name quarter-width/height reconstruction Draft and eighth-width/height reconstruction Thumb. These represent one sixteenth and one sixty-fourth of the pixels.
 - [x] Replace the earlier post-reconstruction RGB reduction experiment with calibrated sensor-layer pooling before Merrill noise and color reconstruction.
@@ -16,7 +17,7 @@ Implements the experimental [small-preview requirements](../docs/specs/small-pre
 - [x] Expose the two choices only when launching with `FOVEONIC_SMALL_OVERVIEW=1`. Unsupported geometry uses Full. Quattro currently falls back to Fast and Classic to Full.
 - [x] Compare completed warm exposure edits and edits that invalidate reconstruction on two Merrill photographs.
 - [x] Complete workspace tests, Clippy, formatting, documentation and artwork checks. Native Draft and Thumb comparison smoke checks and Full fallback GPU checks passed. A third low-light Merrill sample completed both reduced reconstruction paths.
-- [ ] Obtain owner assessment before committing the experiment or choosing a release default.
+- [x] Checkpoint the approved experiment as `f927c26` before the coordinated optimization run. Release defaults remain unchanged.
 
 ## Measurements and appearance
 
@@ -38,6 +39,6 @@ Separate wall and timestamp runs on the parking-sign sample explain why warm exp
 
 The executor also waits for GPU completion after every executed interactive graph node. Warm exposure edits execute only Tone plus display preparation, with upstream reconstruction cached. Reconstruction-changing chroma edits retained a larger difference: 35.97 ms versus 26.41 ms in the planning-instrumented run. Removing noise from a Thumb recipe would principally benefit preparation and reconstruction-changing work, rather than an exposure edit that already reuses those stages.
 
-The next optimization candidates are reusing unchanged tone preparation and operation keys, then revisiting stage-by-stage GPU waits while preserving cancellation and bounded queued work. This investigation adds measurements only and does not implement those changes.
+These measurements motivated the subsequent [scaled editing optimization](./scaled-editing-optimization.md). This initial slice changed measurements only. It did not alter GPU completion waits.
 
 The maintained multi-photo harness, host scheduling comparisons and graph-boundary attribution are recorded in the [editing harness plan](./editing-harness.md). It replaces the ignored test's one-off timing exports. Preview tests retain framing, fallback and optional image-comparison coverage.

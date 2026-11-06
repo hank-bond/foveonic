@@ -29,7 +29,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[background.rs](./background.rs)** Prioritizes selected photos and thumbnails over batches and interruptible speculative work.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[crop.rs](./crop.rs)** Composes saved oriented crop coordinates with camera framing and final output sizing.
-- **[decode_pool.rs](./decode_pool.rs)** Shares a bounded FIFO sensor-layer pool across ordered speculative photo loads.
+- **[decode_pool.rs](./decode_pool.rs)** Shares bounded FIFO sensor-plane and row work across ordered speculative photo loads.
 - **[dng.rs](./dng.rs)** Exports original-derived linear DNG samples with explicit baked edits and separate camera appearance.
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
 - **[graph.rs](./graph.rs)** Builds typed dependency-ordered graphs and validates connections between operation ports.
@@ -46,7 +46,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[preview_color.rs](./preview_color.rs)** Preserves embedded display colors from camera metadata and JPEG profiles in declared RGB16 spaces.
 - **[preview_pixels.rs](./preview_pixels.rs)** Resizes bounded preview samples in linear light while retaining their declared RGB primaries.
 - **[profile.rs](./profile.rs)** Collects host/GPU timings and engine-owned transfer, submission, and allocation counts.
-- **[recipe.rs](./recipe.rs)** Encodes exact effective operation parameters for graph versioning without hashing photographic samples.
+- **[recipe.rs](./recipe.rs)** Keeps compact parameter fingerprints with shared immutable payloads and exact collision checks.
 - **[render.rs](./render.rs)** Shares GPU engine entry points for photographic rendering, inspection, display, and export.
 - **[review.rs](./review.rs)** Persists independent star ratings in a bounded per-folder review file without touching editing recipes.
 - **[rotation.rs](./rotation.rs)** Composes saved quarter turns and fine rotation with an interior photographic crop.

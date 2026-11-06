@@ -21,6 +21,7 @@ Keep camera defaults and supported metadata branches beside the Classic recipe. 
 - **[inspection.rs](./inspection.rs)** Lists visual outputs and comparable operation inputs for the selected Classic route.
 - **[policy.rs](./policy.rs)** Resolves Classic camera defaults into numerical recipe controls.
 - **[prepare.rs](./prepare.rs)** Shares Classic preparation contracts and metadata helpers between calibration, color, reconstruction, and appearance.
+- **[preview.rs](./preview.rs)** Pools corrected signed sensor codes and maps reduced Classic photographs onto their native frame.
 - **[range.rs](./range.rs)** Resolves high-ISO camera metadata into functional reconstruction and color controls.
 - **[reference.rs](./reference.rs)** Defines shared numerical conventions recovered from the Classic reference implementation.
 - **[route.rs](./route.rs)** Selects Classic stages without preparing later numerical parameters.

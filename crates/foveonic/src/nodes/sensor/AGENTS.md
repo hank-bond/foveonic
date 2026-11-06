@@ -39,6 +39,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[ordered_blue_repair.rs](./ordered_blue_repair.rs)** Groups ordered mono defect records into independent GPU batches without changing their dependencies.
 - **[phase_extraction.rs](./phase_extraction.rs)** Extracts RGB and blue codes from triplets or phase cells with affine or channel-gain calibration.
 - **[phase_gain.rs](./phase_gain.rs)** Resizes interleaved phase gain maps and corrects blue samples below a supplied threshold.
+- **[pool.rs](./pool.rs)** Pools corrected numerical signals while preserving categorical clipping provenance.
 - **[red_detail.rs](./red_detail.rs)** Adds signed red-channel detail using a separable five-row binomial support.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.
 - **[rgb_despeckle.rs](./rgb_despeckle.rs)** Removes isolated RGB excursions using immutable masked five-by-five neighborhoods.

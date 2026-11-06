@@ -1,10 +1,11 @@
 ---
 summary: "Measure warm multi-photo editing, host scheduling and graph boundary costs before changing production execution."
+status: archived
 ---
 
 # Editing optimization harness
 
-Implements the [profiling requirements](../docs/specs/profiling.md#cached-multi-photo-editing) alongside the [small-preview experiment](./rotation-and-small-preview.md). The owner requested one scale-aware recipe before quality bypasses and better evidence about scheduling and work between graph nodes. Keep production scheduling and GUI cache policy unchanged in this slice.
+Implements the [profiling requirements](../../docs/specs/profiling.md#cached-multi-photo-editing) alongside the [small-preview experiment](./rotation-and-small-preview.md). The owner requested one scale-aware recipe before quality bypasses and better evidence about scheduling and work between graph nodes. Keep production scheduling and GUI cache policy unchanged in this slice.
 
 - [x] Attribute recipe/session preparation, checkpoint planning, operation work, cache publication, completion waits and retirement.
 - [x] Add a maintained Rust harness with independent warm photo sessions, bounded host concurrency, explicit retained-buffer budget and raw shared-format records.
@@ -12,11 +13,11 @@ Implements the [profiling requirements](../docs/specs/profiling.md#cached-multi-
 - [x] Summarize workloads by scale/edit/concurrency and export host timelines without assigning GPU passes an invented host origin.
 - [x] Compare eight distinct Merrill originals with Off acceptance runs and separate Wall diagnostics. Verify exact final outputs across schedules.
 - [x] Complete workspace tests, Clippy, formatting, documentation and artwork checks. The 14 harness tests, 22 profiling-tool tests, four core profiling GPU tests, two executor GPU tests and two reduced-preview framing/fallback GPU tests passed. Off/Wall activity counts and pixels match.
-- [ ] Owner review before commit.
+- [x] Checkpoint the approved harness as `f927c26` before the coordinated optimization run.
 
 ## Execution boundary
 
-The experiment schedules complete existing render sessions through bounded host workers on the shared ordered queue. It does not batch the same operation across photos, remove cancellation fences or change immutable resource ownership. Device-wide waits may include other executors' work. Session buffer totals are logical retained storage, not total device residency. A shared production cache and stage-major execution remain later design decisions informed by these measurements.
+The experiment schedules complete existing render sessions through bounded host workers on the shared ordered queue. It does not batch the same operation across photos, remove cancellation fences or change immutable resource ownership. Device-wide waits may include other executors' work. Session buffer totals are logical retained storage, not total device residency. The later [scaled editing optimization](./scaled-editing-optimization.md) adds a bounded reduced working set. Stage-major execution remains separate.
 
 ## Local eight-photo evidence
 

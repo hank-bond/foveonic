@@ -14,6 +14,7 @@ Give each requirement or fact one home and link to it from related documents. Re
 - **[color-and-tone-research](./color-and-tone-research.md)** _(reference)._ Research catalog of perceptual saturation, color grading, tonal adjustment, highlight rendering and automatic exposure methods.
 - **[color-field-evaluation](./color-field-evaluation.md)** _(how-to)._ Reproduce saved-sidecar highlight comparisons, completed GPU timings, and a private toggleable browser report.
 - **[contributing](./contributing.md)** _(reference)._ Documentation uses concise requirements, evolving progress plans, frontmatter summaries, and generated directory indexes. _Read before writing documentation or source summaries._
+- **[decoder-optimization-research](./decoder-optimization-research.md)** _(explanation)._ Fixed-stream X3F decoder experiments compare fused Huffman payload tables, explicit NEON predictors and independent Classic rows.
 - **[fuji-rendering-research](./fuji-rendering-research.md)** _(reference)._ Film-rendering inspection connects Fujifilm DR metadata, simulation transforms and candidate X3F/DNG rendering approaches.
 - **[gui-screenshot](./gui-screenshot.md)** _(how-to)._ Explicitly refresh the README's lossless WebP screenshot from a fixed native GUI capture recipe and shared example-photo cache.
 - **[help-examples](./help-examples.md)** _(how-to)._ Download official photographs and explicitly render named comparisons whose PNGs are embedded in photographic help.

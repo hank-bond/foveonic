@@ -39,6 +39,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[cropping](./cropping.md)** _(archived)._ Add saved crop geometry, a shared viewport tool strip and direct crop gestures.
 - **[decode-cache-and-smart-preview](./decode-cache-and-smart-preview.md)** _(archived)._ Implement bounded decoded-source disk reuse, app settings and Quattro regional Smart refinement.
 - **[decode-cache-module](./decode-cache-module.md)** _(archived)._ Gather decoded-cache implementation and tests into a directory module for release 0.5.0.
+- **[decoder-optimization](./decoder-optimization.md)** _(archived)._ Measure compatible decoder candidates and integrate the smallest exact-sample improvement on stable Rust.
 - **[despeckle](./despeckle.md)** _(archived)._ GPU speckle detection and ordered correction fix the two reported red defects; separate repair/despeckle controls default on, and the owner's Dock icon is integrated.
 - **[despeckle-parallel-repair](./despeckle-parallel-repair.md)** _(archived)._ Eight parallel Merrill speckle repair rounds preserve ordered results while reducing low-threshold stalls.
 - **[despeckle-wb-scale](./despeckle-wb-scale.md)** _(archived)._ Align despeckle threshold WB with the actual calibration factors while retaining independent adjustment and Sensor-gain behavior.
@@ -48,6 +49,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[direct-color-production](./direct-color-production.md)** _(archived)._ Align direct color editing with shared controls, worker jobs and GPU selection contracts.
 - **[direct-color-tool](./direct-color-tool.md)** _(archived)._ Added guide-based color picking, simultaneous HSL dragging and persistent gesture preferences.
 - **[directional-banding-continuity](./directional-banding-continuity.md)** _(archived)._ The selected residual Coarse banding fit and Fine strength correction are integrated and validated.
+- **[editing-harness](./editing-harness.md)** _(archived)._ Measure warm multi-photo editing, host scheduling and graph boundary costs before changing production execution.
 - **[editing-section-layout](./editing-section-layout.md)** _(archived)._ Color Editor has an independent checkbox and editing sections persist their visual drag order without changing processing.
 - **[editor-review-focus](./editor-review-focus.md)** _(archived)._ Linked reconstruction controls, grouped inspection, folder restoration, and viewport reporting are implemented; the two identified residual speckles are corrected by the new GPU despeckle stage.
 - **[editor-workflow](./editor-workflow.md)** _(archived)._ Implemented section recipes, configurable defaults, white-balance bias and isolated Before rendering through the existing editor paths.
@@ -118,9 +120,11 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
 - **[responsiveness-campaign](./responsiveness-campaign.md)** _(archived)._ Coordinate measured startup, browsing and rendering optimization trials, including rejected approaches and integration evidence.
+- **[rotation-and-small-preview](./rotation-and-small-preview.md)** _(archived)._ Prototype Draft and Thumb sensor reconstruction after committing rotation and preview-retention fixes.
 - **[rotation-targeting-and-preview-retention](./rotation-targeting-and-preview-retention.md)** _(archived)._ Correct rotation targeting and retain edited previews across active-photo changes.
 - **[rotation-tool](./rotation-tool.md)** _(archived)._ Implement a shared saved rotation transform and Straighten/Freehand toolbar gestures.
 - **[saturation-closeout](./saturation-closeout.md)** _(archived)._ Separated Tone, Saturation and Color Range with independent methods, presets, bypasses and exports.
+- **[scaled-editing-optimization](./scaled-editing-optimization.md)** _(archived)._ Integrate measured preparation reuse, bounded reduced sessions, faster decoding and scale-aware previews, then verify presentation-only framing and architectural ownership.
 - **[sd1-input](./sd1-input.md)** _(archived)._ Validate SD1 Merrill HI and LOW originals and make damaged-file failures actionable across input readers.
 - **[shared-framing-plane](./shared-framing-plane.md)** _(archived)._ Unify Crop and Rotate presentation while keeping their drag controls independent.
 - **[shared-linear-edits](./shared-linear-edits.md)** _(archived)._ Shared pre-curve edits and DNG baking cover Classic, Merrill and Quattro with per-output section choices.

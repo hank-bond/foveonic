@@ -79,5 +79,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
 - **[widgets.rs](./widgets.rs)** Shares numeric display policy, control sizes and workspace widgets.
 - **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
+- **[worker_presentation.rs](./worker_presentation.rs)** Reframes one immutable whole-image result without reopening sources or running photographic nodes.
+- **[worker_reduced.rs](./worker_reduced.rs)** Reuses bounded reduced-photo inputs while native requests keep the existing worker session.
 
 <!-- INDEX:END -->

@@ -44,7 +44,7 @@ Linear gain transfer accepts a reference pair related by scalar brightness multi
 - **[signed_response.rs](./signed_response.rs)** Restores linear detail or applies photographic response to signed root-domain samples.
 - **[tone.rs](./tone.rs)** Prepares a camera-derived color-mode tone table for application in a shader.
 - **[tone_equalizer.rs](./tone_equalizer.rs)** Prepares coordinated HDR ranges and a reusable multiscale log-brightness base.
-- **[wavelet_contrast.rs](./wavelet_contrast.rs)** Adjusts packed-Lab lightness through six lifting levels and bounded detail gains.
+- **[wavelet_contrast.rs](./wavelet_contrast.rs)** Adjusts packed-Lab lightness through scale-aware lifting levels and bounded detail gains.
 - **[white_balance.rs](./white_balance.rs)** Neutralizes sampled white points and applies camera-relative warmth and tint in a shared cone-response basis.
 
 <!-- INDEX:END -->
