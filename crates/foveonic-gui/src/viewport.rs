@@ -478,6 +478,7 @@ pub struct Viewport {
     response: Option<egui::Response>,
     pub one_to_one: bool,
     pub zoom_snap: ZoomPreset,
+    explicit_zoom_pending: bool,
     last_canvas: Option<(egui::Vec2, [u32; 2])>,
     last_image: Option<(egui::Rect, egui::Rect)>,
     /// Image-relative center carried until the next photograph's geometry arrives.
@@ -494,6 +495,7 @@ impl Default for Viewport {
             response: None,
             one_to_one: false,
             zoom_snap: ZoomPreset::default(),
+            explicit_zoom_pending: false,
             last_canvas: None,
             last_image: None,
             pending_center: None,
@@ -503,6 +505,7 @@ impl Default for Viewport {
 }
 impl Viewport {
     pub fn reset(&mut self) {
+        self.explicit_zoom_pending = false;
         self.scale = None;
         self.pan = egui::Vec2::ZERO;
         self.one_to_one = false;
@@ -547,6 +550,7 @@ impl Viewport {
             if old > 0. {
                 self.pan = anchor - (anchor - self.pan) * (next / old);
             }
+            self.explicit_zoom_pending |= self.scale != Some(next);
             self.scale = Some(next);
             self.one_to_one = false;
         }
@@ -560,6 +564,18 @@ impl Viewport {
             self.reset();
             self.last_canvas = canvas;
         }
+    }
+
+    /// Distinguish a deliberate zoom from Fit becoming larger after composition changes.
+    pub fn explicit_zoom_pending(&self) -> bool {
+        self.explicit_zoom_pending
+    }
+    pub fn take_explicit_zoom(&mut self) -> bool {
+        std::mem::take(&mut self.explicit_zoom_pending)
+    }
+
+    pub fn explicit_zoom(&self) -> bool {
+        self.scale.is_some() || self.one_to_one
     }
 
     pub fn zoom_percent(&self, pixels_per_point: f32) -> Option<f32> {
@@ -2127,5 +2143,28 @@ mod linear_code_scale_tests {
             };
             assert!((difference.apply(p).options[1] - 4. / white).abs() < 1e-9);
         }
+    }
+}
+
+#[cfg(test)]
+mod composition_zoom_tests {
+    use super::*;
+    #[test]
+    fn fitting_small_composition_does_not_count_as_an_explicit_zoom() {
+        let mut viewport = Viewport {
+            last_canvas: Some((egui::vec2(1200., 800.), [200, 150])),
+            ..Default::default()
+        };
+        assert!(viewport.zoom_percent(1.).unwrap() > 100.);
+        assert!(!viewport.explicit_zoom());
+        viewport.zoom_by(1.25);
+        assert!(viewport.explicit_zoom());
+        assert!(viewport.explicit_zoom_pending());
+        assert!(viewport.take_explicit_zoom());
+        assert!(!viewport.explicit_zoom_pending());
+        viewport.zoom_by(1.25);
+        viewport.reset();
+        assert!(!viewport.explicit_zoom_pending());
+        assert!(!viewport.explicit_zoom());
     }
 }

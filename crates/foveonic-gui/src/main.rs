@@ -387,15 +387,12 @@ impl App {
                 quality,
                 preferences::PreviewMode::Draft | preferences::PreviewMode::Thumb
             );
-            let zoomed = self
-                .viewport
-                .zoom_percent(self.context.pixels_per_point())
-                .is_some_and(|z| z > 100.);
-            if small_preview
-                && (std::env::var_os("FOVEONIC_SMALL_OVERVIEW").is_none()
-                    || zoomed
-                    || self.framing_preview_active())
-            {
+            let zoomed = self.viewport.explicit_zoom()
+                && self
+                    .viewport
+                    .zoom_percent(self.context.pixels_per_point())
+                    .is_some_and(|z| z > 100.);
+            if small_preview && (std::env::var_os("FOVEONIC_SMALL_OVERVIEW").is_none() || zoomed) {
                 quality = preferences::PreviewMode::Full;
             }
             let request = worker::Request {
@@ -408,6 +405,7 @@ impl App {
                 path: path.clone(),
                 settings: requested,
                 preview_quality: quality,
+                preview_policy: self.preferences.preview_quality,
                 output: if self.before.active == editor::Rendition::Current {
                     self.output.clone()
                 } else {

@@ -267,6 +267,7 @@ mod tests {
             path: "photo.x3f".into(),
             settings: Settings::new("Sunlight", "Standard"),
             preview_quality: PreviewMode::Thumb,
+            preview_policy: PreviewMode::Thumb,
             output: "final".into(),
             comparison: false,
             export: None,

@@ -1,5 +1,7 @@
 //! Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
+#[path = "worker_presentation.rs"]
+mod presentation;
 #[path = "worker_reduced.rs"]
 mod reduced;
 
@@ -42,6 +44,8 @@ pub struct Request {
     pub path: PathBuf,
     pub settings: Settings,
     pub preview_quality: PreviewMode,
+    /// Workspace choice, independent of Smart refinement passes.
+    pub preview_policy: PreviewMode,
     pub output: String,
     pub comparison: bool,
     pub export: Option<Export>,
@@ -171,6 +175,7 @@ impl Frame {
         &self.texture
     }
 }
+#[derive(Clone)]
 pub struct Comparison {
     pub input: &'static str,
     pub texture: Arc<ImageTexture>,
@@ -282,6 +287,7 @@ impl Worker {
             let mut engine = engine;
             let mut source: Option<(PathBuf, RenderSession)> = None;
             let mut reduced = reduced::Photos::default();
+            let mut presented = presentation::Presentation::default();
             loop {
                 let (request, queued_at, _activity) = {
                     let (lock, wake) = &*slot;
@@ -304,6 +310,7 @@ impl Worker {
                         if let Some((_, previous)) = source.take() {
                             engine.release_native_preparation(previous.metadata());
                         }
+                        presented.clear();
                         if clear_all {
                             reduced.clear(&engine);
                         }
@@ -378,18 +385,29 @@ impl Worker {
                 let mut settings = request.settings.clone();
                 let mut defaults_errors = Vec::new();
                 let result = (|| -> foveonic::source::Result<Option<Frame>> {
-                    let mut reduced_loaded = if reduced::Photos::requested(&request) {
+                    let composition_quality = presented.quality_for_view_change(&request);
+                    let mut composed = presented.prepare(&request, &decoded_cache)?;
+                    let reused_display = composed.as_ref().and_then(|composed| composed.display.clone());
+                    let reusing_pixels = composed.is_some();
+                    let mut reduced_loaded = if !reusing_pixels && reduced::Photos::requested(&request) {
                         Some(reduced.load(&request.path, request.revision, &decoded_cache, &engine, &mut source, &|stage| reporter.loaded(stage))?)
                     } else { None };
-                    if reduced_loaded.is_none() {
+                    if !reusing_pixels && reduced_loaded.is_none() {
                         load_native_source(&decoded_cache, &engine, &mut source, &request.path, request.revision, |stage| reporter.loaded(stage))?;
                     }
                     // Cached inputs have already completed both loading sections.
                     reporter.loaded(foveonic::source::LoadStage::Decoded);
-                    metadata = Some(if let Some(loaded) = &reduced_loaded { loaded.metadata.clone() }
+                    metadata = Some(if let Some(composed) = &composed { composed.metadata.clone() }
+                        else if let Some(loaded) = &reduced_loaded { loaded.metadata.clone() }
                         else { source.as_ref().unwrap().1.metadata().clone() });
                     defaults_errors = resolve_camera_settings(&mut settings, metadata.as_ref().unwrap());
-                    resolve_preview(&request, &mut settings, metadata.as_ref().unwrap());
+                    if let Some(composed) = &composed {
+                        settings.preview_quality = composed.quality;
+                        settings.preview_region = None;
+                    } else {
+                        resolve_preview(&request, &mut settings, metadata.as_ref().unwrap());
+                        if let Some(quality) = composition_quality { settings.preview_quality = quality; settings.preview_region = None; }
+                    }
                     if let Some(export) = request.export.as_ref() {
                         let mut profile=Profile::new(crate::timing::mode());
                         let before=crate::timing::enabled().then(||engine.gpu_activity());
@@ -403,7 +421,7 @@ impl Worker {
                         && settings.dehaze_auto();
                     let native_required = Engine::reduced_session_requirement(metadata.as_ref().unwrap(), &settings).is_some();
                     let native_history = source.as_ref().filter(|(path, _)| path == &request.path);
-                    let edit = if let Some(loaded) = &reduced_loaded {
+                    let edit = if reusing_pixels { Vec::new() } else if let Some(loaded) = &reduced_loaded {
                         let previous = reduced.changed_parameters(loaded, &settings);
                         match (native_required, previous, native_history) {
                             (false, Some(previous), _) => previous,
@@ -418,12 +436,14 @@ impl Worker {
                             let mut next=pending.settings.clone();
                             resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
                             resolve_preview(pending, &mut next, metadata.as_ref().unwrap());
+                            if presentation::same_context(&request, pending) && presentation::presentation_change(&request, pending)
+                                && presentation::same_pixels(&settings, &next) { return false; }
                             pending.rendition!=request.rendition||pending.path!=request.path||pending.output!=request.output||pending.comparison!=request.comparison||pending.framing_preview!=request.framing_preview||settings.preview_quality!=next.preview_quality||settings.preview_region!=next.preview_region||(!edit.is_empty()&&settings.changed_parameters(&next).iter().any(|parameter|!edit.contains(parameter)))
                         })
                     };
                     let mut profile = Profile::new(crate::timing::mode());
                     let before = crate::timing::enabled().then(||engine.gpu_activity());
-                    let cache_before = before.map(|_|if let Some(loaded) = &reduced_loaded { reduced.cached_bytes(loaded) }
+                    let cache_before = before.map(|_|if reusing_pixels { 0 } else if let Some(loaded) = &reduced_loaded { reduced.cached_bytes(loaded) }
                         else { source.as_ref().unwrap().1.cached_bytes() });
                     let mut used_reduced = false;
                     let root=if request.export.is_some(){"final"}else{&request.output};
@@ -441,7 +461,11 @@ impl Worker {
                         // Timing a host span must not add a GPU wait and change the
                         // responsiveness we are trying to measure.
                         let _span = crate::timing::Span::new(request.revision, "processing");
-                        if let Some(loaded) = reduced_loaded.take() {
+                        if let Some(composed) = composed.take() {
+                            reporter.rendered(foveonic::render::RenderProgress::Prepared);
+                            reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
+                            Some(composed.artifacts)
+                        } else if let Some(loaded) = reduced_loaded.take() {
                             match reduced.render(&engine, &decoded_cache, &mut source, loaded, &settings, &cancel, &mut profile,
                                 &|stage| reporter.loaded(stage), &|stage| reporter.rendered(stage))? {
                                 reduced::Attempt::Rendered(artifacts) => { used_reduced = true; artifacts },
@@ -458,11 +482,12 @@ impl Worker {
                     #[cfg(test)]
                     observations.recipes.lock().unwrap().push((request.revision, engine.gpu_activity().since(recipe_before).dispatches));
                     if let Some(before) = before {
-                        crate::timing::emit("processing", serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"outputs":roots,"settings":settings,"execution":if used_reduced {"reduced-session"} else {"session"},"status":if rendered.is_some(){"complete"}else{"superseded"},"cache_before_bytes":cache_before,"cache_after_bytes":if used_reduced {reduced.cached_bytes_for_path(&request.path)} else {source.as_ref().unwrap().1.cached_bytes()},"profile":profile,"activity":engine.gpu_activity().since(before)}));
+                        crate::timing::emit("processing", serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"outputs":roots,"settings":settings,"execution":if reusing_pixels {"presentation"} else if used_reduced {"reduced-session"} else {"session"},"status":if rendered.is_some(){"complete"}else{"superseded"},"cache_before_bytes":cache_before,"cache_after_bytes":if reusing_pixels {0} else if used_reduced {reduced.cached_bytes_for_path(&request.path)} else {source.as_ref().unwrap().1.cached_bytes()},"profile":profile,"activity":engine.gpu_activity().since(before)}));
                     }
                     let mut profile = Profile::new(crate::timing::mode());
                     let Some(mut artifacts) = rendered else { return Ok(None); };
                     if cancel(){return Ok(None);}
+                    let retain_whole = presented.retain(&request, &settings, &artifacts, &decoded_cache);
                     let view_before = crate::timing::enabled().then(||engine.gpu_activity());
                     let comparison = if let Some(input) = input {
                         let baseline = artifacts.pop().ok_or("missing comparison input")?;
@@ -472,7 +497,8 @@ impl Worker {
                         let _span = crate::timing::Span::new(request.revision, "comparison_view_prepare_host");
                         Some(Comparison {
                             input,
-                            texture: Arc::new(engine.view_texture(&image, None, &mut profile)?),
+                            texture: if let Some(display) = &reused_display { display.comparison.as_ref().unwrap().texture.clone() }
+                                else { Arc::new(engine.view_texture(&image, None, &mut profile)?) },
                         })
                     } else { None };
                     let artifact = artifacts.pop().ok_or("missing requested artifact")?;
@@ -486,17 +512,20 @@ impl Worker {
                     let native_extent=if root=="final" {foveonic::render::native_extent(&artifact.metadata)?} else {image.uncropped_view().extent};
                     let texture = {
                         let _span = crate::timing::Span::new(request.revision, "view_prepare_host");
-                        let uncropped=request.framing_preview.then(||image.without_composition());
-                        Arc::new(engine.view_texture(uncropped.as_ref().unwrap_or(image.as_ref()), None, &mut profile)?)
+                        if let Some(display) = &reused_display { display.texture.clone() } else {
+                            let uncropped=request.framing_preview.then(||image.without_composition());
+                            Arc::new(engine.view_texture(uncropped.as_ref().unwrap_or(image.as_ref()), None, &mut profile)?)
+                        }
                     };
                     if comparison.as_ref().is_some_and(|c| c.texture.description().extent != texture.description().extent) {
                         return Err("comparison views have different geometry".into());
                     }
-                    {
+                    if reused_display.is_none() {
                         let _span = crate::timing::Span::new(request.revision, "view_completion_wait");
                         engine.device().poll(eframe::wgpu::Maintain::Wait);
                     }
                     if let Some(before)=view_before{crate::timing::emit("view",serde_json::json!({"revision":request.revision,"source":request.path,"output":root,"profile":profile,"activity":engine.gpu_activity().since(before)}));}
+                    if retain_whole { presented.display(texture.clone(), comparison.clone(), request.framing_preview); }
                     Ok(Some(Frame {
                         framing_preview: request.framing_preview,
                         native_extent,
@@ -835,6 +864,7 @@ mod tests {
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
+                preview_policy: crate::preferences::PreviewMode::Full,
                 revision: index as u64 + 1,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -899,6 +929,7 @@ mod tests {
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
+                preview_policy: crate::preferences::PreviewMode::Full,
                 revision,
                 path: path.clone(),
                 settings: foveonic::render::Settings::new("", ""),
@@ -930,6 +961,7 @@ mod tests {
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
+            preview_policy: crate::preferences::PreviewMode::Full,
             revision: 21,
             path: path.clone(),
             settings: foveonic::render::Settings::new("", ""),
@@ -952,6 +984,7 @@ mod tests {
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
+            preview_policy: crate::preferences::PreviewMode::Full,
             revision: 22,
             path,
             settings: foveonic::render::Settings::new("", ""),
@@ -1001,6 +1034,7 @@ mod tests {
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
+                preview_policy: crate::preferences::PreviewMode::Full,
                 revision,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -1036,6 +1070,7 @@ mod tests {
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
+            preview_policy: crate::preferences::PreviewMode::Full,
             revision: 9,
             path: path.clone(),
             settings: settings.clone(),
@@ -1055,6 +1090,7 @@ mod tests {
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
+            preview_policy: crate::preferences::PreviewMode::Full,
             revision: 10,
             path,
             settings,
@@ -1180,6 +1216,7 @@ mod tests {
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
+                preview_policy: crate::preferences::PreviewMode::Full,
                 revision,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -1261,6 +1298,7 @@ mod tests {
                     calibration: None,
                     rendition: Default::default(),
                     preview_quality: crate::preferences::PreviewMode::Full,
+                    preview_policy: crate::preferences::PreviewMode::Full,
                     revision,
                     path: path.clone(),
                     settings,
@@ -1372,6 +1410,7 @@ mod tests {
             calibration: None,
             rendition: Default::default(),
             preview_quality: crate::preferences::PreviewMode::Full,
+            preview_policy: crate::preferences::PreviewMode::Full,
             revision: 1,
             path,
             settings: foveonic::render::Settings::new("Sunlight", "Standard"),
@@ -1440,6 +1479,7 @@ mod tests {
             path: paths[index].clone(),
             settings: settings.clone(),
             preview_quality: crate::preferences::PreviewMode::Thumb,
+            preview_policy: crate::preferences::PreviewMode::Thumb,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -1502,6 +1542,7 @@ mod tests {
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
+                preview_policy: crate::preferences::PreviewMode::Full,
                 revision,
                 path: "test.x3f".into(),
                 settings: foveonic::render::Settings::new("Sunlight", "Standard"),
@@ -1529,6 +1570,7 @@ mod tests {
                 calibration: None,
                 rendition: Default::default(),
                 preview_quality: crate::preferences::PreviewMode::Full,
+                preview_policy: crate::preferences::PreviewMode::Full,
                 revision: 100,
                 path: "test.x3f".into(),
                 settings: foveonic::render::Settings::new("Sunlight", "Standard"),
@@ -1605,6 +1647,7 @@ mod preview_tests {
             path: "merrill.x3f".into(),
             settings: Settings::new("Sunlight", "Standard"),
             preview_quality: PreviewMode::Smart,
+            preview_policy: PreviewMode::Smart,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -1665,6 +1708,7 @@ mod preview_tests {
             path: "test.x3f".into(),
             settings: Settings::new("Sunlight", "Standard"),
             preview_quality: crate::preferences::PreviewMode::Fast,
+            preview_policy: crate::preferences::PreviewMode::Fast,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -1817,6 +1861,7 @@ mod preview_tests {
                 path: path.clone(),
                 settings: export_settings,
                 preview_quality: mode,
+                preview_policy: mode,
                 output: "sensor.rgb".into(),
                 comparison: false,
                 export: Some(Export {
@@ -1849,6 +1894,7 @@ mod preview_tests {
             path,
             settings,
             preview_quality: crate::preferences::PreviewMode::Fast,
+            preview_policy: crate::preferences::PreviewMode::Fast,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -1891,6 +1937,7 @@ mod color_pick_tests {
             path: path.clone(),
             settings: settings.clone(),
             preview_quality: PreviewMode::Full,
+            preview_policy: PreviewMode::Full,
             output: "final".into(),
             comparison: false,
             export: None,

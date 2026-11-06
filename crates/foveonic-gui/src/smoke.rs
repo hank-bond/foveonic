@@ -689,7 +689,14 @@ impl App {
                 if target == "rotate-smart" {
                     assert_eq!(
                         frame.artifact.settings.preview_quality,
-                        foveonic::render::PreviewQuality::Full
+                        if self
+                            .settings
+                            .fast_preview_available(&frame.artifact.metadata)
+                        {
+                            foveonic::render::PreviewQuality::Fast
+                        } else {
+                            foveonic::render::PreviewQuality::Full
+                        }
                     );
                     assert!(frame.artifact.settings.preview_region.is_none());
                 }
@@ -1029,6 +1036,7 @@ impl App {
                             | "smart-crop-zoom"
                             | "smart-crop-enter"
                             | "smart-crop-active-zoom"
+                            | "smart-crop-leave"
                             | "smart-adaptive-zoom"
                             | "smart-transition-full"
                             | "smart-adaptive-edit"

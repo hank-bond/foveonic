@@ -86,18 +86,15 @@ impl App {
     pub(super) fn smart_edit_request(
         &mut self,
     ) -> Option<(preferences::PreviewMode, Option<[u32; 4]>)> {
-        if self.framing_preview_active()
-            && self.preferences.preview_quality == preferences::PreviewMode::Smart
-        {
-            return Some((preferences::PreviewMode::Full, None));
-        }
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
+            || self.framing_preview_active()
             || self.output != "final"
             || self.comparison.requested()
-            || !self
-                .viewport
-                .zoom_percent(self.context.pixels_per_point())
-                .is_some_and(|z| z > 100.)
+            || !(self.viewport.explicit_zoom()
+                && self
+                    .viewport
+                    .zoom_percent(self.context.pixels_per_point())
+                    .is_some_and(|z| z > 100.))
         {
             return None;
         }
@@ -129,7 +126,28 @@ impl App {
     }
 
     pub(super) fn update_smart(&mut self, ctx: &egui::Context) {
+        if self.framing_preview_active() {
+            if !self.busy && self.viewport.explicit_zoom_pending() {
+                self.viewport.take_explicit_zoom();
+                if self
+                    .viewport
+                    .zoom_percent(ctx.pixels_per_point())
+                    .is_some_and(|zoom| zoom > 100.)
+                    && self
+                        .frame
+                        .as_ref()
+                        .is_some_and(|frame| frame.artifact.settings.preview_quality.is_reduced())
+                {
+                    self.submit_with_quality(None, None, preferences::PreviewMode::Full);
+                }
+            }
+            return;
+        }
+        if !self.busy {
+            self.viewport.take_explicit_zoom();
+        }
         if !self.busy
+            && self.viewport.explicit_zoom()
             && self
                 .viewport
                 .zoom_percent(ctx.pixels_per_point())
@@ -150,10 +168,11 @@ impl App {
             || self.output != "final"
             || self.comparison.requested()
             || (self.detail.is_none()
-                && !self
-                    .viewport
-                    .zoom_percent(ctx.pixels_per_point())
-                    .is_some_and(|zoom| zoom > 100.))
+                && !(self.viewport.explicit_zoom()
+                    && self
+                        .viewport
+                        .zoom_percent(ctx.pixels_per_point())
+                        .is_some_and(|zoom| zoom > 100.)))
         {
             return;
         }

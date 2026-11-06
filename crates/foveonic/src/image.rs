@@ -234,6 +234,23 @@ impl RenderedImage {
     pub fn uncropped_view(&self) -> View {
         self.view
     }
+    /// Replace saved composition while sharing unchanged photographic samples.
+    /// Regional and output-sized results require a new authoritative render.
+    pub fn with_composition(
+        &self,
+        crop: crate::crop::Crop,
+        rotation: crate::rotation::Rotation,
+    ) -> crate::source::Result<Self> {
+        crop.validate()?;
+        rotation.validate()?;
+        if self.settings.preview_region.is_some() || self.settings.output_size.is_some() {
+            return Err("composition requires an unresized whole-frame image".into());
+        }
+        let mut image = self.clone();
+        image.settings.crop = crop;
+        image.settings.rotation = rotation;
+        Ok(image)
+    }
     /// Present the camera-oriented source for draft rotation, retaining immutable samples.
     pub fn without_composition(&self) -> Self {
         let mut image = self.without_crop();
@@ -310,5 +327,64 @@ impl ImageTexture {
     }
     pub fn description(&self) -> Description {
         self.description
+    }
+}
+
+#[cfg(test)]
+mod composition_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn composition_shares_samples_and_rejects_regional_or_resized_results() {
+        let engine = crate::render::Engine::new().unwrap();
+        let mut image = RenderedImage {
+            buffer: engine
+                .test_gpu()
+                .upload("Composition samples", &[0_f32; 12])
+                .unwrap(),
+            description: Description::new([2, 2], Space::ToneMappedRgb(ColorSpace::Srgb)),
+            view: View {
+                crop: [0, 0, 2, 2],
+                rotation: 0,
+                extent: [2, 2],
+            },
+            metadata: Arc::new(Metadata {
+                width: 2,
+                height: 2,
+                rotation: 0,
+                processing_version: None,
+                properties: Default::default(),
+                matrices: Default::default(),
+                lists: Default::default(),
+            }),
+            settings: Settings::new("Sunlight", "Standard"),
+            owner: Arc::new(()),
+            dehaze_basis: None,
+        };
+        let before = engine.gpu_activity();
+        let crop = crate::crop::Crop {
+            bounds: [0.1, 0.1, 0.9, 0.9],
+            ..Default::default()
+        };
+        let rotated = image
+            .with_composition(
+                crop,
+                crate::rotation::Rotation {
+                    turns: 1,
+                    degrees: 5.,
+                },
+            )
+            .unwrap();
+        assert!(image.buffer.shares_storage(&rotated.buffer));
+        assert_eq!(image.description, rotated.description);
+        assert_eq!(image.settings.crop, crate::crop::Crop::default());
+        let activity = engine.gpu_activity().since(before);
+        assert_eq!(activity.dispatches, 0);
+        assert_eq!(activity.allocations, 0);
+        image.settings.output_size = Some([1, 1]);
+        assert!(image.with_composition(crop, Default::default()).is_err());
+        image.settings.output_size = None;
+        image.settings.preview_region = Some([0, 0, 1, 1]);
+        assert!(image.with_composition(crop, Default::default()).is_err());
     }
 }
