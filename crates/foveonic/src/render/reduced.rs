@@ -18,6 +18,7 @@ pub enum NeedsOriginal {
     UnsupportedGeometry,
     NativeAuxiliaryInput,
     UpstreamChanged,
+    AnalysisChanged,
     EngineChanged,
 }
 
@@ -43,6 +44,7 @@ pub struct ReducedSession {
     calibration: Option<std::sync::Weak<crate::noise_calibration::Calibration>>,
     cache: Cache,
     metadata_bytes: u64,
+    auto_haze: Option<super::reduced_analysis::AutoHaze>,
 }
 impl ReducedSession {
     pub fn metadata(&self) -> &Arc<Metadata> {
@@ -58,8 +60,15 @@ impl ReducedSession {
     /// Logical metadata and identity payload. Allocator and map-node overhead is excluded.
     pub fn retained_cpu_bytes(&self) -> u64 {
         let mut retained = crate::recipe::RetainedBytes::default();
-        let containers = self.cache.account_keys(&mut retained);
+        let containers = self.account_keys(&mut retained);
         self.owned_cpu_bytes() + containers as u64 + retained.bytes() as u64
+    }
+    fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
+        self.cache.account_keys(retained)
+            + self
+                .auto_haze
+                .as_ref()
+                .map_or(0, |haze| haze.account(retained))
     }
     fn owned_cpu_bytes(&self) -> u64 {
         self.metadata_bytes
@@ -106,7 +115,6 @@ fn requirements(metadata: &Metadata, settings: &Settings, names: &[&str]) -> Opt
     if effective.directional_banding_selected()
         || effective.adaptive_tone_active()
         || effective.dehaze_active()
-        || (effective.dehaze_estimate && effective.dehaze_auto())
         || effective.color_editor_active()
         || effective.advanced_color_active()
     {
@@ -132,6 +140,8 @@ fn upstream(settings: &Settings) -> Result<Vec<u8>> {
         effective.merrill_speckles,
         effective.merrill_noise_method,
         effective.multiscale_noise_selected(),
+        effective.row_correction,
+        effective.reference_rows_selected(),
         effective.sensor_noise_controls(),
     ))?)
 }
@@ -173,6 +183,15 @@ fn metadata_bytes(metadata: &Metadata) -> u64 {
 }
 
 impl Engine {
+    /// Check known native-only requirements before discarding a warm native session.
+    /// Sealing and rendering still validate source, engine and upstream identities.
+    pub fn reduced_session_requirement(
+        metadata: &Metadata,
+        settings: &Settings,
+    ) -> Option<NeedsOriginal> {
+        requirements(metadata, settings, &["final"])
+    }
+
     /// Consume the native source after executing its existing corrected sensor
     /// prefix. Success releases native CPU samples and temporary native graph keys.
     /// Unsupported requests return the same Arc for authoritative fallback. Other
@@ -186,6 +205,7 @@ impl Engine {
     ) -> Result<ReducedPreparation> {
         let source = source.into();
         settings.validate_values()?;
+        profile.mode.check_gpu_features(self.device().features())?;
         if let Some(reason) = requirements(&source.metadata, settings, &["final"]) {
             return Ok(ReducedPreparation::NeedsOriginal { reason, source });
         }
@@ -195,46 +215,61 @@ impl Engine {
             cancel: Some(&cancel),
             ..Execution::default()
         };
-        let prepared = (|| -> Result<RenderedImage> {
-            execution.check()?;
-            let built = recipes::merrill::prepare_reduced_sensor(
-                self,
-                &source,
-                &effective,
-                profile,
-                &mut execution,
-            )?;
-            let mut values = self.execute_controlled(
-                super::Input::Source(&source),
-                &built.graph,
-                &[built.final_id],
-                profile,
-                &mut execution,
-            )?;
-            let value = values.pop().ok_or("missing reduced sensor")?;
-            let description = value.description.ok_or("reduced sensor must be an image")?;
-            Ok(RenderedImage {
-                buffer: value.buffer,
-                description,
-                view: View {
-                    crop: built.params.crop,
-                    rotation: built.params.source[2],
-                    extent: [built.params.output[0], built.params.output[1]],
-                },
-                metadata: source.metadata.clone(),
-                settings: settings.clone(),
-                owner: self.owner.clone(),
-                dehaze_basis: None,
-            })
-        })();
+        let prepared =
+            (|| -> Result<(RenderedImage, Option<super::reduced_analysis::AutoHaze>)> {
+                execution.check()?;
+                let built = recipes::merrill::prepare_reduced_sensor(
+                    self,
+                    &source,
+                    &effective,
+                    profile,
+                    &mut execution,
+                )?;
+                let mut values = self.execute_controlled(
+                    super::Input::Source(&source),
+                    &built.graph,
+                    &[built.final_id],
+                    profile,
+                    &mut execution,
+                )?;
+                let value = values.pop().ok_or("missing reduced sensor")?;
+                let description = value.description.ok_or("reduced sensor must be an image")?;
+                let sensor = RenderedImage {
+                    buffer: value.buffer,
+                    description,
+                    view: View {
+                        crop: built.params.crop,
+                        rotation: built.params.source[2],
+                        extent: [built.params.output[0], built.params.output[1]],
+                    },
+                    metadata: source.metadata.clone(),
+                    settings: settings.clone(),
+                    owner: self.owner.clone(),
+                    dehaze_basis: None,
+                };
+                let auto_haze = if settings.dehaze_estimate && settings.dehaze_auto() {
+                    Some(super::reduced_analysis::AutoHaze::prepare(
+                        self,
+                        &source,
+                        &sensor,
+                        settings,
+                        profile,
+                        &mut execution,
+                    )?)
+                } else {
+                    None
+                };
+                Ok((sensor, auto_haze))
+            })();
         self.release_native_preparation(&source.metadata);
         match prepared {
-            Ok(sensor) => Ok(ReducedPreparation::Prepared(Box::new(ReducedSession {
+            Ok((sensor, auto_haze)) => Ok(ReducedPreparation::Prepared(Box::new(ReducedSession {
                 metadata_bytes: metadata_bytes(&sensor.metadata),
                 sensor,
                 upstream: identity,
                 calibration: self.noise_calibration.as_ref().map(Arc::downgrade),
                 cache: Cache::default(),
+                auto_haze,
             }))),
             Err(error) if error.downcast_ref::<Superseded>().is_some() => {
                 Ok(ReducedPreparation::Superseded)
@@ -251,6 +286,39 @@ impl Engine {
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
     ) -> Result<ReducedRender> {
+        self.render_reduced_session_observed(session, settings, names, cancel, profile, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_reduced_session_with_progress(
+        &self,
+        session: &mut ReducedSession,
+        settings: &Settings,
+        names: &[&str],
+        cancel: impl Fn() -> bool,
+        profile: &mut Profile,
+        progress: impl Fn(super::RenderProgress),
+    ) -> Result<ReducedRender> {
+        self.render_reduced_session_observed(
+            session,
+            settings,
+            names,
+            cancel,
+            profile,
+            Some(&progress),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_reduced_session_observed(
+        &self,
+        session: &mut ReducedSession,
+        settings: &Settings,
+        names: &[&str],
+        cancel: impl Fn() -> bool,
+        profile: &mut Profile,
+        progress: Option<&dyn Fn(super::RenderProgress)>,
+    ) -> Result<ReducedRender> {
         settings.validate_values()?;
         if !Arc::ptr_eq(&session.sensor.owner, &self.owner) {
             return Ok(ReducedRender::NeedsOriginal(NeedsOriginal::EngineChanged));
@@ -266,23 +334,59 @@ impl Engine {
         if !same_calibration || upstream(settings)? != session.upstream {
             return Ok(ReducedRender::NeedsOriginal(NeedsOriginal::UpstreamChanged));
         }
+        let auto_haze_requested = settings.dehaze_estimate && settings.dehaze_auto();
+        if auto_haze_requested {
+            let Some(haze) = &session.auto_haze else {
+                return Ok(ReducedRender::NeedsOriginal(NeedsOriginal::AnalysisChanged));
+            };
+            let mut execution = Execution {
+                cancel: Some(&cancel),
+                ..Execution::default()
+            };
+            match haze.matches(self, &session.sensor, settings, profile, &mut execution) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Ok(ReducedRender::NeedsOriginal(NeedsOriginal::AnalysisChanged))
+                }
+                Err(error) if error.downcast_ref::<Superseded>().is_some() => {
+                    return Ok(ReducedRender::Superseded)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let mut request = std::borrow::Cow::Borrowed(settings);
+        if auto_haze_requested {
+            request.to_mut().dehaze_estimate = false;
+        }
         session.cache.bind(&self.owner);
         session.cache.select(settings.preview_quality, None);
         let mut execution = Execution {
             cache: Some(&mut session.cache),
             cancel: Some(&cancel),
+            progress,
             ..Execution::default()
         };
         let result = self.render_recipe(
             recipes::RecipeInput::Reduced(&session.sensor),
-            settings,
+            &request,
             recipes::Recipe::Photographic(names),
             profile,
             &mut execution,
         );
         session.cache.finish();
         match result {
-            Ok(artifacts) => Ok(ReducedRender::Rendered(artifacts)),
+            Ok(mut artifacts) => {
+                if auto_haze_requested {
+                    for artifact in &mut artifacts {
+                        artifact.settings = settings.clone();
+                        artifact.dehaze_estimate = session.auto_haze.as_ref().unwrap().color;
+                        if let crate::inspection::Content::Image(image) = &mut artifact.content {
+                            image.settings = settings.clone();
+                        }
+                    }
+                }
+                Ok(ReducedRender::Rendered(artifacts))
+            }
             Err(error) if error.downcast_ref::<Superseded>().is_some() => {
                 Ok(ReducedRender::Superseded)
             }
@@ -352,8 +456,7 @@ impl ReducedWorkingSet {
             .iter()
             .map(|entry| {
                 let session = &entry.session;
-                let mut bytes =
-                    session.owned_cpu_bytes() + session.cache.account_keys(retained) as u64;
+                let mut bytes = session.owned_cpu_bytes() + session.account_keys(retained) as u64;
                 if metadata
                     .iter()
                     .any(|old| Arc::ptr_eq(old, session.metadata()))
@@ -398,16 +501,41 @@ impl ReducedWorkingSet {
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
     ) -> Result<Option<ReducedRender>> {
+        self.render_observed(engine, id, settings, cancel, profile, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_with_progress(
+        &mut self,
+        engine: &Engine,
+        id: u64,
+        settings: &Settings,
+        cancel: impl Fn() -> bool,
+        profile: &mut Profile,
+        progress: impl Fn(super::RenderProgress),
+    ) -> Result<Option<ReducedRender>> {
+        self.render_observed(engine, id, settings, cancel, profile, Some(&progress))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn render_observed(
+        &mut self,
+        engine: &Engine,
+        id: u64,
+        settings: &Settings,
+        cancel: impl Fn() -> bool,
+        profile: &mut Profile,
+        progress: Option<&dyn Fn(super::RenderProgress)>,
+    ) -> Result<Option<ReducedRender>> {
         let Some(index) = self.entries.iter().position(|entry| entry.id == id) else {
             return Ok(None);
         };
         let mut entry = self.entries.remove(index);
-        let result = engine.render_reduced_session(
+        let result = engine.render_reduced_session_observed(
             &mut entry.session,
             settings,
             &["final"],
             cancel,
             profile,
+            progress,
         );
         self.entries.push(entry);
         self.enforce(engine);

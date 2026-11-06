@@ -8,7 +8,7 @@ fn sensor_identity_tracks_upstream_controls_and_leaves_tail_edits_reusable() {
     settings.preview_quality = PreviewQuality::Thumb;
     settings.reconstruction = Some(Default::default());
     let base = upstream(&settings).unwrap();
-    for case in 0..7 {
+    for case in 0..9 {
         let mut changed = settings.clone();
         match case {
             0 => changed.white_balance = "Shade".into(),
@@ -20,7 +20,9 @@ fn sensor_identity_tracks_upstream_controls_and_leaves_tail_edits_reusable() {
                 changed.merrill_noise_method =
                     super::super::MerrillNoiseMethod::MultiscaleRowsAndColumns
             }
-            _ => changed.reconstruction.as_mut().unwrap().banding = 4,
+            6 => changed.reconstruction.as_mut().unwrap().banding = 4,
+            7 => changed.row_correction = false,
+            _ => changed.merrill_banding.enabled = false,
         }
         assert_ne!(base, upstream(&changed).unwrap(), "upstream case {case}");
     }
@@ -317,15 +319,17 @@ fn working_set_evicts_after_insertion_and_cache_growth() {
             calibration: first.calibration.clone(),
             cache: Cache::default(),
             metadata_bytes: first.metadata_bytes,
+            auto_haze: None,
         })
     };
+    let duplicate_bytes = duplicate().retained_cpu_bytes();
     let mut aliases = ReducedWorkingSet::new(u64::MAX);
     aliases.insert(10, duplicate(), &engine).unwrap();
     aliases.insert(11, duplicate(), &engine).unwrap();
     assert_eq!(aliases.retained_gpu_bytes(), first.cached_bytes());
     assert_eq!(
         aliases.retained_cpu_bytes(),
-        first.retained_cpu_bytes() * 2 - first.metadata_bytes
+        duplicate_bytes * 2 - first.metadata_bytes
     );
     drop(aliases);
     let limit = first.cached_bytes() + first.retained_cpu_bytes() + 1024;
@@ -375,4 +379,117 @@ fn working_set_evicts_after_insertion_and_cache_growth() {
         0,
         "undersized empty budget releases engine preparation"
     );
+}
+
+#[test]
+#[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
+fn retained_auto_haze_color_matches_fixed_fast_analysis_and_releases_source() {
+    let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
+    let original = Arc::new(Source::open(&path).unwrap());
+    let weak = Arc::downgrade(&original);
+    let engine = Engine::new().unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.preview_quality = PreviewQuality::Thumb;
+    settings.reconstruction = Some(Default::default());
+    settings.dehaze_estimate = true;
+    settings.dehaze.shadow = None;
+    let ReducedPreparation::Prepared(mut session) = engine
+        .prepare_reduced_session(original, &settings, || false, &mut Profile::default())
+        .unwrap()
+    else {
+        panic!("expected Auto Haze reduced preparation");
+    };
+    assert!(
+        weak.upgrade().is_none(),
+        "sealed session must release its Source Arc"
+    );
+    let saved = session.auto_haze.as_ref().unwrap().color;
+    let mut retained = crate::recipe::RetainedBytes::default();
+    let containers = session.auto_haze.as_ref().unwrap().account(&mut retained);
+    assert!(
+        containers + retained.bytes() < 1024 * 1024,
+        "only small analysis statistics and keys remain"
+    );
+    for case in 0..3 {
+        if case == 1 {
+            settings.exposure = 0.5;
+        }
+        if case == 2 {
+            settings.tone.contrast = 0.3;
+        }
+        let ReducedRender::Rendered(mut artifacts) = engine
+            .render_reduced_session(
+                &mut session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap()
+        else {
+            panic!("unchanged analysis should reuse its color");
+        };
+        let artifact = artifacts.pop().unwrap();
+        assert_eq!(artifact.dehaze_estimate, saved);
+        assert!(artifact.settings.dehaze_estimate);
+        let crate::inspection::Content::Image(image) = artifact.content else {
+            panic!("expected image");
+        };
+        let verifier = engine.executor();
+        let fresh = verifier
+            .render_artifacts(
+                &Source::open(&path).unwrap(),
+                &settings,
+                &["final"],
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(artifact.dehaze_estimate, fresh.dehaze_estimate);
+        let crate::inspection::Content::Image(expected) = fresh.content else {
+            panic!("expected image");
+        };
+        assert_eq!(
+            engine.readback_image(&image).unwrap(),
+            verifier.readback_image(&expected).unwrap()
+        );
+    }
+    for case in 0..4 {
+        let mut changed = settings.clone();
+        match case {
+            0 => changed.reconstruction.as_mut().unwrap().chroma = 4,
+            1 => changed.sharpen_amount = Some(0.5),
+            2 => changed.color_mode = "Vivid".into(),
+            _ => changed.white_balance_bias.warmth = 0.5,
+        }
+        assert!(
+            matches!(
+                engine
+                    .render_reduced_session(
+                        &mut session,
+                        &changed,
+                        &["final"],
+                        || false,
+                        &mut Profile::default()
+                    )
+                    .unwrap(),
+                ReducedRender::NeedsOriginal(NeedsOriginal::AnalysisChanged)
+            ),
+            "analysis dependency {case}"
+        );
+    }
+    settings.dehaze.amount = 0.5;
+    assert!(matches!(
+        engine
+            .render_reduced_session(
+                &mut session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default()
+            )
+            .unwrap(),
+        ReducedRender::NeedsOriginal(NeedsOriginal::NativeAuxiliaryInput)
+    ));
 }

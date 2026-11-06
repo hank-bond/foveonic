@@ -188,7 +188,7 @@ impl Engine {
     }
 }
 
-fn build_camera(
+pub(super) fn build_camera(
     engine: &Engine,
     source: RecipeInput<'_>,
     settings: &Settings,

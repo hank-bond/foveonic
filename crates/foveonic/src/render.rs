@@ -21,6 +21,7 @@ mod execute;
 mod preparation;
 mod recipes;
 mod reduced;
+mod reduced_analysis;
 mod settings;
 pub use reduced::{
     NeedsOriginal, ReducedPreparation, ReducedRender, ReducedSession, ReducedWorkingSet,

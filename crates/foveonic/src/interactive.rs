@@ -28,6 +28,11 @@ impl RenderSession {
         &self.source
     }
 
+    /// Release native editing checkpoints while transferring decoded-source ownership.
+    pub fn into_source(self) -> Arc<Source> {
+        self.source
+    }
+
     pub fn metadata(&self) -> &Arc<crate::source::Metadata> {
         &self.source.metadata
     }

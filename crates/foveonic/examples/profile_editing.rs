@@ -184,7 +184,8 @@ fn render(
             let outcome = match outcome {
                 None
                 | Some(ReducedRender::NeedsOriginal(
-                    foveonic::render::NeedsOriginal::UpstreamChanged,
+                    foveonic::render::NeedsOriginal::UpstreamChanged
+                    | foveonic::render::NeedsOriginal::AnalysisChanged,
                 )) => {
                     reduced_reloaded = true;
                     // Native input loading stays outside the retained working set.
