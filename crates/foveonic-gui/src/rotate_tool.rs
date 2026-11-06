@@ -33,6 +33,15 @@ impl Mode {
         Self::ALL[(Self::ALL.iter().position(|m| *m == self).unwrap() + 1) % Self::ALL.len()]
     }
     fn icon(self, painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+        self.outlined_icon(painter, rect, color, 0.);
+    }
+    fn outlined_icon(
+        self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        color: egui::Color32,
+        outline: f32,
+    ) {
         let clockwise = matches!(self, Self::Freehand | Self::Right);
         let p = |x: f32, y: f32| {
             let x = if clockwise { x } else { 34. - x };
@@ -47,19 +56,34 @@ impl Mode {
             })
             .collect();
         arc.push(p(18.5, 7.5));
+        if outline > 0. {
+            painter.add(egui::Shape::line(
+                arc.clone(),
+                egui::Stroke::new(ring.width + outline * 2., egui::Color32::BLACK),
+            ));
+        }
         painter.add(egui::Shape::line(arc, ring));
         painter.add(egui::Shape::convex_polygon(
             vec![p(24.5, 7.5), p(18.5, 1.), p(18.5, 14.)],
             color,
-            egui::Stroke::NONE,
+            egui::Stroke::new(outline, egui::Color32::BLACK),
         ));
+        let line = |points| {
+            if outline > 0. {
+                painter.line_segment(
+                    points,
+                    egui::Stroke::new(detail.width + outline * 2., egui::Color32::BLACK),
+                );
+            }
+            painter.line_segment(points, detail);
+        };
         match self {
             Self::Straighten => {
-                painter.line_segment([p(11., 20.), p(23., 20.)], detail);
-                painter.line_segment([p(17., 14.), p(17., 26.)], detail);
+                line([p(11., 20.), p(23., 20.)]);
+                line([p(17., 14.), p(17., 26.)]);
             }
             Self::Left | Self::Right => {
-                painter.line_segment([p(27., 2.5), p(27., 12.5)], detail);
+                line([p(27., 2.5), p(27., 12.5)]);
             }
             Self::Freehand => {}
         }
@@ -222,14 +246,10 @@ pub fn cursor(ui: &egui::Ui, response: &egui::Response) {
         egui::Order::Tooltip,
         egui::Id::new("rotation cursor"),
     ));
-    let rect = egui::Rect::from_min_size(pointer - egui::vec2(13., 15.), egui::Vec2::splat(28.));
-    let mode = state(ui.ctx()).mode;
-    mode.icon(
-        &painter,
-        rect.translate(egui::vec2(1., 1.)),
-        egui::Color32::BLACK,
-    );
-    mode.icon(&painter, rect, egui::Color32::WHITE);
+    let rect = egui::Rect::from_min_size(pointer - egui::vec2(6.5, 7.5), egui::Vec2::splat(14.));
+    state(ui.ctx())
+        .mode
+        .outlined_icon(&painter, rect, egui::Color32::WHITE, 0.5);
 }
 
 fn angle(mode: Mode, original: f64, start: egui::Pos2, end: egui::Pos2, center: egui::Pos2) -> f64 {
