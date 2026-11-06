@@ -128,7 +128,6 @@ pub struct Browser {
     pub hide_reviewed: bool,
     pub show_ratings: bool,
     pub clear_selection: bool,
-    pub rotation_clicked: Option<(PathBuf, bool)>,
     actions: Vec<(BrowserAction, egui::Modifiers)>,
     highlighted: HashSet<PathBuf>,
     anchor: Option<PathBuf>,
@@ -139,6 +138,7 @@ pub struct Browser {
     pub decode_states: Arc<HashMap<PathBuf, EntryState>>,
     pub cache_enabled: bool,
     prefetch_dirty: bool,
+    selection_generation: u64,
     thumbnail_worker: Loader,
     preview_worker: Loader,
     thumbnail_pass: bool,
@@ -160,6 +160,7 @@ pub struct Browser {
     order: VecDeque<PathBuf>,
     thumbnail_budget_bytes: u64,
     thumbnail_bytes: u64,
+    resource_revision: u64,
     reveal_selection: bool,
 }
 impl Browser {
@@ -214,7 +215,6 @@ impl Browser {
             hide_reviewed: true,
             show_ratings: false,
             clear_selection: false,
-            rotation_clicked: None,
             actions: Vec::new(),
             highlighted: HashSet::new(),
             anchor: None,
@@ -225,6 +225,7 @@ impl Browser {
             decode_states: Arc::new(HashMap::new()),
             cache_enabled: false,
             prefetch_dirty: true,
+            selection_generation: 0,
             thumbnail_worker,
             preview_worker,
             thumbnail_pass: true,
@@ -244,6 +245,7 @@ impl Browser {
             order: VecDeque::new(),
             thumbnail_budget_bytes: crate::preferences::DEFAULT_THUMBNAIL_BYTES,
             thumbnail_bytes: 0,
+            resource_revision: 0,
             reveal_selection: false,
         }
     }
@@ -292,6 +294,7 @@ impl Browser {
         self.last_active = None;
         self.clear_selection = false;
         self.decode_states = Arc::new(HashMap::new());
+        self.resource_revision = self.resource_revision.wrapping_add(1);
         self.cache.clear();
         self.thumbnail_bytes = 0;
         self.previews.clear();
@@ -329,6 +332,7 @@ impl Browser {
         self.preview_demand.clear();
         self.preview_checked.clear();
         self.preview_attempts.clear();
+        self.resource_revision = self.resource_revision.wrapping_add(1);
         self.cache.clear();
         self.thumbnail_bytes = 0;
         self.previews.clear();
@@ -343,6 +347,11 @@ impl Browser {
     }
     pub fn invalidate_prefetch(&mut self) {
         self.prefetch_dirty = true;
+        self.selection_generation = self.selection_generation.wrapping_add(1);
+    }
+    /// Ordered viewport paths need rebuilding only after a browser input changes.
+    pub fn selection_generation(&self) -> u64 {
+        self.selection_generation
     }
     /// Publish order changes once. Selection changes also invalidate this snapshot.
     /// A photo concealed by a history update may remain active in the viewport.
@@ -363,6 +372,7 @@ impl Browser {
                 version,
                 kind,
                 image,
+                memory: _memory,
             }) = self.receiver.try_recv()
             else {
                 return;
@@ -407,6 +417,7 @@ impl Browser {
         }
     }
     fn insert(&mut self, ctx: &egui::Context, path: PathBuf, image: PreparedPreview) {
+        self.resource_revision = self.resource_revision.wrapping_add(1);
         let native_extent = image.thumbnail.native_extent;
         let entry = self.records.entry(path.clone()).or_default();
         if entry.extent != Some(native_extent) {
@@ -481,6 +492,7 @@ impl Browser {
         if !self.claim_rendered(&path, revision) {
             return;
         }
+        self.resource_revision = self.resource_revision.wrapping_add(1);
         self.thumbnail_bytes += Self::thumbnail_bytes(&thumbnail);
         if let Some(Some(previous)) = self.cache.insert(path.clone(), Some(thumbnail.clone())) {
             self.thumbnail_bytes -= Self::thumbnail_bytes(&previous);
@@ -553,6 +565,23 @@ impl Browser {
         self.pending_previews.retain(|p| wanted.contains(p));
         self.trim_thumbnails(&wanted);
     }
+    pub fn resource_revision(&self) -> u64 {
+        self.resource_revision
+            .wrapping_add(self.thumbnail_worker.resource_revision())
+            .wrapping_add(self.preview_worker.resource_revision())
+    }
+    pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        for thumbnail in self
+            .cache
+            .values()
+            .filter_map(Option::as_ref)
+            .chain(self.previews.values())
+        {
+            thumbnail.texture.memory_resources(inventory);
+        }
+        self.thumbnail_worker.memory_resources(inventory);
+        self.preview_worker.memory_resources(inventory);
+    }
     pub fn set_thumbnail_budget(&mut self, bytes: u64) {
         self.thumbnail_budget_bytes = bytes;
     }
@@ -572,6 +601,7 @@ impl Browser {
             if let Some(old) = self.order.remove(index) {
                 if let Some(Some(thumbnail)) = self.cache.remove(&old) {
                     self.thumbnail_bytes -= Self::thumbnail_bytes(&thumbnail);
+                    self.resource_revision = self.resource_revision.wrapping_add(1);
                 }
             }
         }
@@ -668,23 +698,14 @@ impl Browser {
         files: &[PathBuf],
         response: &egui::Response,
     ) -> bool {
-        let rotation = crate::rotate_tool::click_turn(ui.ctx());
-        if rotation.is_some() {
-            crate::rotate_tool::cursor(ui, response);
-        }
         if !response.clicked() || self.review_clicked {
             return false;
-        }
-        if let Some(clockwise) = rotation {
-            self.rotation_clicked = Some((path.to_owned(), clockwise));
-            if self.highlighted.contains(path) {
-                return false;
-            }
         }
         self.highlight(path, files, ui.input(|i| i.modifiers));
         self.highlighted.contains(path)
     }
     pub fn rotate_cached(&mut self, path: &Path, clockwise: bool) {
+        self.resource_revision = self.resource_revision.wrapping_add(1);
         for thumbnail in self
             .cache
             .get_mut(path)
@@ -722,13 +743,13 @@ impl Browser {
         self.apply_query();
         self.review_clicked = false;
         self.clear_selection = false;
-        self.rotation_clicked = None;
         let focus_requested = std::mem::take(&mut self.focus_requested);
         if self.last_active.as_deref() != selected {
             if let Some(path) = selected.filter(|path| !self.excluded.contains(*path)) {
                 if !self.highlighted.contains(path) {
                     self.highlighted.clear();
                     self.highlighted.insert(path.to_owned());
+                    self.selection_generation = self.selection_generation.wrapping_add(1);
                     self.anchor = Some(path.to_owned());
                 }
             }
@@ -823,7 +844,10 @@ impl Browser {
         if ui.is_enabled() {
             for (action, modifiers) in actions {
                 match action {
-                    BrowserAction::SelectAll => self.highlighted = files.iter().cloned().collect(),
+                    BrowserAction::SelectAll => {
+                        self.highlighted = files.iter().cloned().collect();
+                        self.selection_generation = self.selection_generation.wrapping_add(1);
+                    }
                     BrowserAction::TogglePick | BrowserAction::Hide => {
                         if self.import_mode {
                             if self.highlighted.is_empty() {
@@ -831,6 +855,8 @@ impl Browser {
                                     selected.filter(|path| files.iter().any(|file| file == *path))
                                 {
                                     self.highlighted.insert(path.to_owned());
+                                    self.selection_generation =
+                                        self.selection_generation.wrapping_add(1);
                                     self.anchor = Some(path.to_owned());
                                 }
                             }
@@ -1003,6 +1029,7 @@ impl Browser {
                 preserve_viewport: false,
             });
             self.highlighted.clear();
+            self.selection_generation = self.selection_generation.wrapping_add(1);
             if let Some(next) = &chosen {
                 self.highlighted.insert(next.path.clone());
                 self.anchor = Some(next.path.clone());
@@ -1156,6 +1183,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         browser.receiver = rx;
         tx.send(super::Reply {
+            memory: None,
             path: path.clone(),
             version: 1,
             kind: super::Kind::Thumbnail,
@@ -1231,6 +1259,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         browser.receiver = rx;
         tx.send(super::Reply {
+            memory: None,
             path: path.clone(),
             version: 1,
             kind: super::Kind::Preview,
@@ -1254,6 +1283,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         browser.receiver = rx;
         tx.send(super::Reply {
+            memory: None,
             path: path.clone(),
             version: 1,
             kind: super::Kind::Preview,
@@ -1356,5 +1386,25 @@ mod tests {
         ] {
             assert_eq!(super::icon_columns(width), count);
         }
+    }
+}
+
+#[cfg(test)]
+mod selection_generation_tests {
+    use super::*;
+    #[test]
+    fn ordered_selection_generation_changes_for_inputs_and_stays_idle_between_them() {
+        let ctx = egui::Context::default();
+        let mut browser = Browser::new(ctx);
+        let files: Vec<PathBuf> = ["first.x3f", "second.x3f"].map(PathBuf::from).into();
+        browser.open_discovered("photos".into(), files.clone());
+        let initial = browser.selection_generation();
+        browser.highlight(&files[0], &files, Default::default());
+        assert!(browser.selection_generation() > initial);
+        let selected = browser.selection_generation();
+        assert_eq!(browser.processing_selection(None), files[..1]);
+        assert_eq!(browser.selection_generation(), selected);
+        browser.invalidate_prefetch();
+        assert!(browser.selection_generation() > selected);
     }
 }

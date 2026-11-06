@@ -1,7 +1,7 @@
 //! Checks scoped recipe isolation, neutral optional reconstruction and family-default precedence.
 
 use super::*;
-use crate::render::{MerrillNoiseMethod, PhotographicMethod, PreviewQuality, TiffColorSpace};
+use crate::render::{MerrillNoiseMethod, PhotographicMethod, Scale, TiffColorSpace};
 
 #[test]
 fn directional_banding_follows_only_merrill_noise_scope_and_reset() {
@@ -90,7 +90,7 @@ fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {
             bounds: [0.1, 0.2, 0.8, 0.9],
             ..Default::default()
         },
-        preview_quality: PreviewQuality::Fast,
+        working_scale: Scale::new(2).unwrap(),
         preview_region: Some([0, 0, 20, 30]),
         output_size: Some([200, 300]),
         tiff_color_space: Some(TiffColorSpace::ProPhotoRgb),
@@ -126,7 +126,7 @@ fn tool_recipes_do_not_overwrite_other_tools_or_output_preferences() {
             degrees: 12.
         }
     );
-    assert_eq!(target.preview_quality, PreviewQuality::Fast);
+    assert_eq!(target.working_scale, Scale::new(2).unwrap());
     assert_eq!(target.preview_region, Some([0, 0, 20, 30]));
     assert_eq!(target.output_size, Some([200, 300]));
     assert_eq!(target.tiff_color_space, Some(TiffColorSpace::ProPhotoRgb));

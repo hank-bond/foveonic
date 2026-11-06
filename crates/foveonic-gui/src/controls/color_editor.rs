@@ -130,6 +130,11 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             );
         });
         let mono = settings.rendering == foveonic::render::Rendering::Monochrome;
+        let pointer = if selected == COLORS.len() {
+            "/photographic/color_editor/master".to_owned()
+        } else {
+            format!("/photographic/color_editor/bands/{selected}")
+        };
         let adjustment = if selected == COLORS.len() {
             &mut controls.master
         } else {
@@ -137,26 +142,37 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         };
         let column = LabelColumn::new(ui);
         ui.add_enabled_ui(!mono, |ui| {
-            changed |= column.adjustment(
+            changed |= crate::multi_edit_controls::field(ui, format!("{pointer}/hue"), |ui| {
+                column.adjustment(
+                    ui,
+                    ("Color Range Hue", "Hue"),
+                    &mut adjustment.hue,
+                    -1. ..=1.,
+                    0.,
+                )
+            });
+            changed |= crate::multi_edit_controls::mapped_field(
                 ui,
-                ("Color Range Hue", "Hue"),
-                &mut adjustment.hue,
-                -1. ..=1.,
-                0.,
-            );
-            changed |= column.saturation_adjustment(
-                ui,
-                ("Color Range Saturation", "Saturation"),
-                &mut adjustment.saturation,
+                format!("{pointer}/saturation"),
+                crate::multi_edit_controls::Mapping::Saturation,
+                |ui| {
+                    column.saturation_adjustment(
+                        ui,
+                        ("Color Range Saturation", "Saturation"),
+                        &mut adjustment.saturation,
+                    )
+                },
             );
         });
-        changed |= column.adjustment(
-            ui,
-            ("Color Range Lightness", "Lightness"),
-            &mut adjustment.lightness,
-            -1. ..=1.,
-            0.,
-        );
+        changed |= crate::multi_edit_controls::field(ui, format!("{pointer}/lightness"), |ui| {
+            column.adjustment(
+                ui,
+                ("Color Range Lightness", "Lightness"),
+                &mut adjustment.lightness,
+                -1. ..=1.,
+                0.,
+            )
+        });
         crate::editor::direct_color::button(ui);
         if mono {
             ui.weak("Lightness uses the original subject colors.");

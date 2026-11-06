@@ -14,10 +14,10 @@ def fixture(round_index=0, mode='wall'):
             'retirement_ms': .1, 'total_ms': 1.}
     return [record('editing_photo', {'round': round_index, 'photo_index': 0,
                 'source': 'photo.x3f', 'started_ms': 1., 'completed_ms': 10.,
-                'profile_started_ms': 1.5, 'extent': [8, 8], 'effective_quality': 'Thumb',
+                'profile_started_ms': 1.5, 'extent': [8, 8], 'requested_scale_divisor': 8, 'effective_scale_divisor': 8,
                 'profile': {'nodes': [node, {**node, 'executed': False}]}}, mode),
             record('editing_group', {'round': round_index, 'photo_count': 1,
-                'completed_ms': 12., 'workers': 1, 'quality': 'Thumb', 'edit': 'exposure'}, mode)]
+                'completed_ms': 12., 'workers': 1, 'scale_divisor': 8, 'edit': 'exposure'}, mode)]
 
 
 class TimelineTests(unittest.TestCase):

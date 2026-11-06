@@ -3,7 +3,7 @@
 use crate::{
     inspection::Content,
     profile::Profile,
-    render::{ControlCapabilities, Engine, PreviewQuality, RenderSession, Rendering, Settings},
+    render::{ControlCapabilities, Engine, RenderSession, Rendering, Scale, Settings},
     source::Source,
 };
 
@@ -19,7 +19,9 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
     );
     settings.reconstruction = Some(crate::noise::Controls::default());
     settings.rendering = Rendering::Color;
-    assert!(settings.fast_preview_available(&source.metadata));
+    assert!(
+        settings.working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
+    );
     let mut session = RenderSession::new(source);
     let engine = Engine::new().unwrap();
     let output = std::env::var_os("SMALL_PREVIEW_OUT").map(std::path::PathBuf::from);
@@ -27,12 +29,12 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
         std::fs::create_dir(path).unwrap();
     }
     for quality in [
-        PreviewQuality::Full,
-        PreviewQuality::Fast,
-        PreviewQuality::Draft,
-        PreviewQuality::Thumb,
+        Scale::NATIVE,
+        Scale::new(2).unwrap(),
+        Scale::new(4).unwrap(),
+        Scale::new(8).unwrap(),
     ] {
-        settings.preview_quality = quality;
+        settings.working_scale = quality;
         for (exposure, chroma) in [(0., 0), (0.75, 0), (0.75, 2)] {
             settings.exposure = exposure;
             settings.reconstruction.as_mut().unwrap().chroma = chroma;
@@ -51,7 +53,7 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
             let Content::Image(image) = artifact.content else {
                 panic!("expected image")
             };
-            assert_eq!(artifact.settings.preview_quality, quality);
+            assert_eq!(artifact.settings.working_scale, quality);
             assert_eq!(image.view().extent, native.map(|v| v / quality.divisor()));
             let texture = engine
                 .view_texture(&image, None, &mut Profile::default())
@@ -75,7 +77,7 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
 
 #[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
-fn small_overview_falls_back_for_resized_regional_monochrome_and_inspection_requests() {
+fn working_scale_survives_output_views_monochrome_and_inspection() {
     let source = Source::open(std::env::var_os("SMALL_PREVIEW_X3F").unwrap()).unwrap();
     let cap = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let base = Settings::new(
@@ -86,7 +88,7 @@ fn small_overview_falls_back_for_resized_regional_monochrome_and_inspection_requ
     let engine = Engine::new().unwrap();
     for case in 0..4 {
         let mut settings = base.clone();
-        settings.preview_quality = PreviewQuality::Draft;
+        settings.working_scale = Scale::new(4).unwrap();
         let names = match case {
             0 => {
                 settings.output_size = Some([64, 96]);
@@ -116,7 +118,7 @@ fn small_overview_falls_back_for_resized_regional_monochrome_and_inspection_requ
         assert!(
             artifacts
                 .iter()
-                .all(|a| a.settings.preview_quality == PreviewQuality::Full),
+                .all(|a| a.settings.working_scale == settings.working_scale),
             "case {case}"
         );
     }
@@ -124,7 +126,7 @@ fn small_overview_falls_back_for_resized_regional_monochrome_and_inspection_requ
 
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR originals"]
-fn small_color_guides_match_fresh_edits_and_keep_public_inspection_full() {
+fn scaled_color_guides_match_fresh_edits_and_native_inspection_remains_explicit() {
     use crate::{nodes::finish::advanced_color, source::ProcessingFamily};
     use std::{path::PathBuf, sync::Arc};
 
@@ -146,10 +148,10 @@ fn small_color_guides_match_fresh_edits_and_keep_public_inspection_full() {
         base.white_balance = cap.default_white_balance(&source.metadata).unwrap();
         base.color_mode = cap.default_color_mode(&source.metadata).unwrap();
         let mut session = RenderSession::new(source.clone());
-        for quality in [PreviewQuality::Draft, PreviewQuality::Thumb] {
-            base.preview_quality = quality;
+        for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
+            base.working_scale = quality;
             assert!(
-                base.small_preview_available(&source.metadata, quality),
+                base.working_scale_available(&source.metadata, quality),
                 "{name}"
             );
             let neutral = engine
@@ -199,7 +201,7 @@ fn small_color_guides_match_fresh_edits_and_keep_public_inspection_full() {
                         .unwrap()
                         .pop()
                         .unwrap();
-                    assert_eq!(artifact.settings.preview_quality, quality);
+                    assert_eq!(artifact.settings.working_scale, quality);
                     let Content::Image(image) = artifact.content else {
                         panic!("expected image")
                     };
@@ -232,14 +234,28 @@ fn small_color_guides_match_fresh_edits_and_keep_public_inspection_full() {
                 .unwrap()
                 .pop()
                 .unwrap();
-            assert_eq!(inspection.settings.preview_quality, PreviewQuality::Full);
+            assert_eq!(inspection.settings.working_scale, quality);
             let Content::Image(image) = inspection.content else {
                 panic!("expected image")
             };
-            assert!(image.description().extent[0] > neutral.description().extent[0]);
-            eprintln!(
-                "{name} {quality:?}: cached/fresh basic and advanced edits exact, inspection Full"
-            );
+            let mut native_request = base.clone();
+            native_request.working_scale = Scale::NATIVE;
+            let native = verifier
+                .render_artifacts(
+                    &source,
+                    &native_request,
+                    &["linear.base"],
+                    &mut Profile::default(),
+                )
+                .unwrap()
+                .pop()
+                .unwrap();
+            assert_eq!(native.settings.working_scale, Scale::NATIVE);
+            let Content::Image(native) = native.content else {
+                panic!("expected image")
+            };
+            assert!(native.description().extent[0] > image.description().extent[0]);
+            eprintln!("{name} {quality:?}: cached/fresh color edits exact, explicit native inspection preserved");
         }
     }
 }

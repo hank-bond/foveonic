@@ -15,8 +15,6 @@ const KERNEL_PI: f64 = 3.14159;
 const PHASES: usize = 16;
 const TAPS: usize = 16;
 const FIXED_ONE: f64 = 65536.;
-// A 2×2 mean is centered at physical +0.5, or +0.25 on the half grid (Q16).
-const HALF_GRID_CENTER_OFFSET: i64 = 16384;
 // An exclusive source bound must include floor(coordinate) and its bilinear neighbor.
 const BILINEAR_EXCLUSIVE_SUPPORT: u32 = 2;
 
@@ -97,58 +95,38 @@ impl Prepared {
             },
         })
     }
-    /// Map physical crop coordinates onto 2×2 cell centers without rounding crop endpoints.
-    /// The half-cell offset also applies at rotated origins and physical image edges.
-    pub(crate) fn on_half_grid(mut self) -> Result<Self> {
-        if !self.params.shape[0].is_multiple_of(2) || !self.params.shape[1].is_multiple_of(2) {
-            return Err("half-grid crop requires even physical source dimensions".into());
-        }
-        self.params.shape[0] /= 2;
-        self.params.shape[1] /= 2;
-        self.params.column[0] =
-            (i64::from(self.params.column[0]) / 2 - HALF_GRID_CENTER_OFFSET) as u32;
-        self.params.column[1] =
-            (i64::from(self.params.column[1]) / 2 - HALF_GRID_CENTER_OFFSET) as u32;
-        for value in &mut self.params.column[2..] {
-            *value = ((*value as i32) / 2) as u32;
-        }
-        for value in &mut self.params.row[..2] {
-            *value = ((*value as i32) / 2) as u32;
-        }
-        self.params.row[2] = 0; // Half-cell centers always require interpolation.
-        let dx = (self.params.column[2] as i32).unsigned_abs()
-            + (self.params.row[0] as i32).unsigned_abs();
-        let dy = (self.params.column[3] as i32).unsigned_abs()
-            + (self.params.row[1] as i32).unsigned_abs();
-        self.kernel = interpolation_kernel(FIXED_ONE / f64::from(dx), FIXED_ONE / f64::from(dy));
-        Ok(self)
-    }
-    /// Map a native crop onto the centers of filtered square sensor cells.
-    pub(crate) fn on_grid(mut self, divisor: u32) -> Result<Self> {
-        if ![4, 8].contains(&divisor)
-            || self.params.shape[..2]
-                .iter()
-                .any(|v| !v.is_multiple_of(divisor))
+    /// Keep native Q16 framing while sampling a padded sensor working grid.
+    pub(crate) fn on_working_grid(
+        mut self,
+        scale: crate::render::Scale,
+        extent: [u32; 2],
+        origin: [u32; 2],
+    ) -> Result<Self> {
+        if extent.contains(&0)
+            || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / 3
         {
-            return Err("scaled crop requires aligned physical dimensions".into());
+            return Err("invalid padded crop geometry".into());
         }
-        self.params.shape[0] /= divisor;
-        self.params.shape[1] /= divisor;
-        let center = i64::from(divisor - 1) * 65536 / (2 * i64::from(divisor));
-        for value in &mut self.params.column[..2] {
-            *value = (i64::from(*value) / i64::from(divisor) - center) as u32;
+        let divisor = i64::from(scale.divisor());
+        self.params.shape[..2].copy_from_slice(&extent);
+        let center = (divisor - 1) * 65536 / (2 * divisor);
+        for (axis, value) in self.params.column[..2].iter_mut().enumerate() {
+            *value =
+                (i64::from(*value) / divisor - center + i64::from(origin[axis]) * 65536) as u32;
         }
         for value in self.params.column[2..]
             .iter_mut()
             .chain(&mut self.params.row[..2])
         {
-            *value = ((*value as i32) / divisor as i32) as u32;
+            *value = (i64::from(*value as i32) / divisor) as u32;
         }
         self.params.row[2] = 0;
-        let dx = (self.params.column[2] as i32).unsigned_abs()
-            + (self.params.row[0] as i32).unsigned_abs();
-        let dy = (self.params.column[3] as i32).unsigned_abs()
-            + (self.params.row[1] as i32).unsigned_abs();
+        let dx = ((self.params.column[2] as i32).unsigned_abs()
+            + (self.params.row[0] as i32).unsigned_abs())
+        .max(1);
+        let dy = ((self.params.column[3] as i32).unsigned_abs()
+            + (self.params.row[1] as i32).unsigned_abs())
+        .max(1);
         self.kernel = interpolation_kernel(FIXED_ONE / f64::from(dx), FIXED_ONE / f64::from(dy));
         Ok(self)
     }
@@ -321,17 +299,21 @@ mod preview_grid_tests {
     use super::*;
     #[test]
     fn scaled_crop_maps_cell_centers_in_every_orientation() {
-        for divisor in [4, 8] {
+        for divisor in [2, 4, 8, 16, 64, 1 << 31] {
             for rotation in [0, 90, 180, 270] {
                 let original =
                     Prepared::new([128, 96], [16, 8, 112, 88], [24, 20], rotation, true).unwrap();
                 let native = original.params;
-                let pooled = original.on_grid(divisor).unwrap();
-                assert_eq!(pooled.input_extent(), [128 / divisor, 96 / divisor]);
+                let extent = [128_u32.div_ceil(divisor), 96_u32.div_ceil(divisor)].map(|v| v + 6);
+                let pooled = original
+                    .on_working_grid(crate::render::Scale::new(divisor).unwrap(), extent, [3; 2])
+                    .unwrap();
+                assert_eq!(pooled.input_extent(), extent);
                 assert_eq!(pooled.extent(), [24, 20]);
                 for axis in 0..2 {
                     let expected = i64::from(native.column[axis]) / i64::from(divisor)
-                        - i64::from(divisor - 1) * 65536 / (2 * i64::from(divisor));
+                        - i64::from(divisor - 1) * 65536 / (2 * i64::from(divisor))
+                        + 3 * 65536;
                     assert_eq!(pooled.params.column[axis] as i32 as i64, expected);
                 }
             }

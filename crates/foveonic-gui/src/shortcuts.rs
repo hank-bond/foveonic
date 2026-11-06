@@ -24,6 +24,7 @@ pub enum Action {
     CycleRotate,
     RotateLeft,
     RotateRight,
+    Pointer,
     Hand,
     FinishTool,
     ExitTool,
@@ -81,6 +82,7 @@ const BINDINGS: &[Binding] = &[
     Binding::new(Key::ArrowLeft, Modifiers::COMMAND, Action::RotateLeft),
     Binding::new(Key::ArrowRight, Modifiers::COMMAND, Action::RotateRight),
     Binding::new(Key::H, Modifiers::NONE, Action::Hand),
+    Binding::new(Key::V, Modifiers::NONE, Action::Pointer),
     Binding::new(Key::Enter, Modifiers::NONE, Action::FinishTool),
     Binding::new(Key::D, Modifiers::NONE, Action::DirectColor),
     Binding::new(Key::Escape, Modifiers::NONE, Action::ExitTool),
@@ -157,7 +159,7 @@ pub struct Availability {
     pub browser: bool,
     pub import: bool,
     pub settings: bool,
-    pub photo_tool_active: bool,
+    pub viewport_hovered: bool,
     pub framing_active: bool,
 }
 impl Availability {
@@ -165,7 +167,7 @@ impl Availability {
         self.enabled
             && match action {
                 Action::Browser(BrowserAction::TogglePick) => {
-                    self.browser && self.import && !self.photo_tool_active
+                    self.browser && self.import && !self.viewport_hovered
                 }
                 Action::Browser(BrowserAction::Hide) => self.browser && self.import,
                 Action::Browser(_) => self.browser,
@@ -176,6 +178,7 @@ impl Availability {
                 | Action::RotateLeft
                 | Action::RotateRight
                 | Action::CycleRotate
+                | Action::Pointer
                 | Action::Hand
                 | Action::ExitTool
                 | Action::CopySettings
@@ -211,21 +214,22 @@ pub fn capture(
     input.events.retain(|event| {
         // egui-winit emits clipboard events instead of C/V key presses, even
         // with Shift held. Retain their payload and leave plain text copy/paste alone.
-        let (key, modifiers, text) = match event {
+        let (key, modifiers, text, clipboard) = match event {
             egui::Event::Key {
                 key,
                 pressed: true,
                 modifiers,
                 ..
-            } => (*key, *modifiers, None),
-            egui::Event::Copy => (Key::C, input.modifiers, None),
-            egui::Event::Paste(text) => (Key::V, input.modifiers, Some(text)),
+            } => (*key, *modifiers, None, false),
+            egui::Event::Copy => (Key::C, input.modifiers, None, true),
+            egui::Event::Paste(text) => (Key::V, input.modifiers, Some(text), true),
             _ => return true,
         };
-        if let Some(binding) = BINDINGS
-            .iter()
-            .find(|b| b.matches(key, modifiers) && available.allows(b.action))
-        {
+        if let Some(binding) = BINDINGS.iter().find(|b| {
+            (!clipboard || matches!(b.action, Action::CopySettings | Action::PasteSettings))
+                && b.matches(key, modifiers)
+                && available.allows(b.action)
+        }) {
             actions.push(Invocation {
                 action: binding.action,
                 modifiers,

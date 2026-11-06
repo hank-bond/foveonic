@@ -42,16 +42,35 @@ impl<T: Pod + Send + Sync> Payload for Data<T> {
 #[derive(Default)]
 pub(crate) struct RetainedBytes {
     bytes: usize,
+    payload_bytes: usize,
     payloads: HashMap<usize, Arc<dyn Payload>>,
+    owners: HashMap<usize, Arc<dyn std::any::Any + Send + Sync>>,
 }
 impl RetainedBytes {
     pub fn bytes(&self) -> usize {
         self.bytes
     }
+    pub(crate) fn payload_bytes(&self) -> usize {
+        self.payload_bytes
+    }
+    pub(crate) fn add_bytes(&mut self, bytes: usize) {
+        self.bytes += bytes;
+    }
+    pub(crate) fn owner<T: Send + Sync + 'static>(&mut self, owner: Arc<T>, bytes: usize) -> bool {
+        let address = Arc::as_ptr(&owner) as usize;
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.owners.entry(address) {
+            self.bytes += bytes;
+            entry.insert(owner);
+            true
+        } else {
+            false
+        }
+    }
     fn payload(&mut self, payload: Arc<dyn Payload>) {
         let address = Arc::as_ptr(&payload) as *const () as usize;
         self.payloads.entry(address).or_insert_with(|| {
             self.bytes += payload.bytes().len();
+            self.payload_bytes += payload.bytes().len();
             payload
         });
     }

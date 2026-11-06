@@ -37,8 +37,66 @@ pub(super) fn prepared(width: u32, height: u32) -> Prepared {
             mix: [1. / 3., 1. / 3., 1. / 3., 2.],
             filter: [0.375, 0.3, 0.02, 0.0001],
             area: [0, 0, width, height],
-            detail: [100., 500., 0., 0.],
+            detail: [100., 500., 1., 1.],
+            spatial: [9, 40, 0, 0],
         },
+    }
+}
+
+#[test]
+fn monochrome_spatial_support_follows_the_sensor_working_grid() {
+    use crate::render::{Scale, WorkingGrid};
+    for divisor in [2, 4, 8, 16, 64, 1 << 31] {
+        let grid = WorkingGrid::new([4928, 3264], Scale::new(divisor).unwrap(), 8).unwrap();
+        let value = prepared(4928, 3264).on_grid(Some(grid)).unwrap();
+        assert_eq!(value.params.source[..2], grid.extent);
+        assert_eq!(value.params.source[3], 1);
+        assert!(!value.params.source[2].is_multiple_of(2));
+        assert!(value.params.spatial[0] * 2 < grid.extent[0]);
+        assert!(value.params.spatial[1] > 0);
+        assert_eq!(value.params.detail[2], grid.scale.factor());
+        let std = crate::nodes::color::pyramid_resample::independent_noise_std(grid.scale);
+        assert_eq!(value.params.detail[3], std * std);
+        assert_eq!(value.params.filter, prepared(4928, 3264).params.filter);
+    }
+}
+
+#[test]
+fn monochrome_range_tables_use_pooled_variance_in_native_code_units() {
+    use crate::render::{Scale, WorkingGrid};
+    let native = prepared(80, 80);
+    let grid = WorkingGrid::new([80, 80], Scale::new(2).unwrap(), 8).unwrap();
+    let reduced = prepared(80, 80).on_grid(Some(grid)).unwrap();
+    for directional in [true, false] {
+        let (native_indices, native_weights) = native.table(directional);
+        let (indices, weights) = reduced.table(directional);
+        assert!(weights.len() < native_weights.len());
+        // Directional tables start at delta0; histogram tables are centered
+        // around each bin. Compare an equal nonzero native-code separation.
+        let bin = 512;
+        let selected_weight = |indices: &[u32], weights: &[f32]| {
+            let [offset, first, _] = indices[bin * 3..bin * 3 + 3] else {
+                unreachable!()
+            };
+            let neighbor = if directional { 1 } else { bin as u32 + 1 };
+            weights[(offset + neighbor - first) as usize]
+        };
+        let original = selected_weight(&native_indices, &native_weights);
+        let actual = selected_weight(&indices, &weights);
+        assert!(actual < original);
+        assert!((actual - original.powf(1. / reduced.params.detail[3])).abs() < 1e-5);
+        assert_ne!(
+            native.key(if directional {
+                Stage::Directional
+            } else {
+                Stage::Histogram
+            }),
+            reduced.key(if directional {
+                Stage::Directional
+            } else {
+                Stage::Histogram
+            })
+        );
     }
 }
 #[test]

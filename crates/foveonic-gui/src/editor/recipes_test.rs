@@ -1,14 +1,14 @@
 //! Checks named-preset replacement, portable scopes and transient settings exclusion.
 
 use super::*;
-use foveonic::render::PreviewQuality;
+use foveonic::render::Scale;
 
 #[test]
 fn library_replaces_named_scopes_and_shares_universal_tools_only() {
     let mut library = Library::default();
     let mut source = Settings {
         exposure: 1.,
-        preview_quality: PreviewQuality::Fast,
+        working_scale: Scale::new(2).unwrap(),
         ..Default::default()
     };
     library
@@ -35,10 +35,7 @@ fn library_replaces_named_scopes_and_shares_universal_tools_only() {
             .count(),
         1
     );
-    assert_eq!(
-        library.presets[0].settings.preview_quality,
-        PreviewQuality::Full
-    );
+    assert_eq!(library.presets[0].settings.working_scale, Scale::NATIVE);
     library
         .save(ProcessingFamily::Merrill, Scope::All, "All", &source)
         .unwrap();

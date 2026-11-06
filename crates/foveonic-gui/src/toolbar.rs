@@ -492,21 +492,33 @@ mod tests {
         for width in [220., 520.] {
             let ctx = egui::Context::default();
             let mut baseline_height: Option<f32> = None;
-            for message in ["", "Checking import history…\nProcessing error: /Volumes/missing-drive/a/very/long/destination/path/photo.X3F could not be opened"] {
+            for message in [
+                "",
+                "Checking import history…\nProcessing error: /Volumes/missing-drive/a/very/long/destination/path/photo.X3F could not be opened",
+            ] {
                 let mut settings = egui::Rect::NOTHING;
                 let mut status = egui::Rect::NOTHING;
                 let mut toolbar = egui::Rect::NOTHING;
-                let output = ctx.run(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 200.))),
-                    ..Default::default()
-                }, |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        toolbar = row(ui, |ui| {
-                            settings = widgets::button(ui, "Settings", false, egui::Vec2::ZERO).rect;
-                            status = super::status(ui, message).rect;
-                        }).response.rect;
-                    });
-                });
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 200.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            toolbar = row(ui, |ui| {
+                                settings =
+                                    widgets::button(ui, "Settings", false, egui::Vec2::ZERO).rect;
+                                status = super::status(ui, message).rect;
+                            })
+                            .response
+                            .rect;
+                        });
+                    },
+                );
                 assert!(status.left() >= settings.right());
                 assert!(status.right() <= toolbar.right() + 0.01);
                 if let Some(height) = baseline_height {

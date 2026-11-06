@@ -365,10 +365,10 @@ fn merrill_preview_quality_does_not_save_defaults_or_reenable_saved_off() {
     let mut settings = receive(&mut session);
     assert!(settings.reconstruction.is_some());
     for quality in [
-        foveonic::render::PreviewQuality::Fast,
-        foveonic::render::PreviewQuality::Full,
+        foveonic::render::Scale::new(2).unwrap(),
+        foveonic::render::Scale::NATIVE,
     ] {
-        settings.preview_quality = quality;
+        settings.working_scale = quality;
         session.refresh(&settings);
     }
     drop(session);
@@ -399,10 +399,10 @@ fn merrill_preview_quality_does_not_save_defaults_or_reenable_saved_off() {
     let mut restored = receive(&mut session);
     assert_eq!(restored.reconstruction, None);
     for quality in [
-        foveonic::render::PreviewQuality::Fast,
-        foveonic::render::PreviewQuality::Full,
+        foveonic::render::Scale::new(2).unwrap(),
+        foveonic::render::Scale::NATIVE,
     ] {
-        restored.preview_quality = quality;
+        restored.working_scale = quality;
         session.refresh(&restored);
     }
     drop(session);
@@ -490,54 +490,49 @@ fn saved_mixer_edits_override_fresh_capture_mixture() {
 }
 
 #[test]
-fn rotating_unviewed_photos_preserves_the_active_photo_and_each_recipe() {
+fn editing_subset_resolution_replaces_old_reads_and_keeps_import_edits_in_memory() {
     let directory = Directory::new();
-    let active = directory.input("active.x3f");
-    let target = directory.input("target.x3f");
-    let mut settings = Settings::new("Sunlight", "Standard");
-    settings.exposure = 0.7;
-    sidecar::save(&active, &settings).unwrap();
-    sidecar::save(&target, &settings).unwrap();
+    let a = directory.input("a.x3f");
+    let b = directory.input("b.x3f");
+    let mut saved = Settings::new("Sunlight", "Standard");
+    saved.exposure = 0.3;
+    sidecar::save(&a, &saved).unwrap();
+    sidecar::save(&b, &saved).unwrap();
     let mut session = Session::new(
         egui::Context::default(),
         true,
         Arc::new(foveonic::decode_cache::Cache::new()),
     );
-    session.select(active.clone());
-    let original = receive(&mut session);
-    session.refresh(&original);
-    session.rotate(target.clone(), true);
-    session.rotate(target.clone(), true);
+    session.resolve_settings(std::slice::from_ref(&a));
+    session.resolve_settings(std::slice::from_ref(&b));
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !session.rotating.is_empty() {
-        assert!(session.receive().is_none());
+    let resolved = loop {
+        session.receive();
+        let replies = session.take_resolved();
+        if !replies.is_empty() {
+            break replies;
+        }
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));
-    }
-    assert_eq!(session.selected.as_ref(), Some(&active));
-    assert_eq!(session.requested_settings(&active), Some(&original));
-    let rotated = sidecar::load(&target).unwrap().unwrap();
-    assert_eq!(rotated.rotation.turns, 2);
-    assert_eq!(rotated.exposure, 0.7);
-    assert_eq!(session.take_rotated().len(), 2);
+    };
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].path, b);
+    assert_eq!(resolved[0].settings.as_ref().unwrap(), &saved);
+    session.set_memory_only(true);
+    let mut edited = saved.clone();
+    edited.exposure = 1.7;
+    session.apply(b.clone(), edited.clone());
+    session.resolve_settings(std::slice::from_ref(&b));
+    let resolved = session.take_resolved();
+    assert_eq!(resolved[0].settings.as_ref().unwrap(), &edited);
+    drop(session);
+    assert_eq!(sidecar::load(&b).unwrap(), Some(saved));
 }
 
 #[test]
-fn queued_thumbnail_rotations_finish_on_shutdown_and_do_not_replace_bad_recipes() {
+fn malformed_target_recipe_is_reported_without_replacing_its_bytes() {
     let directory = Directory::new();
-    let target = directory.input("target.x3f");
-    let settings = Settings::new("Sunlight", "Standard");
-    sidecar::save(&target, &settings).unwrap();
-    {
-        let mut session = Session::new(
-            egui::Context::default(),
-            true,
-            Arc::new(foveonic::decode_cache::Cache::new()),
-        );
-        session.rotate(target.clone(), true);
-        session.rotate(target.clone(), true);
-    }
-    assert_eq!(sidecar::load(&target).unwrap().unwrap().rotation.turns, 2);
+    let target = directory.input("bad.x3f");
     let path = sidecar::path(&target);
     fs::write(&path, b"broken recipe").unwrap();
     let mut session = Session::new(
@@ -545,43 +540,18 @@ fn queued_thumbnail_rotations_finish_on_shutdown_and_do_not_replace_bad_recipes(
         true,
         Arc::new(foveonic::decode_cache::Cache::new()),
     );
-    session.rotate(target, false);
-    failure(&mut session);
-    assert_eq!(fs::read(path).unwrap(), b"broken recipe");
-}
-
-#[test]
-fn thumbnail_rotation_survives_activation_and_import_review_stays_in_memory() {
-    for memory_only in [false, true] {
-        let directory = Directory::new();
-        let target = directory.input("target.x3f");
-        let mut session = Session::new(
-            egui::Context::default(),
-            true,
-            Arc::new(foveonic::decode_cache::Cache::new()),
-        );
-        session.set_memory_only(memory_only);
-        session.rotate(target.clone(), true);
-        session.rotate(target.clone(), true);
-        session.select(target.clone());
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut latest = None;
-        while !session.ready() || !session.rotating.is_empty() {
-            if let Some(settings) = session.receive() {
-                latest = Some(settings);
-            }
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(1));
+    session.resolve_settings(std::slice::from_ref(&target));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        session.receive();
+        if let Some(reply) = session.take_resolved().pop() {
+            assert_eq!(reply.path, target);
+            assert!(reply.settings.is_err());
+            break;
         }
-        assert_eq!(latest.unwrap().rotation.turns, 2);
-        session.select(target.clone());
-        assert_eq!(receive(&mut session).rotation.turns, 2);
-        drop(session);
-        let saved = sidecar::load(&target).unwrap();
-        if memory_only {
-            assert!(saved.is_none());
-        } else {
-            assert_eq!(saved.unwrap().rotation.turns, 2);
-        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
     }
+    drop(session);
+    assert_eq!(fs::read(path).unwrap(), b"broken recipe");
 }

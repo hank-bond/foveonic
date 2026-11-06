@@ -59,7 +59,7 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
         supported.despeckle = settings.despeckle;
         supported.highlight_restoration = settings.highlight_restoration;
     }
-    supported.preview_quality = settings.preview_quality;
+    supported.working_scale = settings.working_scale;
     supported.preview_region = settings.preview_region;
     supported.rendering = settings.rendering;
     supported.monochrome.noise = settings.monochrome.noise;

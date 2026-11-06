@@ -6,7 +6,7 @@ use crate::{
         Gpu, Kernel, ReadGuard,
     },
     profile::Profile,
-    recipe::Key,
+    recipe::{Key, RetainedBytes, Shared},
     source::Result,
 };
 
@@ -24,10 +24,10 @@ struct Params {
 #[derive(Clone, Debug)]
 pub struct Prepared {
     params: Params,
-    records: Vec<[u32; 4]>,
-    batches: [Vec<[u32; 2]>; 2],
+    records: Shared<[u32; 4]>,
+    batches: [Shared<[u32; 2]>; 2],
     noise: [f32; 12],
-    transforms: Vec<[f32; 2]>,
+    transforms: Shared<[f32; 2]>,
 }
 impl Prepared {
     /// Records contain row, column and packed neighbor/channel/severity bits.
@@ -87,10 +87,10 @@ impl Prepared {
                     0,
                 ],
             },
-            records: jobs,
-            batches,
+            records: jobs.into(),
+            batches: batches.map(Into::into),
             noise: coefficients,
-            transforms,
+            transforms: transforms.into(),
         })
     }
     pub(crate) fn extent(&self) -> [u32; 2] {
@@ -98,11 +98,18 @@ impl Prepared {
     }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params)
-            .slice(&self.records)
-            .slice(&self.batches[0])
-            .slice(&self.batches[1])
+            .join(self.records.key())
+            .join(self.batches[0].key())
+            .join(self.batches[1].key())
             .slice(&self.noise)
-            .slice(&self.transforms)
+            .join(self.transforms.key())
+    }
+    pub(crate) fn account(&self, retained: &mut RetainedBytes) {
+        self.records.account(retained);
+        for batches in &self.batches {
+            batches.account(retained);
+        }
+        self.transforms.account(retained);
     }
 }
 // Bound temporary dense scheduling storage to 64 MiB. Larger sparse inputs
@@ -241,7 +248,7 @@ pub(crate) fn apply(
     let noise = gpu.upload("Chroma noise model", &prepared.noise)?;
     let matrix = gpu.upload("Chroma color projection", &prepared.transforms)?;
     let mut trace = gpu.trace(profile.mode.gpu(), stage_batches.len() as u32);
-    for &[start, count] in stage_batches {
+    for &[start, count] in stage_batches.iter() {
         let groups = count.div_ceil(64);
         let groups_x = groups.min(gpu.device.limits().max_compute_workgroups_per_dimension);
         let mut params = prepared.params;

@@ -4,16 +4,15 @@ mod correction;
 mod highlight;
 mod inspection;
 mod policy;
-mod preview;
-pub(in crate::render) use preview::available as preview_available;
 mod prepare;
+mod preview;
 mod range;
 mod reference;
 mod route;
 mod spatial_gain;
 mod white_balance;
 
-use super::{requested, BuiltRecipe};
+use super::{requested, BuiltRecipe, RecipeInput};
 use crate::{
     graph::{Graph, Operation},
     interactive::Execution,
@@ -26,7 +25,7 @@ use std::sync::Arc;
 
 pub(super) fn build(
     engine: &Engine,
-    source: &Source,
+    source: RecipeInput<'_>,
     settings: &Settings,
     names: &[&str],
     profile: &mut Profile,
@@ -44,7 +43,7 @@ pub(super) fn build_dng(
 ) -> Result<BuiltRecipe> {
     compose(
         engine,
-        source,
+        RecipeInput::Original(source),
         settings,
         &["final"],
         profile,
@@ -59,32 +58,24 @@ pub(crate) use white_balance::estimate as estimate_white_balance;
 
 fn compose(
     engine: &Engine,
-    source: &Source,
+    source: RecipeInput<'_>,
     settings: &Settings,
     names: &[&str],
     profile: &mut Profile,
     execution: &mut Execution<'_>,
     dng: bool,
 ) -> Result<BuiltRecipe> {
-    let metadata = &source.metadata;
+    let metadata = source.metadata();
     let mut params = prepare::geometry(metadata)?;
-    let preview = (!dng
-        && matches!(
-            settings.preview_quality,
-            crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
-        )
-        && (names == ["final"] || names == ["linear.base"])
-        && settings.preview_region.is_none()
-        && settings.output_size.is_none()
-        && preview::available(metadata, settings, settings.preview_quality))
-    .then(|| preview::Grid::new(params, settings.preview_quality))
-    .transpose()?;
+    let native_view = super::camera_view(params);
+
     if let Some(size) = settings.processing_output_size() {
         params.output[..2].copy_from_slice(&size);
     }
     engine.check_extent([params.output[0], params.output[1]])?;
     let mut graph = Graph::default();
     let mut final_id = graph.add(Operation::Source, &[])?;
+    graph.set_view(final_id, native_view);
     macro_rules! finish {
         () => {
             execution.check()?;
@@ -140,10 +131,39 @@ fn compose(
         )?;
         finish!();
     }
+    let range_controls = route
+        .high_iso()?
+        .then(|| {
+            range::controls(
+                metadata,
+                &prepared.color,
+                settings,
+                route.defer_color_mode(dng),
+            )
+            .map(|controls| controls.on_grid(settings.working_scale))
+        })
+        .transpose()?;
+    let halo = range_controls
+        .as_ref()
+        .map_or(8, |controls| controls.required_halo());
+    let preview = settings
+        .working_scale
+        .is_reduced()
+        .then(|| {
+            preview::Grid::new(
+                params,
+                settings.working_scale,
+                settings.processing_output_size(),
+                halo,
+            )
+        })
+        .transpose()?;
     if let Some(grid) = &preview {
         final_id = grid.append(&mut graph, final_id)?;
         params = grid.encode;
         prepared.color.extent = grid.extent().map(|v| v as usize);
+    } else {
+        graph.retain_for_seal(final_id);
     }
     let mut dehaze_matrix = None;
     if route.high_iso()? {
@@ -154,11 +174,9 @@ fn compose(
                 Some(&settings.color_mode),
             )?);
         }
-        let reconstruction = range::prepare(
-            metadata,
-            &prepared.color,
-            settings,
-            route.defer_color_mode(dng),
+        let reconstruction = crate::nodes::color::range_reconstruction::Prepared::new(
+            prepared.color.extent.map(|value| value as u32),
+            range_controls.unwrap(),
         )?;
         final_id = graph.add(
             Operation::RangeReconstruct(Arc::new(reconstruction)),
@@ -167,7 +185,9 @@ fn compose(
         finish!();
     } else {
         if route.small_chroma()? {
-            for p in prepare::prepare_chroma(metadata, gains, route.monochrome)? {
+            for p in
+                prepare::prepare_chroma(metadata, gains, route.monochrome, settings.working_scale)?
+            {
                 let p = if let Some(grid) = &preview {
                     p.on_grid(grid.extent(), grid.divisor)?
                 } else {
@@ -201,10 +221,11 @@ fn compose(
                 color.matrix_green_sum,
                 color.digital_gain,
             )? {
-                let mut fir = fir;
-                if let Some(grid) = &preview {
-                    fir.extent = grid.extent();
-                }
+                let fir = if let Some(grid) = &preview {
+                    fir.on_grid(grid.grid)?
+                } else {
+                    fir
+                };
                 let corrected = graph.named_output(final_id, "color.corrected-layers")?;
                 final_id = graph.add(Operation::LogReconstruct(fir), &[final_id, corrected])?;
                 finish!();
@@ -228,7 +249,9 @@ fn compose(
             }
         }
         if route.recursive_chroma()? {
-            if let Some(chroma) = prepare::prepare_recursive_chroma(metadata, gains)? {
+            if let Some(chroma) =
+                prepare::prepare_recursive_chroma(metadata, gains, settings.working_scale)?
+            {
                 let chroma = if let Some(grid) = &preview {
                     chroma.on_grid(grid.extent(), grid.divisor)?
                 } else {
@@ -245,7 +268,7 @@ fn compose(
             params.crop,
             params.source[2],
             grid.extent(),
-            1. / f64::from(grid.divisor * grid.divisor),
+            f64::from(grid.grid.scale.factor()).powi(2),
         )?
     } else {
         prepare::prepare_root(metadata, params.crop, params.source[2])?
@@ -295,9 +318,6 @@ fn compose(
             rgb_extent: [params.source[0], params.source[1]],
             rgb_bounds: params.crop,
         };
-        if let Some(grid) = &preview {
-            grid.frame(&mut recipe)?;
-        }
         super::linear_edits::alias(&mut recipe, space, "linear.base")?;
         if requested(&recipe.graph, names) {
             return Ok(recipe);
@@ -339,12 +359,17 @@ fn compose(
             space,
             white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
             guide_white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
-            scale: preview.as_ref().map_or(1., |grid| 1. / grid.divisor as f32),
+            scale: settings.working_scale.factor(),
+            analysis_grid: crate::render::AnalysisGrid::new(
+                settings.working_scale,
+                crate::render::Scale::NATIVE,
+                crate::render::Scale::NATIVE,
+            ),
         };
         let context_white = context.white;
         super::linear_edits::build(
             engine,
-            super::RecipeInput::Original(source),
+            source,
             settings,
             &mut recipe,
             names,
@@ -362,6 +387,9 @@ fn compose(
         )?;
         if requested(&recipe.graph, names) {
             return Ok(recipe);
+        }
+        if let Some(grid) = &preview {
+            grid.frame(&mut recipe)?;
         }
         let finish = match response {
             Some(response) => response,

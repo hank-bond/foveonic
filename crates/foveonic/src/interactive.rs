@@ -6,7 +6,11 @@ use crate::{
     render::{Settings, Value},
     source::Source,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    hash::{Hash, Hasher},
+    sync::{Arc, Weak},
+};
 
 /// Keep the original photo and the inputs needed to restart the active edit.
 /// Retaining every stage would spend memory without helping that edit.
@@ -16,6 +20,52 @@ pub struct RenderSession {
     pub(crate) last_settings: Option<Settings>,
 }
 impl RenderSession {
+    /// Inspect all retained processing owners outside timed interactions.
+    pub fn resources(&self) -> crate::render::SessionResources {
+        let mut retained = crate::recipe::RetainedBytes::default();
+        let containers = self.cache.account_keys(&mut retained);
+        let payloads = retained.payload_bytes();
+        crate::render::SessionResources {
+            source_bytes: self.source.retained_source_bytes(),
+            metadata_bytes: self.source.metadata.retained_bytes(),
+            owner_bytes: self.owner_bytes(),
+            cache_gpu_bytes: self.cached_bytes(),
+            cache_structure_bytes: (containers + retained.bytes() - payloads) as u64,
+            parameter_payload_bytes: payloads as u64,
+            preparation_bytes: self.cached_preparation_bytes() as u64,
+            output_parameters: self.cache.parameter_resources(),
+        }
+    }
+    pub fn retained_cpu_bytes(&self) -> u64 {
+        let mut retained = crate::recipe::RetainedBytes::default();
+        let containers = self.cache.account_keys(&mut retained);
+        self.source.retained_source_bytes()
+            + self.source.metadata.retained_bytes()
+            + self.owner_bytes()
+            + self.cached_preparation_bytes() as u64
+            + containers as u64
+            + retained.bytes() as u64
+    }
+    fn owner_bytes(&self) -> u64 {
+        (std::mem::size_of::<Self>()
+            + self.last_settings.as_ref().map_or(0, |settings| {
+                settings.white_balance.capacity() + settings.color_mode.capacity()
+            })) as u64
+    }
+    pub(crate) fn account_memory(&self, retained: &mut crate::recipe::RetainedBytes) -> u64 {
+        retained.owner(
+            self.source.clone(),
+            self.source.retained_source_bytes() as usize,
+        );
+        retained.owner(
+            self.source.metadata.clone(),
+            self.source.metadata.retained_bytes() as usize,
+        );
+        if let Some(repair) = &self.cache.repair {
+            retained.owner(repair.prepared.clone(), repair.bytes);
+        }
+        self.owner_bytes() + self.cache.account_keys(retained) as u64
+    }
     pub fn new(source: impl Into<Arc<Source>>) -> Self {
         Self {
             source: source.into(),
@@ -63,10 +113,7 @@ impl Settings {
         }
         changed!(self.dehaze.amount != next.dehaze.amount, "dehaze-amount");
         changed!(self.dehaze.shadow != next.dehaze.shadow, "dehaze-shadow");
-        changed!(
-            self.preview_quality != next.preview_quality,
-            "preview-quality"
-        );
+        changed!(self.working_scale != next.working_scale, "working-scale");
         changed!(self.preview_region != next.preview_region, "preview-region");
         changed!(self.rendering != next.rendering, "rendering");
         changed!(self.photographic != next.photographic, "photographic");
@@ -231,16 +278,21 @@ struct Recipe {
     operation: std::mem::Discriminant<crate::graph::Operation>,
     parameters: Key,
     data: DataType,
-    inputs: Vec<(String, u64)>,
+    role: &'static str,
+    view: Option<crate::image::View>,
+    inputs: Vec<u64>,
 }
 struct Version {
     recipe: Recipe,
     generation: u64,
+    // A retained result keeps its exact ancestry alive without retaining pixels upstream.
+    parents: Vec<Arc<Version>>,
 }
 struct Entry {
-    name: String,
-    generation: u64,
+    version: Arc<Version>,
     value: Value,
+    pinned: bool,
+    used: u64,
 }
 struct RepairSlot {
     threshold: crate::nodes::sensor::repair::Threshold,
@@ -250,23 +302,27 @@ struct RepairSlot {
 
 #[derive(Default)]
 struct WorkingSet {
-    versions: HashMap<String, Version>,
+    versions: HashMap<String, Arc<Version>>,
     selected: Vec<String>,
     primary: Vec<String>,
-    grid: Option<(crate::render::PreviewQuality, Option<[u32; 4]>)>,
-    prime: bool,
+    cuts: HashSet<u64>,
+    restart: HashSet<u64>,
 }
 #[derive(Default)]
 pub(crate) struct Cache {
     owner: Option<Arc<()>>,
+    source: Option<crate::source::SourceOrigin>,
     repair: Option<RepairSlot>,
-    working: [WorkingSet; 2],
-    active: usize,
+    working: WorkingSet,
+    identities: HashMap<u64, Vec<Weak<Version>>>,
     counter: u64,
+    frame: u64,
     entries: Vec<Entry>,
+    required_cuts: HashSet<u64>,
+    active_restart: HashSet<u64>,
 }
 impl Cache {
-    const LIMIT: u64 = 1024 * 1024 * 1024;
+    pub(crate) const LIMIT: u64 = 1024 * 1024 * 1024;
     const REPAIR_LIMIT: usize = 4 * 1024 * 1024;
 
     fn retain_repair(
@@ -274,8 +330,6 @@ impl Cache {
         threshold: crate::nodes::sensor::repair::Threshold,
         prepared: &Arc<crate::nodes::sensor::camera_repair::Prepared>,
     ) {
-        // Two counters form the Arc header. Allocator rounding and bookkeeping
-        // are outside this logical limit, as are graph-version keys.
         let bytes = prepared
             .retained_bytes()
             .and_then(|n| n.checked_add(2 * std::mem::size_of::<usize>()))
@@ -300,18 +354,16 @@ impl Cache {
             };
         }
     }
-    /// Native Full and the active preview grid keep their own restart boundaries.
-    /// Matching upstream generations still share one set of buffers and one budget.
-    pub(crate) fn select(
-        &mut self,
-        quality: crate::render::PreviewQuality,
-        region: Option<[u32; 4]>,
-    ) {
-        self.active = usize::from(quality.is_reduced() || region.is_some());
-        let working = &mut self.working[self.active];
-        let grid = (quality, region);
-        working.prime |= working.grid != Some(grid);
-        working.grid = Some(grid);
+    /// Source provenance stays alive independently of decoded samples and reload metadata.
+    pub(crate) fn bind_source(&mut self, source: &crate::source::SourceOrigin) {
+        if self.source.as_ref().is_none_or(|old| old != source) {
+            let owner = self.owner.clone();
+            *self = Self {
+                owner,
+                ..Default::default()
+            };
+        }
+        self.source = Some(source.clone());
     }
     pub(crate) fn bytes(&self) -> u64 {
         self.entries
@@ -326,36 +378,94 @@ impl Cache {
             .sum()
     }
     pub(crate) fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
-        let mut bytes = self.entries.capacity() * std::mem::size_of::<Entry>();
-        for entry in &self.entries {
-            bytes += entry.name.capacity();
-        }
-        for working in &self.working {
-            bytes += working.versions.capacity() * std::mem::size_of::<(String, Version)>();
-            bytes += (working.selected.capacity() + working.primary.capacity())
-                * std::mem::size_of::<String>();
-            bytes += working
-                .selected
-                .iter()
-                .chain(&working.primary)
-                .map(String::capacity)
+        let mut bytes = self.entries.capacity() * std::mem::size_of::<Entry>()
+            + (self.required_cuts.capacity()
+                + self.active_restart.capacity()
+                + self.working.cuts.capacity()
+                + self.working.restart.capacity())
+                * std::mem::size_of::<u64>()
+            + self.working.selected.capacity() * std::mem::size_of::<String>()
+            + self.working.primary.capacity() * std::mem::size_of::<String>();
+        bytes += self
+            .working
+            .selected
+            .iter()
+            .chain(&self.working.primary)
+            .map(String::capacity)
+            .sum::<usize>();
+        bytes += match &self.source {
+            Some(crate::source::SourceOrigin::File(identity)) => identity.location.capacity(),
+            Some(crate::source::SourceOrigin::Memory(_)) => 2 * std::mem::size_of::<usize>(),
+            None => 0,
+        };
+        bytes += self
+            .working
+            .versions
+            .keys()
+            .map(|name| name.capacity() + std::mem::size_of::<(String, Arc<Version>)>())
+            .sum::<usize>();
+        bytes += self.identities.capacity() * std::mem::size_of::<(u64, Vec<Weak<Version>>)>()
+            + self
+                .identities
+                .values()
+                .map(|bucket| bucket.capacity() * std::mem::size_of::<Weak<Version>>())
                 .sum::<usize>();
-            for (name, version) in &working.versions {
-                bytes += name.capacity();
-                bytes += version.recipe.inputs.capacity() * std::mem::size_of::<(String, u64)>();
-                bytes += version
-                    .recipe
-                    .inputs
-                    .iter()
-                    .map(|(name, _)| name.capacity())
-                    .sum::<usize>();
-                version.recipe.parameters.account(retained);
-            }
+        for version in self.retained_versions() {
+            bytes += std::mem::size_of::<Version>()
+                + 2 * std::mem::size_of::<usize>()
+                + version.parents.capacity() * std::mem::size_of::<Arc<Version>>()
+                + version.recipe.inputs.capacity() * std::mem::size_of::<u64>();
+            version.recipe.parameters.account(retained);
         }
         bytes
     }
+    fn retained_versions(&self) -> Vec<Arc<Version>> {
+        let mut seen = HashSet::new();
+        let mut pending: Vec<_> = self
+            .working
+            .versions
+            .values()
+            .cloned()
+            .chain(self.entries.iter().map(|entry| entry.version.clone()))
+            .collect();
+        let mut versions = Vec::new();
+        while let Some(version) = pending.pop() {
+            if seen.insert(Arc::as_ptr(&version)) {
+                pending.extend(version.parents.iter().cloned());
+                versions.push(version);
+            }
+        }
+        versions.sort_by_key(|version| version.generation);
+        versions
+    }
+    pub(crate) fn parameter_resources(&self) -> Vec<crate::render::ParameterResources> {
+        let mut retained = crate::recipe::RetainedBytes::default();
+        let mut roles = std::collections::BTreeMap::new();
+        for version in self.retained_versions() {
+            let before = retained.payload_bytes();
+            version.recipe.parameters.account(&mut retained);
+            let role =
+                roles
+                    .entry(version.recipe.role)
+                    .or_insert(crate::render::ParameterResources {
+                        output: version.recipe.role,
+                        versions: 0,
+                        payload_bytes: 0,
+                    });
+            role.versions += 1;
+            role.payload_bytes += (retained.payload_bytes() - before) as u64;
+        }
+        roles.into_values().collect()
+    }
     pub(crate) fn buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
         self.entries.iter().map(|entry| &entry.value.buffer)
+    }
+    #[cfg(test)]
+    pub(crate) fn sealed_buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.pinned)
+            .map(|entry| &entry.value.buffer)
     }
     fn room_for(&self, value: &Value) -> bool {
         self.entries
@@ -363,272 +473,411 @@ impl Cache {
             .any(|entry| entry.value.buffer.shares_storage(&value.buffer))
             || self.bytes() + value.buffer.size() <= Self::LIMIT
     }
-    /// Track changed operations and their inputs rather than graph positions,
-    /// because those positions may change between renders.
-    fn plan(&mut self, graph: &Graph, targets: &[usize]) -> crate::source::Result<Vec<usize>> {
-        let required = graph.required(targets)?;
+    fn intern(&mut self, recipe: Recipe, parents: Vec<Arc<Version>>) -> Arc<Version> {
+        let mut hasher = DefaultHasher::new();
+        recipe.operation.hash(&mut hasher);
+        std::mem::discriminant(&recipe.data).hash(&mut hasher);
+        recipe.role.hash(&mut hasher);
+        recipe.view.hash(&mut hasher);
+        recipe.inputs.hash(&mut hasher);
+        let bucket = self.identities.entry(hasher.finish()).or_default();
+        bucket.retain(|identity| identity.strong_count() != 0);
+        if let Some(existing) = bucket
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|existing| existing.recipe == recipe)
         {
-            let [full, preview] = &mut self.working;
-            let (working, other) = if self.active == 0 {
-                (full, &*preview)
-            } else {
-                (preview, &*full)
+            return existing;
+        }
+        self.counter += 1;
+        let version = Arc::new(Version {
+            recipe,
+            generation: self.counter,
+            parents,
+        });
+        bucket.push(Arc::downgrade(&version));
+        version
+    }
+    fn resolve(&mut self, graph: &Graph) -> Vec<bool> {
+        let previous = std::mem::take(&mut self.working.versions);
+        let mut dirty = vec![false; graph.outputs.len()];
+        for (id, output) in graph.outputs.iter().enumerate() {
+            let parents: Vec<_> = output
+                .dependencies
+                .iter()
+                .map(|input| self.working.versions[&graph.outputs[*input].cache_name()].clone())
+                .collect();
+            let recipe = Recipe {
+                operation: std::mem::discriminant(&graph.nodes[output.producer].operation),
+                parameters: graph.nodes[output.producer].operation.key(output.name),
+                data: output.data,
+                role: output.name,
+                view: output.view,
+                inputs: parents.iter().map(|parent| parent.generation).collect(),
             };
-            let initial = working.versions.is_empty();
-            let mut dirty = vec![false; graph.outputs.len()];
-            let mut local_changes = Vec::new();
-            for (id, output) in graph.outputs.iter().enumerate() {
-                let inputs = output
-                    .dependencies
-                    .iter()
-                    .map(|input| {
-                        let name = graph.outputs[*input].cache_name();
-                        (name.clone(), working.versions[&name].generation)
-                    })
-                    .collect();
-                let recipe = Recipe {
-                    operation: std::mem::discriminant(&graph.nodes[output.producer].operation),
-                    parameters: graph.nodes[output.producer].operation.key(output.name),
-                    data: output.data,
-                    inputs,
-                };
-                let old = working.versions.get(&output.cache_name());
-                let local_changed = old.is_none_or(|old| {
-                    old.recipe.operation != recipe.operation
-                        || old.recipe.parameters != recipe.parameters
-                        || old.recipe.data != recipe.data
-                        || !old
-                            .recipe
-                            .inputs
-                            .iter()
-                            .map(|i| &i.0)
-                            .eq(recipe.inputs.iter().map(|i| &i.0))
-                });
-                dirty[id] = local_changed || output.dependencies.iter().any(|input| dirty[*input]);
-                if local_changed && required[id] {
-                    local_changes.push(id);
-                }
-                let generation = if let Some(old) = old.filter(|old| old.recipe == recipe) {
-                    old.generation
-                } else if let Some(shared) = other
-                    .versions
-                    .get(&output.cache_name())
-                    .filter(|old| old.recipe == recipe)
-                {
-                    shared.generation
-                } else {
-                    self.counter += 1;
-                    self.counter
-                };
-                working
-                    .versions
-                    .insert(output.cache_name(), Version { recipe, generation });
-            }
-            if initial {
-                // Keep the inputs of adjustable reconstruction ready for its first edit.
-                // Guided reconstruction also owns the luminance filter selection.
-                let node = graph
-                    .nodes
-                    .iter()
-                    .find(|node| {
-                        matches!(
-                            node.operation,
-                            crate::graph::Operation::Texture { .. }
-                                | crate::graph::Operation::BlueGuidedReconstruct(_)
-                        ) && required[node.outputs[0]]
-                    })
-                    .unwrap_or(&graph.nodes[graph.outputs[targets[0]].producer]);
-                let pivot_producer = graph.outputs[node.outputs[0]].producer;
-                // Preserve all input branches, including those consumed after the pivot.
-                // Mark its side outputs dirty too: they must share the restart boundary.
-                for (id, output) in graph.outputs.iter().enumerate() {
-                    dirty[id] = output.producer == pivot_producer
-                        || output.dependencies.iter().any(|input| dirty[*input]);
-                }
-            }
-            let finishing: Vec<_> = graph
+            dirty[id] = previous
+                .get(&output.cache_name())
+                .is_none_or(|old| old.recipe != recipe);
+            let version = self.intern(recipe, parents);
+            self.working.versions.insert(output.cache_name(), version);
+        }
+        dirty
+    }
+    /// Build frontiers from exact changed dependencies. Retained results from another
+    /// root, scale or scope may satisfy them only when their complete identity matches.
+    fn plan(&mut self, graph: &Graph, targets: &[usize]) -> crate::source::Result<Vec<usize>> {
+        self.plan_for(graph, targets, false)
+    }
+    fn plan_for(
+        &mut self,
+        graph: &Graph,
+        targets: &[usize],
+        sealing: bool,
+    ) -> crate::source::Result<Vec<usize>> {
+        self.frame += 1;
+        let required = graph.required(targets)?;
+        let initial = self.working.versions.is_empty();
+        let mut dirty = self.resolve(graph);
+        let changed = required
+            .iter()
+            .zip(&dirty)
+            .any(|(required, dirty)| *required && *dirty);
+        if initial {
+            let node = graph
                 .nodes
                 .iter()
-                .filter(|node| {
+                .find(|node| {
                     matches!(
                         node.operation,
-                        crate::graph::Operation::Tone { .. }
-                            | crate::graph::Operation::TonalRanges { .. }
-                            | crate::graph::Operation::SignedPhotographic(_)
-                            | crate::graph::Operation::LinearSignedResponse(_)
-                            | crate::graph::Operation::LinearCodeResponse { .. }
-                            | crate::graph::Operation::CodeResponse { .. }
+                        crate::graph::Operation::Texture { .. }
+                            | crate::graph::Operation::BlueGuidedReconstruct(_)
                     ) && required[node.outputs[0]]
                 })
-                .flat_map(|node| {
-                    node.inputs
-                        .iter()
-                        .map(|&input| graph.outputs[input].cache_name())
-                })
-                .collect();
-            if initial || working.prime || !local_changes.is_empty() {
-                let mut frontier = Vec::new();
-                for (_, output) in graph
-                    .outputs
-                    .iter()
-                    .enumerate()
-                    .filter(|(id, _)| required[*id] && dirty[*id])
-                {
-                    for &input in &output.dependencies {
-                        if !dirty[input]
-                            && required[input]
-                            && !frontier.contains(&graph.outputs[input].cache_name())
-                        {
-                            frontier.push(graph.outputs[input].cache_name());
-                        }
-                    }
-                }
-                if initial || working.prime {
-                    // Exposure and tone usually change before reconstruction controls.
-                    // Also retain their linear input so that first edit needs no warm-up.
-                    // The ordinary bounded cache admission still applies to both boundaries.
-                    for name in &finishing {
-                        if !frontier.contains(name) {
-                            frontier.push(name.clone());
-                        }
-                    }
-                }
-                working.selected = frontier;
+                .unwrap_or(&graph.nodes[graph.outputs[targets[0]].producer]);
+            let pivot = graph.outputs[node.outputs[0]].producer;
+            for (id, output) in graph.outputs.iter().enumerate() {
+                dirty[id] = output.producer == pivot
+                    || output.dependencies.iter().any(|input| dirty[*input]);
             }
-            working.primary = finishing
-                .into_iter()
-                .filter(|name| working.selected.contains(name))
-                .collect();
-            for &id in &graph.session_outputs {
-                let name = graph.outputs[id].cache_name();
-                if required[id] {
-                    if !working.primary.contains(&name) {
-                        working.primary.push(name.clone());
-                    }
-                    if !working.selected.contains(&name) {
-                        working.selected.push(name);
-                    }
-                }
-            }
-            // Explicit downstream editing boundaries take admission priority over
-            // speculative initial frontiers. Later declarations are closer to the edit.
-            working.selected.sort_by_key(|name| {
-                graph
-                    .session_outputs
-                    .iter()
-                    .rev()
-                    .position(|id| graph.outputs[*id].cache_name() == *name)
-                    .unwrap_or(usize::MAX)
-            });
-            working.prime = false;
         }
-        self.retain_selected();
-        // An editing boundary can make earlier checkpoints unnecessary. If an
-        // earlier entry was evicted, asking for it as another root would rerun
-        // upstream processing just to refill a cache that already serves this edit.
+        let finishing: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter(|node| {
+                matches!(
+                    node.operation,
+                    crate::graph::Operation::Tone { .. }
+                        | crate::graph::Operation::TonalRanges { .. }
+                        | crate::graph::Operation::SignedPhotographic(_)
+                        | crate::graph::Operation::LinearSignedResponse(_)
+                        | crate::graph::Operation::LinearCodeResponse { .. }
+                        | crate::graph::Operation::CodeResponse { .. }
+                ) && required[node.outputs[0]]
+            })
+            .flat_map(|node| {
+                node.inputs
+                    .iter()
+                    .map(|&input| graph.outputs[input].cache_name())
+            })
+            .collect();
+        if initial || changed {
+            let mut frontier = Vec::new();
+            for (_, output) in graph
+                .outputs
+                .iter()
+                .enumerate()
+                .filter(|(id, _)| required[*id] && dirty[*id])
+            {
+                for &input in &output.dependencies {
+                    let name = graph.outputs[input].cache_name();
+                    if !dirty[input] && required[input] && !frontier.contains(&name) {
+                        frontier.push(name);
+                    }
+                }
+            }
+            // The dependency cut restarts this edit. Finishing shortcuts and
+            // recipe hints added below are useful alternatives, not that cut.
+            self.working.restart = frontier
+                .iter()
+                .map(|name| self.working.versions[name].generation)
+                .collect();
+            // Any new finishing identity can feed the next exposure edit. Its
+            // geometry and dependencies decide reuse, including after a grid switch.
+            for name in &finishing {
+                if self.get(name).is_none() && !frontier.contains(name) {
+                    frontier.push(name.clone());
+                }
+            }
+            self.working.selected = frontier;
+        }
+        self.working.primary = finishing
+            .into_iter()
+            .filter(|name| self.working.selected.contains(name))
+            .collect();
+        self.working.cuts.clear();
+        if sealing {
+            self.working.selected.clear();
+            self.working.primary.clear();
+            self.working.restart.clear();
+        }
+        for &id in graph.session_outputs.iter().chain(&graph.sealed_outputs) {
+            if sealing && !graph.sealed_outputs.contains(&id) {
+                continue;
+            }
+            if !required[id] {
+                continue;
+            }
+            let name = graph.outputs[id].cache_name();
+            if graph.sealed_outputs.contains(&id) {
+                self.working
+                    .cuts
+                    .insert(self.working.versions[&name].generation);
+            }
+            if !self.working.primary.contains(&name) {
+                self.working.primary.push(name.clone());
+            }
+            if !self.working.selected.contains(&name) {
+                self.working.selected.push(name);
+            }
+        }
+        self.working.selected.sort_by_key(|name| {
+            graph
+                .session_outputs
+                .iter()
+                .rev()
+                .position(|id| graph.outputs[*id].cache_name() == *name)
+                .unwrap_or(usize::MAX)
+        });
+        for entry in &mut self.entries {
+            if self.working.cuts.contains(&entry.version.generation) {
+                entry.pinned = true;
+            }
+        }
         let cached: Vec<_> = graph
             .outputs
             .iter()
-            .map(|o| self.get(&o.cache_name()).is_some())
+            .map(|output| self.get(&output.cache_name()).is_some())
             .collect();
         let needed = graph.required_until(targets, &cached)?;
+        for (id, output) in graph.outputs.iter().enumerate() {
+            if !needed[id] || !cached[id] {
+                continue;
+            }
+            let generation = self.working.versions[&output.cache_name()].generation;
+            if let Some(entry) = self
+                .entries
+                .iter_mut()
+                .find(|entry| entry.version.generation == generation)
+            {
+                entry.used = self.frame;
+            }
+        }
         Ok(graph
             .outputs
             .iter()
             .enumerate()
             .filter_map(|(id, output)| {
-                (needed[id]
-                    && self.working[self.active]
-                        .selected
-                        .contains(&output.cache_name()))
-                .then_some(id)
+                (needed[id] && self.working.selected.contains(&output.cache_name())).then_some(id)
             })
             .collect())
     }
     fn get(&self, name: &str) -> Option<Value> {
-        let generation = self.working[self.active].versions.get(name)?.generation;
+        let generation = self.working.versions.get(name)?.generation;
         self.entries
             .iter()
-            .find(|entry| entry.name == name && entry.generation == generation)
+            .find(|entry| entry.version.generation == generation)
             .map(|entry| entry.value.clone())
     }
     fn put(&mut self, name: &str, value: &Value) {
-        if !self.working[self.active].selected.iter().any(|n| n == name) {
+        if value.buffer.size() > Self::LIMIT {
             return;
         }
-        let generation = self.working[self.active].versions[name].generation;
-        if self
-            .entries
+        if !self
+            .working
+            .selected
             .iter()
-            .any(|entry| entry.name == name && entry.generation == generation)
+            .any(|selected| selected == name)
         {
             return;
         }
-        if !self.room_for(value) {
-            self.retain_selected();
+        let version = self.working.versions[name].clone();
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.version.generation == version.generation)
+        {
+            entry.used = self.frame;
+            entry.pinned |= self.working.cuts.contains(&version.generation);
+            return;
         }
-        if !self.room_for(value) {
-            let priority = self.priority(name, generation).unwrap();
-            while !self.room_for(value) {
-                let candidate = self
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, entry)| {
-                        self.priority(&entry.name, entry.generation)
-                            .filter(|rank| *rank > priority)
-                            .map(|rank| (i, rank))
-                    })
-                    .max_by_key(|(_, rank)| *rank);
-                let Some((index, _)) = candidate else {
-                    break;
-                };
-                self.entries.remove(index);
-            }
+        let pinned = self.working.cuts.contains(&version.generation);
+        let priority = self
+            .current_priority(version.generation)
+            .unwrap_or((u8::MAX, usize::MAX));
+        while !self.room_for(value) {
+            let candidate = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| {
+                    pinned
+                        || (!entry.pinned
+                            && self
+                                .current_priority(entry.version.generation)
+                                .is_none_or(|rank| rank > priority))
+                })
+                .max_by_key(|(_, entry)| {
+                    (
+                        u8::from(!entry.pinned),
+                        self.current_priority(entry.version.generation)
+                            .unwrap_or((u8::MAX, usize::MAX)),
+                        std::cmp::Reverse(entry.used),
+                    )
+                })
+                .map(|(index, _)| index);
+            let Some(index) = candidate else {
+                return;
+            };
+            self.entries.remove(index);
         }
-        if self.room_for(value) {
-            self.entries.push(Entry {
-                name: name.to_owned(),
-                generation,
-                value: value.clone(),
-            });
-        }
+        self.entries.push(Entry {
+            version,
+            value: value.clone(),
+            pinned,
+            used: self.frame,
+        });
     }
-    pub(crate) fn finish(&mut self) {
-        self.retain_selected();
-    }
-    fn priority(&self, name: &str, generation: u64) -> Option<(u8, u8, usize)> {
+    fn current_priority(&self, generation: u64) -> Option<(u8, usize)> {
         self.working
+            .selected
             .iter()
             .enumerate()
-            .filter_map(|(index, working)| {
-                working
+            .find_map(|(rank, name)| {
+                self.working
                     .versions
                     .get(name)
                     .filter(|version| version.generation == generation)?;
-                let rank = working
-                    .selected
-                    .iter()
-                    .position(|selected| selected == name)?;
-                Some((
-                    u8::from(!working.primary.iter().any(|primary| primary == name)),
-                    u8::from(index != self.active),
-                    rank,
-                ))
+                let priority = if self.working.restart.contains(&generation) {
+                    0
+                } else if self.working.primary.contains(name) {
+                    1
+                } else {
+                    2
+                };
+                Some((priority, rank))
             })
-            .min()
     }
-    fn retain_selected(&mut self) {
-        let working = &self.working;
-        self.entries.retain(|entry| {
-            working.iter().any(|state| {
-                state.selected.contains(&entry.name)
-                    && state
-                        .versions
-                        .get(&entry.name)
-                        .is_some_and(|version| version.generation == entry.generation)
-            })
+    fn prune_identities(&mut self) {
+        self.identities.retain(|_, bucket| {
+            bucket.retain(|identity| identity.strong_count() != 0);
+            !bucket.is_empty()
         });
+    }
+    fn logical_bytes(&self) -> u64 {
+        let mut retained = crate::recipe::RetainedBytes::default();
+        self.bytes() + self.account_keys(&mut retained) as u64 + retained.bytes() as u64
+    }
+    /// Commit the immutable inputs of a completed recipe. An unsuccessful
+    /// request must not make the previous valid recipe's inputs expendable.
+    pub(crate) fn commit(&mut self) {
+        self.required_cuts.clone_from(&self.working.cuts);
+        self.active_restart.clone_from(&self.working.restart);
+    }
+    /// A parked photo needs retained values and their exact ancestry. Uncached
+    /// side-output descriptors from its last complete graph need no owner.
+    pub(crate) fn park(&mut self) {
+        self.working.versions.retain(|_, version| {
+            self.entries
+                .iter()
+                .any(|entry| entry.version.generation == version.generation)
+        });
+        self.working
+            .selected
+            .retain(|name| self.working.versions.contains_key(name));
+        self.working
+            .primary
+            .retain(|name| self.working.versions.contains_key(name));
+        self.prune_identities();
+    }
+    /// Drop one optional version under an enclosing working-set budget.
+    /// Older unselected versions go first; current restart inputs remain useful
+    /// after every old alternative has been removed. Required cuts are never
+    /// removed here, so pressure cannot silently turn a photo into a source miss.
+    pub(crate) fn trim_optional(&mut self, obsolete_only: bool) -> bool {
+        self.trim_optional_for(obsolete_only, false)
+    }
+    /// The active photo keeps its last successful edit's dependency cut.
+    /// Opportunistic finishing inputs remain expendable under the same budget.
+    pub(crate) fn trim_active_optional(&mut self, obsolete_only: bool) -> bool {
+        self.trim_optional_for(obsolete_only, true)
+    }
+    fn trim_optional_for(&mut self, obsolete_only: bool, active: bool) -> bool {
+        let candidate = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| !self.required_cuts.contains(&entry.version.generation))
+            .filter(|(_, entry)| {
+                !active || !self.active_restart.contains(&entry.version.generation)
+            })
+            .filter(|(_, entry)| {
+                !obsolete_only || self.current_priority(entry.version.generation).is_none()
+            })
+            .max_by_key(|(_, entry)| {
+                (
+                    self.current_priority(entry.version.generation)
+                        .unwrap_or((u8::MAX, usize::MAX)),
+                    std::cmp::Reverse(entry.used),
+                )
+            })
+            .map(|(index, _)| index);
+        let Some(index) = candidate else { return false };
+        self.entries.remove(index);
+        self.prune_identities();
+        true
+    }
+    pub(crate) fn finish(&mut self) {
+        self.prune_identities();
+        // Small images may have much larger parameter ancestry. Bound both
+        // owners so history cannot grow unbounded merely because pixels are tiny.
+        while self.logical_bytes() > Self::LIMIT {
+            let candidate = self
+                .entries
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, entry)| {
+                    (
+                        u8::from(!entry.pinned),
+                        self.current_priority(entry.version.generation)
+                            .unwrap_or((u8::MAX, usize::MAX)),
+                        std::cmp::Reverse(entry.used),
+                    )
+                })
+                .map(|(index, _)| index);
+            let Some(index) = candidate else {
+                break;
+            };
+            self.entries.remove(index);
+            self.prune_identities();
+        }
+    }
+    /// A seal admits only declared cuts. A refresh preserves older valid optional
+    /// inputs, while the initial empty owner carries no speculative native frames.
+    pub(crate) fn finish_seal(&mut self) -> bool {
+        let required = std::mem::take(&mut self.working.cuts);
+        self.repair = None;
+        self.working = WorkingSet::default();
+        self.finish();
+        let retained = required.iter().all(|generation| {
+            self.entries
+                .iter()
+                .any(|entry| entry.pinned && entry.version.generation == *generation)
+        });
+        if retained {
+            self.required_cuts = required;
+            self.active_restart.clear();
+        }
+        retained
     }
 }
 
@@ -682,6 +931,16 @@ impl Execution<'_> {
         }
         Ok(())
     }
+    pub(crate) fn plan_seal(
+        &mut self,
+        graph: &Graph,
+        targets: &[usize],
+    ) -> crate::source::Result<()> {
+        if let Some(cache) = &mut self.cache {
+            self.checkpoints = cache.plan_for(graph, targets, true)?;
+        }
+        Ok(())
+    }
     pub fn seed(&self, name: &str) -> Option<Value> {
         self.cache.as_ref()?.get(name)
     }
@@ -695,6 +954,32 @@ impl Execution<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn framing_metadata_is_part_of_the_exact_output_identity() {
+        let mut cache = Cache::default();
+        let build = |left| {
+            let mut graph = Graph::default();
+            let root = graph.add(crate::graph::Operation::Source, &[]).unwrap();
+            graph.set_view(
+                root,
+                crate::image::View {
+                    crop: [left, 0, 64, 64],
+                    rotation: 0,
+                    extent: [64 - left, 64],
+                },
+            );
+            (graph, root)
+        };
+        let (first, root) = build(0);
+        cache.plan(&first, &[root]).unwrap();
+        let original = cache.working.versions["sensor.layers"].generation;
+        let (same, root) = build(0);
+        cache.plan(&same, &[root]).unwrap();
+        assert_eq!(cache.working.versions["sensor.layers"].generation, original);
+        let (changed, root) = build(1);
+        cache.plan(&changed, &[root]).unwrap();
+        assert_ne!(cache.working.versions["sensor.layers"].generation, original);
+    }
     #[test]
     fn repair_slot_is_bounded_and_reset_for_another_engine() {
         use crate::nodes::sensor::{camera_repair::Prepared, repair::Threshold};
@@ -854,6 +1139,101 @@ mod tests {
         );
     }
     #[test]
+    fn only_successful_dependency_frontiers_become_active_restart_inputs() {
+        let (mut graph, root) = graph_for_detail(1.);
+        let original = graph.nodes[0].outputs[0];
+        graph.retain_for_session(original);
+        let space = crate::color_space::ColorSpace::Srgb;
+        let finishing_input = graph
+            .add_scoped(
+                crate::graph::Operation::RenderedInput {
+                    data: DataType::LinearRgb(space),
+                },
+                &[],
+                "finishing",
+            )
+            .unwrap();
+        let finishing = graph
+            .add(
+                crate::graph::Operation::Tone {
+                    curve: vec![0., 1.].into(),
+                    exposure: 1.,
+                    space,
+                },
+                &[finishing_input],
+            )
+            .unwrap();
+        let mut cache = Cache::default();
+        cache.plan(&graph, &[root, finishing]).unwrap();
+        assert_eq!(cache.working.restart.len(), 3);
+        assert!(!cache
+            .working
+            .restart
+            .contains(&cache.working.versions[&graph.outputs[original].cache_name()].generation));
+        let finishing_name = graph.outputs[finishing_input].cache_name();
+        assert!(cache.working.selected.contains(&finishing_name));
+        assert!(!cache
+            .working
+            .restart
+            .contains(&cache.working.versions[&finishing_name].generation));
+        let restart = *cache.working.restart.iter().next().unwrap();
+        assert!(
+            cache.current_priority(restart).unwrap()
+                < cache
+                    .current_priority(cache.working.versions[&finishing_name].generation)
+                    .unwrap()
+        );
+        assert!(cache.active_restart.is_empty());
+        cache.commit();
+        let completed = cache.active_restart.clone();
+        // Planning another root does not commit an interrupted request's cut.
+        let mut other = Graph::default();
+        let other_root = other.add(crate::graph::Operation::Source, &[]).unwrap();
+        cache.plan(&other, &[other_root]).unwrap();
+        assert!(cache.working.restart.is_empty());
+        assert_eq!(cache.active_restart, completed);
+    }
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn active_pressure_keeps_restart_inputs_and_the_complete_graph_identity() {
+        let gpu = crate::gpu::Gpu::new().unwrap();
+        let (mut graph, root) = graph_for_detail(1.);
+        let original = graph.nodes[0].outputs[0];
+        graph.retain_for_session(original);
+        let mut cache = Cache::default();
+        let checkpoints = cache.plan(&graph, &[root]).unwrap();
+        let value = Value {
+            buffer: gpu.upload("restart input", &[1_f32; 3]).unwrap(),
+            description: None,
+            working_scale: crate::render::Scale::NATIVE,
+            view: None,
+        };
+        for id in checkpoints {
+            cache.put(&graph.outputs[id].cache_name(), &value);
+        }
+        cache.commit();
+        let identities = cache.working.versions.len();
+        let restart = cache.active_restart.clone();
+        assert_eq!(cache.entries.len(), 4);
+        assert!(
+            cache.trim_active_optional(false),
+            "the session hint is optional"
+        );
+        assert_eq!(cache.entries.len(), 3);
+        assert!(
+            !cache.trim_active_optional(false),
+            "the active cut is essential"
+        );
+        assert_eq!(cache.working.versions.len(), identities);
+        let (next, root) = graph_for_detail(1.2);
+        cache.plan(&next, &[root]).unwrap();
+        assert_eq!(cache.working.restart, restart);
+        assert!(
+            cache.trim_optional(false),
+            "inactive history may shed the same cut"
+        );
+    }
+    #[test]
     fn detail_changes_only_its_own_recipe_and_keeps_three_input_versions() {
         let mut cache = Cache::default();
         let (first, root) = graph_for_detail(1.);
@@ -864,45 +1244,39 @@ mod tests {
             .map(|id| {
                 (
                     first.outputs[*id].name,
-                    cache.working[cache.active].versions[first.outputs[*id].name].generation,
+                    cache.working.versions[first.outputs[*id].name].generation,
                 )
             })
             .collect();
-        let previous = cache.working[cache.active].versions["texture.layers-tiles"].generation;
+        let previous = cache.working.versions["texture.layers-tiles"].generation;
         let (second, root) = graph_for_detail(1.2);
         cache.plan(&second, &[root]).unwrap();
         for (name, version) in inputs {
-            assert_eq!(
-                cache.working[cache.active].versions[name].generation,
-                version
-            );
+            assert_eq!(cache.working.versions[name].generation, version);
         }
         assert_ne!(
-            cache.working[cache.active].versions["texture.layers-tiles"].generation,
+            cache.working.versions["texture.layers-tiles"].generation,
             previous
         );
     }
     #[test]
-    fn preview_and_full_share_matching_inputs_without_replacing_each_others_versions() {
-        use crate::render::PreviewQuality;
+    fn distinct_roots_share_matching_inputs_and_recover_retained_versions() {
         let mut cache = Cache::default();
         let (full, root) = graph_for_detail(1.);
-        cache.select(PreviewQuality::Full, None);
         cache.plan(&full, &[root]).unwrap();
-        let input = cache.working[0].versions["noise.tiles"].generation;
-        let full_result = cache.working[0].versions["texture.layers-tiles"].generation;
+        let input = cache.working.versions["noise.tiles"].generation;
+        let retained_full = cache.working.versions["texture.layers-tiles"].clone();
+        let full_result = retained_full.generation;
         let (preview, root) = graph_for_detail(1.2);
-        cache.select(PreviewQuality::Full, Some([8, 8, 32, 32]));
         cache.plan(&preview, &[root]).unwrap();
-        assert_eq!(cache.working[1].versions["noise.tiles"].generation, input);
+        assert_eq!(cache.working.versions["noise.tiles"].generation, input);
         assert_ne!(
-            cache.working[1].versions["texture.layers-tiles"].generation,
+            cache.working.versions["texture.layers-tiles"].generation,
             full_result
         );
-        cache.select(PreviewQuality::Full, None);
         cache.plan(&full, &[root]).unwrap();
         assert_eq!(
-            cache.working[0].versions["texture.layers-tiles"].generation,
+            cache.working.versions["texture.layers-tiles"].generation,
             full_result
         );
         // Invalidating an upstream recipe in Full must also invalidate preview
@@ -913,16 +1287,12 @@ mod tests {
         };
         params.reduction[0] = 0.25;
         cache.plan(&changed, &[root]).unwrap();
-        let new_input = cache.working[0].versions["noise.tiles"].generation;
+        let new_input = cache.working.versions["noise.tiles"].generation;
         assert_ne!(new_input, input);
-        cache.select(PreviewQuality::Full, Some([8, 8, 32, 32]));
         cache.plan(&changed, &[root]).unwrap();
-        assert_eq!(
-            cache.working[1].versions["noise.tiles"].generation,
-            new_input
-        );
+        assert_eq!(cache.working.versions["noise.tiles"].generation, new_input);
         assert_ne!(
-            cache.working[1].versions["texture.layers-tiles"].generation,
+            cache.working.versions["texture.layers-tiles"].generation,
             full_result
         );
     }
@@ -986,7 +1356,7 @@ mod tests {
         let inputs = graph.nodes[detail_node].inputs.clone();
         let frontier = cache.plan(&graph, &[final_id]).unwrap();
         assert!(inputs.iter().all(|id| frontier.contains(id)));
-        let old_signal = cache.working[cache.active].versions["detail.signal"].generation;
+        let old_signal = cache.working.versions["detail.signal"].generation;
         graph.nodes[detail_node].operation = O::Texture {
             params,
             prepared: crate::nodes::color::texture::Prepared::new(
@@ -1006,7 +1376,7 @@ mod tests {
         assert!(inputs.iter().all(|id| frontier.contains(id)));
         assert_ne!(
             old_signal,
-            cache.working[cache.active].versions["detail.signal"].generation
+            cache.working.versions["detail.signal"].generation
         );
         graph.nodes[graph.outputs[final_id].producer].operation = O::Tone {
             curve: vec![0., 1.].into(),
@@ -1076,17 +1446,14 @@ mod tests {
         let mut cache = Cache::default();
         let frontier = cache.plan(&graph, &[root]).unwrap();
         assert_eq!(frontier, vec![rgb, blue, mask]);
-        let previous = cache.working[cache.active].versions["residual.rgb"].generation;
+        let previous = cache.working.versions["residual.rgb"].generation;
         graph.nodes[graph.outputs[root].producer].operation = finish(1.2);
         // A detail edit can use the initial checkpoints before reconstruction.
         assert_eq!(
             cache.plan(&graph, &[root]).unwrap(),
             vec![reconstructed, residual, mask]
         );
-        assert_ne!(
-            cache.working[cache.active].versions["residual.rgb"].generation,
-            previous
-        );
+        assert_ne!(cache.working.versions["residual.rgb"].generation, previous);
         graph.nodes[graph.outputs[reconstructed].producer].operation = O::BlueGuidedReconstruct(
             Arc::new(blue_guided_reconstruct::Prepared::new([8, 8], 0.5, [0.; 3], None).unwrap()),
         );
@@ -1182,22 +1549,27 @@ mod tests {
         let value = Value {
             buffer,
             description: None,
+            working_scale: crate::render::Scale::NATIVE,
+            view: None,
         };
-        let cache = Cache {
-            entries: vec![
-                Entry {
-                    name: "original".into(),
-                    generation: 0,
-                    value: value.clone(),
-                },
-                Entry {
-                    name: "alias".into(),
-                    generation: 0,
-                    value: value.clone(),
-                },
-            ],
-            ..Default::default()
-        };
+        let (graph, root) = graph_for_detail(1.);
+        let mut cache = Cache::default();
+        cache.plan(&graph, &[root]).unwrap();
+        let version = cache.working.versions["noise.tiles"].clone();
+        cache.entries = vec![
+            Entry {
+                version: version.clone(),
+                value: value.clone(),
+                pinned: false,
+                used: 0,
+            },
+            Entry {
+                version,
+                value: value.clone(),
+                pinned: false,
+                used: 0,
+            },
+        ];
         assert_eq!(cache.bytes(), value.buffer.size());
         assert!(cache.room_for(&value));
     }
@@ -1252,6 +1624,8 @@ mod tests {
             &Value {
                 buffer: gpu.upload("retained edit input", &[0.3_f32; 3]).unwrap(),
                 description: None,
+                working_scale: crate::render::Scale::NATIVE,
+                view: None,
             },
         );
         let (graph, _, _, target) = recipe(0.5);
@@ -1266,3 +1640,11 @@ mod tests {
 #[cfg(test)]
 #[path = "../examples/chroma_investigation/mod.rs"]
 mod chroma_investigation;
+
+#[cfg(test)]
+#[path = "interactive_scale_test.rs"]
+mod scale_tests;
+
+#[cfg(test)]
+#[path = "interactive_cache_test.rs"]
+mod cache_tests;

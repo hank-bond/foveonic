@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     inspection::Content,
     profile::Profile,
-    render::{ControlCapabilities, PreviewQuality, Rendering},
+    render::{ControlCapabilities, Rendering, Scale},
 };
 
 #[test]
@@ -20,6 +20,7 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
         .flat_map(|v| [v[0], v[1], ((v[2] + v[3]) + v[4] + v[5]) * 0.25])
         .collect();
     source.pixels = pixels;
+    source.origin = Default::default();
     source.storage = SourceStorage::InterleavedRgb;
     let metadata = std::sync::Arc::make_mut(&mut source.metadata);
     metadata.width /= 2;
@@ -100,6 +101,23 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
                 );
             }
         }
+        for divisor in [2, 4, 8, 16, 64, 1 << 31] {
+            let mut reduced = settings.clone();
+            reduced.working_scale = Scale::new(divisor).unwrap();
+            reduced.preview_region = None;
+            let result = engine
+                .render(&source, &reduced, &mut Profile::default())
+                .unwrap();
+            let native = crate::render::native_extent(&source.metadata).unwrap();
+            assert_eq!(
+                result.description().extent,
+                reduced.working_scale.extent(native)
+            );
+            let bytes = engine.readback_image(&result).unwrap();
+            let pixels: &[f32] = bytemuck::cast_slice(&bytes);
+            assert!(pixels.iter().all(|v| v.is_finite()));
+            assert!(pixels.iter().any(|v| *v > 0.));
+        }
         let tiff = exports.path().join(format!("{rendering:?}.tiff"));
         let dng = exports.path().join(format!("{rendering:?}.dng"));
         let expected = image.view().extent;
@@ -128,13 +146,13 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
     settings.white_balance = cap.default_white_balance(&source.metadata).unwrap();
     settings.color_mode = cap.default_color_mode(&source.metadata).unwrap();
     let mut expected = None;
-    for quality in [PreviewQuality::Full, PreviewQuality::Fast] {
-        settings.preview_quality = quality;
+    for quality in [Scale::NATIVE, Scale::new(2).unwrap()] {
+        settings.working_scale = quality;
         let mut profile = Profile::default();
         let mut execution = Execution::default();
         let recipe = build(
             &engine,
-            &source,
+            super::super::RecipeInput::Original(&source),
             &settings,
             &["final"],
             &mut profile,
@@ -175,7 +193,6 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
                 &recipe.graph,
                 recipe.final_id,
                 &["phase-detection.blue", "extraction.blue"],
-                recipe.params,
                 &mut profile,
                 &mut execution,
             )
@@ -210,22 +227,15 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
     let source =
         std::sync::Arc::new(Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap());
     let engine = Engine::new().unwrap();
-    assert!(small_preview_available(
-        &source.metadata,
-        PreviewQuality::Thumb
-    ));
     let mut settings = Settings::new("Auto", "Standard");
     settings.reconstruction = Some(controls::default_noise_controls());
     let mut native = None;
-    for quality in [
-        PreviewQuality::Full,
-        PreviewQuality::Draft,
-        PreviewQuality::Thumb,
-    ] {
-        settings.preview_quality = quality;
+    for divisor in [1, 2, 4, 8, 16, 64, 1 << 31] {
+        let quality = Scale::new(divisor).unwrap();
+        settings.working_scale = quality;
         let recipe = build(
             &engine,
-            &source,
+            super::super::RecipeInput::Original(&source),
             &settings,
             &["final"],
             &mut Profile::default(),
@@ -277,13 +287,11 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
         } else {
             native = Some(histories);
         }
-        if quality == PreviewQuality::Full {
+        if quality == Scale::NATIVE {
             continue;
         }
-        let extent = [
-            source.metadata.width as u32 / quality.divisor(),
-            source.metadata.height as u32 / quality.divisor(),
-        ];
+        let extent = color_grid(&source.metadata, quality).unwrap().extent;
+        let blue_extent = output_grid(&source.metadata, quality).unwrap().extent;
         let pools: Vec<_> = recipe
             .graph
             .nodes
@@ -296,10 +304,20 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
                 }
             })
             .collect();
-        assert_eq!(pools.len(), 3);
+        assert_eq!(
+            pools.len(),
+            if tiger::supported(&source.metadata) {
+                4
+            } else {
+                3
+            }
+        );
         assert_eq!(pools[0].output_extent(), extent);
-        assert_eq!(pools[1].output_extent(), extent.map(|v| v * 2));
+        assert_eq!(pools[1].output_extent(), blue_extent);
         assert_eq!(pools[2].output_extent(), extent);
+        assert!(pools
+            .iter()
+            .all(|pool| pool.working_scale() == Some(quality)));
         for node in &recipe.graph.nodes {
             match &node.operation {
                 Operation::TwoScaleNoise(p) => assert_eq!(p.extent(), extent),
@@ -307,8 +325,9 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
                 Operation::SectorColor(p) => assert_eq!(p.extent(), extent),
                 Operation::BlueGuidedReconstruct(p) => {
                     assert_eq!(p.extent(), extent);
-                    assert_eq!(p.blue_extent(), extent.map(|v| v * 2));
-                    assert!(!p.doubles_output());
+                    assert_eq!(p.blue_extent(), blue_extent);
+                    assert_eq!(p.output_extent(), blue_extent);
+                    assert!(p.doubles_output());
                 }
                 _ => {}
             }
@@ -316,12 +335,10 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
         let image = engine
             .render(&source, &settings, &mut Profile::default())
             .unwrap();
-        assert_eq!(image.settings().preview_quality, quality);
+        assert_eq!(image.settings().working_scale, quality);
         assert_eq!(image.source_metadata().width, source.metadata.width);
         assert_eq!(image.source_metadata().height, source.metadata.height);
-        let expected = crate::render::native_extent(&source.metadata)
-            .unwrap()
-            .map(|v| v / quality.divisor());
+        let expected = quality.extent(crate::render::native_extent(&source.metadata).unwrap());
         assert_eq!(image.description().extent, expected);
         assert_eq!(image.view().extent, expected);
         let bytes = engine.readback_image(&image).unwrap();
@@ -381,9 +398,9 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
 fn small_composition_preserves_native_metadata_and_full_inspection() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
-    for quality in [PreviewQuality::Draft, PreviewQuality::Thumb] {
+    for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
         let mut settings = Settings::new("Auto", "Standard");
-        settings.preview_quality = quality;
+        settings.working_scale = quality;
         let image = engine
             .render(&source, &settings, &mut Profile::default())
             .unwrap();
@@ -393,7 +410,7 @@ fn small_composition_preserves_native_metadata_and_full_inspection() {
         let composed = engine
             .render(&source, &settings, &mut Profile::default())
             .unwrap();
-        assert_eq!(composed.settings().preview_quality, quality);
+        assert_eq!(composed.settings().working_scale, quality);
         assert_eq!(composed.source_metadata().width, source.metadata.width);
         assert_eq!(composed.source_metadata().height, source.metadata.height);
         assert_eq!(composed.uncropped_view(), image.uncropped_view());
@@ -412,7 +429,7 @@ fn small_composition_preserves_native_metadata_and_full_inspection() {
             .unwrap()
             .pop()
             .unwrap();
-        assert_eq!(artifact.settings.preview_quality, PreviewQuality::Full);
+        assert_eq!(artifact.settings.working_scale, Scale::NATIVE);
         let Content::Image(native) = artifact.content else {
             panic!("native inspection image")
         };
@@ -430,10 +447,10 @@ fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention()
         std::sync::Arc::new(Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap());
     let engine = Engine::new().unwrap();
     let native_cell_bytes = source.samples().len() as u64 * 4;
-    for quality in [PreviewQuality::Draft, PreviewQuality::Thumb] {
+    for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
         for noise_edit in [false, true] {
             let mut settings = Settings::new("Auto", "Standard");
-            settings.preview_quality = quality;
+            settings.working_scale = quality;
             settings.reconstruction = Some(controls::default_noise_controls());
             let mut session = crate::interactive::RenderSession::new(source.clone());
             let initial = engine
@@ -496,6 +513,74 @@ fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention()
             );
             assert!(engine.readback_image(&initial).unwrap() == initial_bytes);
             eprintln!("{quality:?} noise_edit={noise_edit} GPU cache={} native_cells={native_cell_bytes} uploads={} dispatches={}", session.cached_bytes(), activity.upload_bytes, activity.dispatches);
+        }
+    }
+}
+
+#[test]
+fn component_grids_keep_native_metadata_and_cover_every_sensor_scale() {
+    use crate::source::{Matrix, MatrixEncoding, Metadata};
+    for (model, camera, native, major) in [
+        ("SIGMA dp2 Quattro", 81., [5888, 3672], 3),
+        ("SIGMA sd Quattro", 40., [5888, 3776], 3),
+        ("SIGMA sd Quattro H", 41., [6656, 4480], 4),
+    ] {
+        for low in [false, true] {
+            let sensor = native.map(|v| if low { v / 2 } else { v });
+            let metadata = Metadata {
+                width: sensor[0],
+                height: sensor[1],
+                rotation: 0,
+                processing_version: Some([major, 0, 0, 0]),
+                properties: [("CAMMODEL".into(), model.into())].into(),
+                matrices: [(
+                    "CAMERAID".into(),
+                    Matrix {
+                        encoding: MatrixEncoding::Float32,
+                        representation: "f64",
+                        dimensions: vec![1],
+                        values: vec![camera],
+                    },
+                )]
+                .into(),
+                lists: Default::default(),
+            };
+            assert_eq!(metadata.is_quattro_low(), low);
+            let native_color = calibration::color_extent(&metadata).unwrap();
+            for exponent in 0..=31 {
+                let divisor = 1_u32 << exponent;
+                let scale = Scale::new(divisor).unwrap();
+                let color = color_grid(&metadata, scale).unwrap();
+                let output = output_grid(&metadata, scale).unwrap();
+                assert_eq!(color.native, native_color);
+                assert_eq!(color.logical, scale.extent(native_color));
+                assert_eq!(output.logical, scale.extent(sensor.map(|v| v as u32)));
+                if scale.is_native() {
+                    assert_eq!(color.extent, native_color);
+                    assert_eq!(color.origin, [0, 0]);
+                    assert_eq!(output.extent, sensor.map(|v| v as u32));
+                } else {
+                    assert!(color.extent.iter().all(|v| v.is_multiple_of(4)));
+                    let support = region::CAMERA_SUPPORT.div_ceil(divisor).max(64);
+                    assert!(output.origin[0] >= region::CAMERA_SUPPORT.div_ceil(divisor));
+                    assert!(output
+                        .extent
+                        .iter()
+                        .zip(output.origin)
+                        .zip(output.logical)
+                        .all(|((&extent, origin), logical)| extent >= logical + origin * 2));
+                    assert_eq!(color.origin, [support / if low { 1 } else { 2 }; 2]);
+                }
+                assert_eq!(
+                    output.extent,
+                    color.extent.map(|v| v * if low { 1 } else { 2 })
+                );
+                assert_eq!(
+                    output.origin,
+                    color.origin.map(|v| v * if low { 1 } else { 2 })
+                );
+                assert_eq!([metadata.width, metadata.height], sensor);
+            }
         }
     }
 }

@@ -41,6 +41,24 @@ impl ControlCapabilities {
         }
     }
 
+    /// Authored exposure limits before extending the row to a captured automatic value.
+    pub fn exposure_range(&self) -> [f32; 2] {
+        if self.family == ProcessingFamily::Quattro {
+            [-2., 2.]
+        } else {
+            [-4., 4.]
+        }
+    }
+
+    /// Original sharpening controls have different signed ranges by camera architecture.
+    pub fn reference_sharpening_range(&self) -> [f32; 2] {
+        if self.family == ProcessingFamily::Quattro {
+            [-2., 2.]
+        } else {
+            [0., 2.]
+        }
+    }
+
     /// Resolve the authored recipe's optional noise and detail baseline.
     pub fn default_noise_controls(&self) -> crate::noise::Controls {
         if self.family == ProcessingFamily::Quattro {
@@ -60,6 +78,23 @@ impl ControlCapabilities {
         } else {
             Ok(self.default_noise_controls())
         }
+    }
+
+    /// Resolve the editable optional container without enabling another inactive group.
+    pub fn editable_noise_controls_for_metadata(
+        &self,
+        metadata: &Metadata,
+        authored: Option<crate::noise::Controls>,
+    ) -> Result<crate::noise::Controls> {
+        if let Some(controls) = authored {
+            return Ok(controls);
+        }
+        let mut controls = self.default_noise_controls_for_metadata(metadata)?;
+        if self.family == ProcessingFamily::Merrill {
+            controls.noise_enabled = false;
+            controls.detail_enabled = false;
+        }
+        Ok(controls)
     }
 
     /// Capture modes and saved X3F choices initialize the rendering independently of color looks.

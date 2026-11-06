@@ -13,6 +13,10 @@ pub(crate) struct PreparedPreview {
     pub(crate) preview: Option<Pixels>,
 }
 impl PreparedPreview {
+    pub(crate) fn retained_bytes(&self) -> u64 {
+        self.thumbnail.image.retained_bytes()
+            + self.preview.as_ref().map_or(0, Pixels::retained_bytes)
+    }
     pub(crate) fn new(
         preview: foveonic::preview::Preview,
         large: bool,

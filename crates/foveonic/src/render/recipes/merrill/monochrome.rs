@@ -9,7 +9,7 @@ use crate::{
     nodes::monochrome::{Prepared as MonoPrepared, Stage},
     profile::Profile,
     render::Settings,
-    source::{Result, Source},
+    source::{Metadata, Result},
 };
 use std::sync::Arc;
 
@@ -24,22 +24,23 @@ fn guide_controls(settings: &Settings) -> crate::render::MonochromeControls {
 }
 
 pub(super) fn build(
-    source: &Source,
+    metadata: &Arc<Metadata>,
     settings: &Settings,
     mut recipe: BuiltRecipe,
     names: &[&str],
     profile: &mut Profile,
     execution: &mut Execution<'_>,
+    grid: Option<&super::preview::Grid>,
 ) -> Result<Prepared> {
-    let space = ColorSpace::from_metadata(&source.metadata)?;
+    let space = ColorSpace::from_metadata(metadata)?;
     if settings.directional_banding_selected() {
         let params = profile.measure("prepare monochrome native bands", || {
             let params = crate::noise::prepare(
-                &source.metadata,
+                metadata,
                 &settings.white_balance,
                 settings.sensor_noise_controls(),
             )?;
-            crate::noise::banding_parameters(&source.metadata, params, settings.merrill_banding)
+            crate::noise::banding_parameters(metadata, params, settings.merrill_banding)
         })?;
         let bands = super::reconstruction::append_banding(
             &mut recipe.graph,
@@ -54,12 +55,12 @@ pub(super) fn build(
             return Ok(Prepared::Requested(recipe));
         }
     }
+    if let Some(grid) = grid {
+        recipe.final_id = grid.append(&mut recipe.graph, recipe.final_id)?;
+    }
     let prepared = Arc::new(profile.measure("prepare monochrome", || {
-        MonoPrepared::new(
-            &source.metadata,
-            &settings.white_balance,
-            guide_controls(settings),
-        )
+        MonoPrepared::new(metadata, &settings.white_balance, guide_controls(settings))?
+            .on_grid(grid.map(|g| g.grid))
     })?);
     macro_rules! node {
         ($stage:expr, $inputs:expr) => {{
@@ -98,9 +99,13 @@ pub(super) fn build(
         mono
     };
     if let Some(texture) = settings.monochrome.detail() {
-        corrected = recipe
-            .graph
-            .add(Operation::MonoTexture(texture), &[corrected])?;
+        corrected = recipe.graph.add(
+            Operation::MonoTexture {
+                controls: texture,
+                scale: settings.working_scale.factor(),
+            },
+            &[corrected],
+        )?;
         execution.check()?;
         if requested(&recipe.graph, names) {
             return Ok(Prepared::Requested(recipe));
@@ -110,7 +115,7 @@ pub(super) fn build(
     let mut linear = node!(Stage::Expand, &[corrected]);
     if settings.sharpen_selected() {
         let amount = profile.measure("prepare sharpening amount", || {
-            settings.effective_sharpen_amount(&source.metadata)
+            settings.effective_sharpen_amount(metadata)
         })?;
         linear = recipe
             .graph
@@ -121,5 +126,9 @@ pub(super) fn build(
     if requested(&recipe.graph, names) {
         return Ok(Prepared::Requested(recipe));
     }
-    Ok(Prepared::Linear(recipe, super::dng_base::unselected_mode()))
+    Ok(Prepared::Linear(
+        recipe,
+        super::dng_base::unselected_mode(),
+        None,
+    ))
 }

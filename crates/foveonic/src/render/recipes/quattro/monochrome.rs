@@ -23,10 +23,18 @@ const NEIGHBORHOOD_INTENSITY_LAST: f32 = f32::from_bits(0x3f7ffaa6);
 const RANGE_RADIUS: u32 = 7;
 
 pub(super) fn prepare_stage1(metadata: &Metadata) -> Result<channel_noise::Prepared> {
-    let extent = super::calibration::color_extent(metadata)?;
+    prepare_stage1_on_grid(metadata, super::WorkingGrid::NATIVE)
+}
+pub(super) fn prepare_stage1_on_grid(
+    metadata: &Metadata,
+    grid: super::WorkingGrid,
+) -> Result<channel_noise::Prepared> {
+    let extent = super::color_grid(metadata, grid)?.extent;
+    let energy = super::pool_noise_energy(super::calibration::color_extent(metadata)?, grid);
+    let model = CHANNEL_NOISE_MODEL.map(|v| v * energy);
     let despeckle = blue_despeckle::Prepared::new(
         extent,
-        BLUE_SPECKLE_MODEL,
+        BLUE_SPECKLE_MODEL.map(|v| v * energy as f32),
         1.,
         0.,
         [0, 0, extent[0] - 1, extent[1] - 1],
@@ -36,23 +44,23 @@ pub(super) fn prepare_stage1(metadata: &Metadata) -> Result<channel_noise::Prepa
     // Channel-ratio repair uses the factory Auto estimate. The color route
     // independently uses fixed daylight for its early technical filter.
     let gains = super::calibration::white_balance(metadata, "Auto")?;
-    let ratio = chromatic_ratio::Prepared::new(extent, gains, CHANNEL_NOISE_MODEL)?;
+    let ratio = chromatic_ratio::Prepared::new(extent, gains, model)?;
     let (_, range) = super::stage1::conditioning(0., false);
     let intensity = range_intensity();
     let decorrelate = neighborhood_decorrelate::Prepared::new(
         extent,
-        CHANNEL_NOISE_MODEL,
+        model,
         neighborhood_intensity(),
         range.clone(),
         RANGE_WEIGHT_SCALE,
     )?;
     let filter = rgb_prefilter::RangePrepared::new(
         extent,
-        CHANNEL_NOISE_MODEL,
+        model,
         intensity,
         range,
         RANGE_WEIGHT_SCALE,
-        RANGE_RADIUS,
+        RANGE_RADIUS.div_ceil(grid.divisor()).max(1),
         None,
     )?;
     channel_noise::Prepared::new(extent, despeckle, ratio, decorrelate, filter)
@@ -84,7 +92,7 @@ pub(super) fn stage3_controls(
         sharpen_base,
         lowest_band_factor: Some(factor),
         preserve_dark_detail: false,
-        grid: super::WorkingGrid::Full,
+        grid: super::WorkingGrid::NATIVE,
         region: None,
     })
 }
@@ -100,15 +108,26 @@ pub(super) fn prepare_stage2b(
     let iso = (metadata.scalar("CaptureISO")? / 100.) as f32;
     let (sharp, adaptive) =
         residual_controls(iso, controls, mode == "Portrait", metadata.is_quattro_low())?;
-    prepared.reconstruct = super::stage2b::prepare_reconstruction(
-        metadata,
-        controls.luma,
-        Some(blue_blend(controls.luma, iso, mode == "Portrait")),
-    )?;
+    let blend = Some(blue_blend(controls.luma, iso, mode == "Portrait"));
+    prepared.reconstruct = if controls.grid.is_native() {
+        super::stage2b::prepare_reconstruction(metadata, controls.luma, blend)?
+    } else {
+        super::stage2b::prepare_reconstruction_on_grid(
+            metadata,
+            controls.luma,
+            blend,
+            controls.grid,
+        )?
+    };
     prepared.finish = crate::nodes::color::residual_finish::Params::new(
-        [metadata.width as u32, metadata.height as u32],
+        super::output_grid(metadata, controls.grid)?.extent,
         iso,
-        sharp,
+        sharp
+            * super::pool_noise_energy(
+                [metadata.width as u32, metadata.height as u32],
+                controls.grid,
+            )
+            .sqrt() as f32,
         0,
         adaptive,
         1.,
@@ -187,7 +206,16 @@ pub(super) fn build_stage3(
     controls: super::stage3::Controls,
 ) -> Result<usize> {
     let contrast = super::stage3::build_contrast(graph, metadata, rgb, mode, controls)?;
-    let prepared = prepare_sharpen(metadata, controls.sharpen_level, controls.sharpen_base)?;
+    let prepared = if controls.grid.is_native() {
+        prepare_sharpen(metadata, controls.sharpen_level, controls.sharpen_base)?
+    } else {
+        prepare_sharpen_on_grid(
+            metadata,
+            controls.sharpen_level,
+            controls.sharpen_base,
+            controls.grid,
+        )?
+    };
     graph.add(
         crate::graph::Operation::ProportionalSharpen(std::sync::Arc::new(prepared)),
         &[contrast, detail],
@@ -199,7 +227,15 @@ pub(super) fn prepare_sharpen(
     level: usize,
     base: f32,
 ) -> Result<crate::nodes::finish::proportional_sharpen::Prepared> {
-    let extent = [metadata.width as u32, metadata.height as u32];
+    prepare_sharpen_on_grid(metadata, level, base, super::WorkingGrid::NATIVE)
+}
+fn prepare_sharpen_on_grid(
+    metadata: &Metadata,
+    level: usize,
+    base: f32,
+    grid: super::WorkingGrid,
+) -> Result<crate::nodes::finish::proportional_sharpen::Prepared> {
+    let extent = super::output_grid(metadata, grid)?.extent;
     let normalization = (metadata.scalar("CaptureISO")? / 100.) as f32;
     crate::nodes::finish::proportional_sharpen::Prepared::new(
         extent,
@@ -207,11 +243,11 @@ pub(super) fn prepare_sharpen(
         normalization,
         2000.,
         0.2,
-        if metadata.is_quattro_low() {
-            super::stage3::HALF_GRID_SHARPEN_SCALE
+        (if metadata.is_quattro_low() {
+            super::stage3::LOW_SHARPEN_SCALE
         } else {
             1.
-        },
+        }) * grid.factor().sqrt(),
         false,
     )
 }
@@ -495,7 +531,7 @@ mod tests {
             luma: 2,
             detail: 1.,
             residual_level: 3,
-            grid: super::super::WorkingGrid::Full,
+            grid: super::super::WorkingGrid::NATIVE,
         };
         let low = residual_controls(1., controls, false, false).unwrap();
         assert_eq!(low.0, 16. * 1.2);

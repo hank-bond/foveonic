@@ -1,8 +1,8 @@
 //! Schedules bounded cache writes, selection prefetch, and readiness scans behind foreground work.
 
 use super::{
-    previews, prune, read_header, ready, store_checked, Command, Control, EntryState, Identity,
-    Settings, Status, NAMESPACE,
+    prepare_decoded, previews, prune, publish_decoded, read_header, ready, store_checked, Command,
+    Control, EntryState, Identity, Settings, Status, NAMESPACE,
 };
 use crate::background::{self, Gate};
 use crate::source::{ProcessingFamily, Result};
@@ -20,6 +20,21 @@ const WORK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const READINESS_SCAN_INTERVAL: Duration = Duration::from_secs(2);
 // One source may wait while another is being written. Extra insertions are disposable.
 const PENDING_WRITES: usize = 1;
+// Reading and retaining full photos costs much more memory than a CPU worker.
+// Three photos can feed nine independent planes to the shared host pool.
+const ADMITTED_PHOTOS: usize = 3;
+
+fn photo_workers(cpu_workers: usize) -> usize {
+    cpu_workers.min(ADMITTED_PHOTOS)
+}
+
+#[cfg(test)]
+#[test]
+fn photo_admission_stays_bounded_as_host_cpu_capacity_grows() {
+    for (workers, photos) in [(1, 1), (2, 2), (3, 3), (8, 3), (64, 3)] {
+        assert_eq!(photo_workers(workers), photos);
+    }
+}
 
 pub(super) fn start(
     root: PathBuf,
@@ -29,12 +44,14 @@ pub(super) fn start(
 ) -> mpsc::SyncSender<Command> {
     let (writer, receiver) = mpsc::sync_channel(PENDING_WRITES);
     std::thread::spawn(move || {
+        // Shared CPU workers also serve foreground loads. Create them before
+        // this I/O actor lowers its inherited Linux scheduling priority.
+        let pool = crate::decode_pool::shared();
         background::lower_priority();
         background::run(Some(gate.clone()), || {
             let mut initialized = false;
             let mut last_scan = Instant::now();
             let mut families = HashMap::new();
-            let mut decoder_pool: Option<Arc<crate::decode_pool::Pool>> = None;
             loop {
                 let work_ready = {
                     let state = control.lock().unwrap();
@@ -94,7 +111,7 @@ pub(super) fn start(
                             .is_ok_and(|f| settings.permits(f))
                     {
                         status.lock().unwrap().writing = true;
-                        let _ = store_checked(
+                        let stored = store_checked(
                             &root,
                             &path,
                             identity.clone(),
@@ -112,6 +129,9 @@ pub(super) fn start(
                                     && state.settings.max_bytes == settings.max_bytes
                             },
                         );
+                        if stored.is_ok_and(|written| written) {
+                            control.lock().unwrap().rejected.remove(&identity);
+                        }
                         let current = || {
                             let state = control.lock().unwrap();
                             !state.clear
@@ -180,16 +200,7 @@ pub(super) fn start(
                     && prefetch_settings.max_bytes > 0
                     && queued;
                 if prefetched {
-                    if decoder_pool
-                        .as_ref()
-                        .is_none_or(|pool| pool.threads() != prefetch_settings.decode_threads)
-                    {
-                        decoder_pool =
-                            crate::decode_pool::Pool::new(prefetch_settings.decode_threads)
-                                .ok()
-                                .map(Arc::new);
-                    }
-                    if let Some(pool) = &decoder_pool {
+                    if let Ok(pool) = &pool {
                         background::interruptible(gate.clone(), || {
                             prefetch_pass(
                                 &root,
@@ -208,9 +219,6 @@ pub(super) fn start(
                             state.queue.clear();
                         }
                     }
-                }
-                if !prefetch_settings.enabled {
-                    decoder_pool = None;
                 }
                 if maintenance
                     || prefetched
@@ -247,7 +255,7 @@ fn prefetch_pass(
     let order = Arc::new(crate::decode_pool::Order::default());
     let scheduling = background::context();
     std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..pool.threads())
+        let workers: Vec<_> = (0..photo_workers(pool.threads()))
             .map(|_| {
                 let publication = &publication;
                 let order = &order;
@@ -280,6 +288,7 @@ fn prefetch_pass(
                                     settings,
                                     nearby,
                                     publication,
+                                    control,
                                     || {
                                         let current = control.lock().unwrap();
                                         current.generation == generation && !current.clear
@@ -337,7 +346,7 @@ fn publish_ready(
         return;
     }
     let mut current = control.lock().unwrap();
-    if current.generation == generation && !current.clear {
+    if current.generation == generation && !current.clear && !current.rejected.contains(&identity) {
         current.identities.insert(path.to_owned(), identity);
         let mut status = status.lock().unwrap();
         status.ready.insert(path.to_owned());
@@ -359,12 +368,14 @@ fn publication_lock(publication: &Mutex<()>) -> Result<MutexGuard<'_, ()>> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prefetch(
     root: &Path,
     path: &Path,
     settings: &Settings,
     nearby: &[PathBuf],
     publication: &Mutex<()>,
+    control: &Mutex<Control>,
     current: impl Fn() -> bool,
     published: impl Fn(),
 ) -> Result<()> {
@@ -372,11 +383,12 @@ fn prefetch(
     if !current() {
         return Ok(());
     }
-    if complete(root, path, settings) {
+    let identity = Identity::read(path)?;
+    let rejected = control.lock().unwrap().rejected.contains(&identity);
+    if !rejected && complete_identity(root, &identity, settings) {
         published();
         return Ok(());
     }
-    let identity = Identity::read(path)?;
     let Some((source, original)) =
         crate::x3f::read_cacheable(path, |family| settings.permits(family))?
     else {
@@ -384,37 +396,30 @@ fn prefetch(
     };
     source.validate()?;
     crate::background::checkpoint_or_cancel()?;
+    let decoded = crate::decode_pool::cpu(|| prepare_decoded(identity.clone(), &source))?;
+    let selection = super::selection::prepare_assets(path, &identity, &source.metadata, &original)?;
+    crate::background::checkpoint_or_cancel()?;
     {
         let _publication = publication_lock(publication)?;
-        if current() && !ready(root, path, settings) {
-            store_checked(
+        if current() && (rejected || !ready(root, path, settings)) {
+            let written = publish_decoded(
                 root,
                 path,
-                identity.clone(),
                 &source,
+                decoded,
                 settings.max_bytes,
                 nearby,
                 &current,
             )?;
+            if written {
+                control.lock().unwrap().rejected.remove(&identity);
+            }
         }
+        super::selection::publish(root, path, &original, selection, settings, nearby, &current)?;
+        published();
     }
-    let _publication = publication_lock(publication)?;
-    super::selection::prepare(
-        root,
-        path,
-        &identity,
-        &source.metadata,
-        &original,
-        settings,
-        nearby,
-        &current,
-    )?;
     drop(source);
-    published();
     Ok(())
-}
-fn complete(root: &Path, path: &Path, settings: &Settings) -> bool {
-    Identity::read(path).is_ok_and(|identity| complete_identity(root, &identity, settings))
 }
 fn complete_identity(root: &Path, identity: &Identity, settings: &Settings) -> bool {
     let decoded = std::fs::File::open(root.join(identity.name()))
@@ -440,6 +445,7 @@ pub(super) fn entry_state(
     settings: &Settings,
     queued: bool,
     families: &mut FamilyCatalog,
+    rejected: &HashSet<Identity>,
 ) -> EntryState {
     if !settings.enabled || settings.max_bytes == 0 {
         return EntryState::Disabled;
@@ -479,7 +485,7 @@ pub(super) fn entry_state(
     if !settings.permits(family) {
         return EntryState::Disabled;
     }
-    if complete_identity(root, &identity, settings) {
+    if !rejected.contains(&identity) && complete_identity(root, &identity, settings) {
         EntryState::Ready
     } else if queued {
         EntryState::Queued
@@ -487,14 +493,14 @@ pub(super) fn entry_state(
         EntryState::Uncached
     }
 }
-fn refresh(
+pub(super) fn refresh(
     root: &Path,
     control: &Mutex<Control>,
     status: &Mutex<Status>,
     families: &mut FamilyCatalog,
 ) -> Result<()> {
     background::checkpoint_or_cancel()?;
-    let (settings, watched, generation, queued, nearby, known) = {
+    let (settings, watched, generation, queued, nearby, known, rejected) = {
         let state = control.lock().unwrap();
         // Newly queued neighbors take precedence over a directory-wide scan.
         // This also handles a replacement arriving just after the prior pass exits.
@@ -513,6 +519,7 @@ fn refresh(
                 .collect::<HashSet<_>>(),
             state.nearby.clone(),
             state.identities.clone(),
+            state.rejected.clone(),
         )
     };
     let entries = match prune(root, settings.max_bytes, &nearby) {
@@ -541,7 +548,14 @@ fn refresh(
         .into_iter()
         .map(|path| -> Result<_> {
             background::checkpoint_or_cancel()?;
-            let state = entry_state(root, &path, &settings, queued.contains(&path), families);
+            let state = entry_state(
+                root,
+                &path,
+                &settings,
+                queued.contains(&path),
+                families,
+                &rejected,
+            );
             background::checkpoint_or_cancel()?;
             if state == EntryState::Ready && Identity::read(&path).is_ok() {
                 if let Some((identity, _)) = families.get(&path) {
@@ -572,12 +586,12 @@ fn refresh(
             Ok((path, state))
         })
         .collect::<Result<_>>()?;
-    let ready: HashSet<PathBuf> = files
+    let mut ready: HashSet<PathBuf> = files
         .iter()
         .filter(|(_, state)| **state == EntryState::Ready)
         .map(|(p, _)| p.clone())
         .collect();
-    let identities: HashMap<_, _> = ready
+    let mut identities: HashMap<_, _> = ready
         .iter()
         .filter_map(|p| {
             // Keep the identity whose bundle entry_state verified. Re-reading
@@ -594,6 +608,15 @@ fn refresh(
         .count();
     status.bytes = entries.iter().map(|e| e.1).sum();
     if state.generation == generation && !state.clear {
+        let mut files = files;
+        // A foreground payload read may have failed after this scan read its header.
+        for (path, identity) in &identities {
+            if state.rejected.contains(identity) {
+                ready.remove(path);
+                files.insert(path.clone(), EntryState::Uncached);
+            }
+        }
+        identities.retain(|path, _| ready.contains(path));
         state.identities = identities;
         state.recipes.retain(|p, _| watching.contains(p));
         status.ready = ready;

@@ -37,6 +37,8 @@ pub(crate) struct Params {
 #[derive(Clone)]
 pub struct Prepared {
     pub(crate) extent: [u32; 2],
+    native_extent: [u32; 2],
+    scale: crate::render::Scale,
     /// 0..=2: image-size-relative decay proportions for reference, edge reference,
     /// and edge-guided image filtering. 3: dimensionless edge locality.
     /// 4: sigmoid offset. 5..=6: dimensionless sigmoid slopes for the two guides.
@@ -69,13 +71,27 @@ impl Prepared {
         tables.extend((0..range).map(|i| (i as f32 / range as f32).powf(0.2)));
         Ok(Self {
             extent,
+            native_extent: extent,
+            scale: crate::render::Scale::NATIVE,
             controls,
             tables,
             range,
         })
     }
+    /// Allocation padding supplies context; decay distances remain measured
+    /// over the unpadded native sensor in physical pixel units.
+    pub(crate) fn on_grid(mut self, grid: crate::render::WorkingGrid) -> Result<Self> {
+        if grid.native != self.native_extent || grid.extent.iter().any(|v| *v < 4) {
+            return Err("log reconstruction grid does not match its native sensor".into());
+        }
+        self.extent = grid.extent;
+        self.scale = grid.scale;
+        Ok(self)
+    }
     pub(crate) fn key(&self) -> crate::recipe::Key {
         crate::recipe::Key::pod(&self.extent)
+            .with(&self.native_extent)
+            .with(&self.scale.divisor())
             .slice(&self.controls)
             .slice(&self.tables)
     }
@@ -99,8 +115,10 @@ impl Prepared {
         }
     }
     fn decay(&self, index: usize) -> f32 {
-        1. / (std::f32::consts::LN_2
-            / (((self.extent[0] + self.extent[1]) >> 2) as f32 * self.controls[index]))
+        let native_span =
+            (u64::from(self.native_extent[0]) + u64::from(self.native_extent[1])) >> 2;
+        1. / (std::f32::consts::LN_2 / (native_span as f32 * self.controls[index])
+            * self.scale.divisor() as f32)
             .exp()
     }
 }

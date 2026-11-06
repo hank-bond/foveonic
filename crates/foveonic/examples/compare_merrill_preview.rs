@@ -4,7 +4,7 @@ use foveonic::{
     image::RenderedImage,
     inspection::Content,
     profile::{Mode, Profile},
-    render::{Engine, PreviewQuality, RenderSession, Settings, TiffColorSpace},
+    render::{Engine, RenderSession, Scale, Settings, TiffColorSpace},
     source::{Result, Source},
 };
 use image::ImageEncoder;
@@ -29,7 +29,7 @@ fn settings(variant: &str) -> Settings {
     settings.reconstruction = Some(Default::default());
     settings.tiff_color_space = Some(TiffColorSpace::Srgb);
     if variant != "full" {
-        settings.preview_quality = PreviewQuality::Fast;
+        settings.working_scale = Scale::new(2).unwrap();
     }
     settings.despeckle = variant != "skip-speckle";
     settings

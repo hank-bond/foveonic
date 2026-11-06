@@ -24,13 +24,13 @@ def timeline(records):
             raise ValueError('incomplete photo group')
         events.append({'name': 'edit group', 'ph': 'X', 'pid': 1, 'tid': 0,
                        'ts': offset_us, 'dur': group['completed_ms'] * 1000.,
-                       'args': {k: group[k] for k in ['round', 'quality', 'workers', 'edit', 'photo_count']}})
+                       'args': {k: group[k] for k in ['round', 'scale_divisor', 'workers', 'edit', 'photo_count']}})
         for photo in photos:
             thread = photo['photo_index'] + 1
             events.append({'name': photo['source'], 'ph': 'X', 'pid': 1, 'tid': thread,
                            'ts': offset_us + photo['started_ms'] * 1000.,
                            'dur': photo['completed_ms'] * 1000.,
-                           'args': {'extent': photo['extent'], 'effective_quality': photo['effective_quality']}})
+                           'args': {'extent': photo['extent'], 'requested_scale_divisor': photo['requested_scale_divisor'], 'effective_scale_divisor': photo['effective_scale_divisor']}})
             for node in photo['profile'].get('nodes', []):
                 if not node['executed'] or node.get('total_ms') is None:
                     continue

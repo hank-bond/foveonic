@@ -11,7 +11,7 @@ use crate::{
         tone_equalizer,
     },
     profile::Profile,
-    render::{Engine, PreviewQuality, Rendering, Settings},
+    render::{AnalysisGrid, Engine, Rendering, Scale, Settings},
     source::Result,
 };
 
@@ -61,6 +61,7 @@ pub(super) struct Context {
     pub guide_white: f32,
     /// Working pixels per native pixel, independent of viewport crop size.
     pub scale: f32,
+    pub analysis_grid: AnalysisGrid,
 }
 
 /// Camera responses use a 16-bit code lattice. Evaluate metadata curves only.
@@ -144,6 +145,9 @@ pub(super) fn alias(
         },
         &[recipe.final_id],
     )?;
+    let mut view = super::camera_view(recipe.params);
+    view.crop = recipe.rgb_bounds;
+    recipe.graph.set_view(recipe.final_id, view);
     Ok(())
 }
 
@@ -166,6 +170,7 @@ pub(super) fn build(
         white,
         guide_white,
         scale,
+        analysis_grid,
     } = context;
     let extent = recipe.rgb_extent;
     white_balance(recipe, settings, space)?;
@@ -189,7 +194,16 @@ pub(super) fn build(
         let input = recipe.final_id;
         recipe.graph.retain_for_session(input);
         let analysis = haze_analysis(
-            engine, source, settings, recipe, space, white, basis, profile, execution,
+            engine,
+            source,
+            settings,
+            recipe,
+            space,
+            white,
+            basis,
+            analysis_grid.source_scale,
+            profile,
+            execution,
         )?;
         recipe.graph.retain_for_session(analysis);
         recipe.graph.prioritize_for_session(analysis);
@@ -240,7 +254,11 @@ pub(super) fn build(
             &[input],
         )?;
         recipe.graph.retain_for_session(mask);
-        let (analysis_rgb, analysis_mask, analysis) = if full_analysis {
+        let (analysis_rgb, analysis_mask, analysis) = if full_analysis
+            || (analysis_grid.source_scale == settings.working_scale
+                && analysis_grid.result_scale == settings.working_scale
+                && settings.preview_region.is_none())
+        {
             let rgb = recipe.graph.add(
                 Operation::ImageAlias {
                     dehaze_basis: None,
@@ -268,6 +286,7 @@ pub(super) fn build(
                 white,
                 dehaze_basis,
                 params,
+                analysis_grid,
                 profile,
                 execution,
             )?
@@ -521,19 +540,16 @@ fn adaptive_analysis(
     white: f32,
     dehaze_basis: Option<crate::nodes::finish::dehaze::Basis>,
     params: crate::nodes::finish::adaptive_tone::Params,
+    grid: AnalysisGrid,
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<(usize, usize, crate::nodes::finish::adaptive_tone::Params)> {
     let mut overview = settings.clone();
     overview.photographic.base_response = Default::default();
-    overview.preview_quality = PreviewQuality::Fast;
+    overview.working_scale = grid.source_scale;
     overview.preview_region = None;
     overview.output_size = None;
     overview.dehaze_estimate = false;
-    let reduced = overview.fast_preview_available(source.metadata());
-    if !reduced {
-        overview.preview_quality = PreviewQuality::Full;
-    }
     let output = if settings.dehaze_active() {
         "dehaze.rgb"
     } else {
@@ -559,7 +575,8 @@ fn adaptive_analysis(
             space,
             white,
             guide_white: white,
-            scale: if reduced { 0.5 } else { 1. },
+            scale: grid.source_scale.factor(),
+            analysis_grid: grid,
         },
         |_| Err("tone pivot is not required for analysis preparation".into()),
         profile,
@@ -567,30 +584,32 @@ fn adaptive_analysis(
     )?;
 
     let mut bounds = branch.rgb_bounds;
-    if !reduced {
+    let mut divisor = grid.source_scale.divisor();
+    while divisor < grid.result_scale.divisor() {
         let extent = branch.rgb_extent;
-        branch.final_id = branch.graph.add(
+        branch.final_id = branch.graph.add_scoped(
             Operation::AdaptiveToneOverview {
                 source: extent,
                 space,
             },
             &[branch.final_id],
+            &format!("analysis-overview/{divisor}"),
         )?;
         branch.rgb_extent = extent.map(|v| v.div_ceil(2));
-        bounds = [
-            bounds[0] / 2,
-            bounds[1] / 2,
-            bounds[2].div_ceil(2),
-            bounds[3].div_ceil(2),
-        ];
+        bounds = Scale::new(2)?.bounds(bounds);
+        branch.params.output[..2]
+            .iter_mut()
+            .for_each(|v| *v = v.div_ceil(2));
+        divisor *= 2;
     }
+    branch.rgb_bounds = bounds;
     alias(&mut branch, space, "base-response.analysis")?;
     let rgb = branch.final_id;
     let mask = branch.graph.add(
         Operation::AdaptiveToneGuide {
             guide: tone_equalizer::Guide::new(
                 branch.rgb_extent,
-                tone_equalizer::radius_for_scale(0.5),
+                tone_equalizer::radius_for_scale(grid.result_scale.factor()),
                 space,
             )?
             .with_white(white),
@@ -606,7 +625,7 @@ fn adaptive_analysis(
         },
         &[mask],
     )?;
-    let analysis = params.with_geometry(branch.rgb_extent, bounds, 0.5)?;
+    let analysis = params.with_geometry(branch.rgb_extent, bounds, grid.result_scale.factor())?;
     let mapping = recipe.graph.append(branch.graph, "base-response-analysis");
     for id in [mapping[rgb], mapping[mask]] {
         recipe.graph.retain_for_session(id);
@@ -624,35 +643,33 @@ fn haze_analysis(
     space: ColorSpace,
     white: f32,
     basis: crate::nodes::finish::dehaze::Basis,
+    analysis_scale: Scale,
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<usize> {
     let mut overview = settings.clone();
     overview.dehaze = Default::default();
     overview.photographic.base_response = Default::default();
-    overview.preview_quality = PreviewQuality::Fast;
+    overview.working_scale = analysis_scale;
     overview.preview_region = None;
     overview.output_size = None;
-    let reduced = overview.fast_preview_available(source.metadata());
-    if !reduced {
-        overview.preview_quality = PreviewQuality::Full;
-    }
-    let mut branch = if reduced || settings.preview_region.is_some() {
-        // A fixed quarter-pixel recipe keeps analysis independent of the displayed grid.
-        // Stop before shared edits so estimating the color never feeds back into itself.
-        let mut branch = super::build_camera(
-            engine,
-            source,
-            &overview,
-            &["linear.base"],
-            profile,
-            execution,
-        )?;
-        white_balance(&mut branch, settings, space)?;
-        Some(branch)
-    } else {
-        None
-    };
+    let mut branch =
+        if analysis_scale != settings.working_scale || settings.preview_region.is_some() {
+            // The adapter supplies analysis sampling in physical sensor units.
+            // Stop before shared edits so estimating the color never feeds back into itself.
+            let mut branch = super::build_camera(
+                engine,
+                source,
+                &overview,
+                &["linear.base"],
+                profile,
+                execution,
+            )?;
+            white_balance(&mut branch, settings, space)?;
+            Some(branch)
+        } else {
+            None
+        };
     let target = branch.as_mut().unwrap_or(recipe);
     let analysis = target.graph.add(
         Operation::DehazeEstimate {
@@ -719,7 +736,6 @@ fn color_guide(
     }
     color.photographic.sharpening.method = crate::render::PhotographicMethod::Universal;
     if settings.is_monochrome() {
-        color.preview_quality = PreviewQuality::Full;
         color.preview_region = None;
     }
     let mut noise = caps.default_noise_controls();
@@ -803,7 +819,7 @@ pub(super) fn bake(
     execution: &mut Execution<'_>,
 ) -> Result<()> {
     let mut settings = authored.resolved_exposure(source.metadata()).into_owned();
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     settings.preview_region = None;
     settings.color_range_preview = None;
     settings.output_size = None;

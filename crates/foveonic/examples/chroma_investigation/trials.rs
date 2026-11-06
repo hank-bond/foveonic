@@ -214,21 +214,40 @@ fn views(
 }
 pub(super) fn seed(session: &mut RenderSession, buffer: ReadGuard) -> Result<()> {
     let name = "texture.layers-tiles";
-    let generation = session.cache.working[session.cache.active]
+    let version = session
+        .cache
+        .working
         .versions
         .get(name)
         .ok_or("texture checkpoint")?
-        .generation;
-    session
+        .clone();
+    let provenance = session
         .cache
-        .entries
-        .retain(|entry| entry.generation < generation);
+        .get(name)
+        .or_else(|| session.cache.get("column.tiles"))
+        .ok_or("texture input provenance")?;
+    let (working_scale, view) = (provenance.working_scale, provenance.view);
+    // Canonical versions can be recovered out of creation order. Invalidate
+    // actual descendants of the replaced probe surface rather than newer IDs.
+    session.cache.entries.retain(|entry| {
+        let mut pending = vec![entry.version.as_ref()];
+        while let Some(ancestor) = pending.pop() {
+            if ancestor.generation == version.generation {
+                return false;
+            }
+            pending.extend(ancestor.parents.iter().map(Arc::as_ref));
+        }
+        true
+    });
     session.cache.entries.push(super::super::Entry {
-        name: name.into(),
-        generation,
+        pinned: session.cache.working.cuts.contains(&version.generation),
+        version,
+        used: session.cache.frame,
         value: crate::render::Value {
             buffer,
             description: None,
+            working_scale,
+            view,
         },
     });
     Ok(())

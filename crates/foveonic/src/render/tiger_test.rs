@@ -134,7 +134,7 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         let expected = engine.readback_image(&full).unwrap();
         drop(full);
 
-        settings.preview_quality = PreviewQuality::Fast;
+        settings.working_scale = Scale::new(2).unwrap();
         let started = Instant::now();
         let fast = session_image(&engine, &mut session, &settings, &mut Profile::default());
         let fast_bytes = engine.readback_image(&fast).unwrap();
@@ -182,7 +182,7 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         );
         drop(restored);
 
-        settings.preview_quality = PreviewQuality::Full;
+        settings.working_scale = Scale::NATIVE;
         for [x, y] in [[0, 0], [width / 2, height / 2], [width - 480, height - 320]] {
             settings.preview_region = Some([x, y, x + 480, y + 320]);
             let started = Instant::now();

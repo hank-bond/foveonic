@@ -2,8 +2,11 @@
 
 use crate::{
     nodes::sensor::{blue_despeckle, luma_cluster, ordered_blue_repair},
+    profile::Profile,
+    render::Engine,
     source::{MatrixEncoding, Metadata, Result},
 };
+use std::sync::Arc;
 
 fn extent(metadata: &Metadata) -> Result<[u32; 2]> {
     if !super::defects::supported(metadata) {
@@ -16,6 +19,17 @@ fn extent(metadata: &Metadata) -> Result<[u32; 2]> {
 }
 
 pub(super) fn prepare_records(
+    engine: &Engine,
+    metadata: &Arc<Metadata>,
+    stage: ordered_blue_repair::Stage,
+    profile: &mut Profile,
+) -> Result<Arc<ordered_blue_repair::Prepared>> {
+    engine.prepare_blue_repair(metadata, stage, || {
+        profile.measure("prepare ordered blue repair", || records(metadata, stage))
+    })
+}
+
+fn records(
     metadata: &Metadata,
     stage: ordered_blue_repair::Stage,
 ) -> Result<ordered_blue_repair::Prepared> {
@@ -133,6 +147,65 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires GPU and QUATTRO_X3F"]
+    fn fixed_catalogue_preparation_reuses_shared_payloads_without_source_samples() {
+        let source = Arc::new(
+            crate::source::Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap(),
+        );
+        let weak = Arc::downgrade(&source);
+        let metadata = source.metadata.clone();
+        drop(source);
+        assert!(weak.upgrade().is_none());
+        let engine = Engine::new().unwrap();
+        let mut profile = Profile::new(crate::profile::Mode::Wall);
+        for stage in [
+            ordered_blue_repair::Stage::Directional,
+            ordered_blue_repair::Stage::DarkOffsets,
+            ordered_blue_repair::Stage::General,
+        ] {
+            let first = prepare_records(&engine, &metadata, stage, &mut profile).unwrap();
+            let spans = profile.host.len();
+            for _ in 0..10 {
+                let repeated = prepare_records(&engine, &metadata, stage, &mut profile).unwrap();
+                assert!(Arc::ptr_eq(&first, &repeated));
+                assert_eq!(first.key(), repeated.key());
+            }
+            assert_eq!(
+                profile.host.len(),
+                spans,
+                "warm graph authoring must not rebuild a catalogue"
+            );
+        }
+        let first = super::super::defects::prepare(&engine, &metadata, &mut profile).unwrap();
+        let spans = profile.host.len();
+        let repeated = super::super::defects::prepare(&engine, &metadata, &mut profile).unwrap();
+        assert!(Arc::ptr_eq(&first, &repeated));
+        assert_eq!(profile.host.len(), spans);
+        assert_eq!(
+            profile
+                .host
+                .iter()
+                .filter(|s| s.stage == "prepare ordered blue repair")
+                .count(),
+            3
+        );
+        assert_eq!(
+            profile
+                .host
+                .iter()
+                .filter(|s| s.stage == "prepare ordered chroma repair")
+                .count(),
+            1
+        );
+        let bytes = engine.cached_preparation_bytes();
+        assert!(bytes > 0 && bytes < 64 * 1024 * 1024);
+        eprintln!("fixed Quattro repair preparation retained bytes: {bytes}");
+        engine.clear_preparation();
+        assert_eq!(engine.cached_preparation_bytes(), 0);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
     #[ignore = "requires QUATTRO_X3F and LUMA_NATIVE_BOUNDARIES"]
     fn bounded_catalogue_matches_native_meaningful_prefix() {
         let source = crate::source::Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
@@ -166,7 +239,7 @@ mod tests {
             ordered_blue_repair::Stage::DarkOffsets,
             ordered_blue_repair::Stage::General,
         ] {
-            prepare_records(metadata, stage).unwrap();
+            super::records(metadata, stage).unwrap();
         }
         for stage in [
             blue_despeckle::Stage::DarkPairs,

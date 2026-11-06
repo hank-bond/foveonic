@@ -1,5 +1,5 @@
 // Dedicated sensor-layer monochrome processing. Adapted from the reference implementation.
-struct Parameters { source:vec4<u32>, mix:vec4<f32>, filtering:vec4<f32>, area:vec4<u32>, detail:vec4<f32> }
+struct Parameters { source:vec4<u32>, mix:vec4<f32>, filtering:vec4<f32>, area:vec4<u32>, detail:vec4<f32>, spatial:vec4<u32> }
 @group(0) @binding(0) var<storage,read> input_pixels:array<f32>;
 @group(0) @binding(1) var<storage,read> neighbor_pixels:array<f32>;
 @group(0) @binding(2) var<uniform> params:Parameters;
@@ -38,9 +38,9 @@ fn directional(@builtin(global_invocation_id)id:vec3<u32>){
 @compute @workgroup_size(64)
 fn column(@builtin(global_invocation_id)id:vec3<u32>){
     let w=params.source.x;let h=params.source.y;if id.x>=w{return;}
-    let rows=h/params.source.w;let blocks=(rows-1u)/40u;
+    let rows=h/params.source.w;let block_rows=params.spatial.y;let blocks=max(1u,(rows-1u)/block_rows);
     let strip=id.y/blocks;let block=id.y%blocks;if strip>=params.source.w{return;}
-    let start=strip*rows+block*40u;var end=start+40u;if block+1u==blocks{end=(strip+1u)*rows;}
+    let start=strip*rows+block*block_rows;var end=start+block_rows;if block+1u==blocks{end=(strip+1u)*rows;}
     var original=0.0;var filtered=0.0;
     for(var y=start;y<end;y++){original+=input_pixels[y*w+id.x];filtered+=neighbor_pixels[y*w+id.x];}
     let denominator=f32(end-start+1u);let delta=original/denominator-filtered/denominator;
@@ -59,13 +59,13 @@ struct HistogramBin { count:u32, sum:f32 }
 @group(0) @binding(6) var<storage,read_write> histogram_bins:array<HistogramBin>;
 @compute @workgroup_size(64)
 fn histogram(@builtin(global_invocation_id)id:vec3<u32>){
-    let w=params.source.x;let h=params.source.y;let columns=w-18u;if id.x>=columns{return;}let x=id.x+9u;
+    let w=params.source.x;let h=params.source.y;let radius=params.spatial.x;let columns=w-2u*radius;if id.x>=columns{return;}let x=id.x+radius;
     let rows=h/params.source.w;let down=id.x%2u==0u;
     for(var strip=0u;strip<params.source.w;strip++){
-        let first=max(strip*rows,9u);let last=min((strip+1u)*rows-1u,h-10u);if first>last{continue;}
+        let first=max(strip*rows,radius);let last=min((strip+1u)*rows-1u,h-radius-1u);if first>last{continue;}
         var y=select(last,first,down);
         for(var k=0u;k<1024u;k++){let i=k*columns+id.x;histogram_bins[i].count=0u;histogram_bins[i].sum=0.0;}
-        for(var yy=y-9u;yy<=y+9u;yy++){for(var xx=x-9u;xx<=x+9u;xx++){
+        for(var yy=y-radius;yy<=y+radius;yy++){for(var xx=x-radius;xx<=x+radius;xx++){
             let sample=histogram_value(input_pixels[yy*w+xx]);let i=bin(sample)*columns+id.x;histogram_bins[i].sum=sample+histogram_bins[i].sum;histogram_bins[i].count+=1u;
         }}
         loop{
@@ -77,9 +77,9 @@ fn histogram(@builtin(global_invocation_id)id:vec3<u32>){
             // from contaminating pixels just below the histogram ceiling.
             output_pixels[y*w+x]=total/weight_sum+max(input_pixels[y*w+x]-HISTOGRAM_MAX_CODE,0.);
             if (down && y==last) || (!down && y==first){break;}
-            let leaving=select(y+9u,y-9u,down);let entering=select(y-10u,y+10u,down);
-            for(var xx=x-9u;xx<=x+9u;xx++){let sample=histogram_value(input_pixels[leaving*w+xx]);let i=bin(sample)*columns+id.x;histogram_bins[i].sum-=sample;histogram_bins[i].count-=1u;}
-            for(var xx=x-9u;xx<=x+9u;xx++){let sample=histogram_value(input_pixels[entering*w+xx]);let i=bin(sample)*columns+id.x;histogram_bins[i].sum=sample+histogram_bins[i].sum;histogram_bins[i].count+=1u;}
+            let leaving=select(y+radius,y-radius,down);let entering=select(y-radius-1u,y+radius+1u,down);
+            for(var xx=x-radius;xx<=x+radius;xx++){let sample=histogram_value(input_pixels[leaving*w+xx]);let i=bin(sample)*columns+id.x;histogram_bins[i].sum-=sample;histogram_bins[i].count-=1u;}
+            for(var xx=x-radius;xx<=x+radius;xx++){let sample=histogram_value(input_pixels[entering*w+xx]);let i=bin(sample)*columns+id.x;histogram_bins[i].sum=sample+histogram_bins[i].sum;histogram_bins[i].count+=1u;}
             y=u32(i32(y)+select(-1,1,down));
         }
     }
@@ -105,6 +105,7 @@ fn signal(@builtin(global_invocation_id)id:vec3<u32>){
         var sum=0.0;for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){sum+=input_pixels[u32(i32(p)+y*i32(w)+x)];}}
         let center=input_pixels[p]*params.mix.w;
         value=(input_pixels[p]+sum/(-9.0))*params.mix.w;
+        if params.detail.z<1.0 { value*=params.detail.z*params.detail.z; }
         value=clamp(clamp(value,-params.detail.y,params.detail.y),-center*0.35,center*0.35);
     }
     output_pixels[p]=value;

@@ -236,22 +236,23 @@ pub(super) fn prepare_filter_on_grid(
     chroma_step: u8,
     grid: super::WorkingGrid,
 ) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
-    if !grid.is_small() {
+    if grid.is_native() {
         return prepare_filter(metadata, chroma_step);
     }
     let mut controls = prepare(metadata, chroma_step)?;
-    let divisor = grid.divisor() / 2;
-    controls.extent = controls.extent.map(|v| v / divisor);
-    numerical_scaled(&controls, divisor)
+    let energy = super::pool_noise_energy(controls.extent, grid);
+    controls.extent = super::color_grid(metadata, grid)?.extent;
+    numerical_scaled(&controls, grid.divisor(), energy)
 }
 
 fn numerical(controls: &Stage1Controls) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
-    numerical_scaled(controls, 1)
+    numerical_scaled(controls, 1, 1.)
 }
 
 fn numerical_scaled(
     controls: &Stage1Controls,
     divisor: u32,
+    energy: f64,
 ) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
     use crate::nodes::color::{rgb_prefilter, two_scale_noise};
     let iteration = |index: usize| -> Result<rgb_prefilter::Prepared> {
@@ -268,7 +269,7 @@ fn numerical_scaled(
         rgb_prefilter::Prepared::new(
             extent,
             controls.white_balance,
-            FILTER_NOISE_MODEL.map(|v| v * scale),
+            FILTER_NOISE_MODEL.map(|v| (v * energy) * scale),
             FILTER_VARIANCE_MIX,
             intensity,
             range,
@@ -279,12 +280,7 @@ fn numerical_scaled(
         )
     };
     // The recipe supplies the selected caller's highlight-preservation gains.
-    let constructor = if divisor == 1 {
-        two_scale_noise::Prepared::new
-    } else {
-        two_scale_noise::Prepared::on_preview_grid
-    };
-    let prepared = constructor(
+    let prepared = two_scale_noise::Prepared::new(
         iteration(0)?,
         iteration(1)?,
         brightness(),
@@ -302,6 +298,7 @@ fn numerical_scaled(
             _ => FILTER_NOISE_MODEL[i],
         }
     });
+    let model = model.map(|v| v * energy);
     let tanh = (0..1024)
         .map(|i| ((i as f32 / -1023.) * 3.).tanh().clamp(-1., 1.))
         .collect();

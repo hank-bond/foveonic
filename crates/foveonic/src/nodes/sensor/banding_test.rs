@@ -74,6 +74,22 @@ fn bank_geometry_and_row_links_preserve_native_side_bank_and_column_order() {
     assert!(prepare(&metadata(1600, 640), [0., 1., 1.]).is_err());
     assert!(matrices(32).is_err());
 }
+
+#[test]
+fn multi_output_keys_share_exact_native_geometry_payloads() {
+    let prepared = prepare(&metadata(1600, 640), [4.6, 2.2, 1.6]).unwrap();
+    let mut inventory = crate::recipe::RetainedBytes::default();
+    prepared.key().account(&mut inventory);
+    let once = inventory.payload_bytes();
+    assert!(once > 1024 * 1024);
+    prepared.key().account(&mut inventory);
+    assert!(
+        inventory.payload_bytes() - once < 128,
+        "another output must not copy the geometry"
+    );
+    let changed = prepare(&metadata(1600, 640), [4.5, 2.2, 1.6]).unwrap();
+    assert_ne!(prepared.key(), changed.key());
+}
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn gpu_row_patch_banks_match_native_biases_counts_and_bounds() {

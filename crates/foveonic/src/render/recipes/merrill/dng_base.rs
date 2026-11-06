@@ -32,7 +32,7 @@ pub(in crate::render::recipes) fn build(
         profile,
         execution,
     )? {
-        technical::Prepared::Requested(recipe) | technical::Prepared::Linear(recipe, _) => {
+        technical::Prepared::Requested(recipe) | technical::Prepared::Linear(recipe, _, _) => {
             Ok(recipe)
         }
     }

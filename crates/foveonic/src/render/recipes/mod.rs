@@ -22,31 +22,49 @@ pub(super) mod quattro;
 #[derive(Clone, Copy)]
 pub(super) enum RecipeInput<'a> {
     Original(&'a Source),
-    Reduced(&'a crate::image::RenderedImage),
+    Preparing {
+        source: &'a Source,
+        preparation: &'a super::source_preparation::SourcePreparation,
+    },
+    Metadata {
+        metadata: &'a std::sync::Arc<crate::source::Metadata>,
+        origin: &'a crate::source::SourceOrigin,
+        preparation: &'a super::source_preparation::SourcePreparation,
+    },
 }
 impl<'a> RecipeInput<'a> {
     pub fn metadata(self) -> &'a std::sync::Arc<crate::source::Metadata> {
         match self {
-            Self::Original(source) => &source.metadata,
-            Self::Reduced(image) => &image.metadata,
+            Self::Original(source) | Self::Preparing { source, .. } => &source.metadata,
+            Self::Metadata { metadata, .. } => metadata,
+        }
+    }
+    pub fn origin(self) -> &'a crate::source::SourceOrigin {
+        match self {
+            Self::Original(source) | Self::Preparing { source, .. } => source.origin(),
+            Self::Metadata { origin, .. } => origin,
+        }
+    }
+    pub fn preparation(self) -> Option<&'a super::source_preparation::SourcePreparation> {
+        match self {
+            Self::Original(_) => None,
+            Self::Preparing { preparation, .. } | Self::Metadata { preparation, .. } => {
+                Some(preparation)
+            }
         }
     }
     pub fn original(self) -> Result<&'a Source> {
         match self {
-            Self::Original(source) => Ok(source),
-            Self::Reduced(_) => Err("this recipe requires original sensor samples".into()),
-        }
-    }
-    pub fn reduced(self) -> Option<&'a crate::image::RenderedImage> {
-        match self {
-            Self::Original(_) => None,
-            Self::Reduced(image) => Some(image),
+            Self::Original(source) | Self::Preparing { source, .. } => Ok(source),
+            Self::Metadata { .. } => Err(Box::new(super::execute::SourceRequired)),
         }
     }
     pub fn context(self) -> super::execute::Input<'a> {
         match self {
-            Self::Original(source) => super::execute::Input::Source(source),
-            Self::Reduced(image) => super::execute::Input::Rendered(image),
+            Self::Original(source) | Self::Preparing { source, .. } => {
+                super::execute::Input::Source(source)
+            }
+            Self::Metadata { metadata, .. } => super::execute::Input::Metadata(metadata),
         }
     }
 }
@@ -74,11 +92,35 @@ pub(super) struct BuiltRecipe {
     pub(super) rgb_bounds: [u32; 4],
 }
 
+fn camera_view(params: calibration::EncodeParams) -> crate::image::View {
+    crate::image::View {
+        crop: params.crop,
+        rotation: params.source[2],
+        extent: [params.output[0], params.output[1]],
+    }
+}
+
 fn requested(graph: &Graph, names: &[&str]) -> bool {
     !names.contains(&"final")
         && names
             .iter()
             .all(|name| graph.outputs.iter().any(|o| o.name == *name))
+}
+
+fn execution_settings<'a>(
+    metadata: &crate::source::Metadata,
+    settings: &'a Settings,
+    names: &[&str],
+) -> std::borrow::Cow<'a, Settings> {
+    let mut request = std::borrow::Cow::Borrowed(settings);
+    if settings.preview_region.is_some()
+        && (settings.working_scale.is_reduced()
+            || !matches!(names, ["final"] | ["linear.base"])
+            || !settings.regional_preview_available(metadata))
+    {
+        request.to_mut().preview_region = None;
+    }
+    request
 }
 
 impl Engine {
@@ -103,22 +145,10 @@ impl Engine {
         }
         // Image artifacts must describe the region actually rendered, so
         // whole-frame fallback still applies saved crop and rotation.
-        let mut request = std::borrow::Cow::Borrowed(settings);
-        if settings.preview_region.is_some()
-            && !settings.regional_preview_available(source.metadata())
-        {
+        let mut request = execution_settings(source.metadata(), settings, names);
+        if matches!(recipe, Recipe::DngBase) {
+            request.to_mut().working_scale = super::Scale::NATIVE;
             request.to_mut().preview_region = None;
-        }
-        if matches!(
-            settings.preview_quality,
-            super::PreviewQuality::Draft | super::PreviewQuality::Thumb
-        ) && (!settings.small_preview_available(source.metadata(), settings.preview_quality)
-            || settings.preview_region.is_some()
-            || settings.output_size.is_some()
-            || names != ["final"]
-            || matches!(recipe, Recipe::DngBase))
-        {
-            request.to_mut().preview_quality = super::PreviewQuality::Full;
         }
         let settings = request.as_ref();
         let resolved = settings.resolved_exposure(source.metadata());
@@ -131,32 +161,9 @@ impl Engine {
         };
         let effective = input.processing_settings(source.metadata().processing_family()?);
         let mut built = match recipe {
-            Recipe::Photographic(_) => {
-                let effective = effective.active_tone_settings();
-                let camera = finishing::camera_settings(&effective);
-                let built = build_camera(self, source, &camera, names, profile, execution)?;
-                let mut built = finishing::build(&effective, built, names, execution)?;
-                if settings.dehaze_estimate
-                    && effective.dehaze_auto()
-                    && !built
-                        .graph
-                        .outputs
-                        .iter()
-                        .any(|o| o.name == "dehaze.analysis")
-                {
-                    // Showing Auto at zero Amount must not change the neutral camera recipe.
-                    let analysis = build_camera(
-                        self,
-                        source,
-                        &camera,
-                        &["dehaze.analysis"],
-                        profile,
-                        execution,
-                    )?;
-                    built.graph.append(analysis.graph, "dehaze-swatch");
-                }
-                built
-            }
+            Recipe::Photographic(_) => build_photographic(
+                self, source, &effective, settings, names, profile, execution,
+            )?,
             Recipe::DngBase => build_dng(
                 self,
                 source.original()?,
@@ -179,7 +186,6 @@ impl Engine {
             &built.graph,
             built.final_id,
             names,
-            built.params,
             profile,
             execution,
         )
@@ -199,39 +205,89 @@ pub(super) fn build_camera(
     } else {
         names
     };
-    let mut request = std::borrow::Cow::Borrowed(settings);
-    // Internal color guides share the photographic working grid. Public
-    // inspection requests already select Full at the render_recipe boundary.
-    if matches!(
-        settings.preview_quality,
-        super::PreviewQuality::Draft | super::PreviewQuality::Thumb
-    ) && names != ["final"]
-        && names != ["linear.base"]
-    {
-        request.to_mut().preview_quality = super::PreviewQuality::Full;
-    }
-    let settings = request.as_ref();
     match source.metadata().processing_family()? {
         crate::source::ProcessingFamily::Merrill => {
             merrill::build(engine, source, settings, names, profile, execution)
         }
-        crate::source::ProcessingFamily::Classic => classic::build(
-            engine,
-            source.original()?,
-            settings,
-            names,
-            profile,
-            execution,
-        ),
-        crate::source::ProcessingFamily::Quattro => quattro::build(
-            engine,
-            source.original()?,
-            settings,
-            names,
-            profile,
-            execution,
-        ),
+        crate::source::ProcessingFamily::Classic => {
+            classic::build(engine, source, settings, names, profile, execution)
+        }
+        crate::source::ProcessingFamily::Quattro => {
+            quattro::build(engine, source, settings, names, profile, execution)
+        }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_photographic(
+    engine: &Engine,
+    source: RecipeInput<'_>,
+    effective: &Settings,
+    authored: &Settings,
+    names: &[&str],
+    profile: &mut Profile,
+    execution: &mut Execution<'_>,
+) -> Result<BuiltRecipe> {
+    let effective = effective.active_tone_settings();
+    let camera = finishing::camera_settings(&effective);
+    let built = build_camera(engine, source, &camera, names, profile, execution)?;
+    let mut built = finishing::build(&effective, built, names, execution)?;
+    if authored.dehaze_estimate
+        && effective.dehaze_auto()
+        && !built
+            .graph
+            .outputs
+            .iter()
+            .any(|o| o.name == "dehaze.analysis")
+    {
+        let analysis = build_camera(
+            engine,
+            source,
+            &camera,
+            &["dehaze.analysis"],
+            profile,
+            execution,
+        )?;
+        built.graph.append(analysis.graph, "dehaze-swatch");
+    }
+    Ok(built)
+}
+
+/// Select only declared sensor inputs reachable in this exact photographic graph.
+pub(super) fn sealing_inputs(
+    engine: &Engine,
+    source: RecipeInput<'_>,
+    settings: &Settings,
+    profile: &mut Profile,
+    execution: &mut Execution<'_>,
+) -> Result<Graph> {
+    let request = execution_settings(source.metadata(), settings, &["final"]);
+    let settings = request.as_ref();
+    let resolved = settings.resolved_exposure(source.metadata());
+    let effective = resolved.processing_settings(source.metadata().processing_family()?);
+    let mut built = build_photographic(
+        engine,
+        source,
+        &effective,
+        settings,
+        &["final"],
+        profile,
+        execution,
+    )?;
+    let mut roots = vec![built.final_id];
+    if settings.dehaze_estimate && effective.dehaze_auto() {
+        if let Some(estimate) = built
+            .graph
+            .outputs
+            .iter()
+            .position(|o| o.name == "dehaze.analysis")
+        {
+            roots.push(estimate);
+        }
+    }
+    let required = built.graph.required(&roots)?;
+    built.graph.sealed_outputs.retain(|id| required[*id]);
+    Ok(built.graph)
 }
 
 fn build_dng(
@@ -359,7 +415,12 @@ pub(super) fn estimated_white_balance(
     if source.metadata.processing_family()? == crate::source::ProcessingFamily::Classic
         && !settings.is_monochrome()
     {
-        classic::estimate_white_balance(engine, source, &settings.white_balance, profile)
+        classic::estimate_white_balance(
+            engine,
+            RecipeInput::Original(source),
+            &settings.white_balance,
+            profile,
+        )
     } else {
         Ok(super::WhiteBalanceStats::default())
     }

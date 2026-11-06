@@ -41,7 +41,7 @@ pub(crate) fn apply(
     let mut histogram = if matches!(stage, Stage::Histogram) {
         // One count/sum pair per bin and interior column. The kernel reuses
         // this scratch across fixed strips instead of reserving eight copies.
-        let bytes = u64::from(width - 18) * 1024 * 8;
+        let bytes = u64::from(width - 2 * p.spatial[0]) * 1024 * 8;
         Some(gpu.storage("Mono histogram bins", bytes)?)
     } else {
         None
@@ -70,8 +70,11 @@ pub(crate) fn apply(
         bindings.push((6, Write(bins.write())));
     }
     let groups = match stage {
-        Stage::Column => [width.div_ceil(64), strips * ((height / strips - 1) / 40)],
-        Stage::Histogram => [(width - 18).div_ceil(64), 1],
+        Stage::Column => [
+            width.div_ceil(64),
+            strips * ((height / strips - 1) / p.spatial[1]).max(1),
+        ],
+        Stage::Histogram => [(width - 2 * p.spatial[0]).div_ceil(64), 1],
         _ => [width.div_ceil(8), height.div_ceil(8)],
     };
     let mut trace = gpu.trace(profile.mode.gpu(), 1);

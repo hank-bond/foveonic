@@ -73,7 +73,7 @@ pub fn toggle(ctx: &egui::Context) {
     photo_tools::select(
         ctx,
         if active(ctx) {
-            Tool::Hand
+            Tool::Pointer
         } else {
             Tool::WhiteBalance
         },
@@ -191,7 +191,7 @@ mod tests {
         store(&ctx, s);
         photo_tools::release(&ctx, Tool::WhiteBalance);
         assert!(pending(&ctx));
-        assert_eq!(photo_tools::selected(&ctx), Tool::Hand);
+        assert_eq!(photo_tools::selected(&ctx), Tool::Pointer);
         photo_tools::select(&ctx, Tool::Crop);
         receive(
             &ctx,

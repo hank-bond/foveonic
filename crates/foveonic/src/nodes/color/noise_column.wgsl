@@ -6,6 +6,7 @@
 @group(0) @binding(3) var<storage,read_write> deltas:array<f32>;
 @group(0) @binding(4) var<storage,read_write> output_pixels:array<f32>;
 @group(0) @binding(5) var<storage,read> table:array<f32>;
+fn block_height()->u32{return u32(params.column.z);}
 fn rgb(p:u32)->vec3<f32>{return vec3(input_pixels[p*3u],input_pixels[p*3u+1u],input_pixels[p*3u+2u]);}
 fn cuts(tile:u32)->vec2<u32>{
     let row=native_tile(tile,params).y;
@@ -33,11 +34,11 @@ fn horizontal(@builtin(global_invocation_id)id:vec3<u32>){
 }
 @compute @workgroup_size(64)
 fn block_deltas(@builtin(global_invocation_id)id:vec3<u32>){
-    let blocks=params.tile.y/40u;let tile=id.y/blocks;let block=id.y%blocks;
+    let blocks=params.tile.y/block_height();let tile=id.y/blocks;let block=id.y%blocks;
     if id.x>=params.tile.x || tile>=tile_count(params){return;}
-    let area=cuts(tile);let count=(area.y-area.x)/40u;var delta=vec3(0.0);
+    let area=cuts(tile);let count=(area.y-area.x)/block_height();var delta=vec3(0.0);
     if block<count{
-        let first=area.x+block*40u;let last=select(first+40u,area.y,block+1u==count);
+        let first=area.x+block*block_height();let last=select(first+block_height(),area.y,block+1u==count);
         var original=vec3(0.0);var filtered=vec3(0.0);
         for(var y=first;y<last;y++){
             let p=tile_pixel(vec3(id.x,y,tile),params);original+=rgb(p);
@@ -52,10 +53,10 @@ fn block_deltas(@builtin(global_invocation_id)id:vec3<u32>){
 @compute @workgroup_size(8,8)
 fn correct(@builtin(global_invocation_id)id:vec3<u32>){
     if id.x>=params.tile.x || id.y>=params.tile.y*tile_count(params){return;}
-    let p=atlas_position(id.xy,params);let index=tile_pixel(p,params);var value=rgb(index);let area=cuts(p.z);let count=(area.y-area.x)/40u;
+    let p=atlas_position(id.xy,params);let index=tile_pixel(p,params);var value=rgb(index);let area=cuts(p.z);let count=(area.y-area.x)/block_height();
     let half=u32(params.column.y)/2u;
     if count>0u && p.y>=area.x && p.y<area.y && p.x>=half && p.x<params.tile.x-half{
-        let block=min((p.y-area.x)/40u,count-1u);let q=((p.z*(params.tile.y/40u)+block)*params.tile.x+p.x)*3u;
+        let block=min((p.y-area.x)/block_height(),count-1u);let q=((p.z*(params.tile.y/block_height())+block)*params.tile.x+p.x)*3u;
         let delta=vec3(deltas[q],deltas[q+1u],deltas[q+2u]);let eligible=abs(value*0.06)>abs(delta);
         value=clamp(value-select(vec3(0.0),delta,eligible),vec3(0.0),vec3(32766.0));
     }

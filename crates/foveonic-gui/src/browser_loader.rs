@@ -27,6 +27,7 @@ pub(super) struct Reply {
     pub version: u64,
     pub kind: Kind,
     pub image: Result<PreparedPreview, String>,
+    pub(super) memory: Option<crate::display_image::StagedBytes>,
 }
 #[derive(Default)]
 struct Queue {
@@ -76,6 +77,7 @@ pub(super) struct Worker {
     state: Arc<(Mutex<Queue>, Condvar)>,
     cache: Option<Arc<Cache>>,
     kind: Kind,
+    staging: crate::display_image::Staging,
 }
 impl Worker {
     pub fn start(
@@ -99,58 +101,76 @@ impl Worker {
         let state = Arc::new((Mutex::new(Queue::default()), Condvar::new()));
         let pending = state.clone();
         let source = cache.clone();
-        std::thread::spawn(move || loop {
-            let request = {
-                let mut state = pending.0.lock().unwrap();
-                while state.requests.is_empty() && !state.stop {
-                    state = pending.1.wait(state).unwrap();
-                }
-                if state.stop {
-                    break;
-                }
-                let request = state.requests.pop_front().unwrap();
-                state.active = Some(request.clone());
-                request
-            };
-            let load = || {
-                if !pending.0.lock().unwrap().current(&request) {
-                    return Err("Preview request superseded".into());
-                }
-                read(&request.path).map_err(|e| e.to_string())
-            };
-            let image = match source.as_ref() {
-                Some(cache) if kind == Kind::Thumbnail => cache.thumbnail(load),
-                Some(cache) => cache.background(load),
-                None => load(),
-            };
-            let current = {
-                let mut state = pending.0.lock().unwrap();
-                let current = state.current(&request);
+        let staging = crate::display_image::Staging::default();
+        let worker_staging = staging.clone();
+        std::thread::spawn(move || {
+            loop {
+                let request = {
+                    let mut state = pending.0.lock().unwrap();
+                    while state.requests.is_empty() && !state.stop {
+                        state = pending.1.wait(state).unwrap();
+                    }
+                    if state.stop {
+                        break;
+                    }
+                    let request = state.requests.pop_front().unwrap();
+                    state.active = Some(request.clone());
+                    request
+                };
+                let load = || {
+                    if !pending.0.lock().unwrap().current(&request) {
+                        return Err("Preview request superseded".into());
+                    }
+                    read(&request.path).map_err(|e| e.to_string())
+                };
+                let image = match source.as_ref() {
+                    Some(cache) if kind == Kind::Thumbnail => cache.thumbnail(load),
+                    Some(cache) => cache.background(load),
+                    None => load(),
+                };
+                let current = {
+                    let mut state = pending.0.lock().unwrap();
+                    let current = state.current(&request);
+                    if current {
+                        state.wanted.remove(&request.path);
+                    }
+                    state.active = None;
+                    state.reserve(kind, source.as_deref());
+                    current
+                };
                 if current {
-                    state.wanted.remove(&request.path);
+                    // Wake before a bounded send so a full reply queue can always drain.
+                    context.request_repaint();
+                    let memory = worker_staging
+                        .track(image.as_ref().map_or(0, PreparedPreview::retained_bytes));
+                    if replies
+                        .send(Reply {
+                            path: request.path,
+                            version: request.version,
+                            kind,
+                            image,
+                            memory,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    context.request_repaint();
                 }
-                state.active = None;
-                state.reserve(kind, source.as_deref());
-                current
-            };
-            if current {
-                // Wake before a bounded send so a full reply queue can always drain.
-                context.request_repaint();
-                if replies
-                    .send(Reply {
-                        path: request.path,
-                        version: request.version,
-                        kind,
-                        image,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-                context.request_repaint();
             }
         });
-        Self { state, cache, kind }
+        Self {
+            state,
+            cache,
+            kind,
+            staging,
+        }
+    }
+    pub(super) fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        inventory.cpu(self.staging.bytes());
+    }
+    pub(super) fn resource_revision(&self) -> u64 {
+        self.staging.revision()
     }
     pub fn replace(&self, requests: Vec<Request>, visible: &[PathBuf]) {
         let mut state = self.state.0.lock().unwrap();

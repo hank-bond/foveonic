@@ -17,7 +17,7 @@ mod tests;
 struct Pending {
     load: Option<(u64, PathBuf, foveonic::render::RecipeDefaults)>,
     saves: BTreeMap<PathBuf, Settings>,
-    rotations: VecDeque<(PathBuf, bool, foveonic::render::RecipeDefaults, bool)>,
+    resolve: VecDeque<(u64, PathBuf, foveonic::render::RecipeDefaults)>,
     stop: bool,
 }
 enum Reply {
@@ -28,7 +28,11 @@ enum Reply {
         Box<Settings>,
     ),
     Saved(PathBuf, Settings, Result<(), String>),
-    Rotated(PathBuf, bool, Result<Box<Settings>, String>, Option<String>),
+    Resolved(u64, PathBuf, Result<Settings, String>),
+}
+pub struct Resolved {
+    pub path: PathBuf,
+    pub settings: Result<Settings, String>,
 }
 fn restore(
     path: &std::path::Path,
@@ -90,20 +94,14 @@ impl Store {
                     foveonic::render::RecipeDefaults,
                 ),
                 Save(PathBuf, Settings),
-                Rotate(
-                    PathBuf,
-                    bool,
-                    Option<Settings>,
-                    foveonic::render::RecipeDefaults,
-                    bool,
-                ),
+                Resolve(u64, PathBuf, foveonic::render::RecipeDefaults),
             }
             let job = {
                 let (lock, wake) = &*slot;
                 let mut state = lock.lock().unwrap();
                 while state.load.is_none()
                     && state.saves.is_empty()
-                    && state.rotations.is_empty()
+                    && state.resolve.is_empty()
                     && !state.stop
                 {
                     state = wake.wait(state).unwrap();
@@ -113,38 +111,20 @@ impl Store {
                     Job::Load(generation, path, recent, defaults)
                 } else if let Some((path, settings)) = state.saves.pop_first() {
                     Job::Save(path, settings)
-                } else if let Some((path, clockwise, defaults, memory_only)) =
-                    state.rotations.pop_front()
-                {
-                    let recent = state.saves.get(&path).cloned();
-                    Job::Rotate(path, clockwise, recent, defaults, memory_only)
+                } else if let Some((generation, path, defaults)) = state.resolve.pop_front() {
+                    Job::Resolve(generation, path, defaults)
                 } else {
                     break;
                 }
             };
             let reply = match job {
+                Job::Resolve(generation, path, defaults) => {
+                    let (saved, fresh) = restore(&path, None, &defaults, enabled, &cache);
+                    Reply::Resolved(generation, path, saved.map(|saved| saved.unwrap_or(fresh)))
+                }
                 Job::Load(generation, path, recent, defaults) => {
                     let (result, fresh) = restore(&path, recent, &defaults, enabled, &cache);
                     Reply::Loaded(generation, path, result, Box::new(fresh))
-                }
-                Job::Rotate(path, clockwise, recent, defaults, memory_only) => {
-                    let (saved, fresh) = restore(&path, recent, &defaults, enabled, &cache);
-                    match saved {
-                        Err(error) => Reply::Rotated(path, clockwise, Err(error), None),
-                        Ok(saved) => {
-                            let mut settings = saved.unwrap_or(fresh);
-                            settings.rotation.turn(clockwise, &mut settings.crop);
-                            let error = if enabled && !memory_only {
-                                sidecar::save(&path, &settings).err().map(|e| e.to_string())
-                            } else {
-                                None
-                            };
-                            if error.is_none() && enabled && !memory_only {
-                                cache.saved_settings(&path, &settings);
-                            }
-                            Reply::Rotated(path, clockwise, Ok(Box::new(settings)), error)
-                        }
-                    }
                 }
                 Job::Save(path, settings) => {
                     let result = sidecar::save(&path, &settings).map_err(|e| e.to_string());
@@ -171,20 +151,6 @@ impl Store {
         lock.lock().unwrap().load = Some((generation, path, defaults));
         wake.notify_one();
     }
-    fn rotate(
-        &self,
-        path: PathBuf,
-        clockwise: bool,
-        defaults: foveonic::render::RecipeDefaults,
-        memory_only: bool,
-    ) {
-        let (lock, wake) = &*self.pending;
-        lock.lock()
-            .unwrap()
-            .rotations
-            .push_back((path, clockwise, defaults, memory_only));
-        wake.notify_one();
-    }
     fn save(&self, path: PathBuf, settings: Settings) {
         let (lock, wake) = &*self.pending;
         lock.lock().unwrap().saves.insert(path, settings);
@@ -196,6 +162,7 @@ impl Drop for Store {
         let (lock, wake) = &*self.pending;
         let mut state = lock.lock().unwrap();
         state.load = None;
+        state.resolve.clear();
         state.stop = true;
         wake.notify_one();
         drop(state);
@@ -221,8 +188,8 @@ pub struct Session {
     errors: BTreeMap<PathBuf, String>,
     memory_only: bool,
     requested: BTreeMap<PathBuf, Settings>,
-    rotating: BTreeMap<PathBuf, usize>,
-    rotated: Vec<(PathBuf, bool)>,
+    resolve_generation: u64,
+    resolved: Vec<Resolved>,
 }
 impl Session {
     pub fn new(
@@ -244,8 +211,8 @@ impl Session {
             errors: BTreeMap::new(),
             memory_only: false,
             requested: BTreeMap::new(),
-            rotating: BTreeMap::new(),
-            rotated: Vec::new(),
+            resolve_generation: 0,
+            resolved: Vec::new(),
         }
     }
     pub fn select(&mut self, path: PathBuf) {
@@ -281,6 +248,7 @@ impl Session {
         self.clear();
         self.memory_only = enabled;
         self.requested.clear();
+        self.resolve_settings(&[]);
     }
 
     /// Batch submission uses the latest controls even after an asynchronous save finishes.
@@ -288,22 +256,27 @@ impl Session {
         self.requested.get(path).or_else(|| self.unsaved.get(path))
     }
 
-    /// Known session edits can rotate immediately. Unvisited photos load and save on the existing writer.
-    pub fn rotate(&mut self, path: PathBuf, clockwise: bool) {
-        if !self.rotating.contains_key(&path) {
-            if let Some(mut settings) = self.requested_settings(&path).cloned() {
-                settings.rotation.turn(clockwise, &mut settings.crop);
-                self.apply(path.clone(), settings);
-                self.rotated.push((path, clockwise));
-                return;
+    /// Resolve one replaceable editing subset on the existing background recipe owner.
+    pub fn resolve_settings(&mut self, paths: &[PathBuf]) {
+        self.resolve_generation += 1;
+        self.resolved.clear();
+        let mut pending = VecDeque::new();
+        for path in paths {
+            if let Some(settings) = self.requested_settings(path).cloned() {
+                self.resolved.push(Resolved {
+                    path: path.clone(),
+                    settings: Ok(settings),
+                });
+            } else {
+                pending.push_back((self.resolve_generation, path.clone(), self.defaults.clone()));
             }
         }
-        *self.rotating.entry(path.clone()).or_default() += 1;
-        self.store
-            .rotate(path, clockwise, self.defaults.clone(), self.memory_only);
+        let (lock, wake) = &*self.store.pending;
+        lock.lock().unwrap().resolve = pending;
+        wake.notify_one();
     }
-    pub fn take_rotated(&mut self) -> Vec<(PathBuf, bool)> {
-        std::mem::take(&mut self.rotated)
+    pub fn take_resolved(&mut self) -> Vec<Resolved> {
+        std::mem::take(&mut self.resolved)
     }
 
     /// An older load must not replace the settings for the photo now selected.
@@ -311,6 +284,17 @@ impl Session {
         let mut loaded = None;
         while let Ok(reply) = self.store.replies.try_recv() {
             match reply {
+                Reply::Resolved(generation, path, settings)
+                    if generation == self.resolve_generation =>
+                {
+                    // An edit can arrive while a background read is completing.
+                    let settings = self
+                        .requested_settings(&path)
+                        .cloned()
+                        .map(Ok)
+                        .unwrap_or(settings);
+                    self.resolved.push(Resolved { path, settings });
+                }
                 Reply::Loaded(generation, path, result, fresh)
                     if generation == self.generation && self.selected.as_ref() == Some(&path) =>
                 {
@@ -340,43 +324,6 @@ impl Session {
                                 ),
                             );
                             loaded = Some(*fresh);
-                        }
-                    }
-                }
-                Reply::Rotated(path, clockwise, result, save_error) => {
-                    if let Some(count) = self.rotating.get_mut(&path) {
-                        *count -= 1;
-                        if *count == 0 {
-                            self.rotating.remove(&path);
-                        }
-                    }
-                    match result {
-                        Err(error) => {
-                            self.errors
-                                .insert(path, format!("Cannot rotate photo: {error}"));
-                        }
-                        Ok(settings) => {
-                            let mut current = self
-                                .requested_settings(&path)
-                                .cloned()
-                                .unwrap_or_else(|| (*settings).clone());
-                            if self.requested_settings(&path).is_some() {
-                                current.rotation.turn(clockwise, &mut current.crop);
-                            }
-                            let merged = current != *settings;
-                            self.requested.insert(path.clone(), current.clone());
-                            if merged {
-                                self.apply(path.clone(), current.clone());
-                            }
-                            if let Some(error) = save_error {
-                                self.unsaved.insert(path.clone(), current.clone());
-                                self.errors
-                                    .insert(path.clone(), format!("Edits are not saved: {error}"));
-                            }
-                            if self.selected.as_ref() == Some(&path) {
-                                loaded = Some(current);
-                            }
-                            self.rotated.push((path, clockwise));
                         }
                     }
                 }

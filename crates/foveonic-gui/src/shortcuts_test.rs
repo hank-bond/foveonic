@@ -8,9 +8,31 @@ fn available() -> Availability {
         browser: true,
         import: true,
         settings: true,
-        photo_tool_active: false,
+        viewport_hovered: false,
         framing_active: false,
     }
+}
+#[test]
+fn pointer_and_hand_have_distinct_shortcuts_and_plain_clipboard_stays_with_widgets() {
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput {
+        events: vec![
+            key(Key::V, Modifiers::NONE),
+            key(Key::H, Modifiers::NONE),
+            egui::Event::Paste("text".into()),
+            egui::Event::Copy,
+        ],
+        ..Default::default()
+    };
+    let actions = capture(&ctx, &mut input, available());
+    assert_eq!(
+        actions
+            .iter()
+            .map(|invocation| invocation.action)
+            .collect::<Vec<_>>(),
+        [Action::Pointer, Action::Hand]
+    );
+    assert_eq!(input.events.len(), 2);
 }
 #[test]
 fn before_keys_select_camera_and_defaults_without_consuming_other_y_combinations() {
@@ -194,10 +216,10 @@ fn text_editors_menus_and_modals_keep_clipboard_commands() {
 }
 
 #[test]
-fn direct_color_leaves_space_for_panning_in_import_without_disabling_hide() {
+fn viewport_hover_leaves_space_for_panning_in_import_without_disabling_hide() {
     let ctx = egui::Context::default();
     let mut availability = available();
-    availability.photo_tool_active = true;
+    availability.viewport_hovered = true;
     let mut input = egui::RawInput {
         events: vec![
             key(Key::Space, Modifiers::NONE),
@@ -216,6 +238,31 @@ fn direct_color_leaves_space_for_panning_in_import_without_disabling_hide() {
             ..
         }
     ));
+}
+
+#[test]
+fn browser_space_picks_independently_of_the_viewport_tool() {
+    let ctx = egui::Context::default();
+    for tool in [
+        crate::photo_tools::Tool::Pointer,
+        crate::photo_tools::Tool::Hand,
+        crate::photo_tools::Tool::Crop,
+        crate::photo_tools::Tool::Rotate,
+        crate::photo_tools::Tool::ColorRange,
+    ] {
+        crate::photo_tools::select(&ctx, tool);
+        let mut input = egui::RawInput {
+            events: vec![key(Key::Space, Modifiers::NONE)],
+            ..Default::default()
+        };
+        let actions = capture(&ctx, &mut input, available());
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].action,
+            Action::Browser(BrowserAction::TogglePick)
+        );
+        assert_eq!(crate::photo_tools::selected(&ctx), tool);
+    }
 }
 
 #[test]

@@ -144,7 +144,7 @@ fn session_node_phases_preserve_work_and_exact_pixels() {
         let engine = engine.executor();
         let mut session = crate::interactive::RenderSession::new(source.clone());
         let mut settings = Settings::new("Sunlight", "Standard");
-        settings.preview_quality = crate::render::PreviewQuality::Thumb;
+        settings.working_scale = crate::render::Scale::new(8).unwrap();
         engine
             .render_session(
                 &mut session,

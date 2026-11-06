@@ -61,6 +61,28 @@ pub struct Images {
     waveform: PlotImage,
 }
 impl Images {
+    pub(crate) fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        for plot in [&self.parade, &self.waveform] {
+            inventory.cpu(plot.source.as_raw().capacity() as u64);
+            if let Some(texture) = &plot.texture {
+                let [width, height] = texture.size();
+                inventory.texture(texture.id(), width as u64 * height as u64 * 4);
+            }
+        }
+    }
+    pub(crate) fn memory_key(&self, key: &mut Vec<u64>) {
+        for plot in [&self.parade, &self.waveform] {
+            key.push(plot.source.as_raw().capacity() as u64);
+            if let Some(texture) = &plot.texture {
+                let [width, height] = texture.size();
+                let id = match texture.id() {
+                    egui::TextureId::Managed(id) => id,
+                    egui::TextureId::User(id) => id | (1 << 63),
+                };
+                key.extend([id, width as u64, height as u64]);
+            }
+        }
+    }
     pub fn new(data: &Scopes) -> Self {
         Self {
             parade: PlotImage::new(density_image(data, true), data.channels()),

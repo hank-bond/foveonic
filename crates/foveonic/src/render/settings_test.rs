@@ -505,11 +505,11 @@ fn camera_validation_requires_only_active_photographic_choices() {
 }
 
 #[test]
-fn preview_quality_is_transient_and_invalidates_active_rendering() {
+fn working_scale_is_transient_and_invalidates_active_rendering() {
     let full = Settings::new("Sunlight", "Standard");
     let mut fast = full.clone();
-    fast.preview_quality = PreviewQuality::Fast;
-    assert_eq!(full.changed_parameters(&fast), ["preview-quality"]);
+    fast.working_scale = Scale::new(2).unwrap();
+    assert_eq!(full.changed_parameters(&fast), ["working-scale"]);
     assert_eq!(
         crate::sidecar::encode(&full).unwrap(),
         crate::sidecar::encode(&fast).unwrap()
@@ -517,8 +517,8 @@ fn preview_quality_is_transient_and_invalidates_active_rendering() {
     assert_eq!(
         crate::sidecar::decode(&crate::sidecar::encode(&fast).unwrap())
             .unwrap()
-            .preview_quality,
-        PreviewQuality::Full
+            .working_scale,
+        Scale::NATIVE
     );
 }
 
@@ -604,7 +604,7 @@ fn color_editor_roundtrips_and_stays_separate_from_technical_dng_settings() {
     settings.photographic.tone_method = super::PhotographicMethod::Universal;
     settings.tone.shadows = 0.3;
     settings.tone.highlights = -0.2;
-    settings.preview_quality = super::PreviewQuality::Fast;
+    settings.working_scale = super::Scale::new(2).unwrap();
     settings.preview_region = Some([10, 10, 200, 200]);
     let stored = serde_json::to_value(&settings).unwrap();
     assert!(stored["photographic"]
@@ -623,7 +623,7 @@ fn color_editor_roundtrips_and_stays_separate_from_technical_dng_settings() {
     assert_eq!(dng.tone.highlights, 0.);
     assert_eq!(settings.tone.shadows, 0.3);
     assert_eq!(settings.tone.highlights, -0.2);
-    assert_eq!(dng.preview_quality, super::PreviewQuality::Full);
+    assert_eq!(dng.working_scale, super::Scale::NATIVE);
     assert!(dng.preview_region.is_none());
 }
 

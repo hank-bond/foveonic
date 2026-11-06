@@ -55,12 +55,13 @@ fn pattern_seed(@builtin(global_invocation_id)id:vec3<u32>){
 }
 @compute @workgroup_size(8, 8)
 fn block_mean(@builtin(global_invocation_id) id: vec3<u32>) {
-    let grid = (params.tile.xy + 31u) / 32u;
+    let block = max(params.sampling.y, 1u);
+    let grid = (params.tile.xy + block - 1u) / block;
     if id.x >= grid.x || id.y >= grid.y * tile_count(params) { return; }
     let tile = id.y / grid.y;
     let row = id.y % grid.y;
-    let first = vec2<i32>(vec2(id.x * 32u, row * 32u)) - 1;
-    let last = min(first + 32, vec2<i32>(params.tile.xy));
+    let first = vec2<i32>(vec2(id.x * block, row * block)) - 1;
+    let last = min(first + i32(block), vec2<i32>(params.tile.xy));
     var sum = 0.;
     for (var y = max(0, first.y); y < last.y; y++) {
         for (var x = max(0, first.x); x < last.x; x++) {
@@ -68,12 +69,13 @@ fn block_mean(@builtin(global_invocation_id) id: vec3<u32>) {
             sum += min(v.x, min(v.y, v.z));
         }
     }
-    let nominal = min(vec2(32u), params.tile.xy - vec2(id.x, row) * 32u);
+    let nominal = min(vec2(block), params.tile.xy - vec2(id.x, row) * block);
     scalar_work[id.y * grid.x + id.x] = sum / f32(nominal.x * nominal.y);
 }
 @compute @workgroup_size(8, 8)
 fn radius_map(@builtin(global_invocation_id) id: vec3<u32>) {
-    let grid = (params.tile.xy + 31u) / 32u;
+    let block = max(params.sampling.y, 1u);
+    let grid = (params.tile.xy + block - 1u) / block;
     if id.x >= grid.x || id.y >= grid.y * tile_count(params) { return; }
     let tile = id.y / grid.y;
     let row = id.y % grid.y;
@@ -89,7 +91,8 @@ fn radius_map(@builtin(global_invocation_id) id: vec3<u32>) {
     if value < 500. { radius = select(4u, 6u, high); }
     if value < 300. { radius = select(5u, 7u, high); }
     if value < 150. { radius = 9u; }
-    radii[id.y * grid.x + id.x] = radius;
+    let divisor = max(params.sampling.x, 1u);
+    radii[id.y * grid.x + id.x] = max((radius + divisor - 1u) / divisor, 1u);
 }
 
 @compute @workgroup_size(32, 8)
@@ -105,13 +108,14 @@ fn bilateral(@builtin(global_invocation_id) id: vec3<u32>) {
     if p.x >= half && p.x < params.tile.x - half - 1u && p.y >= half && p.y < last_row {
         var radius=i32(half);var step=2;
         if !global{
-            let grid = (params.tile.xy + 31u) / 32u;
-            let row = (p.y + 1u) / 32u;
-            let column = (p.x + 1u) / 32u;
+            let block = max(params.sampling.y, 1u);
+            let grid = (params.tile.xy + block - 1u) / block;
+            let row = (p.y + 1u) / block;
+            let column = (p.x + 1u) / block;
             var radius_index = (p.z * grid.y + row) * grid.x + column;
             // Preserve the reference's carried radius at the beginning of each row.
-            if column == 0u && p.y != half && (p.y + 1u) % 32u != 0u {
-                radius_index = (p.z * grid.y + (p.y / 32u)) * grid.x + (params.tile.x - half - 1u) / 32u;
+            if column == 0u && p.y != half && (p.y + 1u) % block != 0u {
+                radius_index = (p.z * grid.y + (p.y / block)) * grid.x + (params.tile.x - half - 1u) / block;
             }
             radius=i32(radii[radius_index]);step=select(1,2,radius>3);
         }

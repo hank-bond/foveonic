@@ -6,7 +6,7 @@ use crate::{
         Gpu, Kernel, ReadGuard,
     },
     profile::Profile,
-    recipe::Key,
+    recipe::{Key, Shared},
     source::Result,
 };
 
@@ -24,7 +24,7 @@ struct Params {
 pub struct Prepared {
     params: Params,
     scratch_words: u32,
-    lut: Vec<f32>,
+    lut: Shared<f32>,
 }
 
 impl Prepared {
@@ -56,7 +56,7 @@ impl Prepared {
         let n = cells as u32;
         let density = n * 6;
         let gate = density + buckets as u32 * 4;
-        let lut = (0..1024)
+        let lut: Vec<f32> = (0..1024)
             .map(|i| (1. + (f64::from((i as f32 / 1023.) * 3.) * -2.).tanh()) as f32)
             .collect();
         Ok(Self {
@@ -76,7 +76,7 @@ impl Prepared {
                 noise_blue: [noise_blue[0], noise_blue[1], noise_blue[2], 0.],
             },
             scratch_words: scratch_words as u32,
-            lut,
+            lut: lut.into(),
         })
     }
 
@@ -96,7 +96,7 @@ impl Prepared {
         self.extent().map(|v| v * factor)
     }
     pub(crate) fn key(&self) -> Key {
-        Key::pod(&self.params).slice(&self.lut)
+        Key::pod(&self.params).join(self.lut.key())
     }
 }
 

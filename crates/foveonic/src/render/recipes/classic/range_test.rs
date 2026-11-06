@@ -190,7 +190,7 @@ fn original_mixed_camera_matrix_matches_reference() {
     let wb = std::env::var("CLASSIC_WHITE_BALANCE").unwrap_or_else(|_| "Incandescent".into());
     let statistics = super::super::white_balance::estimate(
         &engine,
-        &source,
+        crate::render::recipes::RecipeInput::Original(&source),
         &wb,
         &mut crate::profile::Profile::default(),
     )

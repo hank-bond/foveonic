@@ -9,26 +9,31 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = false;
     widgets::parameter_group(ui, |ui| {
         let column = common::LabelColumn::new(ui);
-        changed |= column.adjustment(
-            ui,
-            ("Dehaze", "Dehaze"),
-            &mut settings.dehaze.amount,
-            -100. ..=100.,
-            0.,
-        );
+        changed |= crate::multi_edit_controls::field(ui, "/dehaze/amount", |ui| {
+            column.adjustment(
+                ui,
+                ("Dehaze", "Dehaze"),
+                &mut settings.dehaze.amount,
+                -100. ..=100.,
+                0.,
+            )
+        });
         ui.horizontal(|ui| {
             column.label(ui, "Shadow tone");
             let estimated = editor::dehaze::auto_color(ui.ctx(), settings);
             let automatic = settings.dehaze.shadow.is_none();
-            let auto = widgets::auto_button(ui, automatic);
+            let auto = ui.add_enabled_ui(!automatic || crate::multi_edit_controls::optional_ready(ui.ctx(), "/dehaze/shadow"), |ui| widgets::auto_button(ui, automatic)).inner;
             if auto
                 .on_hover_text("Estimate the haze color from the whole photograph. Turn off to adjust this color manually.")
                 .clicked()
             {
-                changed |= editor::dehaze::set_auto(ui.ctx(), settings, !automatic);
+                let next_auto = !automatic;
+                changed |= editor::dehaze::set_auto(ui.ctx(), settings, next_auto);
+                crate::multi_edit_controls::optional(ui.ctx(), "/dehaze/shadow", !next_auto);
             }
             if let Some(color) = color_swatch(ui, settings.dehaze.shadow.or(estimated)) {
                 settings.dehaze.shadow = Some(color);
+                crate::multi_edit_controls::assign(ui.ctx(), "/dehaze/shadow", settings.dehaze.shadow);
                 changed = true;
                 editor::dehaze::exit(ui.ctx());
             }

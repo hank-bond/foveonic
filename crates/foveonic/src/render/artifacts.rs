@@ -5,7 +5,6 @@ use crate::{
     graph::{DataType, Graph},
     image::{RenderedImage, View},
     interactive::Execution,
-    nodes::sensor::calibration,
     profile::Profile,
     source::Result,
 };
@@ -19,7 +18,6 @@ impl Engine {
         graph: &Graph,
         final_id: usize,
         names: &[&str],
-        params: calibration::EncodeParams,
         profile: &mut Profile,
         execution: &mut Execution<'_>,
     ) -> Result<Vec<crate::inspection::Artifact>> {
@@ -83,6 +81,9 @@ impl Engine {
             .zip(targets)
             .map(|(value, id)| {
                 let output = &graph.outputs[id];
+                let mut actual = settings.clone();
+                actual.working_scale = value.working_scale;
+                let settings = &actual;
                 let content = if let Some(description) = value.description {
                     Content::Image(Box::new(RenderedImage {
                         buffer: value.buffer,
@@ -95,21 +96,22 @@ impl Engine {
                             }
                         } else if description.space.uses_full_sensor_view() {
                             let extent = description.extent;
+                            let rotation = value
+                                .view
+                                .map_or(source.metadata().rotation, |view| view.rotation);
                             View {
                                 crop: [0, 0, extent[0], extent[1]],
-                                rotation: params.source[2],
-                                extent: if matches!(params.source[2], 90 | 270) {
+                                rotation,
+                                extent: if matches!(rotation, 90 | 270) {
                                     [extent[1], extent[0]]
                                 } else {
                                     extent
                                 },
                             }
                         } else {
-                            View {
-                                crop: params.crop,
-                                rotation: params.source[2],
-                                extent: [params.output[0], params.output[1]],
-                            }
+                            value
+                                .view
+                                .ok_or("camera image output is missing framing provenance")?
                         },
                         metadata: source.metadata().clone(),
                         settings: settings.clone(),

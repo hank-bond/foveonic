@@ -5,8 +5,7 @@ use crate::{
     inspection::Content,
     profile::{Mode, Profile},
     render::{
-        ControlCapabilities, Engine, PhotographicMethod, PreviewQuality, RenderSession, Rendering,
-        Settings,
+        ControlCapabilities, Engine, PhotographicMethod, RenderSession, Rendering, Scale, Settings,
     },
     source::Source,
 };
@@ -94,17 +93,19 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
     settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
     settings.dehaze.amount = 35.;
     settings.dehaze.shadow = None;
-    assert!(settings.fast_preview_available(&source.metadata));
+    assert!(
+        settings.working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
+    );
     assert!(settings.regional_preview_available(&source.metadata));
     let mut full_extent = None;
     let mut whole_frame_analysis = None;
     let mut fast_pixels = None;
     for (quality, region) in [
-        (PreviewQuality::Full, None),
-        (PreviewQuality::Fast, None),
-        (PreviewQuality::Full, Some([10, 10, 200, 200])),
+        (Scale::NATIVE, None),
+        (Scale::new(2).unwrap(), None),
+        (Scale::NATIVE, Some([10, 10, 200, 200])),
     ] {
-        settings.preview_quality = quality;
+        settings.working_scale = quality;
         settings.preview_region = region;
         let mut profile = Profile::default();
         let mut execution = Execution::default();
@@ -124,7 +125,6 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
                 &built.graph,
                 built.final_id,
                 &["dehaze.analysis", "final"],
-                built.params,
                 &mut profile,
                 &mut execution,
             )
@@ -153,12 +153,12 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
         assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
             .iter()
             .all(|v| v.is_finite()));
-        if quality == PreviewQuality::Fast {
+        if quality == Scale::new(2).unwrap() {
             fast_pixels = Some(bytes);
         }
     }
     let mut session = RenderSession::new(Arc::new(source));
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     settings.preview_region = None;
     for amount in [35., 45., 35.] {
         settings.dehaze.amount = amount;
@@ -272,7 +272,7 @@ fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
         let mut warm_ms = 0.;
         for amount in [45., 35.] {
             settings.dehaze.amount = amount;
-            settings.preview_quality = PreviewQuality::Fast;
+            settings.working_scale = Scale::new(2).unwrap();
             let start = std::time::Instant::now();
             let mut profile = Profile::new(Mode::Wall);
             let mut artifacts = engine
@@ -539,7 +539,7 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
             "tone bypass changes baked samples"
         );
         drop(bypass);
-        s.preview_quality = PreviewQuality::Fast;
+        s.working_scale = Scale::new(2).unwrap();
         s.preview_region = Some([10, 10, 200, 200]);
         let full = engine
             .render_dng_base(&source, &s, &mut Profile::default())
@@ -547,7 +547,7 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
         assert_eq!(full.description().extent, native_extent);
         engine.readback_image(&full).unwrap();
         drop(full);
-        s.preview_quality = PreviewQuality::Full;
+        s.working_scale = Scale::NATIVE;
         s.preview_region = None;
         let mut session = RenderSession::new(source.clone());
         let render = |session: &mut RenderSession, s: &Settings, p: &mut Profile| {
@@ -914,7 +914,7 @@ fn check_chromatic_dng_reprojection(perceptual: bool, prevent: bool) {
             );
         }
     }
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     settings.preview_region = Some([10, 10, 320, 240]);
     settings.output_size = Some([120, 80]);
     let native = engine
@@ -1109,17 +1109,20 @@ fn original_advanced_color_builds_full_fast_and_regional_previews() {
         });
     let engine = Engine::new().unwrap();
     for (quality, region) in [
-        (PreviewQuality::Full, None),
-        (PreviewQuality::Fast, None),
-        (PreviewQuality::Full, Some([10, 10, 200, 200])),
+        (Scale::NATIVE, None),
+        (Scale::new(2).unwrap(), None),
+        (Scale::NATIVE, Some([10, 10, 200, 200])),
     ] {
-        if quality == PreviewQuality::Fast && !settings.fast_preview_available(&source.metadata) {
+        if quality == Scale::new(2).unwrap()
+            && !settings
+                .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
+        {
             continue;
         }
         if region.is_some() && !settings.regional_preview_available(&source.metadata) {
             continue;
         }
-        settings.preview_quality = quality;
+        settings.working_scale = quality;
         settings.preview_region = region;
         let image = engine
             .render(&source, &settings, &mut Profile::default())
@@ -1242,16 +1245,18 @@ fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews(
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         for response in [BaseResponse::Natural, BaseResponse::Strong] {
             settings.photographic.base_response = response;
-            let qualities = if settings.fast_preview_available(&source.metadata) {
-                vec![PreviewQuality::Full, PreviewQuality::Fast]
+            let qualities = if settings
+                .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
+            {
+                vec![Scale::NATIVE, Scale::new(2).unwrap()]
             } else {
-                vec![PreviewQuality::Full]
+                vec![Scale::NATIVE]
             };
             let mut expected_analysis = None;
             let mut expected_fit = None;
             let mut full_extent = None;
             for quality in qualities {
-                settings.preview_quality = quality;
+                settings.working_scale = quality;
                 let mut profile = Profile::default();
                 let mut execution = Execution::default();
                 let built = super::super::build_camera(
@@ -1290,7 +1295,6 @@ fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews(
                             "base-response.analysis-mask",
                             "base-response.rgb",
                         ],
-                        built.params,
                         &mut profile,
                         &mut execution,
                     )
@@ -1305,7 +1309,7 @@ fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews(
                 let [input, mask, analysis_rgb, analysis_mask, actual] = images.as_slice() else {
                     panic!("missing inputs")
                 };
-                if quality == PreviewQuality::Full {
+                if quality == Scale::NATIVE {
                     if caps.family == crate::source::ProcessingFamily::Classic {
                         assert_eq!(analysis_rgb.description.extent, input.description.extent);
                     } else {

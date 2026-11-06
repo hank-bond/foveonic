@@ -206,6 +206,7 @@ impl Browser {
     }
 
     pub(super) fn highlight(&mut self, path: &Path, files: &[PathBuf], modifiers: egui::Modifiers) {
+        self.selection_generation = self.selection_generation.wrapping_add(1);
         if modifiers.shift {
             let anchor = self
                 .anchor

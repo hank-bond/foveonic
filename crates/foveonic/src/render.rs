@@ -18,14 +18,20 @@ mod capabilities;
 mod dng_gpu;
 mod edits;
 mod execute;
+mod memory;
 mod preparation;
 mod recipes;
 mod reduced;
-mod reduced_analysis;
+mod scale;
 mod settings;
+mod source_preparation;
+pub use memory::{MemoryReservation, MemoryResources, MemoryTrim};
 pub use reduced::{
-    NeedsOriginal, ReducedPreparation, ReducedRender, ReducedSession, ReducedWorkingSet,
+    NeedsOriginal, ParameterResources, ReducedPreparation, ReducedRender, ReducedSession,
+    ReducedWorkingSet, SessionResources,
 };
+pub use scale::Scale;
+pub(crate) use scale::{AnalysisGrid, WorkingGrid};
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
 pub fn native_extent(metadata: &crate::source::Metadata) -> crate::source::Result<[u32; 2]> {
     recipes::native_extent(metadata)
@@ -57,9 +63,8 @@ use recipes::Recipe;
 pub use settings::{
     AutoExposureCompensation, ColorEditorControls, ColorFieldApproach, ColorFieldControls,
     DehazeControls, HighlightMode, MerrillNoiseMethod, MonochromeControls, PerceptualControls,
-    PhotographicControls, PhotographicMethod, PreviewQuality, ProcessingSections, Rendering,
-    RepairThreshold, Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening,
-    WhiteBalanceBias,
+    PhotographicControls, PhotographicMethod, ProcessingSections, Rendering, RepairThreshold,
+    Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening, WhiteBalanceBias,
 };
 
 /// Completed recipe preparation and execution boundaries for an interactive render.
@@ -80,9 +85,8 @@ pub struct Engine {
     gpu: Gpu,
     pub(crate) noise_calibration: Option<Arc<crate::noise_calibration::Calibration>>,
     owner: Arc<()>,
-    // Keep the latest photo's calibration statistics with the engine. Metadata lifetime
-    // and the original sample allocation identify the immutable source.
-    calibration_statistics: std::sync::Mutex<Vec<CalibrationEstimate>>,
+    // A bounded lookup shares small records; source-free sessions pin their actual inputs.
+    calibration_statistics: std::sync::Mutex<Vec<Arc<source_preparation::CalibrationEstimate>>>,
     preparation: std::sync::Mutex<preparation::Cache>,
     calibration_resources: Option<Arc<recipes::quattro::resources::ResourceDirectory>>,
 }
@@ -92,19 +96,6 @@ impl Engine {
     pub(crate) fn test_gpu(&self) -> &Gpu {
         &self.gpu
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum StatisticKind {
-    Neutral,
-    ChannelMean,
-}
-
-struct CalibrationEstimate {
-    metadata: std::sync::Weak<crate::source::Metadata>,
-    samples: usize,
-    kind: StatisticKind,
-    values: [f64; 3],
 }
 
 impl Engine {
@@ -220,53 +211,6 @@ impl Engine {
             }
         }
         crate::nodes::sensor::noise_model::embedded()
-    }
-
-    pub(crate) fn cached_neutral(
-        &self,
-        source: &Source,
-        calculate: impl FnOnce() -> Result<[f64; 3]>,
-    ) -> Result<[f64; 3]> {
-        self.cached_statistic(source, StatisticKind::Neutral, calculate)
-    }
-
-    pub(crate) fn cached_channel_mean(
-        &self,
-        source: &Source,
-        calculate: impl FnOnce() -> Result<[f64; 3]>,
-    ) -> Result<[f64; 3]> {
-        self.cached_statistic(source, StatisticKind::ChannelMean, calculate)
-    }
-
-    fn cached_statistic(
-        &self,
-        source: &Source,
-        kind: StatisticKind,
-        calculate: impl FnOnce() -> Result<[f64; 3]>,
-    ) -> Result<[f64; 3]> {
-        let mut cache = self
-            .calibration_statistics
-            .lock()
-            .map_err(|_| "calibration statistics cache poisoned")?;
-        let samples = source.pixels.as_ptr() as usize;
-        cache.retain(|cached| {
-            cached.samples == samples
-                && cached
-                    .metadata
-                    .upgrade()
-                    .is_some_and(|metadata| Arc::ptr_eq(&metadata, &source.metadata))
-        });
-        if let Some(cached) = cache.iter().find(|cached| cached.kind == kind) {
-            return Ok(cached.values);
-        }
-        let values = calculate()?;
-        cache.push(CalibrationEstimate {
-            metadata: Arc::downgrade(&source.metadata),
-            samples,
-            kind,
-            values,
-        });
-        Ok(values)
     }
 
     pub fn device(&self) -> &wgpu::Device {
@@ -477,9 +421,7 @@ impl Engine {
     ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
         let preparation = profile.mode.enabled().then(std::time::Instant::now);
         session.cache.bind(&self.owner);
-        session
-            .cache
-            .select(settings.preview_quality, settings.preview_region);
+        session.cache.bind_source(session.source.origin());
         session.last_settings = Some(settings.clone());
         let mut execution = Execution {
             cache: Some(&mut session.cache),
@@ -497,7 +439,12 @@ impl Engine {
             profile,
             &mut execution,
         );
-        profile.measure("finish session cache", || session.cache.finish());
+        profile.measure("finish session cache", || {
+            if result.is_ok() {
+                session.cache.commit();
+            }
+            session.cache.finish()
+        });
         match result {
             Ok(artifacts) => Ok(Some(artifacts)),
             Err(error) if error.downcast_ref::<Superseded>().is_some() => Ok(None),

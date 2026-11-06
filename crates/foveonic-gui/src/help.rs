@@ -24,7 +24,9 @@ pub fn control(response: egui::Response, label: &str) -> egui::Response {
 /// Explain the automatic/manual toggle in photographic rather than pipeline terms.
 pub fn automatic(label: &str) -> Option<&'static str> {
     Some(match label {
-        "Exposure" => "A cancels this photo's recorded exposure compensation. Choose Bracket, Dial or Both under Auto exposure source in Tone’s menu. Click selected A again to turn Auto off and reset Exposure to zero. Both is the default. The slider and value box stay editable. Editing either turns A off, and double-clicking the slider resets to zero. Camera-family defaults retain Auto and its compensation choice, resolving each photo separately. A is unavailable when the selected compensation cannot be determined.",
+        "Exposure" => {
+            "A cancels this photo's recorded exposure compensation. Choose Bracket, Dial or Both under Auto exposure source in Tone’s menu. Click selected A again to turn Auto off and reset Exposure to zero. Both is the default. The slider and value box stay editable. Editing either turns A off, and double-clicking the slider resets to zero. Camera-family defaults retain Auto and its compensation choice, resolving each photo separately. A is unavailable when the selected compensation cannot be determined."
+        }
         "Highlight correction" => {
             "A uses the camera's suggested setting. Click A to adjust it yourself, or click again to return to Auto. 0 matches Auto. Use the checkbox to turn correction off without losing your setting."
         }
@@ -40,47 +42,109 @@ pub fn automatic(label: &str) -> Option<&'static str> {
 
 pub fn editing(label: &str) -> Option<&'static str> {
     Some(match label {
-        "Color Range" => "The checkbox bypasses this editor while retaining its values. Select a color swatch, then adjust Hue, Saturation or Lightness. The rainbow swatch adjusts all colors. Lightness also works in Monochrome without replacing the sensor mixture. These edits are baked into DNG and TIFF. Double-click a slider to reset it.",
-        "Color Range Hue" => "Rotates the selected colors by up to 30 degrees in perceptual hue. Zero leaves hue unchanged. Inactive in Monochrome.",
-        "Color Range Saturation" | "Advanced Saturation" => "Uses the same saturation shoulder as Universal in the selected original subject-color range. Positive amounts favor muted colors. The range is -1 to +1, with zero unchanged. Prevent saturation clipping in the Editing menu governs all saturation controls. Inactive in Monochrome.",
-        "Saturation method" => "Reference uses the camera family's saturation response. Universal adjusts perceptual colorfulness with gamut protection, saturation contrast and overlapping tonal amounts. This choice is independent of Tone. Inactive values are retained. Universal adjustments bake into DNG pixels.",
-        "Dehaze" => "Positive removes haze and its color cast. Negative adds haze. Zero leaves the photograph unchanged. Auto estimates the shadow tone across the photo and shows it in the swatch. Turn Auto off to adjust that detected color manually. Resetting Corrections restores Auto. Use the eyedropper on a dark, hazy area or set a manual color. Auto uses a whole-photo overview in every preview mode. Dehaze also bakes into TIFF and DNG.",
-        "Haze shadow tone" => "Pick a dark area affected by haze. The surrounding patch supplies a stable haze color. The picker exits after one click. Auto returns to whole-photo estimation. Escape cancels and Space pans.",
-        "Brightness" => "Shifts midtone brightness while holding black and nominal white in place. Uses an anchored curve after spatial HDR and before the camera response. Preserves RGB ratios. Zero is neutral. This is tonal shaping, not exposure in stops. Baked into DNG when active.",
-        "Adaptive" => "Adaptive offers Disabled, Natural and Strong in Universal tone. Reference uses Camera and retains your Universal choice for switching back. Natural fits a regional HDR starting response after recovery and Color mode. Strong uses more demanding visibility targets while protecting Natural’s sampled shadows. Each profile has shared caps in Tone’s menu → Adaptive limits and estimates from a reduced whole-photo image on Merrill and Quattro, or the full image on Classic. Fast and Smart remain available for color previews. Exposure refits the baseline using the retained guide. Artistic HDR remains an additional edit. Blacks gently reveals structured near-black detail that remains after the broader correction. DNG bakes the spatial gain.",
-        "Perceptual saturation" => "Adjusts colorfulness at constant perceptual lightness and hue. Positive favors muted colors. The range is -1 to +1. Negative tames vivid colors preferentially. Zero is neutral and -1 removes chroma when tonal saturation controls are zero. Global and tonal amounts add together. Inactive in Monochrome.",
-        "Prevent color clipping" => "Shared by Reference, Universal and Basic/Advanced Color Range saturation. On, each saturation operation shoulders its additions toward its native color boundary while preserving existing signed values and headroom. Off, Reference keeps its original response and perceptual saturation can exceed the boundary. Later rendering may still clip or change hue.",
-        "Reference saturation" => "Controls camera saturation. One is unchanged, zero is grayscale. The Reference method is independent of the Tone method. Prevent saturation clipping in the Editing menu shoulders positive additions; disable it for the original unguarded response.",
-        "Saturation contrast" => "Positive separates colorfulness: muted colors become quieter and vivid colors stronger. Negative compresses the difference: muted colors rise and vivid colors soften. Preserves perceptual lightness and hue, with working-gamut protection. Zero is unchanged. Inactive in Monochrome.",
-        "Perceptual ranges" => "Saturation by tone: Shadows, Midtones and Highlights have overlapping crossovers and weights that sum to one. They follow Exposure and the camera curve's middle-gray pivot. Bands do not reselect pixels as you adjust them. These masks are pointwise, unlike the spatial HDR filter.",
-        "Color Range Lightness" => "Brightens or darkens the selected original subject colors using the same stabilized gain in Color and Monochrome. Zero leaves brightness unchanged.",
-        "Tone method" => "Reference uses the camera family's tonal response and Shadows/Highlights. Universal adds shared dynamic-range controls, anchored Brightness and Clarity while retaining the base camera appearance. Saturation has its own independent section and method. Inactive values remain saved.",
-        "Local contrast" => "Adjusts texture contrast independently of Noise, Fine/Coarse Detail and sharpening. Negative smooths tonal texture. Positive adds definition. Zero is unchanged and skips filtering. Runs before the camera tone response and bakes into DNG. Keep the X3F and sidecar to change the adjustment.",
-        "Sharpening method" => "Reference retains the camera family's sharpening response. Universal replaces its creative sharpening with shared Amount, Radius, Threshold and Halo suppression controls, while sensor reconstruction remains active. The two methods keep independent amounts. Universal runs before the camera tone response and is baked into DNG.",
-        "Universal amount" => "Strengthens edges in the finished color or monochrome image. Zero turns it off. Universal replaces reference sharpening instead of adding another sharpening pass. Applies to preview, TIFF and DNG samples.",
-        "Universal radius" => "Controls the spatial size of sharpened edges in native-image pixels. Small values emphasize fine edges. Larger values create broader definition and can make outlines visible.",
-        "Sharpen threshold" => "Excludes weak brightness differences from sharpening. Increase it to leave smooth skin and noise alone. Zero sharpens all differences.",
-        "Halo suppression" => "Restrains bright and dark outlines introduced near strong edges. Higher values limit overshoot more strongly and can soften the sharpening effect.",
-        "Red" | "Yellow" | "Green" | "Cyan" | "Blue" | "Magenta" => "Changes brightness according to the subject's original white-balanced color. Positive brightens and negative darkens. The color selection stays independent of the layer mixture. Nearly gray subjects are protected. Color and Monochrome use the same response, baked into DNG samples. Keep the X3F to change a baked adjustment.",
+        "Color Range" => {
+            "The checkbox bypasses this editor while retaining its values. Select a color swatch, then adjust Hue, Saturation or Lightness. The rainbow swatch adjusts all colors. Lightness also works in Monochrome without replacing the sensor mixture. These edits are baked into DNG and TIFF. Double-click a slider to reset it."
+        }
+        "Color Range Hue" => {
+            "Rotates the selected colors by up to 30 degrees in perceptual hue. Zero leaves hue unchanged. Inactive in Monochrome."
+        }
+        "Color Range Saturation" | "Advanced Saturation" => {
+            "Uses the same saturation shoulder as Universal in the selected original subject-color range. Positive amounts favor muted colors. The range is -1 to +1, with zero unchanged. Prevent saturation clipping in the Editing menu governs all saturation controls. Inactive in Monochrome."
+        }
+        "Saturation method" => {
+            "Reference uses the camera family's saturation response. Universal adjusts perceptual colorfulness with gamut protection, saturation contrast and overlapping tonal amounts. This choice is independent of Tone. Inactive values are retained. Universal adjustments bake into DNG pixels."
+        }
+        "Dehaze" => {
+            "Positive removes haze and its color cast. Negative adds haze. Zero leaves the photograph unchanged. Auto estimates the shadow tone across the photo and shows it in the swatch. Turn Auto off to adjust that detected color manually. Resetting Corrections restores Auto. Use the eyedropper on a dark, hazy area or set a manual color. Auto uses a whole-photo overview in every preview mode. Dehaze also bakes into TIFF and DNG."
+        }
+        "Haze shadow tone" => {
+            "Pick a dark area affected by haze. The surrounding patch supplies a stable haze color. The picker exits after one click. Auto returns to whole-photo estimation. Escape cancels and Space pans."
+        }
+        "Brightness" => {
+            "Shifts midtone brightness while holding black and nominal white in place. Uses an anchored curve after spatial HDR and before the camera response. Preserves RGB ratios. Zero is neutral. This is tonal shaping, not exposure in stops. Baked into DNG when active."
+        }
+        "Adaptive" => {
+            "Adaptive offers Disabled, Natural and Strong in Universal tone. Reference uses Camera and retains your Universal choice for switching back. Natural fits a regional HDR starting response after recovery and Color mode. Strong uses more demanding visibility targets while protecting Natural’s sampled shadows. Each profile has shared caps in Tone’s menu → Adaptive limits and estimates from a reduced whole-photo image on Merrill and Quattro, or the full image on Classic. Fast and Smart remain available for color previews. Exposure refits the baseline using the retained guide. Artistic HDR remains an additional edit. Blacks gently reveals structured near-black detail that remains after the broader correction. DNG bakes the spatial gain."
+        }
+        "Perceptual saturation" => {
+            "Adjusts colorfulness at constant perceptual lightness and hue. Positive favors muted colors. The range is -1 to +1. Negative tames vivid colors preferentially. Zero is neutral and -1 removes chroma when tonal saturation controls are zero. Global and tonal amounts add together. Inactive in Monochrome."
+        }
+        "Prevent color clipping" => {
+            "Shared by Reference, Universal and Basic/Advanced Color Range saturation. On, each saturation operation shoulders its additions toward its native color boundary while preserving existing signed values and headroom. Off, Reference keeps its original response and perceptual saturation can exceed the boundary. Later rendering may still clip or change hue."
+        }
+        "Reference saturation" => {
+            "Controls camera saturation. One is unchanged, zero is grayscale. The Reference method is independent of the Tone method. Prevent saturation clipping in the Editing menu shoulders positive additions; disable it for the original unguarded response."
+        }
+        "Saturation contrast" => {
+            "Positive separates colorfulness: muted colors become quieter and vivid colors stronger. Negative compresses the difference: muted colors rise and vivid colors soften. Preserves perceptual lightness and hue, with working-gamut protection. Zero is unchanged. Inactive in Monochrome."
+        }
+        "Perceptual ranges" => {
+            "Saturation by tone: Shadows, Midtones and Highlights have overlapping crossovers and weights that sum to one. They follow Exposure and the camera curve's middle-gray pivot. Bands do not reselect pixels as you adjust them. These masks are pointwise, unlike the spatial HDR filter."
+        }
+        "Color Range Lightness" => {
+            "Brightens or darkens the selected original subject colors using the same stabilized gain in Color and Monochrome. Zero leaves brightness unchanged."
+        }
+        "Tone method" => {
+            "Reference uses the camera family's tonal response and Shadows/Highlights. Universal adds shared dynamic-range controls, anchored Brightness and Clarity while retaining the base camera appearance. Saturation has its own independent section and method. Inactive values remain saved."
+        }
+        "Local contrast" => {
+            "Adjusts texture contrast independently of Noise, Fine/Coarse Detail and sharpening. Negative smooths tonal texture. Positive adds definition. Zero is unchanged and skips filtering. Runs before the camera tone response and bakes into DNG. Keep the X3F and sidecar to change the adjustment."
+        }
+        "Sharpening method" => {
+            "Reference retains the camera family's sharpening response. Universal replaces its creative sharpening with shared Amount, Radius, Threshold and Halo suppression controls, while sensor reconstruction remains active. The two methods keep independent amounts. Universal runs before the camera tone response and is baked into DNG."
+        }
+        "Universal amount" => {
+            "Strengthens edges in the finished color or monochrome image. Zero turns it off. Universal replaces reference sharpening instead of adding another sharpening pass. Applies to preview, TIFF and DNG samples."
+        }
+        "Universal radius" => {
+            "Controls the spatial size of sharpened edges in native-image pixels. Small values emphasize fine edges. Larger values create broader definition and can make outlines visible."
+        }
+        "Sharpen threshold" => {
+            "Excludes weak brightness differences from sharpening. Increase it to leave smooth skin and noise alone. Zero sharpens all differences."
+        }
+        "Halo suppression" => {
+            "Restrains bright and dark outlines introduced near strong edges. Higher values limit overshoot more strongly and can soften the sharpening effect."
+        }
+        "Red" | "Yellow" | "Green" | "Cyan" | "Blue" | "Magenta" => {
+            "Changes brightness according to the subject's original white-balanced color. Positive brightens and negative darkens. The color selection stays independent of the layer mixture. Nearly gray subjects are protected. Color and Monochrome use the same response, baked into DNG samples. Keep the X3F to change a baked adjustment."
+        }
 
         "White balance" => {
             "Corrects the color cast of the light so whites and grays look neutral. Choose a preset close to the lighting, then judge skin tones and neutral objects. It also affects how color noise is treated."
         }
-        "Warmth" => "Biases the selected white balance toward warm or cool light. Zero retains Custom, As Shot or the chosen camera preset. This is a relative adjustment, not a recorded Kelvin temperature. DNG retains an editable neutral and profile interpretation.",
-        "Tint" => "Biases the selected white balance toward magenta or green. Zero preserves the selected or sampled Custom balance. It shares the same linear adjustment in display, TIFF and DNG.",
+        "Warmth" => {
+            "Biases the selected white balance toward warm or cool light. Zero retains Custom, As Shot or the chosen camera preset. This is a relative adjustment, not a recorded Kelvin temperature. DNG retains an editable neutral and profile interpretation."
+        }
+        "Tint" => {
+            "Biases the selected white balance toward magenta or green. Zero preserves the selected or sampled Custom balance. It shares the same linear adjustment in display, TIFF and DNG."
+        }
         "Rendering" => {
             "Color reconstructs a color photograph. Monochrome uses the camera family’s dedicated mixing, filtering and detail processing. Merrill captures recorded as Monochrome open here automatically. Switching to Color keeps a normal color look and retains your saved saturation and color choices. Switching does not discard source color."
         }
         "RGB Mix" => {
             "Mixes reconstructed red, green and blue channels before monochrome contrast and detail. Drag inside the dashed triangle or select a channel corner. The fixed CIE xy illustration is a guide to channel proportions. Reset restores the file's initial proportions."
         }
-        "Neutralize shadows" => { "Reduces green and magenta contamination in dark, nearly gray regions. Brightness texture is retained. This is an appearance adjustment, not an estimate of the original scene color. 0 bypasses it." }
-        "Shadow limit" => { "Upper brightness boundary in stops below nominal linear white, before display exposure. More negative values restrict correction to deeper shadows." }
-        "Color tolerance" => { "Maximum relative regional colorfulness. Lower values protect more genuine colors. Higher values can neutralize stronger casts, but can also weaken real muted shadow colors." }
-        "Hue width" => { "Angular tolerance around the observed green/magenta direction. Wider settings affect more neighboring hues." }
-        "Speckle method" => { "Reference repairs isolated bright or dark extrema. Compact targets bright points and small clusters using unchanged ring neighborhoods. Real tiny highlights can also be affected. Both operate before color conversion." }
-        "Speckle threshold" => { "Multiplies the camera-derived detection threshold. Lower values remove more points and can remove fine scene detail. 1 preserves the Reference detection threshold." }
-        "Speckle size" => { "Maximum neighborhood diameter in native sensor pixels. 3 checks isolated points. 5 and 7 also check wider rings for compact clusters. Wider settings can affect tiny real features." }
+        "Neutralize shadows" => {
+            "Reduces green and magenta contamination in dark, nearly gray regions. Brightness texture is retained. This is an appearance adjustment, not an estimate of the original scene color. 0 bypasses it."
+        }
+        "Shadow limit" => {
+            "Upper brightness boundary in stops below nominal linear white, before display exposure. More negative values restrict correction to deeper shadows."
+        }
+        "Color tolerance" => {
+            "Maximum relative regional colorfulness. Lower values protect more genuine colors. Higher values can neutralize stronger casts, but can also weaken real muted shadow colors."
+        }
+        "Hue width" => {
+            "Angular tolerance around the observed green/magenta direction. Wider settings affect more neighboring hues."
+        }
+        "Speckle method" => {
+            "Reference repairs isolated bright or dark extrema. Compact targets bright points and small clusters using unchanged ring neighborhoods. Real tiny highlights can also be affected. Both operate before color conversion."
+        }
+        "Speckle threshold" => {
+            "Multiplies the camera-derived detection threshold. Lower values remove more points and can remove fine scene detail. 1 preserves the Reference detection threshold."
+        }
+        "Speckle size" => {
+            "Maximum neighborhood diameter in native sensor pixels. 3 checks isolated points. 5 and 7 also check wider rings for compact clusters. Wider settings can affect tiny real features."
+        }
         "Color Mix" => {
             "Mixes overlapping color-sensitive sensor layers before monochrome reconstruction. Drag within the dashed triangle or select a pure R, G, or B corner. The fixed anchors on the CIE xy illustration represent layer proportions, not measured sensor primaries. Display gamut settings do not affect this control. Blue-only can give cleaner high-ISO monochrome. Reset restores equal proportions. DNG bakes this selection. Retain the X3F and sidecar to change it."
         }
@@ -224,46 +288,126 @@ pub fn scope(mode: Scope) -> &'static str {
 
 pub fn inspection(name: &str) -> Option<&'static str> {
     Some(match name {
-        "sensor.rgb" => "Original low-resolution red and green sensor layers with blue averaged over each four-phase cell. These are uncalibrated camera codes.",
-        "phase-gain.blue" => "Blue after the supplied camera gain maps, resized and applied to each sensor phase. This is a calibration inspection output, before reconstruction.",
-        "sensor.blue" => "Original blue sensor readings at full sensor resolution, before calibration. This plane has twice the width and height of sensor.rgb.",
-        "extraction.rgb" => "Low-resolution sensor layers after offset and channel-gain extraction. These remain camera codes before later calibration and reconstruction.",
-        "extraction.blue" => "Full-resolution blue after offset and channel-gain extraction, before later calibration and reconstruction.",
-        "blue-refresh.rgb" => "Low-resolution sensor layers with their blue component refreshed from the full-resolution blue readings. This is preparation for calibration, not finished RGB.",
-        "hlp.rgb" => "Sensor layers after sparse blue calibration and camera shading gains. Compare with blue-refresh.rgb to inspect those calibration changes.",
-        "hlp.blue" => "Full-resolution blue after sparse-pixel calibration and camera shading gains, before sparse-pixel repair.",
-        "hlp.scratch" => "Intermediate sensor samples retained before color-dependent calibration gains. This small diagnostic buffer supports sparse-pixel calibration and is not a complete photograph.",
-        "hlp-repair.rgb" => "Calibrated sensor layers after repairing sparse blue sample locations. Compare with hlp.rgb to see that repair.",
-        "hlp-repair.blue" => "The full-resolution blue plane after repairing sparse sample locations. Compare with hlp.blue before general defect correction.",
-        "phase-detection.rgb" => "Sensor layers after camera-recorded phase-detection pixel correction. These grayscale layer views remain unprocessed camera readings.",
-        "phase-detection.blue" => "Full-resolution blue after camera-recorded phase-detection pixel correction, before further blue-plane cleanup.",
-        "blue-pattern.blue" => "The blue plane after correcting the camera's aperture-dependent sensor pattern. Compare with phase-detection.blue to inspect the change.",
-        "chroma-repair.single" => "Sensor layers after the first camera-recorded color-defect repair pass, before the combined repair pass.",
-        "chroma-repair.rgb" => "Sensor layers after the combined camera-recorded color-defect repair. Compare with chroma-repair.single before speckle and cluster correction.",
-        "chroma-despeckle.rgb" => "Sensor layers after isolated color-speckle correction. This targets individual outliers before clustered defects are repaired.",
-        "chroma-clusters.rgb" => "Sensor layers after camera-recorded groups of color defects have been repaired. These are grayscale sensor layers, not finished color channels.",
-        "purple-fringe.rgb" => "Sensor layers after the supported camera's optical purple-fringe correction, before highlight restoration.",
-        "luma-repair.directional" => "Directional estimates used to repair defects in the full-resolution blue plane. This is an intermediate guide, not a finished brightness image.",
-        "luma-repair.dark-offsets" => "Estimated dark-reference offsets used by blue-plane defect correction. Values describe correction offsets rather than scene brightness.",
-        "luma-despeckle.dark-pairs" => "Dark-reference estimates after paired speckle correction, before those estimates are used to repair the blue plane.",
-        "luma-repair.blue" => "Full-resolution blue after camera-recorded brightness-defect repair, before isolated speckle correction.",
-        "luma-despeckle.blue" => "Full-resolution blue after isolated brightness-speckle correction, before clustered defects are repaired.",
-        "luma-clusters.blue" => "Full-resolution blue after camera-recorded brightness-defect clusters have been repaired.",
-        "blue-mismatch.blue" => "Full-resolution blue after correcting differences between sensor sample phases. Compare with luma-clusters.blue to inspect the change before reconstruction.",
-        "highlight-restoration.recovery-mask" => "White marks pixels with a channel reconstructed near saturation using color relationships elsewhere in the photograph. This is separate from the tone Highlights adjustment.",
-        "highlight-restoration.rgb" => "Sensor layers after reconstructing bright clipped areas from the remaining layer information. This is separate from the Highlights tone adjustment and cannot recreate all lost detail.",
-        "noise.rgb" => "Noise-filtered low-resolution sensor layers used as the base for Quattro reconstruction. The full-resolution blue detail is combined later.",
-        "noise.source-after" => "The companion sensor-layer history retained after noise processing. Reconstruction compares this source information with the filtered base.",
-        "shading.rgb" => "The filtered sensor-layer base after spatial color-shading compensation for the selected white balance.",
-        "shading.source-after" => "The retained sensor-layer source history after the same spatial color-shading compensation as the filtered base.",
-        "shading.blue" => "Full-resolution blue after spatial color-shading compensation for the selected white balance, before reconstruction.",
-        "raw-color.rgb" => "Low-resolution sensor-derived color after camera color-response processing. These components are still reconstruction guidance rather than the finished displayed RGB.",
-        "sector-color.rgb" => "Color-response guidance after the selected color mode's hue and saturation corrections, before full-resolution reconstruction.",
-        "reconstruction.residual" => "Brightness-detail guidance extracted while combining the color base with blue sensor detail. It is a reconstruction diagnostic, not a finished photograph.",
-        "residual.rgb" => "Reconstructed RGB after residual-detail filtering and highlight-guided finishing, before local contrast and sharpening.",
-        "reconstruction.detail" => "The brightness-detail signal retained for final adaptive sharpening. It can include both real texture and sensor noise.",
-        "local-contrast.rgb" => "Reconstructed RGB after local contrast processing, before adaptive sharpening and the final photographic tone response.",
-        "crop.rgb" => "The finished photo after its active image crop and orientation have been applied. The surrounding sensor margins are excluded.",
+        "sensor.rgb" => {
+            "Original low-resolution red and green sensor layers with blue averaged over each four-phase cell. These are uncalibrated camera codes."
+        }
+        "phase-gain.blue" => {
+            "Blue after the supplied camera gain maps, resized and applied to each sensor phase. This is a calibration inspection output, before reconstruction."
+        }
+        "sensor.blue" => {
+            "Original blue sensor readings at full sensor resolution, before calibration. This plane has twice the width and height of sensor.rgb."
+        }
+        "extraction.rgb" => {
+            "Low-resolution sensor layers after offset and channel-gain extraction. These remain camera codes before later calibration and reconstruction."
+        }
+        "extraction.blue" => {
+            "Full-resolution blue after offset and channel-gain extraction, before later calibration and reconstruction."
+        }
+        "blue-refresh.rgb" => {
+            "Low-resolution sensor layers with their blue component refreshed from the full-resolution blue readings. This is preparation for calibration, not finished RGB."
+        }
+        "hlp.rgb" => {
+            "Sensor layers after sparse blue calibration and camera shading gains. Compare with blue-refresh.rgb to inspect those calibration changes."
+        }
+        "hlp.blue" => {
+            "Full-resolution blue after sparse-pixel calibration and camera shading gains, before sparse-pixel repair."
+        }
+        "hlp.scratch" => {
+            "Intermediate sensor samples retained before color-dependent calibration gains. This small diagnostic buffer supports sparse-pixel calibration and is not a complete photograph."
+        }
+        "hlp-repair.rgb" => {
+            "Calibrated sensor layers after repairing sparse blue sample locations. Compare with hlp.rgb to see that repair."
+        }
+        "hlp-repair.blue" => {
+            "The full-resolution blue plane after repairing sparse sample locations. Compare with hlp.blue before general defect correction."
+        }
+        "phase-detection.rgb" => {
+            "Sensor layers after camera-recorded phase-detection pixel correction. These grayscale layer views remain unprocessed camera readings."
+        }
+        "phase-detection.blue" => {
+            "Full-resolution blue after camera-recorded phase-detection pixel correction, before further blue-plane cleanup."
+        }
+        "blue-pattern.blue" => {
+            "The blue plane after correcting the camera's aperture-dependent sensor pattern. Compare with phase-detection.blue to inspect the change."
+        }
+        "chroma-repair.single" => {
+            "Sensor layers after the first camera-recorded color-defect repair pass, before the combined repair pass."
+        }
+        "chroma-repair.rgb" => {
+            "Sensor layers after the combined camera-recorded color-defect repair. Compare with chroma-repair.single before speckle and cluster correction."
+        }
+        "chroma-despeckle.rgb" => {
+            "Sensor layers after isolated color-speckle correction. This targets individual outliers before clustered defects are repaired."
+        }
+        "chroma-clusters.rgb" => {
+            "Sensor layers after camera-recorded groups of color defects have been repaired. These are grayscale sensor layers, not finished color channels."
+        }
+        "purple-fringe.rgb" => {
+            "Sensor layers after the supported camera's optical purple-fringe correction, before highlight restoration."
+        }
+        "luma-repair.directional" => {
+            "Directional estimates used to repair defects in the full-resolution blue plane. This is an intermediate guide, not a finished brightness image."
+        }
+        "luma-repair.dark-offsets" => {
+            "Estimated dark-reference offsets used by blue-plane defect correction. Values describe correction offsets rather than scene brightness."
+        }
+        "luma-despeckle.dark-pairs" => {
+            "Dark-reference estimates after paired speckle correction, before those estimates are used to repair the blue plane."
+        }
+        "luma-repair.blue" => {
+            "Full-resolution blue after camera-recorded brightness-defect repair, before isolated speckle correction."
+        }
+        "luma-despeckle.blue" => {
+            "Full-resolution blue after isolated brightness-speckle correction, before clustered defects are repaired."
+        }
+        "luma-clusters.blue" => {
+            "Full-resolution blue after camera-recorded brightness-defect clusters have been repaired."
+        }
+        "blue-mismatch.blue" => {
+            "Full-resolution blue after correcting differences between sensor sample phases. Compare with luma-clusters.blue to inspect the change before reconstruction."
+        }
+        "highlight-restoration.recovery-mask" => {
+            "White marks pixels with a channel reconstructed near saturation using color relationships elsewhere in the photograph. This is separate from the tone Highlights adjustment."
+        }
+        "highlight-restoration.rgb" => {
+            "Sensor layers after reconstructing bright clipped areas from the remaining layer information. This is separate from the Highlights tone adjustment and cannot recreate all lost detail."
+        }
+        "noise.rgb" => {
+            "Noise-filtered low-resolution sensor layers used as the base for Quattro reconstruction. The full-resolution blue detail is combined later."
+        }
+        "noise.source-after" => {
+            "The companion sensor-layer history retained after noise processing. Reconstruction compares this source information with the filtered base."
+        }
+        "shading.rgb" => {
+            "The filtered sensor-layer base after spatial color-shading compensation for the selected white balance."
+        }
+        "shading.source-after" => {
+            "The retained sensor-layer source history after the same spatial color-shading compensation as the filtered base."
+        }
+        "shading.blue" => {
+            "Full-resolution blue after spatial color-shading compensation for the selected white balance, before reconstruction."
+        }
+        "raw-color.rgb" => {
+            "Low-resolution sensor-derived color after camera color-response processing. These components are still reconstruction guidance rather than the finished displayed RGB."
+        }
+        "sector-color.rgb" => {
+            "Color-response guidance after the selected color mode's hue and saturation corrections, before full-resolution reconstruction."
+        }
+        "reconstruction.residual" => {
+            "Brightness-detail guidance extracted while combining the color base with blue sensor detail. It is a reconstruction diagnostic, not a finished photograph."
+        }
+        "residual.rgb" => {
+            "Reconstructed RGB after residual-detail filtering and highlight-guided finishing, before local contrast and sharpening."
+        }
+        "reconstruction.detail" => {
+            "The brightness-detail signal retained for final adaptive sharpening. It can include both real texture and sensor noise."
+        }
+        "local-contrast.rgb" => {
+            "Reconstructed RGB after local contrast processing, before adaptive sharpening and the final photographic tone response."
+        }
+        "crop.rgb" => {
+            "The finished photo after its active image crop and orientation have been applied. The surrounding sensor margins are excluded."
+        }
         "red-detail.layers" => {
             "Sensor layers after red-channel detail recovery, before highlight restoration. Only the red sensor layer changes."
         }
@@ -300,11 +444,21 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "mono.filtered" => {
             "Dedicated 19-square histogram-weighted monochrome noise filtering. No color denoising is applied."
         }
-        "color-editor.guide" => "Clean white-balanced color used to classify color ranges and stabilize their adjustments, independently of the rendering mode or sensor mixture.",
-        "dehaze.rgb" => "Linear RGB after haze correction. Compare Input to see the color and contrast change before the camera tone response.",
-        "dehaze.input" => "Uncorrected linear RGB used for automatic haze estimation and shadow-tone picking.",
-        "color-editor.rgb" => "Linear RGB after color-range Hue, Saturation and Lightness. Monochrome applies the same Lightness response to its sensor mixture. Compare with Input to see the combined color and brightness change.",
-        "mono.texture" => "Fine and coarse texture adjustments on the cleaned monochrome image. Compare with Input to see the combined detail change.",
+        "color-editor.guide" => {
+            "Clean white-balanced color used to classify color ranges and stabilize their adjustments, independently of the rendering mode or sensor mixture."
+        }
+        "dehaze.rgb" => {
+            "Linear RGB after haze correction. Compare Input to see the color and contrast change before the camera tone response."
+        }
+        "dehaze.input" => {
+            "Uncorrected linear RGB used for automatic haze estimation and shadow-tone picking."
+        }
+        "color-editor.rgb" => {
+            "Linear RGB after color-range Hue, Saturation and Lightness. Monochrome applies the same Lightness response to its sensor mixture. Compare with Input to see the combined color and brightness change."
+        }
+        "mono.texture" => {
+            "Fine and coarse texture adjustments on the cleaned monochrome image. Compare with Input to see the combined detail change."
+        }
         "mono.despeckle" => "Monochrome speckle correction using its dedicated neighborhood plane.",
         "monochrome.rgb" => {
             "Linear monochrome after processing gain, replicated into equal neutral channels. No color matrix or residual color reconstruction is applied."
@@ -327,8 +481,12 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "highlight.density" => {
             "A diagnostic map from the camera's original saturation flags. It guides Classic correction, but is not Color field's continuous reliability or donation strength. This is not a brightness image or a measure of recovered detail."
         }
-        "shadow-neutralize.input" => { "Reconstructed linear RGB before selective shadow neutralization." }
-        "shadow-neutralize.rgb" => { "Linear RGB after green/magenta reduction in dark, nearly neutral regions. Compare Input to inspect color changes and retained brightness texture." }
+        "shadow-neutralize.input" => {
+            "Reconstructed linear RGB before selective shadow neutralization."
+        }
+        "shadow-neutralize.rgb" => {
+            "Linear RGB after green/magenta reduction in dark, nearly neutral regions. Compare Input to inspect color changes and retained brightness texture."
+        }
         "despeckle.layers" => {
             "Sensor readings after the extra search for isolated bright, dark, or colored dots. Use this to check remaining speckles before general noise reduction."
         }
@@ -368,18 +526,40 @@ pub fn inspection(name: &str) -> Option<&'static str> {
         "detail.signal" => {
             "A diagnostic view of fine brightness variation used by the detail processing. Middle gray means no variation. Lighter and darker marks show bright and dark detail. It can contain grain as well as real texture, and is not the finished photo or an exact preview of the Detail slider."
         }
-        "finish.base" => "The camera's base photographic image before shared finishing edits. Reference sharpening is included only when that method is selected.",
-        "linear.sharpen" => "Linear RGB after Universal sharpening and before the camera tone response. Compare with Input to see the sharpening change. This adjustment is baked into DNG samples.",
-        "linear.local-contrast" => "Linear RGB after pre-curve Local Contrast. Compare with Input to see texture changes before the camera tone curve. This adjustment is baked into DNG samples.",
-        "finish.tone" => "Photographic RGB after universal contrast and saturation. The base camera look remains present.",
-        "linear.brightness" => "Linear RGB after anchored midtone shaping, following spatial HDR. Input/Output and Difference compare against its unchanged input. RGB ratios are preserved and the adjustment is baked into DNG.",
+        "finish.base" => {
+            "The camera's base photographic image before shared finishing edits. Reference sharpening is included only when that method is selected."
+        }
+        "linear.sharpen" => {
+            "Linear RGB after Universal sharpening and before the camera tone response. Compare with Input to see the sharpening change. This adjustment is baked into DNG samples."
+        }
+        "linear.local-contrast" => {
+            "Linear RGB after pre-curve Local Contrast. Compare with Input to see texture changes before the camera tone curve. This adjustment is baked into DNG samples."
+        }
+        "finish.tone" => {
+            "Photographic RGB after universal contrast and saturation. The base camera look remains present."
+        }
+        "linear.brightness" => {
+            "Linear RGB after anchored midtone shaping, following spatial HDR. Input/Output and Difference compare against its unchanged input. RGB ratios are preserved and the adjustment is baked into DNG."
+        }
         "perceptual.input" => "Linear working RGB before Universal saturation and Color Range.",
-        "perceptual.rgb" => "Linear working RGB after shared Oklab saturation, before Color Range and the camera curve. Input/Output and Difference use its actual input.",
-        "perceptual.shadows" => "Shadows weight for saturation by tone. White is fully affected. The three band weights sum to one.",
-        "perceptual.midtones" => "Midtones weight for saturation by tone. White is fully affected. The three band weights sum to one.",
-        "perceptual.highlights" => "Highlights weight for saturation by tone. White is fully affected. The three band weights sum to one.",
-        "tonal-ranges.mask" => "Brightness used to select the tonal ranges. Black represents -8 stops below nominal white and white represents nominal white. A multiscale spatial base smooths small details while respecting strong edges.",
-        "tonal-ranges.rgb" => "Linear working RGB after the tonal exposure gains, before the camera tone curve. Input/Output and Difference compare it with the actual linear input. Zero adjustments are unchanged.",
+        "perceptual.rgb" => {
+            "Linear working RGB after shared Oklab saturation, before Color Range and the camera curve. Input/Output and Difference use its actual input."
+        }
+        "perceptual.shadows" => {
+            "Shadows weight for saturation by tone. White is fully affected. The three band weights sum to one."
+        }
+        "perceptual.midtones" => {
+            "Midtones weight for saturation by tone. White is fully affected. The three band weights sum to one."
+        }
+        "perceptual.highlights" => {
+            "Highlights weight for saturation by tone. White is fully affected. The three band weights sum to one."
+        }
+        "tonal-ranges.mask" => {
+            "Brightness used to select the tonal ranges. Black represents -8 stops below nominal white and white represents nominal white. A multiscale spatial base smooths small details while respecting strong edges."
+        }
+        "tonal-ranges.rgb" => {
+            "Linear working RGB after the tonal exposure gains, before the camera tone curve. Input/Output and Difference compare it with the actual linear input. Zero adjustments are unchanged."
+        }
         "tone.rgb" => {
             "The photo after Exposure and the selected rendering mode's tone curve, including Contrast, Shadows, and Highlights. Classic also includes its saturation adjustment here. Merrill exposes saturation as a later stage. Sharpening is already included."
         }

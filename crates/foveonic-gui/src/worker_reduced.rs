@@ -4,14 +4,13 @@ use super::Request;
 use crate::preferences::PreviewMode;
 use foveonic::{
     decode_cache::Cache,
-    importing::Identity,
     inspection::Artifact,
     profile::Profile,
     render::{
         Engine, ReducedPreparation, ReducedRender, ReducedWorkingSet, RenderProgress,
         RenderSession, Settings,
     },
-    source::{LoadStage, Metadata, Result, Source},
+    source::{FileIdentity, LoadStage, Metadata, Result, Source, SourceOrigin},
 };
 use std::{
     path::{Path, PathBuf},
@@ -20,26 +19,33 @@ use std::{
 
 const BUDGET: u64 = 128 * 1024 * 1024;
 
-fn source_identity(path: &Path, verified: Option<Identity>) -> Result<Identity> {
-    verified.map_or_else(|| Identity::read(path), Ok)
+fn source_identity(
+    path: &Path,
+    verified: Option<SourceOrigin>,
+    loaded: Option<SourceOrigin>,
+) -> Result<SourceOrigin> {
+    verified
+        .or(loaded)
+        .map_or_else(|| FileIdentity::read(path).map(SourceOrigin::File), Ok)
 }
 
 struct Photo {
     path: PathBuf,
-    identity: Identity,
+    identity: SourceOrigin,
     id: u64,
 }
 pub(super) struct Loaded {
     pub metadata: Arc<Metadata>,
     path: PathBuf,
-    identity: Identity,
+    identity: SourceOrigin,
     id: u64,
     source: Option<Arc<Source>>,
     revision: u64,
 }
-pub(super) enum Attempt {
-    Rendered(Option<Vec<Artifact>>),
-    Native(Option<Arc<Source>>),
+impl Loaded {
+    pub fn origin(&self) -> &SourceOrigin {
+        &self.identity
+    }
 }
 pub(super) struct Photos {
     working: ReducedWorkingSet,
@@ -56,10 +62,26 @@ impl Default for Photos {
     }
 }
 impl Photos {
+    pub fn configure_memory(&mut self, limit: u64) {
+        self.working.set_limit(limit);
+        self.prune();
+    }
+    pub fn trim_memory(
+        &mut self,
+        engine: &Engine,
+        native: Option<&mut RenderSession>,
+        limit: u64,
+        reservation: &foveonic::render::MemoryReservation,
+    ) -> foveonic::render::MemoryTrim {
+        self.configure_memory(limit);
+        let result = engine.trim_memory(native, &mut self.working, limit, reservation);
+        self.prune();
+        result
+    }
     pub fn requested(request: &Request) -> bool {
         matches!(
             request.preview_quality,
-            PreviewMode::Draft | PreviewMode::Thumb
+            PreviewMode::Fast | PreviewMode::Draft | PreviewMode::Thumb
         ) && request.output == "final"
             && !request.comparison
             && request.export.is_none()
@@ -69,8 +91,31 @@ impl Photos {
         *self = Self::default();
         engine.clear_preparation();
     }
+    pub fn park_active(&mut self, engine: &Engine, revision: u64) {
+        self.working.park_active();
+        self.report_retention(engine, revision, "park");
+        self.prune();
+    }
     fn prune(&mut self) {
         self.photos.retain(|photo| self.working.contains(photo.id));
+    }
+    fn report_retention(&self, engine: &Engine, revision: u64, stage: &str) {
+        if crate::timing::enabled() {
+            let evicted: Vec<_> = self
+                .photos
+                .iter()
+                .filter(|photo| !self.working.contains(photo.id))
+                .map(|photo| photo.id)
+                .collect();
+            crate::timing::emit(
+                "working_set",
+                serde_json::json!({"revision": revision, "stage": stage,
+                "historical_budget_bytes": self.working.limit_bytes(), "historical_bytes": self.working.historical_bytes(),
+                "active_bytes": self.working.active_bytes(), "active_cache_limit_bytes": self.working.active_cache_limit_bytes(),
+                "retained_bytes": self.working.retained_bytes(engine),
+                "resident_photos": self.working.len(), "evicted": evicted}),
+            );
+        }
     }
     #[allow(clippy::too_many_arguments)]
     pub fn load(
@@ -83,7 +128,21 @@ impl Photos {
         progress: &dyn Fn(LoadStage),
     ) -> Result<Loaded> {
         self.prune();
-        let identity = source_identity(path, cache.import_identity(path))?;
+        let native_origin = native
+            .as_ref()
+            .filter(|(loaded, _)| loaded == path)
+            .map(|(_, session)| session.source().origin().clone());
+        let loaded_origin = self
+            .photos
+            .iter()
+            .find(|photo| photo.path == path)
+            .and_then(|photo| self.working.origin(photo.id))
+            .cloned();
+        let mut identity = source_identity(
+            path,
+            cache.source_origin(path).or(native_origin),
+            loaded_origin,
+        )?;
         if let Some(photo) = self
             .photos
             .iter()
@@ -100,24 +159,21 @@ impl Photos {
                 });
             }
         }
-        let changed = self
-            .photos
-            .iter()
-            .any(|photo| photo.path == path && photo.identity != identity);
         if let Some(old) = self.photos.iter().find(|photo| photo.path == path) {
             self.working.remove(old.id);
         }
         self.prune();
-        let (metadata, source) = if let Some((_, session)) = native
-            .as_ref()
-            .filter(|(native_path, _)| native_path == path && !changed)
-        {
+        let (metadata, source) = if let Some((_, session)) =
+            native.as_ref().filter(|(native_path, session)| {
+                native_path == path && *session.source().origin() == identity
+            }) {
             (session.metadata().clone(), None)
         } else {
             if let Some((_, previous)) = native.take() {
                 engine.release_native_preparation(previous.metadata());
             }
             let source = open_source(cache, path, revision, progress)?;
+            identity = source.origin().clone();
             (source.metadata.clone(), Some(source))
         };
         let id = self.next_id;
@@ -164,10 +220,7 @@ impl Photos {
         profile: &mut Profile,
         loaded_progress: &dyn Fn(LoadStage),
         render_progress: &dyn Fn(RenderProgress),
-    ) -> Result<Attempt> {
-        if Engine::reduced_session_requirement(&loaded.metadata, settings).is_some() {
-            return Ok(Attempt::Native(loaded.source));
-        }
+    ) -> Result<Option<Vec<Artifact>>> {
         // Native-only clipping evidence must leave with the native session before
         // the shared reduced budget is enforced. Keep at most this request's Arc
         // for resealing when the corrected sensor or analysis has changed.
@@ -188,10 +241,11 @@ impl Photos {
             match outcome {
                 ReducedRender::Rendered(artifacts) => {
                     *native = None;
+                    self.report_retention(engine, loaded.revision, "render");
                     self.prune();
-                    return Ok(Attempt::Rendered(Some(artifacts)));
+                    return Ok(Some(artifacts));
                 }
-                ReducedRender::Superseded => return Ok(Attempt::Rendered(None)),
+                ReducedRender::Superseded => return Ok(None),
                 ReducedRender::NeedsOriginal(_) => {}
             }
         }
@@ -206,13 +260,37 @@ impl Photos {
             *native = None;
             open_source(cache, &loaded.path, loaded.revision, loaded_progress)?
         };
+        if self.working.contains(loaded.id) {
+            if self
+                .working
+                .refresh(engine, loaded.id, &original, settings, cancel, profile)?
+                .is_none()
+            {
+                return Ok(None);
+            }
+            if let Some(outcome) = self.working.render_with_progress(
+                engine,
+                loaded.id,
+                settings,
+                cancel,
+                profile,
+                render_progress,
+            )? {
+                self.report_retention(engine, loaded.revision, "refresh");
+                self.prune();
+                return match outcome {
+                    ReducedRender::Rendered(artifacts) => Ok(Some(artifacts)),
+                    ReducedRender::Superseded => Ok(None),
+                    ReducedRender::NeedsOriginal(reason) => {
+                        Err(format!("refreshed camera input is missing: {reason:?}").into())
+                    }
+                };
+            }
+        }
         let preparation = engine.prepare_reduced_session(original, settings, cancel, profile)?;
         let mut session = match preparation {
             ReducedPreparation::Prepared(session) => session,
-            ReducedPreparation::NeedsOriginal { source, .. } => {
-                return Ok(Attempt::Native(Some(source)))
-            }
-            ReducedPreparation::Superseded => return Ok(Attempt::Rendered(None)),
+            ReducedPreparation::Superseded => return Ok(None),
         };
         let outcome = engine.render_reduced_session_with_progress(
             &mut session,
@@ -229,11 +307,12 @@ impl Photos {
             identity: loaded.identity,
             id: loaded.id,
         });
+        self.report_retention(engine, loaded.revision, "insert");
         self.prune();
         *native = None;
         match outcome {
-            ReducedRender::Rendered(artifacts) => Ok(Attempt::Rendered(Some(artifacts))),
-            ReducedRender::Superseded => Ok(Attempt::Rendered(None)),
+            ReducedRender::Rendered(artifacts) => Ok(Some(artifacts)),
+            ReducedRender::Superseded => Ok(None),
             ReducedRender::NeedsOriginal(reason) => {
                 Err(format!("sealed reduced request requires original: {reason:?}").into())
             }
@@ -256,7 +335,7 @@ fn open_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use foveonic::{inspection::Content, render::PreviewQuality};
+    use foveonic::{inspection::Content, render::Scale};
 
     fn request() -> Request {
         Request {
@@ -278,13 +357,31 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("offline.x3f");
         std::fs::write(&path, b"identity").unwrap();
-        let identity = Identity::read(&path).unwrap();
+        let identity = SourceOrigin::File(FileIdentity::read(&path).unwrap());
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
-            source_identity(&path, Some(identity.clone())).unwrap(),
+            source_identity(&path, Some(identity.clone()), None).unwrap(),
+            identity.clone()
+        );
+        assert_eq!(
+            source_identity(&path, None, Some(identity.clone())).unwrap(),
             identity
         );
-        assert!(source_identity(&path, None).is_err());
+        assert!(source_identity(&path, None, None).is_err());
+    }
+    #[test]
+    fn newer_verified_replacement_wins_over_loaded_same_path_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("same.x3f");
+        std::fs::write(&path, b"old").unwrap();
+        let old = SourceOrigin::File(FileIdentity::read(&path).unwrap());
+        std::fs::write(&path, b"replacement with another length").unwrap();
+        let current = SourceOrigin::File(FileIdentity::read(&path).unwrap());
+        assert_ne!(old, current);
+        assert_eq!(
+            source_identity(&path, Some(current.clone()), Some(old)).unwrap(),
+            current
+        );
     }
     #[test]
     fn only_explicit_small_final_requests_use_the_reduced_set() {
@@ -292,7 +389,7 @@ mod tests {
         assert!(Photos::requested(&request));
         request.preview_quality = PreviewMode::Draft;
         assert!(Photos::requested(&request));
-        for quality in [PreviewMode::Full, PreviewMode::Fast, PreviewMode::Smart] {
+        for quality in [PreviewMode::Full, PreviewMode::Smart] {
             request.preview_quality = quality;
             assert!(!Photos::requested(&request));
         }
@@ -305,55 +402,24 @@ mod tests {
     }
 
     #[test]
-    fn supported_classic_small_policy_does_not_require_fast_or_reduced_session_ownership() {
-        use foveonic::source::{Matrix, MatrixEncoding};
-        let metadata = Metadata {
-            width: 2688,
-            height: 1792,
-            rotation: 0,
-            processing_version: None,
-            properties: [
-                ("CAMMODEL".into(), "SIGMA SD14".into()),
-                ("ISO".into(), "100".into()),
-            ]
-            .into(),
-            matrices: [(
-                "ActiveImageArea".into(),
-                Matrix {
-                    encoding: MatrixEncoding::Float32,
-                    representation: "test",
-                    dimensions: vec![4],
-                    values: vec![8., 8., 2679., 1783.],
-                },
-            )]
-            .into(),
-            lists: Default::default(),
-        };
+    fn reduced_requests_have_no_camera_or_option_eligibility_gate() {
         let mut request = request();
-        assert!(!request.settings.fast_preview_available(&metadata));
-        assert!(request
-            .settings
-            .small_preview_available(&metadata, PreviewQuality::Thumb));
-        assert_eq!(
-            super::super::effective_preview_quality(&request, &request.settings, &metadata),
-            PreviewQuality::Thumb
-        );
-        let mut resolved = request.settings.clone();
-        resolved.preview_quality = PreviewQuality::Thumb;
-        assert_eq!(
-            Engine::reduced_session_requirement(&metadata, &resolved),
-            Some(foveonic::render::NeedsOriginal::UnsupportedFamily)
-        );
-        request.settings.preview_region = Some([0, 0, 64, 64]);
-        assert_eq!(
-            super::super::effective_preview_quality(&request, &request.settings, &metadata),
-            PreviewQuality::Full
-        );
-        request.settings.preview_region = None;
-        request.settings.output_size = Some([64, 64]);
-        assert_eq!(
-            super::super::effective_preview_quality(&request, &request.settings, &metadata),
-            PreviewQuality::Full
+        request.settings.rendering = foveonic::render::Rendering::Monochrome;
+        request.settings.dehaze.amount = 35.;
+        request.settings.photographic.tone_method = foveonic::render::PhotographicMethod::Universal;
+        request.settings.photographic.base_response = foveonic::render::BaseResponse::Strong;
+        for mode in [PreviewMode::Fast, PreviewMode::Draft, PreviewMode::Thumb] {
+            request.preview_quality = mode;
+            assert!(Photos::requested(&request));
+            assert_eq!(
+                super::super::effective_working_scale(&request),
+                mode.working_scale()
+            );
+        }
+        request.preview_quality = PreviewMode::Smart;
+        assert!(
+            !Photos::requested(&request),
+            "Smart retains native warm continuation"
         );
     }
     #[test]
@@ -373,7 +439,7 @@ mod tests {
         let mut photos = Photos::default();
         let mut native = None;
         let mut settings = Settings::new("Sunlight", "Standard");
-        settings.preview_quality = PreviewQuality::Thumb;
+        settings.working_scale = Scale::new(8).unwrap();
         settings.reconstruction = Some(Default::default());
         settings.dehaze_estimate = true;
         settings.dehaze.shadow = None;
@@ -387,7 +453,7 @@ mod tests {
                 .load(path, 0, &cache, &engine, &mut native, &|_| {})
                 .unwrap();
             let weak = loaded.source.as_ref().map(Arc::downgrade);
-            let Attempt::Rendered(Some(mut artifacts)) = photos
+            let Some(mut artifacts) = photos
                 .render(
                     &engine,
                     &cache,
@@ -407,7 +473,7 @@ mod tests {
             if let Some(weak) = weak {
                 assert!(weak.upgrade().is_none());
             }
-            assert!(photos.working.retained_bytes(&engine) <= BUDGET);
+            assert!(photos.working.historical_bytes() <= BUDGET);
             let artifact = artifacts.pop().unwrap();
             let Content::Image(image) = artifact.content else {
                 panic!("expected image");
@@ -434,10 +500,11 @@ mod tests {
             );
         }
         assert_eq!(photos.working.len(), 2);
+        photos.park_active(&engine, 0);
         super::super::load_native_source(&cache, &engine, &mut native, &paths[0], 0, |_| {})
             .unwrap();
         let mut full = settings.clone();
-        full.preview_quality = PreviewQuality::Full;
+        full.working_scale = Scale::NATIVE;
         engine
             .render_session(
                 &mut native.as_mut().unwrap().1,
@@ -448,59 +515,45 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        let original = native.as_ref().unwrap().1.source().samples().as_ptr();
-        let cached = native.as_ref().unwrap().1.cached_bytes();
         let mut active_haze = settings.clone();
         active_haze.dehaze.amount = 10.;
         let loaded = photos
             .load(&paths[0], 0, &cache, &engine, &mut native, &|_| {})
             .unwrap();
-        assert!(matches!(
-            photos
-                .render(
-                    &engine,
-                    &cache,
-                    &mut native,
-                    loaded,
-                    &active_haze,
-                    &|| false,
-                    &mut Profile::default(),
-                    &|_| {},
-                    &|_| {}
-                )
-                .unwrap(),
-            Attempt::Native(None)
-        ));
-        assert_eq!(
-            native.as_ref().unwrap().1.source().samples().as_ptr(),
-            original
-        );
-        assert_eq!(
-            native.as_ref().unwrap().1.cached_bytes(),
-            cached,
-            "native-only fallback stays warm"
-        );
+        assert!(photos
+            .render(
+                &engine,
+                &cache,
+                &mut native,
+                loaded,
+                &active_haze,
+                &|| false,
+                &mut Profile::default(),
+                &|_| {},
+                &|_| {}
+            )
+            .unwrap()
+            .is_some());
+        assert!(native.is_none());
         let loaded = photos
             .load(&paths[0], 0, &cache, &engine, &mut native, &|_| {})
             .unwrap();
-        assert!(matches!(
-            photos
-                .render(
-                    &engine,
-                    &cache,
-                    &mut native,
-                    loaded,
-                    &settings,
-                    &|| false,
-                    &mut Profile::default(),
-                    &|_| {},
-                    &|_| {}
-                )
-                .unwrap(),
-            Attempt::Rendered(Some(_))
-        ));
+        assert!(photos
+            .render(
+                &engine,
+                &cache,
+                &mut native,
+                loaded,
+                &settings,
+                &|| false,
+                &mut Profile::default(),
+                &|_| {},
+                &|_| {}
+            )
+            .unwrap()
+            .is_some());
         assert!(native.is_none());
-        assert!(engine.cached_preparation_bytes() < 8 * 1024 * 1024);
+        assert!(photos.working.historical_bytes() <= BUDGET);
         photos.clear(&engine);
         assert!(photos.working.is_empty());
         assert_eq!(engine.cached_preparation_bytes(), 0);

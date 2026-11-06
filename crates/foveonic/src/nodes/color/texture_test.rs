@@ -190,7 +190,7 @@ fn texture_controls_start_neutral_and_validate() {
             .unwrap()
             .uniforms
             .steps,
-        [1., 1., 2., 4.]
+        [0.5, 1., 2., 4.]
     );
     selected.texture.fine = 3.;
     selected.texture.coarse = 3.;
@@ -503,6 +503,17 @@ fn texture_sizes_persist_and_fit_processing_context() {
         c.texture.fine_size = 1.;
         c.texture.coarse_size = value;
         assert!(c.validate().is_err());
+    }
+}
+
+#[test]
+fn texture_bands_keep_native_support_at_every_sensor_scale() {
+    for divisor in [1, 2, 4, 8, 16, 64, 1 << 31] {
+        let factor = crate::render::Scale::new(divisor).unwrap().factor();
+        let prepared = Prepared::new(Controls::default(), factor, Default::default()).unwrap();
+        for (native, step) in NATIVE_STEPS.into_iter().zip(prepared.uniforms.steps) {
+            assert_eq!(step / factor, native as f32);
+        }
     }
 }
 

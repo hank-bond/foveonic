@@ -5,7 +5,7 @@ use crate::{
     inspection::Content,
     nodes::sensor::calibration,
     profile::{Mode, Profile},
-    render::{Engine, PreviewQuality, RenderSession, Settings},
+    render::{Engine, RenderSession, Scale, Settings},
     source::Source,
 };
 use std::sync::Arc;
@@ -134,7 +134,7 @@ fn gpu_tonal_ranges_match_cached_reduced_and_regional_rendering() {
             .iter()
             .any(|t| t.stage == "submit tonal brightness mask"));
         settings.exposure = 0.;
-        settings.preview_quality = PreviewQuality::Fast;
+        settings.working_scale = Scale::new(2).unwrap();
         let reduced = engine
             .render(&source, &settings, &mut Profile::default())
             .unwrap();
@@ -143,7 +143,7 @@ fn gpu_tonal_ranges_match_cached_reduced_and_regional_rendering() {
         assert!(
             engine.readback_image(&cached).unwrap() == engine.readback_image(&reduced).unwrap()
         );
-        settings.preview_quality = PreviewQuality::Full;
+        settings.working_scale = Scale::NATIVE;
         settings.tonal_ranges.shadows = 0.;
         settings.tonal_ranges.highlights = 0.;
     }

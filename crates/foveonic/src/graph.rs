@@ -136,6 +136,7 @@ pub struct Output {
     pub name: &'static str,
     cache_scope: String,
     pub dependencies: Vec<usize>,
+    pub(crate) view: Option<crate::image::View>,
 }
 
 impl Output {
@@ -153,15 +154,30 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     pub outputs: Vec<Output>,
     pub(crate) session_outputs: Vec<usize>,
+    pub(crate) sealed_outputs: Vec<usize>,
 }
 
 impl Graph {
+    /// Camera framing belongs to this output's grid, independently of other
+    /// requested outputs and of the eventual photographic frame.
+    pub(crate) fn set_view(&mut self, output: usize, view: crate::image::View) {
+        self.outputs[output].view = Some(view);
+    }
     /// Recipe-owned restart boundaries supplement the generic editing frontier.
     /// The session's normal byte budget and input-version checks still apply.
     pub(crate) fn retain_for_session(&mut self, output: usize) {
         assert!(output < self.outputs.len());
         if !self.session_outputs.contains(&output) {
             self.session_outputs.push(output);
+        }
+    }
+
+    /// Immutable camera dependencies needed after decoded samples are released.
+    /// Their exact operation ancestry determines whether a retained value is reusable.
+    pub(crate) fn retain_for_seal(&mut self, output: usize) {
+        assert!(output < self.outputs.len());
+        if !self.sealed_outputs.contains(&output) {
+            self.sealed_outputs.push(output);
         }
     }
 
@@ -202,6 +218,7 @@ impl Graph {
             name: operation.output_name(),
             cache_scope: String::new(),
             dependencies: inputs.to_vec(),
+            view: None,
         });
         let mut outputs = vec![id];
         for (name, data, slots) in operation.side_outputs() {
@@ -212,6 +229,7 @@ impl Graph {
                 name,
                 cache_scope: String::new(),
                 dependencies: slots.iter().map(|slot| inputs[*slot]).collect(),
+                view: None,
             });
         }
         self.nodes.push(Node {
@@ -256,6 +274,7 @@ impl Graph {
                         let b = &branch.outputs[*b];
                         a.data == b.data
                             && a.name == b.name
+                            && a.view == b.view
                             && candidate.operation.key(a.name) == node.operation.key(b.name)
                     })
             });
@@ -282,6 +301,7 @@ impl Graph {
                         format!("{scope}/{}", output.cache_scope)
                     },
                     dependencies: output.dependencies.iter().map(|id| mapping[*id]).collect(),
+                    view: output.view,
                 });
             }
             self.nodes.push(Node {
@@ -292,6 +312,9 @@ impl Graph {
         }
         for id in branch.session_outputs {
             self.retain_for_session(mapping[id]);
+        }
+        for id in branch.sealed_outputs {
+            self.retain_for_seal(mapping[id]);
         }
         mapping
     }

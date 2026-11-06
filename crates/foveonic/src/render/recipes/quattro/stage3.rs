@@ -1,4 +1,4 @@
-//! Prepares local contrast and adaptive sharpening for Full and reduced preview grids.
+//! Prepares local contrast and adaptive sharpening on native or working sensor grids.
 use super::WorkingGrid;
 use crate::{
     nodes::finish::{proportional_sharpen, wavelet_contrast},
@@ -8,12 +8,11 @@ const LCE_PADDING_ALIGNMENT: u32 = 128;
 const LCE_RELATIVE_BOUND: f32 = 0.35;
 const LOWEST_UNSHARP_BASE: f32 = 0.15;
 const LOWEST_UNSHARP_MIX: f32 = 0.3;
-// LOW-inspired finishing controls used by the reviewed reduced HIGH preview.
-// The wavelet base becomes 0.12 instead of 0.15, and sharpening loses sqrt(2).
-const HALF_GRID_LOWEST_UNSHARP_SCALE: f32 = 0.8;
-pub(super) const HALF_GRID_SHARPEN_SCALE: f32 = std::f32::consts::FRAC_1_SQRT_2;
-const FULL_BOX_RADII: [u32; 2] = [7, 3];
-const HALF_BOX_RADII: [u32; 2] = [3, 2];
+// LOW uses a 0.12 wavelet base instead of 0.15 and a sqrt(0.5) sharpening gain.
+const LOW_LOWEST_UNSHARP_SCALE: f32 = 0.8;
+pub(super) const LOW_SHARPEN_SCALE: f32 = std::f32::consts::FRAC_1_SQRT_2;
+const HIGH_BOX_RADII: [u32; 2] = [7, 3];
+const LOW_BOX_RADII: [u32; 2] = [3, 2];
 const BOX_STRENGTHS: [f32; 2] = [0.2, 0.1];
 const LOWEST_GAUSSIAN_VARIANCE: f64 = 9.;
 const SHARPEN_DETAIL_LIMIT: f32 = 2000.;
@@ -38,30 +37,17 @@ fn extent(metadata: &Metadata, grid: WorkingGrid) -> Result<[u32; 2]> {
     if !super::defects::supported(metadata) {
         return Err("Stage3 requires supported Quattro controls".into());
     }
-    Ok(grid.extent([
-        u32::try_from(metadata.width)?,
-        u32::try_from(metadata.height)?,
-    ]))
+    Ok(super::output_grid(metadata, grid)?.extent)
 }
 fn lce_crop(metadata: &Metadata, grid: WorkingGrid) -> Result<[u32; 4]> {
-    let mut area = metadata.fixed::<4>("ActiveImageArea")?;
-    if grid != WorkingGrid::Full {
-        area = area.map(|v| (v / f64::from(grid.divisor())).floor());
-    }
+    let area = metadata.fixed::<4>("ActiveImageArea")?;
     if area
         .iter()
         .any(|v| !v.is_finite() || *v < 0. || *v >= u32::MAX as f64 || v.fract() != 0.)
     {
         return Err("invalid Stage3 active rectangle".into());
     }
-    Ok([
-        area[0] as u32,
-        area[1] as u32,
-        // This caller retains the raw CAMF right/bottom as exclusive bounds.
-        // Its finishing crop separately adds one to the same metadata values.
-        area[2] as u32,
-        area[3] as u32,
-    ])
+    Ok(super::output_grid(metadata, grid)?.filter_bounds(area.map(|v| v as u32)))
 }
 pub(super) fn prepare_lce(
     metadata: &Metadata,
@@ -85,21 +71,17 @@ pub(super) fn prepare_lce(
             level,
             mode == "Portrait",
             lowest_factor,
-            metadata.is_quattro_low() || grid.is_half(),
+            metadata.is_quattro_low(),
         )?,
         LCE_RELATIVE_BOUND,
     )?;
-    if grid.is_small() {
-        prepared.on_preview_grid(grid.divisor())
-    } else {
-        Ok(prepared)
-    }
+    prepared.on_sensor_scale(grid.divisor())
 }
 fn lowest_kernel(
     level: usize,
     portrait: bool,
     supplied_factor: Option<f32>,
-    reduced_detail: bool,
+    low_resolution: bool,
 ) -> Result<[f32; 9]> {
     let factor = supplied_factor.unwrap_or(
         *LEVEL_FACTORS
@@ -114,8 +96,8 @@ fn lowest_kernel(
     } else {
         LOWEST_UNSHARP_BASE
     };
-    let base = if reduced_detail {
-        base * HALF_GRID_LOWEST_UNSHARP_SCALE
+    let base = if low_resolution {
+        base * LOW_LOWEST_UNSHARP_SCALE
     } else {
         base
     };
@@ -188,13 +170,11 @@ pub(super) fn prepare_sharpen(
         iso_gain,
         absolute_limit,
         SHARPEN_LUMA_LIMIT,
-        if grid.is_small() {
-            1. / (grid.divisor() as f32).sqrt()
-        } else if grid.is_half() || metadata.is_quattro_low() {
-            HALF_GRID_SHARPEN_SCALE
+        (if metadata.is_quattro_low() {
+            LOW_SHARPEN_SCALE
         } else {
             1.
-        },
+        }) * grid.factor().sqrt(),
         preserve_dark,
     )
 }
@@ -209,7 +189,7 @@ pub(super) fn color_sharpen_amount(metadata: &Metadata, mode: &str, base: f32) -
     };
     let base = f64::from(base);
     let scale = if metadata.is_quattro_low() {
-        HALF_GRID_SHARPEN_SCALE
+        LOW_SHARPEN_SCALE
     } else {
         1.
     };
@@ -237,13 +217,12 @@ pub(super) fn prepare_box_contrast(
         return Err("unsupported local contrast level".into());
     }
     let control = level as f32 / 3.;
-    let radii = if grid.is_small() {
-        FULL_BOX_RADII.map(|v| v.div_ceil(grid.divisor()).max(1))
-    } else if grid.is_half() || metadata.is_quattro_low() {
-        HALF_BOX_RADII
+    let native = if metadata.is_quattro_low() {
+        LOW_BOX_RADII
     } else {
-        FULL_BOX_RADII
+        HIGH_BOX_RADII
     };
+    let radii = native.map(|radius| radius.div_ceil(grid.divisor()).max(1));
     crate::nodes::finish::box_contrast::Prepared::new(
         extent(metadata, grid)?,
         std::array::from_fn(|i| (radii[i], control * BOX_STRENGTHS[i])),
@@ -469,12 +448,12 @@ mod tests {
             u32::from_le_bytes(header[16 + i * 4..20 + i * 4].try_into().unwrap())
         });
         assert_eq!(
-            lce_crop(&source.metadata, WorkingGrid::Full).unwrap(),
+            lce_crop(&source.metadata, WorkingGrid::NATIVE).unwrap(),
             captured_crop
         );
         let original = read("main-input-rgb.u16");
         let input = gpu.upload("Original pre-LCE RGB", &original).unwrap();
-        let size = extent(&source.metadata, WorkingGrid::Full).unwrap();
+        let size = extent(&source.metadata, WorkingGrid::NATIVE).unwrap();
         let start = std::time::Instant::now();
         let lab = crate::nodes::color::packed_lab::apply(
             &gpu,
@@ -491,7 +470,7 @@ mod tests {
         let adjusted = wavelet_contrast::apply(
             &gpu,
             &lab,
-            &prepare_lce(&source.metadata, 6, "Standard", None, WorkingGrid::Full).unwrap(),
+            &prepare_lce(&source.metadata, 6, "Standard", None, WorkingGrid::NATIVE).unwrap(),
             &mut Default::default(),
         )
         .unwrap();
@@ -562,7 +541,7 @@ mod tests {
             .collect();
         let gpu = Gpu::new().unwrap();
         let mut profile = Default::default();
-        let extent = extent(&source.metadata, WorkingGrid::Full).unwrap();
+        let extent = extent(&source.metadata, WorkingGrid::NATIVE).unwrap();
         let image = gpu
             .upload("Native monochrome Stage3 mixed RGB", &input)
             .unwrap();
@@ -584,7 +563,7 @@ mod tests {
                 6,
                 "Standard",
                 Some(1.6),
-                WorkingGrid::Full,
+                WorkingGrid::NATIVE,
             )
             .unwrap(),
             &mut profile,

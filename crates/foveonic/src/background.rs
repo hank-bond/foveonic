@@ -80,6 +80,25 @@ impl Gate {
         if self.available(context.priority) || context.interrupted() {
             return;
         }
+        if rayon::current_thread_index().is_some() {
+            // A paused CPU task must not occupy the last worker needed by the
+            // foreground task that will release its gate. Help without holding
+            // the gate lock, and sleep briefly only when no pool work is ready.
+            while !self.available(context.priority) && !context.interrupted() {
+                if rayon::yield_now() == Some(rayon::Yield::Executed) {
+                    continue;
+                }
+                let guard = self.lock.lock().unwrap();
+                if !self.available(context.priority) && !context.interrupted() {
+                    drop(
+                        self.wake
+                            .wait_timeout(guard, std::time::Duration::from_millis(1))
+                            .unwrap(),
+                    );
+                }
+            }
+            return;
+        }
         let mut guard = self.lock.lock().unwrap();
         while !self.available(context.priority) && !context.interrupted() {
             guard = self.wake.wait(guard).unwrap();
@@ -182,25 +201,21 @@ pub(crate) fn with_context<T>(context: Option<Context>, work: impl FnOnce() -> T
     work()
 }
 pub(crate) fn checkpoint() {
-    CONTEXT.with(|c| {
-        if let Some(context) = c.borrow().as_ref() {
-            context.gate.wait(context);
-        }
-    });
+    if let Some(context) = context() {
+        context.gate.wait(&context);
+    }
 }
 
 /// Pausable jobs retain progress. A foreground request still cancels speculative
 /// work immediately, including workers waiting behind thumbnail demand.
 pub(crate) fn checkpoint_or_cancel() -> crate::source::Result<()> {
-    CONTEXT.with(|c| {
-        if let Some(context) = c.borrow().as_ref() {
-            context.gate.wait(context);
-            if context.interrupted() {
-                return Err(Box::new(Interrupted) as Box<dyn std::error::Error + Send + Sync>);
-            }
+    if let Some(context) = context() {
+        context.gate.wait(&context);
+        if context.interrupted() {
+            return Err(Box::new(Interrupted) as Box<dyn std::error::Error + Send + Sync>);
         }
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 /// Small browser reads yield to the selected photo and precede optional work.
@@ -249,7 +264,8 @@ pub(crate) fn decode_priority() {
     #[cfg(target_os = "macos")]
     set_qos(match context() {
         Some(context)
-            if context.decoder.is_some() || matches!(context.priority, Priority::Processing) =>
+            if context.decoder.is_some()
+                || matches!(context.priority, Priority::Processing | Priority::Decode) =>
         {
             QOS_UTILITY
         }
@@ -327,6 +343,17 @@ mod tests {
         std::thread::spawn(|| {
             decode_priority();
             assert_eq!(qos(), QOS_USER_INITIATED);
+            crate::decode_pool::planes(|_| {
+                assert_eq!(qos(), QOS_USER_INITIATED);
+                Ok(())
+            })
+            .unwrap();
+            let mut active_rows = [0; 12];
+            crate::decode_pool::rows(&mut active_rows, 1, |_, _| {
+                assert_eq!(qos(), QOS_USER_INITIATED);
+                Ok(())
+            })
+            .unwrap();
             run(Some(Arc::new(Gate::default())), || {
                 assert_eq!(qos(), QOS_BACKGROUND);
                 let inherited = context();
@@ -343,6 +370,16 @@ mod tests {
             assert_eq!(qos(), QOS_USER_INITIATED);
             processing(Arc::new(Gate::default()), || {
                 assert_eq!(qos(), QOS_UTILITY);
+                crate::decode_pool::planes(|_| {
+                    assert_eq!(qos(), QOS_UTILITY);
+                    Ok(())
+                })
+                .unwrap();
+                crate::decode_pool::rows(&mut active_rows, 1, |_, _| {
+                    assert_eq!(qos(), QOS_UTILITY);
+                    Ok(())
+                })
+                .unwrap();
                 run(Some(Arc::new(Gate::default())), || {
                     assert_eq!(qos(), QOS_BACKGROUND)
                 });
@@ -370,7 +407,7 @@ mod tests {
                     || {
                         assert_eq!(qos(), QOS_UTILITY);
                         let task = decoder_context().unwrap();
-                        task.pool.planes(&task.turn, |_| {
+                        task.pool.planes(Some(&task.turn), |_| {
                             assert_eq!(qos(), QOS_UTILITY);
                             Ok(())
                         })?;

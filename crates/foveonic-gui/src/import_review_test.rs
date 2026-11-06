@@ -164,7 +164,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
             browser: true,
             import: browser.import_mode,
             settings: false,
-            photo_tool_active: false,
+            viewport_hovered: false,
             framing_active: false,
         },
     ) {

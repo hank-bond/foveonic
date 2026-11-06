@@ -9,7 +9,7 @@ fn dependencies_separate_overlapping_searches_and_keep_distant_jobs_parallel() {
         [21, 20, 0x03ff],
     ];
     let p = Prepared::new([80, 80], records, 0, 1., Stage::Directional).unwrap();
-    assert_eq!(p.batches, [[0, 2], [2, 1], [3, 1]]);
+    assert_eq!(&*p.batches, &[[0, 2], [2, 1], [3, 1]]);
     assert_eq!(
         p.jobs.iter().map(|r| [r[0], r[1]]).collect::<Vec<_>>(),
         [[20, 20], [50, 50], [20, 21], [21, 20]]
@@ -53,8 +53,8 @@ fn spatial_batches_match_serial_dependency_oracle() {
                 batches.push([jobs.len() as u32, level.len() as u32]);
                 jobs.extend(level);
             }
-            assert_eq!(p.jobs, jobs, "{stage:?} reverse={reverse}");
-            assert_eq!(p.batches, batches, "{stage:?} reverse={reverse}");
+            assert_eq!(&*p.jobs, &jobs[..], "{stage:?} reverse={reverse}");
+            assert_eq!(&*p.batches, &batches[..], "{stage:?} reverse={reverse}");
         }
     }
 }

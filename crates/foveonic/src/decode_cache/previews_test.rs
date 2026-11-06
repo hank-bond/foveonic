@@ -124,6 +124,56 @@ fn preview_storage_retains_sixteen_bit_samples_and_each_declared_gamut() {
 }
 
 #[test]
+fn separately_prepared_preview_keeps_container_bytes_and_revalidates_publication() {
+    let fixture = Fixture::new();
+    let direct = fixture.root.join("direct");
+    let deferred = fixture.root.join("deferred");
+    let settings = Settings::default();
+    let key = Key::read(&fixture.source).unwrap();
+    write_checked(
+        &direct,
+        fixture.write(true, [41, 83, 157]),
+        &settings,
+        &[],
+        &|| true,
+    )
+    .unwrap();
+    let prepared = crate::decode_pool::cpu(|| prepare(fixture.write(true, [41, 83, 157]))).unwrap();
+    assert!(!deferred.exists());
+    publish(&deferred, prepared, &settings, &[], &|| true).unwrap();
+    assert_eq!(
+        fs::read(key.location(&direct)).unwrap(),
+        fs::read(key.location(&deferred)).unwrap()
+    );
+
+    let cancelled = fixture.root.join("cancelled");
+    let prepared = crate::decode_pool::cpu(|| prepare(fixture.write(true, [1, 2, 3]))).unwrap();
+    publish(&cancelled, prepared, &settings, &[], &|| false).unwrap();
+    assert!(!cancelled.exists());
+    let prepared = crate::decode_pool::cpu(|| prepare(fixture.write(true, [1, 2, 3]))).unwrap();
+    let too_small = Settings {
+        max_bytes: 1,
+        ..settings.clone()
+    };
+    publish(&cancelled, prepared, &too_small, &[], &|| true).unwrap();
+    assert!(!cancelled.exists());
+    let prepared = crate::decode_pool::cpu(|| prepare(fixture.write(true, [1, 2, 3]))).unwrap();
+    sidecar::save(
+        &fixture.source,
+        &crate::render::Settings {
+            exposure: 0.5,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    publish(&cancelled, prepared, &settings, &[], &|| true).unwrap();
+    assert!(
+        !cancelled.exists(),
+        "recipe changes must invalidate prepared preview bytes"
+    );
+}
+
+#[test]
 fn preview_reuses_only_the_same_source_and_recipe_and_obeys_policy() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("cache"));

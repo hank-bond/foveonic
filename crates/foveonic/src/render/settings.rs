@@ -1,6 +1,6 @@
 //! Defines shared photographic settings and validates their values.
 
-use super::MerrillBandingControls;
+use super::{MerrillBandingControls, Scale};
 pub use crate::color_space::TiffColorSpace;
 pub use crate::nodes::finish::color_editor::Controls as ColorEditorControls;
 pub use crate::nodes::finish::dehaze::Controls as DehazeControls;
@@ -43,33 +43,6 @@ pub enum MerrillNoiseMethod {
     MultiscaleRowsAndColumns,
 }
 
-/// Workspace rendering quality. Exports and inspection select Full.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PreviewQuality {
-    #[default]
-    Full,
-    /// Reduced working grid with the requested Noise and Detail controls.
-    Fast,
-    /// Prototype reconstruction at one quarter of native width and height.
-    Draft,
-    /// Prototype reconstruction at one eighth of native width and height.
-    Thumb,
-}
-impl PreviewQuality {
-    pub fn divisor(self) -> u32 {
-        match self {
-            Self::Full => 1,
-            Self::Fast => 2,
-            Self::Draft => 4,
-            Self::Thumb => 8,
-        }
-    }
-
-    pub fn is_reduced(self) -> bool {
-        self != Self::Full
-    }
-}
-
 /// Frozen output switches. These preferences do not become per-image edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -108,9 +81,9 @@ pub struct Settings {
     /// Batch-only section choices, excluded from editing sidecars.
     #[serde(skip)]
     pub processing_sections: ProcessingSections,
-    /// Transient preview policy, excluded from per-photo editing sidecars.
+    /// Sensor sampling for this render, excluded from per-photo editing sidecars.
     #[serde(skip)]
-    pub preview_quality: PreviewQuality,
+    pub working_scale: Scale,
     /// Transient oriented native-pixel rectangle for regional preview processing.
     #[serde(skip)]
     pub preview_region: Option<[u32; 4]>,
@@ -193,7 +166,7 @@ impl Default for Settings {
             dehaze: DehazeControls::default(),
             dehaze_estimate: false,
             processing_sections: Default::default(),
-            preview_quality: PreviewQuality::Full,
+            working_scale: Scale::NATIVE,
             preview_region: None,
             color_range_preview: None,
             adaptive_tone_tuning: Default::default(),
@@ -272,35 +245,13 @@ impl Settings {
         }
     }
 
-    /// Supported color recipes preserve native framing on their reduced working grid.
-    pub fn fast_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
-        !self.is_monochrome()
-            && (super::recipes::merrill::fast_available(metadata)
-                || super::recipes::quattro::fast_available(metadata))
-    }
-
-    /// Validated sensor-level Draft and Thumb grids for the selected camera route.
-    pub fn small_preview_available(
+    /// Sensor sampling is independent of the selected photographic operations.
+    pub fn working_scale_available(
         &self,
         metadata: &crate::source::Metadata,
-        quality: PreviewQuality,
+        _scale: Scale,
     ) -> bool {
-        if self.is_monochrome() || !matches!(quality, PreviewQuality::Draft | PreviewQuality::Thumb)
-        {
-            return false;
-        }
-        match metadata.processing_family() {
-            Ok(crate::source::ProcessingFamily::Merrill) => {
-                super::recipes::merrill::preview_available(metadata, quality)
-            }
-            Ok(crate::source::ProcessingFamily::Classic) => {
-                super::recipes::classic::preview_available(metadata, self, quality)
-            }
-            Ok(crate::source::ProcessingFamily::Quattro) => {
-                super::recipes::quattro::small_preview_available(metadata, quality)
-            }
-            _ => false,
-        }
+        metadata.width != 0 && metadata.height != 0 && metadata.processing_family().is_ok()
     }
 
     /// Color recipes can refine native viewport detail before the whole frame.
@@ -311,7 +262,8 @@ impl Settings {
             && !self.is_monochrome()
             && (super::recipes::quattro::fast_available(metadata)
                 || (self.output_size.is_none()
-                    && super::recipes::merrill::fast_available(metadata)
+                    && metadata.processing_family().ok()
+                        == Some(crate::source::ProcessingFamily::Merrill)
                     && super::recipes::merrill::regional_available(metadata)))
     }
 
@@ -375,6 +327,47 @@ impl Settings {
             Some(amount) => Ok(amount),
             None => super::recipes::default_sharpen_amount(self, metadata),
         }
+    }
+
+    /// Resolve the camera's automatic ColorDQ gain for the current sensor-noise controls.
+    pub fn effective_color_dq_gain(&self, metadata: &crate::source::Metadata) -> Result<f32> {
+        if let Some(gain) = self.color_dq_gain {
+            return Ok(gain);
+        }
+        let recipe =
+            crate::noise::couplings(metadata, &self.white_balance, self.sensor_noise_controls())?;
+        Ok(crate::noise::processing_gain(metadata)?
+            .1
+            .min(recipe.color_dq_limit))
+    }
+    /// Compare the inputs of the camera's automatic sharpening amount.
+    pub fn automatic_sharpening_matches(
+        &self,
+        other: &Self,
+        metadata: &crate::source::Metadata,
+    ) -> bool {
+        if self.photographic.sharpening.method != other.photographic.sharpening.method {
+            return false;
+        }
+        if self.photographic.sharpening.method == PhotographicMethod::Universal {
+            return true;
+        }
+        match metadata.processing_family().ok() {
+            Some(crate::source::ProcessingFamily::Classic) => true,
+            Some(crate::source::ProcessingFamily::Quattro) => {
+                self.is_monochrome() == other.is_monochrome()
+            }
+            Some(crate::source::ProcessingFamily::Merrill) => {
+                self.is_monochrome() == other.is_monochrome()
+                    && (!self.is_monochrome() || self.automatic_color_dq_matches(other))
+            }
+            None => false,
+        }
+    }
+    /// Compare the inputs of automatic sensor-noise couplings and ColorDQ gain.
+    pub fn automatic_color_dq_matches(&self, other: &Self) -> bool {
+        self.white_balance == other.white_balance
+            && self.sensor_noise_controls() == other.sensor_noise_controls()
     }
 
     fn processing_sharpen_amount(&self) -> Option<f32> {
@@ -609,7 +602,7 @@ impl Settings {
         // Resolve the selected method before removing shared photographic controls,
         // so inactive Reference Shadows/Highlights cannot reappear in DNG metadata.
         let mut settings = self.active_tone_settings().into_owned();
-        settings.preview_quality = PreviewQuality::Full;
+        settings.working_scale = Scale::NATIVE;
         settings.preview_region = None;
         settings.color_range_preview = None;
         settings.output_size = None;

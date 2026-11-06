@@ -39,20 +39,33 @@ struct ScalarParams {
 
 pub(super) enum Input<'a> {
     Source(&'a Source),
+    Metadata(&'a std::sync::Arc<Metadata>),
     Rendered(&'a RenderedImage),
 }
 
 impl Input<'_> {
-    fn metadata(&self) -> &Metadata {
+    fn metadata(&self) -> &std::sync::Arc<Metadata> {
         match self {
             Self::Source(source) => &source.metadata,
-            Self::Rendered(image) => image.source_metadata(),
+            Self::Metadata(metadata) => metadata,
+            Self::Rendered(image) => &image.metadata,
         }
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct SourceRequired;
+impl std::fmt::Display for SourceRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a required camera dependency needs original sensor samples")
+    }
+}
+impl std::error::Error for SourceRequired {}
+
 #[derive(Clone)]
 pub(crate) struct Value {
+    pub(crate) working_scale: super::Scale,
+    pub(crate) view: Option<crate::image::View>,
     pub(crate) buffer: crate::gpu::ReadGuard,
     pub(crate) description: Option<Description>,
 }
@@ -92,6 +105,18 @@ impl Engine {
         } else {
             graph.required(targets)?
         };
+        if matches!(context, Input::Metadata(_))
+            && graph.outputs.iter().enumerate().any(|(id, output)| {
+                required[id]
+                    && !cached[id]
+                    && matches!(
+                        graph.nodes[output.producer].operation,
+                        Operation::Source | Operation::SourcePhaseCells
+                    )
+            })
+        {
+            return Err(Box::new(SourceRequired));
+        }
         // A cached main output does not guarantee that a side output is cached.
         // Request only what is missing so a partial run cannot replace retained values.
         let reachable = profile.mode.enabled().then(|| required.clone());
@@ -203,8 +228,36 @@ impl Engine {
                 })
                 .unwrap_or_else(|| match &context {
                     Input::Source(source) => source.storage_extent().map(|v| v as u32),
+                    Input::Metadata(metadata) => [metadata.width as u32, metadata.height as u32],
                     Input::Rendered(image) => image.description.extent,
                 });
+            let inherited_scale = reads[node_index]
+                .iter()
+                .find_map(|id| values[*id].as_ref().map(|value| value.working_scale))
+                .unwrap_or(super::Scale::NATIVE);
+            let coarser = || -> Result<super::Scale> {
+                super::Scale::new(
+                    inherited_scale
+                        .divisor()
+                        .checked_mul(2)
+                        .ok_or("working scale overflow")?,
+                )
+            };
+            let working_scale = match &node.operation {
+                Operation::Source | Operation::SourcePhaseCells => super::Scale::NATIVE,
+                Operation::RenderedInput { .. } => match &context {
+                    Input::Rendered(image) => image.settings.working_scale,
+                    _ => super::Scale::NATIVE,
+                },
+                Operation::ReduceLayers(prepared) => {
+                    prepared.working_scale().map_or_else(coarser, Ok)?
+                }
+                Operation::PoolSignal(prepared) => {
+                    prepared.working_scale().map_or_else(coarser, Ok)?
+                }
+                Operation::AdaptiveToneOverview { .. } => coarser()?,
+                _ => inherited_scale,
+            };
             let extent = match &node.operation {
                 Operation::PoolSignal(prepared) => prepared.output_extent(),
                 Operation::ReduceLayers(prepared) => prepared.output_extent(),
@@ -229,6 +282,35 @@ impl Engine {
                 Operation::Encode { params, .. } => [params.output[0], params.output[1]],
                 Operation::BlueGuidedReconstruct(p) => p.output_extent(),
                 _ => inherited,
+            };
+            let inherited_view = reads[node_index]
+                .iter()
+                .find_map(|id| values[*id].as_ref().and_then(|value| value.view));
+            let view = match &node.operation {
+                Operation::ReduceLayers(prepared) => {
+                    inherited_view.map(|view| prepared.map_view(view))
+                }
+                Operation::PoolSignal(prepared) => {
+                    inherited_view.map(|view| prepared.map_view(view))
+                }
+                Operation::AdaptiveToneOverview { .. } => inherited_view.map(|mut view| {
+                    let half = super::Scale::new(2).expect("power of two");
+                    view.crop = half.bounds(view.crop);
+                    view.extent = half.extent(view.extent);
+                    view
+                }),
+                Operation::CodeCrop(_) | Operation::Encode { .. } | Operation::NoiseContext(_) => {
+                    Some(crate::image::View {
+                        crop: [0, 0, extent[0], extent[1]],
+                        rotation: 0,
+                        extent,
+                    })
+                }
+                Operation::RenderedInput { .. } => match &context {
+                    Input::Rendered(image) => Some(image.uncropped_view()),
+                    _ => None,
+                },
+                _ => inherited_view,
             };
             let view_baked = matches!(
                 node.operation,
@@ -360,6 +442,8 @@ impl Engine {
                     if let Some(&side) = node.outputs.get(1) {
                         if required[side] {
                             values[side] = Some(Value {
+                                working_scale,
+                                view,
                                 buffer: output.mask,
                                 description: None,
                             });
@@ -586,6 +670,8 @@ impl Engine {
                         if let Some(&side) = node.outputs.get(slot) {
                             if required[side] {
                                 values[side] = Some(Value {
+                                    working_scale,
+                                    view,
                                     buffer,
                                     description: Some(Description::new(
                                         inherited,
@@ -610,6 +696,8 @@ impl Engine {
                     if let Some(&side) = node.outputs.get(1) {
                         if required[side] {
                             values[side] = Some(Value {
+                                working_scale,
+                                view,
                                 buffer: output.source_after,
                                 description: Some(Description::new(
                                     inherited,
@@ -633,6 +721,8 @@ impl Engine {
                     if let Some(&side) = node.outputs.get(1) {
                         if required[side] {
                             values[side] = Some(Value {
+                                working_scale,
+                                view,
                                 buffer: output.source_after,
                                 description: Some(Description::new(
                                     inherited,
@@ -656,6 +746,8 @@ impl Engine {
                     if let Some(&side) = node.outputs.get(1) {
                         if required[side] {
                             values[side] = Some(Value {
+                                working_scale,
+                                view,
                                 buffer: output.mask,
                                 description: None,
                             });
@@ -664,6 +756,8 @@ impl Engine {
                     if let Some(&side) = node.outputs.get(2) {
                         if required[side] {
                             values[side] = Some(Value {
+                                working_scale,
+                                view,
                                 buffer: output
                                     .recovery_mask
                                     .ok_or("missing highlight recovery mask")?,
@@ -723,6 +817,8 @@ impl Engine {
                     let extent = prepared.output_extent();
                     if required[node.outputs[1]] {
                         values[node.outputs[1]] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: output.residual,
                             description: Some(Description::new(
                                 extent,
@@ -754,6 +850,8 @@ impl Engine {
                     )?;
                     if required[node.outputs[1]] {
                         values[node.outputs[1]] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: output.detail,
                             description: Some(Description::new(
                                 inherited,
@@ -821,6 +919,8 @@ impl Engine {
                     ] {
                         if required[side] {
                             values[side] = Some(Value {
+                                working_scale,
+                                view,
                                 buffer,
                                 description: graph.outputs[side].data.image_description(extent),
                             });
@@ -850,6 +950,8 @@ impl Engine {
                     ] {
                         if required[side] {
                             values[side] = Some(Value {
+                                working_scale,
+                                view,
                                 buffer,
                                 description: graph.outputs[side].data.image_description(extent),
                             });
@@ -881,6 +983,8 @@ impl Engine {
                     let side = node.outputs[1];
                     if required[side] {
                         values[side] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: blue,
                             description: graph.outputs[side]
                                 .data
@@ -938,6 +1042,8 @@ impl Engine {
                     let layer_id = node.outputs[1];
                     if required[layer_id] {
                         values[layer_id] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: layers,
                             description: DataType::CalibratedLayers.image_description(inherited),
                         });
@@ -1000,6 +1106,8 @@ impl Engine {
                     let detail_id = node.outputs[1];
                     if required[detail_id] {
                         values[detail_id] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: result.detail,
                             description: DataType::SignedDetail.image_description(inherited),
                         });
@@ -1078,6 +1186,8 @@ impl Engine {
                     let side = node.outputs[1];
                     if required[side] {
                         values[side] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: histogram,
                             description: None,
                         });
@@ -1119,6 +1229,8 @@ impl Engine {
                     let edge_id = node.outputs[1];
                     if required[edge_id] {
                         values[edge_id] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: context.edges,
                             description: DataType::ScalarField.image_description(extent),
                         });
@@ -1152,6 +1264,8 @@ impl Engine {
                     };
                     if required[projected] {
                         values[projected] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(
                                 gpu,
                                 base.tiles.as_ref().unwrap(),
@@ -1165,6 +1279,8 @@ impl Engine {
                     }
                     if required[edge_id] {
                         values[edge_id] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(
                                 gpu,
                                 base.edges.as_ref().unwrap(),
@@ -1178,6 +1294,8 @@ impl Engine {
                     }
                     if required[node.outputs[3]] {
                         values[node.outputs[3]] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: base.seed.unwrap(),
                             description: None,
                         });
@@ -1201,6 +1319,8 @@ impl Engine {
                     )?;
                     if let Some(&projected) = node.outputs.get(1).filter(|id| required[**id]) {
                         values[projected] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(gpu, &tiles, params, 3, profile)?,
                             description: DataType::CalibratedLayers
                                 .image_description(params.output_extent()),
@@ -1217,6 +1337,8 @@ impl Engine {
                     let projected = node.outputs[1];
                     if required[projected] {
                         values[projected] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: DataType::CalibratedLayers
                                 .image_description(params.output_extent()),
@@ -1235,6 +1357,8 @@ impl Engine {
                     let projected = node.outputs[1];
                     if required[projected] {
                         values[projected] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(gpu, &ratio, *params, 1, profile)?,
                             description: DataType::LuminanceRatio
                                 .image_description(params.output_extent()),
@@ -1256,6 +1380,8 @@ impl Engine {
                     )?;
                     if required[projected] {
                         values[projected] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(
                                 gpu,
                                 result.ratio.as_ref().unwrap(),
@@ -1269,6 +1395,8 @@ impl Engine {
                     }
                     if required[mask] {
                         values[mask] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(
                                 gpu,
                                 result.mask.as_ref().unwrap(),
@@ -1312,6 +1440,8 @@ impl Engine {
                     )?;
                     if let Some(buffer) = result.change {
                         values[node.outputs[1]] = Some(Value {
+                            working_scale,
+                            view,
                             buffer,
                             description: DataType::LuminanceRatio
                                 .image_description(params.output_extent()),
@@ -1325,6 +1455,8 @@ impl Engine {
                     let projected = node.outputs[1];
                     if required[projected] {
                         values[projected] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: graph.outputs[projected]
                                 .data
@@ -1339,6 +1471,8 @@ impl Engine {
                     let projected = node.outputs[1];
                     if required[projected] {
                         values[projected] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: graph.outputs[projected]
                                 .data
@@ -1353,6 +1487,8 @@ impl Engine {
                     let rows = node.outputs[1];
                     if required[rows] {
                         values[rows] = Some(Value {
+                            working_scale,
+                            view,
                             buffer: result.rows,
                             description: None,
                         });
@@ -1360,6 +1496,13 @@ impl Engine {
                     result.image
                 }
                 Operation::Highlights(prepared) => {
+                    let materialized;
+                    let prepared = if prepared.flags.is_none() {
+                        materialized = self.materialize_highlights(context.metadata(), prepared)?;
+                        &materialized
+                    } else {
+                        prepared
+                    };
                     highlight::apply(gpu, Some(&input(0).buffer), prepared, false, profile)?.pixels
                 }
                 Operation::ColorField(prepared) => Some(color_field::apply(
@@ -1375,6 +1518,13 @@ impl Engine {
                     execution,
                 )?),
                 Operation::HighlightDensity(prepared) => {
+                    let materialized;
+                    let prepared = if prepared.flags.is_none() {
+                        materialized = self.materialize_highlights(context.metadata(), prepared)?;
+                        &materialized
+                    } else {
+                        prepared
+                    };
                     highlight::apply(gpu, None, prepared, true, profile)?.density
                 }
                 Operation::Despeckle(prepared) => Some(despeckle::apply(
@@ -1491,13 +1641,16 @@ impl Engine {
                     inherited,
                     profile,
                 )?),
-                Operation::MonoTexture(c) => Some(crate::nodes::monochrome::texture::apply(
-                    gpu,
-                    &input(0).buffer,
-                    *c,
-                    inherited,
-                    profile,
-                )?),
+                Operation::MonoTexture { controls, scale } => {
+                    Some(crate::nodes::monochrome::texture::apply(
+                        gpu,
+                        &input(0).buffer,
+                        *controls,
+                        *scale,
+                        inherited,
+                        profile,
+                    )?)
+                }
                 Operation::LinearBasis { rows, .. } => {
                     Some(crate::nodes::finish::linear_basis::apply(
                         gpu,
@@ -1767,11 +1920,16 @@ impl Engine {
             let publication = profile.mode.enabled().then(Instant::now);
             if !cached[index] {
                 values[index] = output.map(|buffer| Value {
+                    working_scale,
+                    view,
                     buffer,
                     description: desc,
                 });
             }
             for &id in &node.outputs {
+                if let (Some(view), Some(value)) = (graph.outputs[id].view, values[id].as_mut()) {
+                    value.view = Some(view);
+                }
                 if let Some(value) = values[id].as_ref() {
                     execution.store(&graph.outputs[id].cache_name(), value);
                 }

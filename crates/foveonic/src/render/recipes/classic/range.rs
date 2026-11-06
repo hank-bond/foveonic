@@ -4,7 +4,7 @@ use super::reference::*;
 
 use super::prepare::{self, ColorInput};
 use crate::{
-    nodes::color::range_reconstruction::{Controls, Prepared},
+    nodes::color::range_reconstruction::Controls,
     render::Settings,
     source::{Metadata, Result},
 };
@@ -69,19 +69,7 @@ fn working_matrix(camera: [f64; 9], digital_gain: f32) -> Result<[f64; 9]> {
     }))
 }
 
-pub(super) fn prepare(
-    m: &Metadata,
-    input: &ColorInput,
-    settings: &Settings,
-    unselected: bool,
-) -> Result<Prepared> {
-    Prepared::new(
-        [input.extent[0] as u32, input.extent[1] as u32],
-        controls(m, input, settings, unselected)?,
-    )
-}
-
-fn controls(
+pub(super) fn controls(
     m: &Metadata,
     input: &ColorInput,
     settings: &Settings,

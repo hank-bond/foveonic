@@ -1,8 +1,8 @@
-//! Configures display, thumbnail memory and background disk reuse independently of photographic edits.
+//! Configures display, editing targets, retained memory and background disk reuse independently of photographic edits.
 
 use crate::{preferences, widgets};
 use eframe::egui;
-use foveonic::decode_cache::{available_decode_threads, Cache};
+use foveonic::decode_cache::Cache;
 
 const BYTES_PER_GB: f64 = 1_000_000_000.;
 const CACHE_BUDGET_GB: std::ops::RangeInclusive<f64> = 0.1..=1000.;
@@ -18,6 +18,7 @@ pub fn show(
     preferences: &mut preferences::Preferences,
     cache: &Cache,
     managed: bool,
+    memory: crate::worker::MemoryStatus,
 ) {
     let settings = &mut preferences.decode_cache;
     let gamut = &mut preferences.display_gamut;
@@ -45,19 +46,30 @@ pub fn show(
                 .on_hover_text("Applies to the viewport, navigator and browser previews. Saved edits and TIFF/DNG output are unchanged.");
             if !managed { ui.weak("This window uses the sRGB display fallback."); }
             ui.separator();
-            ui.heading("Performance");
+            ui.heading("Memory");
             ui.horizontal(|ui| {
-                ui.label("Thumbnail memory");
-                let mut mib = preferences.thumbnail_cache_bytes as f64 / preferences::MIB as f64;
-                let range = preferences::THUMBNAIL_BYTES_RANGE;
+                ui.label("Cache memory");
+                let mut mib = preferences.memory_cache_bytes as f64 / preferences::MIB as f64;
+                let range = preferences::MEMORY_BYTES_RANGE;
                 if ui.add(widgets::drag_value(&mut mib)
                     .range(*range.start() as f64 / preferences::MIB as f64..=*range.end() as f64 / preferences::MIB as f64)
-                    .speed(16.)
-                    .suffix(" MiB")).changed() {
-                    preferences.thumbnail_cache_bytes = (mib * preferences::MIB as f64).round() as u64;
+                    .speed(64.).suffix(" MiB")).changed() {
+                    preferences.memory_cache_bytes = (mib * preferences::MIB as f64).round() as u64;
                 }
-            }).response.on_hover_text("Memory for small browser thumbnails. Visible photos stay resident even when they exceed this budget. Larger previews and decoded RAW data use separate storage.");
+            }).response.on_hover_text("Target for retained image and browser caches. Temporary processing uses additional memory.");
+            ui.label(format!("Retained data: {:.0} MiB", memory.resources.total_bytes as f64 / preferences::MIB as f64))
+                .on_hover_text("Known photo samples, display images and caches. Temporary processing and graphics-driver allocations are additional.");
+            if memory.over_budget_bytes > 0 {
+                ui.weak(format!("{:.0} MiB above the cache target", memory.over_budget_bytes as f64 / preferences::MIB as f64));
+            }
+            ui.horizontal(|ui| {
+                ui.label("Maximum editing targets");
+                ui.add(widgets::drag_value(&mut preferences.multi_edit_limit)
+                    .range(1..=usize::MAX).speed(1.));
+            }).response.on_hover_text("The maximum number of viewport-selected photographs that receive editor changes. Browser selection remains unlimited.");
+            ui.weak("The editing count is independent of cache memory.");
             ui.separator();
+            ui.heading("Disk");
             widgets::checkbox(ui, &mut settings.enabled, "Enable disk cache");
             ui.add_enabled_ui(settings.enabled, |ui| {
                 ui.horizontal(|ui| {
@@ -71,20 +83,6 @@ pub fn show(
                         settings.max_bytes = (gb * BYTES_PER_GB).round() as u64;
                     }
                 });
-                let cores = available_decode_threads();
-                ui.horizontal(|ui| {
-                    ui.label("Background decode workers");
-                    ui.add(
-                        crate::widgets::drag_value(&mut settings.decode_threads)
-                            .range(1..=cores)
-                            .speed(1.),
-                    );
-                })
-                .response
-                .on_hover_text(format!(
-                    "Up to {cores} available cores. Share workers across RAW layers, nearest photos first. \
-                     More threads use more CPU and memory. Active photos take priority."
-                ));
                 ui.horizontal(|ui| {
                     ui.label("Look behind");
                     ui.add(

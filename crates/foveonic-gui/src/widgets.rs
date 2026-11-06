@@ -70,9 +70,49 @@ pub(crate) fn format_numeric_value(value: f64, integral: bool) -> String {
     }
 }
 
+/// Reserve every display form before a slider can change its adjacent readout.
+pub(crate) fn numeric_field_width<T: egui::emath::Numeric>(
+    ui: &egui::Ui,
+    range: &std::ops::RangeInclusive<T>,
+) -> f32 {
+    let font = ui.style().drag_value_text_style.resolve(ui.style());
+    let largest = range.start().to_f64().abs().max(range.end().to_f64().abs());
+    let large_sample = -1.23456789 * 10_f64.powi(largest.log10().floor() as i32);
+    let text_width = [
+        format_numeric_value(range.start().to_f64(), T::INTEGRAL),
+        format_numeric_value(range.end().to_f64(), T::INTEGRAL),
+        "-0.00".into(),
+        "Multi".into(),
+        format_numeric_value(large_sample, T::INTEGRAL),
+    ]
+    .into_iter()
+    .map(|text| {
+        ui.painter()
+            .layout_no_wrap(text, font.clone(), egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    })
+    .fold(0., f32::max);
+    (text_width + 2. * ui.spacing().button_padding.x).max(ui.spacing().interact_size.x)
+}
+
 pub(crate) fn drag_value<T: egui::emath::Numeric>(value: &mut T) -> egui::DragValue<'_> {
     egui::DragValue::new(value)
         .custom_formatter(|value, _| format_numeric_value(value, T::INTEGRAL))
+}
+
+/// Mixed readouts keep ordinary numeric parsing and formatting while reporting differing values.
+pub(crate) fn mixed_drag_value<T: egui::emath::Numeric>(
+    value: &mut T,
+    mixed: bool,
+) -> egui::DragValue<'_> {
+    drag_value(value).custom_formatter(move |value, _| {
+        if mixed {
+            "Multi".into()
+        } else {
+            format_numeric_value(value, T::INTEGRAL)
+        }
+    })
 }
 
 pub(crate) fn slider<T: egui::emath::Numeric>(
@@ -84,9 +124,9 @@ pub(crate) fn slider<T: egui::emath::Numeric>(
 }
 
 /// Compact readouts use at most three significant digits and two decimal places.
-/// Scientific notation keeps small nonzero settings distinguishable from zero.
+/// Tiny values round to zero for display while the stored setting keeps its precision.
 pub(crate) fn format_parameter_value(value: f64) -> String {
-    if value == 0. {
+    if value.abs() < 0.5 * 10_f64.powi(-(VALUE_DECIMAL_PLACES as i32)) {
         return "0.00".into();
     }
     if !value.is_finite() {
@@ -108,14 +148,7 @@ pub(crate) fn format_parameter_value(value: f64) -> String {
     }
     let decimals =
         ((VALUE_SIGNIFICANT_DIGITS as i32 - 1 - exponent) as usize).min(VALUE_DECIMAL_PLACES);
-    let text = format!("{value:.decimals$}");
-    if text.parse::<f64>() == Ok(0.) {
-        return format!(
-            "{}e{exponent}",
-            mantissa.trim_end_matches('0').trim_end_matches('.')
-        );
-    }
-    text
+    format!("{value:.decimals$}")
 }
 
 const RADIUS: u8 = 4;
@@ -495,6 +528,11 @@ pub fn dropdown<R>(
     let outer_width = ui
         .data(|d| d.get_temp::<f32>(width_key))
         .unwrap_or(ui.available_width());
+    let combo = if crate::multi_edit_controls::mixed(ui.ctx()) {
+        combo.selected_text("Multi")
+    } else {
+        combo
+    };
     let response = combo.show_ui(ui, |ui| {
         // egui's popup starts with a provisional width. Pin its content to the
         // closed control, excluding the popup frame's own padding and border.
@@ -838,9 +876,12 @@ pub fn selectable_value<T: PartialEq>(
     label: &str,
 ) -> egui::Response {
     let mut response = button(ui, label, *value == choice, egui::Vec2::ZERO);
-    if response.clicked() && *value != choice {
-        *value = choice;
-        response.mark_changed();
+    if response.clicked() {
+        crate::multi_edit_controls::choice_clicked(ui.ctx());
+        if *value != choice || crate::multi_edit_controls::mixed(ui.ctx()) {
+            *value = choice;
+            response.mark_changed();
+        }
     }
     response
 }
@@ -974,9 +1015,12 @@ pub fn menu_value<T: PartialEq>(
     label: &str,
 ) -> egui::Response {
     let mut response = menu_row(ui, label, *value == choice);
-    if response.clicked() && *value != choice {
-        *value = choice;
-        response.mark_changed();
+    if response.clicked() {
+        crate::multi_edit_controls::choice_clicked(ui.ctx());
+        if *value != choice || crate::multi_edit_controls::mixed(ui.ctx()) {
+            *value = choice;
+            response.mark_changed();
+        }
     }
     response
 }

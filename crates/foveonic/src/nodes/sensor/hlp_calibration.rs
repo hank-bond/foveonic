@@ -6,7 +6,7 @@ use crate::{
         Gpu, Kernel, ReadGuard,
     },
     profile::Profile,
-    recipe::Key,
+    recipe::{Key, Shared},
     source::Result,
 };
 
@@ -34,8 +34,8 @@ struct Params {
 #[derive(Clone, Debug)]
 pub struct Prepared {
     params: Params,
-    lut: Vec<u32>,
-    gains: Vec<Gain>,
+    lut: Shared<u32>,
+    gains: Shared<Gain>,
 }
 impl Prepared {
     /// Gains are row-major over sparse positions. RGB gain pairs retain the
@@ -77,8 +77,8 @@ impl Prepared {
                 special,
                 controls: [scale, 1. / scale, BLUE_CAP, 0.],
             },
-            lut,
-            gains,
+            lut: lut.into(),
+            gains: gains.into(),
         })
     }
     pub(crate) fn with_blue_ceiling(mut self, ceiling: f32) -> Result<Self> {
@@ -106,7 +106,9 @@ impl Prepared {
         ]
     }
     pub(crate) fn key(&self) -> Key {
-        Key::pod(&self.params).slice(&self.lut).slice(&self.gains)
+        Key::pod(&self.params)
+            .join(self.lut.key())
+            .join(self.gains.key())
     }
 }
 pub(crate) struct Output {

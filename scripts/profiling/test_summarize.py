@@ -77,8 +77,8 @@ class SummarizeTests(unittest.TestCase):
 
     def test_editing_schedules_sizes_and_node_phases_stay_separate(self):
         records = []
-        for quality, workers, milliseconds in [('Draft', 1, 40.), ('Thumb', 1, 20.), ('Thumb', 2, 15.)]:
-            context = {'quality': quality, 'workers': workers, 'edit': 'exposure'}
+        for divisor, workers, milliseconds in [(4, 1, 40.), (8, 1, 20.), (8, 2, 15.)]:
+            context = {'scale_divisor': divisor, 'workers': workers, 'edit': 'exposure'}
             records.append(event('editing_group', {**context, 'photo_count': 8,
                 'completed_ms': milliseconds, 'first_ms': 5., 'cache_bytes': 100}))
             records.append(event('editing_photo', {**context, 'profile': {

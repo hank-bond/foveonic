@@ -22,6 +22,7 @@ const RGB_CHANNELS: usize = 3;
 // Bound completed CPU display pixels while the UI consumes its previous reply.
 const READY_CAPACITY: usize = 1;
 
+#[derive(Clone)]
 struct Job {
     epoch: u64,
     calibration_signature: Option<String>,
@@ -35,6 +36,8 @@ struct Job {
 #[derive(Default)]
 struct Pending {
     job: Option<Job>,
+    active: Option<Job>,
+    revision: u64,
     stop: bool,
 }
 pub struct Ready {
@@ -43,6 +46,7 @@ pub struct Ready {
     pub path: PathBuf,
     pub revision: u64,
     pub image: PreparedPreview,
+    pub(crate) _memory: Option<crate::display_image::StagedBytes>,
 }
 pub struct Previews {
     render_state: egui_wgpu::RenderState,
@@ -52,9 +56,12 @@ pub struct Previews {
     pub replies: mpsc::Receiver<Ready>,
     wanted: Option<(Job, Instant)>,
     sent: Option<(PathBuf, u64)>,
+    staging: crate::display_image::Staging,
+    resource_revision: u64,
 }
 impl Previews {
     pub fn invalidate(&mut self) {
+        self.resource_revision = self.resource_revision.wrapping_add(1);
         self.epoch = self.epoch.wrapping_add(1);
         self.invalid_paths.clear();
         self.sent = None;
@@ -66,68 +73,83 @@ impl Previews {
         let pending = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let worker = pending.clone();
         let (tx, replies) = mpsc::sync_channel(READY_CAPACITY);
-        std::thread::spawn(move || loop {
-            let job = {
-                let mut state = worker.0.lock().unwrap();
-                while state.job.is_none() && !state.stop {
-                    state = worker.1.wait(state).unwrap();
-                }
-                if state.stop {
-                    break;
-                }
-                state.job.take().unwrap()
-            };
-            let result = cache.background(|| {
-                // A newer frame can replace this job while it waits for foreground work.
-                {
-                    let state = worker.0.lock().unwrap();
-                    if state.stop
-                        || state
-                            .job
-                            .as_ref()
-                            .is_some_and(|j| j.revision > job.revision)
-                    {
-                        return None;
+        let staging = crate::display_image::Staging::default();
+        let worker_staging = staging.clone();
+        std::thread::spawn(move || {
+            loop {
+                let job = {
+                    let mut state = worker.0.lock().unwrap();
+                    while state.job.is_none() && !state.stop {
+                        state = worker.1.wait(state).unwrap();
                     }
+                    if state.stop {
+                        break;
+                    }
+                    let job = state.job.take().unwrap();
+                    state.active = Some(job.clone());
+                    state.revision = state.revision.wrapping_add(1);
+                    job
+                };
+                let result = cache.background(|| {
+                    // A newer frame can replace this job while it waits for foreground work.
+                    {
+                        let state = worker.0.lock().unwrap();
+                        if state.stop
+                            || state
+                                .job
+                                .as_ref()
+                                .is_some_and(|j| j.revision > job.revision)
+                        {
+                            return None;
+                        }
+                    }
+                    let preview = downsample(&rs, &job.source).ok()?;
+                    let prepared = PreparedPreview::new(
+                        Preview {
+                            rgb: preview.rgb.clone(),
+                            color_space: preview.color_space,
+                            extent: preview.extent,
+                            rotation: 0,
+                            native_extent: job.native_extent,
+                        },
+                        true,
+                    )
+                    .ok()?;
+                    let _ = cache.save_preview(
+                        &job.path,
+                        &job.settings,
+                        &job.metadata,
+                        Preview {
+                            native_extent: job.native_extent,
+                            ..preview
+                        },
+                        job.calibration_signature.as_deref(),
+                    );
+                    Some(prepared)
+                });
+                if let Some(image) = result {
+                    let memory = worker_staging.track(image.retained_bytes());
+                    if tx
+                        .send(Ready {
+                            epoch: job.epoch,
+                            calibration_signature: job.calibration_signature,
+                            path: job.path,
+                            revision: job.revision,
+                            image,
+                            _memory: memory,
+                        })
+                        .is_err()
+                    {
+                        let mut state = worker.0.lock().unwrap();
+                        state.active = None;
+                        state.revision = state.revision.wrapping_add(1);
+                        break;
+                    }
+                    context.request_repaint();
                 }
-                let preview = downsample(&rs, &job.source).ok()?;
-                let prepared = PreparedPreview::new(
-                    Preview {
-                        rgb: preview.rgb.clone(),
-                        color_space: preview.color_space,
-                        extent: preview.extent,
-                        rotation: 0,
-                        native_extent: job.native_extent,
-                    },
-                    true,
-                )
-                .ok()?;
-                let _ = cache.save_preview(
-                    &job.path,
-                    &job.settings,
-                    &job.metadata,
-                    Preview {
-                        native_extent: job.native_extent,
-                        ..preview
-                    },
-                    job.calibration_signature.as_deref(),
-                );
-                Some(prepared)
-            });
-            if let Some(image) = result {
-                if tx
-                    .send(Ready {
-                        epoch: job.epoch,
-                        calibration_signature: job.calibration_signature,
-                        path: job.path,
-                        revision: job.revision,
-                        image,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-                context.request_repaint();
+                let mut state = worker.0.lock().unwrap();
+                state.active = None;
+                state.revision = state.revision.wrapping_add(1);
             }
         });
         Self {
@@ -138,7 +160,31 @@ impl Previews {
             replies,
             wanted: None,
             sent: None,
+            staging,
+            resource_revision: 0,
         }
+    }
+    pub fn resource_revision(&self) -> u64 {
+        self.resource_revision
+            .wrapping_add(self.pending.0.lock().unwrap().revision)
+            .wrapping_add(self.staging.revision())
+    }
+    pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        let account = |job: &Job, inventory: &mut crate::memory::Inventory| {
+            inventory.image_texture(&job.source);
+            inventory.metadata(&job.metadata);
+        };
+        if let Some((job, _)) = &self.wanted {
+            account(job, inventory);
+        }
+        let state = self.pending.0.lock().unwrap();
+        if let Some(job) = &state.job {
+            account(job, inventory);
+        }
+        if let Some(job) = &state.active {
+            account(job, inventory);
+        }
+        inventory.cpu(self.staging.bytes());
     }
     pub fn accepts(&self, reply: &Ready) -> bool {
         reply.epoch == self.epoch && !self.invalid_paths.contains(&reply.path)
@@ -176,6 +222,9 @@ impl Previews {
     /// photographic thumbnails, even when they are displayed in the navigator.
     pub fn update(&mut self, frame: Option<&Frame>, busy: bool, context: &egui::Context) {
         let Some(frame) = frame.filter(|f| photographic(f)) else {
+            if self.wanted.is_some() {
+                self.resource_revision = self.resource_revision.wrapping_add(1);
+            }
             self.wanted = None;
             return;
         };
@@ -188,6 +237,7 @@ impl Previews {
             .as_ref()
             .is_none_or(|(j, _)| j.path != key.0 || j.revision != key.1)
         {
+            self.resource_revision = self.resource_revision.wrapping_add(1);
             self.wanted = Some((
                 Job {
                     epoch: self.epoch,
@@ -210,7 +260,11 @@ impl Previews {
             context.request_repaint_after(ready.saturating_duration_since(Instant::now()));
             return;
         }
-        self.pending.0.lock().unwrap().job = self.wanted.take().map(|(j, _)| j);
+        {
+            let mut state = self.pending.0.lock().unwrap();
+            state.job = self.wanted.take().map(|(j, _)| j);
+            state.revision = state.revision.wrapping_add(1);
+        }
         self.sent = Some(key);
         self.pending.1.notify_one();
     }

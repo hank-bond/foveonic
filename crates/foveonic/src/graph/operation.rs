@@ -132,7 +132,10 @@ pub enum Operation {
         prepared: std::sync::Arc<MonoPrepared>,
         space: ColorSpace,
     },
-    MonoTexture(crate::noise::TextureControls),
+    MonoTexture {
+        controls: crate::noise::TextureControls,
+        scale: f32,
+    },
     MonoSharpen {
         amount: f32,
         space: ColorSpace,
@@ -409,7 +412,9 @@ impl Operation {
             Self::AdvancedColor { params, .. } => params.key(),
             Self::DehazeEstimate { params, .. } => params.key(),
             Self::Dehaze { params, .. } => params.key(),
-            Self::MonoTexture(c) => Key::pod(&[c.fine, c.coarse, c.fine_size, c.coarse_size]),
+            Self::MonoTexture { controls: c, scale } => {
+                Key::pod(&[c.fine, c.coarse, c.fine_size, c.coarse_size, *scale])
+            }
             Self::ImageAlias { dehaze_basis, .. } => {
                 dehaze_basis.map_or_else(Key::default, |b| b.key())
             }
@@ -553,7 +558,7 @@ impl Operation {
             Self::ColorField(_) => "ColorField",
             Self::Banding(_) => "Banding",
             Self::Monochrome { .. } => "Monochrome",
-            Self::MonoTexture(_) => "MonoTexture",
+            Self::MonoTexture { .. } => "MonoTexture",
             Self::MonoSharpen { .. } => "MonoSharpen",
             Self::NoiseContext(_) => "NoiseContext",
             Self::NoiseBase(_) => "NoiseBase",
@@ -708,7 +713,7 @@ impl Operation {
             Self::AdvancedColor { .. } => "Advanced Color Range",
             Self::DehazeEstimate { .. } => "estimate haze color",
             Self::Dehaze { .. } => "Dehaze",
-            Self::MonoTexture(_) => "submit monochrome texture",
+            Self::MonoTexture { .. } => "submit monochrome texture",
             Self::ImageAlias { .. } => "retain image alias",
             Self::LinearBasis { .. } => "bake linear color edits",
             Self::LinearWhiteBalance { .. } => "white balance bias",
@@ -735,7 +740,7 @@ impl Operation {
                 let data = match p.signal() {
                     Signal::Rgb => CorrectedSensorRgb,
                     Signal::Blue => CorrectedSensorBlue,
-                    Signal::Mask => HighlightMask,
+                    Signal::Mask | Signal::Flags => HighlightMask,
                 };
                 (vec![data], data)
             }
@@ -918,7 +923,7 @@ impl Operation {
             Self::DirectionalBanding { stage, .. } => {
                 use crate::nodes::color::directional_banding::Stage;
                 match stage {
-                    Stage::Tiles | Stage::Retile => (vec![CalibratedLayers], ConditionedTiles),
+                    Stage::Tiles => (vec![CalibratedLayers], ConditionedTiles),
                     Stage::Window => (vec![ConditionedTiles], ConditionedTiles),
                     Stage::Measure(..) => (vec![ConditionedTiles], BandEstimates),
                     Stage::Correct(..) => (vec![ConditionedTiles, BandEstimates], ConditionedTiles),
@@ -963,7 +968,7 @@ impl Operation {
                     LinearRgb(*space)
                 },
             ),
-            Self::MonoTexture(_) => (vec![Monochrome], Monochrome),
+            Self::MonoTexture { .. } => (vec![Monochrome], Monochrome),
             Self::LinearBasis { data, space, .. } => (vec![LinearRgb(*space)], *data),
             Self::LinearWhiteBalance { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::AdvancedColor { space, .. } => (vec![LinearRgb(*space); 2], LinearRgb(*space)),
@@ -1274,7 +1279,7 @@ impl Operation {
             Self::AdvancedColor { .. } => "advanced-color.rgb",
             Self::DehazeEstimate { .. } => "dehaze.analysis",
             Self::Dehaze { .. } => "dehaze.rgb",
-            Self::MonoTexture(_) => "mono.texture",
+            Self::MonoTexture { .. } => "mono.texture",
             Self::ImageAlias { output, .. } => output,
             Self::LinearBasis { .. } => "dng.linear-color-edits",
             Self::LinearWhiteBalance { .. } => "white-balance.rgb",

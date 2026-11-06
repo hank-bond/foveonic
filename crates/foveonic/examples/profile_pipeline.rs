@@ -24,17 +24,25 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut warm = 2usize;
     let mut goldens = None;
     let mut capture = None;
-    let mut preview_quality = foveonic::render::PreviewQuality::Full;
+    let mut working_scale = foveonic::render::Scale::NATIVE;
     let mut controls = Vec::<OsString>::new();
     while let Some(arg) = args.next() {
         if arg == "--preview-quality" {
-            preview_quality = match args.next().and_then(|v| v.into_string().ok()).as_deref() {
-                Some("full") => foveonic::render::PreviewQuality::Full,
-                Some("fast") => foveonic::render::PreviewQuality::Fast,
-                Some("draft") => foveonic::render::PreviewQuality::Draft,
-                Some("thumb") => foveonic::render::PreviewQuality::Thumb,
+            working_scale = match args.next().and_then(|v| v.into_string().ok()).as_deref() {
+                Some("full") => foveonic::render::Scale::NATIVE,
+                Some("fast") => foveonic::render::Scale::new(2).unwrap(),
+                Some("draft") => foveonic::render::Scale::new(4).unwrap(),
+                Some("thumb") => foveonic::render::Scale::new(8).unwrap(),
                 _ => return Err("preview quality requires full, fast, draft or thumb".into()),
             };
+        } else if arg == "--working-scale" {
+            let divisor = args
+                .next()
+                .ok_or("missing working scale divisor")?
+                .into_string()
+                .map_err(|_| "working scale must be UTF-8")?
+                .parse()?;
+            working_scale = foveonic::render::Scale::new(divisor)?;
         } else if arg == "--warm" {
             warm = args
                 .next()
@@ -64,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let source = Source::open(&input)?;
     let (mut settings, paths, mode) =
         options::parse_settings_for_camera(controls.into_iter(), &source.metadata)?;
-    settings.preview_quality = preview_quality;
+    settings.working_scale = working_scale;
     if !paths.is_empty() {
         return Err("unexpected extra input paths".into());
     }
@@ -80,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         profile::report(
             "session",
             mode,
-            serde_json::json!({"frontend":"completed_processing","preview_quality":format!("{preview_quality:?}"),"source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
+            serde_json::json!({"frontend":"completed_processing","scale_divisor":working_scale.divisor(),"source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
         )
     );
     println!(
@@ -115,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             profile::report(
                 "processing",
                 sample_mode,
-                serde_json::json!({"source":input,"settings":settings,"effective_quality":image.settings().preview_quality,"output":"final","execution":"fresh","iteration":iteration,"cold":iteration==0,"render_call_ms":render_call,"completed_ms":completed,"profile":profile,"activity":activity})
+                serde_json::json!({"source":input,"settings":settings,"effective_scale_divisor":image.settings().working_scale.divisor(),"output":"final","execution":"fresh","iteration":iteration,"cold":iteration==0,"render_call_ms":render_call,"completed_ms":completed,"profile":profile,"activity":activity})
             )
         );
         let mut profile = Profile::new(sample_mode);
@@ -187,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "capture",
                 Mode::Off,
                 serde_json::json!({
-                    "source": input, "settings": settings, "effective_quality": image.settings().preview_quality, "output": name, "file": path, "extent": description.extent,
+                    "source": input, "settings": settings, "effective_scale_divisor": image.settings().working_scale.divisor(), "output": name, "file": path, "extent": description.extent,
                     "dtype": "f32", "endianness": if cfg!(target_endian = "little") {"little"} else {"big"},
                     "layout": format!("{:?}", description.layout), "space": format!("{:?}", description.space),
                     "linear_white": description.linear_white, "view_crop": view.crop,

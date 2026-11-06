@@ -99,7 +99,7 @@ fn compare_portable_tiger_methods_on_ordinary_quattro() {
         let mut execution = Execution::default();
         let built = build(
             &engine,
-            &source,
+            super::super::RecipeInput::Original(&source),
             &settings,
             &["final"],
             &mut crate::profile::Profile::default(),
@@ -115,7 +115,6 @@ fn compare_portable_tiger_methods_on_ordinary_quattro() {
                 &built.graph,
                 built.final_id,
                 &["final"],
-                built.params,
                 &mut profile,
                 &mut execution,
             )

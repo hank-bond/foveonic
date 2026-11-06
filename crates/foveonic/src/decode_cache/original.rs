@@ -18,7 +18,7 @@ pub(super) fn store(
     settings: &Settings,
     nearby: &[PathBuf],
     current: &impl Fn() -> bool,
-) -> Result<u32> {
+) -> Result<()> {
     if original.len() as u64 != identity.length {
         return Err("original cache length mismatch".into());
     }
@@ -39,15 +39,13 @@ pub(super) fn store(
         std::process::id(),
         TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
-    let result = (|| -> Result<u32> {
+    let result = (|| -> Result<()> {
         let mut file = fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&temporary)?;
-        let mut checksum = crc32fast::Hasher::new();
         for chunk in original.chunks(crate::background::IO_CHUNK_BYTES) {
             crate::background::checkpoint_or_cancel()?;
-            checksum.update(chunk);
             file.write_all(chunk)?;
         }
         file.set_modified(std::time::SystemTime::now())?;
@@ -57,7 +55,7 @@ pub(super) fn store(
             return Err("original cache preparation superseded".into());
         }
         fs::rename(&temporary, destination)?;
-        Ok(checksum.finalize())
+        Ok(())
     })();
     let _ = fs::remove_file(temporary);
     result
@@ -73,6 +71,17 @@ impl Cache {
             identity.modified_seconds,
             identity.modified_nanos,
         ))
+    }
+
+    /// The already verified source snapshot; this never probes the original file.
+    pub fn source_origin(&self, path: &Path) -> Option<crate::source::SourceOrigin> {
+        self.control
+            .lock()
+            .unwrap()
+            .identities
+            .get(path)
+            .cloned()
+            .map(crate::source::SourceOrigin::File)
     }
 
     /// Copy locally cached original bytes. A miss falls back to the normal importer.

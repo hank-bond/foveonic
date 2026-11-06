@@ -172,6 +172,34 @@ impl LabelColumn {
         )
     }
 
+    pub(super) fn parameter<T: egui::emath::Numeric>(
+        self,
+        ui: &mut egui::Ui,
+        pointer: impl Into<String>,
+        label: (&str, &str),
+        value: &mut T,
+        range: RangeInclusive<T>,
+        default: T,
+    ) -> bool {
+        crate::multi_edit_controls::field(ui, pointer, |ui| {
+            self.adjustment(ui, label, value, range, default)
+        })
+    }
+    pub(super) fn saturation_parameter(
+        self,
+        ui: &mut egui::Ui,
+        pointer: impl Into<String>,
+        label: (&str, &str),
+        amount: &mut f32,
+    ) -> bool {
+        crate::multi_edit_controls::mapped_field(
+            ui,
+            pointer,
+            crate::multi_edit_controls::Mapping::Saturation,
+            |ui| self.saturation_adjustment(ui, label, amount),
+        )
+    }
+
     pub(super) fn saturation_adjustment(
         self,
         ui: &mut egui::Ui,
@@ -301,6 +329,9 @@ pub fn automatic_adjustment<T: egui::emath::Numeric>(
         },
     );
     *manual = (!automatic).then_some(value);
+    if before.is_none() != automatic {
+        crate::multi_edit_controls::optional_current(ui.ctx(), !automatic);
+    }
     changed || before != manual.map(|v| v.to_f64())
 }
 
@@ -320,6 +351,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
         step_origin,
         label: label_override,
     } = controls;
+    let range = crate::multi_edit_controls::control_range(ui.ctx(), range);
     // The two Highlights rows need separate help and widget IDs.
     let display_label = label_override.map_or_else(
         || match label {
@@ -337,7 +369,6 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
     } else {
         (-nudge.abs().log10()).ceil().clamp(2., 15.) as usize
     };
-    let format_value = |value| crate::widgets::format_numeric_value(value, T::INTEGRAL);
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
             let enabled = if let Some(enabled) = enabled {
@@ -357,51 +388,40 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 } else {
                     0.
                 };
-                // Measure the same formatted values and font as DragValue.
-                // Reserve any extra space from the slider, so a numeric readout
-                // never expands the enclosing resizable panel.
-                let value_font = ui.style().drag_value_text_style.resolve(ui.style());
-                let text_width = [range.start().to_f64(), range.end().to_f64(), value.to_f64()]
-                    .into_iter()
-                    .map(|v| {
-                        let text = format_value(v);
-                        ui.painter()
-                            .layout_no_wrap(text, value_font.clone(), egui::Color32::PLACEHOLDER)
-                            .size()
-                            .x
-                    })
-                    .fold(0., f32::max);
-                // Integer and decimal rows share a field wide enough for a signed
-                // neutral value. Wider formatted values can still remain readable.
-                let standard_width = ui
-                    .painter()
-                    .layout_no_wrap("-0.00".into(), value_font, egui::Color32::PLACEHOLDER)
-                    .size()
-                    .x;
-                let value_width = (text_width.max(standard_width)
-                    + 2. * ui.spacing().button_padding.x)
-                    .max(ui.spacing().interact_size.x);
+                let value_width = crate::widgets::numeric_field_width(ui, &range);
                 ui.spacing_mut().slider_width =
                     (ui.available_width() - value_width - ui.spacing().item_spacing.x - auto_width)
                         .max(35.);
                 ui.add_enabled_ui(
-                    !automatic.as_ref().is_some_and(|a| *a.active && !a.editable),
+                    !automatic.as_ref().is_some_and(|a| *a.active && !a.editable)
+                        && crate::multi_edit_controls::numeric_ready(ui.ctx()),
                     |ui| {
                         // Apply to every editing slider while leaving adjacent
                         // value fields, buttons and group backgrounds unchanged.
                         ui.visuals_mut().widgets.inactive.bg_fill =
                             crate::widgets::slider_track_fill(ui.visuals());
                         let before_slider = value.to_f64();
-                        let mut slider =
-                            crate::widgets::slider(value, range.clone()).show_value(false);
-                        // Shifted grids snap below so odd endpoints remain reachable.
-                        if let Some(step) = step.filter(|_| step_origin == 0.) {
-                            slider = slider.step_by(step);
-                        }
-                        let response = ui.add(slider).interact(egui::Sense::click_and_drag());
-                        if response.double_clicked() {
-                            *value = default;
-                        }
+                        let response = if let Some(response) = crate::multi_edit_controls::slider(
+                            ui,
+                            value,
+                            range.clone(),
+                            default,
+                            step,
+                            nudge,
+                        ) {
+                            response
+                        } else {
+                            let mut slider =
+                                crate::widgets::slider(value, range.clone()).show_value(false);
+                            if let Some(step) = step.filter(|_| step_origin == 0.) {
+                                slider = slider.step_by(step);
+                            }
+                            let response = ui.add(slider).interact(egui::Sense::click_and_drag());
+                            if response.double_clicked() {
+                                *value = default;
+                            }
+                            response
+                        };
                         if response.changed()
                             || response.double_clicked()
                             || before_slider != value.to_f64()
@@ -414,7 +434,13 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                     },
                 );
                 if let Some(auto) = &mut automatic {
-                    let response = crate::widgets::auto_button(ui, *auto.active);
+                    let response = ui
+                        .add_enabled_ui(
+                            !*auto.active
+                                || crate::multi_edit_controls::optional_current_ready(ui.ctx()),
+                            |ui| crate::widgets::auto_button(ui, *auto.active),
+                        )
+                        .inner;
                     if help::attach(response, help::automatic(label).unwrap()).clicked() {
                         if auto.editable {
                             if *auto.active {
@@ -435,32 +461,36 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 // DragValue handles keys while drawing. Find its stable ID first so our
                 // focused nudge can run without changing the row's layout.
                 let response = ui
-                    .add_enabled_ui(!locked, |ui| {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(value_width, ROW_HEIGHT),
-                            egui::Layout::centered_and_justified(ui.layout().main_dir()),
-                            |ui| {
-                                if unresolved {
-                                    return ui.add(egui::Label::new("Auto"));
-                                }
-                                let focused =
-                                    ui.memory(|memory| memory.has_focus(ui.next_auto_id()));
-                                ui.add(
-                                    crate::widgets::drag_value(value)
-                                        .range(range.clone())
-                                        .speed(if focused {
-                                            nudge
-                                        } else if T::INTEGRAL {
-                                            1.
-                                        } else {
-                                            0.01
-                                        })
-                                        .fixed_decimals(decimals),
-                                )
-                            },
-                        )
-                        .inner
-                    })
+                    .add_enabled_ui(
+                        !locked && crate::multi_edit_controls::numeric_ready(ui.ctx()),
+                        |ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(value_width, ROW_HEIGHT),
+                                egui::Layout::centered_and_justified(ui.layout().main_dir()),
+                                |ui| {
+                                    if unresolved {
+                                        return ui.add(egui::Label::new("Auto"));
+                                    }
+                                    let focused =
+                                        ui.memory(|memory| memory.has_focus(ui.next_auto_id()));
+                                    let mixed = crate::multi_edit_controls::number_mixed(ui.ctx());
+                                    ui.add(
+                                        crate::widgets::mixed_drag_value(value, mixed && !focused)
+                                            .range(range.clone())
+                                            .speed(if focused {
+                                                nudge
+                                            } else if T::INTEGRAL {
+                                                1.
+                                            } else {
+                                                0.01
+                                            })
+                                            .fixed_decimals(decimals),
+                                    )
+                                },
+                            )
+                            .inner
+                        },
+                    )
                     .inner;
                 if response.changed() {
                     if let Some(auto) = automatic.as_mut().filter(|a| a.editable) {
@@ -480,6 +510,13 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                     ui.data_mut(|data| data.remove::<String>(response.id));
                     ui.ctx().request_repaint();
                 }
+                if response.changed() {
+                    crate::multi_edit_controls::number(
+                        ui.ctx(),
+                        crate::multi_edit_controls::NumberChange::Set(value.to_f64()),
+                        [range.start().to_f64(), range.end().to_f64()],
+                    );
+                }
                 help::control(response, label);
             });
         });
@@ -490,30 +527,39 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
 }
 
 pub(super) fn rendering(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        help::control(label(ui, "Rendering"), "Rendering");
-        for (value, label) in [
-            (Rendering::Color, "Color"),
-            (Rendering::Monochrome, "Monochrome"),
-        ] {
-            if help::control(
-                crate::widgets::button(
-                    ui,
-                    label,
-                    settings.rendering == value,
-                    egui::vec2(if value == Rendering::Color { 55. } else { 100. }, 22.),
-                ),
-                "Rendering",
-            )
-            .clicked()
-            {
-                changed |= settings.rendering != value;
-                settings.rendering = value;
-            }
-        }
-    });
-    changed
+    crate::multi_edit_controls::choice(
+        ui,
+        "/rendering",
+        &mut settings.rendering,
+        |ui, rendering| {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                help::control(label(ui, "Rendering"), "Rendering");
+                let mixed = crate::multi_edit_controls::mixed(ui.ctx());
+                for (value, label) in [
+                    (Rendering::Color, "Color"),
+                    (Rendering::Monochrome, "Monochrome"),
+                ] {
+                    if help::control(
+                        crate::widgets::button(
+                            ui,
+                            label,
+                            !mixed && *rendering == value,
+                            egui::vec2(if value == Rendering::Color { 55. } else { 100. }, 22.),
+                        ),
+                        "Rendering",
+                    )
+                    .clicked()
+                    {
+                        crate::multi_edit_controls::choice_clicked(ui.ctx());
+                        changed |= *rendering != value || mixed;
+                        *rendering = value;
+                    }
+                }
+            });
+            changed
+        },
+    )
 }
 
 pub(super) fn color_mode(
@@ -563,25 +609,47 @@ pub(super) fn white_balance(
         crate::editor::white_balance::exit(ui.ctx());
     }
     ui.add_enabled_ui(!settings.is_monochrome(), |ui| {
-        changed |= column.adjustment(
-            ui,
-            ("Warmth", "Warmth"),
-            &mut settings.white_balance_bias.warmth,
-            -1. ..=1.,
-            0.,
-        );
-        changed |= column.adjustment(
-            ui,
-            ("Tint", "Tint"),
-            &mut settings.white_balance_bias.tint,
-            -1. ..=1.,
-            0.,
-        );
+        changed |= crate::multi_edit_controls::field(ui, "/white_balance_bias/warmth", |ui| {
+            column.adjustment(
+                ui,
+                ("Warmth", "Warmth"),
+                &mut settings.white_balance_bias.warmth,
+                -1. ..=1.,
+                0.,
+            )
+        });
+        changed |= crate::multi_edit_controls::field(ui, "/white_balance_bias/tint", |ui| {
+            column.adjustment(
+                ui,
+                ("Tint", "Tint"),
+                &mut settings.white_balance_bias.tint,
+                -1. ..=1.,
+                0.,
+            )
+        });
     });
     changed
 }
 
 fn camera_choice(
+    ui: &mut egui::Ui,
+    column: LabelColumn,
+    metadata: Option<&Metadata>,
+    key: &str,
+    labels: (&str, &str, bool),
+    value: &mut String,
+    enabled: bool,
+) -> bool {
+    let pointer = if key == "WhiteBalanceGains" {
+        "/white_balance"
+    } else {
+        "/color_mode"
+    };
+    crate::multi_edit_controls::choice(ui, pointer, value, |ui, value| {
+        camera_choice_widget(ui, column, metadata, key, labels, value, enabled)
+    })
+}
+fn camera_choice_widget(
     ui: &mut egui::Ui,
     column: LabelColumn,
     metadata: Option<&Metadata>,
@@ -636,6 +704,13 @@ fn camera_choice(
                             .changed();
                         if let Some(list) = &choices {
                             for name in list.iter().copied() {
+                                if !crate::multi_edit_controls::camera_choice_available(
+                                    ui.ctx(),
+                                    white_balance,
+                                    name,
+                                ) {
+                                    continue;
+                                }
                                 changed |=
                                     crate::widgets::menu_value(ui, value, name.to_owned(), name)
                                         .changed();
@@ -690,22 +765,24 @@ fn exposure_row(
     };
     let range = range.start().min(calculated.unwrap_or(*range.start()))
         ..=range.end().max(calculated.unwrap_or(*range.end()));
-    let changed = adjustment_row(
-        ui,
-        "Exposure",
-        &mut value,
-        range,
-        0.,
-        0.1,
-        RowControls {
-            automatic: Some(Automatic {
-                active: &mut settings.exposure_auto,
-                calculated: calculated.map(f64::from),
-                editable: true,
-            }),
-            ..column.row_controls("Exposure")
-        },
-    );
+    let changed = crate::multi_edit_controls::field(ui, "/exposure", |ui| {
+        adjustment_row(
+            ui,
+            "Exposure",
+            &mut value,
+            range,
+            0.,
+            0.1,
+            RowControls {
+                automatic: Some(Automatic {
+                    active: &mut settings.exposure_auto,
+                    calculated: calculated.map(f64::from),
+                    editable: true,
+                }),
+                ..column.row_controls("Exposure")
+            },
+        )
+    });
     if !settings.exposure_auto {
         settings.exposure = value;
     }
@@ -737,42 +814,66 @@ fn tone_rows(
             settings.photographic.tone_method == foveonic::render::PhotographicMethod::Universal;
         if universal {
             use foveonic::render::BaseResponse;
-            ui.horizontal(|ui| {
-                help::control(
-                    aligned_label(ui, "Adaptive", None, Some(column.width_at(ui))),
-                    "Adaptive",
-                );
-                let selected = &mut settings.photographic.base_response;
-                let combo = egui::ComboBox::from_id_salt("base-response")
-                    .width(ui.available_width())
-                    .truncate()
-                    .selected_text(selected.label());
-                let response = crate::widgets::dropdown(ui, combo, |ui| {
-                    for (choice, name) in [
-                        (BaseResponse::Camera, "Disabled"),
-                        (BaseResponse::Natural, "Natural"),
-                        (BaseResponse::Strong, "Strong"),
-                    ] {
-                        changed |= crate::widgets::menu_value(ui, selected, choice, name).changed();
-                    }
-                })
-                .response;
-                help::control(response, "Adaptive");
-            });
+            crate::multi_edit_controls::choice(
+                ui,
+                "/photographic/base_response",
+                &mut settings.photographic.base_response,
+                |ui, selected| {
+                    ui.horizontal(|ui| {
+                        help::control(
+                            aligned_label(ui, "Adaptive", None, Some(column.width_at(ui))),
+                            "Adaptive",
+                        );
+                        let combo = egui::ComboBox::from_id_salt("base-response")
+                            .width(ui.available_width())
+                            .truncate()
+                            .selected_text(selected.label());
+                        let response = crate::widgets::dropdown(ui, combo, |ui| {
+                            for (choice, name) in [
+                                (BaseResponse::Camera, "Disabled"),
+                                (BaseResponse::Natural, "Natural"),
+                                (BaseResponse::Strong, "Strong"),
+                            ] {
+                                changed |= crate::widgets::menu_value(ui, selected, choice, name)
+                                    .changed();
+                            }
+                        })
+                        .response;
+                        help::control(response, "Adaptive");
+                    })
+                },
+            );
         }
         changed |= exposure_row(ui, settings, column, exposure_range, compensation);
         if universal {
             ui.weak("Dynamic range");
-            for (label, value) in [
-                ("Shadows", &mut settings.tonal_ranges.shadows),
-                ("Highlights", &mut settings.tonal_ranges.highlights),
-                ("Blacks", &mut settings.tonal_ranges.blacks),
-                ("Whites", &mut settings.tonal_ranges.whites),
+            for (label, pointer, value) in [
+                (
+                    "Shadows",
+                    "/tonal_ranges/shadows",
+                    &mut settings.tonal_ranges.shadows,
+                ),
+                (
+                    "Highlights",
+                    "/tonal_ranges/highlights",
+                    &mut settings.tonal_ranges.highlights,
+                ),
+                (
+                    "Blacks",
+                    "/tonal_ranges/blacks",
+                    &mut settings.tonal_ranges.blacks,
+                ),
+                (
+                    "Whites",
+                    "/tonal_ranges/whites",
+                    &mut settings.tonal_ranges.whites,
+                ),
             ] {
                 changed |= ui
                     .push_id(("tonal-ranges", label), |ui| {
-                        column.adjustment(
+                        column.parameter(
                             ui,
+                            pointer,
                             ("Tonal ranges", label),
                             value,
                             -foveonic::render::TonalRanges::MAX_AMOUNT
@@ -783,36 +884,47 @@ fn tone_rows(
                     .inner;
             }
             ui.weak("Tone shaping");
-            changed |= column.adjustment(
-                ui,
-                ("Brightness", "Brightness"),
-                &mut settings.photographic.brightness,
-                -1. ..=1.,
-                0.,
-            );
+            changed |= crate::multi_edit_controls::field(ui, "/photographic/brightness", |ui| {
+                column.adjustment(
+                    ui,
+                    ("Brightness", "Brightness"),
+                    &mut settings.photographic.brightness,
+                    -1. ..=1.,
+                    0.,
+                )
+            });
         }
-        changed |= column.adjustment(
-            ui,
-            ("Contrast", "Contrast"),
-            &mut settings.tone.contrast,
-            -2. ..=2.,
-            0.,
-        );
-        if universal {
-            changed |= column.adjustment(
+        changed |= crate::multi_edit_controls::field(ui, "/tone/contrast", |ui| {
+            column.adjustment(
                 ui,
-                ("Local contrast", "Clarity"),
-                &mut settings.photographic.local_contrast,
-                -1. ..=1.,
+                ("Contrast", "Contrast"),
+                &mut settings.tone.contrast,
+                -2. ..=2.,
                 0.,
-            );
+            )
+        });
+        if universal {
+            changed |=
+                crate::multi_edit_controls::field(ui, "/photographic/local_contrast", |ui| {
+                    column.adjustment(
+                        ui,
+                        ("Local contrast", "Clarity"),
+                        &mut settings.photographic.local_contrast,
+                        -1. ..=1.,
+                        0.,
+                    )
+                });
         }
         if !universal {
-            for (label, value) in [
-                ("Shadows", &mut settings.tone.shadows),
-                ("Highlights", &mut settings.tone.highlights),
+            for (label, pointer, value) in [
+                ("Shadows", "/tone/shadows", &mut settings.tone.shadows),
+                (
+                    "Highlights",
+                    "/tone/highlights",
+                    &mut settings.tone.highlights,
+                ),
             ] {
-                changed |= column.adjustment(ui, (label, label), value, -2. ..=2., 0.);
+                changed |= column.parameter(ui, pointer, (label, label), value, -2. ..=2., 0.);
             }
         }
     });
@@ -858,55 +970,75 @@ pub(super) fn sharpening_with_range(
         {
             let sharp = &mut settings.photographic.sharpening;
             let column = LabelColumn::new(ui);
-            changed |= column.adjustment(
-                ui,
-                ("Universal amount", "Amount"),
-                &mut sharp.amount,
-                0. ..=4.,
-                0.,
-            );
-            changed |= column.adjustment(
-                ui,
-                ("Universal radius", "Radius"),
-                &mut sharp.radius,
-                0.3..=4.,
-                0.8,
-            );
+            changed |=
+                crate::multi_edit_controls::field(ui, "/photographic/sharpening/amount", |ui| {
+                    column.adjustment(
+                        ui,
+                        ("Universal amount", "Amount"),
+                        &mut sharp.amount,
+                        0. ..=4.,
+                        0.,
+                    )
+                });
+            changed |=
+                crate::multi_edit_controls::field(ui, "/photographic/sharpening/radius", |ui| {
+                    column.adjustment(
+                        ui,
+                        ("Universal radius", "Radius"),
+                        &mut sharp.radius,
+                        0.3..=4.,
+                        0.8,
+                    )
+                });
             crate::widgets::disclosure(
                 ui,
                 egui::CollapsingHeader::new("Advanced").id_salt("universal-sharpening"),
                 |ui| {
                     let column = LabelColumn::new(ui);
-                    changed |= adjustment_row(
+                    changed |= crate::multi_edit_controls::field(
                         ui,
-                        "Sharpen threshold",
-                        &mut sharp.threshold,
-                        0. ..=0.2,
-                        0.01,
-                        0.001,
-                        column.row_controls("Threshold"),
+                        "/photographic/sharpening/threshold",
+                        |ui| {
+                            adjustment_row(
+                                ui,
+                                "Sharpen threshold",
+                                &mut sharp.threshold,
+                                0. ..=0.2,
+                                0.01,
+                                0.001,
+                                column.row_controls("Threshold"),
+                            )
+                        },
                     );
-                    changed |= column.adjustment(
+                    changed |= crate::multi_edit_controls::field(
                         ui,
-                        ("Halo suppression", "Halos"),
-                        &mut sharp.halo_suppression,
-                        0. ..=1.,
-                        0.5,
+                        "/photographic/sharpening/halo_suppression",
+                        |ui| {
+                            column.adjustment(
+                                ui,
+                                ("Halo suppression", "Halos"),
+                                &mut sharp.halo_suppression,
+                                0. ..=1.,
+                                0.5,
+                            )
+                        },
                     );
                 },
             );
             return;
         }
         let column = LabelColumn::new(ui);
-        changed |= automatic_adjustment(
-            ui,
-            "Sharpen",
-            &mut settings.sharpen_amount,
-            *reference_range.start()..=reference_range.end().max(calculated.unwrap_or(0.)),
-            0.,
-            calculated,
-            column.row_controls("Amount"),
-        );
+        changed |= crate::multi_edit_controls::field(ui, "/sharpen_amount", |ui| {
+            automatic_adjustment(
+                ui,
+                "Sharpen",
+                &mut settings.sharpen_amount,
+                *reference_range.start()..=reference_range.end().max(calculated.unwrap_or(0.)),
+                0.,
+                calculated,
+                column.row_controls("Amount"),
+            )
+        });
     });
     changed
 }
@@ -946,6 +1078,7 @@ pub(super) fn reconstruction(ui: &mut egui::Ui, settings: &mut Settings) -> bool
         Some(&mut reconstruction),
     ) {
         settings.reconstruction = reconstruction.then(Default::default);
+        crate::multi_edit_controls::optional(ui.ctx(), "/reconstruction", reconstruction);
         changed = true;
     }
     changed
@@ -969,25 +1102,33 @@ impl LabelColumn {
         label: &str,
         value: &mut foveonic::render::PhotographicMethod,
     ) -> bool {
-        let mut changed = false;
-        ui.horizontal(|ui| {
-            help::control(aligned_label(ui, label, None, Some(self.width_at(ui))), key);
-            let combo = egui::ComboBox::from_id_salt(key)
-                .width(ui.available_width())
-                .truncate()
-                .selected_text(value.label());
-            let response = crate::widgets::dropdown(ui, combo, |ui| {
-                for method in [
-                    foveonic::render::PhotographicMethod::Reference,
-                    foveonic::render::PhotographicMethod::Universal,
-                ] {
-                    changed |=
-                        crate::widgets::menu_value(ui, value, method, method.label()).changed();
-                }
+        let pointer = match key {
+            "Tone method" => "/photographic/tone_method",
+            "Saturation method" => "/photographic/saturation_method",
+            "Sharpening method" => "/photographic/sharpening/method",
+            _ => "",
+        };
+        crate::multi_edit_controls::choice(ui, pointer, value, |ui, value| {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                help::control(aligned_label(ui, label, None, Some(self.width_at(ui))), key);
+                let combo = egui::ComboBox::from_id_salt(key)
+                    .width(ui.available_width())
+                    .truncate()
+                    .selected_text(value.label());
+                let response = crate::widgets::dropdown(ui, combo, |ui| {
+                    for method in [
+                        foveonic::render::PhotographicMethod::Reference,
+                        foveonic::render::PhotographicMethod::Universal,
+                    ] {
+                        changed |=
+                            crate::widgets::menu_value(ui, value, method, method.label()).changed();
+                    }
+                });
+                help::control(response.response, key);
             });
-            help::control(response.response, key);
-        });
-        changed
+            changed
+        })
     }
 }
 

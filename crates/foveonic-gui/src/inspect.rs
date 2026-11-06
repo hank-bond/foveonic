@@ -171,7 +171,9 @@ pub fn show(
     let current_help = match current {
         Some(image) => help::inspection(image.name)
             .unwrap_or("Shows a processing stage used to make the photo."),
-        None => "This processing output is not available for this camera. Choose a supported inspection view.",
+        None => {
+            "This processing output is not available for this camera. Choose a supported inspection view."
+        }
     };
     let width = menu_width(ui, &outputs, &selected);
     let combo = egui::ComboBox::from_id_salt("artifact")
@@ -307,57 +309,15 @@ impl Comparison {
     }
 }
 
-/// Capture properties resolve architecture support before pixel decoding/rendering.
-/// Unknown metadata leaves the application preference visible.
-pub fn preview_support(
-    settings: &Settings,
-    metadata: Option<&Metadata>,
-    capture: Option<&std::collections::BTreeMap<String, String>>,
-) -> Option<bool> {
-    if let Some(metadata) = metadata {
-        return Some(settings.fast_preview_available(metadata));
-    }
-    let model = capture?.get("CAMMODEL")?.trim().to_ascii_lowercase();
-    Some(
-        !settings.is_monochrome()
-            && matches!(
-                model.strip_prefix("sigma ").unwrap_or(&model),
-                "dp1 merrill"
-                    | "dp2 merrill"
-                    | "dp3 merrill"
-                    | "sd1 merrill"
-                    | "dp0 quattro"
-                    | "dp1 quattro"
-                    | "dp2 quattro"
-                    | "dp3 quattro"
-                    | "sd quattro"
-                    | "sd quattro h"
-            ),
-    )
-}
-
 /// Preview quality is a workspace choice, independent of photo edits and export.
 pub fn preview_quality(
     ui: &mut egui::Ui,
     enabled: bool,
-    available: Option<bool>,
     selected: &mut crate::preferences::PreviewMode,
 ) -> bool {
     use crate::preferences::PreviewMode;
     let mut changed = false;
-    let prototype = std::env::var_os("FOVEONIC_SMALL_OVERVIEW").is_some();
-    let effective = if available != Some(false)
-        && (prototype || !matches!(*selected, PreviewMode::Draft | PreviewMode::Thumb))
-    {
-        *selected
-    } else {
-        PreviewMode::Full
-    };
-    let explanation = if available != Some(false) {
-        "Fast renders at quarter resolution with your Noise and Detail controls. Smart starts with Fast and switches to Full above 100% for detail and panning. Exports use Full."
-    } else {
-        "Fast and Smart previews are available for Merrill and Quattro color photographs."
-    };
+    let explanation = "Fast uses half the sensor width and height. Draft uses one quarter and Thumb one eighth. Smart starts with Fast and switches to Full above 100% for detail. Every mode runs the selected processing controls; exports use Full.";
     widgets::button_group(ui, |ui| {
         widgets::centered_control_row(ui, |ui| {
             ui.label("Preview");
@@ -368,20 +328,12 @@ pub fn preview_quality(
                 (PreviewMode::Draft, "Draft"),
                 (PreviewMode::Thumb, "Thumb"),
             ] {
-                if matches!(quality, PreviewMode::Draft | PreviewMode::Thumb) && !prototype {
-                    continue;
-                }
                 let response = ui
-                    .add_enabled_ui(
-                        enabled && (quality == PreviewMode::Full || available != Some(false)),
-                        |ui| widgets::button(ui, label, effective == quality, egui::Vec2::ZERO),
-                    )
+                    .add_enabled_ui(enabled, |ui| {
+                        widgets::button(ui, label, *selected == quality, egui::Vec2::ZERO)
+                    })
                     .inner
-                    .on_hover_text(match quality {
-                        PreviewMode::Draft => "Prototype: Merrill sensor reconstruction at 1/4 width and height (1/16 of the pixels). Other supported color families use Fast. Zoomed views and exports use Full.",
-                        PreviewMode::Thumb => "Prototype: Merrill sensor reconstruction at 1/8 width and height (1/64 of the pixels). Other supported color families use Fast. Zoomed views and exports use Full.",
-                        _ => explanation,
-                    });
+                    .on_hover_text(explanation);
                 if response.clicked() && *selected != quality {
                     *selected = quality;
                     changed = true;

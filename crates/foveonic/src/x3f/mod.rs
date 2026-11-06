@@ -20,31 +20,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
-// Active photos have independent plane workers. Speculative photos share a bounded
-// FIFO layer pool across their nearest-neighbor queue.
-fn decode_planes<T: Send>(decode: impl Fn(usize) -> Result<T> + Sync) -> Result<Vec<T>> {
-    const SENSOR_PLANES: usize = 3;
-    if let Some(task) = crate::background::decoder_context() {
-        return task.pool.planes(&task.turn, decode);
-    }
-    std::thread::scope(|scope| {
-        let workers: [_; SENSOR_PLANES] = std::array::from_fn(|channel| {
-            let decode = &decode;
-            let scheduling = crate::background::context();
-            scope.spawn(move || crate::background::with_context(scheduling, || decode(channel)))
-        });
-        // Join every child, including after a failure, before leaving the scope.
-        workers
-            .map(|worker| {
-                worker
-                    .join()
-                    .map_err(|_| "sensor decoder worker panicked".into())
-                    .and_then(|result| result)
-            })
-            .into_iter()
-            .collect()
-    })
-}
+// All three independent streams use the same processing CPU pool as Classic
+// rows and speculative photos. The input format, rather than a CPU cap, supplies
+// three plane tasks per photo.
+use crate::decode_pool::planes as decode_planes;
 
 const MINIMUM_FILE_BYTES: u64 = 44; // Forty-byte base header and trailing directory pointer.
 const MAXIMUM_FILE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -77,8 +56,14 @@ pub(crate) use exif::thumbnail as jpeg_thumbnail;
 
 /// Cache preparation also uses the already-read original to build display assets.
 pub(crate) fn read_owned(path: &Path, read_complete: impl FnOnce()) -> Result<(Source, Vec<u8>)> {
+    let identity = crate::source::FileIdentity::read(path)?;
     let (data, read) = read_original(path, read_complete)?;
-    decode_owned(data, read)
+    let (mut source, original) = crate::decode_pool::cpu(|| decode_owned(data, read))?;
+    if crate::source::FileIdentity::read(path)? != identity {
+        return Err("X3F file changes during decoding".into());
+    }
+    source.origin = crate::source::SourceOrigin::File(identity);
+    Ok((source, original))
 }
 
 /// Inspect cache eligibility from the same original buffer before spending CPU on its sensor planes.
@@ -86,6 +71,7 @@ pub(crate) fn read_cacheable(
     path: &Path,
     permits: impl Fn(crate::source::ProcessingFamily) -> bool,
 ) -> Result<Option<(Source, Vec<u8>)>> {
+    let identity = crate::source::FileIdentity::read(path)?;
     let (data, read) = read_original(path, || {})?;
     let properties = capture::read(&mut std::io::Cursor::new(&data))?;
     let family = properties
@@ -95,7 +81,12 @@ pub(crate) fn read_cacheable(
     if !permits(family) {
         return Ok(None);
     }
-    decode_owned(data, read).map(Some)
+    let (mut source, original) = crate::decode_pool::cpu(|| decode_owned(data, read))?;
+    if crate::source::FileIdentity::read(path)? != identity {
+        return Err("X3F file changes during decoding".into());
+    }
+    source.origin = crate::source::SourceOrigin::File(identity);
+    Ok(Some((source, original)))
 }
 
 fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, Timing)> {
@@ -252,6 +243,7 @@ fn decode(data: &[u8]) -> Result<Source> {
     let (matrices, lists) = camf::parse(&camf)?;
     timings.push(Timing::elapsed("CAMF parse", start));
     Ok(Source {
+        origin: Default::default(),
         metadata: std::sync::Arc::new(Metadata {
             width,
             height,

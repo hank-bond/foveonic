@@ -8,7 +8,7 @@ use foveonic::{
     image::{ImageTexture, RenderedImage},
     inspection::Content,
     profile::{GpuActivity, Mode, Profile},
-    render::{Engine, PreviewQuality, RenderSession, Settings},
+    render::{Engine, RenderSession, Scale, Settings},
     source::{Result, Source},
 };
 use serde::Serialize;
@@ -54,12 +54,12 @@ fn route(
 ) -> Result<serde_json::Value> {
     let mut settings = initial_settings.clone();
     let mut session = RenderSession::new(source);
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     let (overview, _overview_texture) = completed(engine, &mut session, &settings, Mode::Off)?;
     let [width, height] = overview.extent.map(|v| v * 2);
     // Match the central 200% viewport in the native landscape smoke, including overscan.
     let tile = [992.min(width), 1002.min(height)];
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     if progressive {
         let x = (width - tile[0]) / 2;
         let y = (height - tile[1]) / 2;
@@ -237,9 +237,6 @@ fn main() -> Result<()> {
     if full_edit.is_none() && !direct_only && settings.output_size.is_some() {
         return Err("regional comparisons require native output size".into());
     }
-    if direct_only && !settings.fast_preview_available(&source.metadata) {
-        return Err("this camera recipe does not support a Fast overview".into());
-    }
     if full_edit.is_none() && !direct_only && !settings.regional_preview_available(&source.metadata)
     {
         return Err("this camera recipe does not support regional Smart preview".into());
@@ -267,7 +264,7 @@ fn main() -> Result<()> {
         }
         let mut session = RenderSession::new(source);
         let mut edited_settings = settings.clone();
-        edited_settings.preview_quality = PreviewQuality::Full;
+        edited_settings.working_scale = Scale::NATIVE;
         edited_settings.preview_region = None;
         let (initial, _initial_texture) =
             completed(&engine, &mut session, &edited_settings, Mode::Off)?;
@@ -329,7 +326,7 @@ fn warm_edit_benchmark(
 ) -> Result<()> {
     let initial = settings.clone();
     let mut session = RenderSession::new(source);
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     let overview = region_completed(engine, &mut session, &settings, Mode::Off)?;
     let extent = overview.0.extent.map(|v| v * 2);
     let size = [992.min(extent[0]), 1002.min(extent[1])];
@@ -340,7 +337,7 @@ fn warm_edit_benchmark(
         origin[0] + size[0],
         origin[1] + size[1],
     ]);
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     settings.preview_region = region;
     let mut detail = region_completed(engine, &mut session, &settings, Mode::Off)?;
     settings.preview_region = None;
@@ -382,7 +379,7 @@ fn full_edit_sequence(
 ) -> Result<Vec<serde_json::Value>> {
     let mut session = RenderSession::new(source);
     let mut current = settings.clone();
-    current.preview_quality = PreviewQuality::Full;
+    current.working_scale = Scale::NATIVE;
     current.preview_region = None;
     let base_exposure = current.exposure;
     let (_, mut texture, mut image) = region_completed(engine, &mut session, &current, Mode::Off)?;
@@ -473,15 +470,15 @@ fn region_route(
         )?)
     };
     apply_edit(&mut settings, scenario);
-    settings.preview_quality = if region_first {
-        PreviewQuality::Full
+    settings.working_scale = if region_first {
+        Scale::NATIVE
     } else {
-        PreviewQuality::Fast
+        Scale::new(2).unwrap()
     };
     settings.preview_region = region_first.then_some(rect);
     let (first, _first_texture, first_image) =
         region_completed(engine, &mut session, &settings, mode)?;
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     settings.preview_region = Some(rect);
     let detail = if region_first {
         None
@@ -577,7 +574,7 @@ fn region_benchmark(
 ) -> Result<()> {
     let mut settings = initial_settings.clone();
     apply_edit(&mut settings, scenario);
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     let mut session = RenderSession::new(source.clone());
     let (_, _, whole) = region_completed(engine, &mut session, &settings, Mode::Off)?;
     let extent = whole.uncropped_view().extent;

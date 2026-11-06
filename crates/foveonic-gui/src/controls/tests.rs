@@ -3867,7 +3867,8 @@ fn photographic_value_readouts_limit_significant_digits_and_round_carries() {
         (123.456, "123"),
         (0.123456, "0.12"),
         (0.0123456, "0.01"),
-        (0.00123456, "1.23e-3"),
+        (0.00123456, "0.00"),
+        (-0.000785, "0.00"),
         (0.007, "0.01"),
         (-0.007, "-0.01"),
         (0.01, "0.01"),
@@ -3875,7 +3876,7 @@ fn photographic_value_readouts_limit_significant_digits_and_round_carries() {
         (9.999, "10.0"),
         (0.9999, "1.00"),
         (999.9, "1e3"),
-        (1.23456e-10, "1.23e-10"),
+        (1.23456e-10, "0.00"),
         (-1.23456e10, "-1.23e10"),
     ] {
         assert_eq!(
@@ -3883,6 +3884,98 @@ fn photographic_value_readouts_limit_significant_digits_and_round_carries() {
             expected,
             "{value}"
         );
+    }
+}
+
+#[test]
+fn scrubbing_through_tiny_values_keeps_the_editor_width_stable() {
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        let ctx = egui::Context::default();
+        crate::widgets::install_style(&ctx);
+        ctx.set_theme(theme);
+        let mut value = 0.12_f32;
+        let mut frame = |time, events| {
+            let mut width = 0.;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400., 800.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    width = egui::SidePanel::right("settings")
+                        .default_width(330.)
+                        .width_range(300. ..=600.)
+                        .show(ctx, |ui| {
+                            let mut settings = Settings::new("Sunlight", "Standard");
+                            settings.exposure = value;
+                            let photos = vec![settings.clone(), settings];
+                            crate::multi_edit_controls::begin_with_numeric(
+                                ctx,
+                                photos.clone(),
+                                photos,
+                            );
+                            crate::multi_edit_controls::field(ui, "/exposure", |ui| {
+                                adjustment(ui, "Exposure", &mut value, -1. ..=1., 0.);
+                            });
+                            crate::multi_edit_controls::finish(ctx);
+                        })
+                        .response
+                        .rect
+                        .width();
+                    egui::CentralPanel::default().show(ctx, |_| {});
+                },
+            );
+            (output, width, value)
+        };
+        frame(0., vec![]);
+        let (output, expected, _) = frame(0.1, vec![]);
+        let start = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Circle(c) => Some(c.center),
+                _ => None,
+            })
+            .unwrap();
+        let track = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.rect.height() == 6. && r.rect.width() > 20. => {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .unwrap();
+        frame(
+            1.,
+            vec![
+                egui::Event::PointerMoved(start),
+                pointer_button(start, true),
+            ],
+        );
+        let end = start - egui::vec2(track.width() * 0.0603925, 0.);
+        let (output, width, actual) = frame(1.1, vec![egui::Event::PointerMoved(end)]);
+        assert!(actual.abs() < 0.005 && actual != 0., "scrub value {actual}");
+        assert!(
+            (width - expected).abs() < 1.,
+            "{theme:?}: scrubbing grew the panel from {expected} to {width}"
+        );
+        let expected_text = crate::widgets::format_numeric_value(f64::from(actual), false);
+        assert_eq!(expected_text, "0.00");
+        assert_eq!(text_centers(&output, &expected_text).len(), 1);
+        for i in 0..4 {
+            let (_, width, _) = frame(1.2 + i as f64 * 0.1, vec![pointer_button(end, false)]);
+            assert!(
+                (width - expected).abs() < 1.,
+                "{theme:?}: panel stayed expanded at {width}"
+            );
+        }
     }
 }
 

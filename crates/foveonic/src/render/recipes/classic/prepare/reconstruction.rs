@@ -4,13 +4,15 @@ use super::super::reference::RECURSIVE_CHROMA_THRESHOLD;
 use super::{capture_iso, scalar, vector, Metadata, Result};
 use crate::nodes::color::{
     chroma::{self, Support},
-    log_reconstruction,
+    log_reconstruction, pyramid_resample,
 };
+use crate::render::Scale;
 
 pub(crate) fn prepare_chroma(
     metadata: &Metadata,
     gains: [f64; 3],
     monochrome: bool,
+    scale: Scale,
 ) -> Result<Vec<chroma::Prepared>> {
     let extent = [metadata.width as u32, metadata.height as u32];
     let iso = capture_iso(metadata)?;
@@ -48,6 +50,7 @@ pub(crate) fn prepare_chroma(
             } else {
                 amplitude
             };
+            let amplitude = amplitude * f64::from(pyramid_resample::independent_noise_std(scale));
             let p = chroma::Prepared::new(
                 extent,
                 [amplitude; 3],
@@ -66,6 +69,7 @@ pub(crate) fn prepare_chroma(
 pub(crate) fn prepare_recursive_chroma(
     metadata: &Metadata,
     gains: [f64; 3],
+    working_scale: Scale,
 ) -> Result<Option<chroma::Prepared>> {
     if scalar(metadata, "ChromaBlur", 0.)? < RECURSIVE_CHROMA_THRESHOLD {
         return Ok(None);
@@ -77,7 +81,9 @@ pub(crate) fn prepare_recursive_chroma(
     // This late color-domain pass uses the full ISO ratio, independently of
     // the earlier sensor-domain statistics multiplier.
     let scale = f64::from(ratio + ratio) / 3.;
-    let amplitudes = std::array::from_fn(|c| scale * (gains[c] / f64::from(pre)) * dq[c] * 0.5);
+    let noise_std = f64::from(pyramid_resample::independent_noise_std(working_scale));
+    let amplitudes =
+        std::array::from_fn(|c| scale * (gains[c] / f64::from(pre)) * dq[c] * 0.5 * noise_std);
     let regularizer =
         (scalar(metadata, "SpatialDQ", 0.)? as u32).wrapping_mul((ratio * 10.) as u32) >> 1;
     Ok(Some(chroma::Prepared::new(

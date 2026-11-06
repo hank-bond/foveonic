@@ -9,8 +9,8 @@ use foveonic::{
     inspection::Content,
     profile::{report, Mode, Profile},
     render::{
-        ControlCapabilities, Engine, PreviewQuality, ReducedPreparation, ReducedRender,
-        ReducedWorkingSet, RenderSession, Settings,
+        ControlCapabilities, Engine, ReducedPreparation, ReducedRender, ReducedWorkingSet,
+        RenderSession, Scale, Settings,
     },
     source::{Result, Source},
 };
@@ -28,7 +28,7 @@ use std::{
 struct Run {
     destination: PathBuf,
     sources: Vec<PathBuf>,
-    quality: PreviewQuality,
+    scale: Scale,
     workers: usize,
     repeats: usize,
     mode: Mode,
@@ -37,14 +37,17 @@ struct Run {
     controls: Vec<OsString>,
     verify: bool,
     reduced: bool,
+    sidecars: bool,
+    gui_analysis: bool,
+    sweep: bool,
 }
 impl Run {
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self> {
         let mut args = args.into_iter();
         let mut run = Self {
-            destination: args.next().ok_or("usage: profile_editing REPORT.jsonl [--quality full|fast|draft|thumb] [--workers N] [--repeats N] [--mode off|wall|gpu] [--edit exposure|noise] [--cache-budget-mib N] [--verify] [--reduced] ORIGINAL... [-- RENDER_OPTIONS]")?.into(),
+            destination: args.next().ok_or("usage: profile_editing REPORT.jsonl [--quality full|fast|draft|thumb | --scale-divisor N] [--workers N] [--repeats N] [--mode off|wall|gpu] [--edit exposure|noise] [--cache-budget-mib N] [--verify] [--reduced] [--sidecars] [--gui-analysis] [--sweep] ORIGINAL... [-- RENDER_OPTIONS]")?.into(),
             sources: Vec::new(),
-            quality: PreviewQuality::Thumb,
+            scale: Scale::new(8)?,
             workers: 1,
             repeats: 5,
             mode: Mode::Off,
@@ -53,6 +56,9 @@ impl Run {
             controls: Vec::new(),
             verify: false,
             reduced: false,
+            sidecars: false,
+            gui_analysis: false,
+            sweep: false,
         };
         while let Some(arg) = args.next() {
             match arg.to_str() {
@@ -62,16 +68,24 @@ impl Run {
                 }
                 Some("--verify") => run.verify = true,
                 Some("--reduced") => run.reduced = true,
+                Some("--sidecars") => run.sidecars = true,
+                Some("--gui-analysis") => run.gui_analysis = true,
+                Some("--sweep") => run.sweep = true,
                 Some("--quality") => {
-                    run.quality = match args.next().and_then(|s| s.into_string().ok()).as_deref() {
-                        Some("full") => PreviewQuality::Full,
-                        Some("fast") => PreviewQuality::Fast,
-                        Some("draft") => PreviewQuality::Draft,
-                        Some("thumb") => PreviewQuality::Thumb,
-                        _ => return Err("quality must be full, fast, draft or thumb".into()),
-                    };
+                    run.scale = Scale::new(
+                        match args.next().and_then(|s| s.into_string().ok()).as_deref() {
+                            Some("full") => 1,
+                            Some("fast") => 2,
+                            Some("draft") => 4,
+                            Some("thumb") => 8,
+                            _ => return Err("quality must be full, fast, draft or thumb".into()),
+                        },
+                    )?;
                 }
-                Some("--workers" | "--repeats" | "--cache-budget-mib" | "--mode" | "--edit") => {
+                Some(
+                    "--workers" | "--repeats" | "--cache-budget-mib" | "--mode" | "--edit"
+                    | "--scale-divisor",
+                ) => {
                     let value = args
                         .next()
                         .and_then(|s| s.into_string().ok())
@@ -81,6 +95,7 @@ impl Run {
                         "--repeats" => run.repeats = value.parse()?,
                         "--mode" => run.mode = value.parse()?,
                         "--edit" => run.edit = value,
+                        "--scale-divisor" => run.scale = Scale::new(value.parse()?)?,
                         _ => {
                             run.cache_budget = value
                                 .parse::<u64>()?
@@ -133,6 +148,12 @@ enum Session {
     },
 }
 impl Session {
+    fn resources(&self) -> Option<foveonic::render::SessionResources> {
+        match self {
+            Self::Native(session) => Some(session.resources()),
+            Self::Reduced { id, working } => working.lock().unwrap().session_resources(*id),
+        }
+    }
     fn cached_bytes(&self) -> u64 {
         match self {
             Self::Native(s) => s.cached_bytes(),
@@ -182,24 +203,32 @@ fn render(
             let mut working = working.lock().map_err(|_| "reduced working set poisoned")?;
             let outcome = working.render(&photo.engine, *id, settings, || false, &mut profile)?;
             let outcome = match outcome {
-                None
-                | Some(ReducedRender::NeedsOriginal(
-                    foveonic::render::NeedsOriginal::UpstreamChanged
-                    | foveonic::render::NeedsOriginal::AnalysisChanged,
-                )) => {
+                None | Some(ReducedRender::NeedsOriginal(_)) => {
                     reduced_reloaded = true;
-                    // Native input loading stays outside the retained working set.
                     let original = Source::open(&photo.source)?;
-                    let ReducedPreparation::Prepared(session) = photo
-                        .engine
-                        .prepare_reduced_session(original, settings, || false, &mut profile)?
-                    else {
-                        return Err("reduced preparation requires native fallback".into());
-                    };
-                    working.insert(*id, session, &photo.engine)?;
+                    if working.contains(*id) {
+                        working
+                            .refresh(
+                                &photo.engine,
+                                *id,
+                                &original,
+                                settings,
+                                || false,
+                                &mut profile,
+                            )?
+                            .ok_or("refresh superseded")?;
+                    } else {
+                        let ReducedPreparation::Prepared(session) = photo
+                            .engine
+                            .prepare_reduced_session(original, settings, || false, &mut profile)?
+                        else {
+                            return Err("preparation superseded".into());
+                        };
+                        working.insert(*id, session, &photo.engine)?;
+                    }
                     working
                         .render(&photo.engine, *id, settings, || false, &mut profile)?
-                        .ok_or("reduced session does not fit working-set budget")?
+                        .ok_or("session does not fit working-set budget")?
                 }
                 Some(outcome) => outcome,
             };
@@ -213,7 +242,7 @@ fn render(
         }
     };
     let artifact = artifacts.pop().ok_or("missing final image")?;
-    let effective = artifact.settings.preview_quality;
+    let effective = artifact.settings.working_scale;
     let Content::Image(image) = artifact.content else {
         return Err("image expected".into());
     };
@@ -231,7 +260,7 @@ fn render(
     Ok(serde_json::json!({
         "source": photo.source, "execution":"session", "reduced_reloaded":reduced_reloaded, "started_ms":started_ms,
         "finished_ms":finished_ms, "completed_ms":completed_ms, "profile_started_ms":profile_started_ms,
-        "quality":settings.preview_quality, "effective_quality":effective, "extent":extent,
+        "requested_scale_divisor":settings.working_scale.divisor(), "effective_scale_divisor":effective.divisor(), "extent":extent,
         "settings":settings, "cache_before_bytes":cache_before,
         "cache_after_bytes":photo.session.cached_bytes(),
         "preparation_bytes":photo.session.cached_preparation_bytes(),
@@ -239,11 +268,18 @@ fn render(
         "activity":photo.engine.gpu_activity().since(before), "profile":profile,
     }))
 }
-fn edit(base: &Settings, kind: &str, index: usize) -> Settings {
+fn edit(base: &Settings, kind: &str, index: usize, sweep: bool) -> Settings {
     let mut settings = base.clone();
     if kind == "exposure" {
         settings.exposure_auto = false;
-        settings.exposure += if index.is_multiple_of(2) { 0.25 } else { -0.25 };
+        settings.exposure += if sweep {
+            // Every round changes the response rather than revisiting two cached tables.
+            0.01 * (index + 1) as f32
+        } else if index.is_multiple_of(2) {
+            0.25
+        } else {
+            -0.25
+        };
     } else {
         settings
             .reconstruction
@@ -268,10 +304,11 @@ fn main() -> Result<()> {
         "editing_setup",
         run.mode,
         serde_json::json!({
-            "sources":run.sources,"quality":run.quality,"workers":run.workers,"adapter":engine.adapter_name(),
+            "sources":run.sources,"scale_divisor":run.scale.divisor(),"workers":run.workers,"adapter":engine.adapter_name(),
             "edit":run.edit,"repeats":run.repeats,"cache_budget_bytes":run.cache_budget,
             "schedule":"whole-render", "queue":"shared-ordered", "version":env!("CARGO_PKG_VERSION"),
             "render_options":run.controls,"verify":run.verify,"reduced":run.reduced,
+            "sidecars":run.sidecars,"gui_analysis":run.gui_analysis,"sweep":run.sweep,
         }),
     )?;
     for path in &run.sources {
@@ -279,16 +316,25 @@ fn main() -> Result<()> {
         let source = Source::open(path)?;
         let load_ms = began.elapsed().as_secs_f64() * 1000.;
         let capabilities = ControlCapabilities::from_metadata(&source.metadata)?;
-        let controls = [
-            OsString::from("--wb"),
-            capabilities.default_white_balance(&source.metadata)?.into(),
-            OsString::from("--mode"),
-            capabilities.default_color_mode(&source.metadata)?.into(),
-        ]
-        .into_iter()
-        .chain(run.controls.iter().cloned());
-        let (mut base, paths, control_mode) =
-            options::parse_settings_for_camera(controls, &source.metadata)?;
+        let mut initial = if run.sidecars {
+            foveonic::sidecar::load(path)?.ok_or_else(|| {
+                format!("--sidecars requires a saved recipe for {}", path.display())
+            })?
+        } else {
+            foveonic::render::camera_settings(&source.metadata, None)?
+        };
+        if initial.white_balance.is_empty() {
+            initial.white_balance = capabilities.default_white_balance(&source.metadata)?;
+        }
+        if initial.color_mode.is_empty() {
+            initial.color_mode = capabilities.default_color_mode(&source.metadata)?;
+        }
+        let (mut base, paths, control_mode) = options::parse_settings_with_noise_defaults(
+            run.controls.iter().cloned(),
+            capabilities.default_noise_controls_for_metadata(&source.metadata)?,
+            initial,
+        )?;
+        base.dehaze_estimate = run.gui_analysis && base.dehaze_auto();
         if !paths.is_empty() || control_mode != Mode::Off {
             return Err("render options must contain only photographic controls. Select profiling with the runner's --mode".into());
         }
@@ -297,7 +343,7 @@ fn main() -> Result<()> {
                 .get_or_insert_with(Default::default)
                 .chroma = 0;
         }
-        base.preview_quality = run.quality;
+        base.working_scale = run.scale;
         let photo_engine = if run.reduced {
             engine.clone()
         } else {
@@ -321,9 +367,6 @@ fn main() -> Result<()> {
                         working: reduced_working.clone(),
                     }
                 }
-                ReducedPreparation::NeedsOriginal { reason, .. } => {
-                    return Err(format!("cannot seal reduced session: {reason:?}").into())
-                }
                 ReducedPreparation::Superseded => return Err("preparation superseded".into()),
             }
         } else {
@@ -346,7 +389,7 @@ fn main() -> Result<()> {
         warmup["edit"] = run.edit.clone().into();
         emit(&mut file, "editing_warmup", run.mode, warmup)?;
         let bytes: u64 = photos.iter().map(|p| p.session.cached_bytes()).sum();
-        if bytes > run.cache_budget {
+        if !run.reduced && bytes > run.cache_budget {
             return Err(format!("retained session buffers {bytes} exceed cache budget {}. Budget excludes originals, textures, scratch and driver memory",run.cache_budget).into());
         }
     }
@@ -354,7 +397,7 @@ fn main() -> Result<()> {
         &mut file,
         "editing_ready",
         run.mode,
-        serde_json::json!({"setup_ms":setup.elapsed().as_secs_f64()*1000., "cache_bytes":photos.iter().map(|p|p.session.cached_bytes()).sum::<u64>(),"session_cpu_bytes":photos.iter().map(|p|p.session.cached_preparation_bytes()).sum::<usize>(),"engine_preparation_bytes":if run.reduced {engine.cached_preparation_bytes()} else {photos.iter().map(|p|p.engine.cached_preparation_bytes()).sum::<usize>()},"working_set_bytes":if run.reduced {reduced_working.lock().unwrap().retained_bytes(&engine)} else {0}}),
+        serde_json::json!({"setup_ms":setup.elapsed().as_secs_f64()*1000., "cache_bytes":photos.iter().map(|p|p.session.cached_bytes()).sum::<u64>(),"session_cpu_bytes":photos.iter().map(|p|p.session.cached_preparation_bytes()).sum::<usize>(),"engine_preparation_bytes":if run.reduced {engine.cached_preparation_bytes()} else {photos.iter().map(|p|p.engine.cached_preparation_bytes()).sum::<usize>()},"working_set_bytes":if run.reduced {reduced_working.lock().unwrap().retained_bytes(&engine)} else {0},"session_resources":photos.iter().map(|p|serde_json::json!({"source":p.source,"resources":p.session.resources()})).collect::<Vec<_>>()}),
     )?;
     for round in 0..run.repeats {
         let began = Instant::now();
@@ -363,7 +406,7 @@ fn main() -> Result<()> {
                 .par_iter_mut()
                 .enumerate()
                 .map(|(index, photo)| {
-                    let settings = edit(&photo.base, &run.edit, round);
+                    let settings = edit(&photo.base, &run.edit, round, run.sweep);
                     let mut result = render(photo, &settings, run.mode, began)?;
                     result["photo_index"] = index.into();
                     result["round"] = round.into();
@@ -384,19 +427,25 @@ fn main() -> Result<()> {
             emit(&mut file, "editing_photo", run.mode, result)?;
         }
         let cache_bytes: u64 = photos.iter().map(|p| p.session.cached_bytes()).sum();
-        let (working_set_bytes, resident_sessions) = if run.reduced {
+        let (working_set_bytes, resident_sessions, active_bytes, historical_bytes) = if run.reduced
+        {
             let working = reduced_working.lock().unwrap();
-            (working.retained_bytes(&engine), working.len())
+            (
+                working.retained_bytes(&engine),
+                working.len(),
+                working.active_bytes(),
+                working.historical_bytes(),
+            )
         } else {
-            (0, photos.len())
+            (0, photos.len(), 0, 0)
         };
         emit(
             &mut file,
             "editing_group",
             run.mode,
-            serde_json::json!({"round":round,"quality":run.quality,"workers":run.workers,"edit":run.edit,"photo_count":photos.len(),"completed_ms":group_ms,"first_ms":first_ms,"cache_bytes":cache_bytes,"working_set_bytes":working_set_bytes,"resident_sessions":resident_sessions}),
+            serde_json::json!({"round":round,"scale_divisor":run.scale.divisor(),"workers":run.workers,"edit":run.edit,"photo_count":photos.len(),"completed_ms":group_ms,"first_ms":first_ms,"cache_bytes":cache_bytes,"working_set_bytes":working_set_bytes,"resident_sessions":resident_sessions,"active_bytes":active_bytes,"historical_bytes":historical_bytes}),
         )?;
-        if cache_bytes > run.cache_budget {
+        if !run.reduced && cache_bytes > run.cache_budget {
             return Err("edited session buffers exceed cache budget".into());
         }
     }
@@ -406,7 +455,7 @@ fn main() -> Result<()> {
             let image = photo.image.as_ref().ok_or("missing linear image")?;
             let bytes = photo.engine.readback_image(image)?;
             let verifier = engine.executor();
-            let settings = edit(&photo.base, &run.edit, run.repeats - 1);
+            let settings = edit(&photo.base, &run.edit, run.repeats - 1, run.sweep);
             let original = Source::open(&photo.source)?;
             let fresh = verifier.render(&original, &settings, &mut Profile::default())?;
             let expected = verifier.readback_image(&fresh)?;
@@ -424,7 +473,7 @@ fn main() -> Result<()> {
                 &mut file,
                 "editing_verification",
                 run.mode,
-                serde_json::json!({"source":photo.source,"quality":run.quality,"matches_fresh":true,"crc32":format!("{:08x}",crc32fast::hash(&bytes))}),
+                serde_json::json!({"source":photo.source,"scale_divisor":run.scale.divisor(),"matches_fresh":true,"crc32":format!("{:08x}",crc32fast::hash(&bytes))}),
             )?;
         }
     }
@@ -456,6 +505,8 @@ mod tests {
         assert!(parse(&["--repeats", "0"], false).is_err());
         assert!(parse(&["--mode", "gpu", "--workers", "2"], true).is_err());
         assert!(parse(&["--quality", "tiny"], false).is_err());
+        assert!(parse(&["--scale-divisor", "16"], false).is_ok());
+        assert!(parse(&["--scale-divisor", "3"], false).is_err());
         assert!(parse(&["--cache-budget-mib", "18446744073709551615"], false).is_err());
     }
     #[test]
@@ -463,11 +514,27 @@ mod tests {
         let mut base = Settings::new("Sunlight", "Standard");
         base.exposure_auto = true;
         base.exposure = 1.;
-        assert_eq!(edit(&base, "exposure", 0).exposure, 1.25);
-        assert_eq!(edit(&base, "exposure", 1).exposure, 0.75);
-        assert!(!edit(&base, "exposure", 0).exposure_auto);
-        assert_eq!(edit(&base, "noise", 0).reconstruction.unwrap().chroma, 1);
-        assert_eq!(edit(&base, "noise", 1).reconstruction.unwrap().chroma, 2);
+        assert_eq!(edit(&base, "exposure", 0, false).exposure, 1.25);
+        assert_eq!(edit(&base, "exposure", 1, false).exposure, 0.75);
+        assert!(!edit(&base, "exposure", 0, false).exposure_auto);
+        assert_eq!(
+            edit(&base, "noise", 0, false)
+                .reconstruction
+                .unwrap()
+                .chroma,
+            1
+        );
+        assert_eq!(
+            edit(&base, "noise", 1, false)
+                .reconstruction
+                .unwrap()
+                .chroma,
+            2
+        );
         assert!(base.reconstruction.is_none());
+        let values: HashSet<_> = (0..100)
+            .map(|i| edit(&base, "exposure", i, true).exposure.to_bits())
+            .collect();
+        assert_eq!(values.len(), 100);
     }
 }

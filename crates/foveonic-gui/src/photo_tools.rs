@@ -10,6 +10,7 @@ use foveonic::crop::Crop;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tool {
     #[default]
+    Pointer,
     Hand,
     Crop,
     Rotate,
@@ -18,7 +19,8 @@ pub enum Tool {
     WhiteBalance,
 }
 impl Tool {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
+        Self::Pointer,
         Self::Hand,
         Self::Crop,
         Self::Rotate,
@@ -26,7 +28,7 @@ impl Tool {
         Self::Dehaze,
         Self::WhiteBalance,
     ];
-    const TOOLBAR: [Self; 3] = [Self::Hand, Self::Crop, Self::Rotate];
+    const TOOLBAR: [Self; 4] = [Self::Pointer, Self::Hand, Self::Crop, Self::Rotate];
     fn width(self) -> f32 {
         match self {
             Self::Crop | Self::Rotate => ControlSize::Large.split_width(),
@@ -35,7 +37,7 @@ impl Tool {
     }
     fn cancel(self, ctx: &egui::Context) {
         match self {
-            Self::Hand => {}
+            Self::Pointer | Self::Hand => {}
             Self::Crop => crop_tool::cancel(ctx),
             Self::Rotate => rotate_tool::cancel(ctx),
             Self::ColorRange => editor::direct_color::cancel(ctx),
@@ -56,10 +58,10 @@ pub fn select(ctx: &egui::Context, tool: Tool) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::new("photograph tool"), tool));
     ctx.request_repaint();
 }
-/// A one-shot picker returns to Hand while its validated asynchronous result is still pending.
+/// A one-shot picker returns to Pointer while its validated asynchronous result is still pending.
 pub fn release(ctx: &egui::Context, tool: Tool) {
     if selected(ctx) == tool {
-        ctx.data_mut(|data| data.insert_temp(egui::Id::new("photograph tool"), Tool::Hand));
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("photograph tool"), Tool::Pointer));
         ctx.request_repaint();
     }
 }
@@ -71,7 +73,7 @@ pub fn source(ctx: &egui::Context, path: Option<&std::path::Path>) {
 }
 pub fn takes_pointer(ctx: &egui::Context) -> bool {
     match selected(ctx) {
-        Tool::Hand => false,
+        Tool::Pointer | Tool::Hand => false,
         Tool::Rotate => true,
         Tool::Crop | Tool::ColorRange | Tool::Dehaze | Tool::WhiteBalance => true,
     }
@@ -106,8 +108,18 @@ pub fn take_view_change(ctx: &egui::Context) -> bool {
         previous != current
     })
 }
-pub fn active(ctx: &egui::Context) -> bool {
-    selected(ctx) != Tool::Hand
+pub fn selects_photos(ctx: &egui::Context) -> bool {
+    selected(ctx) == Tool::Pointer
+}
+pub fn pans(ctx: &egui::Context) -> bool {
+    selected(ctx) == Tool::Hand
+}
+pub fn set_viewport_rect(ctx: &egui::Context, rect: egui::Rect) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("photograph viewport"), rect));
+}
+pub fn viewport_contains(ctx: &egui::Context, pos: egui::Pos2) -> bool {
+    ctx.data_mut(|data| data.get_temp::<egui::Rect>(egui::Id::new("photograph viewport")))
+        .is_some_and(|rect| rect.contains(pos))
 }
 pub fn menu_open(ctx: &egui::Context) -> bool {
     crop_tool::menu_open(ctx) || rotate_tool::menu_open(ctx) || editor::direct_color::menu_open(ctx)
@@ -115,11 +127,14 @@ pub fn menu_open(ctx: &egui::Context) -> bool {
 pub fn hand(ctx: &egui::Context) {
     select(ctx, Tool::Hand);
 }
+pub fn pointer(ctx: &egui::Context) {
+    select(ctx, Tool::Pointer);
+}
 pub fn escape(ctx: &egui::Context) {
     match selected(ctx) {
         Tool::Crop => crop_tool::escape(ctx),
         Tool::Rotate => rotate_tool::escape(ctx),
-        _ => hand(ctx),
+        _ => pointer(ctx),
     }
 }
 
@@ -136,8 +151,20 @@ pub fn show(
         ui.add_enabled_ui(enabled, |ui| {
             for tool in Tool::TOOLBAR {
                 match tool {
+                    Tool::Pointer => {
+                        let selected = selects_photos(ui.ctx());
+                        let button =
+                            widgets::icon_button(ui, "Pointer", selected, ControlSize::Large);
+                        pointer_icon(ui, &button, selected);
+                        if button
+                            .on_hover_text("Pointer (V) · Select photographs")
+                            .clicked()
+                        {
+                            pointer(ui.ctx());
+                        }
+                    }
                     Tool::Hand => {
-                        let selected = !active(ui.ctx());
+                        let selected = pans(ui.ctx());
                         let button = widgets::icon_button(ui, "Hand", selected, ControlSize::Large);
                         hand_icon(ui, &button, selected);
                         if button.on_hover_text("Hand (H) · Drag to pan").clicked() {
@@ -157,6 +184,24 @@ pub fn show(
     });
     crop_tool::dialog(ui.ctx(), crop, extent, custom);
     before != (*crop, *rotation)
+}
+
+fn pointer_icon(ui: &egui::Ui, response: &egui::Response, on: bool) {
+    let rect = widgets::icon_rect(ui, response);
+    let points = [
+        [5., 2.],
+        [5., 20.],
+        [10., 15.],
+        [14., 23.],
+        [18., 21.],
+        [14., 13.],
+        [21., 13.],
+    ]
+    .map(|[x, y]| rect.min + egui::vec2(x / 24. * rect.width(), y / 24. * rect.height()));
+    ui.painter().add(egui::Shape::closed_line(
+        points.to_vec(),
+        egui::Stroke::new(1.15_f32, widgets::visuals(ui, response, on).text_color()),
+    ));
 }
 
 fn hand_icon(ui: &egui::Ui, response: &egui::Response, on: bool) {
@@ -226,7 +271,7 @@ mod tests {
                 select(&ctx, previous);
                 activate(&ctx);
                 let expected = if previous == target && target != Tool::Rotate {
-                    Tool::Hand
+                    Tool::Pointer
                 } else {
                     target
                 };
@@ -240,12 +285,48 @@ mod tests {
                 ];
                 assert_eq!(
                     active_flags.iter().filter(|on| **on).count(),
-                    usize::from(expected != Tool::Hand)
+                    usize::from(!matches!(expected, Tool::Pointer | Tool::Hand))
                 );
                 release(&ctx, Tool::Hand);
                 assert_eq!(selected(&ctx), expected);
             }
         }
+    }
+    #[test]
+    fn pointer_is_default_and_only_pointer_selects_photos() {
+        let ctx = egui::Context::default();
+        assert_eq!(selected(&ctx), Tool::Pointer);
+        for tool in Tool::ALL {
+            select(&ctx, tool);
+            assert_eq!(selects_photos(&ctx), tool == Tool::Pointer);
+            assert_eq!(pans(&ctx), tool == Tool::Hand);
+            assert_eq!(
+                takes_pointer(&ctx),
+                !matches!(tool, Tool::Pointer | Tool::Hand)
+            );
+            release(&ctx, tool);
+            assert_eq!(selected(&ctx), Tool::Pointer);
+            select(&ctx, tool);
+            escape(&ctx);
+            assert_eq!(selected(&ctx), Tool::Pointer);
+        }
+    }
+    #[test]
+    fn viewport_routing_uses_the_whole_canvas() {
+        let ctx = egui::Context::default();
+        assert!(!viewport_contains(&ctx, egui::pos2(200., 100.)));
+        set_viewport_rect(
+            &ctx,
+            egui::Rect::from_min_max(egui::pos2(100., 20.), egui::pos2(700., 420.)),
+        );
+        for point in [
+            egui::pos2(110., 30.),
+            egui::pos2(400., 220.),
+            egui::pos2(690., 410.),
+        ] {
+            assert!(viewport_contains(&ctx, point));
+        }
+        assert!(!viewport_contains(&ctx, egui::pos2(90., 100.)));
     }
     #[test]
     fn crop_and_all_rotation_modes_share_the_editing_plane() {

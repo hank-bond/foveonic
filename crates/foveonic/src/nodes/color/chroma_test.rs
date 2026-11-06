@@ -5,6 +5,63 @@ fn rejects_invalid_correction_contracts() {
     assert!(Prepared::new([17, 11], [0., 1., 1.], [0.8; 3], 4, 3, Support::Binomial3).is_err());
     assert!(Prepared::new([17, 11], [1.; 3], [0.8; 3], 4, 16, Support::Box5).is_err());
 }
+
+#[test]
+fn every_power_of_two_preserves_finite_physical_chroma_support() {
+    for support in [Support::Binomial3, Support::Box5, Support::Recursive] {
+        let native = Prepared::new([128, 96], [16.; 3], [0.8; 3], 128, 3, support).unwrap();
+        for level in 0..32 {
+            let divisor = 1_u32 << level;
+            let prepared = native.clone().on_grid([16, 16], divisor).unwrap();
+            assert_eq!(prepared.params.correction[2], divisor);
+            assert_eq!(prepared.tables, native.tables);
+            if support == Support::Recursive && divisor > 1 {
+                let group = prepared.params.correction[3];
+                assert!([1, 2, 4].contains(&group));
+                assert!(prepared
+                    .params
+                    .decay
+                    .into_iter()
+                    .all(|v| (0..=256).contains(&v)));
+                let expected = (-f64::from(divisor) / 5.).exp();
+                assert!((f64::from(prepared.params.decay[1]) / 256. - expected).abs() < 1. / 256.);
+            }
+        }
+        for invalid in [0, 3, 12, u32::MAX] {
+            assert!(native.clone().on_grid([16, 16], invalid).is_err());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn large_divisors_do_not_wrap_signed_chroma_stencil_weights() {
+    let gpu = Gpu::new().unwrap();
+    let pixels: Vec<_> = (0..64)
+        .flat_map(|i| [1000. + (i % 2) as f32 * 32., 1000., 1000.])
+        .collect();
+    let input = gpu.upload("Extreme-scale chroma codes", &pixels).unwrap();
+    for support in [Support::Binomial3, Support::Box5] {
+        let native = Prepared::new([8, 8], [16.; 3], [0.8; 3], 128, 3, support).unwrap();
+        let baseline = apply(
+            &gpu,
+            &input,
+            &native.clone().on_grid([8, 8], 128).unwrap(),
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let baseline = gpu.readback(&baseline).unwrap();
+        for divisor in [1 << 16, 1 << 30, 1 << 31] {
+            let prepared = native.clone().on_grid([8, 8], divisor).unwrap();
+            let image = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+            assert_eq!(
+                gpu.readback(&image).unwrap(),
+                baseline,
+                "{support:?} divisor{divisor}"
+            );
+        }
+    }
+}
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_signed_chroma_matches_native_composed_rows() {

@@ -15,8 +15,36 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let ranges = &mut settings.photographic.color_editor.advanced;
     s.selected = s.selected.min(ranges.count.saturating_sub(1));
     let selected = ranges.count > 0;
+    let pointer = format!("/photographic/color_editor/advanced/{}", s.selected);
     if selected {
-        changed |= super::color_wheel::show(ui, &mut ranges.ranges[s.selected]);
+        let before = ranges.ranges[s.selected];
+        let edited = crate::multi_edit_controls::field(ui, format!("{pointer}/hue"), |ui| {
+            ui.add_enabled_ui(crate::multi_edit_controls::numeric_ready(ui.ctx()), |ui| {
+                super::color_wheel::show(ui, &mut ranges.ranges[s.selected])
+            })
+            .inner
+        });
+        if edited {
+            let after = ranges.ranges[s.selected];
+            if before.hue != after.hue {
+                crate::multi_edit_controls::assign(ui.ctx(), format!("{pointer}/hue"), after.hue);
+            }
+            if before.width != after.width {
+                crate::multi_edit_controls::assign(
+                    ui.ctx(),
+                    format!("{pointer}/width"),
+                    after.width,
+                );
+            }
+            if before.saturation != after.saturation {
+                crate::multi_edit_controls::assign(
+                    ui.ctx(),
+                    format!("{pointer}/saturation"),
+                    after.saturation,
+                );
+            }
+        }
+        changed |= edited;
     } else {
         super::color_wheel::empty(ui);
     }
@@ -28,33 +56,51 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     };
     ui.add_enabled_ui(selected, |ui| {
         let column = LabelColumn::new(ui);
-        changed |= column.adjustment(
-            ui,
-            ("Advanced Smoothness", "Smoothness"),
-            &mut r.smoothness,
-            0. ..=1.,
-            0.2,
-        );
+        changed |= crate::multi_edit_controls::field(ui, format!("{pointer}/smoothness"), |ui| {
+            column.adjustment(
+                ui,
+                ("Advanced Smoothness", "Smoothness"),
+                &mut r.smoothness,
+                0. ..=1.,
+                0.2,
+            )
+        });
         ui.add_enabled_ui(!mono, |ui| {
-            changed |= column.adjustment(
+            changed |=
+                crate::multi_edit_controls::field(ui, format!("{pointer}/adjustment/hue"), |ui| {
+                    column.adjustment(
+                        ui,
+                        ("Advanced Hue", "Hue"),
+                        &mut r.adjustment.hue,
+                        -1. ..=1.,
+                        0.,
+                    )
+                });
+            changed |= crate::multi_edit_controls::mapped_field(
                 ui,
-                ("Advanced Hue", "Hue"),
-                &mut r.adjustment.hue,
-                -1. ..=1.,
-                0.,
-            );
-            changed |= column.saturation_adjustment(
-                ui,
-                ("Advanced Saturation", "Saturation"),
-                &mut r.adjustment.saturation,
+                format!("{pointer}/adjustment/saturation"),
+                crate::multi_edit_controls::Mapping::Saturation,
+                |ui| {
+                    column.saturation_adjustment(
+                        ui,
+                        ("Advanced Saturation", "Saturation"),
+                        &mut r.adjustment.saturation,
+                    )
+                },
             );
         });
-        changed |= column.adjustment(
+        changed |= crate::multi_edit_controls::field(
             ui,
-            ("Advanced Lightness", "Lightness"),
-            &mut r.adjustment.lightness,
-            -1. ..=1.,
-            0.,
+            format!("{pointer}/adjustment/lightness"),
+            |ui| {
+                column.adjustment(
+                    ui,
+                    ("Advanced Lightness", "Lightness"),
+                    &mut r.adjustment.lightness,
+                    -1. ..=1.,
+                    0.,
+                )
+            },
         );
     });
     ui.separator();
@@ -69,14 +115,33 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             for i in 0..ranges.count {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = widgets::MEDIUM_CONTROL_GAP;
-                    changed |= widgets::checkbox_sized(
+                    changed |= crate::multi_edit_controls::field(
                         ui,
-                        &mut ranges.ranges[i].enabled,
-                        "",
-                        widgets::ControlSize::Medium,
-                    )
-                    .on_hover_text("Enable this edit")
-                    .changed();
+                        format!("/photographic/color_editor/advanced/{i}/hue"),
+                        |ui| {
+                            ui.add_enabled_ui(
+                                crate::multi_edit_controls::numeric_ready(ui.ctx()),
+                                |ui| {
+                                    crate::multi_edit_controls::choice(
+                                        ui,
+                                        format!("/photographic/color_editor/advanced/{i}/enabled"),
+                                        &mut ranges.ranges[i].enabled,
+                                        |ui, enabled| {
+                                            widgets::checkbox_sized(
+                                                ui,
+                                                enabled,
+                                                "",
+                                                widgets::ControlSize::Medium,
+                                            )
+                                            .on_hover_text("Enable this edit")
+                                            .changed()
+                                        },
+                                    )
+                                },
+                            )
+                            .inner
+                        },
+                    );
                     let eye = preview_eye(ui, &mut settings.color_range_preview, i);
                     changed |= eye.changed();
                     if eye.clicked() {
@@ -85,7 +150,26 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                     let color: egui::Color32 =
                         egui::ecolor::Hsva::new(ranges.ranges[i].hue / 360., 0.65, 0.8, 1.).into();
                     widgets::swatch(ui, color, widgets::ControlSize::Medium);
-                    let _ = range_name(ui, &mut s, i, &mut ranges.ranges[i]);
+                    let before_name = ranges.ranges[i].name;
+                    crate::multi_edit_controls::field(
+                        ui,
+                        format!("/photographic/color_editor/advanced/{i}/hue"),
+                        |ui| {
+                            ui.add_enabled_ui(
+                                crate::multi_edit_controls::numeric_ready(ui.ctx()),
+                                |ui| {
+                                    let _ = range_name(ui, &mut s, i, &mut ranges.ranges[i]);
+                                },
+                            );
+                        },
+                    );
+                    if ranges.ranges[i].name != before_name {
+                        crate::multi_edit_controls::assign(
+                            ui.ctx(),
+                            format!("/photographic/color_editor/advanced/{i}/name"),
+                            ranges.ranges[i].name.as_str(),
+                        );
+                    }
                 });
             }
         });
@@ -104,7 +188,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 direct_color::toggle_advanced(ui.ctx());
             }
             let remove = ui
-                .add_enabled_ui(ranges.count > 0, |ui| {
+                .add_enabled_ui(ranges.count > 0 && !crate::multi_edit_controls::different(ui.ctx(), "/photographic/color_editor/advanced"), |ui| {
                     widgets::icon_button(
                         ui,
                         "Delete color range",
@@ -120,6 +204,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 egui::TextStyle::Body.resolve(ui.style()),
                 ui.visuals().text_color(),
             );
+            let remove = remove.on_disabled_hover_text("Add and remove ranges together when the selected photographs have the same existing range list.");
             if remove.clicked() {
                 direct_color::exit(ui.ctx());
                 let removed = s.selected;
@@ -136,7 +221,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 changed = true;
             }
             let add = ui
-                .add_enabled_ui(ranges.count < MAX_COLOR_RANGES, |ui| {
+                .add_enabled_ui(ranges.count < MAX_COLOR_RANGES && !crate::multi_edit_controls::different(ui.ctx(), "/photographic/color_editor/advanced"), |ui| {
                     widgets::icon_button(ui, "Add color range", false, widgets::ControlSize::Large)
                 })
                 .inner;
@@ -147,6 +232,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 egui::TextStyle::Body.resolve(ui.style()),
                 ui.visuals().text_color(),
             );
+            let add = add.on_disabled_hover_text("Add and remove ranges together when the selected photographs have the same existing range list.");
             if add.clicked() {
                 direct_color::exit(ui.ctx());
                 s.rename = None;

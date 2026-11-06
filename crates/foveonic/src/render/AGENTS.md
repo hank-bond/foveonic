@@ -21,10 +21,12 @@ The [public renderer](../render.rs) owns the engine and display/export entry poi
 - **[capabilities.rs](./capabilities.rs)** Resolves supported photographic adjustments and compatible defaults at family boundaries.
 - **[edits.rs](./edits.rs)** Shares scoped photographic recipes and user defaults between interactive loading, batch work and preview caching.
 - **[execute.rs](./execute.rs)** Executes typed graph operations with selective outputs and guarded GPU storage.
+- **[memory.rs](./memory.rs)** Inventories shared processing owners and trims optional history under one caller-set budget.
 - **[preparation.rs](./preparation.rs)** Reuses bounded immutable metadata preparation independently of decoded sensor ownership.
-- **[reduced.rs](./reduced.rs)** Owns corrected reduced sensors and bounds retained multi-photo editing resources.
-- **[reduced_analysis.rs](./reduced_analysis.rs)** Retains exact Auto Haze color statistics without retaining their native analysis inputs.
+- **[reduced.rs](./reduced.rs)** Owns source-free camera dependency cuts and bounds multi-photo editing resources.
+- **[scale.rs](./scale.rs)** Describes power-of-two sensor sampling and the covered, padded working grid.
 - **[settings.rs](./settings.rs)** Defines shared photographic settings and validates their values.
+- **[source_preparation.rs](./source_preparation.rs)** Retains the two source-derived calibration statistics without owning sensor samples.
 - **[speckle_controls.rs](./speckle_controls.rs)** Defines Merrill speckle detection thresholds and compact-neighborhood support.
 
 <!-- INDEX:END -->

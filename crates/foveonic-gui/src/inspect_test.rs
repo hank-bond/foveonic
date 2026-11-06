@@ -673,38 +673,14 @@ fn early_quattro_hint_keeps_final_unavailable_without_merrill_menu_choices() {
 
 #[cfg(test)]
 mod preview_tests {
-    #[test]
-    fn capture_support_is_resolved_before_render_without_changing_the_preference() {
-        let settings = Settings::new("", "");
-        assert_eq!(preview_support(&settings, None, None), None);
-        for (model, supported) in [
-            ("SIGMA dp0 Quattro", true),
-            ("SIGMA sd Quattro", true),
-            ("SIGMA sd Quattro H", true),
-            ("sd Quattro H", true),
-            ("SIGMA DP1 Merrill", true),
-            ("SIGMA DP2 Merrill", true),
-            ("SIGMA DP3 Merrill", true),
-            ("SIGMA SD1 Merrill", true),
-            ("DP2 Merrill", true),
-            ("SIGMA SD15", false),
-        ] {
-            let properties = [("CAMMODEL".to_string(), model.to_string())].into();
-            assert_eq!(
-                preview_support(&settings, None, Some(&properties)),
-                Some(supported)
-            );
-        }
-    }
-
     use super::*;
     #[test]
-    fn fast_button_changes_workspace_quality_and_unavailable_choices_stay_disabled() {
+    fn all_numeric_workspace_modes_are_visible_and_fast_selection_changes_state() {
         use crate::preferences::PreviewMode;
         let ctx = egui::Context::default();
         widgets::install_style(&ctx);
         let mut quality = PreviewMode::Full;
-        let mut draw = |events, available| {
+        let mut draw = |events| {
             let mut changed = false;
             let output = ctx.run(
                 egui::RawInput {
@@ -717,14 +693,14 @@ mod preview_tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        changed = preview_quality(ui, true, available, &mut quality);
+                        changed = preview_quality(ui, true, &mut quality);
                     });
                 },
             );
             (changed, output)
         };
-        draw(vec![], Some(true));
-        let (_, output) = draw(vec![], Some(true));
+        draw(vec![]);
+        let (_, output) = draw(vec![]);
         let point = output
             .shapes
             .iter()
@@ -742,19 +718,12 @@ mod preview_tests {
             pressed,
             modifiers: Default::default(),
         };
-        draw(
-            vec![egui::Event::PointerMoved(point), button(true)],
-            Some(true),
-        );
-        assert!(draw(vec![button(false)], Some(true)).0);
-        assert!(
-            !draw(
-                vec![egui::Event::PointerMoved(point), button(true)],
-                Some(false)
-            )
-            .0
-        );
-        assert!(!draw(vec![button(false)], Some(false)).0);
+        for label in ["Full", "Fast", "Smart", "Draft", "Thumb"] {
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.job.text == label)));
+        }
+        draw(vec![egui::Event::PointerMoved(point), button(true)]);
+        assert!(draw(vec![button(false)]).0);
         assert_eq!(quality, PreviewMode::Fast);
     }
 }

@@ -6,7 +6,7 @@ summary: "GUI modules separate thumbnail browsing, interaction, bounded image jo
 
 Frame updates and widget drawing must not probe the filesystem or wait for worker/GPU completion. Receive background snapshots and queue bounded requests instead. Recompute whole-folder state only when its inputs change. Keep filesystem work outside locks shared with the UI.
 
-Run source decoding and processing on the background image worker. Keep one active image job and one replaceable pending request. Same-photo/root completed older frames may advance feedback without replacing requested settings; reject other-photo/root and out-of-order replies. Deliver images before revision-matched scopes and deferred navigator preparation. Let export jobs finish while editing controls are disabled.
+Run source decoding and processing on the background image worker. The UI coordinator owns desired work per photograph and purpose and publishes one replaceable work plan to the serialized executor. Same-photo/root completed older frames may advance feedback without replacing requested settings. Reject incompatible and out-of-order replies. Deliver images before image-matched scopes and deferred navigator preparation. Exports remain frozen commands that finish independently of replaceable preview work.
 
 [Import batches](../../../docs/specs/import-workflow.md) have a separate queue of frozen requests and keep interaction available. Reuse the photographic/export paths. Their independent executor shares compiled kernels and yields I/O and GPU submissions to the foreground gate. Keep import review edits in memory and source sidecar writes disabled. Destination history is one compact current-state file, not an audit log or a catalog.
 
@@ -31,7 +31,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 - **[actions.rs](./actions.rs)** Applies workspace commands through browser selection and the existing per-photo editing session.
 - **[activity.rs](./activity.rs)** Retains session operations, tool messages and errors with one acknowledged toolbar status.
-- **[application_settings.rs](./application_settings.rs)** Configures display, thumbnail memory and background disk reuse independently of photographic edits.
+- **[application_settings.rs](./application_settings.rs)** Configures display, editing targets, retained memory and background disk reuse independently of photographic edits.
 - **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
 - **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
 - **[browser_chrome.rs](./browser_chrome.rs)** Draws compact browser view/sort/search menus and independent star-rating controls.
@@ -43,7 +43,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[browser_review.rs](./browser_review.rs)** Handles browser highlighting, import checkboxes, and shared hidden-photo visibility.
 - **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
 - **[chromaticity.rs](./chromaticity.rs)** Draws a CIE 1931 xy guide with fixed visual anchors for the layer mixer.
-- **[comparison_view.rs](./comparison_view.rs)** Presents highlighted photos together while the active photo keeps the shared editor and RAW renderer.
+- **[comparison_view.rs](./comparison_view.rs)** Fits browser-selected photographs into bounded comparison tiles with explicit viewport editing targets.
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
 - **[crop_tool.rs](./crop_tool.rs)** Owns crop gestures and aspect options within the shared photograph-tool lifecycle.
 - **[display.rs](./display.rs)** Declares the window's display encoding and tags its native Metal layer for host color matching.
@@ -58,8 +58,11 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[information.rs](./information.rs)** Shows selectable capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
 - **[inspect.rs](./inspect.rs)** Groups viewport background, preview quality, pipeline views, and display-only comparisons.
 - **[main.rs](./main.rs)** Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
+- **[memory.rs](./memory.rs)** Counts shared photographic samples and distinct frontend display pools for the worker budget.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
 - **[mixer.rs](./mixer.rs)** Edits layer proportions inside a fixed dashed triangle on a CIE xy guide.
+- **[multi_edit_controls.rs](./multi_edit_controls.rs)** Applies explicit property edits and draws mixed-value controls for viewport-selected photographs.
+- **[multi_edit_runtime.rs](./multi_edit_runtime.rs)** Resolves bounded viewport edit targets and retains their revision-matched settings and images.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
 - **[photo_tools.rs](./photo_tools.rs)** Owns photograph-tool selection, cancellation and pointer routing, and composes the toolbar.
 - **[preferences.rs](./preferences.rs)** Persists workspace, display, cache and per-mode processing preferences separately from image edits.
@@ -67,6 +70,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[previews.rs](./previews.rs)** Retains edited GPU previews immediately and persists bounded photographic previews after foreground work yields.
 - **[processing.rs](./processing.rs)** Remembers per-mode output choices and edits them independently of photographic recipes.
 - **[progress.rs](./progress.rs)** Shows request-to-image time and discrete completed loading and rendering stages.
+- **[render_coordinator.rs](./render_coordinator.rs)** Owns desired photo renders and publishes one immutable plan to the serialized executor.
 - **[rotate_tool.rs](./rotate_tool.rs)** Owns line and freehand rotation gestures within the shared photograph-tool lifecycle.
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
@@ -77,6 +81,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
 - **[toolbar.rs](./toolbar.rs)** Shares padded processing rows and a responsive right-aligned image-tool region.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
+- **[viewport_selection.rs](./viewport_selection.rs)** Keeps bounded viewport editing targets separate from browser selection and active-photo context.
 - **[widgets.rs](./widgets.rs)** Shares numeric display policy, control sizes and workspace widgets.
 - **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 - **[worker_presentation.rs](./worker_presentation.rs)** Reframes one immutable whole-image result without reopening sources or running photographic nodes.

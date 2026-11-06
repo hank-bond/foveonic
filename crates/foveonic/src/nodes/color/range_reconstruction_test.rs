@@ -27,6 +27,52 @@ fn controls() -> Controls {
     }
 }
 #[test]
+fn sampled_controls_preserve_code_units_and_native_physical_support() {
+    use crate::render::Scale;
+    let mut native = controls();
+    native.window = 11;
+    native.downsample = 4;
+    native.diffusion_iterations = 3;
+    native.constant_iterations = 2;
+    let identity = native.clone().on_grid(Scale::NATIVE);
+    assert_eq!(identity.window, native.window);
+    assert_eq!(identity.color_noise, native.color_noise);
+    assert_eq!(
+        identity.diffusion_step.to_bits(),
+        native.diffusion_step.to_bits()
+    );
+    for power in 1..32 {
+        let scale = Scale::new(1 << power).unwrap();
+        let sampled = native.clone().on_grid(scale);
+        let sigma = super::super::pyramid_resample::independent_noise_std(scale);
+        assert_eq!(
+            sampled.color_noise[0][0],
+            native.color_noise[0][0] * sigma * sigma
+        );
+        assert_eq!(
+            sampled.intensity_noise[0],
+            native.intensity_noise[0] * sigma
+        );
+        assert_eq!(
+            sampled.diffusion_step,
+            native.diffusion_step * scale.factor().powi(2)
+        );
+        assert_eq!(
+            sampled.local_decay,
+            f64::from(native.local_decay).powf(f64::from(scale.divisor())) as f32
+        );
+        assert_eq!(sampled.matrix, native.matrix);
+        assert_eq!(sampled.digital_gain, native.digital_gain);
+        let grid = crate::render::WorkingGrid::new([257, 193], scale, 8)
+            .unwrap()
+            .with_halo(sampled.required_halo())
+            .unwrap();
+        let prepared = Prepared::new(grid.extent, sampled).unwrap();
+        assert!(prepared.params.shape[..2].iter().all(|v| *v >= 8));
+    }
+}
+
+#[test]
 fn rejects_invalid_controls() {
     let mut c = controls();
     c.downsample = 3;

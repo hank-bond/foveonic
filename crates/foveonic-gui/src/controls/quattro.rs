@@ -109,28 +109,34 @@ fn noise_and_detail(
     let mut noise = settings.reconstruction.unwrap_or(noise_defaults);
     let mut noise_changed = false;
     if !mono {
-        noise_changed |= common::adjustment(
-            ui,
-            "Chroma noise",
-            &mut noise.chroma,
-            0..=4,
-            noise_defaults.chroma,
-        );
-        noise_changed |= common::adjustment(
-            ui,
-            "Luma noise",
-            &mut noise.luminance,
-            0..=4,
-            noise_defaults.luminance,
-        );
+        noise_changed |= crate::multi_edit_controls::field(ui, "/reconstruction/chroma", |ui| {
+            common::adjustment(
+                ui,
+                "Chroma noise",
+                &mut noise.chroma,
+                0..=4,
+                noise_defaults.chroma,
+            )
+        });
+        noise_changed |= crate::multi_edit_controls::field(ui, "/reconstruction/luminance", |ui| {
+            common::adjustment(
+                ui,
+                "Luma noise",
+                &mut noise.luminance,
+                0..=4,
+                noise_defaults.luminance,
+            )
+        });
     } else {
-        changed |= common::adjustment(
-            ui,
-            "Mono noise",
-            &mut settings.monochrome.noise,
-            0..=4,
-            defaults.monochrome.noise,
-        );
+        changed |= crate::multi_edit_controls::field(ui, "/monochrome/noise", |ui| {
+            common::adjustment(
+                ui,
+                "Mono noise",
+                &mut settings.monochrome.noise,
+                0..=4,
+                defaults.monochrome.noise,
+            )
+        });
         noise.detail = settings
             .monochrome_smoothness
             .unwrap_or(defaults.monochrome_smoothness.unwrap_or(0.5));
@@ -140,13 +146,23 @@ fn noise_and_detail(
     } else {
         noise_defaults.detail
     };
-    noise_changed |= common::stepped_adjustment(
+    noise_changed |= crate::multi_edit_controls::field(
         ui,
-        "Smooth / Crisp",
-        &mut noise.detail,
-        0. ..=1.,
-        detail_default,
-        1. / 6.,
+        if mono {
+            "/monochrome_smoothness"
+        } else {
+            "/reconstruction/detail"
+        },
+        |ui| {
+            common::stepped_adjustment(
+                ui,
+                "Smooth / Crisp",
+                &mut noise.detail,
+                0. ..=1.,
+                detail_default,
+                1. / 6.,
+            )
+        },
     );
     if noise_changed {
         if mono {
@@ -174,14 +190,16 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings, defaults: &Settings) 
         changed |= super::dehaze::show(ui, settings);
         let highlight_default = defaults.highlight_amount.unwrap_or(1.);
         let mut highlight = settings.highlight_amount.unwrap_or(highlight_default);
-        if common::stepped_adjustment(
-            ui,
-            "Highlight recovery",
-            &mut highlight,
-            0. ..=1.,
-            highlight_default,
-            0.1,
-        ) {
+        if crate::multi_edit_controls::field(ui, "/highlight_amount", |ui| {
+            common::stepped_adjustment(
+                ui,
+                "Highlight recovery",
+                &mut highlight,
+                0. ..=1.,
+                highlight_default,
+                0.1,
+            )
+        }) {
             settings.highlight_amount = if highlight == highlight_default {
                 None
             } else {

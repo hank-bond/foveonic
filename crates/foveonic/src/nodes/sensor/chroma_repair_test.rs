@@ -333,10 +333,17 @@ fn parallel_batches_match_serial_record_order_exactly() {
         )
         .unwrap();
         let mut serial = parallel.clone();
-        serial.records = records.into_iter().map(|r| [r[0], r[1], r[2], 0]).collect();
+        serial.records = records
+            .into_iter()
+            .map(|r| [r[0], r[1], r[2], 0])
+            .collect::<Vec<_>>()
+            .into();
         let stage_index = if matches!(stage, Stage::Single) { 0 } else { 1 };
-        serial.batches = [vec![], vec![]];
-        serial.batches[stage_index] = (0..serial.records.len() as u32).map(|i| [i, 1]).collect();
+        serial.batches = Default::default();
+        serial.batches[stage_index] = (0..serial.records.len() as u32)
+            .map(|i| [i, 1])
+            .collect::<Vec<_>>()
+            .into();
         let run = |prepared: &Prepared| {
             let output = apply(
                 &gpu,

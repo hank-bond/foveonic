@@ -25,7 +25,7 @@ pub(in crate::render::recipes) fn build(
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
-    let (mut recipe, mode) = match technical::build(
+    let (mut recipe, mode, grid) = match technical::build(
         engine,
         source,
         settings,
@@ -35,7 +35,7 @@ pub(in crate::render::recipes) fn build(
         execution,
     )? {
         technical::Prepared::Requested(recipe) => return Ok(recipe),
-        technical::Prepared::Linear(recipe, mode) => (recipe, mode),
+        technical::Prepared::Linear(recipe, mode, grid) => (recipe, mode, grid),
     };
     let space = ColorSpace::from_metadata(source.metadata())?;
     linear_edits::alias(&mut recipe, space, "linear.base")?;
@@ -97,17 +97,20 @@ pub(in crate::render::recipes) fn build(
         space,
         white: LINEAR_CODE_WHITE,
         guide_white: CLASSIFIER_CODE_UNIT,
-        scale: if matches!(
-            settings.preview_quality,
-            crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
-        ) {
-            1. / settings.preview_quality.divisor() as f32
-        } else if settings.preview_region.is_some() {
+        scale: if settings.preview_region.is_some() {
             1.
         } else {
-            (recipe.params.source[0] as f32 / source.metadata().width as f32)
-                .min(recipe.params.source[1] as f32 / source.metadata().height as f32)
+            settings.working_scale.factor()
         },
+        analysis_grid: crate::render::AnalysisGrid::new(
+            settings.working_scale,
+            if settings.is_monochrome() {
+                crate::render::Scale::NATIVE
+            } else {
+                crate::render::Scale::new(2)?
+            },
+            crate::render::Scale::new(2)?,
+        ),
     };
     linear_edits::build(
         engine,
@@ -127,6 +130,11 @@ pub(in crate::render::recipes) fn build(
     )?;
     if requested(&recipe.graph, names) {
         return Ok(recipe);
+    }
+    // Internal guides keep the sensor working grid. Apply the photographic
+    // frame only after shared spatial edits and before the pointwise response.
+    if let Some(grid) = &grid {
+        grid.frame(&mut recipe, space)?;
     }
     let curve = match prepared_curve {
         Some(curve) => curve,

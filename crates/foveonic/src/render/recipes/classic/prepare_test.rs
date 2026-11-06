@@ -544,8 +544,8 @@ fn monochrome_chroma_keeps_only_doubled_small_support() {
         })
         .collect(),
     };
-    let color = prepare_chroma(&metadata, [1.; 3], false).unwrap();
-    let mono = prepare_chroma(&metadata, [1.; 3], true).unwrap();
+    let color = prepare_chroma(&metadata, [1.; 3], false, crate::render::Scale::NATIVE).unwrap();
+    let mono = prepare_chroma(&metadata, [1.; 3], true, crate::render::Scale::NATIVE).unwrap();
     assert_eq!(color.len(), 2);
     assert_eq!(mono.len(), 1);
     let expected =
@@ -555,6 +555,44 @@ fn monochrome_chroma_keeps_only_doubled_small_support() {
         bytemuck::bytes_of(&expected.params)
     );
     assert_eq!(mono[0].tables, expected.tables);
+    let mut recursive_metadata = metadata.clone();
+    recursive_metadata
+        .matrices
+        .get_mut("ChromaBlur")
+        .unwrap()
+        .values[0] = 101.;
+    for level in 0..32 {
+        let scale = crate::render::Scale::new(1 << level).unwrap();
+        let std = f64::from(crate::nodes::color::pyramid_resample::independent_noise_std(scale));
+        let mono = prepare_chroma(&metadata, [1.; 3], true, scale).unwrap();
+        let expected =
+            chroma::Prepared::new([32, 32], [16. * std; 3], [0.8; 3], 0, 3, Support::Binomial3)
+                .unwrap();
+        assert_eq!(
+            mono[0].tables,
+            expected.tables,
+            "mono amplitude at divisor{}",
+            scale.divisor()
+        );
+        let recursive = prepare_recursive_chroma(&recursive_metadata, [1.; 3], scale)
+            .unwrap()
+            .unwrap();
+        let expected = chroma::Prepared::new(
+            [32, 32],
+            [(2_f64 / 3.) * 4. * 0.5 * std; 3],
+            [0.8; 3],
+            0,
+            3,
+            Support::Recursive,
+        )
+        .unwrap();
+        assert_eq!(
+            recursive.tables,
+            expected.tables,
+            "recursive amplitude at divisor{}",
+            scale.divisor()
+        );
+    }
 }
 
 #[test]

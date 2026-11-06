@@ -119,9 +119,42 @@ pub(super) fn prepare(
     nearby: &[std::path::PathBuf],
     current: &impl Fn() -> bool,
 ) -> Result<()> {
-    let original_checksum =
-        super::original::store(root, identity, original, settings, nearby, current)?;
+    let prepared = prepare_assets(path, identity, metadata, original)?;
+    publish(root, path, original, prepared, settings, nearby, current)
+}
+
+pub(super) struct PreparedSelection {
+    identity: Identity,
+    recipe: Option<render::Settings>,
+    preview: Option<previews::PreparedPreview>,
+    record: PreparedRecord,
+}
+
+/// Read the saved recipe on the photo coordinator, then borrow its original
+/// buffer for CPU preparation on the shared host pool.
+pub(super) fn prepare_assets(
+    path: &Path,
+    identity: &Identity,
+    metadata: &Metadata,
+    original: &[u8],
+) -> Result<PreparedSelection> {
     let recipe = sidecar::load(path)?;
+    crate::decode_pool::cpu(|| prepare_assets_cpu(path, identity, metadata, original, recipe))
+}
+
+fn prepare_assets_cpu(
+    path: &Path,
+    identity: &Identity,
+    metadata: &Metadata,
+    original: &[u8],
+    recipe: Option<render::Settings>,
+) -> Result<PreparedSelection> {
+    let mut checksum = crc32fast::Hasher::new();
+    for chunk in original.chunks(crate::background::IO_CHUNK_BYTES) {
+        crate::background::checkpoint_or_cancel()?;
+        checksum.update(chunk);
+    }
+    let original_checksum = checksum.finalize();
     let small = crate::preview::from_original(original, false).ok();
     crate::background::checkpoint_or_cancel()?;
     let large = crate::preview::from_original(original, true)
@@ -137,27 +170,64 @@ pub(super) fn prepare(
         .or_else(|| large.clone())
         .map(|p| resize(p, THUMBNAIL_SIDE))
         .transpose()?;
-    if let Some(large) = large {
-        previews::prepared(
-            root,
+    let preview = if let Some(large) = large {
+        Some(previews::prepare_embedded(
             path,
             identity.clone(),
             recipe.as_ref(),
             metadata.processing_family()?,
             resize(large, previews::MAX_SIDE)?,
-            settings,
-            nearby,
-            current,
-        )?;
-    }
+        )?)
+    } else {
+        None
+    };
     crate::background::checkpoint_or_cancel()?;
     let selection = Selection {
         properties: metadata.properties.clone(),
-        settings: recipe,
+        settings: recipe.clone(),
         thumbnail,
         original_checksum,
     };
-    write(root, identity, selection, settings, nearby, current)
+    Ok(PreparedSelection {
+        identity: identity.clone(),
+        recipe,
+        preview,
+        record: prepare_record(identity, selection)?,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn publish(
+    root: &Path,
+    path: &Path,
+    original: &[u8],
+    prepared: PreparedSelection,
+    settings: &Settings,
+    nearby: &[std::path::PathBuf],
+    current: &impl Fn() -> bool,
+) -> Result<()> {
+    let PreparedSelection {
+        identity,
+        recipe,
+        preview,
+        record,
+    } = prepared;
+    if !current() {
+        return Ok(());
+    }
+    let snapshot_current = || {
+        current()
+            && Identity::read(path).is_ok_and(|now| now == identity)
+            && sidecar::load(path).is_ok_and(|now| now == recipe)
+    };
+    if !snapshot_current() {
+        return Err("source or saved recipe changed during cache preparation".into());
+    }
+    super::original::store(root, &identity, original, settings, nearby, current)?;
+    if let Some(preview) = preview {
+        previews::publish(root, preview, settings, nearby, current)?;
+    }
+    publish_record(root, &identity, record, settings, nearby, &snapshot_current)
 }
 
 pub(super) fn update_recipe(
@@ -184,12 +254,37 @@ fn write(
     nearby: &[std::path::PathBuf],
     current: &impl Fn() -> bool,
 ) -> Result<()> {
+    let record = crate::decode_pool::cpu(|| prepare_record(identity, selection))?;
+    publish_record(root, identity, record, settings, nearby, current)
+}
+
+struct PreparedRecord {
+    json: Vec<u8>,
+    checksum: u32,
+}
+
+fn prepare_record(identity: &Identity, selection: Selection) -> Result<PreparedRecord> {
     let record = Record {
         version: FORMAT_VERSION,
         identity: identity.clone(),
         selection,
     };
     let json = serde_json::to_vec(&record)?;
+    Ok(PreparedRecord {
+        checksum: crc32fast::hash(&json),
+        json,
+    })
+}
+
+fn publish_record(
+    root: &Path,
+    identity: &Identity,
+    record: PreparedRecord,
+    settings: &Settings,
+    nearby: &[std::path::PathBuf],
+    current: &impl Fn() -> bool,
+) -> Result<()> {
+    let PreparedRecord { json, checksum } = record;
     let bytes = json.len() as u64 + CHECKSUM_BYTES as u64;
     if bytes > MAX_SELECTION_BYTES || !current() {
         return Err("cached selection exceeds limit or was superseded".into());
@@ -210,13 +305,14 @@ fn write(
             .write(true)
             .create_new(true)
             .open(&temporary)?;
-        file.write_all(&crc32fast::hash(&json).to_le_bytes())?;
+        file.write_all(&checksum.to_le_bytes())?;
         file.write_all(&json)?;
         drop(file);
         crate::background::checkpoint_or_cancel()?;
-        if current() {
-            fs::rename(&temporary, destination)?;
+        if !current() {
+            return Err("cached selection was superseded during publication".into());
         }
+        fs::rename(&temporary, destination)?;
         Ok(())
     })();
     let _ = fs::remove_file(temporary);

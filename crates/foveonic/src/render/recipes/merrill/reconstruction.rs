@@ -22,6 +22,7 @@ pub(super) struct Request<'a> {
     pub region: Option<&'a region::Prepared>,
     pub directional_banding: bool,
     pub native_calibrated: usize,
+    pub view: crate::image::View,
 }
 
 pub(super) struct Reconstructed {
@@ -82,6 +83,11 @@ pub(super) fn append(
         vec![calibrated]
     };
     let base = graph.add(Operation::NoiseBase(params), &base_inputs)?;
+    // Whole-image context has its own coarse inspection grid. NoiseBase
+    // projects every image port back to this camera-owned sensor frame.
+    for id in graph.nodes[graph.outputs[base].producer].outputs.clone() {
+        graph.set_view(id, request.view);
+    }
     checkpoint!();
     let native_columns = if effects.noise {
         profile.measure("prepare column cuts", || {
@@ -115,14 +121,12 @@ pub(super) fn append(
         if let Some(grid) = request.preview {
             let native = graph.named_output(bands, "column.layers")?;
             let reduced = grid.append(graph, native)?;
+            // The native estimator has already corrected these samples.
+            // Packing their working tiles needs only numerical grid geometry.
             graph.add(
-                Operation::DirectionalBanding {
-                    stage: crate::nodes::color::directional_banding::Stage::Retile,
-                    prepared: Arc::new(crate::noise::banding_parameters(
-                        request.source.metadata(),
-                        column_params,
-                        request.settings.merrill_banding,
-                    )?),
+                Operation::Column {
+                    params: column_params,
+                    enabled: false,
                 },
                 &[reduced],
             )?
@@ -153,21 +157,14 @@ pub(super) fn append(
     checkpoint!();
     let mut active =
         crate::nodes::sensor::calibration::rectangle(request.source.metadata(), "ActiveImageArea")?;
-    for axis in 0..2 {
-        let native = [
-            request.source.metadata().width as u32,
-            request.source.metadata().height as u32,
-        ][axis];
-        active[axis] =
-            (u64::from(active[axis]) * u64::from(params.source[axis]) / u64::from(native)) as u32;
-        active[axis + 2] = (u64::from(active[axis + 2]) * u64::from(params.source[axis]))
-            .div_ceil(u64::from(native)) as u32;
+    if let Some(grid) = request.preview {
+        active = grid.grid.bounds(active);
     }
     let color =
         crate::nodes::color::texture::Color::new(request.color.matrix, request.space, active)?;
     let prepared = crate::nodes::color::texture::Prepared::new(
         controls,
-        params.source[0] as f32 / request.source.metadata().width as f32,
+        request.settings.working_scale.factor(),
         color,
     )?;
     let inspect_ratio = request

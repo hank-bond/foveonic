@@ -6,7 +6,7 @@ use crate::{
         Gpu, Kernel, ReadGuard,
     },
     profile::Profile,
-    recipe::Key,
+    recipe::{Key, RetainedBytes, Shared},
     source::Result,
 };
 use std::collections::BTreeMap;
@@ -31,9 +31,9 @@ struct Params {
 #[derive(Clone, Debug)]
 pub struct Prepared {
     params: Params,
-    jobs: Vec<[u32; 4]>,
-    marks: Vec<[u32; 2]>,
-    batches: Vec<[u32; 2]>,
+    jobs: Shared<[u32; 4]>,
+    marks: Shared<[u32; 2]>,
+    batches: Shared<[u32; 2]>,
 }
 
 impl Prepared {
@@ -162,9 +162,9 @@ impl Prepared {
                 controls: [0; 4],
                 gains: [blue_gain, 0., 0., 0.],
             },
-            jobs,
-            marks,
-            batches,
+            jobs: jobs.into(),
+            marks: marks.into(),
+            batches: batches.into(),
         })
     }
     pub(crate) fn extent(&self) -> [u32; 2] {
@@ -180,9 +180,14 @@ impl Prepared {
     }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params)
-            .slice(&self.jobs)
-            .slice(&self.marks)
-            .slice(&self.batches)
+            .join(self.jobs.key())
+            .join(self.marks.key())
+            .join(self.batches.key())
+    }
+    pub(crate) fn account(&self, retained: &mut RetainedBytes) {
+        self.jobs.account(retained);
+        self.marks.account(retained);
+        self.batches.account(retained);
     }
 }
 

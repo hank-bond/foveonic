@@ -73,6 +73,18 @@ pub enum PreviewMode {
     Draft,
     Thumb,
 }
+impl PreviewMode {
+    pub fn working_scale(self) -> foveonic::render::Scale {
+        let divisor = match self {
+            Self::Full => 1,
+            Self::Fast | Self::Smart => 2,
+            Self::Draft => 4,
+            Self::Thumb => 8,
+        };
+        foveonic::render::Scale::new(divisor).expect("workspace scales are powers of two")
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Scope {
     #[default]
@@ -127,9 +139,12 @@ impl Section {
 }
 pub use crate::editor::Section as EditingSection;
 
+pub const DEFAULT_MULTI_EDIT_LIMIT: usize = 8;
+
 pub const MIB: u64 = 1024 * 1024;
-pub const DEFAULT_THUMBNAIL_BYTES: u64 = 256 * MIB;
-pub const THUMBNAIL_BYTES_RANGE: std::ops::RangeInclusive<u64> = 16 * MIB..=2048 * MIB;
+pub const DEFAULT_MEMORY_CACHE_BYTES: u64 = 1024 * MIB;
+pub const MEMORY_BYTES_RANGE: std::ops::RangeInclusive<u64> = 64 * MIB..=64 * 1024 * MIB;
+pub const DEFAULT_THUMBNAIL_BYTES: u64 = DEFAULT_MEMORY_CACHE_BYTES / 4;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -152,7 +167,8 @@ pub struct Preferences {
     pub preview_quality: PreviewMode,
     pub white_viewport_background: bool,
     pub decode_cache: foveonic::decode_cache::Settings,
-    pub thumbnail_cache_bytes: u64,
+    pub memory_cache_bytes: u64,
+    pub multi_edit_limit: usize,
     pub noise_profile: crate::noise_calibration::Slot,
     pub display_gamut: crate::preferences::DisplayGamut,
     pub adaptive_tone_tuning: foveonic::render::AdaptiveToneTuning,
@@ -180,7 +196,8 @@ impl Default for Preferences {
             preview_quality: PreviewMode::Full,
             white_viewport_background: false,
             decode_cache: Default::default(),
-            thumbnail_cache_bytes: DEFAULT_THUMBNAIL_BYTES,
+            memory_cache_bytes: DEFAULT_MEMORY_CACHE_BYTES,
+            multi_edit_limit: DEFAULT_MULTI_EDIT_LIMIT,
             noise_profile: Default::default(),
             display_gamut: Default::default(),
             adaptive_tone_tuning: Default::default(),
@@ -199,14 +216,14 @@ impl Preferences {
         result
     }
     fn normalize(&mut self) {
-        self.decode_cache.normalize();
+        self.multi_edit_limit = self.multi_edit_limit.max(1);
         if self.adaptive_tone_tuning.validate().is_err() {
             self.adaptive_tone_tuning = Default::default();
         }
         self.direct_color.normalize();
-        self.thumbnail_cache_bytes = self
-            .thumbnail_cache_bytes
-            .clamp(*THUMBNAIL_BYTES_RANGE.start(), *THUMBNAIL_BYTES_RANGE.end());
+        self.memory_cache_bytes = self
+            .memory_cache_bytes
+            .clamp(*MEMORY_BYTES_RANGE.start(), *MEMORY_BYTES_RANGE.end());
         crate::editor::normalize_sections(&mut self.editing_sections);
         let mut seen = BTreeSet::new();
         self.sections.retain(|s| seen.insert(*s));
@@ -215,6 +232,13 @@ impl Preferences {
                 self.sections.push(section);
             }
         }
+    }
+    /// Browser thumbnails share the master cache target rather than introducing
+    /// an independently growing memory allowance.
+    pub fn thumbnail_cache_bytes(&self) -> u64 {
+        self.memory_cache_bytes
+            .clamp(*MEMORY_BYTES_RANGE.start(), *MEMORY_BYTES_RANGE.end())
+            / 4
     }
     /// Resolve startup intent without probing the filesystem on the UI thread.
     pub fn startup_request(
@@ -324,6 +348,28 @@ mod tests {
             Preferences::load(Some(&store)).last_folder_mode,
             FolderMode::Browse
         );
+    }
+
+    #[test]
+    fn editing_target_limit_defaults_and_persists_separately_from_memory_settings() {
+        let mut store = Storage::default();
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(organizer:List)".into());
+        assert_eq!(Preferences::load(Some(&store)).multi_edit_limit, 8);
+        let prefs = Preferences {
+            multi_edit_limit: 13,
+            ..Default::default()
+        };
+        prefs.save(&mut store);
+        let restored = Preferences::load(Some(&store));
+        assert_eq!(restored, prefs);
+        assert_eq!(restored.thumbnail_cache_bytes(), DEFAULT_THUMBNAIL_BYTES);
+        assert_eq!(restored.decode_cache, Preferences::default().decode_cache);
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(multi_edit_limit:0)".into());
+        assert_eq!(Preferences::load(Some(&store)).multi_edit_limit, 1);
     }
 
     #[test]
@@ -498,30 +544,30 @@ mod tests {
 mod preview_tests {
     use super::*;
     #[test]
-    fn thumbnail_memory_defaults_and_persists_independently() {
+    fn master_memory_defaults_round_trips_and_bounds_thumbnail_share() {
         let old: Preferences = serde_json::from_str("{}").unwrap();
-        assert_eq!(old.thumbnail_cache_bytes, 256 * MIB);
+        assert_eq!(old.memory_cache_bytes, 1024 * MIB);
+        assert_eq!(old.thumbnail_cache_bytes(), 256 * MIB);
         let prefs = Preferences {
-            thumbnail_cache_bytes: 512 * MIB,
+            memory_cache_bytes: 2048 * MIB,
             ..Default::default()
         };
         let bytes = serde_json::to_vec(&prefs).unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Preferences>(&bytes).unwrap(),
-            prefs
-        );
+        let loaded: Preferences = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(loaded, prefs);
+        assert_eq!(loaded.thumbnail_cache_bytes(), 512 * MIB);
+        assert!(!String::from_utf8(bytes)
+            .unwrap()
+            .contains("thumbnail_cache_bytes"));
         let mut invalid = Preferences {
-            thumbnail_cache_bytes: 0,
+            memory_cache_bytes: 0,
             ..Default::default()
         };
         invalid.normalize();
-        assert_eq!(
-            invalid.thumbnail_cache_bytes,
-            *THUMBNAIL_BYTES_RANGE.start()
-        );
-        invalid.thumbnail_cache_bytes = u64::MAX;
+        assert_eq!(invalid.memory_cache_bytes, *MEMORY_BYTES_RANGE.start());
+        invalid.memory_cache_bytes = u64::MAX;
         invalid.normalize();
-        assert_eq!(invalid.thumbnail_cache_bytes, *THUMBNAIL_BYTES_RANGE.end());
+        assert_eq!(invalid.memory_cache_bytes, *MEMORY_BYTES_RANGE.end());
     }
     #[test]
     fn preview_quality_defaults_full_and_round_trips_as_workspace_state() {
@@ -544,7 +590,6 @@ mod preview_tests {
             decode_cache: foveonic::decode_cache::Settings {
                 enabled: false,
                 max_bytes: 5_000_000_000,
-                decode_threads: 1,
                 prefetch_behind: 2,
                 prefetch_ahead: 5,
                 classic: true,

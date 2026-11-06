@@ -46,7 +46,7 @@ def interaction_windows(events, settle):
 
 
 def workload(row):
-    fields = tuple((key, row[key]) for key in ['quality', 'effective_quality', 'workers', 'edit'] if key in row)
+    fields = tuple((key, row[key]) for key in ['scale_divisor', 'requested_scale_divisor', 'effective_scale_divisor', 'workers', 'edit'] if key in row)
     if row['event'] in ['editing_photo', 'editing_group'] and 'round' in row:
         fields += (('first_edit', row['round'] == 0),)
     return fields

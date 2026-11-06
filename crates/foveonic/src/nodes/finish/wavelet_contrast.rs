@@ -91,11 +91,11 @@ impl Prepared {
         })
     }
     /// Preserve native band support when pixels represent pooled sensor cells.
-    pub(crate) fn on_preview_grid(mut self, divisor: u32) -> Result<Self> {
-        if ![4, 8].contains(&divisor) {
-            return Err("invalid wavelet preview divisor".into());
+    pub(crate) fn on_sensor_scale(mut self, divisor: u32) -> Result<Self> {
+        if !divisor.is_power_of_two() {
+            return Err("invalid wavelet sensor scale".into());
         }
-        self.params.levels[0] = LEVELS - divisor.ilog2();
+        self.params.levels[0] = LEVELS.saturating_sub(divisor.ilog2());
         for band in &mut self.gains {
             band[1] /= divisor as f32;
         }
@@ -369,9 +369,12 @@ mod preview_grid_tests {
             0.35,
         )
         .unwrap();
-        for divisor in [4, 8] {
-            let small = p.clone().on_preview_grid(divisor).unwrap();
-            assert_eq!((1 << small.params.levels[0]) * divisor, 64);
+        for divisor in [2_u32, 4, 8, 16, 64, 1 << 31] {
+            let small = p.clone().on_sensor_scale(divisor).unwrap();
+            assert_eq!(
+                small.params.levels[0],
+                6_u32.saturating_sub(divisor.ilog2())
+            );
             assert_eq!(small.gains[0], [1.2, 100. / divisor as f32, 0.5, 0.]);
             assert!(p.key() != small.key());
         }

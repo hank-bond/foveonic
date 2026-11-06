@@ -52,7 +52,6 @@ impl Band {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Stage {
     Tiles,
-    Retile,
     Window,
     Measure(Band, Axis),
     Correct(Band, Axis),
@@ -62,7 +61,6 @@ impl Stage {
     pub(crate) fn output(self) -> &'static str {
         match self {
             Self::Tiles => "banding.source-tiles",
-            Self::Retile => "banding.preview-tiles",
             Self::Window => "banding.region-tiles",
             Self::Measure(Band::Fine, Axis::Columns) => "banding.fine-column-estimates",
             Self::Measure(Band::Fine, Axis::Rows) => "banding.fine-row-estimates",
@@ -77,7 +75,6 @@ impl Stage {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Tiles => "prepare directional band tiles",
-            Self::Retile => "prepare reduced band tiles",
             Self::Window => "select native band tiles",
             Self::Measure(Band::Fine, Axis::Columns) => "measure native fine column bands",
             Self::Measure(Band::Fine, Axis::Rows) => "measure native fine row bands",
@@ -399,7 +396,7 @@ pub(crate) fn apply_stage(
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
     let p = prepared.params;
-    if matches!(stage, Stage::Tiles | Stage::Retile) {
+    if matches!(stage, Stage::Tiles) {
         if input.size() != u64::from(p.source[0]) * u64::from(p.source[1]) * COMPONENT_BYTES {
             return Err("Banding input does not match sensor extent".into());
         }

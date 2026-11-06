@@ -119,9 +119,9 @@ impl Prepared {
                     } else {
                         detail.coarse_size
                     };
-                    // Retain the existing reduced-grid default. Fractional taps let
-                    // size controls move continuously between pixels.
-                    (NATIVE_STEPS[i] as f32 * scale).round().max(1.) * size
+                    // Fractional taps preserve support in native sensor pixels,
+                    // including bands narrower than one working-grid cell.
+                    NATIVE_STEPS[i] as f32 * scale * size
                 }),
             },
         })

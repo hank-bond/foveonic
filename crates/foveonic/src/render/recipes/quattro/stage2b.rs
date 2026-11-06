@@ -17,10 +17,6 @@ const DETAIL_ISO_NORMALIZATION: f32 = 36.;
 // Smooth/Crisp presets select these ordinary single-input residual powers.
 const RESIDUAL_POWERS: [f32; 7] = [0., 0., 0., 0., 1., 1.25, 1.5];
 const BLUE_FILTER_KERNEL: u32 = 11;
-// Reviewed Fast approximation: smaller support on the R/G grid. The mean of
-// four blue samples uses one quarter of the HIGH variance coefficients.
-const HALF_GRID_BLUE_FILTER_KERNEL: u32 = 7;
-const CELL_SAMPLE_COUNT: f64 = 4.;
 const BLUE_FILTER_RANGE_CUTOFF: f32 = 0.25;
 const BLUE_FILTER_STRENGTHS: [f32; 5] = [0.2, 0.125, 0.1, 0.075, 0.05];
 // Native Stage2B output-code normalization, independent of the sensor ISO gain.
@@ -59,7 +55,7 @@ impl Default for Controls {
             luma: 0,
             detail: 1.,
             residual_level: 6,
-            grid: super::WorkingGrid::Full,
+            grid: super::WorkingGrid::NATIVE,
         }
     }
 }
@@ -86,21 +82,20 @@ pub(super) fn prepare(metadata: &Metadata, controls: Controls, mode: &str) -> Re
     if !super::defects::supported(metadata) {
         return Err("reconstruction preparation requires supported Quattro input".into());
     }
-    let output_extent = controls
-        .grid
-        .extent([metadata.width as u32, metadata.height as u32]);
+    let output_extent = super::output_grid(metadata, controls.grid)?.extent;
     let capture_iso = metadata.scalar("CaptureISO")?;
     if !capture_iso.is_finite() || capture_iso <= 0. {
         return Err("invalid reconstruction capture ISO".into());
     }
     let iso_gain = (capture_iso / 100.) as f32;
     let low = metadata.is_quattro_low();
-    let (sharp_threshold, adaptive) = detail_controls(
-        iso_gain,
-        controls,
-        mode == "Portrait",
-        low || controls.grid.is_half(),
-    )?;
+    let (sharp_threshold, adaptive) = detail_controls(iso_gain, controls, mode == "Portrait", low)?;
+    let sharp_threshold = sharp_threshold
+        * super::pool_noise_energy(
+            [metadata.width as u32, metadata.height as u32],
+            controls.grid,
+        )
+        .sqrt() as f32;
     // Standard's zero-level adaptive blend discards the filtered plane.
     // Portrait retains a nonzero blend at level zero, so filtering is required.
     let blend = if controls.luma == 0 && mode != "Portrait" {
@@ -132,20 +127,24 @@ pub(super) fn prepare_reconstruction(
     step: u8,
     blend: Option<Vec<f32>>,
 ) -> Result<blue_guided_reconstruct::Prepared> {
-    prepare_reconstruction_on_grid(metadata, step, blend, super::WorkingGrid::Full)
+    prepare_reconstruction_on_grid(metadata, step, blend, super::WorkingGrid::NATIVE)
 }
-fn prepare_reconstruction_on_grid(
+pub(super) fn prepare_reconstruction_on_grid(
     metadata: &Metadata,
     step: u8,
     blend: Option<Vec<f32>>,
     grid: super::WorkingGrid,
 ) -> Result<blue_guided_reconstruct::Prepared> {
-    let physical_extent = [metadata.width as u32, metadata.height as u32];
-    let output_extent = grid.extent(physical_extent);
-    let color_extent = if grid.is_small() {
-        output_extent
-    } else {
-        super::calibration::color_extent(metadata)?
+    let output_extent = super::output_grid(metadata, grid)?.extent;
+    let color_extent = super::color_grid(metadata, grid)?.extent;
+    let energy = super::pool_noise_energy([metadata.width as u32, metadata.height as u32], grid);
+    let noise = BLUE_VARIANCE.map(|v| v * energy);
+    let kernel = |native: u32| {
+        if grid.is_native() {
+            native
+        } else {
+            ((native / 2).div_ceil(grid.divisor()).max(1) * 2 + 1).min(31)
+        }
     };
     if metadata.is_quattro_low() {
         let iso_gain = (metadata.scalar("CaptureISO")? / 100.) as f32;
@@ -158,8 +157,8 @@ fn prepare_reconstruction_on_grid(
                 };
                 crate::nodes::color::scalar_bilateral::Prepared::new(
                     color_extent,
-                    5,
-                    BLUE_VARIANCE,
+                    kernel(5),
+                    noise,
                     strengths[usize::from(step)],
                     BLUE_FILTER_RANGE_CUTOFF,
                     low_intensity(step)?,
@@ -172,29 +171,14 @@ fn prepare_reconstruction_on_grid(
                 )
             })
             .transpose()?;
-        return blue_guided_reconstruct::Prepared::native_size(color_extent, BLUE_VARIANCE, filter);
+        return blue_guided_reconstruct::Prepared::native_size(color_extent, noise, filter);
     }
     let filter = blend
         .map(|table| {
             histogram_bilateral::Prepared::new(
                 output_extent,
-                if grid.is_small() {
-                    // Keep a nontrivial neighborhood after native support shrinks.
-                    (BLUE_FILTER_KERNEL.div_ceil(grid.divisor()) | 1).max(3)
-                } else if grid.is_half() {
-                    HALF_GRID_BLUE_FILTER_KERNEL
-                } else {
-                    BLUE_FILTER_KERNEL
-                },
-                if grid.is_half() {
-                    // Preview noise approximation for a mean of four blue samples.
-                    BLUE_VARIANCE.map(|v| v / CELL_SAMPLE_COUNT)
-                } else {
-                    // Small sensor pools retain this conservative calibrated model.
-                    // Their corrected samples are correlated, so an area-based
-                    // independent-noise reduction is not assumed.
-                    BLUE_VARIANCE
-                },
+                kernel(BLUE_FILTER_KERNEL),
+                noise,
                 BLUE_FILTER_STRENGTHS[usize::from(step)],
                 BLUE_FILTER_RANGE_CUTOFF,
                 table,
@@ -206,17 +190,8 @@ fn prepare_reconstruction_on_grid(
             )
         })
         .transpose()?;
-    if grid.is_half() || grid.is_small() {
-        blue_guided_reconstruct::Prepared::same_size(color_extent, BLUE_VARIANCE, filter)
-    } else {
-        blue_guided_reconstruct::Prepared::new(
-            color_extent,
-            CHROMA_RESIDUAL_SUPPRESSION,
-            BLUE_VARIANCE,
-            filter,
-        )
+    blue_guided_reconstruct::Prepared::new(color_extent, CHROMA_RESIDUAL_SUPPRESSION, noise, filter)
         .map(|prepared| prepared.with_adaptive_range(super::tiger::supported(metadata)))
-    }
 }
 
 /// LOW keeps the native one-to-one working scale. Its scalar worker selects
@@ -286,7 +261,7 @@ fn detail_controls(
     iso_gain: f32,
     controls: Controls,
     portrait: bool,
-    reduced_detail: bool,
+    low_resolution: bool,
 ) -> Result<(f32, f32)> {
     if !iso_gain.is_finite()
         || iso_gain <= 0.
@@ -297,11 +272,11 @@ fn detail_controls(
     {
         return Err("invalid reconstruction noise or detail controls".into());
     }
-    // Full follows the ordinary HIGH setter. Fast borrows LOW's natural-log
-    // threshold and half-scale detail, while retaining HIGH calibration.
+    // LOW uses its natural-log threshold and half-strength detail. HIGH
+    // retains its logarithm-base-two response at every working scale.
     // Keep each expression's evaluation order for the reviewed integer output.
     let log_iso = iso_gain.log2();
-    let mut sharp = if reduced_detail {
+    let mut sharp = if low_resolution {
         (BASE_SHARP_THRESHOLD
             - DETAIL_ISO_CURVATURE * iso_gain.ln().powi(2) / DETAIL_ISO_NORMALIZATION)
             / 2.
@@ -310,7 +285,7 @@ fn detail_controls(
             + BASE_SHARP_THRESHOLD
     };
     sharp *= [1., 1., 1.2, 1.5, 2.][usize::from(controls.luma)];
-    if iso_gain >= 8. && !reduced_detail {
+    if iso_gain >= 8. && !low_resolution {
         sharp *= 1.5;
     }
     let ramp = (iso_gain - 1.).mul_add(-0.125, 1.);
@@ -339,6 +314,7 @@ pub(super) fn build(
     signals: &super::stage2::Signals,
     highlight_mask: usize,
     prepared: Prepared,
+    view: crate::image::View,
 ) -> Result<usize> {
     let color_extent = prepared.reconstruct.extent();
     let double_mask = prepared.reconstruct.doubles_output();
@@ -351,6 +327,12 @@ pub(super) fn build(
             signals.blue,
         ],
     )?;
+    for id in graph.nodes[graph.outputs[reconstructed].producer]
+        .outputs
+        .clone()
+    {
+        graph.set_view(id, view);
+    }
     let residual = graph.named_output(reconstructed, "reconstruction.residual")?;
     let mask = if !double_mask {
         highlight_mask
@@ -362,13 +344,23 @@ pub(super) fn build(
             &[highlight_mask],
         )?
     };
-    graph.add(
+    if double_mask {
+        graph.set_view(mask, view);
+    }
+    let finished = graph.add(
         Operation::ResidualFinish {
             params: prepared.finish,
             with_mask: true,
         },
         &[reconstructed, residual, mask],
-    )
+    )?;
+    for id in graph.nodes[graph.outputs[finished].producer]
+        .outputs
+        .clone()
+    {
+        graph.set_view(id, view);
+    }
+    Ok(finished)
 }
 
 #[cfg(test)]
@@ -415,7 +407,7 @@ mod tests {
                     luma: case["luma"].as_u64().unwrap() as u8,
                     detail: 1.,
                     residual_level: case["residual_level"].as_u64().unwrap() as u8,
-                    grid: super::super::WorkingGrid::Full,
+                    grid: super::super::WorkingGrid::NATIVE,
                 },
                 case["portrait"].as_bool().unwrap(),
                 false,
@@ -453,7 +445,7 @@ mod tests {
             detail: std::env::var("QUATTRO_DETAIL").map_or(1., |v| v.parse().unwrap()),
             residual_level: std::env::var("QUATTRO_RESIDUAL_LEVEL")
                 .map_or(6, |v| v.parse().unwrap()),
-            grid: super::super::WorkingGrid::Full,
+            grid: super::super::WorkingGrid::NATIVE,
         };
         let mode = std::env::var("QUATTRO_MODE").unwrap_or_else(|_| "Standard".into());
         let prepared = prepare(&source.metadata, controls, &mode).unwrap();
@@ -552,7 +544,7 @@ mod tests {
             luma: 2,
             detail: 1.,
             residual_level: 6,
-            grid: super::super::WorkingGrid::Full,
+            grid: super::super::WorkingGrid::NATIVE,
         };
         let (threshold, adaptive) = detail_controls(1., selected, false, false).unwrap();
         assert_eq!(threshold, 19.2);
@@ -574,7 +566,7 @@ mod tests {
                 luma: 5,
                 detail: 1.,
                 residual_level: 6,
-                grid: super::super::WorkingGrid::Full,
+                grid: super::super::WorkingGrid::NATIVE,
             },
             false,
             false
@@ -586,7 +578,7 @@ mod tests {
                 luma: 0,
                 detail: f32::NAN,
                 residual_level: 6,
-                grid: super::super::WorkingGrid::Full,
+                grid: super::super::WorkingGrid::NATIVE,
             },
             false,
             false

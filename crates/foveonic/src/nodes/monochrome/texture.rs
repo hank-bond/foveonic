@@ -53,9 +53,13 @@ pub(crate) fn apply(
     gpu: &Gpu,
     input: &ReadGuard,
     controls: TextureControls,
+    scale: f32,
     extent: [u32; 2],
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
+    if !scale.is_finite() || scale <= 0. {
+        return Err("invalid monochrome texture scale".into());
+    }
     if controls.is_neutral() {
         return Ok(input.clone());
     }
@@ -73,6 +77,7 @@ pub(crate) fn apply(
     let mut fine = log.clone();
     for (index, step) in NATIVE_STEPS.into_iter().enumerate() {
         p.values[2] = step as f32
+            * scale
             * if index <= FINE_BOUNDARY_STEP {
                 controls.fine_size
             } else {

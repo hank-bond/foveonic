@@ -4,7 +4,7 @@ use crate::render::Engine;
 use crate::{
     inspection::Content,
     profile::Profile,
-    render::{ControlCapabilities, PhotographicMethod, PreviewQuality, RenderSession, Rendering},
+    render::{ControlCapabilities, PhotographicMethod, RenderSession, Rendering, Scale},
     source::{ProcessingFamily, Source},
 };
 use std::sync::Arc;
@@ -209,8 +209,11 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
             "DNG boundary"
         );
         drop(dng);
-        if rendering == Rendering::Color && settings.fast_preview_available(&source.metadata) {
-            settings.preview_quality = PreviewQuality::Fast;
+        if rendering == Rendering::Color
+            && settings
+                .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
+        {
+            settings.working_scale = Scale::new(2).unwrap();
             let image = engine
                 .render(&source, &settings, &mut Profile::default())
                 .unwrap();
@@ -281,13 +284,13 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
     let full_bytes = engine.readback_image(&full).unwrap();
     let [w, h] = full.view().extent;
     let mut session = RenderSession::new(source.clone());
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     let overview = session_image(&engine, &mut session, &settings, &mut Profile::default());
     engine
         .view_texture(&overview, None, &mut Profile::default())
         .unwrap();
     drop(overview);
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     for (index, [x, y]) in [[0, 0], [w / 2, h / 2], [w - 320, h - 240]]
         .into_iter()
         .enumerate()
@@ -471,7 +474,7 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
         );
         if rendering == Rendering::Color {
             settings.tone_enabled = true;
-            settings.preview_quality = PreviewQuality::Fast;
+            settings.working_scale = Scale::new(2).unwrap();
             let image = engine
                 .render(&source, &settings, &mut Profile::default())
                 .unwrap();

@@ -83,6 +83,22 @@ impl Tracker {
             }
         }
     }
+    /// Keep image-stage reporting separate from settlement of the desired render set.
+    pub fn settle(&self, pending: bool, failed_revision: Option<u64>) {
+        let completed = {
+            let mut state = self.0.lock().unwrap();
+            let Some(state) = state.as_mut() else {
+                return;
+            };
+            if failed_revision == Some(state.revision) {
+                state.failed = true;
+            }
+            (!pending).then_some((state.revision, state.failed))
+        };
+        if let Some((revision, failed)) = completed {
+            self.finish(revision, failed);
+        }
+    }
 }
 
 pub struct Reporter {
@@ -161,6 +177,74 @@ pub fn show(ui: &mut egui::Ui, snapshot: Option<Snapshot>, show_time: bool) -> e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn desire(
+        coordinator: &mut crate::render_coordinator::RenderCoordinator,
+        path: &str,
+        revision: u64,
+    ) -> crate::render_coordinator::Stamp {
+        let request = Arc::new(crate::worker::Request {
+            framing_preview: false,
+            calibration: None,
+            rendition: crate::editor::Rendition::Current,
+            revision,
+            path: path.into(),
+            settings: foveonic::render::Settings::new("Sunlight", "Standard"),
+            preview_quality: crate::preferences::PreviewMode::Thumb,
+            preview_policy: crate::preferences::PreviewMode::Thumb,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        });
+        let target = crate::render_coordinator::Target::of(&request);
+        coordinator.desire(request, None, Instant::now());
+        coordinator.desired(&target).unwrap().stamp.clone()
+    }
+
+    #[test]
+    fn sibling_completion_order_cannot_leave_settled_progress_running() {
+        let mut coordinator = crate::render_coordinator::RenderCoordinator::default();
+        let a = desire(&mut coordinator, "a.x3f", 1);
+        let b = desire(&mut coordinator, "b.x3f", 2);
+        let tracker = Tracker::default();
+        let began = Instant::now();
+        tracker.begin(b.revision, began);
+        Reporter::new(tracker.clone(), b.revision).rendered(RenderProgress::Stage {
+            completed: 1,
+            total: 1,
+        });
+
+        coordinator.finish(&b);
+        tracker.settle(coordinator.busy(), None);
+        assert!(tracker.snapshot().unwrap().running());
+        assert_eq!(tracker.snapshot().unwrap().fraction, 0.8);
+
+        coordinator.finish(&a);
+        tracker.settle(coordinator.busy(), None);
+        let done = tracker.snapshot().unwrap();
+        assert!(!done.running());
+        assert_eq!(done.fraction, 1.);
+        assert_eq!(done.revision, b.revision);
+        assert_eq!(done.started, began);
+    }
+
+    #[test]
+    fn retiring_last_desire_settles_without_another_image_reply() {
+        let mut coordinator = crate::render_coordinator::RenderCoordinator::default();
+        let a = desire(&mut coordinator, "a.x3f", 1);
+        let b = desire(&mut coordinator, "b.x3f", 2);
+        let tracker = Tracker::default();
+        tracker.begin(b.revision, Instant::now());
+        coordinator.finish(&a);
+        tracker.settle(coordinator.busy(), None);
+        assert!(tracker.snapshot().unwrap().running());
+
+        coordinator.retain_overviews(&["a.x3f".into()], &[]);
+        tracker.settle(coordinator.busy(), None);
+        assert!(!tracker.snapshot().unwrap().running());
+        assert_eq!(tracker.snapshot().unwrap().fraction, 1.);
+    }
+
     #[test]
     fn stages_are_discrete_and_older_jobs_cannot_advance_or_finish_a_new_request() {
         let tracker = Tracker::default();

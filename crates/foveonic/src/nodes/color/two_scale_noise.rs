@@ -60,29 +60,8 @@ impl Prepared {
         brightness: Vec<f32>,
         gains: [f32; 3],
     ) -> Result<Self> {
-        Self::prepare(first, second, brightness, gains, false)
-    }
-    /// Keep floor-halved odd preview dimensions and extend the doubled candidate
-    /// at the physical edge. Native construction retains its existing alignment.
-    pub(crate) fn on_preview_grid(
-        first: rgb_prefilter::Prepared,
-        second: rgb_prefilter::Prepared,
-        brightness: Vec<f32>,
-        gains: [f32; 3],
-    ) -> Result<Self> {
-        Self::prepare(first, second, brightness, gains, true)
-    }
-    fn prepare(
-        first: rgb_prefilter::Prepared,
-        second: rgb_prefilter::Prepared,
-        brightness: Vec<f32>,
-        gains: [f32; 3],
-        preview: bool,
-    ) -> Result<Self> {
         let extent = first.extent();
-        if extent
-            .iter()
-            .any(|v| *v < 4 || (!preview && !v.is_multiple_of(4)))
+        if extent.iter().any(|v| *v < 4 || !v.is_multiple_of(4))
             || second.extent() != extent.map(|v| v / 2)
             || brightness.len() != 14344
             || brightness.iter().any(|v| !v.is_finite())
@@ -91,11 +70,7 @@ impl Prepared {
             return Err("invalid two-scale RGB filter parameters".into());
         }
         let half = pyramid_resample::Prepared::new(extent, Ratio::Half)?;
-        let double = if preview {
-            pyramid_resample::Prepared::double_to(second.extent(), extent)?
-        } else {
-            pyramid_resample::Prepared::new(second.extent(), Ratio::Double)?
-        };
+        let double = pyramid_resample::Prepared::new(second.extent(), Ratio::Double)?;
         Ok(Self {
             first,
             second,

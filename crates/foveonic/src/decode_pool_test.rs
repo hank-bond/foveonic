@@ -4,6 +4,97 @@ use super::*;
 use std::{sync::mpsc, time::Duration};
 
 type Latch = (Mutex<bool>, Condvar);
+
+#[test]
+fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() {
+    let pool = Arc::new(Pool::new(2).unwrap());
+    let gate = Arc::new(background::Gate::default());
+    let values = [3, 5, 7];
+    background::interruptible(gate.clone(), || {
+        background::decoder(
+            Task {
+                pool: pool.clone(),
+                turn: Arc::new(Order::default()).issue(),
+            },
+            || {
+                assert_eq!(
+                    cpu(|| {
+                        assert!(pool.0.current_thread_index().is_some());
+                        assert!(background::context().is_some());
+                        planes(|channel| {
+                            assert!(pool.0.current_thread_index().is_some());
+                            Ok(values[channel])
+                        })
+                    })?,
+                    values
+                );
+                let _foreground = gate.foreground();
+                let ran = std::sync::atomic::AtomicBool::new(false);
+                assert!(cpu(|| {
+                    ran.store(true, std::sync::atomic::Ordering::Relaxed);
+                    Ok(())
+                })
+                .unwrap_err()
+                .is::<background::Interrupted>());
+                assert!(!ran.load(std::sync::atomic::Ordering::Relaxed));
+                Ok(())
+            },
+        )
+    })
+    .unwrap();
+}
+
+#[test]
+fn paused_cpu_batch_yields_one_worker_to_foreground_and_resumes() {
+    let pool = Arc::new(Pool::new(1).unwrap());
+    let gate = Arc::new(background::Gate::default());
+    let (started, start) = mpsc::channel();
+    let (proceed, resume) = mpsc::channel();
+    let (foreground_done, done) = mpsc::channel();
+    let (batch_resumed, resumed) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let batch = {
+            let pool = pool.clone();
+            let gate = gate.clone();
+            scope.spawn(move || {
+                background::processing(gate, || {
+                    background::decoder(
+                        Task {
+                            pool,
+                            turn: Arc::new(Order::default()).issue(),
+                        },
+                        || {
+                            cpu(move || {
+                                started.send(()).unwrap();
+                                resume.recv().unwrap();
+                                background::checkpoint_or_cancel()?;
+                                batch_resumed.send(()).unwrap();
+                                Ok(19)
+                            })
+                        },
+                    )
+                })
+            })
+        };
+        start.recv_timeout(Duration::from_secs(5)).unwrap();
+        let foreground = gate.foreground();
+        pool.0.spawn(move || {
+            background::with_context(None, || foreground_done.send(()).unwrap());
+        });
+        proceed.send(()).unwrap();
+        let completed = done.recv_timeout(Duration::from_secs(5));
+        let resumed_early = resumed.try_recv().is_ok();
+        // Release even on failure so the old blocking implementation cannot hang joins.
+        drop(foreground);
+        assert_eq!(batch.join().unwrap().unwrap(), 19);
+        assert!(
+            !resumed_early,
+            "the batch must keep its progress paused until foreground releases the gate"
+        );
+        completed.expect("foreground work could not run while a one-worker batch was paused");
+    });
+}
+
 struct ReleaseAll(Arc<Vec<Latch>>);
 impl Drop for ReleaseAll {
     fn drop(&mut self) {
@@ -13,6 +104,65 @@ impl Drop for ReleaseAll {
         }
     }
 }
+#[test]
+fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
+    let pool = shared().unwrap();
+    assert!(Arc::ptr_eq(&pool, &shared().unwrap()));
+    assert_eq!(pool.threads(), available_workers());
+    let caller = std::thread::current().id();
+    assert_eq!(
+        planes(|channel| {
+            assert!(pool.0.current_thread_index().is_some());
+            assert_ne!(std::thread::current().id(), caller);
+            assert!(background::context().is_none());
+            Ok(channel + 1)
+        })
+        .unwrap(),
+        [1, 2, 3]
+    );
+    let mut output = vec![0; pool.threads() * 4];
+    rows(&mut output, 1, |first, chunk| {
+        assert!(pool.0.current_thread_index().is_some());
+        assert_ne!(std::thread::current().id(), caller);
+        assert!(background::context().is_none());
+        for (offset, value) in chunk.iter_mut().enumerate() {
+            *value = first + offset;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(output, (0..output.len()).collect::<Vec<_>>());
+    background::interruptible(Arc::new(background::Gate::default()), || {
+        background::decoder(
+            Task {
+                pool: pool.clone(),
+                turn: Arc::new(Order::default()).issue(),
+            },
+            || {
+                planes(|channel| {
+                    assert!(pool.0.current_thread_index().is_some());
+                    assert!(Arc::ptr_eq(
+                        &pool,
+                        &background::decoder_context().unwrap().pool
+                    ));
+                    Ok(channel)
+                })?;
+                rows(&mut output, 1, |_, chunk| {
+                    assert!(pool.0.current_thread_index().is_some());
+                    assert!(Arc::ptr_eq(
+                        &pool,
+                        &background::decoder_context().unwrap().pool
+                    ));
+                    chunk.fill(7);
+                    Ok(())
+                })
+            },
+        )
+    })
+    .unwrap();
+    assert!(output.iter().all(|&value| value == 7));
+}
+
 #[test]
 fn five_workers_start_rgb_rg_then_take_the_next_b_before_the_first_photo_finishes() {
     let pool = Arc::new(Pool::new(5).unwrap());
@@ -37,7 +187,7 @@ fn five_workers_start_rgb_rg_then_take_the_next_b_before_the_first_photo_finishe
                     background::interruptible(Arc::new(background::Gate::default()), || {
                         background::decoder(Task { pool, turn }, || {
                             let task = background::decoder_context().unwrap();
-                            task.pool.planes(&task.turn, |layer| {
+                            task.pool.planes(Some(&task.turn), |layer| {
                                 started
                                     .send((photo, layer, std::thread::current().id()))
                                     .unwrap();
@@ -105,7 +255,7 @@ fn cancellation_reaches_queued_layers_and_unblocks_later_photo_admission() {
             let _foreground = gate.foreground();
             assert!(task
                 .pool
-                .planes(&task.turn, |_| Ok(()))
+                .planes(Some(&task.turn), |_| Ok(()))
                 .unwrap_err()
                 .is::<background::Interrupted>());
             Ok(())
@@ -140,7 +290,7 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
                     },
                     || {
                         let task = background::decoder_context().unwrap();
-                        task.pool.planes(&task.turn, |layer| {
+                        task.pool.planes(Some(&task.turn), |layer| {
                             started.send(layer).unwrap();
                             let mut released = latches[layer].0.lock().unwrap();
                             while !*released {
@@ -170,7 +320,7 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
     let next = background::interruptible(gate, || {
         background::decoder(Task { pool, turn: second }, || {
             let task = background::decoder_context().unwrap();
-            task.pool.planes(&task.turn, Ok)
+            task.pool.planes(Some(&task.turn), Ok)
         })
     })
     .unwrap();
@@ -240,7 +390,7 @@ fn row_photos_share_only_configured_workers_and_release_admission_after_queueing
                 .collect();
             assert!(first
                 .iter()
-                .all(|event| event.0 == 0 && event.3.starts_with("cache-layer-")));
+                .all(|event| event.0 == 0 && event.3.starts_with("processing-cpu-")));
             assert_eq!(
                 first
                     .iter()
@@ -366,7 +516,16 @@ fn row_failures_join_every_chunk_and_choose_row_order_for_foreground_and_pool() 
             work().unwrap_err()
         };
         assert_eq!(error.to_string(), "earliest row failed");
-        assert_eq!(completed.load(Ordering::SeqCst), 4);
+        let workers = if pooled {
+            4
+        } else {
+            shared().unwrap().threads()
+        };
+        let rows_per_chunk = 16_usize.div_ceil(workers);
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            16_usize.div_ceil(rows_per_chunk)
+        );
     }
     let gate = Arc::new(background::Gate::default());
     background::interruptible(gate.clone(), || {

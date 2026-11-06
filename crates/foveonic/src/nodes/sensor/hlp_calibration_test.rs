@@ -3,6 +3,32 @@
 use super::*;
 
 #[test]
+fn component_output_keys_share_sparse_lut_and_gain_payloads() {
+    let gain = Gain {
+        ordinary: [1.; 4],
+        mono: [1.; 4],
+        red_green: [1.; 4],
+        blue: [1.; 4],
+        phases: [1.; 4],
+    };
+    let prepared =
+        Prepared::new([32, 12], [0, 0, 16, 4], vec![0; 32768], vec![gain; 6], 1.).unwrap();
+    let mut inventory = crate::recipe::RetainedBytes::default();
+    prepared.key().account(&mut inventory);
+    let once = inventory.payload_bytes();
+    prepared.key().account(&mut inventory);
+    prepared.key().account(&mut inventory);
+    assert!(
+        inventory.payload_bytes() - once < 128,
+        "RGB, blue and scratch keys must share data"
+    );
+    assert_ne!(
+        prepared.key(),
+        prepared.clone().with_blue_ceiling(14000.).unwrap().key()
+    );
+}
+
+#[test]
 fn preparation_rejects_bad_sparse_geometry_and_tables() {
     let g = Gain {
         ordinary: [1., 0., 1., 0.],

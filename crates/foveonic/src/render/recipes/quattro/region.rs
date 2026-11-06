@@ -11,7 +11,7 @@ use crate::{
 // Six 5/3 lifting levels reach 126 pixels in each transform direction, with
 // another 64 for lowest-band filtering. 512 also covers reconstruction,
 // bilateral filtering, signed-detail support, sharpening and final resampling.
-const CONTEXT_MARGIN: u32 = 512;
+pub(super) const CAMERA_SUPPORT: u32 = 512;
 // Preserve six-level lifting phase and the ordinary 128-pixel padding origin.
 const GRID_ALIGNMENT: u32 = 128;
 
@@ -29,7 +29,7 @@ impl Prepared {
             metadata.rotation,
             true,
         )?;
-        let (crop, physical) = crop.region(output, CONTEXT_MARGIN, GRID_ALIGNMENT)?;
+        let (crop, physical) = crop.region(output, CAMERA_SUPPORT, GRID_ALIGNMENT)?;
         Ok(Self { physical, crop })
     }
     pub fn extent(&self) -> [u32; 2] {

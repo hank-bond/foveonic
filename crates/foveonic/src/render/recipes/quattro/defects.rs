@@ -2,8 +2,11 @@
 
 use crate::{
     nodes::sensor::chroma_repair::Prepared,
+    profile::Profile,
+    render::Engine,
     source::{MatrixEncoding, Metadata, Result},
 };
+use std::sync::Arc;
 const REFERENCE_SENSOR_ISO: f64 = 100.;
 const TEMPERATURE_SCORE_SCALE: f32 = 0.0866434;
 const SHUTTER_SCORE_DIVISOR: f32 = 1000.;
@@ -32,7 +35,17 @@ pub(super) fn supported(metadata: &Metadata) -> bool {
         && optional(metadata, "CaptureISO", REFERENCE_SENSOR_ISO)
             .is_ok_and(|v| v.is_finite() && v > 0.)
 }
-pub(super) fn prepare(metadata: &Metadata) -> Result<Prepared> {
+pub(super) fn prepare(
+    engine: &Engine,
+    metadata: &Arc<Metadata>,
+    profile: &mut Profile,
+) -> Result<Arc<Prepared>> {
+    engine.prepare_chroma_repair(metadata, || {
+        profile.measure("prepare ordered chroma repair", || records(metadata))
+    })
+}
+
+fn records(metadata: &Metadata) -> Result<Prepared> {
     if !supported(metadata) {
         return Err("chroma repair requires the Quattro factory-calibration route".into());
     }
@@ -396,7 +409,7 @@ mod tests {
                 controls["single"]["matrix"][i].as_f64().unwrap().to_bits()
             );
         }
-        let prepared = prepare(m).unwrap();
+        let prepared = super::records(m).unwrap();
         assert_eq!(prepared.extent(), [2944, 1836]);
     }
 }

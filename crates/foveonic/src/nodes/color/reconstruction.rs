@@ -322,8 +322,8 @@ fn filter(
     let mut filtered = gpu.storage("Bilateral base tiles", n * 12)?;
     let mut edges = gpu.storage("Noise edge weights", n * 4)?;
     let grid = [
-        params.tile[0].div_ceil(32),
-        params.tile[1].div_ceil(32) * params.tile_count(),
+        params.tile[0].div_ceil(params.sampling[1].max(1)),
+        params.tile[1].div_ceil(params.sampling[1].max(1)) * params.tile_count(),
     ];
     let mut block_mean = gpu.storage(
         "Noise block means",
@@ -472,7 +472,11 @@ pub(crate) fn column(
     let n = params.atlas_pixels();
     let mut raw = gpu.storage("Immutable column input tiles", n * 12)?;
     let mut smoothed = gpu.storage("Column directional workspace", n * 12)?;
-    let blocks = params.tile[1] / 40;
+    let block_height = params.column[2] as u32;
+    if block_height == 0 {
+        return Err("invalid column block height".into());
+    }
+    let blocks = params.tile[1] / block_height;
     if blocks == 0 {
         return Err("unsupported column tile height".into());
     }

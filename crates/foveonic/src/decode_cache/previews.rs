@@ -305,17 +305,13 @@ fn read_file(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn prepared(
-    root: &Path,
+pub(super) fn prepare_embedded(
     path: &Path,
     identity: Identity,
     recipe: Option<&crate::render::Settings>,
     family: ProcessingFamily,
     preview: Preview,
-    settings: &Settings,
-    nearby: &[PathBuf],
-    current: &impl Fn() -> bool,
-) -> Result<()> {
+) -> Result<PreparedPreview> {
     let key = Key {
         calibration: None,
         source: identity,
@@ -336,7 +332,7 @@ pub(super) fn prepared(
         },
         preview,
     };
-    write_checked(root, write, settings, nearby, current)
+    prepare(write)
 }
 
 #[cfg(test)]
@@ -423,7 +419,7 @@ pub(super) fn store(root: &Path, write: PendingPreview, control: &Mutex<Control>
 
 fn write_checked(
     root: &Path,
-    mut write: PendingPreview,
+    write: PendingPreview,
     settings: &Settings,
     nearby: &[PathBuf],
     current: &impl Fn() -> bool,
@@ -442,6 +438,20 @@ fn write_checked(
     {
         return Ok(());
     }
+    let prepared = crate::decode_pool::cpu(|| prepare(write))?;
+    publish(root, prepared, settings, nearby, current)
+}
+
+pub(super) struct PreparedPreview {
+    path: PathBuf,
+    header: PreviewHeader,
+    json: Vec<u8>,
+    header_checksum: u32,
+    encoded: Vec<u8>,
+}
+
+fn prepare(mut write: PendingPreview) -> Result<PreparedPreview> {
+    crate::background::checkpoint_or_cancel()?;
     if write
         .preview
         .extent
@@ -471,9 +481,47 @@ fn write_checked(
         )?;
     }
     let encoded = encoded.into_inner();
+    crate::background::checkpoint_or_cancel()?;
     write.header.checksum = crc32fast::hash(&encoded);
-    let header = serde_json::to_vec(&write.header)?;
-    let bytes = PREVIEW_PREFIX_BYTES + header.len() as u64 + encoded.len() as u64;
+    let json = serde_json::to_vec(&write.header)?;
+    Ok(PreparedPreview {
+        path: write.path,
+        header: write.header,
+        header_checksum: crc32fast::hash(&json),
+        json,
+        encoded,
+    })
+}
+
+pub(super) fn publish(
+    root: &Path,
+    prepared: PreparedPreview,
+    settings: &Settings,
+    nearby: &[PathBuf],
+    current: &impl Fn() -> bool,
+) -> Result<()> {
+    let PreparedPreview {
+        path,
+        header,
+        json,
+        header_checksum,
+        encoded,
+    } = prepared;
+    if !current() || !settings.permits(header.family) {
+        return Ok(());
+    }
+    crate::background::checkpoint_or_cancel()?;
+    if !Key::read(&path)?.same_file_recipe(&header.key) {
+        return Ok(());
+    }
+    let destination = header.key.location(root);
+    if !header.rendered
+        && read_file(&destination, &header.key, settings, false)
+            .is_ok_and(|(header, _)| header.rendered)
+    {
+        return Ok(());
+    }
+    let bytes = PREVIEW_PREFIX_BYTES + json.len() as u64 + encoded.len() as u64;
     if bytes > settings.max_bytes || bytes > MAX_ENCODED {
         return Ok(());
     }
@@ -493,13 +541,13 @@ fn write_checked(
             .create_new(true)
             .open(&temporary)?;
         file.write_all(PREVIEW_MAGIC)?;
-        file.write_all(&(header.len() as u64).to_le_bytes())?;
-        file.write_all(&crc32fast::hash(&header).to_le_bytes())?;
-        file.write_all(&header)?;
+        file.write_all(&(json.len() as u64).to_le_bytes())?;
+        file.write_all(&header_checksum.to_le_bytes())?;
+        file.write_all(&json)?;
         file.write_all(&encoded)?;
         drop(file);
         crate::background::checkpoint_or_cancel()?;
-        if current() && Key::read(&write.path)?.same_file_recipe(&write.header.key) {
+        if current() && Key::read(&path)?.same_file_recipe(&header.key) {
             fs::rename(&temporary, destination)?;
         }
         Ok(())

@@ -4,6 +4,7 @@
 //! Adapted with owner permission from Foveonic banding/mod.rs and patches.rs at
 //! e47af35. Host fitting matrices depend only on fixed geometric polynomial bases.
 use crate::gpu::Binding::{Read, Write};
+use crate::recipe::Shared;
 use crate::source::{MatrixEncoding, Metadata, Result};
 
 // Largest selected polynomial basis. Match the coefficient slots in banding.wgsl.
@@ -25,24 +26,24 @@ pub(crate) struct Patch {
 }
 pub(crate) struct Prepared {
     pub params: Params,
-    pub patches: Vec<Patch>,
-    pub tables: Vec<f32>,
-    pub links: Vec<u32>,
-    pub rows: Vec<[u32; 2]>,
+    pub patches: Shared<Patch>,
+    pub tables: Shared<f32>,
+    pub links: Shared<u32>,
+    pub rows: Shared<[u32; 2]>,
     pub samples: u32,
     pub contributions: u32,
-    pub batches: Vec<[u32; 4]>,
+    pub batches: Shared<[u32; 4]>,
 }
 
 impl Prepared {
     pub(crate) fn key(&self) -> crate::recipe::Key {
         crate::recipe::Key::pod(&self.params)
-            .slice(&self.patches)
-            .slice(&self.tables)
-            .slice(&self.links)
-            .slice(&self.rows)
+            .join(self.patches.key())
+            .join(self.tables.key())
+            .join(self.links.key())
+            .join(self.rows.key())
             .with(&[self.samples, self.contributions])
-            .slice(&self.batches)
+            .join(self.batches.key())
     }
 }
 
@@ -133,42 +134,39 @@ pub(crate) fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Resul
     if calibration_gains.iter().any(|v| !v.is_finite() || *v <= 0.) {
         return Err("invalid row-correction gains".into());
     }
-    let mut p = Prepared {
-        params: Params {
-            source: [metadata.width as u32, metadata.height as u32, 0, 0],
-            area,
-            values: [
-                0.,
-                if iso < 800. {
-                    0.75
-                } else {
-                    f32::from_bits(0x3f99999a)
-                },
-                0.,
-                0.,
-            ],
-            gains: [
-                calibration_gains[0],
-                calibration_gains[1],
-                calibration_gains[2],
-                0.,
-            ],
-        },
-        patches: Vec::new(),
-        tables: Vec::new(),
-        links: Vec::new(),
-        rows: Vec::new(),
-        samples: 0,
-        contributions: 0,
-        batches: Vec::new(),
+    let mut params = Params {
+        source: [metadata.width as u32, metadata.height as u32, 0, 0],
+        area,
+        values: [
+            0.,
+            if iso < 800. {
+                0.75
+            } else {
+                f32::from_bits(0x3f99999a)
+            },
+            0.,
+            0.,
+        ],
+        gains: [
+            calibration_gains[0],
+            calibration_gains[1],
+            calibration_gains[2],
+            0.,
+        ],
     };
+    let mut patches = Vec::new();
+    let mut tables = Vec::new();
+    let mut rows = Vec::new();
+    let mut samples = 0_u32;
+    let mut contributions = 0_u32;
+    let mut batches = Vec::new();
     let mut links = vec![Vec::new(); metadata.height];
     for side in [31, 73, 151] {
-        let first = p.patches.len() as u32;
+        let first = patches.len() as u32;
         let (n, basis, inverse) = matrices(side)?;
-        let table = p.tables.len() as u32;
-        p.tables.extend(basis);
-        p.tables.extend(inverse);
+        let table = tables.len() as u32;
+        tables.extend(basis);
+        tables.extend(inverse);
         let columns = ((area[2] - area[0]) as f32 / side as f32).floor() as u32;
         let eighth = (area[3] - area[1]) / 8;
         for bank in 0..8_u32 {
@@ -195,36 +193,44 @@ pub(crate) fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Resul
                 for column in 0..columns {
                     let origin_y = base + row * side;
                     let origin_x = area[0] + column * side;
-                    p.patches.push(Patch {
+                    patches.push(Patch {
                         geometry: [origin_x, origin_y, side, n],
-                        storage: [table, p.samples, p.contributions, 0],
+                        storage: [table, samples, contributions, 0],
                     });
                     for y in 0..side {
-                        links[(origin_y + y + 1) as usize].push(p.contributions + y);
+                        links[(origin_y + y + 1) as usize].push(contributions + y);
                     }
-                    p.samples = p
-                        .samples
+                    samples = samples
                         .checked_add(side * side)
                         .ok_or("row sample workspace overflow")?;
-                    p.contributions = p
-                        .contributions
+                    contributions = contributions
                         .checked_add(side)
                         .ok_or("row contribution workspace overflow")?;
                 }
             }
         }
-        let count = p.patches.len() as u32 - first;
+        let count = patches.len() as u32 - first;
         if count > 0 {
-            p.batches.push([first, count, side, n]);
+            batches.push([first, count, side, n]);
         }
     }
+    let mut flattened_links = Vec::new();
     for row in links {
-        p.rows.push([p.links.len() as u32, row.len() as u32]);
-        p.links.extend(row);
+        rows.push([flattened_links.len() as u32, row.len() as u32]);
+        flattened_links.extend(row);
     }
-    p.params.source[2] = u32::try_from(p.patches.len()).map_err(|_| "too many row patches")?;
-    p.params.source[3] = p.contributions;
-    Ok(p)
+    params.source[2] = u32::try_from(patches.len()).map_err(|_| "too many row patches")?;
+    params.source[3] = contributions;
+    Ok(Prepared {
+        params,
+        patches: patches.into(),
+        tables: tables.into(),
+        links: flattened_links.into(),
+        rows: rows.into(),
+        samples,
+        contributions,
+        batches: batches.into(),
+    })
 }
 pub(crate) struct Output {
     pub image: Option<crate::gpu::ReadGuard>,
@@ -292,7 +298,7 @@ pub(crate) fn apply(
         [(p.params.source[2] * MAX_FIT_COEFFICIENTS).div_ceil(32), 1],
         &mut trace,
     );
-    for batch in &p.batches {
+    for batch in p.batches.iter() {
         let batch_uniform = gpu.uniform(batch);
         gpu.dispatch(
             Kernel::BandingResidual,

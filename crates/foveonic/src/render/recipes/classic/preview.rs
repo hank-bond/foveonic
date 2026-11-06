@@ -5,66 +5,36 @@ use crate::{
     color_space::ColorSpace,
     graph::{Graph, Operation},
     nodes::{color::pyramid_resample, sensor::calibration::EncodeParams},
-    render::{PreviewQuality, Settings},
-    source::{Metadata, Result},
+    render::{Scale, WorkingGrid},
+    source::Result,
 };
-
-pub(in crate::render) fn available(
-    metadata: &Metadata,
-    settings: &Settings,
-    quality: PreviewQuality,
-) -> bool {
-    // High-ISO range reconstruction keeps its native grid until its reduced
-    // spatial equations have independent photographic validation.
-    !settings.is_monochrome()
-        && matches!(
-            (metadata.width, metadata.height),
-            (2304, 1531) | (2688, 1792)
-        )
-        && metadata
-            .properties
-            .get("RESOLUTION")
-            .is_none_or(|resolution| {
-                !resolution.trim().eq_ignore_ascii_case("MED")
-                    && !resolution.trim().eq_ignore_ascii_case("LOW")
-            })
-        && super::prepare::capture_iso(metadata)
-            .is_ok_and(|iso| iso < super::reference::RANGE_RECONSTRUCTION_ISO)
-        && super::prepare::geometry(metadata)
-            .and_then(|encode| Grid::new(encode, quality))
-            .is_ok()
-}
 
 pub(super) struct Grid {
     native: EncodeParams,
     pub encode: EncodeParams,
+    pub grid: WorkingGrid,
     pub divisor: u32,
 }
 impl Grid {
-    pub fn new(mut encode: EncodeParams, quality: PreviewQuality) -> Result<Self> {
-        let divisor = quality.divisor();
-        let extent = [encode.source[0], encode.source[1]];
-        if !matches!(quality, PreviewQuality::Draft | PreviewQuality::Thumb)
-            || extent.iter().any(|v| v.div_ceil(divisor) < 8)
-            || encode.output[..2].iter().any(|v| v / divisor == 0)
-        {
-            return Err("Classic small preview requires a nonempty reconstruction grid".into());
-        }
+    pub fn new(
+        mut encode: EncodeParams,
+        scale: Scale,
+        output_size: Option<[u32; 2]>,
+        halo: u32,
+    ) -> Result<Self> {
         let native = encode;
-        encode.source[..2].copy_from_slice(&extent.map(|v| v.div_ceil(divisor)));
-        encode.crop = std::array::from_fn(|i| {
-            if i < 2 {
-                native.crop[i] / divisor
-            } else {
-                native.crop[i].div_ceil(divisor).min(encode.source[i - 2])
-            }
-        });
-        encode.output[..2]
-            .copy_from_slice(&[native.output[0] / divisor, native.output[1] / divisor]);
+        let grid =
+            WorkingGrid::new([native.source[0], native.source[1]], scale, 8)?.with_halo(halo)?;
+        encode.source[..2].copy_from_slice(&grid.extent);
+        encode.crop = grid.bounds(native.crop);
+        encode.output[..2].copy_from_slice(
+            &output_size.unwrap_or_else(|| scale.extent([native.output[0], native.output[1]])),
+        );
         Ok(Self {
             native,
             encode,
-            divisor,
+            grid,
+            divisor: scale.divisor(),
         })
     }
 
@@ -74,15 +44,30 @@ impl Grid {
 
     pub fn append(&self, graph: &mut Graph, mut input: usize) -> Result<usize> {
         let mut extent = [self.native.source[0], self.native.source[1]];
+        let scope = graph.outputs[input].cache_name();
         for level in 0..self.divisor.ilog2() {
-            let prepared = pyramid_resample::Prepared::half_ceil(extent)?.with_signed_codes();
+            let output = if level + 1 == self.divisor.ilog2() {
+                self.grid.extent
+            } else {
+                extent.map(|v| v.div_ceil(2))
+            };
+            let origin = if level + 1 == self.divisor.ilog2() {
+                self.grid.origin
+            } else {
+                [0; 2]
+            };
+            let prepared = pyramid_resample::Prepared::half_to(extent, output)?
+                .with_signed_codes()
+                .with_origin(origin)
+                .with_working_scale(Scale::new(1_u32 << (level + 1))?);
             extent = prepared.output_extent();
             input = graph.add_scoped(
                 Operation::ReduceLayers(prepared),
                 &[input],
-                &format!("preview.sensor.{}", 1 << (level + 1)),
+                &format!("sensor-grid/{scope}/{}", 1_u32 << (level + 1)),
             )?;
         }
+        graph.retain_for_seal(input);
         Ok(input)
     }
 
@@ -97,7 +82,10 @@ impl Grid {
         recipe.final_id = recipe.graph.add(
             Operation::ResampleRgb {
                 params: EncodeParams {
-                    mapping: [[r - l, 0., l, 1.], [0., b - t, t, 1.]],
+                    mapping: [
+                        [r - l, 0., l + self.grid.origin[0] as f32, 1.],
+                        [0., b - t, t + self.grid.origin[1] as f32, 1.],
+                    ],
                     source: [extent[0], extent[1], 0, 0],
                     crop: [0, 0, extent[0], extent[1]],
                     output: [output[0], output[1], 0, 0],
@@ -110,6 +98,9 @@ impl Grid {
         recipe.params.crop = [0, 0, output[0], output[1]];
         recipe.rgb_extent = output;
         recipe.rgb_bounds = recipe.params.crop;
+        recipe
+            .graph
+            .set_view(recipe.final_id, super::super::camera_view(recipe.params));
         Ok(())
     }
 }

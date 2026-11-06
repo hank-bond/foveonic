@@ -143,7 +143,10 @@ fn actual_fullsize_mapping_and_patch_samples_match() {
 fn half_grid_mapping_preserves_physical_crop_for_every_orientation() {
     for angle in [0, 90, 180, 270] {
         let full = Prepared::new([100, 80], [4, 6, 95, 75], [42, 32], angle, true).unwrap();
-        let half = full.clone().on_half_grid().unwrap();
+        let half = full
+            .clone()
+            .on_working_grid(crate::render::Scale::new(2).unwrap(), [50, 40], [0, 0])
+            .unwrap();
         assert_eq!(half.input_extent(), [50, 40]);
         assert_eq!(half.extent(), full.extent());
         for (x, y) in [(0_u32, 0_u32), (12, 10), (40, 30)] {
@@ -164,13 +167,13 @@ fn half_grid_mapping_preserves_physical_crop_for_every_orientation() {
     // A full physical crop legitimately maps just before the first cell center.
     let origin = Prepared::new([16, 16], [0, 0, 16, 16], [8, 8], 0, true)
         .unwrap()
-        .on_half_grid()
+        .on_working_grid(crate::render::Scale::new(2).unwrap(), [8, 8], [0, 0])
         .unwrap();
     assert_eq!(origin.params.column[0] as i32, -16384);
     assert!(Prepared::new([15, 16], [0, 0, 15, 16], [8, 8], 0, true)
         .unwrap()
-        .on_half_grid()
-        .is_err());
+        .on_working_grid(crate::render::Scale::new(2).unwrap(), [8, 8], [0, 0])
+        .is_ok());
 }
 
 #[test]

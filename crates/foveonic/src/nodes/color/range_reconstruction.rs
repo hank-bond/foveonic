@@ -43,6 +43,43 @@ pub(crate) struct Controls {
     pub digital_gain: f32,
 }
 
+impl Controls {
+    /// Keep sensor-code units while adapting physical support and independent
+    /// noise energy to the calibrated sensor sampler.
+    pub(crate) fn on_grid(mut self, scale: crate::render::Scale) -> Self {
+        if scale.is_native() {
+            return self;
+        }
+        let divisor = scale.divisor();
+        let sigma = f64::from(super::pyramid_resample::independent_noise_std(scale));
+        let variance = sigma * sigma;
+        self.window = 2 * (self.window / 2).div_ceil(divisor).max(1) + 1;
+        self.local_decay = f64::from(self.local_decay).powf(f64::from(divisor)) as f32;
+        for row in &mut self.color_noise {
+            for value in row {
+                *value *= variance as f32;
+            }
+        }
+        for value in &mut self.intensity_noise {
+            *value *= sigma as f32;
+        }
+        self.channel_noise = self.channel_noise.map(|value| value * sigma);
+        self.diffusion_k *= sigma as f32;
+        self.diffusion_step *= scale.factor().powi(2);
+        self
+    }
+
+    /// The bilateral stage runs on its own downsampled grid and deliberately
+    /// leaves an exterior column unwritten. Keep that boundary and the following
+    /// diffusion stencil outside the logical photograph.
+    pub(crate) fn required_halo(&self) -> u32 {
+        self.downsample * (self.window / 2 + 2)
+            + self.diffusion_iterations
+            + self.constant_iterations
+            + 2
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Params {

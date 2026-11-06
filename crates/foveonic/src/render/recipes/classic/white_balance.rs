@@ -5,7 +5,8 @@ use super::prepare;
 use crate::{
     nodes::color::weighted_white_balance::{self, Prepared},
     profile::Profile,
-    render::Engine,
+    recipe::Key,
+    render::{recipes::RecipeInput, source_preparation::StatisticKind, Engine},
     source::{Metadata, Result, Source},
 };
 fn scalar(m: &Metadata, name: &str, fallback: f64) -> Result<f64> {
@@ -24,53 +25,101 @@ fn property(m: &Metadata, name: &str, fallback: f64) -> f64 {
 
 pub(crate) fn estimate(
     engine: &Engine,
-    source: &Source,
+    source: RecipeInput<'_>,
     white_balance: &str,
     profile: &mut Profile,
 ) -> Result<crate::render::WhiteBalanceStats> {
     let mut result = crate::render::WhiteBalanceStats::default();
     let auto = white_balance.eq_ignore_ascii_case("Auto");
-    if prepare::capture_iso(&source.metadata)? >= RANGE_RECONSTRUCTION_ISO
+    if prepare::capture_iso(source.metadata())? >= RANGE_RECONSTRUCTION_ISO
         && white_balance.eq_ignore_ascii_case("Incandescent")
     {
-        result.mean =
-            Some(engine.cached_channel_mean(source, || gray_mean(engine, source, profile))?);
+        let prepared = mean_preparation(source.metadata())?;
+        result.mean = Some(engine.source_statistic(
+            source,
+            StatisticKind::ChannelMean,
+            prepared.key(),
+            |original| gray_mean(engine, original, &prepared, profile),
+        )?);
     }
     if auto {
-        if let Some(p) = preparation(&source.metadata)? {
-            result.neutral = Some(engine.cached_neutral(source, || {
-                let pixels = engine
-                    .gpu
-                    .upload("Original layers for white balance", &source.pixels)?;
-                weighted_white_balance::estimate(&engine.gpu, &pixels, &p, profile)
-            })?);
+        if let Some(p) = preparation(source.metadata())? {
+            result.neutral = Some(engine.source_statistic(
+                source,
+                StatisticKind::Neutral,
+                neutral_key(&p),
+                |original| {
+                    let pixels = engine
+                        .gpu
+                        .upload("Original layers for white balance", &original.pixels)?;
+                    weighted_white_balance::estimate(&engine.gpu, &pixels, &p, profile)
+                },
+            )?);
         }
     }
     Ok(result)
 }
 
-/// Measures signed camera layers after constant drift subtraction and before gain.
-pub(crate) fn gray_mean(
-    engine: &Engine,
-    source: &Source,
-    profile: &mut Profile,
-) -> Result<[f64; 3]> {
-    // This choice retrieves the shared correction controls. The measured layers
-    // have no white-balance gain or color matrix applied.
-    let prepared = prepare::prepare(&source.metadata, "Sunlight")?;
+fn neutral_key(p: &Prepared) -> Key {
+    Key::pod(&p.extent)
+        .slice(&p.camera)
+        .slice(&p.tone)
+        .slice(&p.saturation)
+        .with(&[p.brightness, p.scale])
+        .with(&[
+            u32::from(p.flash),
+            u32::from(p.constrained),
+            u32::from(p.estimate_drift),
+        ])
+        .with(&p.shields)
+        .with(&p.drift)
+        .with(&p.flare)
+        .with(&p.polynomial)
+}
+
+struct MeanPreparation {
+    extent: [u32; 2],
+    shields: [[u32; 4]; 2],
+    estimate_drift: bool,
+    drift: [f32; 3],
+}
+impl MeanPreparation {
+    fn key(&self) -> Key {
+        Key::pod(&self.extent)
+            .with(&self.shields)
+            .with(&u32::from(self.estimate_drift))
+            .with(&self.drift)
+    }
+}
+fn mean_preparation(metadata: &Metadata) -> Result<MeanPreparation> {
+    // The signed channel means are measured before white-balance gain.
+    let prepared = prepare::prepare(metadata, "Sunlight")?;
     let p = &prepared.correction.params;
     let drift_value = |i: usize| p.drift[i / 2][(i % 2) * 2] + p.drift[i / 2][(i % 2) * 2 + 1];
-    let drift = std::array::from_fn(|c| (drift_value(3 + c) + drift_value(9 + c)) * 0.5);
+    Ok(MeanPreparation {
+        extent: [metadata.width as u32, metadata.height as u32],
+        shields: p.shields,
+        estimate_drift: p.drift_controls[2] != 0,
+        drift: std::array::from_fn(|c| (drift_value(3 + c) + drift_value(9 + c)) * 0.5),
+    })
+}
+
+fn gray_mean(
+    engine: &Engine,
+    source: &Source,
+    prepared: &MeanPreparation,
+    profile: &mut Profile,
+) -> Result<[f64; 3]> {
     let pixels = engine
         .gpu
         .upload("Original layers for gray-world statistics", &source.pixels)?;
     weighted_white_balance::mean(
         &engine.gpu,
         &pixels,
-        [source.metadata.width as u32, source.metadata.height as u32],
-        p.shields,
-        p.drift_controls[2] != 0,
-        drift,
+        prepared.extent,
+        prepared.shields,
+        prepared.estimate_drift,
+        prepared.drift,
         profile,
     )
 }
@@ -157,10 +206,15 @@ fn preparation(m: &Metadata) -> Result<Option<Prepared>> {
 fn original_neutral_matches_reference() {
     let source = Source::open(std::env::var("CLASSIC_AWB_SOURCE").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
-    let neutral = estimate(&engine, &source, "Auto", &mut Profile::default())
-        .unwrap()
-        .neutral
-        .unwrap();
+    let neutral = estimate(
+        &engine,
+        RecipeInput::Original(&source),
+        "Auto",
+        &mut Profile::default(),
+    )
+    .unwrap()
+    .neutral
+    .unwrap();
     let receipt: serde_json::Value = serde_json::from_slice(
         &std::fs::read(std::env::var("CLASSIC_AWB_REFERENCE").unwrap()).unwrap(),
     )
@@ -183,9 +237,14 @@ fn original_neutral_matches_reference() {
     );
     let activity = engine.gpu_activity();
     assert_eq!(
-        estimate(&engine, &source, "Auto", &mut Profile::default())
-            .unwrap()
-            .neutral,
+        estimate(
+            &engine,
+            RecipeInput::Original(&source),
+            "Auto",
+            &mut Profile::default()
+        )
+        .unwrap()
+        .neutral,
         Some(neutral)
     );
     let after = engine.gpu_activity();
@@ -195,4 +254,89 @@ fn original_neutral_matches_reference() {
     for i in 0..3 {
         assert!((neutral[i] - expected[i]).abs() < 0.001);
     }
+}
+
+#[test]
+#[ignore = "requires GPU and CLASSIC_AWB_SOURCE"]
+fn source_free_statistics_survive_engine_eviction_and_reject_changed_descriptors() {
+    use crate::render::source_preparation::SourcePreparation;
+    use std::sync::Arc;
+    let source = Arc::new(Source::open(std::env::var_os("CLASSIC_AWB_SOURCE").unwrap()).unwrap());
+    let weak = Arc::downgrade(&source);
+    let metadata = source.metadata.clone();
+    let origin = source.origin().clone();
+    let prepared = SourcePreparation::default();
+    let engine = Engine::new().unwrap();
+    let original = estimate(
+        &engine,
+        RecipeInput::Preparing {
+            source: &source,
+            preparation: &prepared,
+        },
+        "Auto",
+        &mut Profile::default(),
+    )
+    .unwrap();
+    assert!(
+        original.neutral.is_some(),
+        "fixture must exercise the source-derived estimator"
+    );
+    drop(source);
+    assert!(weak.upgrade().is_none());
+    engine.clear_preparation();
+    let before = engine.gpu_activity();
+    let retained = estimate(
+        &engine,
+        RecipeInput::Metadata {
+            metadata: &metadata,
+            origin: &origin,
+            preparation: &prepared,
+        },
+        "Auto",
+        &mut Profile::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        original.neutral.map(|v| v.map(f64::to_bits)),
+        retained.neutral.map(|v| v.map(f64::to_bits))
+    );
+    assert_eq!(engine.gpu_activity().dispatches, before.dispatches);
+    assert_eq!(engine.gpu_activity().readbacks, before.readbacks);
+    let missing = SourcePreparation::default();
+    let error = estimate(
+        &engine,
+        RecipeInput::Metadata {
+            metadata: &metadata,
+            origin: &origin,
+            preparation: &missing,
+        },
+        "Auto",
+        &mut Profile::default(),
+    )
+    .err()
+    .expect("missing preparation needs native samples");
+    assert!(error
+        .downcast_ref::<crate::render::execute::SourceRequired>()
+        .is_some());
+    let mut changed = (*metadata).clone();
+    changed
+        .properties
+        .insert("EXIF_EXPOSURE_BIAS".into(), "123".into());
+    let changed = Arc::new(changed);
+    let error = estimate(
+        &engine,
+        RecipeInput::Metadata {
+            metadata: &changed,
+            origin: &origin,
+            preparation: &prepared,
+        },
+        "Auto",
+        &mut Profile::default(),
+    )
+    .err()
+    .expect("changed estimator descriptor needs materialization");
+    assert!(error
+        .downcast_ref::<crate::render::execute::SourceRequired>()
+        .is_some());
+    assert_eq!(engine.gpu_activity().dispatches, before.dispatches);
 }

@@ -9,7 +9,10 @@ mod previews;
 mod selection;
 pub use selection::Selection;
 mod worker;
-use crate::source::{LoadStage, Metadata, ProcessingFamily, Result, Source, SourceStorage};
+use crate::source::{
+    FileIdentity as Identity, LoadStage, Metadata, ProcessingFamily, Result, Source, SourceOrigin,
+    SourceStorage,
+};
 pub use previews::MAX_SIDE as PREVIEW_MAX_SIDE;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -22,15 +25,13 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc, Arc, Mutex,
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime},
 };
 
 // Bump when decoder semantics or the stored source representation change.
 const FORMAT_VERSION: u32 = 1;
 const NAMESPACE: &str = "foveonic-decoded-v1";
 pub const DEFAULT_BUDGET: u64 = 10_000_000_000;
-// Start all three sensor layers of the nearest photo together by default.
-const DEFAULT_DECODE_THREADS: usize = 3;
 const DEFAULT_PREFETCH_BEHIND: usize = 3;
 const DEFAULT_PREFETCH_AHEAD: usize = 7;
 const MAGIC: &[u8; 8] = b"FOVDEC01";
@@ -45,8 +46,6 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub struct Settings {
     pub enabled: bool,
     pub max_bytes: u64,
-    /// Shared CPU workers for speculative sensor layers, across nearby photos.
-    pub decode_threads: usize,
     /// Browser neighbors to decode around the current photo, independently of CPU concurrency.
     pub prefetch_behind: usize,
     pub prefetch_ahead: usize,
@@ -59,7 +58,6 @@ impl Default for Settings {
         Self {
             enabled: true,
             max_bytes: DEFAULT_BUDGET,
-            decode_threads: available_decode_threads().min(DEFAULT_DECODE_THREADS),
             prefetch_behind: DEFAULT_PREFETCH_BEHIND,
             prefetch_ahead: DEFAULT_PREFETCH_AHEAD,
             classic: false,
@@ -68,14 +66,7 @@ impl Default for Settings {
         }
     }
 }
-/// Available logical CPU cores, including when the platform cannot report a count.
-pub fn available_decode_threads() -> usize {
-    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
-}
 impl Settings {
-    pub fn normalize(&mut self) {
-        self.decode_threads = self.decode_threads.clamp(1, available_decode_threads());
-    }
     pub fn permits(&self, family: ProcessingFamily) -> bool {
         self.enabled
             && self.max_bytes > 0
@@ -110,25 +101,7 @@ pub struct Status {
     pub files: Arc<HashMap<PathBuf, EntryState>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-struct Identity {
-    location: Vec<u8>,
-    length: u64,
-    modified_seconds: u64,
-    modified_nanos: u32,
-}
 impl Identity {
-    fn read(path: &Path) -> Result<Self> {
-        let canonical = path.canonicalize()?;
-        let metadata = fs::metadata(&canonical)?;
-        let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?;
-        Ok(Self {
-            location: canonical.as_os_str().as_encoded_bytes().to_vec(),
-            length: metadata.len(),
-            modified_seconds: modified.as_secs(),
-            modified_nanos: modified.subsec_nanos(),
-        })
-    }
     fn name(&self) -> String {
         // The full identity is checked in the header. Hash collisions cause a
         // disposable miss/replacement and can never select another photograph.
@@ -167,6 +140,7 @@ struct Control {
     generation: u64,
     preview: Option<previews::PendingPreview>,
     identities: HashMap<PathBuf, Identity>,
+    rejected: HashSet<Identity>,
     recipes: HashMap<PathBuf, crate::render::Settings>,
     recipe_updates: BTreeMap<PathBuf, crate::render::Settings>,
 }
@@ -192,7 +166,7 @@ enum Command {
     },
 }
 
-/// Prefetch retains at most one source per decode worker. Foreground insertion
+/// Prefetch admits at most three photos independently of CPU worker count. Foreground insertion
 /// allows one source write and one pending source. A full queue drops cache
 /// insertion, never an image request. Sources are shared, not copied for writing.
 pub struct Cache {
@@ -229,6 +203,7 @@ impl Cache {
             generation: 0,
             preview: None,
             identities: HashMap::new(),
+            rejected: HashSet::new(),
             recipes: HashMap::new(),
             recipe_updates: BTreeMap::new(),
         }));
@@ -243,8 +218,7 @@ impl Cache {
             gate,
         }
     }
-    pub fn configure(&self, mut settings: Settings) {
-        settings.normalize();
+    pub fn configure(&self, settings: Settings) {
         let mut state = self.control.lock().unwrap();
         state.settings = settings;
         state.identities.clear();
@@ -262,6 +236,7 @@ impl Cache {
         state.clear = true;
         state.identities.clear();
         state.recipes.clear();
+        state.rejected.clear();
         state.recipe_updates.clear();
         state.preview = None;
         state.queue.clear();
@@ -442,17 +417,53 @@ impl Cache {
                     Identity::read(path).ok().as_ref() == Some(&identity)
                 } =>
             {
+                self.control.lock().unwrap().rejected.remove(&identity);
                 source.timings.insert(0, lookup);
                 self.status.lock().unwrap().hits += 1;
                 Some(Arc::new(source))
             }
-            _ => {
+            result => {
+                let rejected = result.as_ref().is_err_and(|error| {
+                    !error.is::<crate::background::Interrupted>() && !error.is::<PolicyMiss>()
+                });
+                if rejected || result.is_ok() {
+                    let mut control = self.control.lock().unwrap();
+                    if control.settings == settings
+                        && control
+                            .identities
+                            .get(path)
+                            .is_none_or(|current| current == &identity)
+                    {
+                        if rejected {
+                            control.rejected.insert(identity);
+                        }
+                        control.identities.remove(path);
+                        let mut status = self.status.lock().unwrap();
+                        status.ready.remove(path);
+                        if !matches!(
+                            status.files.get(path),
+                            Some(EntryState::Disabled | EntryState::Unsupported)
+                        ) {
+                            Arc::make_mut(&mut status.files)
+                                .insert(path.to_owned(), EntryState::Uncached);
+                        }
+                    }
+                }
                 self.status.lock().unwrap().misses += 1;
                 None
             }
         }
     }
 }
+
+#[derive(Debug)]
+struct PolicyMiss(&'static str);
+impl std::fmt::Display for PolicyMiss {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+impl std::error::Error for PolicyMiss {}
 
 fn load(
     path: &Path,
@@ -487,6 +498,7 @@ fn load(
     let metadata_started = Instant::now();
     let (matrices, lists) = crate::x3f::cached_camera_metadata(&camf)?;
     let source = Source {
+        origin: SourceOrigin::File(identity.clone()),
         metadata: Arc::new(Metadata {
             width: header.width,
             height: header.height,
@@ -519,7 +531,7 @@ fn load(
 fn read_header(file: &mut File, identity: &Identity, settings: &Settings) -> Result<Header> {
     let total = file.metadata()?.len();
     if total > settings.max_bytes {
-        return Err("decoded cache entry exceeds budget".into());
+        return Err(Box::new(PolicyMiss("decoded cache entry exceeds budget")));
     }
     let mut magic = [0; 8];
     file.read_exact(&mut magic)?;
@@ -552,7 +564,7 @@ fn read_header(file: &mut File, identity: &Identity, settings: &Settings) -> Res
         .and_then(|m| ProcessingFamily::from_camera_model(m))
         .ok_or("unknown cached source family")?;
     if !settings.permits(family) {
-        return Err("source family cache disabled".into());
+        return Err(Box::new(PolicyMiss("source family cache disabled")));
     }
     let payload = header
         .samples
@@ -593,7 +605,7 @@ fn ready(root: &Path, path: &Path, settings: &Settings) -> bool {
 
 #[cfg(test)]
 fn store(root: &Path, path: &Path, identity: Identity, source: &Source, budget: u64) -> Result<()> {
-    store_checked(root, path, identity, source, budget, &[], || true)
+    store_checked(root, path, identity, source, budget, &[], || true).map(|_| ())
 }
 fn store_checked(
     root: &Path,
@@ -603,13 +615,26 @@ fn store_checked(
     budget: u64,
     nearby: &[PathBuf],
     current: impl Fn() -> bool,
-) -> Result<()> {
+) -> Result<bool> {
     if !current() {
-        return Ok(());
+        return Ok(false);
     }
     if Identity::read(path)? != identity {
         return Err("source changed before caching".into());
     }
+    let prepared = crate::decode_pool::cpu(|| prepare_decoded(identity, source))?;
+    publish_decoded(root, path, source, prepared, budget, nearby, current)
+}
+
+struct PreparedDecoded {
+    identity: Identity,
+    json: Vec<u8>,
+    header_checksum: u32,
+    bytes: u64,
+}
+
+/// Pure preparation borrows sensor samples; publication never copies a RAW payload.
+fn prepare_decoded(identity: Identity, source: &Source) -> Result<PreparedDecoded> {
     let mut checksum = crc32fast::Hasher::new();
     for bytes in
         bytemuck::cast_slice::<f32, u8>(&source.pixels).chunks(crate::background::IO_CHUNK_BYTES)
@@ -637,15 +662,41 @@ fn store_checked(
         + json.len() as u64
         + std::mem::size_of_val(source.pixels.as_slice()) as u64
         + source.camf.len() as u64;
+    Ok(PreparedDecoded {
+        identity,
+        header_checksum: crc32fast::hash(&json),
+        json,
+        bytes,
+    })
+}
+
+fn publish_decoded(
+    root: &Path,
+    path: &Path,
+    source: &Source,
+    prepared: PreparedDecoded,
+    budget: u64,
+    nearby: &[PathBuf],
+    current: impl Fn() -> bool,
+) -> Result<bool> {
+    let PreparedDecoded {
+        identity,
+        json,
+        header_checksum,
+        bytes,
+    } = prepared;
     if bytes > budget || json.len() as u64 > MAX_HEADER {
-        return Ok(());
+        return Ok(false);
     }
     if !current() {
-        return Ok(());
+        return Ok(false);
+    }
+    if Identity::read(path)? != identity {
+        return Err("source changed before caching".into());
     }
     fs::create_dir_all(root)?;
     if !lru::reserve(root, &root.join(identity.name()), bytes, budget, nearby)? {
-        return Ok(());
+        return Ok(false);
     }
     let temporary = root.join(format!(
         "{}.{}.writing",
@@ -659,7 +710,7 @@ fn store_checked(
             .open(&temporary)?;
         file.write_all(MAGIC)?;
         file.write_all(&(json.len() as u64).to_le_bytes())?;
-        file.write_all(&crc32fast::hash(&json).to_le_bytes())?;
+        file.write_all(&header_checksum.to_le_bytes())?;
         file.write_all(&json)?;
         for bytes in bytemuck::cast_slice::<f32, u8>(&source.pixels)
             .chunks(crate::background::IO_CHUNK_BYTES)
@@ -677,7 +728,7 @@ fn store_checked(
         Ok(())
     })();
     let _ = fs::remove_file(temporary);
-    result
+    result.map(|()| true)
 }
 
 fn boot_key() -> String {

@@ -23,8 +23,9 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 &mut settings.photographic.saturation_method,
             );
             if settings.photographic.saturation_method == PhotographicMethod::Reference {
-                changed |= column.adjustment(
+                changed |= column.parameter(
                     ui,
+                    "/saturation",
                     ("Reference saturation", "Amount"),
                     &mut settings.saturation,
                     0. ..=2.,
@@ -32,13 +33,15 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 );
             } else {
                 let c = &mut settings.photographic.perceptual;
-                changed |= column.saturation_adjustment(
+                changed |= column.saturation_parameter(
                     ui,
+                    "/photographic/perceptual/saturation",
                     ("Perceptual saturation", "Amount"),
                     &mut c.saturation,
                 );
-                changed |= column.adjustment(
+                changed |= column.parameter(
                     ui,
+                    "/photographic/perceptual/contrast",
                     ("Saturation contrast", "Contrast"),
                     &mut c.contrast,
                     -1. ..=1.,
@@ -49,8 +52,9 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                         .into_iter()
                         .enumerate()
                     {
-                        changed |= column.saturation_adjustment(
+                        changed |= column.saturation_parameter(
                             ui,
+                            format!("/photographic/perceptual/bands/{index}/saturation"),
                             ("Perceptual ranges", label),
                             &mut c.bands[index].saturation,
                         );

@@ -20,11 +20,17 @@ pub(crate) struct Params {
 #[cfg_attr(test, derive(Default))]
 pub(crate) struct Prepared {
     pub params: Params,
-    pub flags: crate::recipe::Shared<u32>,
+    /// Native clipping evidence is materialized only when this operation executes.
+    pub flags: Option<crate::recipe::Shared<u32>>,
 }
 impl Prepared {
     pub(crate) fn key(&self) -> crate::recipe::Key {
-        crate::recipe::Key::pod(&self.params).join(self.flags.key())
+        let key = crate::recipe::Key::pod(&self.params).with(&u32::from(self.flags.is_some()));
+        if let Some(flags) = &self.flags {
+            key.join(flags.key())
+        } else {
+            key
+        }
     }
 }
 pub(crate) struct Output {
@@ -99,14 +105,30 @@ pub(crate) fn validate_threshold(ev: Option<f32>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn prepare(metadata: &Metadata, threshold_ev: Option<f32>) -> Result<Prepared> {
     prepare_with_flags(metadata, threshold_ev, None)
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_with_flags(
     metadata: &Metadata,
     threshold_ev: Option<f32>,
     flags: Option<crate::recipe::Shared<u32>>,
+) -> Result<Prepared> {
+    prepare_description(metadata, threshold_ev, flags, false)
+}
+
+/// Authors the exact numerical recipe without expanding native clipping evidence.
+pub(crate) fn deferred(metadata: &Metadata, threshold_ev: Option<f32>) -> Result<Prepared> {
+    prepare_description(metadata, threshold_ev, None, true)
+}
+
+fn prepare_description(
+    metadata: &Metadata,
+    threshold_ev: Option<f32>,
+    flags: Option<crate::recipe::Shared<u32>>,
+    deferred: bool,
 ) -> Result<Prepared> {
     validate_threshold(threshold_ev)?;
     let count = metadata
@@ -170,10 +192,32 @@ pub(crate) fn prepare_with_flags(
             area,
             value: [threshold, 0., 0., 0.],
         },
-        flags: match flags {
-            Some(flags) => flags,
-            None => saturation(metadata)?.into(),
+        flags: if deferred {
+            None
+        } else {
+            Some(match flags {
+                Some(flags) => flags,
+                None => saturation(metadata)?.into(),
+            })
         },
+    })
+}
+
+pub(crate) fn materialize(
+    metadata: &Metadata,
+    description: &Prepared,
+    flags: Option<crate::recipe::Shared<u32>>,
+) -> Result<Prepared> {
+    let flags = match flags {
+        Some(flags) => flags,
+        None => saturation(metadata)?.into(),
+    };
+    if flags.len() != description.params.source[2] as usize {
+        return Err("original saturation map has the wrong sensor extent".into());
+    }
+    Ok(Prepared {
+        params: description.params,
+        flags: Some(flags),
     })
 }
 
@@ -186,7 +230,12 @@ pub(crate) fn apply(
 ) -> Result<Output> {
     let size = u64::from(p.params.source[2]) * 4;
     let uniform = gpu.uniform(&p.params);
-    let original = gpu.upload("Original camera saturation flags", &p.flags)?;
+    let original = gpu.upload(
+        "Original camera saturation flags",
+        p.flags
+            .as_ref()
+            .ok_or("highlight clipping evidence must be materialized")?,
+    )?;
     let mut flags = gpu.storage("Connected saturation processing copy", size)?;
     let mut map = gpu.storage("Multi-layer clipped neighborhood map", size)?;
     let groups = [

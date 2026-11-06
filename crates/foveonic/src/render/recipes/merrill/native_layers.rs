@@ -8,11 +8,11 @@ use crate::{
     nodes::sensor::{banding, calibration, color_field, despeckle},
     profile::Profile,
     render::Settings,
-    source::{Result, Source},
+    source::{Metadata, Result},
 };
 use std::sync::Arc;
 
-/// Preview policy resolves stage selection once at the technical recipe boundary.
+/// Selected native corrections are independent of the working grid.
 pub(super) struct Policy {
     pub multiscale: bool,
     pub directional_banding: bool,
@@ -20,16 +20,11 @@ pub(super) struct Policy {
     pub retain_calibrated: bool,
 }
 impl Policy {
-    pub fn new(settings: &Settings, reduced: bool, retain_calibrated: bool) -> Self {
+    pub fn new(settings: &Settings, retain_calibrated: bool) -> Self {
         Self {
             multiscale: settings.multiscale_noise_selected(),
             directional_banding: settings.directional_banding_selected(),
-            reference_rows: settings.reference_rows_selected()
-                && (!reduced
-                    || matches!(
-                        settings.preview_quality,
-                        crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
-                    )),
+            reference_rows: settings.reference_rows_selected(),
             retain_calibrated,
         }
     }
@@ -46,7 +41,7 @@ pub(super) enum Output {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build(
     engine: &crate::render::Engine,
-    source: &Source,
+    metadata: &Arc<Metadata>,
     settings: &Settings,
     params: calibration::EncodeParams,
     policy: &Policy,
@@ -56,6 +51,7 @@ pub(super) fn build(
 ) -> Result<Output> {
     let mut graph = Graph::default();
     let input = graph.add(Operation::Source, &[])?;
+    graph.set_view(input, super::super::camera_view(params));
     macro_rules! finish {
         () => {
             execution.check()?;
@@ -74,17 +70,19 @@ pub(super) fn build(
     let mut highlight_params = None;
     if settings.highlight_restoration && names.contains(&"highlight.density") {
         let prepared = profile.measure("prepare original saturation", || {
-            engine.prepare_highlights(&source.metadata, settings.highlight_threshold_ev)
+            crate::nodes::sensor::highlight::deferred(metadata, settings.highlight_threshold_ev)
+                .map(Arc::new)
         })?;
-        graph.add(Operation::HighlightDensity(prepared.clone()), &[])?;
+        let density = graph.add(Operation::HighlightDensity(prepared.clone()), &[])?;
+        graph.set_view(density, super::super::camera_view(params));
         highlight_params = Some(prepared);
         finish!();
     }
-    let black_params = profile.measure("prepare black", || calibration::black(&source.metadata))?;
+    let black_params = profile.measure("prepare black", || calibration::black(metadata))?;
     let black = graph.add(Operation::Black(black_params), &[input])?;
     finish!();
     let calibration = profile.measure("prepare calibration", || {
-        calibration::prepare(&source.metadata, &settings.white_balance)
+        calibration::prepare(metadata, &settings.white_balance)
     })?;
     let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
     let calibration_params = calibration.params;
@@ -92,7 +90,7 @@ pub(super) fn build(
         .noise_calibration
         .as_ref()
         .filter(|_| settings.processing_sections.noise && settings.despeckle)
-        .and_then(|profile| profile.matching_defects(&source.metadata))
+        .and_then(|profile| profile.matching_defects(metadata))
         .filter(|map| !map.points.is_empty());
     let working = if let Some(map) = defect_map {
         let repaired = graph.add(
@@ -106,11 +104,11 @@ pub(super) fn build(
     } else {
         input
     };
-    let model = engine.noise_model(&source.metadata)?;
+    let model = engine.noise_model(metadata)?;
     let corrected = if policy.multiscale || policy.directional_banding {
         let (shields, filter) = profile.measure("prepare multiscale noise", || {
             layer_noise::prepare(
-                &source.metadata,
+                metadata,
                 &settings.white_balance,
                 calibration_gains,
                 settings.merrill_noise_method
@@ -125,7 +123,7 @@ pub(super) fn build(
         finish!();
         let corrected = if policy.directional_banding {
             let guard = profile.measure("prepare guarded native rows", || {
-                layer_noise::prepare_row_guard(&source.metadata, model)
+                layer_noise::prepare_row_guard(metadata, model)
             })?;
             let guarded = graph.add(
                 Operation::RowGuard(Arc::new(guard)),
@@ -168,7 +166,7 @@ pub(super) fn build(
     let unrepaired = calibrated;
     if let Some(threshold) = settings.repair {
         let prepared = profile.measure("prepare repair records", || {
-            execution.prepare_repair(&source.metadata, threshold)
+            execution.prepare_repair(metadata, threshold)
         })?;
         calibrated = graph.add(Operation::Repair(prepared), &[calibrated, input])?;
         finish!();
@@ -178,7 +176,7 @@ pub(super) fn build(
     {
         let prepared = profile.measure("prepare color-field highlights", || {
             color_field::prepare(
-                &source.metadata,
+                metadata,
                 &settings.white_balance,
                 calibration_params,
                 settings.repair.is_some(),
@@ -194,7 +192,8 @@ pub(super) fn build(
         let prepared = match highlight_params {
             Some(prepared) => prepared,
             None => profile.measure("prepare highlight restoration", || {
-                engine.prepare_highlights(&source.metadata, settings.highlight_threshold_ev)
+                crate::nodes::sensor::highlight::deferred(metadata, settings.highlight_threshold_ev)
+                    .map(Arc::new)
             })?,
         };
         calibrated = graph.add(Operation::Highlights(prepared), &[calibrated])?;
@@ -204,29 +203,28 @@ pub(super) fn build(
     if settings.despeckle {
         let recipe = profile.measure("prepare noise couplings", || {
             crate::noise::couplings(
-                &source.metadata,
+                metadata,
                 &settings.white_balance,
                 settings.sensor_noise_controls(),
             )
         })?;
         couplings = Some(recipe);
         let prepared = profile.measure("prepare despeckle", || {
-            despeckle::prepare(&source.metadata, calibration_gains, recipe.despeckle_scale)?
+            despeckle::prepare(metadata, calibration_gains, recipe.despeckle_scale)?
                 .with_controls(settings.merrill_speckles)
         })?;
         calibrated = graph.add(Operation::Despeckle(prepared), &[calibrated, input])?;
         finish!();
     }
-    // Fast and Full share this native boundary. Keep it through refinement so
-    // a later edit's Fast response does not repeat sensor repair and highlights.
+    // Keep the native boundary through refinement so returning to a sampled
+    // overview does not repeat sensor repair and highlights.
     if policy.retain_calibrated {
         graph.retain_for_session(calibrated);
     }
-    // Reviewed Fast omits the native row estimate. Draft and Thumb apply the
-    // selected native correction before pooling the calibrated layers.
+    // Native coordinate corrections precede sensor pooling at every scale.
     if policy.reference_rows {
         let prepared = profile.measure("prepare row correction", || {
-            banding::prepare(&source.metadata, calibration_gains)
+            banding::prepare(metadata, calibration_gains)
         })?;
         calibrated = graph.add(Operation::Banding(prepared), &[calibrated])?;
         finish!();
@@ -246,26 +244,26 @@ pub(super) fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{MerrillBandingMethod, PreviewQuality};
+    use crate::render::{MerrillBandingMethod, Scale};
 
     #[test]
-    fn small_previews_keep_native_rows_while_reviewed_fast_stays_unchanged() {
+    fn every_working_scale_keeps_selected_native_rows() {
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.row_correction = true;
         settings.merrill_banding.enabled = true;
         settings.merrill_banding.method = MerrillBandingMethod::Reference;
         settings.reconstruction = Some(Default::default());
         for quality in [
-            PreviewQuality::Full,
-            PreviewQuality::Fast,
-            PreviewQuality::Draft,
-            PreviewQuality::Thumb,
+            Scale::NATIVE,
+            Scale::new(2).unwrap(),
+            Scale::new(4).unwrap(),
+            Scale::new(8).unwrap(),
         ] {
-            settings.preview_quality = quality;
-            let policy = Policy::new(&settings, quality.is_reduced(), false);
-            assert_eq!(policy.reference_rows, quality != PreviewQuality::Fast);
+            settings.working_scale = quality;
+            let policy = Policy::new(&settings, false);
+            assert!(policy.reference_rows);
         }
         settings.processing_sections.noise = false;
-        assert!(!Policy::new(&settings, true, false).reference_rows);
+        assert!(!Policy::new(&settings, false).reference_rows);
     }
 }

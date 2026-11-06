@@ -523,6 +523,7 @@ fn synthetic_classic_reduced_grids_preserve_declared_photograph_shape() {
             storage: crate::source::SourceStorage::InterleavedRgb,
             camf: original.camf.clone(),
             timings: vec![],
+            origin: Default::default(),
         };
         source.validate().unwrap();
         let cap = ControlCapabilities::from_metadata(&source.metadata).unwrap();

@@ -151,12 +151,20 @@ impl Params {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum DrawSlot {
+    Main,
+    Detail,
+    Comparison(usize),
+}
+
 struct Resources {
     pipeline: wgpu::RenderPipeline,
     navigator_pipeline: wgpu::RenderPipeline,
     color_transform: egui_wgpu::ColorTransform,
     layout: wgpu::BindGroupLayout,
-    binds: HashMap<&'static str, wgpu::BindGroup>,
+    binds: HashMap<DrawSlot, wgpu::BindGroup>,
+    frame: Option<u64>,
 }
 
 pub(crate) fn shader_source() -> String {
@@ -272,6 +280,7 @@ pub fn install(rs: &egui_wgpu::RenderState) {
         color_transform: Default::default(),
         layout,
         binds: HashMap::new(),
+        frame: None,
     });
 }
 
@@ -392,7 +401,8 @@ fn render_preview(
 }
 
 struct Draw {
-    key: &'static str,
+    key: DrawSlot,
+    frame: u64,
     texture: Arc<ImageTexture>,
     input: Option<Arc<ImageTexture>>,
     params: Params,
@@ -410,6 +420,12 @@ impl CallbackTrait for Draw {
         let _span = self.probe.prepare();
         use wgpu::util::DeviceExt;
         let r = resources.get_mut::<Resources>().unwrap();
+        // Bind groups are rebuilt for every draw. Retire the previous egui pass's
+        // slots so hidden comparison tiles do not keep their textures alive.
+        if r.frame != Some(self.frame) {
+            r.binds.clear();
+            r.frame = Some(self.frame);
+        }
         let mut params = self.params;
         params.color_transform = r.color_transform;
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -457,9 +473,49 @@ impl CallbackTrait for Draw {
         let _span = self.probe.encode();
         let r = resources.get::<Resources>().unwrap();
         pass.set_pipeline(&r.pipeline);
-        pass.set_bind_group(0, r.binds.get(self.key).unwrap(), &[]);
+        pass.set_bind_group(0, r.binds.get(&self.key).unwrap(), &[]);
         pass.draw(0..6, 0..1);
     }
+}
+
+/// Paint an immutable edited image in a bounded comparison slot using the
+/// ordinary photographic display mapping. This does not submit image processing.
+pub(crate) fn paint_comparison(
+    ui: &mut egui::Ui,
+    texture: Arc<ImageTexture>,
+    extent: [u32; 2],
+    srgb_target: bool,
+    slot: usize,
+    revision: u64,
+) {
+    let (canvas, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+    let scale =
+        (canvas.width() / extent[0].max(1) as f32).min(canvas.height() / extent[1].max(1) as f32);
+    let image = egui::Rect::from_center_size(
+        canvas.center(),
+        egui::vec2(extent[0] as f32, extent[1] as f32) * scale,
+    );
+    let Some((visible, params)) = Params::clipped(
+        canvas,
+        image,
+        ui.clip_rect().intersect(ui.ctx().screen_rect()),
+        texture.description().space,
+        -1,
+        srgb_target,
+    ) else {
+        return;
+    };
+    ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+        visible,
+        Draw {
+            key: DrawSlot::Comparison(slot),
+            frame: ui.ctx().cumulative_pass_nr(),
+            texture,
+            input: None,
+            params,
+            probe: crate::timing::DrawProbe::new(revision),
+        },
+    ));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -666,19 +722,20 @@ impl Viewport {
             self.set_scale_at(1. / ui.ctx().pixels_per_point(), egui::Vec2::ZERO);
         }
         self.response = Some(response.clone());
-        let navigation = !self.editing || ui.input(|i| i.key_down(egui::Key::Space));
-        if navigation && response.hovered() {
+        let temporary_pan = ui.input(|i| i.key_down(egui::Key::Space));
+        let pan = crate::photo_tools::pans(ui.ctx()) || temporary_pan;
+        if pan && response.hovered() {
             ui.ctx().set_cursor_icon(if response.dragged() {
                 egui::CursorIcon::Grabbing
             } else {
                 egui::CursorIcon::Grab
             });
         }
-        if response.dragged() && navigation {
+        if response.dragged() && pan {
             self.scale.get_or_insert(fit);
             self.pan += ui.input(|i| i.pointer.delta());
         }
-        if response.double_clicked() && navigation {
+        if response.double_clicked() && (!self.editing || temporary_pan) {
             let anchor = response
                 .interact_pointer_pos()
                 .map(|mouse| mouse - rect.center())
@@ -771,7 +828,8 @@ impl Viewport {
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             visible,
             Draw {
-                key: "main",
+                key: DrawSlot::Main,
+                frame: ui.ctx().cumulative_pass_nr(),
                 texture,
                 input,
                 params: mapping.apply(params),
@@ -866,7 +924,8 @@ impl Viewport {
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             visible,
             Draw {
-                key: "smart-detail",
+                key: DrawSlot::Detail,
+                frame: ui.ctx().cumulative_pass_nr(),
                 texture,
                 input: None,
                 params: mapping.apply(params),
@@ -1890,6 +1949,7 @@ mod tests {
         let extent = [4704, 3136];
         for wheel_zoom in [false, true] {
             let ctx = egui::Context::default();
+            crate::photo_tools::hand(&ctx);
             let mut viewport = Viewport::default();
             let mut run = |size, time, events| {
                 let input = egui::RawInput {
@@ -1956,6 +2016,79 @@ mod tests {
             assert_eq!(resized_scale, scale);
             assert!((resized.1.size() - bounds.1.size()).length() < 0.001);
             assert!((resized_uv.min - uv.min).length() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn hand_or_temporary_space_pans_without_changing_the_selected_tool() {
+        use crate::photo_tools::{self, Tool};
+        for tool in [
+            Tool::Pointer,
+            Tool::Hand,
+            Tool::Crop,
+            Tool::Rotate,
+            Tool::ColorRange,
+            Tool::Dehaze,
+            Tool::WhiteBalance,
+        ] {
+            for space in [false, true] {
+                let ctx = egui::Context::default();
+                photo_tools::select(&ctx, tool);
+                let mut viewport = Viewport {
+                    scale: Some(1.),
+                    editing: photo_tools::takes_pointer(&ctx),
+                    ..Default::default()
+                };
+                let mut run = |time, events| {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(400., 240.),
+                            )),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                viewport.layout(ui, [900, 600]);
+                            });
+                        },
+                    );
+                };
+                run(0., vec![]);
+                let start = egui::pos2(160., 100.);
+                let mut events = vec![
+                    egui::Event::PointerMoved(start),
+                    egui::Event::PointerButton {
+                        pos: start,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                ];
+                if space {
+                    events.push(egui::Event::Key {
+                        key: egui::Key::Space,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    });
+                }
+                run(0.1, events);
+                run(
+                    0.2,
+                    vec![egui::Event::PointerMoved(start + egui::vec2(35., 20.))],
+                );
+                assert_eq!(
+                    viewport.pan != egui::Vec2::ZERO,
+                    tool == Tool::Hand || space,
+                    "{tool:?}, space={space}"
+                );
+                assert_eq!(photo_tools::selected(&ctx), tool);
+            }
         }
     }
 

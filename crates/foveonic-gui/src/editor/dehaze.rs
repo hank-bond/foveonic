@@ -49,11 +49,11 @@ pub fn source(ctx: &egui::Context, path: Option<&Path>) {
         photo_tools::release(ctx, Tool::Dehaze);
     }
 }
-fn estimate_settings(settings: &Settings) -> Settings {
+pub(crate) fn estimate_settings(settings: &Settings) -> Settings {
     let mut basis = settings.clone();
     basis.dehaze = Default::default();
     basis.dehaze_estimate = false;
-    basis.preview_quality = foveonic::render::PreviewQuality::Full;
+    basis.working_scale = foveonic::render::Scale::NATIVE;
     basis.preview_region = None;
     basis.color_range_preview = None;
     basis
@@ -104,7 +104,7 @@ pub fn toggle(ctx: &egui::Context) {
     photo_tools::select(
         ctx,
         if active(ctx) {
-            Tool::Hand
+            Tool::Pointer
         } else {
             Tool::Dehaze
         },
@@ -287,6 +287,7 @@ mod tests {
             frame(&mut settings, vec![button(false)], 0.2);
             assert!(!active(&ctx));
             assert!(!crate::editor::direct_color::active(&ctx));
+            assert_eq!(photo_tools::selected(&ctx), Tool::Pointer);
             let reply = ColorPickReply {
                 tool: request.tool,
                 token: request.token,
@@ -327,7 +328,7 @@ mod tests {
         assert_eq!(settings.dehaze.shadow, None);
         assert_eq!(auto_color(&ctx, &settings), Some(rgb));
         settings.dehaze.amount = 45.;
-        settings.preview_quality = foveonic::render::PreviewQuality::Fast;
+        settings.working_scale = foveonic::render::Scale::new(2).unwrap();
         assert_eq!(auto_color(&ctx, &settings), Some(rgb));
         settings.white_balance = "Shade".into();
         assert_eq!(auto_color(&ctx, &settings), None);

@@ -2,7 +2,7 @@
 
 use super::worker::{entry_state, FamilyCatalog};
 use super::*;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 struct Fixture {
     root: PathBuf,
@@ -22,6 +22,7 @@ impl Fixture {
     }
     fn image(&self) -> Source {
         Source {
+            origin: Default::default(),
             metadata: Arc::new(Metadata {
                 width: 8,
                 height: 6,
@@ -39,6 +40,45 @@ impl Fixture {
             timings: vec![],
         }
     }
+    fn ready_cache(&self) -> (Cache, Activity, Identity) {
+        let cache = Cache::at(self.root.join("cache"));
+        let foreground = cache.foreground();
+        let identity = Identity::read(&self.source).unwrap();
+        let settings = Settings::default();
+        store(
+            &cache.root,
+            &self.source,
+            identity.clone(),
+            &self.image(),
+            DEFAULT_BUDGET,
+        )
+        .unwrap();
+        super::selection::prepare(
+            &cache.root,
+            &self.source,
+            &identity,
+            &self.image().metadata,
+            &fs::read(&self.source).unwrap(),
+            &settings,
+            &[],
+            &|| true,
+        )
+        .unwrap();
+        {
+            let mut control = cache.control.lock().unwrap();
+            control.settings = settings;
+            control.watched = vec![self.source.clone()];
+            control
+                .identities
+                .insert(self.source.clone(), identity.clone());
+        }
+        {
+            let mut status = cache.status.lock().unwrap();
+            status.ready.insert(self.source.clone());
+            Arc::make_mut(&mut status.files).insert(self.source.clone(), EntryState::Ready);
+        }
+        (cache, foreground, identity)
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -47,22 +87,15 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn decode_thread_budget_restores_legacy_settings_and_clamps_to_available_cores() {
+fn obsolete_decode_thread_preference_does_not_limit_processing_workers() {
     let legacy: Settings =
-        serde_json::from_str(r#"{"enabled":true,"max_bytes":10000000000}"#).unwrap();
-    assert_eq!(legacy.decode_threads, available_decode_threads().min(3));
-    for (requested, expected) in [(0, 1), (usize::MAX, available_decode_threads())] {
-        let fixture = Fixture::new();
-        let cache = Cache::at(fixture.root.join("cache"));
-        cache.configure(Settings {
-            decode_threads: requested,
-            ..Settings::default()
-        });
-        assert_eq!(
-            cache.control.lock().unwrap().settings.decode_threads,
-            expected
-        );
-    }
+        serde_json::from_str(r#"{"enabled":true,"max_bytes":10000000000,"decode_threads":1}"#)
+            .unwrap();
+    assert_eq!(legacy, Settings::default());
+    assert!(serde_json::to_value(legacy)
+        .unwrap()
+        .get("decode_threads")
+        .is_none());
 }
 
 #[test]
@@ -73,6 +106,95 @@ fn defaults_enable_only_merrill_and_quattro_with_ten_decimal_gigabytes() {
     assert!(settings.permits(ProcessingFamily::Merrill));
     assert!(settings.permits(ProcessingFamily::Quattro));
     assert!(!settings.permits(ProcessingFamily::Classic));
+}
+
+#[test]
+fn failed_payload_read_revokes_ready_and_header_refresh_cannot_restore_it() {
+    let fixture = Fixture::new();
+    let (cache, _foreground, identity) = fixture.ready_cache();
+    let file = cache.root.join(identity.name());
+    let valid = fs::read(&file).unwrap();
+    let mut corrupt = valid.clone();
+    *corrupt.last_mut().unwrap() ^= 1;
+    fs::write(&file, corrupt).unwrap();
+    assert!(read_header(
+        &mut File::open(&file).unwrap(),
+        &identity,
+        &Settings::default()
+    )
+    .is_ok());
+
+    assert!(cache.open_cached(&fixture.source, |_| {}).is_none());
+    let status = cache.status();
+    assert!(!status.ready.contains(&fixture.source));
+    assert_eq!(
+        status.files.get(&fixture.source),
+        Some(&EntryState::Uncached)
+    );
+    assert!(cache.source_origin(&fixture.source).is_none());
+    assert!(cache.selection(&fixture.source).is_none());
+    super::worker::refresh(
+        &cache.root,
+        &cache.control,
+        &cache.status,
+        &mut FamilyCatalog::new(),
+    )
+    .unwrap();
+    assert!(!cache.status().ready.contains(&fixture.source));
+    assert!(file.exists(), "cache-read failures do not delete bundles");
+
+    fs::write(&file, valid).unwrap();
+    assert!(cache.open_cached(&fixture.source, |_| {}).is_some());
+    super::worker::refresh(
+        &cache.root,
+        &cache.control,
+        &cache.status,
+        &mut FamilyCatalog::new(),
+    )
+    .unwrap();
+    assert!(cache.status().ready.contains(&fixture.source));
+}
+
+#[test]
+fn missing_ready_decode_immediately_loses_its_trusted_identity() {
+    let fixture = Fixture::new();
+    let (cache, _foreground, identity) = fixture.ready_cache();
+    fs::remove_file(cache.root.join(identity.name())).unwrap();
+    assert!(cache.open_cached(&fixture.source, |_| {}).is_none());
+    assert!(!cache.status().ready.contains(&fixture.source));
+    assert_eq!(
+        cache.status().files.get(&fixture.source),
+        Some(&EntryState::Uncached)
+    );
+    assert!(cache.import_identity(&fixture.source).is_none());
+}
+
+#[test]
+fn interrupted_cache_reads_and_policy_misses_do_not_reject_valid_payloads() {
+    let fixture = Fixture::new();
+    let (cache, _foreground, identity) = fixture.ready_cache();
+    crate::background::interruptible(cache.gate.clone(), || {
+        let _interrupt = cache.foreground();
+        assert!(cache.open_cached(&fixture.source, |_| {}).is_none());
+    });
+    assert!(cache.status().ready.contains(&fixture.source));
+    assert!(!cache.control.lock().unwrap().rejected.contains(&identity));
+    cache.control.lock().unwrap().settings.quattro = false;
+    assert!(cache.open_cached(&fixture.source, |_| {}).is_none());
+    cache.control.lock().unwrap().settings = Settings {
+        max_bytes: 1,
+        ..Settings::default()
+    };
+    assert!(cache.open_cached(&fixture.source, |_| {}).is_none());
+    assert!(!cache.control.lock().unwrap().rejected.contains(&identity));
+    assert!(cache
+        .control
+        .lock()
+        .unwrap()
+        .identities
+        .contains_key(&fixture.source));
+    cache.control.lock().unwrap().settings = Settings::default();
+    assert!(cache.open_cached(&fixture.source, |_| {}).is_some());
 }
 
 #[test]
@@ -250,6 +372,172 @@ fn persistence_preserves_sample_bits_geometry_and_source_location() {
         &|_| {}
     )
     .is_err());
+}
+
+#[test]
+fn prepared_bundle_defers_publication_and_rechecks_recipe_policy_and_budget() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("prepared");
+    let source = fixture.image();
+    let original = fs::read(&fixture.source).unwrap();
+    let identity = Identity::read(&fixture.source).unwrap();
+    let prepare_selection = || {
+        super::selection::prepare_assets(&fixture.source, &identity, &source.metadata, &original)
+            .unwrap()
+    };
+    let selection = prepare_selection();
+    let decoded = crate::decode_pool::cpu(|| prepare_decoded(identity.clone(), &source)).unwrap();
+    assert!(!root.exists(), "CPU preparation must not publish files");
+    publish_decoded(&root, &fixture.source, &source, decoded, 0, &[], || true).unwrap();
+    super::selection::publish(
+        &root,
+        &fixture.source,
+        &original,
+        selection,
+        &Settings::default(),
+        &[],
+        &|| false,
+    )
+    .unwrap();
+    assert!(
+        !root.exists(),
+        "cancelled or over-budget preparation must not publish"
+    );
+
+    let stale = prepare_selection();
+    let recipe = crate::render::Settings {
+        exposure: 0.5,
+        ..Default::default()
+    };
+    crate::sidecar::save(&fixture.source, &recipe).unwrap();
+    assert!(super::selection::publish(
+        &root,
+        &fixture.source,
+        &original,
+        stale,
+        &Settings::default(),
+        &[],
+        &|| true
+    )
+    .is_err());
+    assert!(
+        !root.exists(),
+        "a stale recipe must be rejected before original publication"
+    );
+
+    let too_small = Settings {
+        max_bytes: original.len() as u64 - 1,
+        ..Default::default()
+    };
+    assert!(super::selection::publish(
+        &root,
+        &fixture.source,
+        &original,
+        prepare_selection(),
+        &too_small,
+        &[],
+        &|| true
+    )
+    .is_err());
+    assert!(!root.exists());
+
+    let decoded = crate::decode_pool::cpu(|| prepare_decoded(identity.clone(), &source)).unwrap();
+    publish_decoded(
+        &root,
+        &fixture.source,
+        &source,
+        decoded,
+        DEFAULT_BUDGET,
+        &[],
+        || true,
+    )
+    .unwrap();
+    super::selection::publish(
+        &root,
+        &fixture.source,
+        &original,
+        prepare_selection(),
+        &Settings::default(),
+        &[],
+        &|| true,
+    )
+    .unwrap();
+    let selection = super::selection::read(&root, &identity, &Settings::default()).unwrap();
+    assert_eq!(selection.settings, Some(recipe));
+    assert_eq!(selection.original_checksum, crc32fast::hash(&original));
+    assert_eq!(
+        fs::read(root.join(identity.name()).with_extension("original")).unwrap(),
+        original
+    );
+    let restored = load(
+        &root.join(identity.name()),
+        &identity,
+        &Settings::default(),
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(
+        bytemuck::cast_slice::<f32, u8>(restored.samples()),
+        bytemuck::cast_slice::<f32, u8>(source.samples())
+    );
+}
+
+#[test]
+fn sidecar_change_during_original_publication_rejects_prepared_selection() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("cache");
+    fs::create_dir_all(&root).unwrap();
+    let source = fixture.image();
+    let original = fs::read(&fixture.source).unwrap();
+    let identity = Identity::read(&fixture.source).unwrap();
+    let prepared =
+        super::selection::prepare_assets(&fixture.source, &identity, &source.metadata, &original)
+            .unwrap();
+    let changed = std::cell::Cell::new(false);
+    let updated = crate::render::Settings {
+        exposure: 0.75,
+        ..Default::default()
+    };
+    let current = || {
+        let original_is_written = fs::read_dir(&root).unwrap().flatten().any(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "writing")
+                && entry
+                    .metadata()
+                    .is_ok_and(|metadata| metadata.len() == original.len() as u64)
+        });
+        if original_is_written && !changed.replace(true) {
+            crate::sidecar::save(&fixture.source, &updated).unwrap();
+        }
+        true
+    };
+    assert!(super::selection::publish(
+        &root,
+        &fixture.source,
+        &original,
+        prepared,
+        &Settings::default(),
+        &[],
+        &current
+    )
+    .is_err());
+    assert!(
+        changed.get(),
+        "the sidecar must change after the original payload was written"
+    );
+    assert_eq!(
+        fs::read(root.join(identity.name()).with_extension("original")).unwrap(),
+        original
+    );
+    assert!(
+        !root
+            .join(identity.name())
+            .with_extension("metadata")
+            .exists(),
+        "stale selection metadata must not make the original bundle ready"
+    );
 }
 
 #[test]
@@ -565,11 +853,25 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
     )]);
     let policy = Settings::default();
     assert_eq!(
-        entry_state(&root, &fixture.source, &policy, true, &mut families),
+        entry_state(
+            &root,
+            &fixture.source,
+            &policy,
+            true,
+            &mut families,
+            &HashSet::new()
+        ),
         EntryState::Queued
     );
     assert_eq!(
-        entry_state(&root, &fixture.source, &policy, false, &mut families),
+        entry_state(
+            &root,
+            &fixture.source,
+            &policy,
+            false,
+            &mut families,
+            &HashSet::new()
+        ),
         EntryState::Uncached
     );
     store(
@@ -592,7 +894,14 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
     )
     .unwrap();
     assert_eq!(
-        entry_state(&root, &fixture.source, &policy, true, &mut families),
+        entry_state(
+            &root,
+            &fixture.source,
+            &policy,
+            true,
+            &mut families,
+            &HashSet::new()
+        ),
         EntryState::Ready
     );
     let original = root
@@ -600,7 +909,14 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
         .with_extension("original");
     fs::write(&original, b"truncated").unwrap();
     assert_eq!(
-        entry_state(&root, &fixture.source, &policy, false, &mut families),
+        entry_state(
+            &root,
+            &fixture.source,
+            &policy,
+            false,
+            &mut families,
+            &HashSet::new()
+        ),
         EntryState::Uncached,
         "a truncated original must not advertise a complete local bundle"
     );
@@ -611,7 +927,14 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
     fs::write(&metadata, b"corrupt selection").unwrap();
     assert!(super::selection::read(&root, &identity, &policy).is_err());
     assert_eq!(
-        entry_state(&root, &fixture.source, &policy, false, &mut families),
+        entry_state(
+            &root,
+            &fixture.source,
+            &policy,
+            false,
+            &mut families,
+            &HashSet::new()
+        ),
         EntryState::Uncached
     );
     fs::write(metadata, valid).unwrap();
@@ -620,7 +943,14 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
         ..Settings::default()
     };
     assert_eq!(
-        entry_state(&root, &fixture.source, &disabled, false, &mut families),
+        entry_state(
+            &root,
+            &fixture.source,
+            &disabled,
+            false,
+            &mut families,
+            &HashSet::new()
+        ),
         EntryState::Disabled
     );
     assert!(
@@ -640,12 +970,26 @@ fn file_status_tracks_queue_ready_eviction_and_architecture_policy() {
     );
     prune(&root, 0, &[]).unwrap();
     assert_eq!(
-        entry_state(&root, &fixture.source, &policy, false, &mut families),
+        entry_state(
+            &root,
+            &fixture.source,
+            &policy,
+            false,
+            &mut families,
+            &HashSet::new()
+        ),
         EntryState::Uncached
     );
     fs::remove_file(&fixture.source).unwrap();
     assert_eq!(
-        entry_state(&root, &fixture.source, &policy, false, &mut families),
+        entry_state(
+            &root,
+            &fixture.source,
+            &policy,
+            false,
+            &mut families,
+            &HashSet::new()
+        ),
         EntryState::Unavailable
     );
 }
@@ -726,41 +1070,35 @@ fn parallel_prefetch_throughput_preserves_exact_samples_and_disk_budget() {
         })
         .collect();
     let expected = Source::open(&original).unwrap();
-    let mut budgets = vec![1, available_decode_threads().min(3)];
-    budgets.dedup();
-    for threads in budgets {
-        let cache = Cache::at(fixture.root.join(format!("cache-{threads}")));
-        let settings = Settings {
-            decode_threads: threads,
-            ..Settings::default()
-        };
-        cache.configure(settings.clone());
-        let began = Instant::now();
-        cache.prefetch_window(paths.clone(), paths.first().cloned());
-        while cache.status().ready.len() != PHOTOS {
-            assert!(
-                began.elapsed() < Duration::from_secs(60),
-                "prefetch stalled: {:?}",
-                cache.status()
-            );
-            assert!(cache.status().prefetching.len() <= threads);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        eprintln!(
-            "{PHOTOS} Quattro photos, {threads} background decode threads: {:.1} ms",
-            began.elapsed().as_secs_f64() * 1000.
+    let threads = crate::decode_pool::shared().unwrap().threads();
+    let cache = Cache::at(fixture.root.join("cache"));
+    let settings = Settings::default();
+    cache.configure(settings.clone());
+    let began = Instant::now();
+    cache.prefetch_window(paths.clone(), paths.first().cloned());
+    while cache.status().ready.len() != PHOTOS {
+        assert!(
+            began.elapsed() < Duration::from_secs(60),
+            "prefetch stalled: {:?}",
+            cache.status()
         );
-        assert!(cache.status().bytes <= settings.max_bytes);
-        let active = cache.foreground();
-        for path in &paths {
-            let restored = cache.open_cached(path, |_| {}).unwrap();
-            assert_eq!(
-                bytemuck::cast_slice::<f32, u8>(expected.samples()),
-                bytemuck::cast_slice::<f32, u8>(restored.samples())
-            );
-        }
-        drop(active);
+        assert!(cache.status().prefetching.len() <= threads.min(3));
+        std::thread::sleep(Duration::from_millis(5));
     }
+    eprintln!(
+        "{PHOTOS} Quattro photos, {threads} shared processing workers, at most three admitted photos: {:.1} ms",
+        began.elapsed().as_secs_f64() * 1000.
+    );
+    assert!(cache.status().bytes <= settings.max_bytes);
+    let active = cache.foreground();
+    for path in &paths {
+        let restored = cache.open_cached(path, |_| {}).unwrap();
+        assert_eq!(
+            bytemuck::cast_slice::<f32, u8>(expected.samples()),
+            bytemuck::cast_slice::<f32, u8>(restored.samples())
+        );
+    }
+    drop(active);
 }
 
 #[test]

@@ -22,8 +22,11 @@ mod icon;
 mod import_review;
 mod information;
 mod inspect;
+mod memory;
 mod metadata;
 mod mixer;
+mod multi_edit_controls;
+mod multi_edit_runtime;
 mod navigator;
 mod noise_calibration;
 mod photo_tools;
@@ -32,6 +35,7 @@ mod preview_image;
 mod previews;
 mod processing;
 mod progress;
+mod render_coordinator;
 mod rotate_tool;
 mod scopes;
 mod sections;
@@ -42,6 +46,7 @@ mod smoke;
 mod timing;
 mod toolbar;
 mod viewport;
+mod viewport_selection;
 mod widgets;
 mod worker;
 
@@ -68,8 +73,13 @@ struct Opening {
 struct App {
     context: egui::Context,
     noise_calibration: noise_calibration::State,
-    comparison_selection: Option<PathBuf>,
+    comparison_selection: Option<viewport_selection::Request>,
+    edit_selection: viewport_selection::Selection,
+    multi_edit: multi_edit_runtime::Runtime,
     comparison_zoom: f32,
+    viewport_paths: Arc<[PathBuf]>,
+    viewport_paths_key: Option<(u64, Option<PathBuf>)>,
+    viewport_paths_limit: usize,
     editor_ui: editor::State,
     before: editor::Before,
     actions: Vec<actions::Edit>,
@@ -100,6 +110,8 @@ struct App {
     previews: previews::Previews,
     revision: u64,
     busy: bool,
+    memory_key: Vec<u64>,
+    memory_reply_epoch: u64,
     exporting: bool,
     preferences: preferences::Preferences,
     activity: activity::Log,
@@ -111,6 +123,26 @@ struct App {
     startup_ready: Option<std::time::Instant>,
 }
 impl App {
+    fn multi_photo_overview(&self) -> bool {
+        multi_photo_overview(&self.viewport_paths, self.selected.as_deref())
+    }
+
+    fn sync_viewport_paths(&mut self) {
+        let key = (self.browser.selection_generation(), self.selected.clone());
+        let changed = self.viewport_paths_key.as_ref() != Some(&key);
+        if changed {
+            self.viewport_paths = self
+                .browser
+                .processing_selection(self.selected.as_deref())
+                .into();
+            self.viewport_paths_key = Some(key);
+        }
+        if changed || self.viewport_paths_limit != self.preferences.multi_edit_limit {
+            self.edit_selection
+                .sync_browser(&self.viewport_paths, self.preferences.multi_edit_limit);
+            self.viewport_paths_limit = self.preferences.multi_edit_limit;
+        }
+    }
     fn new(
         cc: &eframe::CreationContext<'_>,
         path: Option<PathBuf>,
@@ -191,7 +223,12 @@ impl App {
             context: cc.egui_ctx.clone(),
             noise_calibration,
             comparison_selection: None,
+            edit_selection: Default::default(),
+            multi_edit: Default::default(),
             comparison_zoom: 1.,
+            viewport_paths: Arc::default(),
+            viewport_paths_key: None,
+            viewport_paths_limit: 0,
             editor_ui: Default::default(),
             before: Default::default(),
             actions: Vec::new(),
@@ -226,6 +263,8 @@ impl App {
             navigator: navigator::Navigator::new(rs.clone(), cc.egui_ctx.clone()),
             revision: 0,
             busy: false,
+            memory_key: Vec::new(),
+            memory_reply_epoch: 0,
             exporting: false,
             preferences,
             activity: Default::default(),
@@ -244,7 +283,7 @@ impl App {
             .cache
             .configure(app.preferences.decode_cache.clone());
         app.browser
-            .set_thumbnail_budget(app.preferences.thumbnail_cache_bytes);
+            .set_thumbnail_budget(app.preferences.thumbnail_cache_bytes());
         app.sidecars.set_defaults(&app.preferences.editor.defaults);
         app.worker
             .cache
@@ -255,6 +294,7 @@ impl App {
             app.preferences.processing_destination.as_deref(),
         );
         app.viewport.zoom_snap = app.preferences.zoom_snap;
+        app.update_memory();
         if let Some((path, mode)) = app.preferences.startup_request(path) {
             app.folder_loader.request(path, mode);
         }
@@ -307,8 +347,12 @@ impl App {
         self.browser.invalidate_prefetch();
         self.revision += 1;
         self.selected = None;
+        self.edit_selection
+            .sync_browser(&[], self.preferences.multi_edit_limit);
+        self.multi_edit.clear();
         self.opening = None;
         self.sidecars.clear();
+        self.sidecars.resolve_settings(&[]);
         self.capture.select(None);
         self.metadata = None;
         self.frame = None;
@@ -323,26 +367,57 @@ impl App {
         viewport::clear(&self.render_state);
     }
     fn select(&mut self, path: PathBuf, preserve_viewport: bool) {
+        self.multi_edit.selected(&path);
+        if let Some(frame) = self.frame.take() {
+            self.multi_edit.retain(frame);
+        }
+        let cached_frame = self.multi_edit.take_frame(&path);
+        let cached_metadata = self.multi_edit.metadata(&path);
+        let cached_settings = self.multi_edit.settings(&path).cloned();
+        let cached_selection = cached_frame.as_ref().is_some_and(|frame| {
+            cached_settings
+                .as_ref()
+                .is_some_and(|settings| smart::same_edits(&frame.requested, settings))
+                && frame.calibration_signature.as_deref()
+                    == self
+                        .noise_calibration
+                        .selected(self.preferences.noise_profile)
+                        .as_ref()
+                        .map(|profile| profile.signature())
+                && self
+                    .worker
+                    .cache
+                    .source_origin(&path)
+                    .is_none_or(|origin| origin == frame.origin)
+        });
+        if let Some(previous) = &self.selected {
+            self.worker.retire_before(previous);
+        }
+        self.worker.activate(&path);
         self.before = Default::default();
         self.browser.invalidate_prefetch();
         timing::selected(self.revision + 1, &path);
         let began = std::time::Instant::now();
-        self.opening = Some(Opening {
+        self.opening = (!cached_selection).then(|| Opening {
             _priority: self.worker.cache.foreground(),
             began,
         });
         self.capture.select(Some(path.clone()));
         self.sidecars.select(path.clone());
         self.selected = Some(path);
-        self.settings = Settings::new("", "");
+        self.settings = cached_settings.unwrap_or_else(|| Settings::new("", ""));
         self.revision += 1;
-        self.worker.clear();
-        self.worker.progress.begin(self.revision, began);
-        self.busy = false;
-        self.metadata = None;
+        if !self.multi_photo_overview() {
+            self.worker.clear();
+        }
+        if !cached_selection {
+            self.worker.progress.begin(self.revision, began);
+        }
+        self.busy = self.worker.busy();
+        self.metadata = cached_metadata;
         self.output = "final".into();
         self.channel = -1;
-        self.frame = None;
+        self.frame = cached_frame;
         self.detail = None;
         self.smart.reset();
         self.scope_key = None;
@@ -381,7 +456,7 @@ impl App {
             self.exporting = export.is_some();
             timing::requested(self.revision, path, &self.output, &self.settings);
             let mut requested = self.view_settings();
-            requested.preview_quality = foveonic::render::PreviewQuality::Full;
+            requested.working_scale = foveonic::render::Scale::NATIVE;
             requested.preview_region = region;
             let small_preview = matches!(
                 quality,
@@ -392,7 +467,10 @@ impl App {
                     .viewport
                     .zoom_percent(self.context.pixels_per_point())
                     .is_some_and(|z| z > 100.);
-            if small_preview && (std::env::var_os("FOVEONIC_SMALL_OVERVIEW").is_none() || zoomed) {
+            if self.multi_photo_overview() && export.is_none() && self.output == "final" {
+                quality = preferences::PreviewMode::Thumb;
+                requested.preview_region = None;
+            } else if small_preview && zoomed {
                 quality = preferences::PreviewMode::Full;
             }
             let request = worker::Request {
@@ -405,7 +483,14 @@ impl App {
                 path: path.clone(),
                 settings: requested,
                 preview_quality: quality,
-                preview_policy: self.preferences.preview_quality,
+                preview_policy: if self.multi_photo_overview()
+                    && export.is_none()
+                    && self.output == "final"
+                {
+                    preferences::PreviewMode::Thumb
+                } else {
+                    self.preferences.preview_quality
+                },
                 output: if self.before.active == editor::Rendition::Current {
                     self.output.clone()
                 } else {
@@ -427,8 +512,16 @@ impl App {
                 self.worker.submit(request);
             }
             self.opening = None;
+            self.busy = self.worker.busy() || self.exporting;
         }
     }
+    fn sync_render_progress(&mut self, failed_revision: Option<u64>) {
+        self.busy = self.worker.busy() || self.exporting;
+        self.worker
+            .progress
+            .settle(self.busy || self.opening.is_some(), failed_revision);
+    }
+
     fn receive(&mut self, ctx: &egui::Context) {
         self.browser.receive(ctx);
         while let Ok(preview) = self.previews.replies.try_recv() {
@@ -446,8 +539,14 @@ impl App {
         }
         while let Ok(update) = self.worker.replies.try_recv() {
             let reply = match update {
-                worker::Update::Image(reply) => *reply,
-                worker::Update::ColorPick(reply) => {
+                worker::Update::Image(reply) => {
+                    self.memory_reply_epoch = self.memory_reply_epoch.wrapping_add(1);
+                    *reply
+                }
+                worker::Update::ColorPick { id, reply } => {
+                    if !self.worker.finish_pick(id) {
+                        continue;
+                    }
                     if !editor::white_balance::receive(ctx, &reply)
                         && !editor::dehaze::receive(ctx, &reply)
                     {
@@ -455,7 +554,10 @@ impl App {
                     }
                     continue;
                 }
-                worker::Update::Scopes { key, result } => {
+                worker::Update::Scopes { id, key, result } => {
+                    if !self.worker.finish_scope(id) {
+                        continue;
+                    }
                     if self
                         .frame
                         .as_ref()
@@ -480,7 +582,18 @@ impl App {
                     continue;
                 }
             };
-            if !self.exporting
+            let completion = if reply.exported.is_some() {
+                self.exporting = false;
+                render_coordinator::Completion::Current
+            } else {
+                self.worker.finish_image(&reply.stamp)
+            };
+            let current = completion == render_coordinator::Completion::Current;
+            self.sync_render_progress((current && reply.result.is_err()).then_some(reply.revision));
+            if completion == render_coordinator::Completion::Removed {
+                continue;
+            }
+            if reply.exported.is_none()
                 && reply
                     .result
                     .as_ref()
@@ -497,6 +610,55 @@ impl App {
             {
                 continue;
             }
+            if let Ok(Some(frame)) = &reply.result {
+                self.worker.retain_pixels(&reply.stamp, frame);
+            }
+            if current {
+                self.multi_edit.complete(
+                    &reply.path,
+                    reply.metadata.clone(),
+                    reply.numeric_settings.clone(),
+                    reply.reset_settings.clone(),
+                    &reply.settings,
+                );
+            }
+            let current_overview = reply.rendition == editor::Rendition::Current
+                && reply.stamp.target.purpose == render_coordinator::Purpose::Current;
+            if self.selected.as_ref() != Some(&reply.path)
+                || (current_overview
+                    && (self.before.active != editor::Rendition::Current
+                        || self.output != "final"
+                        || self.comparison.requested()))
+            {
+                if current_overview && self.edit_selection.contains(&reply.path) {
+                    match reply.result {
+                        Ok(Some(frame)) => {
+                            let geometry =
+                                self.multi_edit
+                                    .settings(&frame.path)
+                                    .is_some_and(|settings| {
+                                        smart::same_geometry(settings, &frame.requested)
+                                    });
+                            if geometry && self.worker.admit_image(&reply.stamp, &frame) {
+                                if let Some((thumbnail, preview)) = self.previews.snapshot(&frame) {
+                                    self.browser.rendered_texture(
+                                        frame.path.clone(),
+                                        frame.revision,
+                                        thumbnail,
+                                        preview,
+                                    );
+                                }
+                                self.multi_edit.retain(frame);
+                            }
+                        }
+                        Err(error) if current => {
+                            self.fail(format!("{}: {error}", reply.path.display()))
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
             if reply
                 .result
                 .as_ref()
@@ -506,7 +668,6 @@ impl App {
             {
                 continue;
             }
-            let current = reply.revision == self.revision;
             if reply.rendition != self.before.active {
                 continue;
             }
@@ -535,27 +696,19 @@ impl App {
             {
                 continue;
             }
-            if current {
-                self.worker
-                    .progress
-                    .finish(reply.revision, reply.result.is_err());
-                self.busy = false;
-                self.exporting = false;
+            if let Ok(Some(frame)) = &reply.result {
+                if !self.worker.admit_image(&reply.stamp, frame) {
+                    continue;
+                }
             }
-            if let Some(metadata) = reply.metadata {
-                self.metadata = Some(metadata);
-                if current && reply.rendition == editor::Rendition::Current {
-                    // Authored As Shot choices must keep following each photograph.
-                    // Render replies carry concrete camera choices for the GPU recipe.
-                    let white_balance = std::mem::take(&mut self.settings.white_balance);
-                    let color_mode = std::mem::take(&mut self.settings.color_mode);
-                    self.settings = reply.settings;
-                    self.settings.white_balance = white_balance;
-                    self.settings.color_mode = color_mode;
+            if current {
+                if let Some(metadata) = reply.metadata {
+                    self.metadata = Some(metadata);
                 }
             }
             match reply.result {
                 Ok(Some(frame)) => {
+                    self.worker.delivered(frame.revision);
                     if current
                         && frame.rendition == editor::Rendition::Current
                         && frame.artifact.settings.dehaze_estimate
@@ -594,9 +747,13 @@ impl App {
                         self.detail = Some(frame);
                     } else {
                         viewport::clear(&self.render_state);
-                        if self.preferences.preview_quality != preferences::PreviewMode::Smart
-                            || frame.artifact.settings.preview_quality
-                                != foveonic::render::PreviewQuality::Full
+                        if (self.preferences.preview_quality != preferences::PreviewMode::Smart
+                            || frame.artifact.settings.working_scale
+                                != foveonic::render::Scale::NATIVE)
+                            && self
+                                .detail
+                                .as_ref()
+                                .is_none_or(|detail| frame.revision >= detail.revision)
                         {
                             self.detail = None;
                         }
@@ -841,6 +998,10 @@ impl App {
 
     fn framing_preview_active(&self) -> bool {
         photo_tools::framing(&self.context)
+            && self
+                .selected
+                .as_deref()
+                .is_some_and(|path| self.edit_selection.contains(path))
             && self.output == "final"
             && self.before.active == editor::Rendition::Current
             && !self.comparison.requested()
@@ -858,6 +1019,7 @@ impl App {
                     && self.before.active == editor::Rendition::Current
                     && !self.comparison.requested()
                     && self.sidecars.ready()
+                    && self.edit_selection.contains(&f.path)
             })
             .map(|frame| self.settings.rotation.extent(frame.camera_extent()));
         photo_tools::show(
@@ -900,28 +1062,34 @@ impl App {
             }
             Section::Editing => {
                 let mut changed = false;
-                ui.add_enabled_ui(!self.exporting && self.sidecars.ready(), |ui| {
-                    let exposure_auto_compensation = self.settings.exposure_auto_compensation;
-                    let prevent_color_clipping = self.settings.prevent_color_clipping;
-                    changed = controls::processing(
-                        ui,
-                        &mut self.settings,
-                        self.metadata.as_deref(),
-                        self.capture.properties.as_ref(),
-                        &mut self.preferences.editing_sections,
-                        &mut editor::Menus {
-                            exposure_auto_compensation,
-                            prevent_color_clipping,
-                            family: self.metadata.as_deref().and_then(|m| {
-                                foveonic::render::ControlCapabilities::from_metadata(m)
-                                    .ok()
-                                    .map(|c| c.family)
-                            }),
-                            library: &self.preferences.editor,
-                            state: &mut self.editor_ui,
-                        },
-                    );
-                });
+                ui.add_enabled_ui(
+                    !self.exporting
+                        && self.sidecars.ready()
+                        && !self.edit_selection.paths().is_empty()
+                        && (!self.multi_edit.multiple() || self.multi_edit.editable_ready()),
+                    |ui| {
+                        let exposure_auto_compensation = self.settings.exposure_auto_compensation;
+                        let prevent_color_clipping = self.settings.prevent_color_clipping;
+                        changed = controls::processing(
+                            ui,
+                            &mut self.settings,
+                            self.metadata.as_deref(),
+                            self.capture.properties.as_ref(),
+                            &mut self.preferences.editing_sections,
+                            &mut editor::Menus {
+                                exposure_auto_compensation,
+                                prevent_color_clipping,
+                                family: self.metadata.as_deref().and_then(|m| {
+                                    foveonic::render::ControlCapabilities::from_metadata(m)
+                                        .ok()
+                                        .map(|c| c.family)
+                                }),
+                                library: &self.preferences.editor,
+                                state: &mut self.editor_ui,
+                            },
+                        );
+                    },
+                );
                 changed
             }
             Section::Metadata => {
@@ -1022,6 +1190,7 @@ impl App {
     }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
+        let overview = self.multi_photo_overview();
         let background_width = 2. * widgets::ControlSize::Medium.side()
             + widgets::MEDIUM_CONTROL_GAP
             + 2. * f32::from(widgets::BUTTON_GROUP_MARGIN);
@@ -1029,20 +1198,20 @@ impl App {
             ui,
             background_width,
             |ui| {
-                changed |= inspect::preview_quality(
-                    ui,
-                    !self.exporting,
-                    if self.output != "final" || self.comparison.requested() {
-                        Some(false)
-                    } else {
-                        inspect::preview_support(
-                            &self.settings,
-                            self.metadata.as_deref(),
-                            self.capture.properties.as_ref(),
-                        )
-                    },
-                    &mut self.preferences.preview_quality,
-                );
+                if overview {
+                    let mut quality = preferences::PreviewMode::Thumb;
+                    ui.scope(|ui| {
+                        inspect::preview_quality(ui, false, &mut quality);
+                    })
+                    .response
+                    .on_disabled_hover_text("Multi-photo overviews use Thumb.");
+                } else {
+                    changed |= inspect::preview_quality(
+                        ui,
+                        !self.exporting,
+                        &mut self.preferences.preview_quality,
+                    );
+                }
                 widgets::button_group(ui, |ui| {
                     widgets::centered_control_row(ui, |ui| {
                         ui.weak("Inspect");
@@ -1164,6 +1333,7 @@ impl App {
                     ui.cursor().min,
                     egui::vec2(ui.available_width(), height),
                 );
+                photo_tools::set_viewport_rect(ui.ctx(), canvas);
                 ui.painter().rect_filled(
                     canvas,
                     0.,
@@ -1173,13 +1343,8 @@ impl App {
                         egui::Color32::BLACK
                     },
                 );
-                let paths = self.browser.processing_selection(self.selected.as_deref());
-                if paths.len() > 1
-                    && self
-                        .selected
-                        .as_ref()
-                        .is_some_and(|active| paths.contains(active))
-                {
+                let paths = self.viewport_paths.clone();
+                if self.multi_photo_overview() {
                     changed |= self.comparison_view(ui, &paths);
                     return;
                 }
@@ -1208,6 +1373,10 @@ impl App {
 
     fn photo_interaction_available(&self, mapping: viewport::Mapping) -> bool {
         !self.exporting
+            && self
+                .selected
+                .as_deref()
+                .is_some_and(|path| self.edit_selection.contains(path))
             && self.sidecars.ready()
             && self.before.active == editor::Rendition::Current
             && self.output == "final"
@@ -1327,7 +1496,10 @@ impl App {
             let (changed, request) =
                 photo_tools::pick(ui, &response, uv, path, &mut self.settings, allowed);
             if let Some(request) = request {
-                self.worker.pick_color(request);
+                if let Some(frame) = &self.frame {
+                    self.worker
+                        .pick_color(request, frame.revision, Some(frame.origin.clone()));
+                }
             }
             return changed;
         }
@@ -1407,12 +1579,10 @@ impl eframe::App for App {
                             foveonic::source::ProcessingFamily::from_camera_model(model)
                         }),
                 );
-                self.submit(None);
+                if !self.multi_edit.multiple() {
+                    self.submit(None);
+                }
             }
-        }
-        for (path, clockwise) in self.sidecars.take_rotated() {
-            self.previews.invalidate_path(&path);
-            self.browser.rotate_cached(&path, clockwise);
         }
         if self
             .smoke
@@ -1428,6 +1598,7 @@ impl eframe::App for App {
         self.noise_calibration
             .show(ctx, &mut self.preferences.noise_profile);
         if !self.exporting && self.noise_calibration.take_changed() {
+            self.multi_edit.invalidate();
             self.smart.reset();
             self.detail = None;
             let selected = self
@@ -1462,10 +1633,11 @@ impl eframe::App for App {
             &mut self.preferences,
             &self.worker.cache,
             self.display.target.managed(),
+            self.worker.memory_status(),
         );
         application_settings::adaptive(ctx, &mut self.preferences);
         self.browser
-            .set_thumbnail_budget(self.preferences.thumbnail_cache_bytes);
+            .set_thumbnail_budget(self.preferences.thumbnail_cache_bytes());
         if previous_gamut != self.preferences.display_gamut {
             viewport::set_gamut(&self.render_state, self.preferences.display_gamut);
         }
@@ -1515,13 +1687,6 @@ impl eframe::App for App {
                 self.preferences.browser_sort = self.browser.sort;
                 self.preferences.browser_show_ratings = self.browser.show_ratings;
             });
-        if let Some((path, clockwise)) = self.browser.rotation_clicked.take() {
-            if self.selected.as_ref() == Some(&path) {
-                self.actions.push(actions::Edit::QuarterTurn(clockwise));
-            } else {
-                self.sidecars.rotate(path, clockwise);
-            }
-        }
         let actions_changed = self.dispatch_actions(ctx);
         let tuning_changed = previous_limits != self.preferences.adaptive_tone_tuning;
         if tuning_changed {
@@ -1530,6 +1695,30 @@ impl eframe::App for App {
             self.previews.invalidate();
         }
         let mut changed = normalized || actions_changed || tuning_changed || toolbar_changed;
+        self.sync_viewport_paths();
+        if self
+            .selected
+            .as_deref()
+            .is_some_and(|path| !self.edit_selection.contains(path))
+        {
+            if let Some(path) = self.edit_selection.paths().first().cloned() {
+                self.select(path, true);
+            }
+        }
+        self.sync_multi_edit();
+        let editor_before = self.settings.clone();
+        multi_edit_controls::begin_with_numeric(
+            ctx,
+            self.multi_edit.snapshots(),
+            self.multi_edit.numeric_snapshots(),
+        );
+        multi_edit_controls::set_metadata(ctx, self.multi_edit.metadata_snapshots());
+        for (pointer, ready) in self.multi_edit.optional_readiness() {
+            multi_edit_controls::set_optional_ready(ctx, pointer, ready);
+        }
+        for (pointer, range) in self.multi_edit.control_ranges() {
+            multi_edit_controls::set_range(ctx, &pointer, range);
+        }
         let tools_limit = (ctx.available_rect().width() - 240.).clamp(TOOLS_MIN_WIDTH, 600.);
         egui::SidePanel::right("settings")
             .default_width(
@@ -1542,6 +1731,34 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 changed |= self.tools(ui);
             });
+        let mut edits = multi_edit_controls::finish(ctx);
+        if self.multi_edit.multiple() && self.multi_edit.editable_ready() {
+            let assignments =
+                multi_edit_controls::assignments(&editor_before, &self.settings, &edits);
+            edits.extend(assignments);
+            if self.multi_edit.apply_edits(&edits, &mut self.sidecars) {
+                if let Some(settings) = self
+                    .selected
+                    .as_deref()
+                    .and_then(|path| self.multi_edit.settings(path))
+                {
+                    self.settings = settings.clone();
+                }
+                for path in self.edit_selection.paths() {
+                    self.previews.invalidate_path(path);
+                }
+                changed = true;
+            }
+            if !edits.is_empty() {
+                if let Some(settings) = self
+                    .selected
+                    .as_deref()
+                    .and_then(|path| self.multi_edit.settings(path))
+                {
+                    self.settings = settings.clone();
+                }
+            }
+        }
         let mut viewport_frame = egui::Frame::central_panel(&ctx.style());
         // The information row owns its vertical spacing down to the window edge.
         viewport_frame.inner_margin.bottom = 0;
@@ -1555,6 +1772,12 @@ impl eframe::App for App {
             self.viewport.reset();
             changed = true;
         }
+        if self.sidecars.ready() {
+            if let Some(path) = &self.selected {
+                self.multi_edit
+                    .observe_active(path, &self.settings, self.metadata.as_ref());
+            }
+        }
         if previous_selection == self.selected && (normalized || previous_settings != self.settings)
         {
             self.exit_before();
@@ -1563,14 +1786,43 @@ impl eframe::App for App {
         self.preferences.direct_color = editor::direct_color::configuration(ctx);
         if std::mem::take(&mut self.browser.clear_selection) {
             self.clear_selection();
-        } else if let Some(path) = self.comparison_selection.take() {
-            self.select(path, true);
+        } else if let Some(request) = self.comparison_selection.take() {
+            let clicked = request.path.clone();
+            self.edit_selection
+                .apply(request, self.preferences.multi_edit_limit);
+            self.sync_multi_edit();
+            let active = if self.edit_selection.contains(&clicked) {
+                Some(clicked)
+            } else if self
+                .selected
+                .as_deref()
+                .is_some_and(|path| self.edit_selection.contains(path))
+            {
+                self.selected.clone()
+            } else {
+                self.edit_selection.paths().first().cloned()
+            };
+            if let Some(path) = active.filter(|path| self.selected.as_ref() != Some(path)) {
+                self.select(path, true);
+            }
         } else if let Some(selection) = select {
-            self.select(selection.path, selection.preserve_viewport);
+            let path = if self.edit_selection.contains(&selection.path) {
+                selection.path
+            } else {
+                self.edit_selection
+                    .paths()
+                    .first()
+                    .cloned()
+                    .unwrap_or(selection.path)
+            };
+            self.select(path, selection.preserve_viewport);
         } else if changed && !self.exporting {
             self.exit_before();
-            self.submit(None);
+            if !self.submit_multi_edit() {
+                self.submit(None);
+            }
         }
+        self.submit_multi_edit();
         if let Some(paths) = self.browser.take_prefetch_order(self.selected.as_deref()) {
             self.worker
                 .cache
@@ -1578,9 +1830,12 @@ impl eframe::App for App {
         }
         self.editor_ui.dialog(ctx, &mut self.preferences.editor);
         self.activity.show(ctx);
-        self.update_smart(ctx);
+        if !self.multi_photo_overview() {
+            self.update_smart(ctx);
+        }
         self.update_scopes(ctx);
         self.smoke_check_scope_retention();
+        self.sync_render_progress(None);
         self.previews.update(self.frame.as_ref(), self.busy, ctx);
         self.navigator.update(
             self.frame.as_ref(),
@@ -1588,6 +1843,7 @@ impl eframe::App for App {
             self.busy,
             ctx,
         );
+        self.update_memory();
         if timing::enabled() {
             timing::emit(
                 "ui_update",
@@ -1595,6 +1851,9 @@ impl eframe::App for App {
             );
         }
     }
+}
+fn multi_photo_overview(paths: &[PathBuf], active: Option<&std::path::Path>) -> bool {
+    paths.len() > 1 && active.is_some_and(|active| paths.iter().any(|path| path == active))
 }
 fn main() -> eframe::Result {
     timing::configure().map_err(eframe::Error::AppCreation)?;

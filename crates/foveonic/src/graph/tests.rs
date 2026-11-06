@@ -485,3 +485,26 @@ fn high_pass_working_scale_invalidates_its_stage_identity() {
     };
     assert_ne!(full.key("detail.signal"), thumb.key("detail.signal"));
 }
+#[test]
+fn appended_camera_views_remain_owned_by_each_output() {
+    let view = crate::image::View {
+        crop: [2, 4, 30, 36],
+        rotation: 90,
+        extent: [32, 28],
+    };
+    let mut main = Graph::default();
+    let first = main.add(Operation::Source, &[]).unwrap();
+    main.set_view(first, view);
+    let mut branch = Graph::default();
+    let second = branch.add(Operation::Source, &[]).unwrap();
+    let mut different = view;
+    different.crop[0] += 1;
+    branch.set_view(second, different);
+    let mapping = main.append(branch, "other-frame");
+    assert_ne!(
+        mapping[second], first,
+        "different output framing must not merge"
+    );
+    assert_eq!(main.outputs[first].view, Some(view));
+    assert_eq!(main.outputs[mapping[second]].view, Some(different));
+}

@@ -26,9 +26,9 @@ fn horizontal(@builtin(global_invocation_id) id:vec3<u32>) {
     for(var c=0u;c<3u;c++) {
         var sum=0;
         if params.correction.z > 1u {
-            let d=i32(params.correction.z);
+            let d=params.correction.z;
             // Binomial3 variance is 1/2. Box5 variance is 2 per axis.
-            let side=select(1024,4096,params.shape.z==1u)/(d*d);
+            let side=i32(select(1024u,4096u,params.shape.z==1u)/d/d);
             let center=4096-2*side;
             sum=side*i32(source[position(x-1,y)+c])+center*i32(source[p+c])+side*i32(source[position(x+1,y)+c]);
             if params.shape.z==0u { blurred[p+c]=narrow((sum+2048)>>12u); }
@@ -51,8 +51,8 @@ fn apply(@builtin(global_invocation_id) id:vec3<u32>) {
     for(var c=0u;c<3u;c++) {
         old[c]=i32(source[p+c]);
         if params.correction.z > 1u {
-            let d=i32(params.correction.z);
-            let side=select(1024,4096,params.shape.z==1u)/(d*d);
+            let d=params.correction.z;
+            let side=i32(select(1024u,4096u,params.shape.z==1u)/d/d);
             let center=4096-2*side;
             let sum=side*blurred[position(x,y-1)+c]+center*blurred[p+c]+side*blurred[position(x,y+1)+c];
             if params.shape.z==0u { smoothed[c]=sum>>12u; }

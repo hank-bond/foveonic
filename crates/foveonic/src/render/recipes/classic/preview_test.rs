@@ -16,13 +16,19 @@ fn native(rotation: u32) -> EncodeParams {
 }
 
 #[test]
-fn small_grids_preserve_fractional_active_edges_and_orientation() {
+fn grids_cover_all_scales_and_preserve_fractional_camera_framing() {
     for rotation in [0, 90, 180, 270] {
-        for quality in [PreviewQuality::Draft, PreviewQuality::Thumb] {
+        for power in 1..32 {
+            let scale = Scale::new(1 << power).unwrap();
             let native = native(rotation);
-            let grid = Grid::new(native, quality).unwrap();
-            let d = quality.divisor();
-            assert_eq!(grid.extent(), [256 / d, 192 / d]);
+            let grid = Grid::new(native, scale, None, 8).unwrap();
+            let d = scale.divisor() as f32;
+            assert_eq!(grid.grid.logical, scale.extent([256, 192]));
+            assert!(grid
+                .extent()
+                .into_iter()
+                .zip(grid.grid.logical)
+                .all(|(extent, logical)| extent >= logical + 16));
             let mut graph = Graph::default();
             let layers = graph
                 .add(
@@ -36,6 +42,14 @@ fn small_grids_preserve_fractional_active_edges_and_orientation() {
             assert_eq!(
                 graph.outputs[pooled].data,
                 crate::graph::DataType::CalibratedLayers
+            );
+            assert_eq!(
+                graph
+                    .nodes
+                    .iter()
+                    .filter(|node| matches!(node.operation, Operation::ReduceLayers(_)))
+                    .count(),
+                power as usize
             );
             let rgb = graph
                 .add(
@@ -57,66 +71,19 @@ fn small_grids_preserve_fractional_active_edges_and_orientation() {
             let operation =
                 &recipe.graph.nodes[recipe.graph.outputs[recipe.final_id].producer].operation;
             let Operation::ResampleRgb { params, .. } = operation else {
-                panic!("missing native frame")
+                panic!("missing photographic frame")
             };
-            assert_eq!(params.mapping[0], [242. / d as f32, 0., 7. / d as f32, 1.]);
-            assert_eq!(params.mapping[1], [0., 182. / d as f32, 5. / d as f32, 1.]);
-            assert_eq!(params.output[..2], [242 / d, 182 / d]);
+            assert_eq!(params.mapping[0], [242. / d, 0., 7. / d + 8., 1.]);
+            assert_eq!(params.mapping[1], [0., 182. / d, 5. / d + 8., 1.]);
+            // Rotation is retained for presentation; this camera frame is unrotated.
+            assert_eq!(params.output[..2], scale.extent([242, 182]));
         }
     }
     let mut odd = native(0);
     odd.source[0] += 1;
-    assert_eq!(
-        Grid::new(odd, PreviewQuality::Thumb).unwrap().extent(),
-        [33, 24]
-    );
-    assert!(Grid::new(native(0), PreviewQuality::Fast).is_err());
-}
-
-#[test]
-fn unvalidated_classic_routes_report_full_fallback() {
-    use crate::source::{Matrix, MatrixEncoding};
-    let matrix = |values: Vec<f64>| Matrix {
-        encoding: MatrixEncoding::Float32,
-        representation: "test",
-        dimensions: vec![values.len()],
-        values,
-    };
-    let mut metadata = Metadata {
-        width: 2688,
-        height: 1792,
-        rotation: 0,
-        processing_version: None,
-        properties: [
-            ("CAMMODEL".into(), "SIGMA DP1S".into()),
-            ("ISO".into(), "100".into()),
-        ]
-        .into(),
-        matrices: [("ActiveImageArea".into(), matrix(vec![7., 5., 248., 186.]))].into(),
-        lists: Default::default(),
-    };
-    let mut settings = Settings::new("Sunlight", "Standard");
-    settings.reconstruction = Some(Default::default());
-    assert!(settings.small_preview_available(&metadata, PreviewQuality::Thumb));
-    metadata.properties.insert("ISO".into(), "400".into());
-    assert!(!settings.small_preview_available(&metadata, PreviewQuality::Thumb));
-    metadata.properties.insert("ISO".into(), "100".into());
-    metadata
-        .matrices
-        .insert("ChromaBlur".into(), matrix(vec![101.]));
-    assert!(settings.small_preview_available(&metadata, PreviewQuality::Thumb));
-    settings.reconstruction = None;
-    assert!(settings.small_preview_available(&metadata, PreviewQuality::Thumb));
-    metadata
-        .properties
-        .insert("RESOLUTION".into(), "MED".into());
-    assert!(!settings.small_preview_available(&metadata, PreviewQuality::Thumb));
-    metadata.properties.remove("RESOLUTION");
-    metadata.width = 1344;
-    assert!(!settings.small_preview_available(&metadata, PreviewQuality::Thumb));
-    metadata.width = 2688;
-    settings.rendering = crate::render::Rendering::Monochrome;
-    assert!(!settings.small_preview_available(&metadata, PreviewQuality::Thumb));
+    let grid = Grid::new(odd, Scale::new(8).unwrap(), Some([19, 13]), 8).unwrap();
+    assert_eq!(grid.grid.logical, [33, 24]);
+    assert_eq!(grid.encode.output[..2], [19, 13]);
 }
 
 #[test]
@@ -154,17 +121,15 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
         settings.reconstruction = Some(Default::default());
         let requested = settings.reconstruction;
         let mut session = RenderSession::new(source.clone());
-        for quality in [PreviewQuality::Draft, PreviewQuality::Thumb] {
-            settings.preview_quality = quality;
-            if !available(&source.metadata, &settings, quality) {
-                continue;
-            }
+        for divisor in [2, 4, 8, 16] {
+            let scale = Scale::new(divisor).unwrap();
+            settings.working_scale = scale;
             supported += 1;
-            eprintln!("Classic {quality:?} original: {}", path.display());
+            eprintln!("Classic {scale:?} original: {}", path.display());
             let full = super::super::prepare::geometry(&source.metadata).unwrap();
             let recipe = super::super::build(
                 &engine,
-                &source,
+                crate::render::recipes::RecipeInput::Original(&source),
                 &settings,
                 &["final"],
                 &mut Profile::default(),
@@ -183,13 +148,16 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
                 .iter()
                 .position(|node| matches!(node.operation, Operation::FixedPointCalibration(_)))
                 .unwrap();
-            let color = recipe
-                .graph
-                .nodes
-                .iter()
-                .position(|node| matches!(node.operation, Operation::FixedPointColor(_)))
-                .unwrap();
-            assert!(calibration < first_pool && first_pool < color);
+            let color = recipe.graph.nodes.iter().position(|node| {
+                matches!(
+                    node.operation,
+                    Operation::FixedPointColor(_) | Operation::RangeReconstruct(_)
+                )
+            });
+            assert!(calibration < first_pool);
+            if let Some(color) = color {
+                assert!(first_pool < color);
+            }
             for (position, node) in recipe.graph.nodes.iter().enumerate() {
                 if matches!(
                     node.operation,
@@ -204,13 +172,15 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
                     );
                 }
                 if let Operation::RootDetail(root) = &node.operation {
-                    assert_eq!(
-                        root.params.shape[..2],
-                        [
-                            (source.metadata.width as u32).div_ceil(quality.divisor()),
-                            (source.metadata.height as u32).div_ceil(quality.divisor())
-                        ]
-                    );
+                    assert!(root.params.shape[..2]
+                        .iter()
+                        .zip(
+                            scale.extent([
+                                source.metadata.width as u32,
+                                source.metadata.height as u32,
+                            ])
+                        )
+                        .all(|(actual, logical)| *actual >= logical));
                 }
             }
 
@@ -235,25 +205,20 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
                 else {
                     panic!("missing photograph")
                 };
-                assert_eq!(
-                    cached.settings.preview_quality,
-                    quality,
-                    "{}",
-                    path.display()
-                );
+                assert_eq!(cached.settings.working_scale, scale, "{}", path.display());
                 assert_eq!(cached.settings.reconstruction, settings.reconstruction);
                 assert_eq!(
                     cached.view().extent,
                     [
-                        full.output[0] / quality.divisor(),
-                        full.output[1] / quality.divisor()
+                        full.output[0].div_ceil(scale.divisor()),
+                        full.output[1].div_ceil(scale.divisor())
                     ]
                 );
                 let bytes = engine.readback_image(cached).unwrap();
                 assert_eq!(
                     bytes,
                     engine.readback_image(fresh).unwrap(),
-                    "{} {quality:?} edit {edit}",
+                    "{} {scale:?} edit {edit}",
                     path.display()
                 );
                 assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
@@ -264,6 +229,6 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
     }
     assert!(
         supported >= 2,
-        "expected validated Classic Draft and Thumb originals"
+        "expected Classic originals at reduced scales"
     );
 }

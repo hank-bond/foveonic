@@ -203,7 +203,10 @@ fn regional_app_response_bakes_exports_and_preserves_reference() {
         for response in [BaseResponse::Natural, BaseResponse::Strong] {
             settings.photographic.base_response = response;
             assert_eq!(
-                settings.fast_preview_available(&source.metadata),
+                settings.working_scale_available(
+                    &source.metadata,
+                    crate::render::Scale::new(2).unwrap()
+                ),
                 rendering == Rendering::Color
             );
             assert!(!settings.regional_preview_available(&source.metadata));

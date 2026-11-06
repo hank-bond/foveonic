@@ -250,8 +250,13 @@ pub(super) fn shade_preprocessing(
             },
             &[rgb],
         )?;
+        let prepare_blue = if metadata.is_quattro_low() {
+            cell_gain::Prepared::pixels
+        } else {
+            cell_gain::Prepared::new
+        };
         let blue = graph.add(
-            Operation::CellGain(Arc::new(cell_gain::Prepared::new(
+            Operation::CellGain(Arc::new(prepare_blue(
                 [metadata.width as u32, metadata.height as u32],
                 compensation_grid(metadata, selected, "B")?,
             )?)),
@@ -275,9 +280,19 @@ pub(super) fn build_reduced_signals(
     use std::sync::Arc;
     let extent = rendering.response.extent();
     // Both histories have already received native selected-WB shading.
+    let inputs = if rendering.response.requires_highlight_mask() {
+        vec![
+            filtered,
+            rendering
+                .recovery_mask
+                .ok_or("missing recovered-channel mask")?,
+        ]
+    } else {
+        vec![filtered]
+    };
     let response = graph.add(
         Operation::RawColorBlend(Arc::new(rendering.response)),
-        &[filtered],
+        &inputs,
     )?;
     let processed = if super::mcc::enabled(metadata) {
         graph.add(

@@ -34,7 +34,7 @@ The parent recipe wires stages and stops once the requested outputs exist. Calib
 - **[stage1.rs](./stage1.rs)** Prepares Quattro and Tiger two-pass noise controls and exposure-guided filtering.
 - **[stage2.rs](./stage2.rs)** Prepares Quattro and Tiger color shading, masked raw response and chroma sectors.
 - **[stage2b.rs](./stage2b.rs)** Prepares Quattro reconstruction, luminance filtering and residual detail on native or preview grids.
-- **[stage3.rs](./stage3.rs)** Prepares local contrast and adaptive sharpening for Full and reduced preview grids.
+- **[stage3.rs](./stage3.rs)** Prepares local contrast and adaptive sharpening on native or working sensor grids.
 - **[tiger.rs](./tiger.rs)** Prepares Tiger's gain-bearing calibration and camera-specific numerical contracts.
 
 <!-- INDEX:END -->

@@ -1,7 +1,10 @@
 //! Uploads bounded linear-light photographic previews without clipping them to sRGB.
 
 use eframe::{egui, egui_wgpu, wgpu};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 #[cfg(test)]
 #[path = "display_image_test.rs"]
@@ -12,6 +15,9 @@ pub(crate) struct Pixels {
     pub rgba: Vec<[u16; 4]>,
 }
 impl Pixels {
+    pub(crate) fn retained_bytes(&self) -> u64 {
+        (self.rgba.capacity() * size_of::<[u16; 4]>()) as u64
+    }
     pub fn from_linear(image: &image::Rgb32FImage, space: foveonic::image::ColorSpace) -> Self {
         let matrix = foveonic::color_space::TiffColorSpace::Srgb.transform(space);
         Self {
@@ -81,6 +87,44 @@ impl Pixels {
             image,
             egui::TextureOptions::LINEAR,
         ))))
+    }
+}
+
+/// Counts pixel payloads owned by bounded workers and their reply queues.
+#[derive(Clone, Default)]
+pub(crate) struct Staging(Arc<StagingState>);
+#[derive(Default)]
+struct StagingState {
+    bytes: AtomicU64,
+    revision: AtomicU64,
+}
+pub(crate) struct StagedBytes {
+    state: Arc<StagingState>,
+    bytes: u64,
+}
+impl Staging {
+    pub(crate) fn track(&self, bytes: u64) -> Option<StagedBytes> {
+        if bytes == 0 {
+            return None;
+        }
+        self.0.bytes.fetch_add(bytes, Ordering::AcqRel);
+        self.0.revision.fetch_add(1, Ordering::AcqRel);
+        Some(StagedBytes {
+            state: self.0.clone(),
+            bytes,
+        })
+    }
+    pub(crate) fn bytes(&self) -> u64 {
+        self.0.bytes.load(Ordering::Acquire)
+    }
+    pub(crate) fn revision(&self) -> u64 {
+        self.0.revision.load(Ordering::Acquire)
+    }
+}
+impl Drop for StagedBytes {
+    fn drop(&mut self) {
+        self.state.bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+        self.state.revision.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -155,6 +199,21 @@ impl Texture {
         );
         Some(Self::from_native(rs, target))
     }
+    pub(crate) fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        let bytes = match &*self.0 {
+            Storage::Native { _texture, .. } => crate::memory::texture_bytes(_texture),
+            #[cfg(test)]
+            Storage::Headless(texture) => {
+                texture
+                    .size()
+                    .into_iter()
+                    .map(|v| v as u64)
+                    .product::<u64>()
+                    * 4
+            }
+        };
+        inventory.texture(self.id(), bytes);
+    }
     pub fn id(&self) -> egui::TextureId {
         match &*self.0 {
             Storage::Native { id, .. } => *id,
@@ -180,5 +239,39 @@ impl From<&Texture> for egui::load::SizedTexture {
 impl From<egui::TextureHandle> for Texture {
     fn from(texture: egui::TextureHandle) -> Self {
         Self(Arc::new(Storage::Headless(texture)))
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+    #[test]
+    fn staging_counts_live_payload_leases_and_releases_dropped_replies() {
+        let staging = Staging::default();
+        let observer = staging.clone();
+        let first = staging.track(1024);
+        let second = staging.track(2048);
+        assert_eq!(observer.bytes(), 3072);
+        let revision = observer.revision();
+        drop(first);
+        assert_eq!(observer.bytes(), 2048);
+        assert!(observer.revision() > revision);
+        drop(second);
+        assert_eq!(observer.bytes(), 0);
+        assert!(staging.track(0).is_none());
+    }
+    #[test]
+    fn shared_preview_texture_is_inventoried_once() {
+        let ctx = egui::Context::default();
+        let texture = Pixels {
+            size: [20, 10],
+            rgba: vec![[0; 4]; 200],
+        }
+        .headless(&ctx);
+        let alias = texture.clone();
+        let mut inventory = crate::memory::Inventory::default();
+        texture.memory_resources(&mut inventory);
+        alias.memory_resources(&mut inventory);
+        assert_eq!(inventory.finish().exclusive_bytes, 20 * 10 * 4);
     }
 }

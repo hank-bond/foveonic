@@ -30,10 +30,13 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[editing-optimization-handoff](./editing-optimization-handoff.md)** Continue native editing measurements with guarded GPU ownership while preserving the deferred mismatch evidence.
 - **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
+- **[full-option-scaled-pipeline](./full-option-scaled-pipeline.md)** Replace recipe-wide scale exceptions with numeric working grids, graph-owned dependency cuts and complete downstream option support.
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
 - **[merrill-banding-width](./merrill-banding-width.md)** Compare scale-separated native row and column correction against the accepted fine-band baseline.
+- **[multi-edit](./multi-edit.md)** Implement independent viewport editing selection, Pointer-only selection routing and shared mixed-value controls before finalizing memory policy.
 - **[perceptual-editing](./perceptual-editing.md)** Evaluate shared colorfulness and an Exposure, spatial HDR and anchored Brightness workflow.
+- **[performance-diagnostics](./performance-diagnostics.md)** Design and review a shared trace foundation and repeatable application scenarios before continuing renderer optimization.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[release-0.7.0](./release-0.7.0.md)** Prepare, verify and publish the reviewed Adaptive, export, crop and workspace release as 0.7.0.

@@ -208,13 +208,14 @@ mod tests {
     fn tiger_fast_blue_repairs_phase_detection_pairs_before_reduction() {
         use crate::{
             profile::Profile,
-            render::{execute::Input, Engine, PreviewQuality, Settings},
+            render::{execute::Input, Engine, Scale, Settings},
             source::Source,
         };
         use std::sync::Arc;
 
         let engine = Engine::new().unwrap();
         let mut source = Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
+        source.origin = Default::default();
         // Isolate phase-detection sites from unrelated factory defects in a flat field.
         Arc::make_mut(&mut source.metadata)
             .matrices
@@ -225,11 +226,11 @@ mod tests {
             cell[2..].fill(flat_code);
         }
         let mut settings = Settings::new("Sunlight", "Standard");
-        settings.preview_quality = PreviewQuality::Fast;
+        settings.working_scale = Scale::new(2).unwrap();
         let blue_for_reduction = |source: &Source| {
             let built = super::super::build(
                 &engine,
-                source,
+                super::super::super::RecipeInput::Original(source),
                 &settings,
                 &["final"],
                 &mut crate::profile::Profile::default(),

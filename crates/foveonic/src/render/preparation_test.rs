@@ -3,6 +3,121 @@
 use super::*;
 use crate::source::{Matrix, MatrixEncoding};
 
+fn blue(stage: ordered_blue_repair::Stage) -> ordered_blue_repair::Prepared {
+    ordered_blue_repair::Prepared::new(
+        [128, 128],
+        (0..1000)
+            .map(|i| [12 + i / 100, 12 + i % 100, 0x03ff])
+            .collect(),
+        0,
+        1.,
+        stage,
+    )
+    .unwrap()
+}
+
+#[test]
+fn repair_preparation_is_lazy_shared_and_separate_for_metadata_and_stage() {
+    let metadata = metadata();
+    let mut cache = Cache::default();
+    let mut builds = 0;
+    for stage in [
+        ordered_blue_repair::Stage::Directional,
+        ordered_blue_repair::Stage::DarkOffsets,
+        ordered_blue_repair::Stage::General,
+    ] {
+        let first = cache
+            .blue_repair(&metadata, stage, || {
+                builds += 1;
+                Ok(blue(stage))
+            })
+            .unwrap();
+        let second = cache
+            .blue_repair(&metadata, stage, || panic!("warm repair was rebuilt"))
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let mut retained = RetainedBytes::default();
+        cache.account(&mut retained);
+        let prepared_bytes = retained.bytes();
+        first.key().account(&mut retained);
+        second.key().account(&mut retained);
+        assert!(
+            retained.bytes() - prepared_bytes < 1024,
+            "keys must share catalogue bytes"
+        );
+    }
+    assert_eq!(builds, 3);
+    assert_eq!(Arc::strong_count(&metadata), 1);
+    let distinct = Arc::new((*metadata).clone());
+    cache
+        .blue_repair(&distinct, ordered_blue_repair::Stage::Directional, || {
+            builds += 1;
+            Ok(blue(ordered_blue_repair::Stage::Directional))
+        })
+        .unwrap();
+    assert_eq!(builds, 4);
+    let chroma = || {
+        chroma_repair::Prepared::new(
+            [64, 64],
+            vec![],
+            0,
+            [1.; 9],
+            [1., 0., 0., 0., 1., 0., 0., 0., 1.],
+            false,
+            false,
+        )
+    };
+    let first = cache.chroma_repair(&metadata, chroma).unwrap();
+    let second = cache
+        .chroma_repair(&metadata, || panic!("warm chroma was rebuilt"))
+        .unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn repair_history_evicts_old_sources_and_retains_a_large_current_bundle() {
+    let mut cache = Cache::default();
+    let sources: Vec<_> = (0..=REPAIR_SOURCES).map(|_| metadata()).collect();
+    let stage = ordered_blue_repair::Stage::Directional;
+    let mut oldest = None;
+    for source in &sources {
+        let prepared = cache
+            .blue_repair(source, stage, || Ok(blue(stage)))
+            .unwrap();
+        oldest.get_or_insert_with(|| Arc::downgrade(&prepared));
+    }
+    assert_eq!(cache.repairs.len(), REPAIR_SOURCES);
+    assert!(oldest.unwrap().upgrade().is_none());
+    let current = sources.last().unwrap();
+    cache.repairs.last_mut().unwrap().bytes = REPAIR_BYTES + 1;
+    let second = cache
+        .blue_repair(current, ordered_blue_repair::Stage::General, || {
+            Ok(blue(ordered_blue_repair::Stage::General))
+        })
+        .unwrap();
+    assert_eq!(
+        cache.repairs.len(),
+        2,
+        "large current stages must not evict one another"
+    );
+    cache
+        .blue_repair(current, stage, || panic!("large current stage was rebuilt"))
+        .unwrap();
+    let weak = Arc::downgrade(&second);
+    drop(second);
+    drop(sources);
+    let other = metadata();
+    cache
+        .blue_repair(&other, stage, || Ok(blue(stage)))
+        .unwrap();
+    assert_eq!(
+        cache.repairs.len(),
+        1,
+        "expired metadata preparations must release their payloads"
+    );
+    assert!(weak.upgrade().is_none());
+}
+
 fn metadata() -> Arc<Metadata> {
     let mut value = Metadata {
         width: 64,
@@ -127,7 +242,11 @@ fn highlight_thresholds_share_clipping_evidence_and_remain_exact() {
     assert!(Arc::ptr_eq(&original, &repeated));
     let changed = cache.highlights(&metadata, Some(-1.)).unwrap();
     assert!(!Arc::ptr_eq(&original, &changed));
-    assert!(original.flags.shares_storage(&changed.flags));
+    assert!(original
+        .flags
+        .as_ref()
+        .unwrap()
+        .shares_storage(changed.flags.as_ref().unwrap()));
     assert_ne!(original.key(), changed.key());
     assert_eq!(
         changed.key(),
@@ -141,7 +260,11 @@ fn highlight_thresholds_share_clipping_evidence_and_remain_exact() {
     ));
     let other = Arc::new((*metadata).clone());
     let changed_source = cache.highlights(&other, Some(-1.)).unwrap();
-    assert!(!changed_source.flags.shares_storage(&changed.flags));
+    assert!(!changed_source
+        .flags
+        .as_ref()
+        .unwrap()
+        .shares_storage(changed.flags.as_ref().unwrap()));
 }
 
 #[test]
@@ -158,7 +281,7 @@ fn preparation_inventory_deduplicates_payloads_retained_by_graph_keys() {
     cache.account(&mut retained);
     let before = retained.bytes();
     curve.account(&mut retained);
-    highlights.flags.account(&mut retained);
+    highlights.flags.as_ref().unwrap().account(&mut retained);
     assert_eq!(retained.bytes(), before);
     curve_key.account(&mut retained);
     highlight_key.account(&mut retained);
@@ -211,7 +334,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
         image::RenderedImage,
         inspection::Content,
         profile::Profile,
-        render::{BaseResponse, PhotographicMethod, PreviewQuality, RenderSession, Settings},
+        render::{BaseResponse, PhotographicMethod, RenderSession, Scale, Settings},
         source::Source,
     };
 
@@ -257,7 +380,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
     let engine = Engine::new().unwrap();
     let mut session = RenderSession::new(first.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
-    settings.preview_quality = PreviewQuality::Thumb;
+    settings.working_scale = Scale::new(8).unwrap();
     settings.reconstruction = Some(Default::default());
     let retained = compare(&engine, &mut session, &settings, "initial");
     let retained_bytes = engine.readback_image(&retained).unwrap();
@@ -323,7 +446,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
         &engine,
         &mut other,
         &Settings {
-            preview_quality: PreviewQuality::Thumb,
+            working_scale: Scale::new(8).unwrap(),
             ..Settings::new("Sunlight", "Standard")
         },
         "second source",
@@ -348,5 +471,45 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
     assert!(
         engine.readback_image(&retained).unwrap() == retained_bytes,
         "retained image"
+    );
+}
+
+#[test]
+fn deferred_highlights_keep_small_keys_and_materialize_only_when_needed() {
+    let metadata = metadata();
+    let description = highlight::deferred(&metadata, Some(-1.)).unwrap();
+    assert!(description.flags.is_none());
+    let mut retained = RetainedBytes::default();
+    description.key().account(&mut retained);
+    assert!(retained.bytes() < 1024);
+    let mut cache = Cache::default();
+    let first = cache
+        .materialize_highlights(&metadata, &description)
+        .unwrap();
+    assert_eq!(
+        bytemuck::bytes_of(&first.params),
+        bytemuck::bytes_of(&description.params)
+    );
+    assert!(first.flags.is_some());
+    assert!(Arc::ptr_eq(
+        &first,
+        &cache
+            .materialize_highlights(&metadata, &description)
+            .unwrap()
+    ));
+    let warm = highlight::deferred(&metadata, Some(-1.)).unwrap();
+    assert_eq!(description.key(), warm.key());
+    assert!(warm.flags.is_none());
+    let changed = highlight::deferred(&metadata, Some(-0.5)).unwrap();
+    assert_ne!(description.key(), changed.key());
+    let next = cache.materialize_highlights(&metadata, &changed).unwrap();
+    assert!(first
+        .flags
+        .as_ref()
+        .unwrap()
+        .shares_storage(next.flags.as_ref().unwrap()));
+    assert_eq!(
+        bytemuck::bytes_of(&next.params),
+        bytemuck::bytes_of(&highlight::prepare(&metadata, Some(-0.5)).unwrap().params)
     );
 }

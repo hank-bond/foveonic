@@ -5,6 +5,47 @@ fn rejects_invalid_log_reconstruction_controls() {
     assert!(Prepared::new([16, 16], [0.; 10]).is_err());
     assert!(Prepared::new([2, 2], [1.; 10]).is_err());
 }
+
+#[test]
+fn log_decay_uses_native_physical_extent_and_ignores_allocation_padding() {
+    use crate::render::{Scale, WorkingGrid};
+    let controls = [0.0011, 0.0019, 0.019, 1., 0.55, 5., 7., 0.7, 3., 1.];
+    let native = Prepared::new([2640, 1760], controls).unwrap();
+    for (index, control) in controls.iter().enumerate().take(3) {
+        let original =
+            1. / (std::f32::consts::LN_2 / (((2640 + 1760) >> 2) as f32 * control)).exp();
+        assert_eq!(native.decay(index).to_bits(), original.to_bits());
+    }
+    for level in 0..32 {
+        let scale = Scale::new(1 << level).unwrap();
+        let grid = WorkingGrid::new([2640, 1760], scale, 8)
+            .unwrap()
+            .with_halo(8)
+            .unwrap();
+        let padded = WorkingGrid::new([2640, 1760], scale, 8)
+            .unwrap()
+            .with_halo(64)
+            .unwrap();
+        let first = native.clone().on_grid(grid).unwrap();
+        let second = native.clone().on_grid(padded).unwrap();
+        assert_eq!(first.extent, grid.extent);
+        for index in 0..3 {
+            assert_eq!(first.decay(index), second.decay(index));
+            assert!(first.decay(index).is_finite());
+            let expected = native.decay(index).powf(scale.divisor() as f32);
+            assert!((first.decay(index) - expected).abs() < 1e-5);
+        }
+        if scale.is_reduced() {
+            assert_ne!(
+                first.key(),
+                second.key(),
+                "allocation geometry stays part of identity"
+            );
+        }
+    }
+    let wrong = WorkingGrid::new([2632, 1760], Scale::new(2).unwrap(), 8).unwrap();
+    assert!(native.on_grid(wrong).is_err());
+}
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_log_reconstruction_matches_bounded_native_output() {

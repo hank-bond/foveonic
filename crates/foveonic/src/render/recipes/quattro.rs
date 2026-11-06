@@ -53,65 +53,53 @@ use crate::{
 // The reference color route leaves optional sparse HP correction disabled.
 // Photographic highlight reconstruction remains a separate operation.
 const COLOR_HP_CORRECTION: bool = false;
-/// Full source metadata remains authoritative for camera calibration.
-/// Working geometry is selected separately for the preview recipe.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum WorkingGrid {
-    #[default]
-    Full,
-    Half,
-    Quarter,
-    Eighth,
+/// Camera component grids share one numerical scale without changing metadata.
+pub(super) use crate::render::Scale as WorkingGrid;
+
+pub(super) fn color_grid(
+    metadata: &crate::source::Metadata,
+    scale: WorkingGrid,
+) -> Result<crate::render::WorkingGrid> {
+    let component_ratio = if metadata.is_quattro_low() { 1 } else { 2 };
+    crate::render::WorkingGrid::new(calibration::color_extent(metadata)?, scale, 4)?
+        .with_halo(sensor_halo(scale) / component_ratio)
 }
-impl WorkingGrid {
-    fn is_half(self) -> bool {
-        self == Self::Half
-    }
-    fn is_small(self) -> bool {
-        matches!(self, Self::Quarter | Self::Eighth)
-    }
-    fn divisor(self) -> u32 {
-        match self {
-            Self::Full => 1,
-            Self::Half => 2,
-            Self::Quarter => 4,
-            Self::Eighth => 8,
-        }
-    }
-    fn extent(self, native: [u32; 2]) -> [u32; 2] {
-        native.map(|v| v / self.divisor())
-    }
+
+fn sensor_halo(scale: WorkingGrid) -> u32 {
+    // The finite camera support composes noise, reconstruction and finishing.
+    // Sixty-four working pixels also cover stencils whose minimum stays fixed.
+    region::CAMERA_SUPPORT.div_ceil(scale.divisor()).max(64)
 }
+pub(super) fn output_grid(
+    metadata: &crate::source::Metadata,
+    scale: WorkingGrid,
+) -> Result<crate::render::WorkingGrid> {
+    if metadata.is_quattro_low() {
+        return color_grid(metadata, scale);
+    }
+    crate::render::WorkingGrid::new([metadata.width as u32, metadata.height as u32], scale, 8)?
+        .with_halo(sensor_halo(scale))
+}
+pub(super) fn pool_noise_energy(native: [u32; 2], scale: WorkingGrid) -> f64 {
+    1. / (f64::from(native[0].min(scale.divisor())) * f64::from(native[1].min(scale.divisor())))
+}
+
+/// The aligned native regional adapter requires doubled component geometry.
 pub(in crate::render) fn fast_available(metadata: &crate::source::Metadata) -> bool {
     !metadata.is_quattro_low()
         && (calibration::is_ordinary_dp(metadata) || calibration::is_interchangeable(metadata))
 }
 
-pub(in crate::render) fn small_preview_available(
-    metadata: &crate::source::Metadata,
-    quality: crate::render::PreviewQuality,
-) -> bool {
-    let divisor = quality.divisor();
-    matches!(
-        quality,
-        crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
-    ) && (calibration::is_ordinary_dp(metadata) || calibration::is_ordinary_sd(metadata))
-        && !metadata.is_quattro_low()
-        && [metadata.width, metadata.height]
-            .iter()
-            .all(|v| *v >= (divisor * 32) as usize && v.is_multiple_of(divisor as usize))
-}
-
 pub(super) fn build(
     engine: &Engine,
-    source: &Source,
+    source: super::RecipeInput<'_>,
     settings: &Settings,
     names: &[&str],
     profile: &mut crate::profile::Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
     let mut regional = settings.clone();
-    let crop = region::expand_shared_edits(&source.metadata, &mut regional, names)?;
+    let crop = region::expand_shared_edits(source.metadata(), &mut regional, names)?;
     let mut recipe = compose(engine, source, &regional, names, profile, execution, false)?;
     region::crop_shared_edits(&mut recipe, crop)?;
     Ok(recipe)
@@ -126,7 +114,7 @@ pub(super) fn build_dng(
 ) -> Result<BuiltRecipe> {
     compose(
         engine,
-        source,
+        super::RecipeInput::Original(source),
         settings,
         &["final"],
         profile,
@@ -137,13 +125,14 @@ pub(super) fn build_dng(
 
 fn compose(
     engine: &Engine,
-    source: &Source,
+    source: super::RecipeInput<'_>,
     settings: &Settings,
     names: &[&str],
     profile: &mut crate::profile::Profile,
     execution: &mut Execution<'_>,
     dng: bool,
 ) -> Result<BuiltRecipe> {
+    let metadata = source.metadata();
     let mut selected = settings.clone();
     if !settings.processing_sections.corrections {
         selected.highlight_amount = Some(0.);
@@ -168,46 +157,34 @@ fn compose(
         selected.reconstruction = Some(controls);
     }
     let settings = &selected;
-    let low = source.metadata.is_quattro_low();
+    let low = metadata.is_quattro_low();
     let storage = if low {
         SourceStorage::InterleavedRgb
     } else {
         SourceStorage::PackedRgbBluePhases
     };
-    if source.storage() != storage {
+    if source
+        .original()
+        .is_ok_and(|source| source.storage() != storage)
+    {
         return Err("Quattro sensor storage does not match its resolution".into());
     }
-    let small = small_preview_available(&source.metadata, settings.preview_quality)
-        && !dng
-        && !settings.is_monochrome()
-        && (names == ["final"] || names == ["linear.base"])
-        && settings.preview_region.is_none()
-        && settings.output_size.is_none();
-    let fast = settings.preview_quality == crate::render::PreviewQuality::Fast
-        && !dng
-        && !settings.is_monochrome()
-        && (names == ["final"] || names == ["linear.base"])
-        && settings.preview_region.is_none()
-        && fast_available(&source.metadata);
-    let grid = if small {
-        if settings.preview_quality == crate::render::PreviewQuality::Draft {
-            WorkingGrid::Quarter
-        } else {
-            WorkingGrid::Eighth
-        }
-    } else if fast {
-        WorkingGrid::Half
+    let grid = if dng {
+        WorkingGrid::NATIVE
     } else {
-        WorkingGrid::Full
+        settings.working_scale
     };
-    let available = outputs(Some(&source.metadata));
+    let reduced = grid.is_reduced();
+    let color_geometry = color_grid(metadata, grid)?;
+    let output_geometry = output_grid(metadata, grid)?;
+    let available = outputs(Some(metadata));
     if names.iter().any(|name| {
         !super::linear_edits::requested_output(name)
             && !available.iter().any(|output| output.name == *name)
     }) {
         return Err("requested output is unavailable for this Quattro input".into());
     }
-    let [width, height] = source.storage_extent().map(|v| v as u32);
+    let [width, height] = calibration::color_extent(metadata)?;
     let mut graph = Graph::default();
     let input = graph.add(
         if low {
@@ -217,9 +194,8 @@ fn compose(
         },
         &[],
     )?;
-    // Fast skips general high-blue repairs. A later Full request needs the original
-    // cells, even when its reconstruction inputs differ from the Fast graph.
-    if names == ["final"] && fast_available(&source.metadata) && !small {
+    // Native regional requests can reuse the original sensor cells.
+    if names == ["final"] && fast_available(metadata) && !reduced {
         graph.retain_for_session(input);
     }
     let raw_params = phase_extraction::Params::new(width, height)?;
@@ -231,13 +207,28 @@ fn compose(
         }),
         &[input],
     )?;
+    let sensor_view = |extent: [u32; 2]| crate::image::View {
+        crop: [0, 0, extent[0], extent[1]],
+        rotation: metadata.rotation,
+        extent: if matches!(metadata.rotation, 90 | 270) {
+            [extent[1], extent[0]]
+        } else {
+            extent
+        },
+    };
+    let color_view = sensor_view([width, height]);
+    let blue_view = sensor_view([metadata.width as u32, metadata.height as u32]);
+    graph.set_view(raw, color_view);
+    let raw_blue = graph.named_output(raw, "sensor.blue")?;
+    graph.set_view(raw_blue, blue_view);
     let factor = if low { 1 } else { 2 };
     let mut params = EncodeParams {
         mapping: [[0.; 4]; 2],
-        source: [width * factor, height * factor, source.metadata.rotation, 0],
+        source: [width * factor, height * factor, metadata.rotation, 0],
         crop: [0, 0, width * factor, height * factor],
         output: [width * factor, height * factor, 0, 0],
     };
+    graph.set_view(input, super::camera_view(params));
     macro_rules! finish {
         ($output:expr) => {
             execution.check()?;
@@ -254,7 +245,7 @@ fn compose(
     }
     finish!(raw);
 
-    let calibrated_input = if let Some(prepared) = calibration::column_gain(&source.metadata)? {
+    let calibrated_input = if let Some(prepared) = calibration::column_gain(metadata)? {
         graph.add(
             Operation::ColumnGain(std::sync::Arc::new(prepared)),
             &[input],
@@ -263,19 +254,22 @@ fn compose(
         input
     };
     let extracted = graph.add(
-        Operation::PhaseExtraction(calibration::extraction(&source.metadata)?),
+        Operation::PhaseExtraction(calibration::extraction(metadata)?),
         &[calibrated_input],
     )?;
+    graph.set_view(extracted, color_view);
+    let extracted_blue = graph.named_output(extracted, "extraction.blue")?;
+    graph.set_view(extracted_blue, blue_view);
     finish!(extracted);
 
-    let is_tiger = tiger::supported(&source.metadata);
-    let is_interchangeable = calibration::is_interchangeable(&source.metadata);
+    let is_tiger = tiger::supported(metadata);
+    let is_interchangeable = calibration::is_interchangeable(metadata);
     let (sparse, sparse_blue) = if is_interchangeable {
         let rgb = graph.add(
             Operation::Fppd(std::sync::Arc::new(if is_tiger {
-                tiger::chroma(&source.metadata)?
+                tiger::chroma(metadata)?
             } else {
-                sd::chroma(&source.metadata)?
+                sd::chroma(metadata)?
             })),
             &[extracted],
         )?;
@@ -286,8 +280,7 @@ fn compose(
         let (refreshed, corrected_blue) = if low {
             (extracted, blue)
         } else {
-            let gain =
-                calibration::phase_gain(&source.metadata, engine.calibration_resources.as_deref())?;
+            let gain = calibration::phase_gain(metadata, engine.calibration_resources.as_deref())?;
             let corrected_blue =
                 graph.add(Operation::PhaseGain(std::sync::Arc::new(gain)), &[blue])?;
             finish!(corrected_blue);
@@ -302,25 +295,29 @@ fn compose(
             (refreshed, corrected_blue)
         };
 
-        let prepared = hlp::prepare(&source.metadata)?;
+        let prepared = hlp::prepare(metadata)?;
         let calibrated = graph.add(
             Operation::HlpCalibration(std::sync::Arc::new(prepared)),
             &[refreshed, corrected_blue],
         )?;
-        finish!(calibrated);
         let blue = graph.named_output(calibrated, "hlp.blue")?;
-        let prepared = repair::prepare(&source.metadata, COLOR_HP_CORRECTION)?;
+        graph.set_view(blue, blue_view);
+        finish!(calibrated);
+        let prepared = repair::prepare(metadata, COLOR_HP_CORRECTION)?;
         let sparse = graph.add(
             Operation::SparseRepair(std::sync::Arc::new(prepared)),
             &[calibrated, blue],
         )?;
+        let blue = graph.named_output(sparse, "hlp-repair.blue")?;
+        graph.set_view(blue, blue_view);
         finish!(sparse);
-        (sparse, graph.named_output(sparse, "hlp-repair.blue")?)
+        (sparse, blue)
     };
     // Factory chroma repair receives a separate initially empty mask. Sparse
     // repair writes another surface. Sharing those flags skips valid repairs.
     let mask = graph.add(Operation::EmptyDefectFlags([width, height]), &[])?;
-    let prepared = std::sync::Arc::new(defects::prepare(&source.metadata)?);
+    graph.set_view(mask, color_view);
+    let prepared = defects::prepare(engine, metadata, profile)?;
     let single = graph.add(
         Operation::ChromaRepair {
             prepared: prepared.clone(),
@@ -338,16 +335,12 @@ fn compose(
     )?;
     finish!(general);
     let despeckled = graph.add(
-        Operation::RgbDespeckle(std::sync::Arc::new(defects::prepare_despeckle(
-            &source.metadata,
-        )?)),
+        Operation::RgbDespeckle(std::sync::Arc::new(defects::prepare_despeckle(metadata)?)),
         &[general, mask],
     )?;
     finish!(despeckled);
     let chroma = graph.add(
-        Operation::ChromaClusters(std::sync::Arc::new(defects::prepare_clusters(
-            &source.metadata,
-        )?)),
+        Operation::ChromaClusters(std::sync::Arc::new(defects::prepare_clusters(metadata)?)),
         &[despeckled, mask],
     )?;
     finish!(chroma);
@@ -359,9 +352,9 @@ fn compose(
     let phase_corrected_blue = if is_interchangeable && !low {
         let corrected = graph.add(
             Operation::Fppd(std::sync::Arc::new(if is_tiger {
-                tiger::luma(&source.metadata)?
+                tiger::luma(metadata)?
             } else {
-                sd::luma(&source.metadata)?
+                sd::luma(metadata)?
             })),
             &[sparse_blue],
         )?;
@@ -370,11 +363,11 @@ fn compose(
     } else {
         sparse_blue
     };
-    let mismatch = if fast || low {
+    let mismatch = if low {
         phase_corrected_blue
     } else {
         let blue = if is_interchangeable {
-            if let Some(prepared) = sd::pattern(&source.metadata)? {
+            if let Some(prepared) = sd::pattern(metadata)? {
                 let corrected = graph.add(
                     Operation::BluePattern(std::sync::Arc::new(prepared)),
                     &[phase_corrected_blue],
@@ -388,42 +381,48 @@ fn compose(
             phase_corrected_blue
         };
         let directional = graph.add(
-            Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
-                &source.metadata,
+            Operation::OrderedBlueRepair(luma_repair::prepare_records(
+                engine,
+                metadata,
                 Repair::Directional,
-            )?)),
+                profile,
+            )?),
             &[blue],
         )?;
         finish!(directional);
         let directional_mask = graph.named_output(directional, "luma-repair.defects")?;
         // The selected reference SuperBlue worker has no reachable pixel writes.
         let offsets = graph.add(
-            Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
-                &source.metadata,
+            Operation::OrderedBlueRepair(luma_repair::prepare_records(
+                engine,
+                metadata,
                 Repair::DarkOffsets,
-            )?)),
+                profile,
+            )?),
             &[directional],
         )?;
         finish!(offsets);
         let dark_filtered = graph.add(
             Operation::BlueDespeckle(std::sync::Arc::new(luma_repair::prepare_despeckle(
-                &source.metadata,
+                metadata,
                 Filter::DarkPairs,
             )?)),
             &[offsets],
         )?;
         finish!(dark_filtered);
         let repaired = graph.add(
-            Operation::OrderedBlueRepair(std::sync::Arc::new(luma_repair::prepare_records(
-                &source.metadata,
+            Operation::OrderedBlueRepair(luma_repair::prepare_records(
+                engine,
+                metadata,
                 Repair::General,
-            )?)),
+                profile,
+            )?),
             &[dark_filtered, directional_mask],
         )?;
         finish!(repaired);
         let filtered = graph.add(
             Operation::BlueDespeckle(std::sync::Arc::new(luma_repair::prepare_despeckle(
-                &source.metadata,
+                metadata,
                 Filter::General,
             )?)),
             &[repaired],
@@ -431,16 +430,14 @@ fn compose(
         finish!(filtered);
         let clusters = graph.add(
             Operation::LumaClusters(std::sync::Arc::new(luma_repair::prepare_clusters(
-                &source.metadata,
+                metadata,
             )?)),
             &[filtered],
         )?;
         finish!(clusters);
-        if !is_tiger && (calibration::normalization(&source.metadata)? - 1.).abs() < f32::EPSILON {
+        if !is_tiger && (calibration::normalization(metadata)? - 1.).abs() < f32::EPSILON {
             graph.add(
-                Operation::BlueMismatch(std::sync::Arc::new(highlights::prepare_blue(
-                    &source.metadata,
-                )?)),
+                Operation::BlueMismatch(std::sync::Arc::new(highlights::prepare_blue(metadata)?)),
                 &[clusters],
             )?
         } else {
@@ -450,7 +447,7 @@ fn compose(
     finish!(mismatch);
     // The DP1 optical correction belongs after factory repairs and before
     // highlight restoration. Other DP recipes keep the same RGB history.
-    let chroma = if let Some(prepared) = optical::prepare(&source.metadata)? {
+    let chroma = if let Some(prepared) = optical::prepare(metadata)? {
         graph.add(
             Operation::PurpleFringe(std::sync::Arc::new(prepared)),
             &[chroma],
@@ -461,7 +458,7 @@ fn compose(
     finish!(chroma);
     let restored = graph.add(
         Operation::HighlightRestoration(std::sync::Arc::new(highlights::prepare_restoration(
-            &source.metadata,
+            metadata,
         )?)),
         &[chroma],
     )?;
@@ -486,28 +483,29 @@ fn compose(
     let color_mode = if settings.is_monochrome() || dng {
         "Standard"
     } else if settings.color_mode.is_empty() {
-        recorded_color_mode = default_color_mode(&source.metadata)?;
+        recorded_color_mode = default_color_mode(metadata)?;
         &recorded_color_mode
     } else {
         &settings.color_mode
     };
     let mut controls = match settings.reconstruction {
         Some(controls) => controls,
-        None => captured_noise_controls(&source.metadata)?,
+        None => captured_noise_controls(metadata)?,
     };
     if settings.is_monochrome() {
         controls.luminance = settings.monochrome.noise;
         controls.detail = settings.monochrome_smoothness.unwrap_or(
-            source
-                .metadata
+            metadata
                 .capture_adjustments()?
                 .mono_smoothness
                 .unwrap_or(0.5),
         );
     }
-    let small_white_balance = if small {
-        Some(if settings.white_balance.is_empty() {
-            default_white_balance(&source.metadata)?
+    let small_white_balance = if reduced {
+        Some(if settings.is_monochrome() {
+            "Auto".into()
+        } else if settings.white_balance.is_empty() {
+            default_white_balance(metadata)?
         } else {
             settings.white_balance.clone()
         })
@@ -515,56 +513,92 @@ fn compose(
         None
     };
     let native_highlight_mask = graph.named_output(restored, "highlight-restoration.mask")?;
-    let (noise_input, mismatch, highlight_mask) = if small {
+    let native_recovery_mask = if is_tiger {
+        Some(graph.named_output(restored, "highlight-restoration.recovery-flags")?)
+    } else {
+        None
+    };
+    let (noise_input, mismatch, highlight_mask, recovery_mask) = if reduced {
         use crate::nodes::sensor::pool::{Prepared, Signal};
         let (shaded, blue) = stage2::shade_preprocessing(
             &mut graph,
-            &source.metadata,
+            metadata,
             restored,
             mismatch,
-            small_white_balance.as_deref().expect("small-grid balance"),
+            small_white_balance.as_deref().expect("reduced balance"),
         )?;
-        let color_extent = calibration::color_extent(&source.metadata)?;
-        let divisor = grid.divisor() / 2;
-        let rgb = graph.add_scoped(
-            Operation::PoolSignal(Prepared::new(color_extent, divisor, Signal::Rgb)?),
-            &[shaded],
-            "preview-rgb",
+        let mut pool =
+            |input, native, geometry: crate::render::WorkingGrid, signal, scope| -> Result<usize> {
+                let prepared = Prepared::new(native, grid.divisor(), signal)?
+                    .with_extent(geometry.extent)?
+                    .with_origin(geometry.origin)
+                    .with_working_scale(grid);
+                let output = graph.add_scoped(Operation::PoolSignal(prepared), &[input], scope)?;
+                graph.retain_for_session(output);
+                graph.retain_for_seal(output);
+                Ok(output)
+            };
+        let rgb = pool(
+            shaded,
+            [width, height],
+            color_geometry,
+            Signal::Rgb,
+            "sensor-rgb-grid",
         )?;
-        let blue = graph.add_scoped(
-            Operation::PoolSignal(Prepared::new(
-                [source.metadata.width as u32, source.metadata.height as u32],
-                divisor,
-                Signal::Blue,
-            )?),
-            &[blue],
-            "preview-blue",
+        let blue_geometry = if low { color_geometry } else { output_geometry };
+        let blue = pool(
+            blue,
+            [metadata.width as u32, metadata.height as u32],
+            blue_geometry,
+            Signal::Blue,
+            "sensor-blue-grid",
         )?;
-        let mask = graph.add_scoped(
-            Operation::PoolSignal(Prepared::new(color_extent, divisor, Signal::Mask)?),
-            &[native_highlight_mask],
-            "preview-highlight",
+        let mask = pool(
+            native_highlight_mask,
+            [width, height],
+            color_geometry,
+            Signal::Mask,
+            "sensor-highlight-grid",
         )?;
-        // These corrected small histories are the restart frontier for the first
-        // downstream edit. Native cells remain available through the source.
-        for input in [rgb, blue, mask] {
-            graph.retain_for_session(input);
-        }
-        (rgb, blue, mask)
+        let flags = native_recovery_mask
+            .map(|flags| {
+                pool(
+                    flags,
+                    [width, height],
+                    color_geometry,
+                    Signal::Flags,
+                    "sensor-recovery-grid",
+                )
+            })
+            .transpose()?;
+        (rgb, blue, mask, flags)
     } else {
-        (restored, mismatch, native_highlight_mask)
+        for input in [restored, mismatch, native_highlight_mask]
+            .into_iter()
+            .chain(native_recovery_mask)
+        {
+            graph.retain_for_seal(input);
+        }
+        (
+            restored,
+            mismatch,
+            native_highlight_mask,
+            native_recovery_mask,
+        )
     };
     let noise = if settings.is_monochrome() {
         graph.add(
-            Operation::ChannelNoise(std::sync::Arc::new(monochrome::prepare_stage1(
-                &source.metadata,
-            )?)),
-            &[restored],
+            Operation::ChannelNoise(std::sync::Arc::new(if grid.is_native() {
+                monochrome::prepare_stage1(metadata)?
+            } else {
+                monochrome::prepare_stage1_on_grid(metadata, grid)?
+            })),
+            &[noise_input],
         )?
     } else {
         graph.add(
             Operation::TwoScaleNoise(std::sync::Arc::new(stage1::prepare_filter_on_grid(
-                &source.metadata,
+                metadata,
                 controls.chroma as u8,
                 grid,
             )?)),
@@ -576,7 +610,7 @@ fn compose(
     let white_balance = if settings.is_monochrome() {
         "Auto"
     } else if settings.white_balance.is_empty() {
-        recorded_white_balance = default_white_balance(&source.metadata)?;
+        recorded_white_balance = default_white_balance(metadata)?;
         &recorded_white_balance
     } else {
         &settings.white_balance
@@ -584,41 +618,28 @@ fn compose(
 
     let calibrated = graph.named_output(noise, "noise.source-after")?;
     let highlight_amount = settings.highlight_amount.unwrap_or(
-        source
-            .metadata
+        metadata
             .capture_adjustments()?
             .highlight_correction
             .unwrap_or(1.),
     );
     let response = if settings.is_monochrome() {
-        monochrome::prepare_stage2(&source.metadata, highlight_amount, color_mode)?
+        monochrome::prepare_stage2(metadata, highlight_amount, color_mode)?
     } else {
-        stage2::prepare(
-            &source.metadata,
-            highlight_amount,
-            white_balance,
-            color_mode,
-        )?
+        stage2::prepare(metadata, highlight_amount, white_balance, color_mode)?
     };
-    let response = if small {
-        response.with_extent(
-            grid.extent([source.metadata.width as u32, source.metadata.height as u32]),
-        )?
+    let response = if reduced {
+        response.with_extent(color_geometry.extent)?
     } else {
         response
     };
-    let recovery_mask = if is_tiger {
-        Some(graph.named_output(restored, "highlight-restoration.recovery-flags")?)
-    } else {
-        None
-    };
-    let signals = (if small {
+    let signals = (if reduced {
         stage2::build_reduced_signals
     } else {
         stage2::build_signals
     })(
         &mut graph,
-        &source.metadata,
+        metadata,
         noise,
         calibrated,
         mismatch,
@@ -630,28 +651,10 @@ fn compose(
         },
     )?;
     finish!(signals.processed);
-    if fast && is_tiger {
-        // Smart detail shares these whole-frame color histories with Fast.
-        // Retain both masks so a changed WB or recovery control can reuse them too.
-        // Admission remains subject to the existing active-photo cache budget.
-        for input in [
-            signals.filtered,
-            signals.calibrated,
-            signals.processed,
-            highlight_mask,
-        ]
-        .into_iter()
-        .chain(recovery_mask)
-        {
-            graph.retain_for_session(input);
-        }
-    }
-    params = crate::nodes::sensor::calibration::encode(
-        &source.metadata,
-        crate::color_space::ColorSpace::Srgb,
-    )?;
+    params =
+        crate::nodes::sensor::calibration::encode(metadata, crate::color_space::ColorSpace::Srgb)?;
     let physical_extent = [params.source[0], params.source[1]];
-    params.source[..2].copy_from_slice(&grid.extent(physical_extent));
+    params.source[..2].copy_from_slice(&output_geometry.extent);
     let output_extent = grid.extent([params.output[0], params.output[1]]);
     params.output[..2].copy_from_slice(&output_extent);
     if let Some(size) = settings.processing_output_size() {
@@ -662,16 +665,14 @@ fn compose(
         .filter(|_| {
             !dng && !settings.is_monochrome()
                 && (names == ["final"] || names == ["linear.base"])
-                && fast_available(&source.metadata)
+                && fast_available(metadata)
         })
-        .map(|rect| {
-            region::Prepared::new(&source.metadata, [params.output[0], params.output[1]], rect)
-        })
+        .map(|rect| region::Prepared::new(metadata, [params.output[0], params.output[1]], rect))
         .transpose()?;
     let (signals, highlight_mask) = if let Some(region) = &region {
         params.source[..2].copy_from_slice(&region.extent());
         params.output[..2].copy_from_slice(&region.crop.extent());
-        region.build(&mut graph, &source.metadata, &signals, highlight_mask)?
+        region.build(&mut graph, metadata, &signals, highlight_mask)?
     } else {
         (signals, highlight_mask)
     };
@@ -684,16 +685,26 @@ fn compose(
         grid,
     };
     let reconstruction = if settings.is_monochrome() {
-        monochrome::prepare_stage2b(&source.metadata, reconstruction_controls, color_mode)?
+        monochrome::prepare_stage2b(metadata, reconstruction_controls, color_mode)?
     } else {
-        stage2b::prepare(&source.metadata, reconstruction_controls, color_mode)?
+        stage2b::prepare(metadata, reconstruction_controls, color_mode)?
     };
     let reconstruction = if let Some(region) = &region {
         reconstruction.with_extent(region.extent())?
     } else {
         reconstruction
     };
-    let reconstructed = stage2b::build(&mut graph, &signals, highlight_mask, reconstruction)?;
+    let mut reconstruction_view = super::camera_view(params);
+    if reduced {
+        reconstruction_view.crop = output_geometry.bounds(reconstruction_view.crop);
+    }
+    let reconstructed = stage2b::build(
+        &mut graph,
+        &signals,
+        highlight_mask,
+        reconstruction,
+        reconstruction_view,
+    )?;
     finish!(reconstructed);
     let detail = graph.named_output(reconstructed, "reconstruction.detail")?;
     let spatial_input = if settings.is_monochrome() {
@@ -715,16 +726,18 @@ fn compose(
         reconstructed
     };
     let spatial_controls = if settings.is_monochrome() {
-        monochrome::stage3_controls(
+        let mut controls = monochrome::stage3_controls(
             usize::from(residual_level),
             usize::from(residual_level),
-            settings.effective_sharpen_amount(&source.metadata)?,
-        )?
+            settings.effective_sharpen_amount(metadata)?,
+        )?;
+        controls.grid = grid;
+        controls
     } else {
         stage3::Controls {
             contrast_level: usize::from(residual_level),
             sharpen_level: usize::from(residual_level),
-            sharpen_base: settings.effective_sharpen_amount(&source.metadata)?,
+            sharpen_base: settings.effective_sharpen_amount(metadata)?,
             lowest_band_factor: None,
             preserve_dark_detail: true,
             grid,
@@ -736,7 +749,7 @@ fn compose(
     {
         stage3::build_contrast(
             &mut graph,
-            &source.metadata,
+            metadata,
             spatial_input,
             color_mode,
             spatial_controls,
@@ -744,7 +757,7 @@ fn compose(
     } else if settings.is_monochrome() {
         monochrome::build_stage3(
             &mut graph,
-            &source.metadata,
+            metadata,
             spatial_input,
             detail,
             color_mode,
@@ -753,7 +766,7 @@ fn compose(
     } else {
         stage3::build(
             &mut graph,
-            &source.metadata,
+            metadata,
             spatial_input,
             detail,
             color_mode,
@@ -764,17 +777,11 @@ fn compose(
     // The same sharpening base selects the proportional table and the optional
     // per-channel amount. Residual restoration remains a separate control.
     let amount = stage3::color_sharpen_amount(
-        &source.metadata,
+        metadata,
         color_mode,
-        settings.effective_sharpen_amount(&source.metadata)?,
+        settings.effective_sharpen_amount(metadata)?,
     )?;
-    let amount = if small {
-        amount / (grid.divisor() as f32).sqrt()
-    } else if fast {
-        amount * stage3::HALF_GRID_SHARPEN_SCALE
-    } else {
-        amount
-    };
+    let amount = amount * grid.factor().sqrt();
     let sharpened = if amount > 0.
         && !settings.is_monochrome()
         && settings.photographic.sharpening.method == crate::render::PhotographicMethod::Reference
@@ -782,7 +789,7 @@ fn compose(
         graph.add(
             Operation::ColorSharpen(crate::nodes::finish::color_sharpen::Params::new(
                 [params.source[0], params.source[1]],
-                (source.metadata.scalar("CaptureISO")? / 100.) as f32,
+                (metadata.scalar("CaptureISO")? / 100.) as f32,
                 amount,
             )?),
             &[sharpened],
@@ -805,10 +812,7 @@ fn compose(
     } else {
         sharpened
     };
-    let crop = source
-        .metadata
-        .fixed::<4>("ActiveImageArea")?
-        .map(|v| v as u32);
+    let crop = metadata.fixed::<4>("ActiveImageArea")?.map(|v| v as u32);
     // This crop's raw right/bottom are exclusive in the reference operation.
     // Nominal output dimensions still include that final recorded pixel.
     let crop = if let Some(region) = region {
@@ -818,13 +822,11 @@ fn compose(
             physical_extent,
             crop,
             [params.output[0], params.output[1]],
-            source.metadata.rotation,
+            metadata.rotation,
             true,
         )?;
-        if grid.is_small() {
-            crop.on_grid(grid.divisor())?
-        } else if grid.is_half() {
-            crop.on_half_grid()?
+        if reduced {
+            crop.on_working_grid(grid, output_geometry.extent, output_geometry.origin)?
         } else {
             crop
         }
@@ -889,7 +891,7 @@ fn compose(
                 appearance::prepare_monochrome(f64::from(settings.exposure), settings.tone)
             } else {
                 appearance::prepare(
-                    &source.metadata,
+                    metadata,
                     color_mode,
                     f64::from(settings.exposure),
                     settings.tone,
@@ -904,7 +906,7 @@ fn compose(
             } else {
                 Basis::new(
                     space,
-                    calibration::color_matrix(&source.metadata, white_balance, color_mode)?,
+                    calibration::color_matrix(metadata, white_balance, color_mode)?,
                     [0.299, 0.587, 0.114],
                 )?
             })
@@ -915,7 +917,7 @@ fn compose(
             let response = if settings.is_monochrome() {
                 appearance::prepare_monochrome(0., Default::default())?
             } else {
-                appearance::prepare(&source.metadata, color_mode, 0., Default::default())?
+                appearance::prepare(metadata, color_mode, 0., Default::default())?
             };
             let curve =
                 super::linear_edits::response_curve(|code| response.evaluate_codes([code; 3])[1]);
@@ -933,13 +935,22 @@ fn compose(
         let context = super::linear_edits::Context {
             dehaze_basis,
             adaptive,
+            analysis_grid: crate::render::AnalysisGrid::new(
+                grid,
+                if settings.is_monochrome() {
+                    WorkingGrid::NATIVE
+                } else {
+                    WorkingGrid::new(2)?
+                },
+                WorkingGrid::new(2)?,
+            ),
             space,
             white: appearance::LINEAR_CODE_WHITE as f32,
             guide_white: appearance::LINEAR_CODE_WHITE as f32,
             scale: if settings.preview_region.is_some() {
                 1.
             } else {
-                let native = crate::nodes::sensor::calibration::encode(&source.metadata, space)?;
+                let native = crate::nodes::sensor::calibration::encode(metadata, space)?;
                 (params.output[0] as f32 / native.output[0] as f32)
                     .min(params.output[1] as f32 / native.output[1] as f32)
             },
@@ -947,7 +958,7 @@ fn compose(
         let context_white = context.white;
         super::linear_edits::build(
             engine,
-            super::RecipeInput::Original(source),
+            source,
             settings,
             &mut recipe,
             names,
@@ -996,7 +1007,7 @@ fn compose(
         appearance::prepare_monochrome(f64::from(settings.exposure), settings.tone)?
     } else {
         appearance::prepare(
-            &source.metadata,
+            metadata,
             color_mode,
             f64::from(settings.exposure),
             settings.tone,

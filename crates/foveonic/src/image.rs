@@ -128,7 +128,7 @@ impl Description {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct View {
     /// Half-open active rectangle in physical storage coordinates.
     pub crop: [u32; 4],

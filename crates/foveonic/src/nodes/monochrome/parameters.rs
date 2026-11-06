@@ -16,7 +16,8 @@ pub(crate) struct Parameters {
     pub mix: [f32; 4],    // three WB-normalized amounts, processing gain
     pub filter: [f32; 4], // directional divisor, histogram divisor, column gate, speckle gate
     pub area: [u32; 4],
-    pub detail: [f32; 4], // estimated ISO, signed-detail magnitude limit
+    pub detail: [f32; 4], // estimated ISO, signed-detail magnitude limit, working scale, noise variance ratio
+    pub spatial: [u32; 4], // histogram radius, column block height, reserved
 }
 
 pub(crate) struct Prepared {
@@ -36,11 +37,6 @@ impl Prepared {
     pub(crate) fn new(metadata: &Metadata, wb: &str, controls: Controls) -> Result<Self> {
         controls.validate()?;
         let iso = noise::monochrome_iso(metadata, wb)?;
-        if iso > 6400. {
-            return Err(
-                "monochrome column correction does not yet support estimated ISO above 6400".into(),
-            );
-        }
         let width = metadata.width as u32;
         let height = metadata.height as u32;
         if width < 41 || height < 41 || !height.is_multiple_of(8) {
@@ -102,20 +98,44 @@ impl Prepared {
                     speckle,
                 ],
                 area,
-                detail: [iso, magnitude, 0., 0.],
+                detail: [iso, magnitude, 1., 1.],
+                spatial: [9, 40, 0, 0],
             },
         })
+    }
+    pub(crate) fn on_grid(mut self, grid: Option<crate::render::WorkingGrid>) -> Result<Self> {
+        if let Some(grid) = grid.filter(|grid| grid.scale.is_reduced()) {
+            if grid.native != [self.params.source[0], self.params.source[1]] {
+                return Err("monochrome grid does not match its native parameters".into());
+            }
+            self.params.source[..2].copy_from_slice(&grid.extent);
+            self.params.source[2] =
+                (self.params.source[2].div_ceil(grid.scale.divisor()) | 1).max(3);
+            self.params.source[3] = 1;
+            self.params.area = grid.filter_bounds(self.params.area);
+            self.params.spatial[0] = 9_u32.div_ceil(grid.scale.divisor()).max(1);
+            self.params.spatial[1] = 40_u32.div_ceil(grid.scale.divisor()).max(1);
+            self.params.detail[2] = grid.scale.factor();
+            let noise_std =
+                crate::nodes::color::pyramid_resample::independent_noise_std(grid.scale);
+            self.params.detail[3] = noise_std * noise_std;
+        }
+        Ok(self)
     }
     pub(crate) fn key(&self, stage: Stage) -> Key {
         let p = &self.params;
         let key = Key::pod(&[p.source[0], p.source[1]]);
         match stage {
             Stage::Mix => key.slice(&p.mix[..3]).with(&p.area),
-            Stage::Directional => key.with(&p.source[2]).with(&p.filter[0]),
-            Stage::Column => key.with(&p.source).with(&p.filter[2]),
-            Stage::Histogram => key.with(&p.source[3]).with(&p.filter[1]),
+            Stage::Directional => key.with(&p.source[2]).with(&p.filter[0]).with(&p.detail[3]),
+            Stage::Column => key.with(&p.source).with(&p.filter[2]).with(&p.spatial[1]),
+            Stage::Histogram => key
+                .with(&p.source[3])
+                .with(&p.filter[1])
+                .with(&p.spatial[0])
+                .with(&p.detail[3]),
             Stage::Despeckle => key.with(&p.filter[3]),
-            Stage::Signal => key.with(&p.mix[3]).with(&p.detail[1]),
+            Stage::Signal => key.with(&p.mix[3]).slice(&p.detail[1..3]),
             Stage::Expand => key.with(&p.mix[3]),
         }
     }
@@ -127,10 +147,14 @@ impl Prepared {
         let mut weights = Vec::new();
         for bin in 0..count {
             let level = (bin * if directional { 1 } else { 4 }) as f64;
+            // Tables predict variance in unchanged native signal-code units.
+            // Sensor pooling reduces that variance, rather than changing ISO or
+            // the owner's dimensionless filtering strength.
             let variance = (0.0000173171583027778 * level).mul_add(
                 level,
                 0.0428362301201803_f64.mul_add(level, 9.85389175535173),
-            ) / divisor;
+            ) / divisor
+                * f64::from(self.params.detail[3]);
             let radius = (3. * variance.sqrt()) as usize / if directional { 1 } else { 4 };
             let first = if directional {
                 0

@@ -19,10 +19,14 @@ fn encoding(rotation: u32) -> EncodeParams {
 fn half_grid_preserves_crop_orientation_and_explicit_output_size() {
     for rotation in [0, 90, 180, 270] {
         let native = encoding(rotation);
-        let grid = Grid::new(native, None, crate::render::PreviewQuality::Fast).unwrap();
-        assert_eq!(grid.reductions[0].output_extent(), [2464, 1632]);
-        assert_eq!(grid.encode.source, [2464, 1632, rotation, 0]);
-        assert_eq!(grid.encode.crop, native.crop.map(|v| v / 2));
+        let grid = Grid::new(native, None, crate::render::Scale::new(2).unwrap()).unwrap();
+        assert_eq!(grid.grid.logical, [2464, 1632]);
+        assert_eq!(grid.reductions[0].output_extent(), grid.grid.extent);
+        assert_eq!(
+            grid.encode.source,
+            [grid.grid.extent[0], grid.grid.extent[1], rotation, 0]
+        );
+        assert_eq!(grid.encode.crop, grid.grid.bounds(native.crop));
         assert_eq!(
             grid.encode.output[..2],
             native.output[..2].iter().map(|v| v / 2).collect::<Vec<_>>()
@@ -30,19 +34,71 @@ fn half_grid_preserves_crop_orientation_and_explicit_output_size() {
         let sized = Grid::new(
             native,
             Some([1200, 800]),
-            crate::render::PreviewQuality::Fast,
+            crate::render::Scale::new(2).unwrap(),
         )
         .unwrap();
         assert_eq!(sized.encode.output[..2], [1200, 800]);
     }
     let mut odd = encoding(0);
     odd.crop[0] += 1;
-    assert!(Grid::new(odd, None, crate::render::PreviewQuality::Fast).is_err());
+    assert!(Grid::new(odd, None, crate::render::Scale::new(2).unwrap()).is_ok());
     let mut misaligned = encoding(0);
     misaligned.source[0] -= 1;
-    assert!(Grid::new(misaligned, None, crate::render::PreviewQuality::Fast).is_err());
+    assert!(Grid::new(misaligned, None, crate::render::Scale::new(2).unwrap()).is_ok());
     misaligned.source[0] -= 1;
-    assert!(Grid::new(misaligned, None, crate::render::PreviewQuality::Fast).is_ok());
+    assert!(Grid::new(misaligned, None, crate::render::Scale::new(2).unwrap()).is_ok());
+}
+
+#[test]
+fn arbitrary_sensor_scales_cover_edges_and_align_every_reconstruction_ratio() {
+    use bytemuck::Zeroable;
+    for divisor in [2, 4, 8, 16, 32, 64, 256, 1 << 31] {
+        let scale = Scale::new(divisor).unwrap();
+        let mut native = encoding(0);
+        native.source[0] -= 1;
+        native.crop[0] += 1;
+        let grid = Grid::new(native, None, scale).unwrap();
+        assert_eq!(grid.grid.logical, scale.extent([4927, 3264]));
+        assert!(grid.grid.extent.into_iter().all(|v| v.is_multiple_of(8)));
+        assert_eq!(grid.encode.output[..2], scale.extent([4704, 3136]));
+        assert_eq!(grid.reductions.last().unwrap().working_scale(), Some(scale));
+        for reduction in [0.375, 0.5, 0.625, 0.75, 0.875, 1.] {
+            let mut params = crate::noise::Parameters::zeroed();
+            params.source = [grid.grid.native[0], grid.grid.native[1], 4, 4];
+            params.tile = [1360, 944, 64, 21];
+            params.area = [112, 64, 4816, 3200];
+            params.geometry = [8, 8, 11, 0];
+            params.column[1] = 39.;
+            params.column[2] = 40.;
+            params.model = [[2.; 4], [3.; 4], [4.; 4]];
+            params.mono = [2., 3., 4., 0.];
+            params.filter = [2., 3., 4., 0.9];
+            params.edge = [2., 3., 4., 100.];
+            params.reduction[0] = reduction;
+            let working = grid.noise(params).unwrap();
+            assert_eq!(working.source[..2], grid.grid.extent);
+            assert_eq!(working.source[2..], [1, 1]);
+            assert_eq!(working.column[2], 40_u32.div_ceil(divisor).max(1) as f32);
+            let std = pyramid_resample::independent_noise_std(scale);
+            for (native, actual) in params.model.iter().zip(working.model) {
+                assert_eq!(actual, native.map(|v| v * (std * std)));
+            }
+            assert_eq!(working.mono, [2. * std, 3. * std, 4. * std, 0.]);
+            assert_eq!(working.filter[..3], params.filter[..3]);
+            assert_eq!(working.filter[3], params.filter[3].powf(divisor as f32));
+            if divisor <= 64 {
+                assert!(
+                    (working.filter[3].powf(1. / divisor as f32) - params.filter[3]).abs() < 1e-6
+                );
+            }
+            assert_eq!(
+                working.sampling,
+                [divisor, 32_u32.div_ceil(divisor).max(1), 0, 0]
+            );
+            assert_eq!(working.edge, params.edge);
+            assert!(working.reduced_tile_extent().is_ok());
+        }
+    }
 }
 
 #[test]
@@ -69,19 +125,19 @@ fn color_preview_support_requires_valid_merrill_geometry_and_supports_native_reg
     let mut settings = crate::render::Settings::default();
     for rotation in [0, 90, 180, 270] {
         metadata.rotation = rotation;
-        assert!(settings.fast_preview_available(&metadata));
+        assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
         assert!(settings.regional_preview_available(&metadata));
     }
     settings.rendering = crate::render::Rendering::Monochrome;
-    assert!(!settings.fast_preview_available(&metadata));
+    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
     settings.rendering = crate::render::Rendering::Color;
     settings.output_size = Some([1200, 800]);
     assert!(!settings.regional_preview_available(&metadata));
     settings.output_size = None;
     metadata.matrices.get_mut("ActiveImageArea").unwrap().values[0] += 1.;
-    assert!(!settings.fast_preview_available(&metadata));
+    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
     metadata.matrices.clear();
-    assert!(!settings.fast_preview_available(&metadata));
+    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
 }
 
 #[test]
@@ -90,7 +146,7 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
     use crate::{
         inspection::Content,
         profile::{Mode, Profile},
-        render::{Engine, PreviewQuality, RenderSession, Settings},
+        render::{Engine, RenderSession, Scale, Settings},
         source::Source,
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
@@ -104,7 +160,7 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
         .render(&source, &settings, &mut Profile::default())
         .unwrap();
     let full_bytes = engine.readback_image(&full).unwrap();
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     let mut profile = Profile::new(Mode::Wall);
     let fast = engine.render(&source, &settings, &mut profile).unwrap();
     let fast_bytes = engine.readback_image(&fast).unwrap();
@@ -119,7 +175,7 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
     ] {
         assert!(profile.host.iter().any(|s| s.stage == stage), "{stage}");
     }
-    assert!(!profile
+    assert!(profile
         .host
         .iter()
         .any(|s| s.stage == "submit row banding correction"));
@@ -133,9 +189,17 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
     );
     assert_eq!(
         fast.description().extent,
-        full.description().extent.map(|v| v / 2)
+        full.view().extent.map(|v| v.div_ceil(2))
     );
-    assert_eq!(fast.view().crop, full.view().crop.map(|v| v / 2));
+    assert_eq!(
+        fast.view().crop,
+        [
+            0,
+            0,
+            fast.description().extent[0],
+            fast.description().extent[1]
+        ]
+    );
     assert_eq!(fast.view().extent, full.view().extent.map(|v| v / 2));
     assert!(bytemuck::cast_slice::<u8, f32>(&fast_bytes)
         .iter()
@@ -159,8 +223,8 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
                 settings.saturation = 0.7;
                 settings.reconstruction.as_mut().unwrap().texture.fine = 0.9;
             }
-            2 => settings.preview_quality = PreviewQuality::Full,
-            3 => settings.preview_quality = PreviewQuality::Fast,
+            2 => settings.working_scale = Scale::NATIVE,
+            3 => settings.working_scale = Scale::new(2).unwrap(),
             _ => {}
         }
         let mut artifacts = engine
@@ -244,7 +308,7 @@ fn regional_detail_matches_full_and_continues_without_repeating_sensor_correctio
     use crate::{
         inspection::Content,
         profile::{Mode, Profile},
-        render::{Engine, PreviewQuality, RenderSession, Settings},
+        render::{Engine, RenderSession, Scale, Settings},
         source::Source,
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
@@ -303,7 +367,7 @@ fn regional_detail_matches_full_and_continues_without_repeating_sensor_correctio
             let full_bytes = engine.readback_image(&full).unwrap();
             let full_pixels: &[f32] = bytemuck::cast_slice(&full_bytes);
             let mut session = RenderSession::new(source.clone());
-            settings.preview_quality = PreviewQuality::Fast;
+            settings.working_scale = Scale::new(2).unwrap();
             let overview = engine
                 .render_session(
                     &mut session,
@@ -314,7 +378,7 @@ fn regional_detail_matches_full_and_continues_without_repeating_sensor_correctio
                 )
                 .unwrap()
                 .unwrap();
-            settings.preview_quality = PreviewQuality::Full;
+            settings.working_scale = Scale::NATIVE;
             // A central region crosses both native tile seams. A corner exercises sensor support.
             let [w, h] = full.view().extent;
             for rect in [
@@ -561,17 +625,17 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
 
 #[test]
 fn draft_and_thumb_preserve_sensor_geometry_and_require_calibrated_inputs() {
-    use crate::render::PreviewQuality;
+    use crate::render::Scale;
     let mut native = encoding(90);
     // Thumb must retain an active edge at a half reduced pixel.
     native.crop[1] += 4;
-    for quality in [PreviewQuality::Draft, PreviewQuality::Thumb] {
+    for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
         let grid = Grid::new(native, None, quality).unwrap();
         let divisor = quality.divisor();
         assert_eq!(grid.reductions.len(), divisor.ilog2() as usize);
         assert_eq!(
             grid.reductions.last().unwrap().output_extent(),
-            [native.source[0] / divisor, native.source[1] / divisor]
+            grid.grid.extent
         );
         assert_eq!(
             grid.encode.output[..2],

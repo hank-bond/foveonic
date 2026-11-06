@@ -9,7 +9,7 @@ use crate::{
     interactive::Execution,
     nodes::sensor::calibration,
     profile::Profile,
-    render::{Engine, MerrillNoiseMethod, PreviewQuality, RenderSession, Rendering, Settings},
+    render::{Engine, MerrillNoiseMethod, RenderSession, Rendering, Scale, Settings},
     source::Source,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -387,7 +387,7 @@ fn multiscale_preview_order_and_export_preparation_share_native_inputs() {
     let mut settings = settings();
     for method in METHODS {
         settings.merrill_noise_method = method;
-        settings.preview_quality = PreviewQuality::Full;
+        settings.working_scale = Scale::NATIVE;
         let full = photographic(&engine, &source, &settings);
         let shield = position(&full, |op| matches!(op, Operation::ShieldNoise(_)));
         let filter = position(&full, |op| matches!(op, Operation::Multiscale(_)));
@@ -431,7 +431,7 @@ fn multiscale_preview_order_and_export_preparation_share_native_inputs() {
             );
         }
 
-        settings.preview_quality = PreviewQuality::Fast;
+        settings.working_scale = Scale::new(2).unwrap();
         let fast = photographic(&engine, &source, &settings);
         let filter = position(&fast, |op| matches!(op, Operation::Multiscale(_)));
         let reduction = position(&fast, |op| matches!(op, Operation::ReduceLayers(_)));
@@ -480,7 +480,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
                 == dng.graph.nodes[other].operation.key("shared")
         );
     }
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     let fast = photographic(&engine, &source, &settings);
     assert!(
         position(&fast, |op| matches!(op, Operation::RowGuard(_)))
@@ -491,7 +491,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
         full.graph.nodes[local].operation.key("native bands")
             == fast.graph.nodes[fast_bands].operation.key("native bands")
     );
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     settings.output_size = Some([240, 160]);
     let mut session = RenderSession::new(source.clone());
     let retained = cached(&engine, &mut session, &settings);

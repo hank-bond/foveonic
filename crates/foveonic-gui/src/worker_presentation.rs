@@ -5,16 +5,15 @@ use crate::{editor::Rendition, export::resolve_camera_settings, preferences::Pre
 use foveonic::{
     decode_cache::Cache as DecodeCache,
     image::{ImageTexture, RenderedImage},
-    importing::Identity,
     inspection::{Artifact, Content},
-    render::{PreviewQuality, Settings},
-    source::{Metadata, Result},
+    render::{Scale, Settings},
+    source::{Metadata, Result, SourceOrigin},
 };
 use std::{path::PathBuf, sync::Arc};
 
 /// Crop and rotation change the view. Existing workspace grid flags and range
 /// names retain the same normalization used for Smart's pixel revisions.
-pub(super) fn same_pixels(a: &Settings, b: &Settings) -> bool {
+pub(crate) fn same_pixels(a: &Settings, b: &Settings) -> bool {
     let mut b = b.clone();
     b.crop = a.crop;
     b.rotation = a.rotation;
@@ -46,6 +45,7 @@ pub(super) fn presentation_change(a: &Request, b: &Request) -> bool {
         || a.settings.rotation != b.settings.rotation
 }
 
+#[derive(Clone)]
 struct Image {
     name: &'static str,
     dehaze_estimate: Option<[f32; 3]>,
@@ -72,6 +72,7 @@ pub(super) struct Display {
     pub comparison: Option<Comparison>,
     framing: bool,
 }
+#[derive(Clone)]
 struct Whole {
     path: PathBuf,
     root: String,
@@ -81,9 +82,52 @@ struct Whole {
     policy: PreviewMode,
     settings: Settings,
     framing: bool,
-    identity: Option<Identity>,
+    identity: SourceOrigin,
     images: Vec<Image>,
     display: Option<Display>,
+}
+#[derive(Clone)]
+pub(crate) struct Snapshot(Whole);
+impl Snapshot {
+    pub fn from_frame(frame: &super::Frame, request: &Request) -> Option<Self> {
+        if request.comparison
+            || frame.artifact.settings.preview_region.is_some()
+            || frame.artifact.settings.output_size.is_some()
+        {
+            return None;
+        }
+        let Content::Image(image) = &frame.artifact.content else {
+            return None;
+        };
+        Some(Self(Whole {
+            path: frame.path.clone(),
+            root: frame.output.clone(),
+            rendition: frame.rendition,
+            comparison: false,
+            calibration: request.calibration.clone(),
+            policy: request.preview_policy,
+            settings: frame.artifact.settings.clone(),
+            framing: frame.framing_preview,
+            identity: frame.origin.clone(),
+            images: vec![Image {
+                name: frame.artifact.name,
+                dehaze_estimate: frame.artifact.dehaze_estimate,
+                metadata: frame.artifact.metadata.clone(),
+                image: (**image).clone(),
+            }],
+            display: Some(Display {
+                texture: frame.texture.clone(),
+                comparison: None,
+                framing: frame.framing_preview,
+            }),
+        }))
+    }
+    pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        Presentation {
+            whole: Some(self.0.clone()),
+        }
+        .memory_resources(inventory);
+    }
 }
 #[derive(Default)]
 pub(super) struct Presentation {
@@ -91,18 +135,42 @@ pub(super) struct Presentation {
 }
 pub(super) struct Prepared {
     pub metadata: Arc<Metadata>,
-    pub quality: PreviewQuality,
+    pub origin: SourceOrigin,
+    pub quality: Scale,
     pub artifacts: Vec<Artifact>,
     pub display: Option<Display>,
 }
 impl Presentation {
+    pub fn seed(&mut self, snapshot: &Snapshot) {
+        self.whole = Some(snapshot.0.clone());
+    }
+    pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        if let Some(whole) = &self.whole {
+            for image in &whole.images {
+                inventory.image(&image.image);
+                inventory.metadata(&image.metadata);
+            }
+            if let Some(display) = &whole.display {
+                inventory.image_texture(&display.texture);
+                if let Some(comparison) = &display.comparison {
+                    inventory.image_texture(&comparison.texture);
+                }
+            }
+        }
+    }
     pub fn clear(&mut self) {
         self.whole = None;
     }
     /// Pixel edits can be pending when composition changes. They still need a
     /// render, using the existing working grid rather than a new framing policy.
-    pub fn quality_for_view_change(&self, request: &Request) -> Option<PreviewQuality> {
+    pub fn quality_for_view_change(&self, request: &Request, cache: &DecodeCache) -> Option<Scale> {
         let whole = self.whole.as_ref()?;
+        if cache
+            .source_origin(&request.path)
+            .is_some_and(|current| current != whole.identity)
+        {
+            return None;
+        }
         let mut settings = request.settings.clone();
         resolve_camera_settings(&mut settings, &whole.images[0].metadata);
         let changed = whole.framing != request.framing_preview
@@ -110,7 +178,7 @@ impl Presentation {
             || whole.settings.rotation != settings.rotation;
         if !changed
             && request.preview_quality == PreviewMode::Full
-            && whole.images[0].image.settings().preview_quality != PreviewQuality::Full
+            && whole.images[0].image.settings().working_scale != Scale::NATIVE
             && same_pixels(&whole.settings, &settings)
         {
             return None;
@@ -128,7 +196,7 @@ impl Presentation {
                 || whole.framing != request.framing_preview
                 || whole.settings.crop != request.settings.crop
                 || whole.settings.rotation != request.settings.rotation))
-            .then_some(whole.images[0].image.settings().preview_quality)
+            .then_some(whole.images[0].image.settings().working_scale)
     }
     pub fn prepare(&self, request: &Request, cache: &DecodeCache) -> Result<Option<Prepared>> {
         let Some(whole) = &self.whole else {
@@ -146,11 +214,11 @@ impl Presentation {
         {
             return Ok(None);
         }
-        if let (Some(old), Some(current)) = (&whole.identity, cache.import_identity(&request.path))
+        if cache
+            .source_origin(&request.path)
+            .is_some_and(|current| current != whole.identity)
         {
-            if *old != current {
-                return Ok(None);
-            }
+            return Ok(None);
         }
         let mut settings = request.settings.clone();
         resolve_camera_settings(&mut settings, &whole.images[0].metadata);
@@ -164,7 +232,7 @@ impl Presentation {
         // changing controls. Composition must retain the already rendered grid.
         if !changed
             && request.preview_quality == PreviewMode::Full
-            && whole.images[0].image.settings().preview_quality != PreviewQuality::Full
+            && whole.images[0].image.settings().working_scale != Scale::NATIVE
         {
             return Ok(None);
         }
@@ -180,7 +248,8 @@ impl Presentation {
             .cloned();
         Ok(Some(Prepared {
             metadata: whole.images[0].metadata.clone(),
-            quality: whole.images[0].image.settings().preview_quality,
+            origin: whole.identity.clone(),
+            quality: whole.images[0].image.settings().working_scale,
             artifacts: whole
                 .images
                 .iter()
@@ -196,7 +265,7 @@ impl Presentation {
         request: &Request,
         settings: &Settings,
         artifacts: &[Artifact],
-        cache: &DecodeCache,
+        origin: &SourceOrigin,
     ) -> bool {
         if request.export.is_some()
             || artifacts.is_empty()
@@ -232,7 +301,7 @@ impl Presentation {
             policy: request.preview_policy,
             settings: settings.clone(),
             framing: request.framing_preview,
-            identity: cache.import_identity(&request.path),
+            identity: origin.clone(),
             images,
             display: None,
         });
@@ -291,6 +360,10 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(30))
                 .unwrap()
             {
+                worker.finish_image(&reply.stamp);
+                if let Ok(Some(frame)) = &reply.result {
+                    worker.retain_pixels(&reply.stamp, frame);
+                }
                 if reply.revision == revision {
                     return reply.result.unwrap().unwrap();
                 }
@@ -351,7 +424,7 @@ mod tests {
     }
     fn matches_fresh(engine: &Engine, frame: &Frame, path: &std::path::Path, settings: &Settings) {
         let mut settings = settings.clone();
-        settings.preview_quality = frame.artifact.settings.preview_quality;
+        settings.working_scale = frame.artifact.settings.working_scale;
         settings.preview_region = None;
         let fresh = engine
             .render(
@@ -420,13 +493,13 @@ mod tests {
             settings.reconstruction = Some(Default::default());
             worker.submit(request(&path, 1, policy, policy, &settings, false));
             let base = receive(&worker, 1);
-            let quality = base.artifact.settings.preview_quality;
+            let quality = base.artifact.settings.working_scale;
             assert_eq!(
                 quality,
                 if policy == PreviewMode::Thumb {
-                    PreviewQuality::Thumb
+                    Scale::new(8).unwrap()
                 } else {
-                    PreviewQuality::Fast
+                    Scale::new(2).unwrap()
                 }
             );
             let loads = worker.checks.source_loads.load(Ordering::Relaxed);
@@ -454,7 +527,7 @@ mod tests {
             ));
             let plane = receive(&worker, 3);
             assert_eq!(
-                plane.artifact.settings.preview_quality, quality,
+                plane.artifact.settings.working_scale, quality,
                 "a regional Full tile cannot become the whole plane"
             );
             assert!(plane.artifact.settings.preview_region.is_none());
@@ -473,7 +546,7 @@ mod tests {
             assert_eq!(dispatches(&worker, 4), 0);
             worker.submit(request(&path, 5, policy, policy, &settings, false));
             let committed = receive(&worker, 5);
-            assert_eq!(committed.artifact.settings.preview_quality, quality);
+            assert_eq!(committed.artifact.settings.working_scale, quality);
             assert_eq!(dispatches(&worker, 5), 0);
             assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), loads);
             matches_fresh(&verifier, &committed, &path, &settings);
@@ -487,23 +560,17 @@ mod tests {
                 false,
             ));
             let full = receive(&worker, 6);
-            assert_eq!(full.artifact.settings.preview_quality, PreviewQuality::Full);
+            assert_eq!(full.artifact.settings.working_scale, Scale::NATIVE);
             assert!(dispatches(&worker, 6) > 0);
             let full_loads = worker.checks.source_loads.load(Ordering::Relaxed);
             worker.submit(request(&path, 7, policy, policy, &settings, true));
             let full_plane = receive(&worker, 7);
-            assert_eq!(
-                full_plane.artifact.settings.preview_quality,
-                PreviewQuality::Full
-            );
+            assert_eq!(full_plane.artifact.settings.working_scale, Scale::NATIVE);
             assert_eq!(dispatches(&worker, 7), 0);
             settings.rotation.degrees = -4.;
             worker.submit(request(&path, 8, policy, policy, &settings, false));
             let full_composed = receive(&worker, 8);
-            assert_eq!(
-                full_composed.artifact.settings.preview_quality,
-                PreviewQuality::Full
-            );
+            assert_eq!(full_composed.artifact.settings.working_scale, Scale::NATIVE);
             assert_eq!(dispatches(&worker, 8), 0);
             assert_eq!(
                 worker.checks.source_loads.load(Ordering::Relaxed),
@@ -528,8 +595,8 @@ mod tests {
             true,
         ));
         assert_eq!(
-            receive(&worker, 1).artifact.settings.preview_quality,
-            PreviewQuality::Thumb
+            receive(&worker, 1).artifact.settings.working_scale,
+            Scale::new(8).unwrap()
         );
         worker.submit(request(
             &path,
@@ -540,8 +607,8 @@ mod tests {
             true,
         ));
         assert_eq!(
-            receive(&worker, 2).artifact.settings.preview_quality,
-            PreviewQuality::Full
+            receive(&worker, 2).artifact.settings.working_scale,
+            Scale::NATIVE
         );
         assert!(dispatches(&worker, 2) > 0);
     }
@@ -568,7 +635,7 @@ mod tests {
                 initially_framing,
             ));
             let base = receive(&worker, 1);
-            let quality = base.artifact.settings.preview_quality;
+            let quality = base.artifact.settings.working_scale;
             let loads = worker.checks.source_loads.load(Ordering::Relaxed);
             settings.exposure = 0.5;
             worker.submit(request(
@@ -592,7 +659,7 @@ mod tests {
             let frame = receive(&worker, 3);
             assert_eq!(frame.artifact.settings.exposure, 0.5);
             assert_eq!(
-                frame.artifact.settings.preview_quality, quality,
+                frame.artifact.settings.working_scale, quality,
                 "composition must retain the working grid of pending pixel edits"
             );
             assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), loads);
@@ -617,14 +684,65 @@ mod tests {
                 true,
             ));
             let changed = receive(&worker, 4);
-            assert_eq!(
-                changed.artifact.settings.preview_quality,
-                PreviewQuality::Full
-            );
+            assert_eq!(changed.artifact.settings.working_scale, Scale::NATIVE);
             assert!(
                 dispatches(&worker, 4) > 0,
                 "explicit workspace quality is a pixel request"
             );
         }
+    }
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
+    fn same_path_replacement_does_not_reactivate_old_reduced_metadata() {
+        let fixtures = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.x3f");
+        std::fs::copy(fixtures.join("blue-parking-sign.x3f"), &path).unwrap();
+        let engine = Engine::new().unwrap();
+        let verifier = engine.executor();
+        let worker = Worker::new(engine, egui::Context::default());
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.reconstruction = Some(Default::default());
+        worker.submit(request(
+            &path,
+            1,
+            PreviewMode::Thumb,
+            PreviewMode::Thumb,
+            &settings,
+            false,
+        ));
+        let first = receive(&worker, 1);
+        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 1);
+        std::fs::copy(fixtures.join("merrill-hazy-coast.x3f"), &path).unwrap();
+        worker.submit(request(
+            &path,
+            2,
+            PreviewMode::Full,
+            PreviewMode::Full,
+            &settings,
+            false,
+        ));
+        let native = receive(&worker, 2);
+        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 2);
+        matches_fresh(&verifier, &native, &path, &settings);
+        worker.submit(request(
+            &path,
+            3,
+            PreviewMode::Thumb,
+            PreviewMode::Thumb,
+            &settings,
+            false,
+        ));
+        let changed = receive(&worker, 3);
+        assert_eq!(
+            worker.checks.source_loads.load(Ordering::Relaxed),
+            2,
+            "new native source transfers into the reduced owner without another decode"
+        );
+        matches_fresh(&verifier, &changed, &path, &settings);
+        assert_ne!(
+            pixels(&verifier, &first.texture),
+            pixels(&verifier, &changed.texture)
+        );
     }
 }

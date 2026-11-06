@@ -51,43 +51,67 @@ pub(super) fn select_highlight(
 
 fn detail(
     ui: &mut egui::Ui,
+    pointer: &str,
     enabled: &mut bool,
     texture: &mut foveonic::noise::TextureControls,
 ) -> bool {
     let mut changed = false;
-    changed |= common::section_header(ui, EditingSection::Detail, "Detail", Some(enabled));
+    changed |= crate::multi_edit_controls::choice(
+        ui,
+        format!("{pointer}/detail_enabled"),
+        enabled,
+        |ui, enabled| common::section_header(ui, EditingSection::Detail, "Detail", Some(enabled)),
+    );
     ui.add_enabled_ui(*enabled, |ui| {
         let column = common::LabelColumn::new(ui);
         crate::widgets::parameter_group(ui, |ui| {
-            changed |= column.adjustment(
+            changed |=
+                crate::multi_edit_controls::field(ui, format!("{pointer}/texture/fine"), |ui| {
+                    column.adjustment(
+                        ui,
+                        ("Fine detail", "Fine"),
+                        &mut texture.fine,
+                        foveonic::noise::TextureControls::AMOUNT_RANGE,
+                        1.,
+                    )
+                });
+            changed |= crate::multi_edit_controls::field(
                 ui,
-                ("Fine detail", "Fine"),
-                &mut texture.fine,
-                foveonic::noise::TextureControls::AMOUNT_RANGE,
-                1.,
-            );
-            changed |= column.adjustment(
-                ui,
-                ("Fine size", "Size"),
-                &mut texture.fine_size,
-                foveonic::noise::TextureControls::SIZE_RANGE,
-                1.,
+                format!("{pointer}/texture/fine_size"),
+                |ui| {
+                    column.adjustment(
+                        ui,
+                        ("Fine size", "Size"),
+                        &mut texture.fine_size,
+                        foveonic::noise::TextureControls::SIZE_RANGE,
+                        1.,
+                    )
+                },
             );
         });
         crate::widgets::parameter_group(ui, |ui| {
-            changed |= column.adjustment(
+            changed |=
+                crate::multi_edit_controls::field(ui, format!("{pointer}/texture/coarse"), |ui| {
+                    column.adjustment(
+                        ui,
+                        ("Coarse detail", "Coarse"),
+                        &mut texture.coarse,
+                        foveonic::noise::TextureControls::AMOUNT_RANGE,
+                        1.,
+                    )
+                });
+            changed |= crate::multi_edit_controls::field(
                 ui,
-                ("Coarse detail", "Coarse"),
-                &mut texture.coarse,
-                foveonic::noise::TextureControls::AMOUNT_RANGE,
-                1.,
-            );
-            changed |= column.adjustment(
-                ui,
-                ("Coarse size", "Size"),
-                &mut texture.coarse_size,
-                foveonic::noise::TextureControls::SIZE_RANGE,
-                1.,
+                format!("{pointer}/texture/coarse_size"),
+                |ui| {
+                    column.adjustment(
+                        ui,
+                        ("Coarse size", "Size"),
+                        &mut texture.coarse_size,
+                        foveonic::noise::TextureControls::SIZE_RANGE,
+                        1.,
+                    )
+                },
             );
         });
     });
@@ -145,6 +169,7 @@ pub(super) fn show(
             if mono {
                 detail(
                     ui,
+                    "/monochrome",
                     &mut settings.monochrome.detail_enabled,
                     &mut settings.monochrome.texture,
                 )
@@ -165,7 +190,12 @@ fn color_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         detail_enabled: false,
         ..Default::default()
     });
-    let changed = detail(ui, &mut controls.detail_enabled, &mut controls.texture);
+    let changed = detail(
+        ui,
+        "/reconstruction",
+        &mut controls.detail_enabled,
+        &mut controls.texture,
+    );
     if before.is_some() || controls.noise_enabled || controls.detail_enabled {
         settings.reconstruction = Some(controls);
     }
@@ -200,37 +230,65 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                         .width(ui.available_width())
                         .truncate()
                         .selected_text(label);
-                    let response = crate::widgets::dropdown(ui, combo, |ui| {
-                        for (value, label) in HIGHLIGHT_METHODS {
-                            if crate::widgets::menu_value(ui, &mut choice, value, label).clicked() {
-                                changed |= select_highlight(settings, choice);
+                    let properties: &[&str] = if choice.0 == HighlightMode::Classic
+                        && !crate::multi_edit_controls::different(ui.ctx(), "/highlight_mode")
+                    {
+                        &["/highlight_mode"]
+                    } else {
+                        &["/highlight_mode", "/color_field/approach"]
+                    };
+                    let response = crate::multi_edit_controls::compound(ui, properties, |ui| {
+                        crate::widgets::dropdown(ui, combo, |ui| {
+                            for (value, label) in HIGHLIGHT_METHODS {
+                                if crate::widgets::menu_value(ui, &mut choice, value, label)
+                                    .clicked()
+                                {
+                                    changed |= select_highlight(settings, choice);
+                                    changed |= crate::multi_edit_controls::active(ui.ctx());
+                                    crate::multi_edit_controls::assign(
+                                        ui.ctx(),
+                                        "/highlight_mode",
+                                        choice.0,
+                                    );
+                                    crate::multi_edit_controls::assign(
+                                        ui.ctx(),
+                                        "/color_field/approach",
+                                        choice.1,
+                                    );
+                                }
                             }
-                        }
+                        })
                     });
                     help::control(response.response, "Highlight method");
                 });
             });
             ui.add_enabled_ui(settings.highlight_restoration, |ui| {
                 if settings.highlight_mode == HighlightMode::Classic {
-                    changed |= automatic_adjustment(
-                        ui,
-                        "Highlight correction",
-                        &mut settings.highlight_threshold_ev,
-                        -2. ..=2.,
-                        0.,
-                        Some(0.),
-                        column.row_controls("Threshold"),
-                    );
+                    changed |=
+                        crate::multi_edit_controls::field(ui, "/highlight_threshold_ev", |ui| {
+                            automatic_adjustment(
+                                ui,
+                                "Highlight correction",
+                                &mut settings.highlight_threshold_ev,
+                                -2. ..=2.,
+                                0.,
+                                Some(0.),
+                                column.row_controls("Threshold"),
+                            )
+                        });
                 } else {
-                    changed |= adjustment_row(
-                        ui,
-                        "Color-field highlights",
-                        &mut settings.color_field.selectivity,
-                        0. ..=1.,
-                        0.,
-                        0.1,
-                        column.row_controls("Threshold"),
-                    );
+                    changed |=
+                        crate::multi_edit_controls::field(ui, "/color_field/selectivity", |ui| {
+                            adjustment_row(
+                                ui,
+                                "Color-field highlights",
+                                &mut settings.color_field.selectivity,
+                                0. ..=1.,
+                                0.,
+                                0.1,
+                                column.row_controls("Threshold"),
+                            )
+                        });
                 }
             });
         });
@@ -244,4 +302,52 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         help::control(advanced.header_response, "Advanced corrections");
     });
     changed
+}
+
+#[cfg(test)]
+mod mixed_tests {
+    use super::*;
+    #[test]
+    fn highlight_method_mixed_label_ignores_inactive_color_field_preference() {
+        for color_field in [false, true] {
+            let ctx = egui::Context::default();
+            crate::widgets::install_style(&ctx);
+            let mut a = Settings::new("Sunlight", "Standard");
+            if color_field {
+                a.highlight_mode = HighlightMode::ColorField;
+            }
+            let mut b = a.clone();
+            b.color_field.approach = ColorFieldApproach::LocalGradient;
+            let mut active = a.clone();
+            crate::multi_edit_controls::begin_with_numeric(
+                &ctx,
+                vec![a.clone(), b.clone()],
+                vec![a, b],
+            );
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 1400.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        corrections(ui, &mut active);
+                    });
+                },
+            );
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.contains(&"Multi"), color_field);
+            assert!(crate::multi_edit_controls::finish(&ctx).is_empty());
+        }
+    }
 }

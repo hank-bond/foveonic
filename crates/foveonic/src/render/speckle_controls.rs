@@ -31,6 +31,13 @@ impl Default for MerrillSpeckleControls {
 impl MerrillSpeckleControls {
     pub const THRESHOLD_RANGE: std::ops::RangeInclusive<f32> = 0.05..=4.;
     pub const SIZE_RANGE: std::ops::RangeInclusive<u32> = 3..=7;
+    pub fn threshold_range(self) -> std::ops::RangeInclusive<f32> {
+        if self.method == MerrillSpeckleMethod::Compact {
+            0.2..=*Self::THRESHOLD_RANGE.end()
+        } else {
+            Self::THRESHOLD_RANGE
+        }
+    }
     pub(crate) fn validate(self) -> Result<()> {
         if !self.threshold.is_finite() || !Self::THRESHOLD_RANGE.contains(&self.threshold) {
             return Err("speckle threshold must be between 0.05 and 4".into());

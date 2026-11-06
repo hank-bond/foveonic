@@ -258,3 +258,26 @@ fn regional_geometry_rejects_invalid_grids_rectangles_and_reduction() {
     params.tile[0] = 193;
     assert!(params.reduced_tile_extent().is_err());
 }
+#[test]
+fn adaptive_sampling_support_invalidates_only_the_noise_base() {
+    use super::RecipeStage;
+    use bytemuck::Zeroable;
+    let mut native = Parameters::zeroed();
+    native.sampling = [1, 32, 0, 0];
+    for (index, value) in [(0, 2), (1, 16)] {
+        let mut changed = native;
+        changed.sampling[index] = value;
+        assert_ne!(
+            native.key(RecipeStage::Base),
+            changed.key(RecipeStage::Base)
+        );
+        for stage in [
+            RecipeStage::Column,
+            RecipeStage::Ratio,
+            RecipeStage::Geometry,
+            RecipeStage::Texture,
+        ] {
+            assert_eq!(native.key(stage), changed.key(stage));
+        }
+    }
+}

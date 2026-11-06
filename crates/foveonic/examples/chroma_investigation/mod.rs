@@ -225,7 +225,7 @@ fn inspect_green_outliers() -> Result<()> {
                             .cache
                             .entries
                             .iter()
-                            .map(|e| &e.name)
+                            .map(|e| (e.version.recipe.role, e.version.generation))
                             .collect::<Vec<_>>()
                     )
                 })

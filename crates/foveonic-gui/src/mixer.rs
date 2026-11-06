@@ -53,7 +53,11 @@ pub fn show_with_help(
             crate::sections::editing_handle(ui, crate::preferences::EditingSection::Mix);
         });
     });
-    ui.small("Mix proportions");
+    if crate::multi_edit_controls::different(ui.ctx(), "/monochrome/mix") {
+        ui.small("Multi · choosing a point sets the selected photos to that mix.");
+    } else {
+        ui.small("Mix proportions");
+    }
     let width = ui.available_width().min(280.);
     let (rect, mut response) = ui.allocate_exact_size(
         Vec2::new(width, width * 0.90 / 0.80),
@@ -122,6 +126,9 @@ pub fn show_with_help(
     });
     if before != *mix {
         response.mark_changed();
+    }
+    if before != *mix {
+        crate::multi_edit_controls::assign(ui.ctx(), "/monochrome/mix", *mix);
     }
     crate::help::control(response, "Color Mix");
     ui.horizontal(|ui| {

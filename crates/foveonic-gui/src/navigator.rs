@@ -67,6 +67,7 @@ impl Key {
             && self.revision <= new.revision
     }
 }
+#[derive(Clone)]
 struct Job {
     key: Key,
     source: Arc<ImageTexture>,
@@ -75,11 +76,15 @@ struct Job {
 #[derive(Default)]
 struct Pending {
     job: Option<Job>,
+    active: Option<Job>,
+    ready: Vec<Key>,
+    revision: u64,
     stop: bool,
 }
 struct Tile {
     key: Key,
     texture: wgpu::Texture,
+    memory: Option<crate::display_image::StagedBytes>,
 }
 /// One pending job and one small retained texture. No processing samples ever visit the CPU.
 pub struct Navigator {
@@ -89,6 +94,8 @@ pub struct Navigator {
     wanted: Option<(Job, Instant)>,
     sent: Option<Key>,
     displayed: Option<(Tile, egui::TextureId)>,
+    staging: crate::display_image::Staging,
+    resource_revision: u64,
 }
 impl Navigator {
     pub fn new(rs: egui_wgpu::RenderState, context: egui::Context) -> Self {
@@ -96,6 +103,8 @@ impl Navigator {
         let slot = pending.clone();
         let gpu = rs.clone();
         let (tx, replies) = mpsc::sync_channel(1);
+        let staging = crate::display_image::Staging::default();
+        let worker_staging = staging.clone();
         std::thread::spawn(move || loop {
             let job = {
                 let mut state = slot.0.lock().unwrap();
@@ -105,7 +114,10 @@ impl Navigator {
                 if state.stop {
                     break;
                 }
-                state.job.take().unwrap()
+                let job = state.job.take().unwrap();
+                state.active = Some(job.clone());
+                state.revision = state.revision.wrapping_add(1);
+                job
             };
             let started = Instant::now();
             let size = tile_extent(job.key.extent);
@@ -125,6 +137,7 @@ impl Navigator {
                     | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
+            let memory = worker_staging.track(crate::memory::texture_bytes(&texture));
             viewport::prepare_preview(
                 &gpu,
                 job.source.texture(),
@@ -146,13 +159,26 @@ impl Navigator {
                     serde_json::json!({"revision":job.key.revision,"completed_ms":started.elapsed().as_secs_f64()*1000.,"bytes":size[0]*size[1]*TEXEL_BYTES}),
                 );
             }
-            if tx
-                .send(Tile {
-                    key: job.key,
-                    texture,
-                })
-                .is_err()
+            let ready_key = job.key.clone();
             {
+                let mut state = slot.0.lock().unwrap();
+                state.ready.push(ready_key.clone());
+                state.revision = state.revision.wrapping_add(1);
+            }
+            let sent = tx.send(Tile {
+                key: job.key,
+                texture,
+                memory,
+            });
+            {
+                let mut state = slot.0.lock().unwrap();
+                state.active = None;
+                if sent.is_err() {
+                    state.ready.retain(|key| key != &ready_key);
+                }
+                state.revision = state.revision.wrapping_add(1);
+            }
+            if sent.is_err() {
                 break;
             }
             context.request_repaint();
@@ -164,12 +190,22 @@ impl Navigator {
             wanted: None,
             sent: None,
             displayed: None,
+            staging,
+            resource_revision: 0,
         }
     }
     pub fn clear(&mut self) {
+        if self.wanted.is_some() || self.sent.is_some() || self.displayed.is_some() {
+            self.resource_revision = self.resource_revision.wrapping_add(1);
+        }
         self.wanted = None;
         self.sent = None;
-        self.pending.0.lock().unwrap().job = None;
+        {
+            let mut state = self.pending.0.lock().unwrap();
+            if state.job.take().is_some() {
+                state.revision = state.revision.wrapping_add(1);
+            }
+        }
         self.free();
     }
     fn free(&mut self) {
@@ -192,7 +228,14 @@ impl Navigator {
             return;
         };
         let key = Key::new(frame, mapping);
-        while let Ok(tile) = self.replies.try_recv() {
+        while let Ok(mut tile) = self.replies.try_recv() {
+            drop(tile.memory.take());
+            {
+                let mut state = self.pending.0.lock().unwrap();
+                state.ready.retain(|key| key != &tile.key);
+                state.revision = state.revision.wrapping_add(1);
+            }
+            self.resource_revision = self.resource_revision.wrapping_add(1);
             if self.sent.as_ref() == Some(&tile.key) {
                 self.sent = None;
             }
@@ -216,6 +259,9 @@ impl Navigator {
             .as_ref()
             .is_some_and(|(tile, _)| tile.key == key)
         {
+            if self.wanted.is_some() {
+                self.resource_revision = self.resource_revision.wrapping_add(1);
+            }
             self.wanted = None;
             return;
         }
@@ -223,6 +269,7 @@ impl Navigator {
             return;
         }
         if self.wanted.as_ref().is_none_or(|(job, _)| job.key != key) {
+            self.resource_revision = self.resource_revision.wrapping_add(1);
             self.wanted = Some((
                 Job {
                     key: key.clone(),
@@ -250,7 +297,44 @@ impl Navigator {
             self.sent = Some(job.key.clone());
             let mut state = self.pending.0.lock().unwrap();
             state.job = Some(job);
+            state.revision = state.revision.wrapping_add(1);
             self.pending.1.notify_one();
+        }
+    }
+    pub fn resource_revision(&self) -> u64 {
+        self.resource_revision
+            .wrapping_add(self.pending.0.lock().unwrap().revision)
+            .wrapping_add(self.staging.revision())
+    }
+    pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        let account = |job: &Job, inventory: &mut crate::memory::Inventory| {
+            inventory.image_texture(&job.source);
+            if let Some(input) = &job.input {
+                inventory.image_texture(input);
+            }
+            inventory.metadata(&job.key.source.0);
+        };
+        if let Some((job, _)) = &self.wanted {
+            account(job, inventory);
+        }
+        if let Some(key) = &self.sent {
+            inventory.metadata(&key.source.0);
+        }
+        let state = self.pending.0.lock().unwrap();
+        if let Some(job) = &state.job {
+            account(job, inventory);
+        }
+        if let Some(job) = &state.active {
+            account(job, inventory);
+        }
+        for key in &state.ready {
+            inventory.metadata(&key.source.0);
+        }
+        // Unregistered in-flight and completed navigator textures form one display pool.
+        inventory.cpu(self.staging.bytes());
+        if let Some((tile, id)) = &self.displayed {
+            inventory.metadata(&tile.key.source.0);
+            inventory.texture(*id, crate::memory::texture_bytes(&tile.texture));
         }
     }
     pub fn image(&self, frame: &Frame, mapping: viewport::Mapping) -> Image {

@@ -36,11 +36,12 @@ pub(crate) struct Parameters {
     pub mono: [f32; 4],
     pub diffusion: [f32; 4], // Step, noise-model step, fixed contrast, directional axis.
     pub column_area: [u32; 4], // Camera column bounds, not the shading or working-area bounds.
-    pub column: [f32; 4],    // Column range coefficient, horizontal window, and reserved values.
+    pub column: [f32; 4],    // Column range coefficient, horizontal window, block height, reserved.
     pub reduction: [f32; 4], // Native eighth-quantized reconstruction scale.
     pub geometry: [u32; 4], // LocalMean margin, edge LUT margin, fixed bilateral size, global branch.
     pub window: [u32; 4],   // First native tile column/row and compact atlas columns/rows.
     pub region: [u32; 4],   // Half-open physical rectangle projected from the compact atlas.
+    pub sampling: [u32; 4], // Native pixels per sample, adaptive intensity block span, reserved.
 }
 impl Parameters {
     pub fn atlas_extent(self) -> [u32; 2] {
@@ -139,7 +140,8 @@ impl Parameters {
                 .with(&[self.edge[0], self.edge[1], self.edge[3]])
                 .with(&self.model)
                 .with(&self.reduction)
-                .with(&self.geometry),
+                .with(&self.geometry)
+                .slice(&self.sampling[..2]),
             RecipeStage::Column => key
                 .with(&self.area)
                 .with(&self.model)
@@ -275,7 +277,12 @@ pub(crate) fn pattern_parameters(
         return Err("unsupported pattern half size".into());
     }
     super::pattern::Prepared::new(
-        [p.tile[0], p.tile[1], p.tile_count(), half as u32],
+        [
+            p.tile[0],
+            p.tile[1],
+            p.tile_count(),
+            (half as u32).div_ceil(p.sampling[0].max(1)),
+        ],
         [extra[1], extra[2], extra[3].clamp(0., 1.), 0.],
     )
 }
@@ -622,6 +629,7 @@ pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Resu
         geometry: [8, 8, fixed_size, 0],
         window: [0, 0, 4, 4],
         region: [0, 0, w, h],
+        sampling: [1, 32, 0, 0],
         column_area: [0; 4], // Prepared only when the column stage is required.
         column: [
             [0.625, 0.5, 0.375, 0.25, 0.125][controls.banding as usize]
@@ -631,7 +639,7 @@ pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Resu
                     f32::from_bits(0x3faaa993)
                 },
             (15 + 6 * controls.banding) as f32,
-            0.,
+            40.,
             0.,
         ],
     };

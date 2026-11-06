@@ -237,6 +237,7 @@ fn escape_discards_only_the_draft_before_leaving_the_tool() {
     assert!(!crate::photo_tools::take_view_change(&ctx));
     escape(&ctx);
     assert!(!active(&ctx));
+    assert_eq!(crate::photo_tools::selected(&ctx), Tool::Pointer);
     assert!(crate::photo_tools::take_view_change(&ctx));
 }
 #[test]

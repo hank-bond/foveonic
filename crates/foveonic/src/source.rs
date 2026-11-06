@@ -301,6 +301,40 @@ impl CaptureAdjustments {
 }
 
 impl Metadata {
+    /// Logical metadata storage, excluding allocator and map-node overhead.
+    pub fn retained_bytes(&self) -> u64 {
+        let properties: usize = self
+            .properties
+            .iter()
+            .map(|(k, v)| k.capacity() + v.capacity())
+            .sum();
+        let matrices: usize = self
+            .matrices
+            .iter()
+            .map(|(k, v)| {
+                k.capacity()
+                    + std::mem::size_of_val(v)
+                    + v.values.capacity() * std::mem::size_of::<f64>()
+                    + v.dimensions.capacity() * std::mem::size_of::<usize>()
+            })
+            .sum();
+        let lists: usize = self
+            .lists
+            .iter()
+            .map(|(k, list)| {
+                k.capacity()
+                    + list
+                        .names()
+                        .map(|name| {
+                            name.len()
+                                + list.get(name).map_or(0, String::capacity)
+                                + std::mem::size_of::<(String, String)>()
+                        })
+                        .sum::<usize>()
+            })
+            .sum();
+        (std::mem::size_of_val(self) + properties + matrices + lists) as u64
+    }
     /// Equal-resolution RGB storage used by Quattro LOW captures.
     pub(crate) fn is_quattro_low(&self) -> bool {
         self.processing_family().ok() == Some(ProcessingFamily::Quattro)
@@ -467,7 +501,60 @@ pub enum SourceStorage {
     PackedRgbBluePhases,
 }
 
+/// The existing decoded-cache freshness contract, shared by every source loader.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize, Hash)]
+pub struct FileIdentity {
+    pub(crate) location: Vec<u8>,
+    pub(crate) length: u64,
+    pub(crate) modified_seconds: u64,
+    pub(crate) modified_nanos: u32,
+}
+impl FileIdentity {
+    pub fn read(path: &Path) -> Result<Self> {
+        let canonical = path.canonicalize()?;
+        let metadata = std::fs::metadata(&canonical)?;
+        let modified = metadata.modified()?.duration_since(std::time::UNIX_EPOCH)?;
+        Ok(Self {
+            location: canonical.as_os_str().as_encoded_bytes().to_vec(),
+            length: metadata.len(),
+            modified_seconds: modified.as_secs(),
+            modified_nanos: modified.subsec_nanos(),
+        })
+    }
+}
+
+/// Stable verified file provenance, or a unique lifetime for an in-memory input.
+#[derive(Clone, Debug)]
+pub enum SourceOrigin {
+    File(FileIdentity),
+    Memory(std::sync::Arc<()>),
+}
+impl Default for SourceOrigin {
+    fn default() -> Self {
+        Self::Memory(std::sync::Arc::new(()))
+    }
+}
+impl PartialEq for SourceOrigin {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::File(a), Self::File(b)) => a == b,
+            (Self::Memory(a), Self::Memory(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+impl Eq for SourceOrigin {}
+impl SourceOrigin {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        match self {
+            Self::File(identity) => identity.location.capacity(),
+            Self::Memory(_) => 0,
+        }
+    }
+}
+
 pub struct Source {
+    pub(crate) origin: SourceOrigin,
     pub metadata: std::sync::Arc<Metadata>,
     /// Immutable samples in original camera code units, ordered by `storage`.
     pub(crate) pixels: Vec<f32>,
@@ -477,6 +564,19 @@ pub struct Source {
 }
 
 impl Source {
+    /// Decoded codes, retained CAMF and source bookkeeping. Metadata may have
+    /// other shared owners and is inventoried independently.
+    pub fn retained_source_bytes(&self) -> u64 {
+        (std::mem::size_of::<Self>()
+            + self.pixels.capacity() * std::mem::size_of::<f32>()
+            + self.camf.capacity()
+            + self.timings.capacity() * std::mem::size_of::<crate::profile::Timing>()
+            + self.origin.allocated_bytes()) as u64
+    }
+    pub fn origin(&self) -> &SourceOrigin {
+        &self.origin
+    }
+
     /// Physical sample ordering.
     pub fn storage(&self) -> SourceStorage {
         self.storage

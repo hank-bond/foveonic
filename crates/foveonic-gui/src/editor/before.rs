@@ -16,6 +16,20 @@ pub struct Before {
     saved: Option<(Option<worker::Frame>, Option<worker::Frame>)>,
 }
 impl Before {
+    pub(crate) fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        if let Some((frame, detail)) = &self.saved {
+            for frame in frame.iter().chain(detail.iter()) {
+                inventory.frame(frame);
+            }
+        }
+    }
+    pub(crate) fn memory_key(&self, key: &mut Vec<u64>) {
+        if let Some((frame, detail)) = &self.saved {
+            for frame in frame.iter().chain(detail.iter()) {
+                crate::memory::frame_key(frame, key);
+            }
+        }
+    }
     pub fn retain_current(
         &mut self,
         frame: &mut Option<worker::Frame>,
@@ -39,7 +53,7 @@ impl Before {
             Rendition::Defaults => defaults.for_metadata(metadata)?,
             _ => foveonic::render::camera_settings(metadata, None)?,
         };
-        baseline.preview_quality = current.preview_quality;
+        baseline.working_scale = current.working_scale;
         baseline.output_size = current.output_size;
         baseline.crop = current.crop;
         baseline.rotation = current.rotation;
@@ -75,14 +89,23 @@ impl App {
             self.detail = detail;
         }
         self.revision += 1;
+        if let Some(path) = &self.selected {
+            self.worker.retire_before(path);
+            if self.output == "final" && !self.comparison.requested() {
+                if let Some(frame) = self.multi_edit.take_frame(path) {
+                    self.frame = Some(frame);
+                }
+            }
+        }
         if let Some(frame) = &mut self.frame {
             // Presentation consumers publish revisions monotonically. Restoring
             // an owned frame is a new presentation without another render.
             frame.revision = self.revision;
         }
-        self.worker.cancel_before(self.revision);
-        self.worker.progress.finish(self.revision - 1, false);
-        self.busy = false;
+        if let Some(frame) = &self.frame {
+            self.worker.delivered(frame.revision);
+        }
+        self.sync_render_progress(None);
         self.scope_key = None;
         self.smart.reset();
         self.previews.invalidate();
@@ -126,7 +149,7 @@ mod tests {
             ..Default::default()
         };
         current.white_balance_bias.warmth = 0.3;
-        current.preview_quality = foveonic::render::PreviewQuality::Fast;
+        current.working_scale = foveonic::render::Scale::new(2).unwrap();
         let mut defaults = RecipeDefaults::default();
         let mut default = Settings::default();
         default.photographic.tone_method = PhotographicMethod::Universal;
@@ -145,7 +168,7 @@ mod tests {
         assert_eq!(baseline.exposure, 0.);
         assert_eq!(baseline.white_balance, "");
         assert_eq!(baseline.white_balance_bias.warmth, 0.);
-        assert_eq!(baseline.preview_quality, current.preview_quality);
+        assert_eq!(baseline.working_scale, current.working_scale);
         before.active = Rendition::Defaults;
         let baseline = before
             .settings(&current, Some(&metadata), &defaults)

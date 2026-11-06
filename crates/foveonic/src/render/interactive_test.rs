@@ -595,9 +595,9 @@ fn exposure_edits_reuse_both_smart_grids_and_match_fresh() {
     let region = Some([width / 4, height / 4, width / 2, height / 2]);
     // Smart initializes Fast, a native detail tile, and then whole Full. Each
     // subsequent exposure edit must reuse both native finishing boundaries.
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     session_image(&engine, &mut session, &settings);
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     settings.preview_region = region;
     session_image(&engine, &mut session, &settings);
     settings.preview_region = None;

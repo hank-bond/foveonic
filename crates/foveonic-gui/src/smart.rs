@@ -2,7 +2,7 @@
 
 use crate::{preferences, worker, App};
 use eframe::egui;
-use foveonic::render::{PreviewQuality, Settings};
+use foveonic::render::{Scale, Settings};
 // Keep a small margin around the clicked viewport while the whole frame catches up.
 const DETAIL_OVERSCAN_PIXELS: u32 = 64;
 
@@ -40,8 +40,8 @@ pub fn contains(outer: [u32; 4], inner: [u32; 4]) -> bool {
 pub fn same_edits(a: &Settings, b: &Settings) -> bool {
     let mut a = a.clone();
     let mut b = b.clone();
-    a.preview_quality = PreviewQuality::Full;
-    b.preview_quality = PreviewQuality::Full;
+    a.working_scale = Scale::NATIVE;
+    b.working_scale = Scale::NATIVE;
     a.preview_region = None;
     b.preview_region = None;
     a.dehaze_estimate = false;
@@ -59,7 +59,8 @@ pub fn same_geometry(a: &Settings, b: &Settings) -> bool {
 
 impl App {
     pub(super) fn smart_detail(&self, pixels_per_point: f32) -> Option<&worker::Frame> {
-        if self.preferences.preview_quality != preferences::PreviewMode::Smart
+        if self.multi_photo_overview()
+            || self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.framing_preview_active()
             || self.output != "final"
             || self.comparison.requested()
@@ -86,7 +87,8 @@ impl App {
     pub(super) fn smart_edit_request(
         &mut self,
     ) -> Option<(preferences::PreviewMode, Option<[u32; 4]>)> {
-        if self.preferences.preview_quality != preferences::PreviewMode::Smart
+        if self.multi_photo_overview()
+            || self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.framing_preview_active()
             || self.output != "final"
             || self.comparison.requested()
@@ -107,7 +109,6 @@ impl App {
                 && frame.artifact.settings.output_size.is_none()
                 && requested.output_size.is_none()
                 && same_geometry(&frame.requested, &requested)
-                && requested.fast_preview_available(&frame.artifact.metadata)
         })?;
         let visible = self.viewport.visible_pixels()?;
         if !requested.regional_preview_available(&frame.artifact.metadata) {
@@ -136,7 +137,7 @@ impl App {
                     && self
                         .frame
                         .as_ref()
-                        .is_some_and(|frame| frame.artifact.settings.preview_quality.is_reduced())
+                        .is_some_and(|frame| frame.artifact.settings.working_scale.is_reduced())
                 {
                     self.submit_with_quality(None, None, preferences::PreviewMode::Full);
                 }
@@ -152,12 +153,10 @@ impl App {
                 .viewport
                 .zoom_percent(ctx.pixels_per_point())
                 .is_some_and(|z| z > 100.)
-            && self.frame.as_ref().is_some_and(|f| {
-                matches!(
-                    f.artifact.settings.preview_quality,
-                    PreviewQuality::Draft | PreviewQuality::Thumb
-                )
-            })
+            && self
+                .frame
+                .as_ref()
+                .is_some_and(|f| f.artifact.settings.working_scale.divisor() >= 4)
         {
             self.submit_with_quality(None, None, preferences::PreviewMode::Full);
             return;
@@ -180,7 +179,7 @@ impl App {
             && self.detail.as_ref().is_some_and(|detail| {
                 let full_completed = self.frame.as_ref().is_some_and(|frame| {
                     frame.revision > detail.revision
-                        && frame.artifact.settings.preview_quality == PreviewQuality::Full
+                        && frame.artifact.settings.working_scale == Scale::NATIVE
                         && same_edits(&frame.requested, &self.view_settings())
                 });
                 !full_completed
@@ -193,17 +192,11 @@ impl App {
             return;
         }
         let Some(frame) = self.frame.as_ref().filter(|f| {
-            f.artifact
-                .settings
-                .fast_preview_available(&f.artifact.metadata)
-                && f.rendition == self.before.active
-                && same_edits(&f.requested, &self.view_settings())
+            f.rendition == self.before.active && same_edits(&f.requested, &self.view_settings())
         }) else {
             return;
         };
-        if self.busy
-            || frame.artifact.settings.preview_quality == foveonic::render::PreviewQuality::Full
-        {
+        if self.busy || frame.artifact.settings.working_scale == foveonic::render::Scale::NATIVE {
             return;
         }
         // Recipes without regional support refine the whole frame directly.

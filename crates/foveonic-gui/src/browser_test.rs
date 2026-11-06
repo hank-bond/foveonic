@@ -250,6 +250,7 @@ struct Frame {
     green_border: bool,
     restore: Option<egui::Pos2>,
     copy_path: Option<egui::Pos2>,
+    cursor: egui::CursorIcon,
 }
 impl Fixture {
     fn new(mode: Organizer) -> Self {
@@ -306,7 +307,7 @@ impl Fixture {
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
                 settings: false,
-                photo_tool_active: false,
+                viewport_hovered: false,
                 framing_active: false,
             },
         ) {
@@ -384,10 +385,12 @@ impl Fixture {
                     green_border: false,
                     restore: None,
                     copy_path: None,
+                    cursor: egui::CursorIcon::Default,
                 });
             });
         });
         let mut result = result.unwrap();
+        result.cursor = output.platform_output.cursor_icon;
         for command in &output.platform_output.commands {
             if let egui::OutputCommand::CopyText(text) = command {
                 self.copied.push(text.clone());
@@ -1595,31 +1598,42 @@ fn browser_snapshot_profile() {
 }
 
 #[test]
-fn quarter_turn_thumbnail_targets_keep_the_selected_set_and_active_photo() {
+fn viewport_tools_leave_browser_selection_and_pointer_behavior_ordinary() {
     for mode in [Organizer::Icons, Organizer::List, Organizer::Large] {
-        let mut fixture = Fixture::new(mode);
-        let frame = fixture.select_first();
-        let paths = fixture.browser.files[..2].to_vec();
-        fixture.browser.highlighted = paths.iter().cloned().collect();
-        let active = fixture.selected.clone();
-        crate::rotate_tool::activate(&fixture.ctx, crate::rotate_tool::Mode::Left);
-        let point = frame.grid.min + egui::vec2(30., 20.);
-        for pressed in [true, false] {
-            fixture.frame(vec![
-                egui::Event::PointerMoved(point),
-                egui::Event::PointerButton {
-                    pos: point,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: Default::default(),
-                },
-            ]);
+        for tool in [
+            crate::photo_tools::Tool::Rotate,
+            crate::photo_tools::Tool::Crop,
+            crate::photo_tools::Tool::Hand,
+        ] {
+            let mut fixture = Fixture::new(mode);
+            let frame = fixture.select_first();
+            let paths = fixture.browser.files[..2].to_vec();
+            fixture.browser.highlighted = paths.iter().cloned().collect();
+            let active = fixture.selected.clone();
+            crate::photo_tools::select(&fixture.ctx, tool);
+            if tool == crate::photo_tools::Tool::Rotate {
+                crate::rotate_tool::activate(&fixture.ctx, crate::rotate_tool::Mode::Left);
+            }
+            let point = frame.grid.min + egui::vec2(30., 20.);
+            for pressed in [true, false] {
+                fixture.frame(vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ]);
+            }
+            assert_eq!(fixture.selected, active);
+            assert_eq!(
+                fixture.browser.highlighted,
+                [paths[0].clone()].into_iter().collect()
+            );
+            assert_eq!(crate::photo_tools::selected(&fixture.ctx), tool);
+            let hover = fixture.frame(vec![egui::Event::PointerMoved(point)]);
+            assert_eq!(hover.cursor, egui::CursorIcon::Default);
         }
-        assert_eq!(
-            fixture.browser.rotation_clicked,
-            Some((paths[0].clone(), false))
-        );
-        assert_eq!(fixture.selected, active);
-        assert_eq!(fixture.browser.highlighted, paths.iter().cloned().collect());
     }
 }

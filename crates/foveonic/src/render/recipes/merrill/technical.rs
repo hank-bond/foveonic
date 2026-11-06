@@ -15,9 +15,11 @@ use crate::{
     source::Result,
 };
 
+// This transient recipe handoff stays on the stack rather than adding a heap owner.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Prepared {
     Requested(BuiltRecipe),
-    Linear(BuiltRecipe, color_mode::Settings),
+    Linear(BuiltRecipe, color_mode::Settings, Option<preview::Grid>),
 }
 
 pub(super) fn build(
@@ -31,17 +33,16 @@ pub(super) fn build(
 ) -> Result<Prepared> {
     let space = ColorSpace::from_metadata(source.metadata())?;
     let mut params = calibration::encode(source.metadata(), space)?;
-    // Preview policy changes the working grid. Inspection and DNG keep native geometry.
-    let preview = (settings.preview_quality.is_reduced()
+    let native_params = params;
+    // Working scale sets sensor sampling. Native DNG requests select identity sampling.
+    let preview = (settings.working_scale.is_reduced()
         && mode.is_some()
-        && !settings.is_monochrome()
-        && (names == ["final"] || names == ["linear.base"])
         && settings.preview_region.is_none())
     .then(|| {
         preview::Grid::new(
             params,
             settings.processing_output_size(),
-            settings.preview_quality,
+            settings.working_scale,
         )
     })
     .transpose()?;
@@ -89,48 +90,29 @@ pub(super) fn build(
     engine.check_extent([params.output[0], params.output[1]])?;
     let policy = native_layers::Policy::new(
         settings,
-        preview.is_some(),
         mode.is_some()
             && (names == ["final"] || names == ["linear.base"])
-            && !settings.is_monochrome()
-            && preview::available(source.metadata()),
+            && settings.working_scale.is_native(),
     );
-    let (recipe, couplings) = if source.reduced().is_some() {
-        let mut graph = crate::graph::Graph::default();
-        let calibrated = graph.add(
-            Operation::RenderedInput {
-                data: crate::graph::DataType::CalibratedLayers,
-            },
-            &[],
-        )?;
-        (
-            BuiltRecipe {
-                graph,
-                final_id: calibrated,
-                params,
-                rgb_extent: [params.source[0], params.source[1]],
-                rgb_bounds: params.crop,
-            },
-            None,
-        )
-    } else {
-        match native_layers::build(
-            engine,
-            source.original()?,
-            settings,
-            params,
-            &policy,
-            names,
-            profile,
-            execution,
-        )? {
-            native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
-            native_layers::Output::Ready { recipe, couplings } => (recipe, couplings),
-        }
+    let (recipe, couplings) = match native_layers::build(
+        engine,
+        source.metadata(),
+        settings,
+        native_params,
+        &policy,
+        names,
+        profile,
+        execution,
+    )? {
+        native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
+        native_layers::Output::Ready { recipe, couplings } => (recipe, couplings),
     };
     let mut graph = recipe.graph;
     let mut calibrated = recipe.final_id;
     let directional_banding_selected = policy.directional_banding;
+    if preview.is_none() {
+        graph.retain_for_seal(calibrated);
+    }
     macro_rules! finish {
         () => {
             execution.check()?;
@@ -146,8 +128,8 @@ pub(super) fn build(
         };
     }
     if settings.is_monochrome() {
-        return super::monochrome::build(
-            source.original()?,
+        return match super::monochrome::build(
+            source.metadata(),
             settings,
             BuiltRecipe {
                 graph,
@@ -159,13 +141,15 @@ pub(super) fn build(
             names,
             profile,
             execution,
-        );
+            preview.as_ref(),
+        )? {
+            Prepared::Linear(recipe, mode, _) => Ok(Prepared::Linear(recipe, mode, preview)),
+            requested => Ok(requested),
+        };
     }
     let native_calibrated = calibrated;
     if let Some(grid) = &preview {
-        if source.reduced().is_none() {
-            calibrated = grid.append(&mut graph, calibrated)?;
-        }
+        calibrated = grid.append(&mut graph, calibrated)?;
     }
     let noise_controls = settings.merrill_reconstruction();
     if let Some(region) = &region {
@@ -212,6 +196,7 @@ pub(super) fn build(
                 region: region.as_ref(),
                 directional_banding: directional_banding_selected,
                 native_calibrated,
+                view: super::super::camera_view(params),
             },
             &mut graph,
             calibrated,
@@ -308,7 +293,7 @@ pub(super) fn build(
             if region.is_some() {
                 1.
             } else {
-                params.source[0] as f32 / source.metadata().width as f32
+                settings.working_scale.factor()
             },
         );
         let guide = graph.add(
@@ -330,15 +315,7 @@ pub(super) fn build(
     // Final sharpening uses the actual reconstructed RGB, independently of
     // denoising and texture restoration. Inspection can request it without sharpening.
     let signal = if settings.sharpen_selected() || names.contains(&"detail.signal") {
-        let scale = if matches!(
-            settings.preview_quality,
-            crate::render::PreviewQuality::Draft | crate::render::PreviewQuality::Thumb
-        ) && preview.is_some()
-        {
-            1. / settings.preview_quality.divisor() as f32
-        } else {
-            1.
-        };
+        let scale = settings.working_scale.factor();
         let signal = graph.add(Operation::SharpSignal { space, scale }, &[linear])?;
         finish!();
         Some(signal)
@@ -355,15 +332,12 @@ pub(super) fn build(
             finish!();
         }
     }
-    let mut recipe = BuiltRecipe {
+    let recipe = BuiltRecipe {
         graph,
         final_id: linear,
         params,
         rgb_extent: [params.source[0], params.source[1]],
         rgb_bounds: params.crop,
     };
-    if let Some(grid) = &preview {
-        grid.frame(&mut recipe, space)?;
-    }
-    Ok(Prepared::Linear(recipe, mode))
+    Ok(Prepared::Linear(recipe, mode, preview))
 }

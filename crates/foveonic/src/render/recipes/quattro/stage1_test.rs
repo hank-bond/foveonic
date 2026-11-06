@@ -248,21 +248,18 @@ fn small_noise_grids_preserve_all_strength_steps_and_native_controls() {
         let full = prepare_filter(&metadata, step).unwrap();
         assert!(
             full.key()
-                == prepare_filter_on_grid(&metadata, step, WorkingGrid::Full)
+                == prepare_filter_on_grid(&metadata, step, WorkingGrid::NATIVE)
                     .unwrap()
                     .key()
         );
-        assert!(
-            full.key()
-                == prepare_filter_on_grid(&metadata, step, WorkingGrid::Half)
-                    .unwrap()
-                    .key()
-        );
-        let draft = prepare_filter_on_grid(&metadata, step, WorkingGrid::Quarter).unwrap();
-        let thumb = prepare_filter_on_grid(&metadata, step, WorkingGrid::Eighth).unwrap();
-        assert_eq!(draft.extent(), [1472, 918]);
-        assert_eq!(thumb.extent(), [736, 459]);
-        assert!(full.key() != draft.key());
-        assert!(draft.key() != thumb.key());
+        for divisor in [2, 4, 8, 16, 64, 1 << 31] {
+            let scale = WorkingGrid::new(divisor).unwrap();
+            let prepared = prepare_filter_on_grid(&metadata, step, scale).unwrap();
+            assert_eq!(
+                prepared.extent(),
+                super::super::color_grid(&metadata, scale).unwrap().extent
+            );
+            assert!(prepared.key() != full.key());
+        }
     }
 }

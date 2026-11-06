@@ -16,6 +16,19 @@ pub(crate) enum Ratio {
     Double,
 }
 
+/// Standard-deviation ratio for independent native noise after complete 2D half levels.
+///
+/// The separable half phase is [1, 3, 3, 1]/8. Composing levels at divisor d
+/// gives three convolved length-d boxes; their 1D squared-weight sum is also
+/// the 2D standard-deviation ratio. This describes interior samples before
+/// edge replication and excludes correlations introduced by native corrections
+/// and signed-code rounding. Signal levels and heuristic controls keep their units.
+pub(crate) fn independent_noise_std(scale: crate::render::Scale) -> f32 {
+    let inverse = 1. / f64::from(scale.divisor());
+    let squared = inverse * inverse;
+    ((11. + 5. * squared + 4. * squared * squared) * inverse / 20.) as f32
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Prepared {
@@ -23,6 +36,8 @@ pub(crate) struct Prepared {
     shape: [u32; 4],
     // Doubling flag, horizontal/vertical pass, signed-code rounding flag, reserved.
     controls: [u32; 4],
+    // Logical sensor origin inside replicated padding.
+    origin: [u32; 4],
 }
 
 impl Prepared {
@@ -42,21 +57,29 @@ impl Prepared {
         Ok(Self {
             shape: [extent[0], extent[1], output[0], output[1]],
             controls: [doubling, 0, 0, 0],
+            origin: [0; 4],
         })
     }
 
-    /// Cover odd native sensor edges with the same replicated-edge half filter.
-    pub(crate) fn half_ceil(extent: [u32; 2]) -> Result<Self> {
-        if extent.contains(&0) || extent.iter().any(|&v| v > i32::MAX as u32 / 2) {
-            return Err("invalid RGB pyramid source extent".into());
+    /// Extend the covered cells with replicated edges for downstream alignment.
+    pub(crate) fn half_to(extent: [u32; 2], output: [u32; 2]) -> Result<Self> {
+        if extent.contains(&0)
+            || extent.iter().any(|&v| v > i32::MAX as u32 / 2)
+            || output.contains(&0)
+            || output
+                .iter()
+                .zip(extent)
+                .any(|(&out, input)| out < input.div_ceil(2))
+        {
+            return Err("invalid covered RGB pyramid extent".into());
         }
-        let output = extent.map(|v| v.div_ceil(2));
         if u64::from(output[0]) * u64::from(output[1]) > u64::from(u32::MAX) / 3 {
             return Err("invalid RGB pyramid destination extent".into());
         }
         Ok(Self {
             shape: [extent[0], extent[1], output[0], output[1]],
             controls: [0, 0, 0, 0],
+            origin: [0; 4],
         })
     }
 
@@ -77,6 +100,7 @@ impl Prepared {
         Ok(Self {
             shape: [extent[0], extent[1], output[0], output[1]],
             controls: [1, 0, 0, 0],
+            origin: [0; 4],
         })
     }
 
@@ -85,6 +109,34 @@ impl Prepared {
     pub(crate) fn with_signed_codes(mut self) -> Self {
         self.controls[2] = 1;
         self
+    }
+
+    /// Graph-level sensor resampling declares its processing grid explicitly.
+    pub(crate) fn with_working_scale(mut self, scale: crate::render::Scale) -> Self {
+        self.controls[3] = scale.divisor();
+        self
+    }
+    pub(crate) fn working_scale(&self) -> Option<crate::render::Scale> {
+        crate::render::Scale::new(self.controls[3]).ok()
+    }
+    pub(crate) fn with_origin(mut self, origin: [u32; 2]) -> Self {
+        self.origin[..2].copy_from_slice(&origin);
+        self
+    }
+    pub(crate) fn map_view(&self, mut view: crate::image::View) -> crate::image::View {
+        if self.controls[0] == 0 {
+            let half = crate::render::Scale::new(2).expect("power of two");
+            view.crop = half.bounds(view.crop);
+            view.extent = half.extent(view.extent);
+        } else {
+            view.crop = view.crop.map(|v| v * 2);
+            view.extent = view.extent.map(|v| v * 2);
+        }
+        for axis in 0..2 {
+            view.crop[axis] += self.origin[axis];
+            view.crop[axis + 2] += self.origin[axis];
+        }
+        view
     }
 
     pub(crate) fn extent(&self) -> [u32; 2] {

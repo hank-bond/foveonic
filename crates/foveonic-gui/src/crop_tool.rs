@@ -65,7 +65,14 @@ pub fn escape(ctx: &egui::Context) {
     }
 }
 pub fn toggle(ctx: &egui::Context) {
-    photo_tools::select(ctx, if active(ctx) { Tool::Hand } else { Tool::Crop });
+    photo_tools::select(
+        ctx,
+        if active(ctx) {
+            Tool::Pointer
+        } else {
+            Tool::Crop
+        },
+    );
 }
 pub fn displayed(ctx: &egui::Context, crop: Crop) -> (Crop, bool) {
     let s = state(ctx);
@@ -220,6 +227,7 @@ mod tests {
         assert!(!crate::photo_tools::take_view_change(&ctx));
         escape(&ctx);
         assert!(!active(&ctx));
+        assert_eq!(photo_tools::selected(&ctx), Tool::Pointer);
         assert!(crate::photo_tools::take_view_change(&ctx));
     }
 }

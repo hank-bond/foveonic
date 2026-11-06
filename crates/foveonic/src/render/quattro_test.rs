@@ -23,6 +23,7 @@ fn diagnostic_settings() -> Settings {
 
 fn source() -> Source {
     Source {
+        origin: Default::default(),
         storage: SourceStorage::PackedRgbBluePhases,
         metadata: Arc::new(Metadata {
             processing_version: Some([3, 1, 2, 0]),
@@ -1243,10 +1244,10 @@ fn original_fast_previews_match_fresh_renders_through_quality_and_edit_changes()
         let mut retained = None;
         let mut retained_bytes = Vec::new();
         for step in 0..6 {
-            full.preview_quality = if step == 0 || step == 4 {
-                PreviewQuality::Full
+            full.working_scale = if step == 0 || step == 4 {
+                Scale::NATIVE
             } else {
-                PreviewQuality::Fast
+                Scale::new(2).unwrap()
             };
             full.exposure = if step == 2 || step == 4 { 0.5 } else { 0. };
             full.reconstruction = if step == 3 {
@@ -1283,7 +1284,7 @@ fn original_fast_previews_match_fresh_renders_through_quality_and_edit_changes()
             );
             assert_eq!(
                 cached.view().extent,
-                if full.preview_quality == PreviewQuality::Fast {
+                if full.working_scale == Scale::new(2).unwrap() {
                     native.map(|v| v / 2)
                 } else {
                     native
@@ -1309,7 +1310,7 @@ fn original_fast_previews_match_fresh_renders_through_quality_and_edit_changes()
 #[test]
 fn supported_preview_policy_survives_photographic_control_normalization() {
     let mut settings = Settings::new("Sunlight", "Standard");
-    settings.preview_quality = PreviewQuality::Fast;
+    settings.working_scale = Scale::new(2).unwrap();
     assert!(!recipes::quattro::normalize_photographic(&mut settings));
     assert!(recipes::quattro::validate_photographic(&settings).is_ok());
 }
@@ -1335,7 +1336,7 @@ fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_pannin
         let [width, height] = full.view().extent;
         let bytes = engine.readback_image(&full).unwrap();
         let mut session = RenderSession::new(source);
-        settings.preview_quality = PreviewQuality::Fast;
+        settings.working_scale = Scale::new(2).unwrap();
         engine
             .render_session(
                 &mut session,
@@ -1345,7 +1346,7 @@ fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_pannin
                 &mut Profile::default(),
             )
             .unwrap();
-        settings.preview_quality = PreviewQuality::Full;
+        settings.working_scale = Scale::NATIVE;
         for (index, [x, y]) in [[0, 0], [width / 2, height / 2], [width - 480, height - 320]]
             .into_iter()
             .enumerate()
@@ -1439,11 +1440,11 @@ fn progress_observers_report_real_load_and_render_boundaries_without_changing_pi
     let engine = Engine::new().unwrap();
     let mut settings = Settings::new("Sunlight", "Standard");
     for (quality, exposure) in [
-        (PreviewQuality::Full, 0.),
-        (PreviewQuality::Fast, 0.),
-        (PreviewQuality::Fast, 0.5),
+        (Scale::NATIVE, 0.),
+        (Scale::new(2).unwrap(), 0.),
+        (Scale::new(2).unwrap(), 0.5),
     ] {
-        settings.preview_quality = quality;
+        settings.working_scale = quality;
         settings.exposure = exposure;
         let stages = RefCell::new(Vec::new());
         let mut artifacts = engine

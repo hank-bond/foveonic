@@ -1,13 +1,45 @@
-//! Shares bounded FIFO sensor-plane and row work across ordered speculative photo loads.
+//! Runs independent processing CPU work on one host-sized pool with decode-specific FIFO admission.
 
 use crate::{background, source::Result};
 use std::{
     collections::BTreeSet,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, LazyLock, Mutex},
     time::Duration,
 };
 
 pub(crate) struct Pool(rayon::ThreadPool);
+static HOST: LazyLock<std::result::Result<Arc<Pool>, String>> = LazyLock::new(|| {
+    Pool::new(available_workers())
+        .map(Arc::new)
+        .map_err(|error| error.to_string())
+});
+
+pub(crate) fn available_workers() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+}
+
+/// Foreground and speculative CPU tasks share this persistent pool. It is
+/// independent of the UI's global Rayon pool and creates no workers per photo.
+pub(crate) fn shared() -> Result<Arc<Pool>> {
+    HOST.as_ref()
+        .map(Arc::clone)
+        .map_err(|error| error.clone().into())
+}
+
+/// Run borrowed CPU preparation within the same capacity as sensor decoding.
+/// Nested plane/row work uses this pool too; file I/O stays on its caller.
+pub(crate) fn cpu<T: Send>(work: impl FnOnce() -> Result<T> + Send) -> Result<T> {
+    let scheduling = background::context();
+    let pool = background::decoder_context()
+        .map(|task| task.pool)
+        .map_or_else(shared, Ok)?;
+    pool.0.install(|| {
+        background::with_context(scheduling, || {
+            background::checkpoint_or_cancel()?;
+            work()
+        })
+    })
+}
 #[derive(Clone)]
 pub(crate) struct Task {
     pub pool: Arc<Pool>,
@@ -79,8 +111,7 @@ impl Pool {
         Ok(Self(
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
-                .thread_name(|i| format!("cache-layer-{i}"))
-                .start_handler(|_| background::lower_priority())
+                .thread_name(|i| format!("processing-cpu-{i}"))
                 .build()?,
         ))
     }
@@ -91,7 +122,7 @@ impl Pool {
     /// the same FIFO workers, without copying compressed data or creating child threads.
     pub fn planes<T: Send>(
         &self,
-        turn: &Turn,
+        turn: Option<&Turn>,
         decode: impl Fn(usize) -> Result<T> + Sync,
     ) -> Result<Vec<T>> {
         const SENSOR_PLANES: usize = 3;
@@ -108,7 +139,9 @@ impl Pool {
                 });
             }
             // The next photo can now read and queue its layers while these run.
-            turn.release();
+            if let Some(turn) = turn {
+                turn.release();
+            }
         });
         results
             .into_iter()
@@ -121,7 +154,7 @@ impl Pool {
     }
     fn rows<T: Send>(
         &self,
-        turn: &Turn,
+        turn: Option<&Turn>,
         output: &mut [T],
         row_size: usize,
         decode: &(impl Fn(usize, &mut [T]) -> Result<()> + Sync),
@@ -141,7 +174,9 @@ impl Pool {
                     }));
                 });
             }
-            turn.release();
+            if let Some(turn) = turn {
+                turn.release();
+            }
         });
         // Scope completion joins every chunk. Row order, rather than completion
         // order, chooses the earliest damaged row when several chunks fail.
@@ -151,8 +186,18 @@ impl Pool {
     }
 }
 
-/// Decode independent rows into disjoint output slices. Speculative photos share
-/// their configured FIFO pool. Active loads use at most four inherited workers.
+/// Decode independent planes using the common processing CPU budget. Speculative
+/// photo admission adds its FIFO turn; foreground decoding has no such turn.
+pub(crate) fn planes<T: Send>(decode: impl Fn(usize) -> Result<T> + Sync) -> Result<Vec<T>> {
+    if let Some(task) = background::decoder_context() {
+        task.pool.planes(Some(&task.turn), decode)
+    } else {
+        shared()?.planes(None, decode)
+    }
+}
+
+/// Decode independent rows into disjoint output slices on the same processing
+/// pool as sensor planes. Every task inherits its caller's priority and cancellation.
 pub(crate) fn rows<T: Send>(
     output: &mut [T],
     row_size: usize,
@@ -163,33 +208,9 @@ pub(crate) fn rows<T: Send>(
     }
     assert!(row_size != 0 && output.len().is_multiple_of(row_size));
     if let Some(task) = background::decoder_context() {
-        task.pool.rows(&task.turn, output, row_size, &decode)
+        task.pool.rows(Some(&task.turn), output, row_size, &decode)
     } else {
-        const FOREGROUND_WORKERS: usize = 4;
-        let chunk_rows = (output.len() / row_size).div_ceil(FOREGROUND_WORKERS);
-        std::thread::scope(|scope| {
-            let workers: Vec<_> = output
-                .chunks_mut(chunk_rows * row_size)
-                .enumerate()
-                .map(|(chunk, output)| {
-                    let scheduling = background::context();
-                    let decode = &decode;
-                    scope.spawn(move || {
-                        background::with_context(scheduling, || decode(chunk * chunk_rows, output))
-                    })
-                })
-                .collect();
-            let results: Vec<_> = workers
-                .into_iter()
-                .map(|worker| {
-                    worker
-                        .join()
-                        .map_err(|_| "sensor row decoder worker panicked".into())
-                        .and_then(|result| result)
-                })
-                .collect();
-            results.into_iter().collect()
-        })
+        shared()?.rows(None, output, row_size, &decode)
     }
 }
 

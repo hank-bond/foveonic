@@ -25,6 +25,16 @@ impl App {
             return;
         }
         let mut browser = Vec::new();
+        let viewport_hovered = input
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                egui::Event::PointerMoved(pos) => Some(*pos),
+                _ => None,
+            })
+            .or_else(|| ctx.pointer_hover_pos())
+            .is_some_and(|pos| crate::photo_tools::viewport_contains(ctx, pos));
         for invocation in shortcuts::capture(
             ctx,
             input,
@@ -33,10 +43,25 @@ impl App {
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
                 settings: self.selected.is_some() && self.sidecars.ready(),
-                photo_tool_active: crate::photo_tools::active(ctx),
+                viewport_hovered,
                 framing_active: crate::crop_tool::active(ctx) || crate::rotate_tool::active(ctx),
             },
         ) {
+            if matches!(
+                invocation.action,
+                Action::DirectColor
+                    | Action::Crop
+                    | Action::Rotate
+                    | Action::CycleRotate
+                    | Action::RotateLeft
+                    | Action::RotateRight
+            ) && !self
+                .selected
+                .as_deref()
+                .is_some_and(|path| self.edit_selection.contains(path))
+            {
+                continue;
+            }
             match invocation.action {
                 Action::Browser(action) => browser.push((action, invocation.modifiers)),
                 Action::DirectColor => {
@@ -61,9 +86,10 @@ impl App {
                     self.comparison = Default::default();
                     crate::crop_tool::toggle(ctx);
                 }
-                Action::Hand | Action::FinishTool => {
+                Action::Hand => {
                     crate::photo_tools::hand(ctx);
                 }
+                Action::Pointer | Action::FinishTool => crate::photo_tools::pointer(ctx),
                 Action::CopySettings => self.actions.push(Edit::CopySettings),
                 Action::PasteSettings => {
                     if let Some(text) = invocation.text {
@@ -140,7 +166,7 @@ impl App {
                                 let mut settings = copied.clone();
                                 if self.selected.as_ref() == Some(&path) {
                                     // Preview policy and inspection belong to the workspace.
-                                    settings.preview_quality = self.settings.preview_quality;
+                                    settings.working_scale = self.settings.working_scale;
                                     settings.preview_region = self.settings.preview_region;
                                     controls::normalize_with_capture(
                                         &mut settings,
@@ -185,11 +211,11 @@ mod tests {
         let mut source = Settings::new("Shade", "Vivid");
         source.exposure = 0.7;
         source.tone_enabled = false;
-        source.preview_quality = foveonic::render::PreviewQuality::Fast;
+        source.working_scale = foveonic::render::Scale::new(2).unwrap();
         source.preview_region = Some([10, 20, 100, 200]);
         let encoded = String::from_utf8(sidecar::encode(&source).unwrap()).unwrap();
         let copied = clipboard_settings(&encoded).unwrap();
-        source.preview_quality = foveonic::render::PreviewQuality::Full;
+        source.working_scale = foveonic::render::Scale::NATIVE;
         source.preview_region = None;
         assert_eq!(copied, source);
         assert!(clipboard_settings("ordinary clipboard text").is_err());

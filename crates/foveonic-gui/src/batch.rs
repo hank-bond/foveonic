@@ -117,65 +117,70 @@ impl Worker {
         let directory = Arc::new(Mutex::new(None));
         let checked_directory = directory.clone();
         let mut engine = engine;
-        std::thread::spawn(move || loop {
-            let (scan, batch, directory) = {
-                let mut state = slot.0.lock().unwrap();
-                while !state.stop
-                    && state.scan.is_none()
-                    && state.batch.is_none()
-                    && state.directory.is_none()
-                {
-                    state = slot.1.wait(state).unwrap();
-                }
-                if state.stop {
-                    break;
-                }
-                let batch = state.batch.take();
-                let scan = if batch.is_none() {
-                    state.scan.take()
-                } else {
-                    None
+        std::thread::spawn(move || {
+            loop {
+                let (scan, batch, directory) = {
+                    let mut state = slot.0.lock().unwrap();
+                    while !state.stop
+                        && state.scan.is_none()
+                        && state.batch.is_none()
+                        && state.directory.is_none()
+                    {
+                        state = slot.1.wait(state).unwrap();
+                    }
+                    if state.stop {
+                        break;
+                    }
+                    let batch = state.batch.take();
+                    let scan = if batch.is_none() {
+                        state.scan.take()
+                    } else {
+                        None
+                    };
+                    let directory = if batch.is_none() && scan.is_none() {
+                        state.directory.take()
+                    } else {
+                        None
+                    };
+                    (scan, batch, directory)
                 };
-                let directory = if batch.is_none() && scan.is_none() {
-                    state.directory.take()
-                } else {
-                    None
-                };
-                (scan, batch, directory)
-            };
-            if let Some(path) = directory {
-                let available = path.is_dir();
-                *checked_directory.lock().unwrap() = Some((path, available));
+                if let Some(path) = directory {
+                    let available = path.is_dir();
+                    *checked_directory.lock().unwrap() = Some((path, available));
+                }
+                if let Some(scan) = scan {
+                    let completed = status.lock().unwrap().imported.len();
+                    let result = cache.background(|| {
+                        scan_files(scan, completed, &cache, || cache.background(|| ()))
+                    });
+                    // A stale scan can be discarded. Batch completion never waits for UI receipt.
+                    *scanned.lock().unwrap() = Some(result);
+                }
+                if let Some(batch) = batch {
+                    engine.set_noise_calibration(batch.calibration.clone());
+                    cache.processing(|| {
+                        run_batch(&engine, &cache, batch, &status, &context, || {
+                            let (stop, scan) = {
+                                let mut state = slot.0.lock().unwrap();
+                                (state.stop, state.scan.take())
+                            };
+                            if let Some(scan) = scan {
+                                let completed = status.lock().unwrap().imported.len();
+                                *scanned.lock().unwrap() =
+                                    Some(scan_files(scan, completed, &cache, || {
+                                        cache.processing(|| ())
+                                    }));
+                                context.request_repaint();
+                            }
+                            stop
+                        })
+                    });
+                    engine.clear_preparation();
+                    engine.set_noise_calibration(None);
+                    status.lock().unwrap().running = false;
+                }
+                context.request_repaint();
             }
-            if let Some(scan) = scan {
-                let completed = status.lock().unwrap().imported.len();
-                let result = cache
-                    .background(|| scan_files(scan, completed, &cache, || cache.background(|| ())));
-                // A stale scan can be discarded. Batch completion never waits for UI receipt.
-                *scanned.lock().unwrap() = Some(result);
-            }
-            if let Some(batch) = batch {
-                engine.set_noise_calibration(batch.calibration.clone());
-                cache.processing(|| {
-                    run_batch(&engine, &cache, batch, &status, &context, || {
-                        let (stop, scan) = {
-                            let mut state = slot.0.lock().unwrap();
-                            (state.stop, state.scan.take())
-                        };
-                        if let Some(scan) = scan {
-                            let completed = status.lock().unwrap().imported.len();
-                            *scanned.lock().unwrap() =
-                                Some(scan_files(scan, completed, &cache, || {
-                                    cache.processing(|| ())
-                                }));
-                            context.request_repaint();
-                        }
-                        stop
-                    })
-                });
-                status.lock().unwrap().running = false;
-            }
-            context.request_repaint();
         });
         Self {
             pending,

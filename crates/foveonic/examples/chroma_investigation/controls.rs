@@ -19,11 +19,12 @@ fn params() -> Parameters {
         mono: [1.; 4],
         diffusion: [0.25, 1., 2., 0.],
         column_area: [0, 0, 64, 64],
-        column: [0.375, 27., 0., 0.],
+        column: [0.375, 27., 40., 0.],
         reduction: [1., 0., 0., 0.],
         geometry: [8, 8, 21, 0],
         window: [0, 0, 1, 1],
         region: [0, 0, 64, 64],
+        sampling: [1, 32, 0, 0],
     }
 }
 #[test]

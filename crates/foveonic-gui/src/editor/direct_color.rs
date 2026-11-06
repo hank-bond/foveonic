@@ -107,7 +107,7 @@ pub fn advanced_active(ctx: &egui::Context) -> bool {
 
 fn toggle_target(ctx: &egui::Context, target: Target) {
     let on = active(ctx) && state(ctx).target == target;
-    photo_tools::select(ctx, if on { Tool::Hand } else { Tool::ColorRange });
+    photo_tools::select(ctx, if on { Tool::Pointer } else { Tool::ColorRange });
     let mut s = state(ctx);
     s.target = target;
     store(ctx, s);

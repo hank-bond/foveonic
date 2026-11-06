@@ -75,7 +75,7 @@ impl Scope {
         match self {
             Self::All => {
                 let (quality, region, size, space, output) = (
-                    target.preview_quality,
+                    target.working_scale,
                     target.preview_region,
                     target.output_size,
                     target.tiff_color_space,
@@ -92,7 +92,7 @@ impl Scope {
                 target.color_range_preview = color_preview;
                 target.dehaze_estimate = dehaze_estimate;
                 target.adaptive_tone_tuning = adaptive_limits;
-                target.preview_quality = quality;
+                target.working_scale = quality;
                 target.preview_region = region;
                 target.output_size = size;
                 target.tiff_color_space = space;
@@ -196,7 +196,7 @@ fn merge_reconstruction(source: &Settings, target: &mut Settings, detail: bool) 
 pub(super) fn snapshot(settings: &Settings) -> Settings {
     Settings {
         dehaze_estimate: false,
-        preview_quality: Default::default(),
+        working_scale: Default::default(),
         preview_region: None,
         color_range_preview: None,
         adaptive_tone_tuning: Default::default(),

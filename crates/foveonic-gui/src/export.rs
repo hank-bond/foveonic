@@ -4,7 +4,7 @@ use foveonic::{
     importing::ConflictPolicy,
     inspection::Content,
     profile::Profile,
-    render::{Engine, PreviewQuality, RenderSession, Settings},
+    render::{Engine, RenderSession, Scale, Settings},
     source::Metadata,
 };
 use std::{collections::HashSet, path::PathBuf};
@@ -55,7 +55,7 @@ pub fn write(
     let mut settings = settings.clone();
     settings.processing_sections = export.sections;
     settings.tiff_color_space = export.tiff_color_space;
-    settings.preview_quality = PreviewQuality::Full;
+    settings.working_scale = Scale::NATIVE;
     settings.preview_region = None;
     settings.color_range_preview = None;
     settings.dehaze_estimate = false;
