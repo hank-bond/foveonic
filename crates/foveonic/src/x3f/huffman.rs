@@ -20,6 +20,12 @@ struct Symbol {
     category: u8,
 }
 
+#[derive(Clone, Copy, Default)]
+struct Difference {
+    length: u8,
+    value: i16,
+}
+
 pub(super) struct Table([Symbol; PREFIX_TABLE_ENTRIES]);
 
 impl Table {
@@ -68,6 +74,47 @@ impl Table {
         } else {
             value + 1 - (1 << symbol.category)
         }) as i16)
+    }
+
+    /// Fold short category payloads into the existing twelve-bit lookahead.
+    /// Longer payloads retain the checked category decoder.
+    fn differences(&self) -> [Difference; PREFIX_TABLE_ENTRIES] {
+        std::array::from_fn(|prefix| {
+            let symbol = self.0[prefix];
+            let length = symbol.length + symbol.category;
+            if symbol.length == 0 || length > CODE_BITS as u8 {
+                return Difference::default();
+            }
+            let value = if symbol.category == 0 {
+                0
+            } else {
+                let value = ((prefix >> (CODE_BITS - usize::from(length)))
+                    & ((1 << symbol.category) - 1)) as i32;
+                if value >= 1 << (symbol.category - 1) {
+                    value
+                } else {
+                    value + 1 - (1 << symbol.category)
+                }
+            };
+            Difference {
+                length,
+                value: value as i16,
+            }
+        })
+    }
+
+    fn looked_up_difference(
+        &self,
+        lookup: &[Difference; PREFIX_TABLE_ENTRIES],
+        stream: &mut Bits<'_>,
+    ) -> Result<i16> {
+        let entry = lookup[stream.peek() as usize];
+        if entry.length == 0 {
+            return self.difference(stream);
+        }
+        // Lookahead is padded. Only advance authorizes consuming real bits.
+        stream.advance(entry.length)?;
+        Ok(entry.value)
     }
 
     /// Packed words keep the category prefix in the high twelve bits.
@@ -143,6 +190,11 @@ impl Table {
         {
             return Err("unsupported compressed plane geometry or seed".into());
         }
+        #[cfg(test)]
+        if let Some(result) = lookup_tests::dispatch(self, input, width, height, seed, maximum) {
+            return result;
+        }
+        let lookup = self.differences();
         let mut output = Vec::with_capacity(count);
         let mut bits = Bits::new(input)?;
         let mut vertical = [[seed; 2]; 2];
@@ -159,7 +211,8 @@ impl Table {
                 } else {
                     horizontal[x & 1]
                 };
-                let value = (predictor as i16).wrapping_add(self.difference(&mut bits)?);
+                let value =
+                    (predictor as i16).wrapping_add(self.looked_up_difference(&lookup, &mut bits)?);
                 if value as u16 > maximum {
                     return Err(damaged("decoded sample outside declared range"));
                 }
@@ -319,3 +372,7 @@ mod tests {
         assert!(table.decode(&[0x80], 1, 1, 0).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "huffman_lookup_test.rs"]
+mod lookup_tests;
