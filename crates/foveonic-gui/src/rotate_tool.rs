@@ -129,17 +129,18 @@ pub fn escape(ctx: &egui::Context) {
         store(ctx, s);
     }
 }
-pub fn invoke(ctx: &egui::Context, rotation: &mut Rotation, crop: &mut Crop) {
-    let s = state(ctx);
-    if s.mode.gesture() && active(ctx) {
-        exit(ctx);
-    } else {
-        activate(ctx, s.mode);
-        match s.mode {
-            Mode::Left => rotation.turn(false, crop),
-            Mode::Right => rotation.turn(true, crop),
-            _ => {}
-        }
+pub fn invoke(ctx: &egui::Context) {
+    activate(ctx, state(ctx).mode);
+}
+/// Quarter-turn tools act on the photograph under the pointer, never on selection.
+pub fn click_turn(ctx: &egui::Context) -> Option<bool> {
+    if !active(ctx) {
+        return None;
+    }
+    match state(ctx).mode {
+        Mode::Left => Some(false),
+        Mode::Right => Some(true),
+        _ => None,
     }
 }
 pub fn cycle(ctx: &egui::Context) {
@@ -197,20 +198,38 @@ pub fn button(ui: &mut egui::Ui, rotation: &mut Rotation, crop: &mut Crop) {
         ))
         .clicked()
     {
-        invoke(ui.ctx(), rotation, crop);
+        invoke(ui.ctx());
         s = state(ui.ctx());
     }
     if let Some(mode) = chosen {
         activate(ui.ctx(), mode);
-        match mode {
-            Mode::Left => rotation.turn(false, crop),
-            Mode::Right => rotation.turn(true, crop),
-            _ => {}
-        }
         s = state(ui.ctx());
     }
     s.menu = menu.inner.is_some();
     store(ui.ctx(), s);
+}
+
+/// Reuse the selected toolbar glyph at the image pointer.
+pub fn cursor(ui: &egui::Ui, response: &egui::Response) {
+    if !active(ui.ctx()) || !response.hovered() || ui.input(|i| i.key_down(egui::Key::Space)) {
+        return;
+    }
+    let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) else {
+        return;
+    };
+    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("rotation cursor"),
+    ));
+    let rect = egui::Rect::from_min_size(pointer - egui::vec2(13., 15.), egui::Vec2::splat(28.));
+    let mode = state(ui.ctx()).mode;
+    mode.icon(
+        &painter,
+        rect.translate(egui::vec2(1., 1.)),
+        egui::Color32::BLACK,
+    );
+    mode.icon(&painter, rect, egui::Color32::WHITE);
 }
 
 fn angle(mode: Mode, original: f64, start: egui::Pos2, end: egui::Pos2, center: egui::Pos2) -> f64 {
@@ -231,9 +250,23 @@ pub fn photo(
     response: &egui::Response,
     image: egui::Rect,
     rotation: &mut Rotation,
+    crop: &mut Crop,
 ) -> bool {
     let mut s = state(ui.ctx());
-    if !active(ui.ctx()) || !s.mode.gesture() {
+    cursor(ui, response);
+    if !active(ui.ctx()) {
+        return false;
+    }
+    if let Some(clockwise) = click_turn(ui.ctx()) {
+        if !ui.input(|i| i.key_down(egui::Key::Space))
+            && response.clicked()
+            && response
+                .interact_pointer_pos()
+                .is_some_and(|p| image.contains(p))
+        {
+            rotation.turn(clockwise, crop);
+            return true;
+        }
         return false;
     }
     let pan = ui.input(|i| i.key_down(egui::Key::Space));
@@ -285,9 +318,6 @@ pub fn photo(
                 }
             }
         }
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        }
     }
     let mut changed = false;
     let completing_line = s.mode == Mode::Straighten
@@ -296,8 +326,8 @@ pub fn photo(
             .is_some_and(|d| d.phase == Phase::SecondPress && d.start.distance(d.end) > 3.);
     if !pan && response.double_clicked() && !completing_line {
         s.gesture = None;
-        changed = rotation.degrees != 0.;
-        rotation.degrees = 0.;
+        changed = !rotation.is_neutral();
+        rotation.reset(crop);
     } else if ui.input(|i| i.pointer.primary_released()) {
         if let Some(drag) = &mut s.gesture {
             if s.mode == Mode::Straighten

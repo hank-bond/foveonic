@@ -217,3 +217,25 @@ fn direct_color_leaves_space_for_panning_in_import_without_disabling_hide() {
         }
     ));
 }
+
+#[test]
+fn command_arrows_rotate_the_active_photo_and_plain_arrows_still_navigate() {
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput {
+        events: vec![
+            key(Key::ArrowLeft, Modifiers::COMMAND),
+            key(Key::ArrowRight, Modifiers::COMMAND),
+            key(Key::ArrowLeft, Modifiers::NONE),
+        ],
+        ..Default::default()
+    };
+    let actions = capture(&ctx, &mut input, available());
+    assert_eq!(
+        actions.iter().map(|a| a.action).collect::<Vec<_>>(),
+        [
+            Action::RotateLeft,
+            Action::RotateRight,
+            Action::Browser(BrowserAction::Arrow(Key::ArrowLeft))
+        ]
+    );
+}

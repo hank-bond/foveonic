@@ -59,10 +59,10 @@ impl App {
                                 .id_salt("active comparison"),
                         );
                         child.set_clip_rect(image_rect.intersect(ui.clip_rect()));
-                        // Ordinary comparison navigation belongs to the canvas. The
-                        // active photo alone accepts direct color gestures.
-                        if !(crate::editor::direct_color::active(ui.ctx()) || crate::editor::dehaze::active(ui.ctx()))
-                            || !self.photo_interaction_available(mapping)
+                        // The canvas owns comparison navigation. Image tools act only
+                        // on their target and retain the selected set.
+                        if !crate::photo_tools::takes_pointer(ui.ctx())
+                            || !(self.photo_interaction_available(mapping) || self.framing_preview_active())
                         {
                             child.disable();
                         }
@@ -78,16 +78,21 @@ impl App {
                         if let Some(preview) = preview {
                             preview.paint(ui, image_rect);
                         }
-                        if ui
-                            .interact(
-                                rect,
-                                ui.id().with(("comparison photo", path)),
-                                egui::Sense::click(),
-                            )
-                            .on_hover_text("Click to edit this photo. Other photos use cached or embedded previews.")
-                            .clicked()
-                        {
-                            self.comparison_selection = Some(path.clone());
+                        let response = ui.interact(
+                            rect,
+                            ui.id().with(("comparison photo", path)),
+                            egui::Sense::click(),
+                        );
+                        let turn = crate::rotate_tool::click_turn(ui.ctx());
+                        if turn.is_some() {
+                            crate::rotate_tool::cursor(ui, &response);
+                        }
+                        if response.on_hover_text("Click to edit this photo. Other photos use cached or embedded previews.").clicked() {
+                            if let Some(clockwise) = turn {
+                                self.sidecars.rotate(path.clone(), clockwise);
+                            } else {
+                                self.comparison_selection = Some(path.clone());
+                            }
                         }
                     }
                     ui.painter().rect_stroke(

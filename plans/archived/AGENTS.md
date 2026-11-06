@@ -118,6 +118,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[render-resources-and-optimization](./render-resources-and-optimization.md)** _(archived)._ Profile conversion, establish owned GPU render resources, and optimize decoding and scratch allocation without interactive caching.
 - **[rendering-organization](./rendering-organization.md)** _(archived)._ Group processing nodes and separate recipe construction from execution before adding monochrome rendering.
 - **[responsiveness-campaign](./responsiveness-campaign.md)** _(archived)._ Coordinate measured startup, browsing and rendering optimization trials, including rejected approaches and integration evidence.
+- **[rotation-targeting-and-preview-retention](./rotation-targeting-and-preview-retention.md)** _(archived)._ Correct rotation targeting and retain edited previews across active-photo changes.
 - **[rotation-tool](./rotation-tool.md)** _(archived)._ Implement a shared saved rotation transform and Straighten/Freehand toolbar gestures.
 - **[saturation-closeout](./saturation-closeout.md)** _(archived)._ Separated Tone, Saturation and Color Range with independent methods, presets, bypasses and exports.
 - **[sd1-input](./sd1-input.md)** _(archived)._ Validate SD1 Merrill HI and LOW originals and make damaged-file failures actionable across input readers.

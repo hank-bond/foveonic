@@ -64,7 +64,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[photo_tools.rs](./photo_tools.rs)** Owns photograph-tool selection, cancellation and pointer routing, and composes the toolbar.
 - **[preferences.rs](./preferences.rs)** Persists workspace, display, cache and per-mode processing preferences separately from image edits.
 - **[preview_image.rs](./preview_image.rs)** Prepares oriented display thumbnails and larger previews away from the UI thread.
-- **[previews.rs](./previews.rs)** Refreshes browser previews from complete photographic frames after foreground work yields.
+- **[previews.rs](./previews.rs)** Retains edited GPU previews immediately and persists bounded photographic previews after foreground work yields.
 - **[processing.rs](./processing.rs)** Remembers per-mode output choices and edits them independently of photographic recipes.
 - **[progress.rs](./progress.rs)** Shows request-to-image time and discrete completed loading and rendering stages.
 - **[rotate_tool.rs](./rotate_tool.rs)** Owns line and freehand rotation gestures within the shared photograph-tool lifecycle.

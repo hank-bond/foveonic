@@ -72,7 +72,7 @@ pub fn source(ctx: &egui::Context, path: Option<&std::path::Path>) {
 pub fn takes_pointer(ctx: &egui::Context) -> bool {
     match selected(ctx) {
         Tool::Hand => false,
-        Tool::Rotate => rotate_tool::editing(ctx),
+        Tool::Rotate => true,
         Tool::Crop | Tool::ColorRange | Tool::Dehaze | Tool::WhiteBalance => true,
     }
 }
@@ -248,7 +248,7 @@ mod tests {
         }
     }
     #[test]
-    fn crop_and_rotation_switch_controls_without_changing_the_shared_plane() {
+    fn crop_and_all_rotation_modes_share_the_editing_plane() {
         let ctx = egui::Context::default();
         crop_tool::toggle(&ctx);
         assert!(take_view_change(&ctx));
@@ -259,6 +259,7 @@ mod tests {
             rotate_tool::Mode::Freehand,
             rotate_tool::Mode::Left,
             rotate_tool::Mode::Right,
+            rotate_tool::Mode::Straighten,
         ] {
             rotate_tool::activate(&ctx, mode);
             assert!(!take_view_change(&ctx));

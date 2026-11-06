@@ -1593,3 +1593,33 @@ fn browser_snapshot_profile() {
         );
     }
 }
+
+#[test]
+fn quarter_turn_thumbnail_targets_keep_the_selected_set_and_active_photo() {
+    for mode in [Organizer::Icons, Organizer::List, Organizer::Large] {
+        let mut fixture = Fixture::new(mode);
+        let frame = fixture.select_first();
+        let paths = fixture.browser.files[..2].to_vec();
+        fixture.browser.highlighted = paths.iter().cloned().collect();
+        let active = fixture.selected.clone();
+        crate::rotate_tool::activate(&fixture.ctx, crate::rotate_tool::Mode::Left);
+        let point = frame.grid.min + egui::vec2(30., 20.);
+        for pressed in [true, false] {
+            fixture.frame(vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]);
+        }
+        assert_eq!(
+            fixture.browser.rotation_clicked,
+            Some((paths[0].clone(), false))
+        );
+        assert_eq!(fixture.selected, active);
+        assert_eq!(fixture.browser.highlighted, paths.iter().cloned().collect());
+    }
+}

@@ -6,9 +6,7 @@ use eframe::{
     egui_wgpu::{self, CallbackResources, CallbackTrait},
     wgpu,
 };
-#[cfg(test)]
-use foveonic::image::ColorSpace;
-use foveonic::image::{ImageTexture, Space};
+use foveonic::image::{ColorSpace, ImageTexture, Space};
 use std::{collections::HashMap, sync::Arc};
 
 /// Display-only side, component, and difference amplification. Zero gain shows the selected side normally.
@@ -298,7 +296,6 @@ pub(crate) fn prepare_preview(
     input: Option<&wgpu::Texture>,
     framing: Option<crate::framing::Presentation>,
 ) {
-    use wgpu::util::DeviceExt;
     let full = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.));
     let mut params = mapping.apply(Params::new(full, full, space, mapping.channel, true));
     if let Some(view) = framing {
@@ -308,6 +305,35 @@ pub(crate) fn prepare_preview(
             view.extent(),
         );
     }
+    render_preview(rs, source, target, input, params);
+}
+
+/// Browser textures already hold normalized linear sRGB, including out-of-gamut components.
+pub(crate) fn rotate_linear_preview(
+    rs: &egui_wgpu::RenderState,
+    source: &wgpu::Texture,
+    target: &wgpu::Texture,
+    framing: crate::framing::Presentation,
+) {
+    let full = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.));
+    let mut params = Params::new(full, full, Space::ToneMappedRgb(ColorSpace::Srgb), -1, true);
+    params.options[2] = -4.;
+    params.rotate(
+        framing.angle(),
+        [source.width(), source.height()],
+        framing.extent(),
+    );
+    render_preview(rs, source, target, None, params);
+}
+
+fn render_preview(
+    rs: &egui_wgpu::RenderState,
+    source: &wgpu::Texture,
+    target: &wgpu::Texture,
+    input: Option<&wgpu::Texture>,
+    params: Params,
+) {
+    use wgpu::util::DeviceExt;
     let uniform = rs
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {

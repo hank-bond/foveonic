@@ -159,3 +159,77 @@ fn native_previews_preserve_gamut_and_filter_in_linear_light() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn thumbnail_quarter_turns_preserve_direction_and_linear_wide_colors() {
+    let rs = crate::navigator::gpu_tests::state();
+    // Two columns make clockwise and counterclockwise orientation unambiguous.
+    let colors = [[-0.25_f32, 1.25, 0.1], [0.8, 0.2, 0.3]];
+    let image = image::Rgb32FImage::from_raw(2, 1, colors.concat()).unwrap();
+    let original = Pixels::from_linear(&image, foveonic::image::ColorSpace::Srgb).upload(&rs);
+    for clockwise in [false, true] {
+        let rotated = original.quarter_turn(clockwise).unwrap();
+        assert_eq!(rotated.size(), [1, 2]);
+        let Storage::Native {
+            _texture: source, ..
+        } = &*rotated.0
+        else {
+            unreachable!()
+        };
+        let target = crate::navigator::gpu_tests::texture(
+            &rs,
+            [1, 2],
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        crate::viewport::rotate_linear_preview(
+            &rs,
+            source,
+            &target,
+            crate::framing::Presentation {
+                rotation: Default::default(),
+                native_extent: [1, 2],
+            },
+        );
+        let pitch = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = rs.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(pitch) * 2,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = rs.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch),
+                    rows_per_image: None,
+                },
+            },
+            target.size(),
+        );
+        rs.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+        rs.device.poll(wgpu::Maintain::Wait);
+        rx.recv().unwrap().unwrap();
+        let bytes = buffer.slice(..).get_mapped_range();
+        for row in 0..2 {
+            let expected = colors[if clockwise { row } else { 1 - row }];
+            for (c, value) in expected.into_iter().enumerate() {
+                let i = row * pitch as usize + c * 2;
+                let actual = half::f16::from_le_bytes([bytes[i], bytes[i + 1]]).to_f32();
+                assert!(
+                    (actual - value).abs() < 0.005,
+                    "clockwise={clockwise}, row={row}, c={c}: {actual} != {value}"
+                );
+            }
+        }
+    }
+}

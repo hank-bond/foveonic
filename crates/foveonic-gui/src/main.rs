@@ -418,16 +418,14 @@ impl App {
     fn receive(&mut self, ctx: &egui::Context) {
         self.browser.receive(ctx);
         while let Ok(preview) = self.previews.replies.try_recv() {
-            if self.frame.as_ref().is_some_and(|frame| {
-                frame.path == preview.path
-                    && frame.revision == preview.revision
-                    && preview.calibration_signature.as_deref()
-                        == self
-                            .noise_calibration
-                            .selected(self.preferences.noise_profile)
-                            .as_ref()
-                            .map(|p| p.signature())
-            }) {
+            if self.previews.accepts(&preview)
+                && preview.calibration_signature.as_deref()
+                    == self
+                        .noise_calibration
+                        .selected(self.preferences.noise_profile)
+                        .as_ref()
+                        .map(|p| p.signature())
+            {
                 self.browser
                     .rendered(ctx, preview.path, preview.revision, preview.image);
             }
@@ -568,6 +566,14 @@ impl App {
                         frame.queued_at,
                         frame.milliseconds,
                     );
+                    if let Some((thumbnail, preview)) = self.previews.snapshot(&frame) {
+                        self.browser.rendered_texture(
+                            frame.path.clone(),
+                            frame.revision,
+                            thumbnail,
+                            preview,
+                        );
+                    }
                     // Keep the last completed scopes until this frame has replacements.
                     self.scope_key = None;
                     if frame.artifact.settings.preview_region.is_some() {
@@ -1390,6 +1396,10 @@ impl eframe::App for App {
                 self.submit(None);
             }
         }
+        for (path, clockwise) in self.sidecars.take_rotated() {
+            self.previews.invalidate_path(&path);
+            self.browser.rotate_cached(&path, clockwise);
+        }
         if self
             .smoke
             .as_ref()
@@ -1491,6 +1501,13 @@ impl eframe::App for App {
                 self.preferences.browser_sort = self.browser.sort;
                 self.preferences.browser_show_ratings = self.browser.show_ratings;
             });
+        if let Some((path, clockwise)) = self.browser.rotation_clicked.take() {
+            if self.selected.as_ref() == Some(&path) {
+                self.actions.push(actions::Edit::QuarterTurn(clockwise));
+            } else {
+                self.sidecars.rotate(path, clockwise);
+            }
+        }
         let actions_changed = self.dispatch_actions(ctx);
         let tuning_changed = previous_limits != self.preferences.adaptive_tone_tuning;
         if tuning_changed {

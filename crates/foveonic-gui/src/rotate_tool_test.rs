@@ -7,6 +7,15 @@ fn pointer_frame(
     time: &mut f64,
     events: Vec<egui::Event>,
 ) -> bool {
+    pointer_frame_with_crop(ctx, rotation, &mut Crop::default(), time, events)
+}
+fn pointer_frame_with_crop(
+    ctx: &egui::Context,
+    rotation: &mut Rotation,
+    crop: &mut Crop,
+    time: &mut f64,
+    events: Vec<egui::Event>,
+) -> bool {
     *time += 0.05;
     let mut changed = false;
     let _ = ctx.run(
@@ -23,7 +32,7 @@ fn pointer_frame(
             egui::CentralPanel::default().show(ctx, |ui| {
                 let (image, response) =
                     ui.allocate_exact_size(egui::vec2(300., 300.), egui::Sense::click_and_drag());
-                changed |= photo(ui, &response, image, rotation);
+                changed |= photo(ui, &response, image, rotation, crop);
             });
         },
     );
@@ -142,7 +151,6 @@ fn cycling_selects_each_choice_and_invoking_quarter_turns_retains_the_mode() {
         degrees: 12.,
         ..Default::default()
     };
-    let mut crop = Crop::default();
     activate(&ctx, Mode::Straighten);
     crate::photo_tools::take_view_change(&ctx);
     for mode in [Mode::Freehand, Mode::Left, Mode::Right, Mode::Straighten] {
@@ -154,15 +162,25 @@ fn cycling_selects_each_choice_and_invoking_quarter_turns_retains_the_mode() {
         crate::photo_tools::take_view_change(&ctx);
     }
     activate(&ctx, Mode::Left);
-    invoke(&ctx, &mut rotation, &mut crop);
+    invoke(&ctx);
+    assert_eq!(rotation.turns, 0);
+    let mut time = 0.;
+    pointer_frame(&ctx, &mut rotation, &mut time, vec![]);
+    let point = egui::pos2(120., 120.);
+    pointer_frame(&ctx, &mut rotation, &mut time, pointer_button(point, true));
+    assert!(pointer_frame(
+        &ctx,
+        &mut rotation,
+        &mut time,
+        pointer_button(point, false)
+    ));
     assert_eq!(rotation.turns, 3);
-    invoke(&ctx, &mut rotation, &mut crop);
-    assert_eq!(rotation.turns, 2);
+    invoke(&ctx);
+    assert_eq!(rotation.turns, 3);
     assert_eq!(state(&ctx).mode, Mode::Left);
     cycle(&ctx);
-    invoke(&ctx, &mut rotation, &mut crop);
+    invoke(&ctx);
     assert_eq!(rotation.turns, 3);
-    assert_eq!(rotation.degrees, 12.);
     assert_eq!(state(&ctx).mode, Mode::Right);
     assert!(active(&ctx));
     assert!(!editing(&ctx));
@@ -256,4 +274,39 @@ fn straightening_chooses_nearest_axis_and_freehand_preserves_existing_angle() {
         ),
         45.
     );
+}
+
+#[test]
+fn double_click_resets_both_rotation_components_and_preserves_crop_content() {
+    for mode in [Mode::Straighten, Mode::Freehand] {
+        let ctx = egui::Context::default();
+        activate(&ctx, mode);
+        let mut rotation = Rotation {
+            turns: 3,
+            degrees: 17.,
+        };
+        let mut crop = Crop {
+            bounds: [0.1, 0.2, 0.8, 0.9],
+            ..Default::default()
+        };
+        let mut expected_crop = crop;
+        let mut expected_rotation = rotation;
+        expected_rotation.reset(&mut expected_crop);
+        let mut time = 0.;
+        pointer_frame_with_crop(&ctx, &mut rotation, &mut crop, &mut time, vec![]);
+        let point = egui::pos2(120., 120.);
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                pointer_frame_with_crop(
+                    &ctx,
+                    &mut rotation,
+                    &mut crop,
+                    &mut time,
+                    pointer_button(point, pressed),
+                );
+            }
+        }
+        assert!(rotation.is_neutral(), "{mode:?}");
+        assert_eq!(crop, expected_crop);
+    }
 }

@@ -60,17 +60,7 @@ impl Pixels {
             },
             texture.size(),
         );
-        let id = rs.renderer.write().register_native_texture(
-            &rs.device,
-            &texture.create_view(&Default::default()),
-            wgpu::FilterMode::Linear,
-        );
-        Texture(Arc::new(Storage::Native {
-            id,
-            size: self.size,
-            rs: rs.clone(),
-            _texture: texture,
-        }))
+        Texture::from_native(rs, texture)
     }
 
     /// Headless browser tests exercise reply ordering without a graphics device.
@@ -117,6 +107,54 @@ impl Drop for Storage {
 #[derive(Clone)]
 pub(crate) struct Texture(Arc<Storage>);
 impl Texture {
+    pub(crate) fn from_native(rs: &egui_wgpu::RenderState, texture: wgpu::Texture) -> Self {
+        let size = [texture.width() as usize, texture.height() as usize];
+        let id = rs.renderer.write().register_native_texture(
+            &rs.device,
+            &texture.create_view(&Default::default()),
+            wgpu::FilterMode::Linear,
+        );
+        Self(Arc::new(Storage::Native {
+            id,
+            size,
+            rs: rs.clone(),
+            _texture: texture,
+        }))
+    }
+    pub(crate) fn quarter_turn(&self, clockwise: bool) -> Option<Self> {
+        let (rs, source) = match &*self.0 {
+            Storage::Native { rs, _texture, .. } => (rs, _texture),
+            #[cfg(test)]
+            Storage::Headless(_) => return None,
+        };
+        let target = rs.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Rotated browser preview"),
+            size: wgpu::Extent3d {
+                width: source.height(),
+                height: source.width(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        crate::viewport::rotate_linear_preview(
+            rs,
+            source,
+            &target,
+            crate::framing::Presentation {
+                rotation: foveonic::rotation::Rotation {
+                    turns: if clockwise { 1 } else { 3 },
+                    degrees: 0.,
+                },
+                native_extent: [source.width(), source.height()],
+            },
+        );
+        Some(Self::from_native(rs, target))
+    }
     pub fn id(&self) -> egui::TextureId {
         match &*self.0 {
             Storage::Native { id, .. } => *id,

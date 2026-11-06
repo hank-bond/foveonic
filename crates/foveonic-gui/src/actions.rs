@@ -12,6 +12,7 @@ pub enum Edit {
     CopySettings,
     Rotate,
     CycleRotate,
+    QuarterTurn(bool),
     PasteSettings(String),
     Before(crate::editor::Rendition),
 }
@@ -51,6 +52,8 @@ impl App {
                 }
                 Action::Rotate => self.actions.push(Edit::Rotate),
                 Action::CycleRotate => self.actions.push(Edit::CycleRotate),
+                Action::RotateLeft => self.actions.push(Edit::QuarterTurn(false)),
+                Action::RotateRight => self.actions.push(Edit::QuarterTurn(true)),
                 Action::Crop => {
                     self.exit_before();
                     self.output = "final".into();
@@ -101,11 +104,17 @@ impl App {
                     if matches!(edit, Edit::CycleRotate) {
                         crate::rotate_tool::cycle(ctx);
                     } else {
-                        crate::rotate_tool::invoke(
-                            ctx,
-                            &mut self.settings.rotation,
-                            &mut self.settings.crop,
-                        );
+                        crate::rotate_tool::invoke(ctx);
+                    }
+                }
+                Edit::QuarterTurn(clockwise) => {
+                    self.exit_before();
+                    self.settings
+                        .rotation
+                        .turn(clockwise, &mut self.settings.crop);
+                    if let Some(path) = &self.selected {
+                        self.previews.invalidate_path(path);
+                        self.browser.rotate_cached(path, clockwise);
                     }
                 }
                 Edit::Before(target) => self.toggle_before(target),

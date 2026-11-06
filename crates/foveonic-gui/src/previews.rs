@@ -1,4 +1,4 @@
-//! Refreshes browser previews from complete photographic frames after foreground work yields.
+//! Retains edited GPU previews immediately and persists bounded photographic previews after foreground work yields.
 
 use crate::{preview_image::PreparedPreview, viewport, worker::Frame};
 use eframe::{egui, egui_wgpu, wgpu};
@@ -6,6 +6,7 @@ use foveonic::{
     decode_cache::Cache, image::ImageTexture, preview::Preview, render::Settings, source::Metadata,
 };
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{mpsc, Arc, Condvar, Mutex},
     time::{Duration, Instant},
@@ -22,6 +23,7 @@ const RGB_CHANNELS: usize = 3;
 const READY_CAPACITY: usize = 1;
 
 struct Job {
+    epoch: u64,
     calibration_signature: Option<String>,
     path: PathBuf,
     revision: u64,
@@ -36,12 +38,16 @@ struct Pending {
     stop: bool,
 }
 pub struct Ready {
+    pub epoch: u64,
     pub calibration_signature: Option<String>,
     pub path: PathBuf,
     pub revision: u64,
     pub image: PreparedPreview,
 }
 pub struct Previews {
+    render_state: egui_wgpu::RenderState,
+    epoch: u64,
+    invalid_paths: HashSet<PathBuf>,
     pending: Arc<(Mutex<Pending>, Condvar)>,
     pub replies: mpsc::Receiver<Ready>,
     wanted: Option<(Job, Instant)>,
@@ -49,11 +55,14 @@ pub struct Previews {
 }
 impl Previews {
     pub fn invalidate(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.invalid_paths.clear();
         self.sent = None;
         self.wanted = None;
         self.pending.0.lock().unwrap().job = None;
     }
     pub fn new(rs: egui_wgpu::RenderState, context: egui::Context, cache: Arc<Cache>) -> Self {
+        let render_state = rs.clone();
         let pending = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let worker = pending.clone();
         let (tx, replies) = mpsc::sync_channel(READY_CAPACITY);
@@ -108,6 +117,7 @@ impl Previews {
             if let Some(image) = result {
                 if tx
                     .send(Ready {
+                        epoch: job.epoch,
                         calibration_signature: job.calibration_signature,
                         path: job.path,
                         revision: job.revision,
@@ -121,22 +131,51 @@ impl Previews {
             }
         });
         Self {
+            render_state,
+            epoch: 0,
+            invalid_paths: HashSet::new(),
             pending,
             replies,
             wanted: None,
             sent: None,
         }
     }
+    pub fn accepts(&self, reply: &Ready) -> bool {
+        reply.epoch == self.epoch && !self.invalid_paths.contains(&reply.path)
+    }
+
+    /// Reject delayed preview readbacks after a presentation-only browser rotation.
+    pub fn invalidate_path(&mut self, path: &std::path::Path) {
+        self.invalid_paths.insert(path.to_owned());
+    }
+
+    /// Queue a bounded GPU thumbnail without waiting for readback or disk caching.
+    pub fn snapshot(
+        &mut self,
+        frame: &Frame,
+    ) -> Option<(crate::browser::Thumbnail, crate::browser::Thumbnail)> {
+        if !photographic(frame) {
+            return None;
+        }
+        self.invalid_paths.remove(&frame.path);
+        let make = |side| {
+            let target = scaled_texture(
+                &self.render_state,
+                frame.texture.texture(),
+                frame.texture.description().space,
+                side,
+            );
+            crate::browser::Thumbnail {
+                texture: crate::display_image::Texture::from_native(&self.render_state, target),
+                native_extent: frame.display_extent(false),
+            }
+        };
+        Some((make(256), make(PREVIEW_SIDE)))
+    }
     /// Keep one replaceable pending whole-image job. Diagnostics never become
     /// photographic thumbnails, even when they are displayed in the navigator.
     pub fn update(&mut self, frame: Option<&Frame>, busy: bool, context: &egui::Context) {
-        let Some(frame) = frame.filter(|f| {
-            f.rendition == crate::editor::Rendition::Current
-                && !f.framing_preview
-                && f.output == "final"
-                && f.artifact.settings.color_range_preview.is_none()
-                && f.artifact.settings.preview_region.is_none()
-        }) else {
+        let Some(frame) = frame.filter(|f| photographic(f)) else {
             self.wanted = None;
             return;
         };
@@ -151,6 +190,7 @@ impl Previews {
         {
             self.wanted = Some((
                 Job {
+                    epoch: self.epoch,
                     calibration_signature: frame.calibration_signature.clone(),
                     path: frame.path.clone(),
                     revision: frame.revision,
@@ -184,17 +224,22 @@ impl Drop for Previews {
     }
 }
 
-fn downsample(rs: &egui_wgpu::RenderState, source: &ImageTexture) -> Result<Preview, String> {
-    downsample_texture(rs, source.texture(), source.description().space)
+fn photographic(frame: &Frame) -> bool {
+    frame.rendition == crate::editor::Rendition::Current
+        && !frame.framing_preview
+        && frame.output == "final"
+        && frame.artifact.settings.color_range_preview.is_none()
+        && frame.artifact.settings.preview_region.is_none()
 }
 
-fn downsample_texture(
+fn scaled_texture(
     rs: &egui_wgpu::RenderState,
     source: &wgpu::Texture,
     space: foveonic::image::Space,
-) -> Result<Preview, String> {
+    side: u32,
+) -> wgpu::Texture {
     let extent = [source.width(), source.height()];
-    let scale = (PREVIEW_SIDE as f32 / extent[0].max(extent[1]) as f32).min(1.);
+    let scale = (side as f32 / extent[0].max(extent[1]) as f32).min(1.);
     let size = extent.map(|v| (v as f32 * scale).round().max(1.) as u32);
     let target = rs.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Cached photographic preview"),
@@ -207,7 +252,9 @@ fn downsample_texture(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba16Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     viewport::prepare_preview(
@@ -219,6 +266,21 @@ fn downsample_texture(
         None,
         None,
     );
+    target
+}
+
+fn downsample(rs: &egui_wgpu::RenderState, source: &ImageTexture) -> Result<Preview, String> {
+    downsample_texture(rs, source.texture(), source.description().space)
+}
+
+fn downsample_texture(
+    rs: &egui_wgpu::RenderState,
+    source: &wgpu::Texture,
+    space: foveonic::image::Space,
+) -> Result<Preview, String> {
+    let extent = [source.width(), source.height()];
+    let target = scaled_texture(rs, source, space, PREVIEW_SIDE);
+    let size = [target.width(), target.height()];
     let row = (size[0] * RGBA_BYTES).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
         * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = rs.device.create_buffer(&wgpu::BufferDescriptor {

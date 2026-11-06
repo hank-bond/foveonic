@@ -38,7 +38,7 @@ pub fn photo(
             crop,
         ),
         crate::photo_tools::Tool::Rotate => {
-            crate::rotate_tool::photo(ui, response, image, rotation)
+            crate::rotate_tool::photo(ui, response, image, rotation, crop)
         }
         _ => return false,
     };

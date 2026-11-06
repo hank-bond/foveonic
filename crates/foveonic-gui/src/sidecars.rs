@@ -3,7 +3,7 @@
 use eframe::egui;
 use foveonic::{render::Settings, sidecar};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::PathBuf,
     sync::{mpsc, Arc, Condvar, Mutex},
     thread::JoinHandle,
@@ -17,6 +17,7 @@ mod tests;
 struct Pending {
     load: Option<(u64, PathBuf, foveonic::render::RecipeDefaults)>,
     saves: BTreeMap<PathBuf, Settings>,
+    rotations: VecDeque<(PathBuf, bool, foveonic::render::RecipeDefaults, bool)>,
     stop: bool,
 }
 enum Reply {
@@ -27,7 +28,49 @@ enum Reply {
         Box<Settings>,
     ),
     Saved(PathBuf, Settings, Result<(), String>),
+    Rotated(PathBuf, bool, Result<Box<Settings>, String>, Option<String>),
 }
+fn restore(
+    path: &std::path::Path,
+    recent: Option<Settings>,
+    defaults: &foveonic::render::RecipeDefaults,
+    enabled: bool,
+    cache: &foveonic::decode_cache::Cache,
+) -> (Result<Option<Settings>, String>, Settings) {
+    let cached = cache.selection(path);
+    let result = if enabled {
+        (if let Some(cached) = &cached {
+            Ok(cached.settings.clone())
+        } else {
+            sidecar::load(path)
+        })
+        .map(|saved| recent.or(saved))
+        .map_err(|e| e.to_string())
+    } else {
+        Ok(None)
+    };
+    // Only a missing recipe gets source defaults. Saved recipes,
+    // including explicit neutral values, are complete edits.
+    let fresh = if matches!(&result, Ok(Some(_))) {
+        Settings::default()
+    } else {
+        cached
+            .map(|s| s.properties)
+            .map(Ok)
+            .unwrap_or_else(|| cache.capture_properties(path))
+            .ok()
+            .and_then(|properties| {
+                if defaults.is_empty() {
+                    capture_defaults(properties).ok()
+                } else {
+                    defaults.from_properties(&properties).ok()
+                }
+            })
+            .unwrap_or_default()
+    };
+    (result, fresh)
+}
+
 struct Store {
     pending: Arc<(Mutex<Pending>, Condvar)>,
     replies: mpsc::Receiver<Reply>,
@@ -47,11 +90,22 @@ impl Store {
                     foveonic::render::RecipeDefaults,
                 ),
                 Save(PathBuf, Settings),
+                Rotate(
+                    PathBuf,
+                    bool,
+                    Option<Settings>,
+                    foveonic::render::RecipeDefaults,
+                    bool,
+                ),
             }
             let job = {
                 let (lock, wake) = &*slot;
                 let mut state = lock.lock().unwrap();
-                while state.load.is_none() && state.saves.is_empty() && !state.stop {
+                while state.load.is_none()
+                    && state.saves.is_empty()
+                    && state.rotations.is_empty()
+                    && !state.stop
+                {
                     state = wake.wait(state).unwrap();
                 }
                 if let Some((generation, path, defaults)) = state.load.take() {
@@ -59,44 +113,38 @@ impl Store {
                     Job::Load(generation, path, recent, defaults)
                 } else if let Some((path, settings)) = state.saves.pop_first() {
                     Job::Save(path, settings)
+                } else if let Some((path, clockwise, defaults, memory_only)) =
+                    state.rotations.pop_front()
+                {
+                    let recent = state.saves.get(&path).cloned();
+                    Job::Rotate(path, clockwise, recent, defaults, memory_only)
                 } else {
                     break;
                 }
             };
             let reply = match job {
                 Job::Load(generation, path, recent, defaults) => {
-                    let cached = cache.selection(&path);
-                    let result = if enabled {
-                        (if let Some(cached) = &cached {
-                            Ok(cached.settings.clone())
-                        } else {
-                            sidecar::load(&path)
-                        })
-                        .map(|saved| recent.or(saved))
-                        .map_err(|e| e.to_string())
-                    } else {
-                        Ok(None)
-                    };
-                    // Only a missing recipe gets source defaults. Saved recipes,
-                    // including explicit neutral values, are complete edits.
-                    let fresh = if matches!(&result, Ok(Some(_))) {
-                        Settings::default()
-                    } else {
-                        cached
-                            .map(|s| s.properties)
-                            .map(Ok)
-                            .unwrap_or_else(|| cache.capture_properties(&path))
-                            .ok()
-                            .and_then(|properties| {
-                                if defaults.is_empty() {
-                                    capture_defaults(properties).ok()
-                                } else {
-                                    defaults.from_properties(&properties).ok()
-                                }
-                            })
-                            .unwrap_or_default()
-                    };
+                    let (result, fresh) = restore(&path, recent, &defaults, enabled, &cache);
                     Reply::Loaded(generation, path, result, Box::new(fresh))
+                }
+                Job::Rotate(path, clockwise, recent, defaults, memory_only) => {
+                    let (saved, fresh) = restore(&path, recent, &defaults, enabled, &cache);
+                    match saved {
+                        Err(error) => Reply::Rotated(path, clockwise, Err(error), None),
+                        Ok(saved) => {
+                            let mut settings = saved.unwrap_or(fresh);
+                            settings.rotation.turn(clockwise, &mut settings.crop);
+                            let error = if enabled && !memory_only {
+                                sidecar::save(&path, &settings).err().map(|e| e.to_string())
+                            } else {
+                                None
+                            };
+                            if error.is_none() && enabled && !memory_only {
+                                cache.saved_settings(&path, &settings);
+                            }
+                            Reply::Rotated(path, clockwise, Ok(Box::new(settings)), error)
+                        }
+                    }
                 }
                 Job::Save(path, settings) => {
                     let result = sidecar::save(&path, &settings).map_err(|e| e.to_string());
@@ -121,6 +169,20 @@ impl Store {
     fn load(&self, generation: u64, path: PathBuf, defaults: foveonic::render::RecipeDefaults) {
         let (lock, wake) = &*self.pending;
         lock.lock().unwrap().load = Some((generation, path, defaults));
+        wake.notify_one();
+    }
+    fn rotate(
+        &self,
+        path: PathBuf,
+        clockwise: bool,
+        defaults: foveonic::render::RecipeDefaults,
+        memory_only: bool,
+    ) {
+        let (lock, wake) = &*self.pending;
+        lock.lock()
+            .unwrap()
+            .rotations
+            .push_back((path, clockwise, defaults, memory_only));
         wake.notify_one();
     }
     fn save(&self, path: PathBuf, settings: Settings) {
@@ -159,6 +221,8 @@ pub struct Session {
     errors: BTreeMap<PathBuf, String>,
     memory_only: bool,
     requested: BTreeMap<PathBuf, Settings>,
+    rotating: BTreeMap<PathBuf, usize>,
+    rotated: Vec<(PathBuf, bool)>,
 }
 impl Session {
     pub fn new(
@@ -180,6 +244,8 @@ impl Session {
             errors: BTreeMap::new(),
             memory_only: false,
             requested: BTreeMap::new(),
+            rotating: BTreeMap::new(),
+            rotated: Vec::new(),
         }
     }
     pub fn select(&mut self, path: PathBuf) {
@@ -222,6 +288,24 @@ impl Session {
         self.requested.get(path).or_else(|| self.unsaved.get(path))
     }
 
+    /// Known session edits can rotate immediately. Unvisited photos load and save on the existing writer.
+    pub fn rotate(&mut self, path: PathBuf, clockwise: bool) {
+        if !self.rotating.contains_key(&path) {
+            if let Some(mut settings) = self.requested_settings(&path).cloned() {
+                settings.rotation.turn(clockwise, &mut settings.crop);
+                self.apply(path.clone(), settings);
+                self.rotated.push((path, clockwise));
+                return;
+            }
+        }
+        *self.rotating.entry(path.clone()).or_default() += 1;
+        self.store
+            .rotate(path, clockwise, self.defaults.clone(), self.memory_only);
+    }
+    pub fn take_rotated(&mut self) -> Vec<(PathBuf, bool)> {
+        std::mem::take(&mut self.rotated)
+    }
+
     /// An older load must not replace the settings for the photo now selected.
     pub fn receive(&mut self) -> Option<Settings> {
         let mut loaded = None;
@@ -256,6 +340,43 @@ impl Session {
                                 ),
                             );
                             loaded = Some(*fresh);
+                        }
+                    }
+                }
+                Reply::Rotated(path, clockwise, result, save_error) => {
+                    if let Some(count) = self.rotating.get_mut(&path) {
+                        *count -= 1;
+                        if *count == 0 {
+                            self.rotating.remove(&path);
+                        }
+                    }
+                    match result {
+                        Err(error) => {
+                            self.errors
+                                .insert(path, format!("Cannot rotate photo: {error}"));
+                        }
+                        Ok(settings) => {
+                            let mut current = self
+                                .requested_settings(&path)
+                                .cloned()
+                                .unwrap_or_else(|| (*settings).clone());
+                            if self.requested_settings(&path).is_some() {
+                                current.rotation.turn(clockwise, &mut current.crop);
+                            }
+                            let merged = current != *settings;
+                            self.requested.insert(path.clone(), current.clone());
+                            if merged {
+                                self.apply(path.clone(), current.clone());
+                            }
+                            if let Some(error) = save_error {
+                                self.unsaved.insert(path.clone(), current.clone());
+                                self.errors
+                                    .insert(path.clone(), format!("Edits are not saved: {error}"));
+                            }
+                            if self.selected.as_ref() == Some(&path) {
+                                loaded = Some(current);
+                            }
+                            self.rotated.push((path, clockwise));
                         }
                     }
                 }

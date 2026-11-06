@@ -128,6 +128,7 @@ pub struct Browser {
     pub hide_reviewed: bool,
     pub show_ratings: bool,
     pub clear_selection: bool,
+    pub rotation_clicked: Option<(PathBuf, bool)>,
     actions: Vec<(BrowserAction, egui::Modifiers)>,
     highlighted: HashSet<PathBuf>,
     anchor: Option<PathBuf>,
@@ -213,6 +214,7 @@ impl Browser {
             hide_reviewed: true,
             show_ratings: false,
             clear_selection: false,
+            rotation_clicked: None,
             actions: Vec::new(),
             highlighted: HashSet::new(),
             anchor: None,
@@ -438,6 +440,26 @@ impl Browser {
             }
         }
     }
+    fn claim_rendered(&mut self, path: &Path, revision: u64) -> bool {
+        if self.files.iter().any(|file| file.as_path() == path)
+            && self
+                .rendered_revisions
+                .get(path)
+                .is_none_or(|old| *old <= revision)
+        {
+            self.rendered_revisions.insert(path.to_owned(), revision);
+            self.sequence += 1;
+            self.versions.insert(path.to_owned(), self.sequence);
+            self.pending.remove(path);
+            self.pending_previews.remove(path);
+            self.preview_checked.insert(path.to_owned());
+            self.thumbnail_worker.cancel(path);
+            self.preview_worker.cancel(path);
+            true
+        } else {
+            false
+        }
+    }
     pub(crate) fn rendered(
         &mut self,
         ctx: &egui::Context,
@@ -445,21 +467,33 @@ impl Browser {
         revision: u64,
         image: PreparedPreview,
     ) {
-        if self.files.contains(&path)
-            && self
-                .rendered_revisions
-                .get(&path)
-                .is_none_or(|old| *old <= revision)
-        {
-            self.rendered_revisions.insert(path.clone(), revision);
-            self.sequence += 1;
-            self.versions.insert(path.clone(), self.sequence);
-            self.pending.remove(&path);
-            self.pending_previews.remove(&path);
-            self.preview_checked.insert(path.clone());
-            self.thumbnail_worker.cancel(&path);
-            self.preview_worker.cancel(&path);
+        if self.claim_rendered(&path, revision) {
             self.insert(ctx, path, image);
+        }
+    }
+    pub(crate) fn rendered_texture(
+        &mut self,
+        path: PathBuf,
+        revision: u64,
+        thumbnail: Thumbnail,
+        preview: Thumbnail,
+    ) {
+        if !self.claim_rendered(&path, revision) {
+            return;
+        }
+        self.thumbnail_bytes += Self::thumbnail_bytes(&thumbnail);
+        if let Some(Some(previous)) = self.cache.insert(path.clone(), Some(thumbnail.clone())) {
+            self.thumbnail_bytes -= Self::thumbnail_bytes(&previous);
+        }
+        self.order.retain(|p| p != &path);
+        self.order.push_back(path.clone());
+        self.previews.insert(path.clone(), preview);
+        self.preview_order.retain(|p| p != &path);
+        self.preview_order.push_back(path);
+        while self.preview_order.len() > PREVIEW_CACHE_ENTRIES {
+            if let Some(old) = self.preview_order.pop_front() {
+                self.previews.remove(&old);
+            }
         }
     }
     pub fn rendered_revision(&self, path: &Path) -> Option<u64> {
@@ -627,6 +661,58 @@ impl Browser {
         let color = cache_color(self.cache_state(path));
         ui.painter().circle_filled(center, STATUS_RADIUS, color);
     }
+    fn photo_click(
+        &mut self,
+        ui: &egui::Ui,
+        path: &Path,
+        files: &[PathBuf],
+        response: &egui::Response,
+    ) -> bool {
+        let rotation = crate::rotate_tool::click_turn(ui.ctx());
+        if rotation.is_some() {
+            crate::rotate_tool::cursor(ui, response);
+        }
+        if !response.clicked() || self.review_clicked {
+            return false;
+        }
+        if let Some(clockwise) = rotation {
+            self.rotation_clicked = Some((path.to_owned(), clockwise));
+            if self.highlighted.contains(path) {
+                return false;
+            }
+        }
+        self.highlight(path, files, ui.input(|i| i.modifiers));
+        self.highlighted.contains(path)
+    }
+    pub fn rotate_cached(&mut self, path: &Path, clockwise: bool) {
+        for thumbnail in self
+            .cache
+            .get_mut(path)
+            .and_then(Option::as_mut)
+            .into_iter()
+            .chain(self.previews.get_mut(path))
+        {
+            if let Some(texture) = thumbnail.texture.quarter_turn(clockwise) {
+                thumbnail.texture = texture;
+                thumbnail.native_extent.swap(0, 1);
+            }
+        }
+        self.sequence += 1;
+        self.versions.insert(path.to_owned(), self.sequence);
+        self.pending.remove(path);
+        self.pending_previews.remove(path);
+        self.thumbnail_worker.cancel(path);
+        self.preview_worker.cancel(path);
+        self.preview_checked.insert(path.to_owned());
+        if let Some(extent) = self
+            .records
+            .get_mut(path)
+            .and_then(|record| record.extent.as_mut())
+        {
+            extent.swap(0, 1);
+        }
+        self.invalidate_organizer();
+    }
     pub fn organizer(
         &mut self,
         ui: &mut egui::Ui,
@@ -636,6 +722,7 @@ impl Browser {
         self.apply_query();
         self.review_clicked = false;
         self.clear_selection = false;
+        self.rotation_clicked = None;
         let focus_requested = std::mem::take(&mut self.focus_requested);
         if self.last_active.as_deref() != selected {
             if let Some(path) = selected.filter(|path| !self.excluded.contains(*path)) {
@@ -861,25 +948,19 @@ impl Browser {
                         };
                         if list {
                             let path = &files[range.start];
-                            if self
-                                .list_item(
-                                    ui,
-                                    path,
-                                    highlighted.contains(path),
-                                    selected == Some(path.as_path()),
-                                    egui::vec2(width, row.height),
-                                    list_columns.as_ref().unwrap(),
-                                )
-                                .clicked()
-                                && !self.review_clicked
-                            {
-                                self.highlight(path, files, ui.input(|input| input.modifiers));
-                                if self.highlighted.contains(path) {
-                                    chosen = Some(Selection {
-                                        path: path.clone(),
-                                        preserve_viewport: false,
-                                    });
-                                }
+                            let response = self.list_item(
+                                ui,
+                                path,
+                                highlighted.contains(path),
+                                selected == Some(path.as_path()),
+                                egui::vec2(width, row.height),
+                                list_columns.as_ref().unwrap(),
+                            );
+                            if self.photo_click(ui, path, files, &response) {
+                                chosen = Some(Selection {
+                                    path: path.clone(),
+                                    preserve_viewport: false,
+                                });
                             }
                         } else {
                             ui.horizontal(|ui| {
@@ -887,29 +968,19 @@ impl Browser {
                                     ui.spacing_mut().item_spacing.x = 0.;
                                 }
                                 for path in &files[range.clone()] {
-                                    if self
-                                        .tile(
-                                            ui,
-                                            path,
-                                            highlighted.contains(path),
-                                            selected == Some(path.as_path()),
-                                            egui::vec2(tile_width, row.height),
-                                            icons,
-                                        )
-                                        .clicked()
-                                        && !self.review_clicked
-                                    {
-                                        self.highlight(
-                                            path,
-                                            files,
-                                            ui.input(|input| input.modifiers),
-                                        );
-                                        if self.highlighted.contains(path) {
-                                            chosen = Some(Selection {
-                                                path: path.clone(),
-                                                preserve_viewport: false,
-                                            });
-                                        }
+                                    let response = self.tile(
+                                        ui,
+                                        path,
+                                        highlighted.contains(path),
+                                        selected == Some(path.as_path()),
+                                        egui::vec2(tile_width, row.height),
+                                        icons,
+                                    );
+                                    if self.photo_click(ui, path, files, &response) {
+                                        chosen = Some(Selection {
+                                            path: path.clone(),
+                                            preserve_viewport: false,
+                                        });
                                     }
                                 }
                             });
@@ -1094,6 +1165,16 @@ mod tests {
         browser.receive(&context);
         assert_eq!(browser.thumbnail(&path).unwrap().texture.id(), rendered);
         assert_eq!(browser.preview(&path).unwrap().texture.size(), [1024, 512]);
+        // A GPU snapshot remains the latest view when a delayed CPU preview arrives.
+        let snapshot = browser.preview(&path).unwrap();
+        browser.rendered_texture(path.clone(), 4, snapshot.clone(), snapshot.clone());
+        browser.last_active = Some("another.x3f".into());
+        browser.rendered(&context, path.clone(), 3, prepared([255, 255, 0], [16, 8]));
+        assert_eq!(
+            browser.preview(&path).unwrap().texture.id(),
+            snapshot.texture.id()
+        );
+        assert_eq!(browser.rendered_revision(&path), Some(4));
     }
     #[test]
     fn larger_previews_are_bounded_independently_of_thumbnails() {
