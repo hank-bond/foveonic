@@ -10,9 +10,9 @@ use std::{
 };
 
 fn fingerprint(bytes: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
+    // A fingerprint only rejects unequal payloads. Shared ownership or exact
+    // bytes still decide every match, including CRC32 collisions.
+    u64::from(crc32fast::hash(bytes))
 }
 fn combined(previous: u64, next: u64, kind: u8) -> u64 {
     let mut hasher = DefaultHasher::new();
