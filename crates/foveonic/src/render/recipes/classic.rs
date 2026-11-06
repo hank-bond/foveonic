@@ -293,7 +293,7 @@ fn compose(
         let context_white = context.white;
         super::linear_edits::build(
             engine,
-            source,
+            super::RecipeInput::Original(source),
             settings,
             &mut recipe,
             names,

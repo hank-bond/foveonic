@@ -170,7 +170,7 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
         );
         let mut artifacts = engine
             .collect_artifacts(
-                &source,
+                crate::render::recipes::RecipeInput::Original(&source),
                 &settings,
                 &recipe.graph,
                 recipe.final_id,

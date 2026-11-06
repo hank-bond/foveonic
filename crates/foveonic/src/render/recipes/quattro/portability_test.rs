@@ -110,7 +110,7 @@ fn compare_portable_tiger_methods_on_ordinary_quattro() {
         let mut profile = Profile::new(Mode::Gpu);
         let artifacts = engine
             .collect_artifacts(
-                &source,
+                crate::render::recipes::RecipeInput::Original(&source),
                 &settings,
                 &built.graph,
                 built.final_id,

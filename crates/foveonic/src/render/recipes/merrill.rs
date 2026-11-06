@@ -21,6 +21,7 @@ pub(super) use dng_base::build as build_dng;
 pub(super) use photographic::build;
 pub(in crate::render) use preview::{
     available as fast_available, available_at as preview_available,
+    prepare_sensor as prepare_reduced_sensor,
 };
 pub(in crate::render) use region::available as regional_available;
 

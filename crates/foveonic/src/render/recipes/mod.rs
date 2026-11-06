@@ -18,6 +18,39 @@ pub(super) mod merrill;
 mod preview_tests;
 pub(super) mod quattro;
 
+/// A recipe keeps the original camera metadata even when native samples have been released.
+#[derive(Clone, Copy)]
+pub(super) enum RecipeInput<'a> {
+    Original(&'a Source),
+    Reduced(&'a crate::image::RenderedImage),
+}
+impl<'a> RecipeInput<'a> {
+    pub fn metadata(self) -> &'a std::sync::Arc<crate::source::Metadata> {
+        match self {
+            Self::Original(source) => &source.metadata,
+            Self::Reduced(image) => &image.metadata,
+        }
+    }
+    pub fn original(self) -> Result<&'a Source> {
+        match self {
+            Self::Original(source) => Ok(source),
+            Self::Reduced(_) => Err("this recipe requires original sensor samples".into()),
+        }
+    }
+    pub fn reduced(self) -> Option<&'a crate::image::RenderedImage> {
+        match self {
+            Self::Original(_) => None,
+            Self::Reduced(image) => Some(image),
+        }
+    }
+    pub fn context(self) -> super::execute::Input<'a> {
+        match self {
+            Self::Original(source) => super::execute::Input::Source(source),
+            Self::Reduced(image) => super::execute::Input::Rendered(image),
+        }
+    }
+}
+
 pub(super) enum Recipe<'a> {
     Photographic(&'a [&'a str]),
     DngBase,
@@ -31,14 +64,14 @@ pub(super) fn native_extent(metadata: &crate::source::Metadata) -> Result<[u32; 
     Ok([params.output[0], params.output[1]])
 }
 
-struct BuiltRecipe {
-    graph: Graph,
-    final_id: usize,
-    params: calibration::EncodeParams,
+pub(super) struct BuiltRecipe {
+    pub(super) graph: Graph,
+    pub(super) final_id: usize,
+    pub(super) params: calibration::EncodeParams,
     /// Working RGB grid at the shared photographic boundary, before output encoding.
-    rgb_extent: [u32; 2],
+    pub(super) rgb_extent: [u32; 2],
     /// Valid image bounds on that RGB grid, independent of sensor/output framing.
-    rgb_bounds: [u32; 4],
+    pub(super) rgb_bounds: [u32; 4],
 }
 
 fn requested(graph: &Graph, names: &[&str]) -> bool {
@@ -51,7 +84,7 @@ fn requested(graph: &Graph, names: &[&str]) -> bool {
 impl Engine {
     pub(super) fn render_recipe(
         &self,
-        source: &Source,
+        source: RecipeInput<'_>,
         settings: &Settings,
         recipe: Recipe<'_>,
         profile: &mut Profile,
@@ -72,16 +105,16 @@ impl Engine {
         // whole-frame fallback still applies saved crop and rotation.
         let mut request = std::borrow::Cow::Borrowed(settings);
         if settings.preview_region.is_some()
-            && !settings.regional_preview_available(&source.metadata)
+            && !settings.regional_preview_available(source.metadata())
         {
             request.to_mut().preview_region = None;
         }
         if matches!(
             settings.preview_quality,
             super::PreviewQuality::Draft | super::PreviewQuality::Thumb
-        ) && (source.metadata.processing_family()? != crate::source::ProcessingFamily::Merrill
-            || !merrill::preview_available(&source.metadata, settings.preview_quality)
-            || !settings.fast_preview_available(&source.metadata)
+        ) && (source.metadata().processing_family()? != crate::source::ProcessingFamily::Merrill
+            || !merrill::preview_available(source.metadata(), settings.preview_quality)
+            || !settings.fast_preview_available(source.metadata())
             || settings.preview_region.is_some()
             || settings.output_size.is_some()
             || names != ["final"]
@@ -90,7 +123,7 @@ impl Engine {
             request.to_mut().preview_quality = super::PreviewQuality::Full;
         }
         let settings = request.as_ref();
-        let resolved = settings.resolved_exposure(&source.metadata);
+        let resolved = settings.resolved_exposure(source.metadata());
         let dng_settings;
         let input = if matches!(recipe, Recipe::DngBase) {
             dng_settings = resolved.dng_settings();
@@ -98,7 +131,7 @@ impl Engine {
         } else {
             resolved.as_ref()
         };
-        let effective = input.processing_settings(source.metadata.processing_family()?);
+        let effective = input.processing_settings(source.metadata().processing_family()?);
         let mut built = match recipe {
             Recipe::Photographic(_) => {
                 let effective = effective.active_tone_settings();
@@ -126,7 +159,14 @@ impl Engine {
                 }
                 built
             }
-            Recipe::DngBase => build_dng(self, source, &effective, settings, profile, execution)?,
+            Recipe::DngBase => build_dng(
+                self,
+                source.original()?,
+                &effective,
+                settings,
+                profile,
+                execution,
+            )?,
         };
         linear_edits::prioritize_cache(&mut built.graph);
         if let Some(start) = preparation {
@@ -150,7 +190,7 @@ impl Engine {
 
 fn build_camera(
     engine: &Engine,
-    source: &Source,
+    source: RecipeInput<'_>,
     settings: &Settings,
     names: &[&str],
     profile: &mut Profile,
@@ -170,16 +210,26 @@ fn build_camera(
         request.to_mut().preview_quality = super::PreviewQuality::Full;
     }
     let settings = request.as_ref();
-    match source.metadata.processing_family()? {
+    match source.metadata().processing_family()? {
         crate::source::ProcessingFamily::Merrill => {
             merrill::build(engine, source, settings, names, profile, execution)
         }
-        crate::source::ProcessingFamily::Classic => {
-            classic::build(engine, source, settings, names, profile, execution)
-        }
-        crate::source::ProcessingFamily::Quattro => {
-            quattro::build(engine, source, settings, names, profile, execution)
-        }
+        crate::source::ProcessingFamily::Classic => classic::build(
+            engine,
+            source.original()?,
+            settings,
+            names,
+            profile,
+            execution,
+        ),
+        crate::source::ProcessingFamily::Quattro => quattro::build(
+            engine,
+            source.original()?,
+            settings,
+            names,
+            profile,
+            execution,
+        ),
     }
 }
 
@@ -202,7 +252,14 @@ fn build_dng(
             quattro::build_dng(engine, source, technical, profile, execution)
         }
     }?;
-    linear_edits::bake(engine, source, authored, &mut recipe, profile, execution)?;
+    linear_edits::bake(
+        engine,
+        RecipeInput::Original(source),
+        authored,
+        &mut recipe,
+        profile,
+        execution,
+    )?;
     Ok(recipe)
 }
 

@@ -1,20 +1,20 @@
 //! Collects requested graph outputs as owned images or diagnostic tables.
 
-use super::{execute::Input, Engine, Settings};
+use super::{recipes::RecipeInput, Engine, Settings};
 use crate::{
     graph::{DataType, Graph},
     image::{RenderedImage, View},
     interactive::Execution,
     nodes::sensor::calibration,
     profile::Profile,
-    source::{Result, Source},
+    source::Result,
 };
 
 impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn collect_artifacts(
         &self,
-        source: &Source,
+        source: RecipeInput<'_>,
         settings: &Settings,
         graph: &Graph,
         final_id: usize,
@@ -69,7 +69,7 @@ impl Engine {
             }
         }
         let values =
-            self.execute_controlled(Input::Source(source), graph, &roots, profile, execution)?;
+            self.execute_controlled(source.context(), graph, &roots, profile, execution)?;
         let dehaze_estimate = if let Some(id) = estimate {
             let value = &values[roots.iter().position(|root| *root == id).unwrap()];
             let bytes = self.gpu.readback(&value.buffer)?;
@@ -111,7 +111,7 @@ impl Engine {
                                 extent: [params.output[0], params.output[1]],
                             }
                         },
-                        metadata: source.metadata.clone(),
+                        metadata: source.metadata().clone(),
                         settings: settings.clone(),
                         dehaze_basis: match &graph.nodes[output.producer].operation {
                             crate::graph::Operation::ImageAlias { dehaze_basis, .. } => {
@@ -145,7 +145,7 @@ impl Engine {
                 Ok(Artifact {
                     name: output.name,
                     dehaze_estimate,
-                    metadata: source.metadata.clone(),
+                    metadata: source.metadata().clone(),
                     settings: settings.clone(),
                     content,
                 })

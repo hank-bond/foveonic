@@ -25,7 +25,7 @@ pub(in crate::render::recipes) fn build(
     }
     match technical::build(
         engine,
-        source,
+        super::super::RecipeInput::Original(source),
         settings,
         &["final"],
         None,

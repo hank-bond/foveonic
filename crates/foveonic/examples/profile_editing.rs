@@ -8,7 +8,10 @@ use foveonic::{
     image::{ImageTexture, RenderedImage},
     inspection::Content,
     profile::{report, Mode, Profile},
-    render::{ControlCapabilities, Engine, PreviewQuality, RenderSession, Settings},
+    render::{
+        ControlCapabilities, Engine, PreviewQuality, ReducedPreparation, ReducedRender,
+        ReducedWorkingSet, RenderSession, Settings,
+    },
     source::{Result, Source},
 };
 use rayon::prelude::*;
@@ -18,7 +21,7 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
@@ -33,12 +36,13 @@ struct Run {
     cache_budget: u64,
     controls: Vec<OsString>,
     verify: bool,
+    reduced: bool,
 }
 impl Run {
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self> {
         let mut args = args.into_iter();
         let mut run = Self {
-            destination: args.next().ok_or("usage: profile_editing REPORT.jsonl [--quality full|fast|draft|thumb] [--workers N] [--repeats N] [--mode off|wall|gpu] [--edit exposure|noise] [--cache-budget-mib N] [--verify] ORIGINAL... [-- RENDER_OPTIONS]")?.into(),
+            destination: args.next().ok_or("usage: profile_editing REPORT.jsonl [--quality full|fast|draft|thumb] [--workers N] [--repeats N] [--mode off|wall|gpu] [--edit exposure|noise] [--cache-budget-mib N] [--verify] [--reduced] ORIGINAL... [-- RENDER_OPTIONS]")?.into(),
             sources: Vec::new(),
             quality: PreviewQuality::Thumb,
             workers: 1,
@@ -48,6 +52,7 @@ impl Run {
             cache_budget: 2048 * 1024 * 1024,
             controls: Vec::new(),
             verify: false,
+            reduced: false,
         };
         while let Some(arg) = args.next() {
             match arg.to_str() {
@@ -56,6 +61,7 @@ impl Run {
                     break;
                 }
                 Some("--verify") => run.verify = true,
+                Some("--reduced") => run.reduced = true,
                 Some("--quality") => {
                     run.quality = match args.next().and_then(|s| s.into_string().ok()).as_deref() {
                         Some("full") => PreviewQuality::Full,
@@ -101,6 +107,9 @@ impl Run {
         if !["exposure", "noise"].contains(&run.edit.as_str()) {
             return Err("edit must be exposure or noise".into());
         }
+        if run.reduced && run.workers != 1 {
+            return Err("shared reduced working-set measurements require one worker".into());
+        }
         if run.mode.gpu() && run.workers != 1 {
             return Err("run GPU diagnostics serially so timestamp resolves do not perturb concurrent schedules".into());
         }
@@ -110,12 +119,40 @@ impl Run {
 
 struct Photo {
     source: PathBuf,
-    original: Arc<Source>,
-    engine: Engine,
-    session: RenderSession,
+    engine: Arc<Engine>,
+    session: Session,
     base: Settings,
     texture: Option<ImageTexture>,
     image: Option<RenderedImage>,
+}
+enum Session {
+    Native(Box<RenderSession>),
+    Reduced {
+        id: u64,
+        working: Arc<Mutex<ReducedWorkingSet>>,
+    },
+}
+impl Session {
+    fn cached_bytes(&self) -> u64 {
+        match self {
+            Self::Native(s) => s.cached_bytes(),
+            Self::Reduced { id, working } => working
+                .lock()
+                .unwrap()
+                .session_bytes(*id)
+                .map_or(0, |s| s.0),
+        }
+    }
+    fn cached_preparation_bytes(&self) -> usize {
+        match self {
+            Self::Native(s) => s.cached_preparation_bytes(),
+            Self::Reduced { id, working } => working
+                .lock()
+                .unwrap()
+                .session_bytes(*id)
+                .map_or(0, |s| s.1 as usize),
+        }
+    }
 }
 fn emit(file: &mut impl Write, event: &str, mode: Mode, data: serde_json::Value) -> Result<()> {
     serde_json::to_writer(&mut *file, &report(event, mode, data))?;
@@ -135,16 +172,45 @@ fn render(
     let cache_before = photo.session.cached_bytes();
     let profile_started_ms = group.elapsed().as_secs_f64() * 1000.;
     let mut profile = Profile::new(mode);
-    let mut artifacts = photo
-        .engine
-        .render_session(
-            &mut photo.session,
-            settings,
-            &["final"],
-            || false,
-            &mut profile,
-        )?
-        .ok_or("render superseded")?;
+    let mut reduced_reloaded = false;
+    let mut artifacts = match &mut photo.session {
+        Session::Native(session) => photo
+            .engine
+            .render_session(session, settings, &["final"], || false, &mut profile)?
+            .ok_or("render superseded")?,
+        Session::Reduced { id, working } => {
+            let mut working = working.lock().map_err(|_| "reduced working set poisoned")?;
+            let outcome = working.render(&photo.engine, *id, settings, || false, &mut profile)?;
+            let outcome = match outcome {
+                None
+                | Some(ReducedRender::NeedsOriginal(
+                    foveonic::render::NeedsOriginal::UpstreamChanged,
+                )) => {
+                    reduced_reloaded = true;
+                    // Native input loading stays outside the retained working set.
+                    let original = Source::open(&photo.source)?;
+                    let ReducedPreparation::Prepared(session) = photo
+                        .engine
+                        .prepare_reduced_session(original, settings, || false, &mut profile)?
+                    else {
+                        return Err("reduced preparation requires native fallback".into());
+                    };
+                    working.insert(*id, session, &photo.engine)?;
+                    working
+                        .render(&photo.engine, *id, settings, || false, &mut profile)?
+                        .ok_or("reduced session does not fit working-set budget")?
+                }
+                Some(outcome) => outcome,
+            };
+            match outcome {
+                ReducedRender::Rendered(artifacts) => artifacts,
+                ReducedRender::NeedsOriginal(reason) => {
+                    return Err(format!("reduced edit requires original: {reason:?}").into())
+                }
+                ReducedRender::Superseded => return Err("render superseded".into()),
+            }
+        }
+    };
     let artifact = artifacts.pop().ok_or("missing final image")?;
     let effective = artifact.settings.preview_quality;
     let Content::Image(image) = artifact.content else {
@@ -162,7 +228,7 @@ fn render(
     photo.texture = Some(texture);
     photo.image = Some(*image);
     Ok(serde_json::json!({
-        "source": photo.source, "execution":"session", "started_ms":started_ms,
+        "source": photo.source, "execution":"session", "reduced_reloaded":reduced_reloaded, "started_ms":started_ms,
         "finished_ms":finished_ms, "completed_ms":completed_ms, "profile_started_ms":profile_started_ms,
         "quality":settings.preview_quality, "effective_quality":effective, "extent":extent,
         "settings":settings, "cache_before_bytes":cache_before,
@@ -190,7 +256,8 @@ fn main() -> Result<()> {
     // Never truncate existing evidence. Reports are flushed after each completed group.
     let mut file = BufWriter::new(File::create_new(&run.destination)?);
     let setup = Instant::now();
-    let engine = Engine::new()?;
+    let engine = Arc::new(Engine::new()?);
+    let reduced_working = Arc::new(Mutex::new(ReducedWorkingSet::new(run.cache_budget)));
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(run.workers)
         .build()?;
@@ -203,12 +270,12 @@ fn main() -> Result<()> {
             "sources":run.sources,"quality":run.quality,"workers":run.workers,"adapter":engine.adapter_name(),
             "edit":run.edit,"repeats":run.repeats,"cache_budget_bytes":run.cache_budget,
             "schedule":"whole-render", "queue":"shared-ordered", "version":env!("CARGO_PKG_VERSION"),
-            "render_options":run.controls,"verify":run.verify,
+            "render_options":run.controls,"verify":run.verify,"reduced":run.reduced,
         }),
     )?;
     for path in &run.sources {
         let began = Instant::now();
-        let source = Arc::new(Source::open(path)?);
+        let source = Source::open(path)?;
         let load_ms = began.elapsed().as_secs_f64() * 1000.;
         let capabilities = ControlCapabilities::from_metadata(&source.metadata)?;
         let controls = [
@@ -230,11 +297,41 @@ fn main() -> Result<()> {
                 .chroma = 0;
         }
         base.preview_quality = run.quality;
+        let photo_engine = if run.reduced {
+            engine.clone()
+        } else {
+            Arc::new(engine.executor())
+        };
+        let session = if run.reduced {
+            match photo_engine.prepare_reduced_session(
+                source,
+                &base,
+                || false,
+                &mut Profile::default(),
+            )? {
+                ReducedPreparation::Prepared(session) => {
+                    let id = photos.len() as u64;
+                    reduced_working
+                        .lock()
+                        .unwrap()
+                        .insert(id, session, &photo_engine)?;
+                    Session::Reduced {
+                        id,
+                        working: reduced_working.clone(),
+                    }
+                }
+                ReducedPreparation::NeedsOriginal { reason, .. } => {
+                    return Err(format!("cannot seal reduced session: {reason:?}").into())
+                }
+                ReducedPreparation::Superseded => return Err("preparation superseded".into()),
+            }
+        } else {
+            Session::Native(Box::new(RenderSession::new(Arc::new(source))))
+        };
         photos.push(Photo {
             source: path.clone(),
-            engine: engine.executor(),
-            session: RenderSession::new(source.clone()),
-            original: source,
+            engine: photo_engine,
+            session,
             base,
             texture: None,
             image: None,
@@ -256,7 +353,7 @@ fn main() -> Result<()> {
         &mut file,
         "editing_ready",
         run.mode,
-        serde_json::json!({"setup_ms":setup.elapsed().as_secs_f64()*1000., "cache_bytes":photos.iter().map(|p|p.session.cached_bytes()).sum::<u64>()}),
+        serde_json::json!({"setup_ms":setup.elapsed().as_secs_f64()*1000., "cache_bytes":photos.iter().map(|p|p.session.cached_bytes()).sum::<u64>(),"session_cpu_bytes":photos.iter().map(|p|p.session.cached_preparation_bytes()).sum::<usize>(),"engine_preparation_bytes":if run.reduced {engine.cached_preparation_bytes()} else {photos.iter().map(|p|p.engine.cached_preparation_bytes()).sum::<usize>()},"working_set_bytes":if run.reduced {reduced_working.lock().unwrap().retained_bytes(&engine)} else {0}}),
     )?;
     for round in 0..run.repeats {
         let began = Instant::now();
@@ -286,11 +383,17 @@ fn main() -> Result<()> {
             emit(&mut file, "editing_photo", run.mode, result)?;
         }
         let cache_bytes: u64 = photos.iter().map(|p| p.session.cached_bytes()).sum();
+        let (working_set_bytes, resident_sessions) = if run.reduced {
+            let working = reduced_working.lock().unwrap();
+            (working.retained_bytes(&engine), working.len())
+        } else {
+            (0, photos.len())
+        };
         emit(
             &mut file,
             "editing_group",
             run.mode,
-            serde_json::json!({"round":round,"quality":run.quality,"workers":run.workers,"edit":run.edit,"photo_count":photos.len(),"completed_ms":group_ms,"first_ms":first_ms,"cache_bytes":cache_bytes}),
+            serde_json::json!({"round":round,"quality":run.quality,"workers":run.workers,"edit":run.edit,"photo_count":photos.len(),"completed_ms":group_ms,"first_ms":first_ms,"cache_bytes":cache_bytes,"working_set_bytes":working_set_bytes,"resident_sessions":resident_sessions}),
         )?;
         if cache_bytes > run.cache_budget {
             return Err("edited session buffers exceed cache budget".into());
@@ -303,7 +406,8 @@ fn main() -> Result<()> {
             let bytes = photo.engine.readback_image(image)?;
             let verifier = engine.executor();
             let settings = edit(&photo.base, &run.edit, run.repeats - 1);
-            let fresh = verifier.render(&photo.original, &settings, &mut Profile::default())?;
+            let original = Source::open(&photo.source)?;
+            let fresh = verifier.render(&original, &settings, &mut Profile::default())?;
             let expected = verifier.readback_image(&fresh)?;
             if image.description() != fresh.description()
                 || image.view() != fresh.view()

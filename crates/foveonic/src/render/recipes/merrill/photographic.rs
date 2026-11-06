@@ -9,7 +9,7 @@ use crate::{
     interactive::Execution,
     profile::Profile,
     render::{Engine, Settings},
-    source::{Result, Source},
+    source::Result,
 };
 
 // Camera tone tables use 4095 as nominal white. The sensitivity model uses
@@ -19,7 +19,7 @@ const CLASSIFIER_CODE_UNIT: f32 = 4096.;
 
 pub(in crate::render::recipes) fn build(
     engine: &Engine,
-    source: &Source,
+    source: super::super::RecipeInput<'_>,
     settings: &Settings,
     names: &[&str],
     profile: &mut Profile,
@@ -37,14 +37,14 @@ pub(in crate::render::recipes) fn build(
         technical::Prepared::Requested(recipe) => return Ok(recipe),
         technical::Prepared::Linear(recipe, mode) => (recipe, mode),
     };
-    let space = ColorSpace::from_metadata(&source.metadata)?;
+    let space = ColorSpace::from_metadata(source.metadata())?;
     linear_edits::alias(&mut recipe, space, "linear.base")?;
     if requested(&recipe.graph, names) {
         return Ok(recipe);
     }
     let adaptive = if settings.adaptive_tone_active() {
         let curve = engine.prepare_tone(
-            &source.metadata,
+            source.metadata(),
             &mode,
             Default::default(),
             settings.is_monochrome(),
@@ -64,7 +64,7 @@ pub(in crate::render::recipes) fn build(
     let prepare_curve = |profile: &mut Profile| {
         profile.measure("prepare tone curve", || {
             engine.prepare_tone(
-                &source.metadata,
+                source.metadata(),
                 &mode,
                 settings.tone,
                 settings.is_monochrome(),
@@ -77,7 +77,7 @@ pub(in crate::render::recipes) fn build(
             Basis::monochrome()
         } else {
             let rows = crate::nodes::sensor::calibration::color(
-                &source.metadata,
+                source.metadata(),
                 &settings.white_balance,
                 &mode,
             )?
@@ -105,8 +105,8 @@ pub(in crate::render::recipes) fn build(
         } else if settings.preview_region.is_some() {
             1.
         } else {
-            (recipe.params.source[0] as f32 / source.metadata.width as f32)
-                .min(recipe.params.source[1] as f32 / source.metadata.height as f32)
+            (recipe.params.source[0] as f32 / source.metadata().width as f32)
+                .min(recipe.params.source[1] as f32 / source.metadata().height as f32)
         },
     };
     linear_edits::build(

@@ -12,7 +12,7 @@ use crate::{
     },
     profile::Profile,
     render::{Engine, PreviewQuality, Rendering, Settings},
-    source::{Result, Source},
+    source::Result,
 };
 
 /// Numerical response and analysis-grid choice supplied by the camera adapter.
@@ -150,7 +150,7 @@ pub(super) fn alias(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build(
     engine: &Engine,
-    source: &Source,
+    source: super::RecipeInput<'_>,
     settings: &Settings,
     recipe: &mut BuiltRecipe,
     names: &[&str],
@@ -514,7 +514,7 @@ pub(super) fn build(
 #[allow(clippy::too_many_arguments)]
 fn adaptive_analysis(
     engine: &Engine,
-    source: &Source,
+    source: super::RecipeInput<'_>,
     settings: &Settings,
     recipe: &mut BuiltRecipe,
     space: ColorSpace,
@@ -530,7 +530,7 @@ fn adaptive_analysis(
     overview.preview_region = None;
     overview.output_size = None;
     overview.dehaze_estimate = false;
-    let reduced = overview.fast_preview_available(&source.metadata);
+    let reduced = overview.fast_preview_available(source.metadata());
     if !reduced {
         overview.preview_quality = PreviewQuality::Full;
     }
@@ -618,7 +618,7 @@ fn adaptive_analysis(
 #[allow(clippy::too_many_arguments)]
 fn haze_analysis(
     engine: &Engine,
-    source: &Source,
+    source: super::RecipeInput<'_>,
     settings: &Settings,
     recipe: &mut BuiltRecipe,
     space: ColorSpace,
@@ -633,7 +633,7 @@ fn haze_analysis(
     overview.preview_quality = PreviewQuality::Fast;
     overview.preview_region = None;
     overview.output_size = None;
-    let reduced = overview.fast_preview_available(&source.metadata);
+    let reduced = overview.fast_preview_available(source.metadata());
     if !reduced {
         overview.preview_quality = PreviewQuality::Full;
     }
@@ -690,24 +690,24 @@ fn white_balance(recipe: &mut BuiltRecipe, settings: &Settings, space: ColorSpac
 
 fn color_guide(
     engine: &Engine,
-    source: &Source,
+    source: super::RecipeInput<'_>,
     settings: &Settings,
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<BuiltRecipe> {
     let mut color = settings.clone();
     color.rendering = Rendering::Color;
-    let caps = crate::render::ControlCapabilities::from_metadata(&source.metadata)?;
-    color.color_mode = caps.default_color_mode(&source.metadata)?;
+    let caps = crate::render::ControlCapabilities::from_metadata(source.metadata())?;
+    color.color_mode = caps.default_color_mode(source.metadata())?;
     // The neutral color look is independent of the authored rendering and mono mix.
     if caps
-        .color_mode_presets(&source.metadata)
+        .color_mode_presets(source.metadata())
         .contains(&"Standard")
     {
         color.color_mode = "Standard".into();
     }
     if color.white_balance.is_empty() {
-        color.white_balance = caps.default_white_balance(&source.metadata)?;
+        color.white_balance = caps.default_white_balance(source.metadata())?;
     }
     color.processing_sections.noise = true;
     color.processing_sections.detail = true;
@@ -796,18 +796,18 @@ pub(super) fn support(settings: &Settings) -> u32 {
 
 pub(super) fn bake(
     engine: &Engine,
-    source: &Source,
+    source: super::RecipeInput<'_>,
     authored: &Settings,
     recipe: &mut BuiltRecipe,
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<()> {
-    let mut settings = authored.resolved_exposure(&source.metadata).into_owned();
+    let mut settings = authored.resolved_exposure(source.metadata()).into_owned();
     settings.preview_quality = PreviewQuality::Full;
     settings.preview_region = None;
     settings.color_range_preview = None;
     settings.output_size = None;
-    let effective = settings.processing_settings(source.metadata.processing_family()?);
+    let effective = settings.processing_settings(source.metadata().processing_family()?);
     let active = effective.active_tone_settings();
     if !baked_active(&active) {
         return Ok(());
@@ -841,8 +841,9 @@ pub(super) fn bake(
     let data = recipe.graph.outputs[recipe.final_id].data;
     let mapping = recipe.graph.append(reference.graph, "dng-edit-reference");
     recipe.final_id = if active.linear_chromatic_active() || active.dehaze_active() {
-        let statistics = super::estimated_white_balance(engine, source, &active, profile)?;
-        let appearance = super::prepare_dng_appearance(&source.metadata, &active, statistics)?;
+        let statistics =
+            super::estimated_white_balance(engine, source.original()?, &active, profile)?;
+        let appearance = super::prepare_dng_appearance(source.metadata(), &active, statistics)?;
         let matrix = if active.is_monochrome() {
             appearance.technical_from_monochrome()?
         } else {

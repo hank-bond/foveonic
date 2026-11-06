@@ -157,6 +157,39 @@ impl Grid {
     }
 }
 
+/// Build the same native corrections used by the photographic recipe, then stop
+/// at the reduced calibrated sensor. No original or native checkpoint is retained.
+pub(in crate::render) fn prepare_sensor(
+    engine: &crate::render::Engine,
+    source: &crate::source::Source,
+    settings: &crate::render::Settings,
+    profile: &mut crate::profile::Profile,
+    execution: &mut crate::interactive::Execution<'_>,
+) -> Result<BuiltRecipe> {
+    let space = ColorSpace::from_metadata(&source.metadata)?;
+    let native = crate::nodes::sensor::calibration::encode(&source.metadata, space)?;
+    let grid = Grid::new(native, None, settings.preview_quality)?;
+    let policy = super::native_layers::Policy::new(settings, true, false);
+    let mut recipe = match super::native_layers::build(
+        engine,
+        source,
+        settings,
+        native,
+        &policy,
+        &["final"],
+        profile,
+        execution,
+    )? {
+        super::native_layers::Output::Requested(recipe)
+        | super::native_layers::Output::Ready { recipe, .. } => recipe,
+    };
+    recipe.final_id = grid.append(&mut recipe.graph, recipe.final_id)?;
+    recipe.params = grid.encode;
+    recipe.rgb_extent = [grid.encode.source[0], grid.encode.source[1]];
+    recipe.rgb_bounds = grid.encode.crop;
+    Ok(recipe)
+}
+
 #[cfg(test)]
 #[path = "preview_test.rs"]
 mod tests;

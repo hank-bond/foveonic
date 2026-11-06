@@ -12,7 +12,7 @@ use crate::{
     interactive::Execution,
     profile::Profile,
     render::{Engine, Settings},
-    source::{Result, Source},
+    source::Result,
 };
 
 pub(super) enum Prepared {
@@ -22,15 +22,15 @@ pub(super) enum Prepared {
 
 pub(super) fn build(
     engine: &Engine,
-    source: &Source,
+    source: super::super::RecipeInput<'_>,
     settings: &Settings,
     names: &[&str],
     mode: Option<&str>,
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<Prepared> {
-    let space = ColorSpace::from_metadata(&source.metadata)?;
-    let mut params = calibration::encode(&source.metadata, space)?;
+    let space = ColorSpace::from_metadata(source.metadata())?;
+    let mut params = calibration::encode(source.metadata(), space)?;
     // Preview policy changes the working grid. Inspection and DNG keep native geometry.
     let preview = (settings.preview_quality.is_reduced()
         && mode.is_some()
@@ -93,13 +93,40 @@ pub(super) fn build(
         mode.is_some()
             && (names == ["final"] || names == ["linear.base"])
             && !settings.is_monochrome()
-            && preview::available(&source.metadata),
+            && preview::available(source.metadata()),
     );
-    let (recipe, couplings) = match native_layers::build(
-        engine, source, settings, params, &policy, names, profile, execution,
-    )? {
-        native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
-        native_layers::Output::Ready { recipe, couplings } => (recipe, couplings),
+    let (recipe, couplings) = if source.reduced().is_some() {
+        let mut graph = crate::graph::Graph::default();
+        let calibrated = graph.add(
+            Operation::RenderedInput {
+                data: crate::graph::DataType::CalibratedLayers,
+            },
+            &[],
+        )?;
+        (
+            BuiltRecipe {
+                graph,
+                final_id: calibrated,
+                params,
+                rgb_extent: [params.source[0], params.source[1]],
+                rgb_bounds: params.crop,
+            },
+            None,
+        )
+    } else {
+        match native_layers::build(
+            engine,
+            source.original()?,
+            settings,
+            params,
+            &policy,
+            names,
+            profile,
+            execution,
+        )? {
+            native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
+            native_layers::Output::Ready { recipe, couplings } => (recipe, couplings),
+        }
     };
     let mut graph = recipe.graph;
     let mut calibrated = recipe.final_id;
@@ -120,7 +147,7 @@ pub(super) fn build(
     }
     if settings.is_monochrome() {
         return super::monochrome::build(
-            source,
+            source.original()?,
             settings,
             BuiltRecipe {
                 graph,
@@ -136,7 +163,9 @@ pub(super) fn build(
     }
     let native_calibrated = calibrated;
     if let Some(grid) = &preview {
-        calibrated = grid.append(&mut graph, calibrated)?;
+        if source.reduced().is_none() {
+            calibrated = grid.append(&mut graph, calibrated)?;
+        }
     }
     let noise_controls = settings.merrill_reconstruction();
     if let Some(region) = &region {
@@ -145,7 +174,10 @@ pub(super) fn build(
             calibrated = graph.add(
                 Operation::ImageRegion {
                     prepared: crate::nodes::finish::image_region::Prepared::new(
-                        [source.metadata.width as u32, source.metadata.height as u32],
+                        [
+                            source.metadata().width as u32,
+                            source.metadata().height as u32,
+                        ],
                         region.physical,
                         3,
                     )?,
@@ -158,12 +190,12 @@ pub(super) fn build(
     }
     let mode = match mode {
         Some(name) => profile.measure("prepare color mode", || {
-            color_mode::prepare(&source.metadata, name)
+            color_mode::prepare(source.metadata(), name)
         })?,
         None => dng_base::unselected_mode(),
     };
     let mut color = profile.measure("prepare color matrix", || {
-        calibration::color(&source.metadata, &settings.white_balance, &mode)
+        calibration::color(source.metadata(), &settings.white_balance, &mode)
     })?;
     if preview.is_some() || region.is_some() {
         color.source[..2].copy_from_slice(&params.source[..2]);
@@ -229,18 +261,18 @@ pub(super) fn build(
                 Some(recipe) => recipe,
                 None => profile.measure("prepare noise couplings", || {
                     crate::noise::couplings(
-                        &source.metadata,
+                        source.metadata(),
                         &settings.white_balance,
                         settings.sensor_noise_controls(),
                     )
                 })?,
             };
-            crate::noise::processing_gain(&source.metadata)?
+            crate::noise::processing_gain(source.metadata())?
                 .1
                 .min(recipe.color_dq_limit)
         };
         let table = profile.measure("prepare ColorDQ", || {
-            color_dq::prepare(&source.metadata, gain)
+            color_dq::prepare(source.metadata(), gain)
         })?;
         linear = if let Some((params, _)) = reconstruction {
             graph.add(
@@ -276,7 +308,7 @@ pub(super) fn build(
             if region.is_some() {
                 1.
             } else {
-                params.source[0] as f32 / source.metadata.width as f32
+                params.source[0] as f32 / source.metadata().width as f32
             },
         );
         let guide = graph.add(
@@ -306,7 +338,7 @@ pub(super) fn build(
     };
     if settings.sharpen_selected() {
         let amount = profile.measure("prepare sharpening amount", || {
-            settings.effective_sharpen_amount(&source.metadata)
+            settings.effective_sharpen_amount(source.metadata())
         })?;
         if amount != 0. || names.contains(&"sharpen.rgb") {
             let signal = signal.ok_or("missing sharpening signal")?;

@@ -308,7 +308,7 @@ impl Cache {
         working.prime |= working.grid != Some(grid);
         working.grid = Some(grid);
     }
-    fn bytes(&self) -> u64 {
+    pub(crate) fn bytes(&self) -> u64 {
         self.entries
             .iter()
             .enumerate()
@@ -319,6 +319,38 @@ impl Cache {
             })
             .map(|(_, entry)| entry.value.buffer.size())
             .sum()
+    }
+    pub(crate) fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
+        let mut bytes = self.entries.capacity() * std::mem::size_of::<Entry>();
+        for entry in &self.entries {
+            bytes += entry.name.capacity();
+        }
+        for working in &self.working {
+            bytes += working.versions.capacity() * std::mem::size_of::<(String, Version)>();
+            bytes += (working.selected.capacity() + working.primary.capacity())
+                * std::mem::size_of::<String>();
+            bytes += working
+                .selected
+                .iter()
+                .chain(&working.primary)
+                .map(String::capacity)
+                .sum::<usize>();
+            for (name, version) in &working.versions {
+                bytes += name.capacity();
+                bytes += version.recipe.inputs.capacity() * std::mem::size_of::<(String, u64)>();
+                bytes += version
+                    .recipe
+                    .inputs
+                    .iter()
+                    .map(|(name, _)| name.capacity())
+                    .sum::<usize>();
+                version.recipe.parameters.account(retained);
+            }
+        }
+        bytes
+    }
+    pub(crate) fn buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
+        self.entries.iter().map(|entry| &entry.value.buffer)
     }
     fn room_for(&self, value: &Value) -> bool {
         self.entries

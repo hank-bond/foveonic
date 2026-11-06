@@ -110,7 +110,7 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
         let mut execution = Execution::default();
         let built = super::super::build_camera(
             &engine,
-            &source,
+            crate::render::recipes::RecipeInput::Original(&source),
             &settings,
             &["final"],
             &mut profile,
@@ -119,7 +119,7 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
         .unwrap();
         let mut artifacts = engine
             .collect_artifacts(
-                &source,
+                crate::render::recipes::RecipeInput::Original(&source),
                 &settings,
                 &built.graph,
                 built.final_id,
@@ -1256,7 +1256,7 @@ fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews(
                 let mut execution = Execution::default();
                 let built = super::super::build_camera(
                     &engine,
-                    &source,
+                    crate::render::recipes::RecipeInput::Original(&source),
                     &settings,
                     &["final"],
                     &mut profile,
@@ -1279,7 +1279,7 @@ fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews(
                     .unwrap();
                 let artifacts = engine
                     .collect_artifacts(
-                        &source,
+                        crate::render::recipes::RecipeInput::Original(&source),
                         &settings,
                         &built.graph,
                         built.final_id,

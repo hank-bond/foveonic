@@ -20,7 +20,11 @@ mod edits;
 mod execute;
 mod preparation;
 mod recipes;
+mod reduced;
 mod settings;
+pub use reduced::{
+    NeedsOriginal, ReducedPreparation, ReducedRender, ReducedSession, ReducedWorkingSet,
+};
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
 pub fn native_extent(metadata: &crate::source::Metadata) -> crate::source::Result<[u32; 2]> {
     recipes::native_extent(metadata)
@@ -424,7 +428,7 @@ impl Engine {
         profile: &mut Profile,
     ) -> Result<Vec<crate::inspection::Artifact>> {
         self.render_recipe(
-            source,
+            recipes::RecipeInput::Original(source),
             settings,
             Recipe::Photographic(names),
             profile,
@@ -486,7 +490,7 @@ impl Engine {
             profile.record("prepare session cache", start);
         }
         let result = self.render_recipe(
-            &session.source,
+            recipes::RecipeInput::Original(&session.source),
             settings,
             Recipe::Photographic(names),
             profile,
@@ -508,7 +512,7 @@ impl Engine {
     ) -> Result<RenderedImage> {
         let artifact = self
             .render_recipe(
-                source,
+                recipes::RecipeInput::Original(source),
                 settings,
                 Recipe::DngBase,
                 profile,

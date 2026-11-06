@@ -350,7 +350,7 @@ fn monochrome_native_methods_keep_layer_order_and_shared_export_preparation() {
 fn photographic(engine: &Engine, source: &Source, settings: &Settings) -> BuiltRecipe {
     super::photographic::build(
         engine,
-        source,
+        super::super::RecipeInput::Original(source),
         settings,
         &["final"],
         &mut Profile::default(),

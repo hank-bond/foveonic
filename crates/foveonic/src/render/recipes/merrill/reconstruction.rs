@@ -8,12 +8,12 @@ use crate::{
     noise::{Controls, Parameters},
     profile::Profile,
     render::Settings,
-    source::{Result, Source},
+    source::Result,
 };
 use std::sync::Arc;
 
 pub(super) struct Request<'a> {
-    pub source: &'a Source,
+    pub source: super::super::RecipeInput<'a>,
     pub settings: &'a Settings,
     pub names: &'a [&'a str],
     pub color: crate::nodes::sensor::calibration::ColorParams,
@@ -58,7 +58,7 @@ pub(super) fn append(
     };
     let native_params = profile.measure("prepare reference noise", || {
         crate::noise::prepare(
-            &request.source.metadata,
+            request.source.metadata(),
             &request.settings.white_balance,
             prepared_controls,
         )
@@ -85,7 +85,7 @@ pub(super) fn append(
     checkpoint!();
     let native_columns = if effects.noise {
         profile.measure("prepare column cuts", || {
-            crate::noise::column_parameters(&request.source.metadata, native_params)
+            crate::noise::column_parameters(request.source.metadata(), native_params)
         })?
     } else {
         native_params
@@ -102,7 +102,7 @@ pub(super) fn append(
             graph,
             request.native_calibrated,
             Arc::new(crate::noise::banding_parameters(
-                &request.source.metadata,
+                request.source.metadata(),
                 native_columns,
                 request.settings.merrill_banding,
             )?),
@@ -119,7 +119,7 @@ pub(super) fn append(
                 Operation::DirectionalBanding {
                     stage: crate::nodes::color::directional_banding::Stage::Retile,
                     prepared: Arc::new(crate::noise::banding_parameters(
-                        &request.source.metadata,
+                        request.source.metadata(),
                         column_params,
                         request.settings.merrill_banding,
                     )?),
@@ -131,7 +131,7 @@ pub(super) fn append(
                 Operation::DirectionalBanding {
                     stage: crate::nodes::color::directional_banding::Stage::Window,
                     prepared: Arc::new(crate::noise::banding_parameters(
-                        &request.source.metadata,
+                        request.source.metadata(),
                         column_params,
                         request.settings.merrill_banding,
                     )?),
@@ -152,11 +152,11 @@ pub(super) fn append(
     };
     checkpoint!();
     let mut active =
-        crate::nodes::sensor::calibration::rectangle(&request.source.metadata, "ActiveImageArea")?;
+        crate::nodes::sensor::calibration::rectangle(request.source.metadata(), "ActiveImageArea")?;
     for axis in 0..2 {
         let native = [
-            request.source.metadata.width as u32,
-            request.source.metadata.height as u32,
+            request.source.metadata().width as u32,
+            request.source.metadata().height as u32,
         ][axis];
         active[axis] =
             (u64::from(active[axis]) * u64::from(params.source[axis]) / u64::from(native)) as u32;
@@ -167,7 +167,7 @@ pub(super) fn append(
         crate::nodes::color::texture::Color::new(request.color.matrix, request.space, active)?;
     let prepared = crate::nodes::color::texture::Prepared::new(
         controls,
-        params.source[0] as f32 / request.source.metadata.width as f32,
+        params.source[0] as f32 / request.source.metadata().width as f32,
         color,
     )?;
     let inspect_ratio = request
@@ -178,7 +178,7 @@ pub(super) fn append(
         let ratio = graph.add(Operation::Ratio(params), &[conditioned, base])?;
         checkpoint!();
         let pattern_recipe = profile.measure("prepare pattern recipe", || {
-            crate::noise::pattern_parameters(&request.source.metadata, params)
+            crate::noise::pattern_parameters(request.source.metadata(), params)
         })?;
         let seed = graph.named_output(base, "noise.pattern-seed-tiles")?;
         let pattern = graph.add(
