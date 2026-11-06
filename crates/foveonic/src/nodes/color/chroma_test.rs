@@ -192,7 +192,9 @@ fn reduced_recursive_chroma_keeps_neutral_constants_and_channel_symmetry() {
             let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
             let bytes = gpu.readback(&output).unwrap();
             for (index, rgb) in bytemuck::cast_slice::<u8, f32>(&bytes)
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .enumerate()
             {
                 assert_eq!(rgb[0], rgb[1]);
@@ -205,7 +207,7 @@ fn reduced_recursive_chroma_keeps_neutral_constants_and_channel_symmetry() {
                     let shared = (3 * correction) >> prepared.params.correction[1];
                     assert_eq!(rgb[0], code + (correction - shared) as f32);
                 } else if code == 0. {
-                    assert_eq!(rgb, [0.; 3]);
+                    assert_eq!(rgb, &[0.; 3]);
                 } else {
                     // The original IIR starts from zero at its edges. Check a
                     // settled flat interior separately from those transients.
@@ -234,7 +236,9 @@ fn reduced_recursive_chroma_keeps_neutral_constants_and_channel_symmetry() {
             })
             .collect();
         let swapped: Vec<f32> = pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|rgb| [rgb[2], rgb[1], rgb[0]])
             .collect();
         let filter = |pixels: &[f32]| {
@@ -247,7 +251,12 @@ fn reduced_recursive_chroma_keeps_neutral_constants_and_channel_symmetry() {
         };
         let original = filter(&pixels);
         let permuted = filter(&swapped);
-        for (a, b) in original.chunks_exact(3).zip(permuted.chunks_exact(3)) {
+        for (a, b) in original
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(permuted.as_chunks::<3>().0.iter())
+        {
             assert_eq!(a, &[b[2], b[1], b[0]]);
         }
     }
