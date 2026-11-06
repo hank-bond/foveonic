@@ -168,6 +168,7 @@ fn render(
         "settings":settings, "cache_before_bytes":cache_before,
         "cache_after_bytes":photo.session.cached_bytes(),
         "preparation_bytes":photo.session.cached_preparation_bytes(),
+        "engine_preparation_bytes":photo.engine.cached_preparation_bytes(),
         "activity":photo.engine.gpu_activity().since(before), "profile":profile,
     }))
 }

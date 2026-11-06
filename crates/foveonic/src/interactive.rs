@@ -932,7 +932,7 @@ mod tests {
         let final_id = graph
             .add(
                 O::Tone {
-                    curve: vec![0., 1.],
+                    curve: vec![0., 1.].into(),
                     exposure: 0.,
                     space: C::Srgb,
                 },
@@ -966,7 +966,7 @@ mod tests {
             cache.working[cache.active].versions["detail.signal"].generation
         );
         graph.nodes[graph.outputs[final_id].producer].operation = O::Tone {
-            curve: vec![0., 1.],
+            curve: vec![0., 1.].into(),
             exposure: 0.5,
             space: C::Srgb,
         };

@@ -19,7 +19,7 @@ use crate::{
 #[derive(Clone)]
 pub(super) struct Adaptive {
     pub params: crate::nodes::finish::adaptive_tone::Params,
-    pub curve: Vec<f32>,
+    pub curve: crate::recipe::Shared<f32>,
     pub full_analysis: bool,
 }
 impl Adaptive {
@@ -28,9 +28,10 @@ impl Adaptive {
         recipe: &BuiltRecipe,
         space: ColorSpace,
         white: f32,
-        curve: Vec<f32>,
+        curve: impl Into<crate::recipe::Shared<f32>>,
         full_analysis: bool,
     ) -> Result<Self> {
+        let curve = curve.into();
         Ok(Self {
             params: crate::nodes::finish::adaptive_tone::Params::new(
                 recipe.rgb_extent,

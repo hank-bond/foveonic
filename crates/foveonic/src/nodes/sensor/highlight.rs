@@ -20,11 +20,11 @@ pub(crate) struct Params {
 #[cfg_attr(test, derive(Default))]
 pub(crate) struct Prepared {
     pub params: Params,
-    pub flags: Vec<u32>,
+    pub flags: crate::recipe::Shared<u32>,
 }
 impl Prepared {
     pub(crate) fn key(&self) -> crate::recipe::Key {
-        crate::recipe::Key::pod(&self.params).slice(&self.flags)
+        crate::recipe::Key::pod(&self.params).join(self.flags.key())
     }
 }
 pub(crate) struct Output {
@@ -100,6 +100,14 @@ pub(crate) fn validate_threshold(ev: Option<f32>) -> Result<()> {
 }
 
 pub(crate) fn prepare(metadata: &Metadata, threshold_ev: Option<f32>) -> Result<Prepared> {
+    prepare_with_flags(metadata, threshold_ev, None)
+}
+
+pub(crate) fn prepare_with_flags(
+    metadata: &Metadata,
+    threshold_ev: Option<f32>,
+    flags: Option<crate::recipe::Shared<u32>>,
+) -> Result<Prepared> {
     validate_threshold(threshold_ev)?;
     let count = metadata
         .width
@@ -107,6 +115,9 @@ pub(crate) fn prepare(metadata: &Metadata, threshold_ev: Option<f32>) -> Result<
         .ok_or("highlight geometry overflow")?;
     if metadata.width < 5 || metadata.height < 5 || count > u32::MAX as usize / 3 {
         return Err("unsupported highlight geometry".into());
+    }
+    if flags.as_ref().is_some_and(|flags| flags.len() != count) {
+        return Err("original saturation map has the wrong sensor extent".into());
     }
     let active = super::calibration::rectangle(metadata, "ActiveImageArea")?;
     let columns = metadata.fixed::<4>("DarkShieldColRange")?;
@@ -159,7 +170,10 @@ pub(crate) fn prepare(metadata: &Metadata, threshold_ev: Option<f32>) -> Result<
             area,
             value: [threshold, 0., 0., 0.],
         },
-        flags: saturation(metadata)?,
+        flags: match flags {
+            Some(flags) => flags,
+            None => saturation(metadata)?.into(),
+        },
     })
 }
 

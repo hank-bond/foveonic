@@ -43,12 +43,12 @@ pub(in crate::render::recipes) fn build(
         return Ok(recipe);
     }
     let adaptive = if settings.adaptive_tone_active() {
-        use crate::nodes::finish::tone;
-        let curve = if settings.is_monochrome() {
-            tone::prepare_monochrome(&source.metadata, Default::default())?
-        } else {
-            tone::prepare(&source.metadata, &mode, Default::default())?
-        };
+        let curve = engine.prepare_tone(
+            &source.metadata,
+            &mode,
+            Default::default(),
+            settings.is_monochrome(),
+        )?;
         Some(linear_edits::Adaptive::new(
             settings,
             &recipe,
@@ -63,7 +63,12 @@ pub(in crate::render::recipes) fn build(
     let mut prepared_curve = None;
     let prepare_curve = |profile: &mut Profile| {
         profile.measure("prepare tone curve", || {
-            super::appearance::curve(&source.metadata, &mode, settings)
+            engine.prepare_tone(
+                &source.metadata,
+                &mode,
+                settings.tone,
+                settings.is_monochrome(),
+            )
         })
     };
     let dehaze_basis = if linear_edits::needs_dehaze(settings, names) {

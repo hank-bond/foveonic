@@ -136,7 +136,7 @@ fn reference_outputs_have_stage_local_dependencies_and_typed_atlases() {
     assert!(required[raw]);
     assert!(!required[base] && !required[detail] && !required[colour]);
     let tone = Operation::Tone {
-        curve: vec![0., 1.],
+        curve: vec![0., 1.].into(),
         exposure: 1.,
         space: ColorSpace::Srgb,
     };
@@ -211,7 +211,7 @@ fn rejects_wrong_space_and_forward_dependencies() {
     let toned = graph
         .add(
             Operation::Tone {
-                curve: vec![0., 1.],
+                curve: vec![0., 1.].into(),
                 exposure: 1.,
                 space: ColorSpace::Srgb,
             },

@@ -5,7 +5,7 @@ use super::layer_noise;
 use crate::{
     graph::{Graph, Operation},
     interactive::Execution,
-    nodes::sensor::{banding, calibration, color_field, despeckle, highlight},
+    nodes::sensor::{banding, calibration, color_field, despeckle},
     profile::Profile,
     render::Settings,
     source::{Result, Source},
@@ -68,9 +68,9 @@ pub(super) fn build(
     finish!();
     let mut highlight_params = None;
     if settings.highlight_restoration && names.contains(&"highlight.density") {
-        let prepared = Arc::new(profile.measure("prepare original saturation", || {
-            highlight::prepare(&source.metadata, settings.highlight_threshold_ev)
-        })?);
+        let prepared = profile.measure("prepare original saturation", || {
+            engine.prepare_highlights(&source.metadata, settings.highlight_threshold_ev)
+        })?;
         graph.add(Operation::HighlightDensity(prepared.clone()), &[])?;
         highlight_params = Some(prepared);
         finish!();
@@ -188,9 +188,9 @@ pub(super) fn build(
     } else if settings.highlight_restoration {
         let prepared = match highlight_params {
             Some(prepared) => prepared,
-            None => Arc::new(profile.measure("prepare highlight restoration", || {
-                highlight::prepare(&source.metadata, settings.highlight_threshold_ev)
-            })?),
+            None => profile.measure("prepare highlight restoration", || {
+                engine.prepare_highlights(&source.metadata, settings.highlight_threshold_ev)
+            })?,
         };
         calibrated = graph.add(Operation::Highlights(prepared), &[calibrated])?;
         finish!();

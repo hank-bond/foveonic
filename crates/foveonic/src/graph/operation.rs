@@ -254,7 +254,7 @@ pub enum Operation {
     AdaptiveTone {
         params: crate::nodes::finish::adaptive_tone::Params,
         analysis: crate::nodes::finish::adaptive_tone::Params,
-        curve: Vec<f32>,
+        curve: crate::recipe::Shared<f32>,
         space: ColorSpace,
     },
     ToneMask {
@@ -268,7 +268,7 @@ pub enum Operation {
         space: ColorSpace,
     },
     Tone {
-        curve: Vec<f32>,
+        curve: crate::recipe::Shared<f32>,
         exposure: f32,
         space: ColorSpace,
     },
@@ -423,7 +423,7 @@ impl Operation {
                 analysis,
                 curve,
                 ..
-            } => params.key().join(analysis.key()).slice(curve),
+            } => params.key().join(analysis.key()).join(curve.key()),
             Self::TonalRanges {
                 controls,
                 pivot,
@@ -432,7 +432,7 @@ impl Operation {
             } => Key::pod(&controls.amounts()).with(pivot).with(white),
             Self::Tone {
                 curve, exposure, ..
-            } => Key::pod(exposure).slice(curve),
+            } => Key::pod(exposure).join(curve.key()),
             Self::Encode {
                 params,
                 destination,

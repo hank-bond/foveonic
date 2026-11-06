@@ -18,6 +18,7 @@ mod capabilities;
 mod dng_gpu;
 mod edits;
 mod execute;
+mod preparation;
 mod recipes;
 mod settings;
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
@@ -77,6 +78,7 @@ pub struct Engine {
     // Keep the latest photo's calibration statistics with the engine. Metadata lifetime
     // and the original sample allocation identify the immutable source.
     calibration_statistics: std::sync::Mutex<Vec<CalibrationEstimate>>,
+    preparation: std::sync::Mutex<preparation::Cache>,
     calibration_resources: Option<Arc<recipes::quattro::resources::ResourceDirectory>>,
 }
 
@@ -107,6 +109,7 @@ impl Engine {
             noise_calibration: None,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
+            preparation: Default::default(),
             calibration_resources: Some(Arc::new(
                 recipes::quattro::resources::ResourceDirectory::bundled()?,
             )),
@@ -149,6 +152,7 @@ impl Engine {
             noise_calibration: None,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
+            preparation: Default::default(),
             calibration_resources: Some(Arc::new(calibration_resources)),
         })
     }
@@ -169,6 +173,7 @@ impl Engine {
             noise_calibration: self.noise_calibration.clone(),
             owner: Arc::new(()),
             calibration_statistics: Default::default(),
+            preparation: Default::default(),
             calibration_resources: self.calibration_resources.clone(),
         }
     }

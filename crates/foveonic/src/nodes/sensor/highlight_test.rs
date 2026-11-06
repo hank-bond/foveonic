@@ -92,7 +92,7 @@ fn gpu_threshold_changes_only_brightness_blend_and_keeps_density_and_input() {
         },
         // No valid blue donors: the correction table stays empty, making the
         // expected brightness blend independent of the donor implementation.
-        flags: vec![7; count as usize],
+        flags: vec![7; count as usize].into(),
     };
     let mut reference_density = None;
     {
@@ -335,7 +335,7 @@ fn gpu_highlight_restoration_matches_native_saturation_and_density() {
                 .unwrap(),
             value: [5500., 1., 0., 0.],
         },
-        flags,
+        flags: flags.into(),
     };
     let gpu = Gpu::new().unwrap();
     {
