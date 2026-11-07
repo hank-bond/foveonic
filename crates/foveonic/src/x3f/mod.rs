@@ -90,8 +90,15 @@ pub(crate) fn read_cacheable(
 }
 
 fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, Timing)> {
+    let _scope = crate::diagnostics::scope_with(
+        crate::diagnostics::Category::Io,
+        "source.original",
+        |fields| {
+            fields.str("source", &path.to_string_lossy());
+        },
+    );
     let start = Instant::now();
-    let mut file = std::fs::File::open(path)?;
+    let file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
     if length < MINIMUM_FILE_BYTES {
         return Err(damaged("truncated X3F header"));
@@ -99,6 +106,7 @@ fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, 
     if length > MAXIMUM_FILE_BYTES {
         return Err("unsupported X3F file size".into());
     }
+    let mut file = crate::diagnostics::io::ObservedReader::new(file, "original", path);
     let mut data = Vec::with_capacity(length as usize);
     use std::io::Read;
     // Yield background I/O between bounded reads instead of issuing the whole
@@ -118,12 +126,14 @@ fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, 
     if data.len() as u64 != length {
         return Err("X3F file changes during reading".into());
     }
+    file.complete();
     let read = Timing::elapsed("file read", start);
     read_complete();
     Ok((data, read))
 }
 
 fn decode_owned(data: Vec<u8>, read: Timing) -> Result<(Source, Vec<u8>)> {
+    let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Cpu, "decode.source");
     let start = Instant::now();
     let mut source = decode(&data)?;
     crate::background::checkpoint_or_cancel()?;

@@ -30,6 +30,8 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[crop.rs](./crop.rs)** Composes saved oriented crop coordinates with camera framing and final output sizing.
 - **[decode_pool.rs](./decode_pool.rs)** Runs independent processing CPU work on one host-sized pool with decode-specific FIFO admission.
+- **[diagnostics.rs](./diagnostics.rs)** Records bounded application traces through Perfetto with shared clocks and scalar correlation.
+- **[diagnostics_capture.rs](./diagnostics_capture.rs)** Owns Perfetto sessions on one control thread and saves bounded captures outside the frontend.
 - **[dng.rs](./dng.rs)** Exports original-derived linear DNG samples with explicit baked edits and separate camera appearance.
 - **[gpu.rs](./gpu.rs)** Owns the GPU device, compute kernels, buffer uploads, and export readback.
 - **[graph.rs](./graph.rs)** Builds typed dependency-ordered graphs and validates connections between operation ports.

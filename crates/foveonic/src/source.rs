@@ -482,9 +482,18 @@ impl Metadata {
 /// appear while sensor samples and calibration are still loading.
 pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String, String>> {
     let path = path.as_ref();
+    let _scope = crate::diagnostics::scope_with(
+        crate::diagnostics::Category::Io,
+        "source.capture_properties",
+        |fields| {
+            fields.str("source", &path.to_string_lossy());
+        },
+    );
     crate::input_error::read(path, || {
-        let mut file = std::fs::File::open(path)?;
+        let file = std::fs::File::open(path)?;
+        let mut file = crate::diagnostics::io::ObservedReader::new(file, "original-metadata", path);
         let properties = crate::x3f::capture::read(&mut file)?;
+        file.complete();
         if family(properties.get("CAMMODEL").map(String::as_str)).is_none() {
             return Err("unsupported camera family".into());
         }
@@ -511,6 +520,13 @@ pub struct FileIdentity {
 }
 impl FileIdentity {
     pub fn read(path: &Path) -> Result<Self> {
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Io,
+            "source.identity",
+            |fields| {
+                fields.str("source", &path.to_string_lossy());
+            },
+        );
         let canonical = path.canonicalize()?;
         let metadata = std::fs::metadata(&canonical)?;
         let modified = metadata.modified()?.duration_since(std::time::UNIX_EPOCH)?;

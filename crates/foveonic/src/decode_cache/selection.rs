@@ -63,13 +63,22 @@ impl Cache {
 
 pub(super) fn read(root: &Path, identity: &Identity, settings: &Settings) -> Result<Selection> {
     let path = root.join(identity.name()).with_extension("metadata");
-    let file = fs::File::open(path)?;
+    let file = fs::File::open(&path)?;
     use std::io::Read;
     if file.metadata()?.len() > MAX_SELECTION_BYTES {
         return Err("cached selection too large".into());
     }
+    let source = String::from_utf8_lossy(&identity.location);
+    let mut file = crate::diagnostics::io::ObservedReader::new(
+        file,
+        "decoded-metadata",
+        Path::new(source.as_ref()),
+    );
     let mut bytes = Vec::new();
-    file.take(MAX_SELECTION_BYTES + 1).read_to_end(&mut bytes)?;
+    (&mut file)
+        .take(MAX_SELECTION_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    file.complete();
     if bytes.len() < CHECKSUM_BYTES {
         return Err("truncated cached selection".into());
     }

@@ -29,7 +29,17 @@ pub(super) fn prune(root: &Path, budget: u64, nearby: &[PathBuf]) -> Result<Vec<
     for (entry, evict) in remove {
         crate::background::checkpoint_or_cancel()?;
         if evict {
-            fs::remove_file(entry.0)?;
+            fs::remove_file(&entry.0)?;
+            crate::diagnostics::event(
+                crate::diagnostics::Category::Cache,
+                "cache.disk.evicted",
+                |fields| {
+                    fields.str("entry", &entry.0.to_string_lossy());
+                    fields.str("reason", "disk_budget");
+                    fields.u64("bytes", entry.1);
+                    fields.u64("budget_bytes", budget);
+                },
+            );
         } else {
             retained.push(entry);
         }
@@ -47,6 +57,16 @@ pub(super) fn reserve(
     nearby: &[PathBuf],
 ) -> Result<bool> {
     if bytes > budget {
+        crate::diagnostics::event(
+            crate::diagnostics::Category::Cache,
+            "cache.disk.admission_rejected",
+            |fields| {
+                fields.str("entry", &destination.to_string_lossy());
+                fields.str("reason", "entry_exceeds_budget");
+                fields.u64("bytes", bytes);
+                fields.u64("budget_bytes", budget);
+            },
+        );
         return Ok(false);
     }
     let mut entries = entries(root)?;
@@ -57,12 +77,32 @@ pub(super) fn reserve(
         .iter()
         .any(|(entry, evict)| entry.0 == destination && *evict)
     {
+        crate::diagnostics::event(
+            crate::diagnostics::Category::Cache,
+            "cache.disk.admission_rejected",
+            |fields| {
+                fields.str("entry", &destination.to_string_lossy());
+                fields.str("reason", "protect_nearer_photos");
+                fields.u64("bytes", bytes);
+                fields.u64("budget_bytes", budget);
+            },
+        );
         return Ok(false);
     }
     for (entry, evict) in remove {
         crate::background::checkpoint_or_cancel()?;
         if evict {
-            fs::remove_file(entry.0)?;
+            fs::remove_file(&entry.0)?;
+            crate::diagnostics::event(
+                crate::diagnostics::Category::Cache,
+                "cache.disk.evicted",
+                |fields| {
+                    fields.str("entry", &entry.0.to_string_lossy());
+                    fields.str("reason", "disk_admission");
+                    fields.u64("bytes", entry.1);
+                    fields.u64("budget_bytes", budget);
+                },
+            );
         }
     }
     Ok(true)

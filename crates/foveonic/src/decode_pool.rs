@@ -29,11 +29,15 @@ pub(crate) fn shared() -> Result<Arc<Pool>> {
 /// Run borrowed CPU preparation within the same capacity as sensor decoding.
 /// Nested plane/row work uses this pool too; file I/O stays on its caller.
 pub(crate) fn cpu<T: Send>(work: impl FnOnce() -> Result<T> + Send) -> Result<T> {
+    let diagnostic = crate::diagnostics::current_context();
+    let _admission = crate::diagnostics::scope(crate::diagnostics::Category::Cpu, "cpu.install");
     let scheduling = background::context();
     let pool = background::decoder_context()
         .map(|task| task.pool)
         .map_or_else(shared, Ok)?;
     pool.0.install(|| {
+        let _context = diagnostic.map(crate::diagnostics::enter);
+        let _work = crate::diagnostics::scope(crate::diagnostics::Category::Cpu, "cpu.execute");
         background::with_context(scheduling, || {
             background::checkpoint_or_cancel()?;
             work()
@@ -73,6 +77,7 @@ impl Order {
 }
 impl Turn {
     pub fn wait(&self) -> Result<()> {
+        let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Cpu, "cpu.fifo_wait");
         const TURN_POLL: Duration = Duration::from_millis(5);
         loop {
             // Thumbnail demand can pause admission. Leave the order lock free
@@ -130,8 +135,17 @@ impl Pool {
         self.0.in_place_scope_fifo(|scope| {
             for (channel, result) in results.iter_mut().enumerate() {
                 let scheduling = background::context();
+                let diagnostic = crate::diagnostics::current_context();
                 let decode = &decode;
                 scope.spawn_fifo(move |_| {
+                    let _context = diagnostic.map(crate::diagnostics::enter);
+                    let _scope = crate::diagnostics::scope_with(
+                        crate::diagnostics::Category::Cpu,
+                        "decode.plane",
+                        |fields| {
+                            fields.u64("plane", channel as u64);
+                        },
+                    );
                     *result = Some(background::decoding(scheduling, || {
                         background::checkpoint_or_cancel()?;
                         decode(channel)
@@ -167,7 +181,17 @@ impl Pool {
                 output.chunks_mut(chunk_size).zip(&mut results).enumerate()
             {
                 let scheduling = background::context();
+                let diagnostic = crate::diagnostics::current_context();
                 scope.spawn_fifo(move |_| {
+                    let _context = diagnostic.map(crate::diagnostics::enter);
+                    let _scope = crate::diagnostics::scope_with(
+                        crate::diagnostics::Category::Cpu,
+                        "decode.rows",
+                        |fields| {
+                            fields.u64("first_row", (chunk * chunk_rows) as u64);
+                            fields.u64("rows", (output.len() / row_size) as u64);
+                        },
+                    );
                     *result = Some(background::decoding(scheduling, || {
                         background::checkpoint_or_cancel()?;
                         decode(chunk * chunk_rows, output)

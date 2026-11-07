@@ -67,9 +67,28 @@ pub fn read_full(path: &Path) -> Result<Preview> {
 }
 
 fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
+    let _scope = crate::diagnostics::scope_with(
+        crate::diagnostics::Category::Io,
+        "source.preview",
+        |fields| {
+            fields.str("source", &path.to_string_lossy());
+            fields.str(
+                "selection",
+                match selection {
+                    Selection::Smallest => "smallest",
+                    Selection::Largest => "largest",
+                },
+            );
+        },
+    );
     crate::input_error::read(path, || {
-        let mut file = File::open(path)?;
-        read_reader(&mut file, selection)
+        let file = File::open(path)?;
+        let mut file = crate::diagnostics::io::ObservedReader::new(file, "original-preview", path);
+        let result = read_reader(&mut file, selection);
+        if result.is_ok() {
+            file.complete();
+        }
+        result
     })
 }
 

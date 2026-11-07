@@ -5,6 +5,7 @@ use super::{
     Control, EntryState, Identity, Settings, Status, NAMESPACE,
 };
 use crate::background::{self, Gate};
+use crate::diagnostics::{self as diag, Category};
 use crate::source::{ProcessingFamily, Result};
 use std::{
     collections::{HashMap, HashSet},
@@ -43,7 +44,7 @@ pub(super) fn start(
     gate: Arc<Gate>,
 ) -> mpsc::SyncSender<Command> {
     let (writer, receiver) = mpsc::sync_channel(PENDING_WRITES);
-    std::thread::spawn(move || {
+    let worker = move || {
         // Shared CPU workers also serve foreground loads. Create them before
         // this I/O actor lowers its inherited Linux scheduling priority.
         let pool = crate::decode_pool::shared();
@@ -104,6 +105,12 @@ pub(super) fn start(
                     original,
                 }) = command
                 {
+                    let _context = photo_context(&path, generation, "decode-store");
+                    let _store =
+                        diag::scope_with(Category::Cache, "cache.writer.store", |fields| {
+                            fields.str("source", &path.to_string_lossy());
+                            fields.u64("generation", generation);
+                        });
                     if !clear
                         && source
                             .metadata
@@ -129,6 +136,18 @@ pub(super) fn start(
                                     && state.settings.max_bytes == settings.max_bytes
                             },
                         );
+                        diag::event(Category::Cache, "cache.writer.decoded", |fields| {
+                            fields.str("source", &path.to_string_lossy());
+                            fields.u64("generation", generation);
+                            fields.str(
+                                "outcome",
+                                match &stored {
+                                    Ok(true) => "published",
+                                    Ok(false) => "not-published",
+                                    Err(_) => "failed",
+                                },
+                            );
+                        });
                         if stored.is_ok_and(|written| written) {
                             control.lock().unwrap().rejected.remove(&identity);
                         }
@@ -138,7 +157,7 @@ pub(super) fn start(
                                 && state.generation == generation
                                 && state.settings == settings
                         };
-                        let _ = super::selection::prepare(
+                        let selection = super::selection::prepare(
                             &root,
                             &path,
                             &identity,
@@ -148,8 +167,15 @@ pub(super) fn start(
                             &nearby,
                             &current,
                         );
+                        photo_outcome(&path, generation, "cache.writer.selection", &selection);
                         publish_ready(&root, &path, &settings, &control, &status, generation);
                         status.lock().unwrap().writing = false;
+                    } else {
+                        diag::event(Category::Cache, "cache.writer.skipped", |fields| {
+                            fields.str("source", &path.to_string_lossy());
+                            fields.u64("generation", generation);
+                            fields.str("reason", "cleared-or-policy");
+                        });
                     }
                     control.lock().unwrap().stores.remove(&path);
                 }
@@ -235,7 +261,11 @@ pub(super) fn start(
                 }
             }
         });
-    });
+    };
+    std::thread::Builder::new()
+        .name("decode-cache".into())
+        .spawn(worker)
+        .expect("create decode cache worker");
     writer
 }
 
@@ -275,6 +305,12 @@ fn prefetch_pass(
                         let Some((path, turn)) = next else {
                             break;
                         };
+                        let _context = photo_context(&path, generation, "decode-prefetch");
+                        let _photo =
+                            diag::scope_with(Category::Cache, "cache.prefetch.photo", |fields| {
+                                fields.str("source", &path.to_string_lossy());
+                                fields.u64("generation", generation);
+                            });
                         status.lock().unwrap().prefetching.push(path.clone());
                         let result = background::decoder(
                             crate::decode_pool::Task {
@@ -301,6 +337,7 @@ fn prefetch_pass(
                                 )
                             },
                         );
+                        photo_outcome(&path, generation, "cache.prefetch.finished", &result);
                         let mut current = control.lock().unwrap();
                         if current.generation == generation
                             && !current.clear
@@ -338,11 +375,19 @@ fn publish_ready(
     status: &Mutex<Status>,
     generation: u64,
 ) {
+    let _scope = diag::scope_with(Category::Cache, "cache.ready.publish", |fields| {
+        fields.str("source", &path.to_string_lossy());
+        fields.u64("generation", generation);
+    });
     let identity = match Identity::read(path) {
         Ok(i) => i,
-        Err(_) => return,
+        Err(_) => {
+            ready_outcome(path, generation, "identity-unavailable");
+            return;
+        }
     };
     if !complete_identity(root, &identity, settings) {
+        ready_outcome(path, generation, "incomplete");
         return;
     }
     let mut current = control.lock().unwrap();
@@ -351,12 +396,54 @@ fn publish_ready(
         let mut status = status.lock().unwrap();
         status.ready.insert(path.to_owned());
         Arc::make_mut(&mut status.files).insert(path.to_owned(), EntryState::Ready);
+        ready_outcome(path, generation, "published");
+    } else {
+        ready_outcome(path, generation, "superseded-or-rejected");
     }
+}
+
+fn photo_context(
+    path: &Path,
+    generation: u64,
+    purpose: &'static str,
+) -> Option<diag::ContextGuard> {
+    diag::enabled().then(|| {
+        diag::enter(diag::Context {
+            // Background cache jobs have no foreground coordinator TaskId.
+            task: 0,
+            revision: generation,
+            photo: diag::photo_id(path),
+            purpose,
+            node: None,
+        })
+    })
+}
+fn photo_outcome<T>(path: &Path, generation: u64, event: &'static str, result: &Result<T>) {
+    diag::event(Category::Cache, event, |fields| {
+        fields.str("source", &path.to_string_lossy());
+        fields.u64("generation", generation);
+        fields.str(
+            "outcome",
+            match result {
+                Ok(_) => "completed",
+                Err(error) if error.is::<background::Interrupted>() => "interrupted",
+                Err(_) => "failed",
+            },
+        );
+    });
+}
+fn ready_outcome(path: &Path, generation: u64, outcome: &'static str) {
+    diag::event(Category::Cache, "cache.ready.outcome", |fields| {
+        fields.str("source", &path.to_string_lossy());
+        fields.u64("generation", generation);
+        fields.str("outcome", outcome);
+    });
 }
 
 // A completed speculative decode must also unwind while another photo owns
 // publication. Blocking on Mutex::lock would retain its buffers during foreground work.
 fn publication_lock(publication: &Mutex<()>) -> Result<MutexGuard<'_, ()>> {
+    let _scope = diag::scope(Category::Cache, "cache.publication.wait");
     const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(1);
     loop {
         background::checkpoint_or_cancel()?;
@@ -381,17 +468,28 @@ fn prefetch(
 ) -> Result<()> {
     crate::background::checkpoint_or_cancel()?;
     if !current() {
+        diag::event(Category::Cache, "cache.prefetch.skipped", |fields| {
+            fields.str("source", &path.to_string_lossy());
+            fields.str("reason", "superseded");
+        });
         return Ok(());
     }
     let identity = Identity::read(path)?;
     let rejected = control.lock().unwrap().rejected.contains(&identity);
     if !rejected && complete_identity(root, &identity, settings) {
+        diag::event(Category::Cache, "cache.prefetch.reused", |fields| {
+            fields.str("source", &path.to_string_lossy());
+        });
         published();
         return Ok(());
     }
     let Some((source, original)) =
         crate::x3f::read_cacheable(path, |family| settings.permits(family))?
     else {
+        diag::event(Category::Cache, "cache.prefetch.skipped", |fields| {
+            fields.str("source", &path.to_string_lossy());
+            fields.str("reason", "processing-policy");
+        });
         return Ok(());
     };
     source.validate()?;
@@ -400,6 +498,9 @@ fn prefetch(
     let selection = super::selection::prepare_assets(path, &identity, &source.metadata, &original)?;
     crate::background::checkpoint_or_cancel()?;
     {
+        let _scope = diag::scope_with(Category::Cache, "cache.prefetch.publish", |fields| {
+            fields.str("source", &path.to_string_lossy());
+        });
         let _publication = publication_lock(publication)?;
         if current() && (rejected || !ready(root, path, settings)) {
             let written = publish_decoded(

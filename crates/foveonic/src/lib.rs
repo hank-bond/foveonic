@@ -5,6 +5,7 @@ pub mod color_space;
 pub mod crop;
 pub mod decode_cache;
 mod decode_pool;
+pub mod diagnostics;
 pub mod dng;
 mod gpu;
 mod graph;

@@ -187,7 +187,12 @@ impl Default for Cache {
 impl Cache {
     /// Start inactive. The application supplies its persistent policy with `configure`.
     pub fn new() -> Self {
-        Self::at(std::env::temp_dir().join(NAMESPACE).join(boot_key()))
+        let root = std::env::temp_dir().join(NAMESPACE).join(boot_key());
+        let namespace = std::env::var_os("FOVEONIC_DIAGNOSTICS_CACHE_NAMESPACE");
+        Self::at(
+            diagnostic_root(root, namespace.as_deref())
+                .expect("invalid diagnostic cache namespace"),
+        )
     }
     fn at(root: PathBuf) -> Self {
         let control = Arc::new(Mutex::new(Control {
@@ -399,16 +404,42 @@ impl Cache {
     /// Reuse a verified decode without falling back to reading the original.
     /// Import can decode its completed local copy when the card cache is missing.
     pub fn open_cached(&self, path: &Path, progress: impl Fn(LoadStage)) -> Option<Arc<Source>> {
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Cache,
+            "cache.decoded.lookup",
+            |fields| {
+                fields.str("source", &path.to_string_lossy());
+            },
+        );
         crate::background::decode_priority();
         let settings = self.control.lock().unwrap().settings.clone();
         if !settings.enabled {
+            crate::diagnostics::event(
+                crate::diagnostics::Category::Cache,
+                "cache.decoded.miss",
+                |fields| {
+                    fields.str("reason", "disabled");
+                    fields.str("source", &path.to_string_lossy());
+                },
+            );
             return None;
         }
         let lookup_started = Instant::now();
         let known = self.control.lock().unwrap().identities.get(path).cloned();
-        let identity = known
+        let Some(identity) = known
             .clone()
-            .map_or_else(|| Identity::read(path).ok(), Some)?;
+            .map_or_else(|| Identity::read(path).ok(), Some)
+        else {
+            crate::diagnostics::event(
+                crate::diagnostics::Category::Cache,
+                "cache.decoded.miss",
+                |fields| {
+                    fields.str("reason", "source identity unavailable");
+                    fields.str("source", &path.to_string_lossy());
+                },
+            );
+            return None;
+        };
         let location = self.root.join(identity.name());
         let lookup =
             crate::profile::Timing::elapsed("decoded cache identity lookup", lookup_started);
@@ -420,12 +451,34 @@ impl Cache {
                     Identity::read(path).ok().as_ref() == Some(&identity)
                 } =>
             {
+                crate::diagnostics::event(
+                    crate::diagnostics::Category::Cache,
+                    "cache.decoded.hit",
+                    |fields| {
+                        fields.str("source", &path.to_string_lossy());
+                        fields.u64("bytes", source.retained_source_bytes());
+                    },
+                );
                 self.control.lock().unwrap().rejected.remove(&identity);
                 source.timings.insert(0, lookup);
                 self.status.lock().unwrap().hits += 1;
                 Some(Arc::new(source))
             }
             result => {
+                crate::diagnostics::event(
+                    crate::diagnostics::Category::Cache,
+                    "cache.decoded.miss",
+                    |fields| {
+                        fields.str("source", &path.to_string_lossy());
+                        fields.str(
+                            "reason",
+                            &result.as_ref().err().map_or_else(
+                                || "source identity changed".to_owned(),
+                                |error| error.to_string(),
+                            ),
+                        );
+                    },
+                );
                 let rejected = result.as_ref().is_err_and(|error| {
                     !error.is::<crate::background::Interrupted>() && !error.is::<PolicyMiss>()
                 });
@@ -459,6 +512,29 @@ impl Cache {
     }
 }
 
+/// Diagnostic suites may isolate disposable entries while retaining the ordinary
+/// cache implementation and its temporary-storage policy.
+fn diagnostic_root(root: PathBuf, namespace: Option<&std::ffi::OsStr>) -> Result<PathBuf> {
+    let Some(namespace) = namespace else {
+        return Ok(root);
+    };
+    let name = namespace
+        .to_str()
+        .ok_or("diagnostic cache namespace must be ASCII")?;
+    if name.is_empty()
+        || name.len() > 96
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "diagnostic cache namespace must contain 1..96 ASCII letters, digits, '-' or '_'"
+                .into(),
+        );
+    }
+    Ok(root.join("diagnostics").join(name))
+}
+
 #[derive(Debug)]
 struct PolicyMiss(&'static str);
 impl std::fmt::Display for PolicyMiss {
@@ -478,6 +554,12 @@ fn load(
     let mut file = File::open(path)?;
     let header = read_header(&mut file, identity, settings)?;
     let header_timing = crate::profile::Timing::elapsed("decoded cache header", start);
+    let location = String::from_utf8_lossy(&identity.location);
+    let mut file = crate::diagnostics::io::ObservedReader::new(
+        file,
+        "decoded-cache",
+        Path::new(location.as_ref()),
+    );
     let payload_started = Instant::now();
     let mut pixels = vec![0_f32; usize::try_from(header.samples)?];
     let mut camf = vec![0; usize::try_from(header.camf_bytes)?];
@@ -499,6 +581,7 @@ fn load(
     if checksum.finalize() != header.checksum {
         return Err("decoded cache checksum mismatch".into());
     }
+    file.complete();
     let payload_timing = crate::profile::Timing::elapsed(
         "decoded cache payload read, checksum and conversion",
         payload_started,
@@ -532,7 +615,7 @@ fn load(
         ],
     };
     source.validate()?;
-    let _ = file.set_modified(SystemTime::now());
+    let _ = file.get_ref().set_modified(SystemTime::now());
     progress(LoadStage::Decoded);
     Ok(source)
 }

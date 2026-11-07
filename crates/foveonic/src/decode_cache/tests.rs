@@ -4,6 +4,27 @@ use super::worker::{entry_state, FamilyCatalog};
 use super::*;
 use std::time::{Duration, UNIX_EPOCH};
 
+#[test]
+fn diagnostic_namespace_is_confined_to_temporary_cache_storage() {
+    let root = PathBuf::from("temporary-cache");
+    assert_eq!(diagnostic_root(root.clone(), None).unwrap(), root);
+    assert_eq!(
+        diagnostic_root(root.clone(), Some(std::ffi::OsStr::new("scenario-123"))).unwrap(),
+        root.join("diagnostics/scenario-123")
+    );
+    for invalid in [
+        "",
+        ".",
+        "..",
+        "../other",
+        "/absolute",
+        "folder/name",
+        "with space",
+    ] {
+        assert!(diagnostic_root(root.clone(), Some(std::ffi::OsStr::new(invalid))).is_err());
+    }
+}
+
 struct Fixture {
     root: PathBuf,
     source: PathBuf,
