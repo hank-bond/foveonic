@@ -14,6 +14,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 
 - **[adaptive-tone](./adaptive-tone.md)** _(archived)._ Integrate the reviewed regional base responses across camera architectures with shared app limits and normal rendering/export ownership.
 - **[advanced-color-range](./advanced-color-range.md)** _(archived)._ Build and evaluate an Advanced Color Range wheel, saved HSL edit list.
+- **[alpha-sidecar-fields](./alpha-sidecar-fields.md)** _(archived)._ Use shared defaults and tolerate extra alpha editing fields without sidecar migrations.
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[browser-review](./browser-review.md)** _(archived)._ Add three browser views with independent review ratings, metadata sorting and shared search filters.
 - **[browser-thumbnail-budget](./browser-thumbnail-budget.md)** _(archived)._ Replace the browser thumbnail count limit with a persistent memory budget and group performance preferences.
@@ -36,6 +37,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[color-field-determinism](./color-field-determinism.md)** _(archived)._ Make color-field GPU solver row ordering deterministic without changing equations, tolerances, Classic processing or per-image controls.
 - **[color-field-selectivity](./color-field-selectivity.md)** _(archived)._ Experiment with local color-evidence acceptance thresholds, without added neutral bias, to reduce bleeding while preserving compatible reconstructed color.
 - **[color-field-speed](./color-field-speed.md)** _(archived)._ Measure simple color-field optimizations while preserving recovery equations, solver limits and numerical acceptance.
+- **[compact-decoded-cache](./compact-decoded-cache.md)** _(archived)._ Store decoded sensor codes as lossless 16-bit integers within the existing disk cache.
 - **[cropping](./cropping.md)** _(archived)._ Add saved crop geometry, a shared viewport tool strip and direct crop gestures.
 - **[decode-cache-and-smart-preview](./decode-cache-and-smart-preview.md)** _(archived)._ Implement bounded decoded-source disk reuse, app settings and Quattro regional Smart refinement.
 - **[decode-cache-module](./decode-cache-module.md)** _(archived)._ Gather decoded-cache implementation and tests into a directory module for release 0.5.0.

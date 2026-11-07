@@ -19,7 +19,6 @@ const MAX_BYTES: u64 = 64 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Recipe {
     format: String,
     version: u32,

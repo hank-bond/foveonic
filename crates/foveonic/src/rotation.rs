@@ -4,7 +4,7 @@ use crate::{crop::Crop, image::View, source::Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Rotation {
     pub turns: u8,
     /// Clockwise fine angle, independent of accumulated quarter turns.

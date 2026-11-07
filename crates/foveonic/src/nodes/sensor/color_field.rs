@@ -47,7 +47,7 @@ pub enum Approach {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Controls {
     /// Selection strength, 0..1. Zero keeps the original behavior.
     pub selectivity: f32,

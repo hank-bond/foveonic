@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 /// Manual shadow colors use normalized linear sRGB, independently of display encoding.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Controls {
     pub amount: f32,
     pub shadow: Option<[f32; 3]>,

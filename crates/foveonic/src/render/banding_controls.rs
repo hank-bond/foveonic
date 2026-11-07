@@ -12,7 +12,6 @@ pub enum MerrillBandingMethod {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BandingBand {
     /// Odd neighborhood width in native sensor pixels.
     pub size: u32,
@@ -25,7 +24,7 @@ impl BandingBand {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct BandingAxisControls {
     /// Fine and Coarse, in increasing size order.
     pub bands: [BandingBand; 2],
@@ -88,7 +87,7 @@ impl BandingAxisControls {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct MerrillBandingControls {
     pub enabled: bool,
     pub method: MerrillBandingMethod,

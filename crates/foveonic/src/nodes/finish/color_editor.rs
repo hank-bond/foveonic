@@ -13,7 +13,7 @@ use crate::{
 
 /// One selected color range. Zero leaves its hue, saturation and lightness unchanged.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Adjustment {
     pub hue: f32,
     pub saturation: f32,

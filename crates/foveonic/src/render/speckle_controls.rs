@@ -11,7 +11,7 @@ pub enum MerrillSpeckleMethod {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct MerrillSpeckleControls {
     pub method: MerrillSpeckleMethod,
     /// Multiplier for camera-derived thresholds. Lower values detect more points.

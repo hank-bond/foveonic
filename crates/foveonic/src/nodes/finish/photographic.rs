@@ -25,7 +25,7 @@ impl Method {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Sharpening {
     pub method: Method,
     pub amount: f32,
