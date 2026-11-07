@@ -11,6 +11,8 @@ The processing engine must support sensor-layer reduction at any positive power-
 
 Reduction must filter calibrated sensor layers before expensive reconstruction. Preserve original source samples and native sensor-coordinate corrections. Do not expose a resize of an already reconstructed photograph as sensor-level reconstruction support. Existing Fast and Full processing must remain available.
 
+The native prefix must be limited to basic calibration and corrections whose evidence depends on original sensor locations. Calling an operation a sensor correction does not establish that its complete image processing must precede pooling. Neighborhood filtering, row estimation, highlight processing and reconstruction should consume explicit working geometry after the earliest valid reduction boundary. Preserve categorical clipping and defect evidence through reduction instead of inferring it from averaged samples. Keep the authoritative Full operation order and numerical behavior unchanged.
+
 Recorded framing, camera orientation, saved composition and native viewport coordinates must remain consistent. Sensor and processing alignment constraints must use edge-covered working-grid padding. Edits retain their requested values. Spatial controls must use the appropriate working-grid scale, while noise approximations require validation at each size.
 
 Smart detail promotion, inspection and exports must use Full. Explicit Draft/Thumb remain workspace preview choices. Preview quality must not become an image sidecar edit. Validate completed reconstruction-changing edits separately from cached exposure edits. Compare appearance on original photographs before enabling a default.

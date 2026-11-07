@@ -35,6 +35,7 @@ pub(super) enum Output {
     Ready {
         recipe: BuiltRecipe,
         couplings: Option<crate::noise::Couplings>,
+        rows: Option<banding::Description>,
     },
 }
 
@@ -221,14 +222,13 @@ pub(super) fn build(
     if policy.retain_calibrated {
         graph.retain_for_session(calibrated);
     }
-    // Native coordinate corrections precede sensor pooling at every scale.
-    if policy.reference_rows {
-        let prepared = profile.measure("prepare row correction", || {
-            banding::prepare(metadata, calibration_gains)
-        })?;
-        calibrated = graph.add(Operation::Banding(prepared), &[calibrated])?;
-        finish!();
-    }
+    let rows = if policy.reference_rows {
+        Some(profile.measure("prepare row correction", || {
+            banding::describe(metadata, calibration_gains)
+        })?)
+    } else {
+        None
+    };
     Ok(Output::Ready {
         recipe: BuiltRecipe {
             graph,
@@ -238,6 +238,7 @@ pub(super) fn build(
             rgb_bounds: params.crop,
         },
         couplings,
+        rows,
     })
 }
 
@@ -247,7 +248,7 @@ mod tests {
     use crate::render::{MerrillBandingMethod, Scale};
 
     #[test]
-    fn every_working_scale_keeps_selected_native_rows() {
+    fn row_correction_stays_selected_at_every_working_scale() {
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.row_correction = true;
         settings.merrill_banding.enabled = true;

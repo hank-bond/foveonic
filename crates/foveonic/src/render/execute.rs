@@ -1481,9 +1481,11 @@ impl Engine {
                     }
                     required[index].then_some(tiles)
                 }
-                Operation::Banding(prepared) => {
+                Operation::Banding(description) => {
+                    let prepared = profile
+                        .measure("materialize row correction", || description.materialize())?;
                     let result =
-                        banding::apply(gpu, &input(0).buffer, prepared, required[index], profile)?;
+                        banding::apply(gpu, &input(0).buffer, &prepared, required[index], profile)?;
                     let rows = node.outputs[1];
                     if required[rows] {
                         values[rows] = Some(Value {

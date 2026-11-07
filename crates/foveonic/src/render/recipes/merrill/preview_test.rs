@@ -276,6 +276,60 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
 }
 
 #[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn row_correction_follows_sensor_pooling_for_color_and_monochrome() {
+    use crate::{
+        graph::Operation,
+        interactive::Execution,
+        profile::Profile,
+        render::{Engine, Rendering, Scale, Settings},
+        source::Source,
+    };
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(root.join("blue-parking-sign.x3f")).unwrap();
+    let engine = Engine::new().unwrap();
+    for rendering in [Rendering::Color, Rendering::Monochrome] {
+        for divisor in [1, 2, 4, 8] {
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.reconstruction = Some(Default::default());
+            settings.rendering = rendering;
+            settings.working_scale = Scale::new(divisor).unwrap();
+            let recipe = crate::render::recipes::merrill::technical::build(
+                &engine,
+                crate::render::recipes::RecipeInput::Original(&source),
+                &settings,
+                &["final"],
+                Some("Standard"),
+                &mut Profile::default(),
+                &mut Execution::default(),
+            )
+            .unwrap();
+            let recipe = match recipe {
+                crate::render::recipes::merrill::technical::Prepared::Requested(recipe)
+                | crate::render::recipes::merrill::technical::Prepared::Linear(recipe, _, _) => {
+                    recipe
+                }
+            };
+            let nodes: Vec<_> = recipe
+                .graph
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.operation, Operation::Banding(_)))
+                .collect();
+            assert_eq!(nodes.len(), 1);
+            let producer = recipe.graph.outputs[nodes[0].inputs[0]].producer;
+            assert_eq!(
+                matches!(
+                    recipe.graph.nodes[producer].operation,
+                    Operation::ReduceLayers(_)
+                ),
+                divisor > 1,
+            );
+        }
+    }
+}
+
+#[test]
 fn regional_views_keep_native_crop_and_all_four_rotations() {
     for (rotation, expected) in [
         (0, [212, 264, 512, 564]),

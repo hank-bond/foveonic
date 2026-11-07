@@ -23,6 +23,7 @@ fn guide_controls(settings: &Settings) -> crate::render::MonochromeControls {
     controls
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build(
     metadata: &Arc<Metadata>,
     settings: &Settings,
@@ -31,6 +32,7 @@ pub(super) fn build(
     profile: &mut Profile,
     execution: &mut Execution<'_>,
     grid: Option<&super::preview::Grid>,
+    rows: Option<crate::nodes::sensor::banding::Description>,
 ) -> Result<Prepared> {
     let space = ColorSpace::from_metadata(metadata)?;
     if settings.directional_banding_selected() {
@@ -57,6 +59,16 @@ pub(super) fn build(
     }
     if let Some(grid) = grid {
         recipe.final_id = grid.append(&mut recipe.graph, recipe.final_id)?;
+    }
+    if let Some(rows) = rows {
+        recipe.final_id = recipe.graph.add(
+            Operation::Banding(rows.on_grid(grid.map(|grid| grid.grid))),
+            &[recipe.final_id],
+        )?;
+        execution.check()?;
+        if requested(&recipe.graph, names) {
+            return Ok(Prepared::Requested(recipe));
+        }
     }
     let prepared = Arc::new(profile.measure("prepare monochrome", || {
         MonoPrepared::new(metadata, &settings.white_balance, guide_controls(settings))?

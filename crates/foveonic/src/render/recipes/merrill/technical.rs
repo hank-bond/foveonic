@@ -94,7 +94,7 @@ pub(super) fn build(
             && (names == ["final"] || names == ["linear.base"])
             && settings.working_scale.is_native(),
     );
-    let (recipe, couplings) = match native_layers::build(
+    let (recipe, couplings, rows) = match native_layers::build(
         engine,
         source.metadata(),
         settings,
@@ -105,7 +105,11 @@ pub(super) fn build(
         execution,
     )? {
         native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
-        native_layers::Output::Ready { recipe, couplings } => (recipe, couplings),
+        native_layers::Output::Ready {
+            recipe,
+            couplings,
+            rows,
+        } => (recipe, couplings, rows),
     };
     let mut graph = recipe.graph;
     let mut calibrated = recipe.final_id;
@@ -142,6 +146,7 @@ pub(super) fn build(
             profile,
             execution,
             preview.as_ref(),
+            rows,
         )? {
             Prepared::Linear(recipe, mode, _) => Ok(Prepared::Linear(recipe, mode, preview)),
             requested => Ok(requested),
@@ -150,6 +155,13 @@ pub(super) fn build(
     let native_calibrated = calibrated;
     if let Some(grid) = &preview {
         calibrated = grid.append(&mut graph, calibrated)?;
+    }
+    if let Some(rows) = rows {
+        calibrated = graph.add(
+            Operation::Banding(rows.on_grid(preview.as_ref().map(|grid| grid.grid))),
+            &[calibrated],
+        )?;
+        finish!();
     }
     let noise_controls = settings.merrill_reconstruction();
     if let Some(region) = &region {

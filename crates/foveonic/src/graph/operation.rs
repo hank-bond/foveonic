@@ -126,7 +126,7 @@ pub enum Operation {
     Highlights(std::sync::Arc<highlight::Prepared>),
     HighlightDensity(std::sync::Arc<highlight::Prepared>),
     ColorField(color_field::Prepared),
-    Banding(banding::Prepared),
+    Banding(banding::Description),
     Monochrome {
         stage: MonoStage,
         prepared: std::sync::Arc<MonoPrepared>,

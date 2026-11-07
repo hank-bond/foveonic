@@ -35,7 +35,7 @@ fn metadata(w: usize, h: usize) -> Metadata {
 fn geometric_weights_match_native_svd_for_all_selected_polynomial_bases() {
     let f = fixture();
     for side in [31, 73, 151] {
-        let (n, basis, inverse) = matrices(side).unwrap();
+        let (n, basis, inverse) = matrices(side, if side == 31 { 3 } else { 6 }).unwrap();
         let native = &f["matrices"][side.to_string()];
         assert_eq!(
             n,
@@ -72,23 +72,92 @@ fn bank_geometry_and_row_links_preserve_native_side_bank_and_column_order() {
             .all(|p| p[0] < p[1])
     ));
     assert!(prepare(&metadata(1600, 640), [0., 1., 1.]).is_err());
-    assert!(matrices(32).is_err());
+    assert!(matrices(32, 3).is_err());
 }
 
 #[test]
-fn multi_output_keys_share_exact_native_geometry_payloads() {
-    let prepared = prepare(&metadata(1600, 640), [4.6, 2.2, 1.6]).unwrap();
+fn reduced_rows_use_working_geometry_and_native_polynomial_support() {
+    use crate::render::{Scale, WorkingGrid};
+    let metadata = metadata(1600, 640);
+    for divisor in [2, 4, 8, 16, 64, 1024] {
+        let grid = WorkingGrid::new([1600, 640], Scale::new(divisor).unwrap(), 8)
+            .unwrap()
+            .with_halo(16)
+            .unwrap();
+        let description = describe(&metadata, [4.6, 2.2, 1.6])
+            .unwrap()
+            .on_grid(Some(grid));
+        assert_eq!(description.params.source[..2], grid.extent);
+        let prepared = description.materialize().unwrap();
+        assert_eq!(prepared.rows.len(), grid.extent[1] as usize);
+        for patch in prepared.patches.iter() {
+            let [x, y, side, coefficients] = patch.geometry;
+            assert!(side >= 3 && side % 2 == 1);
+            assert!(x + side <= grid.extent[0]);
+            assert!(y + side < grid.extent[1]);
+            assert!([3, 6].contains(&coefficients));
+        }
+        if divisor == 8 {
+            assert_eq!(
+                prepared.batches.iter().map(|b| b[2]).collect::<Vec<_>>(),
+                [5, 11, 19]
+            );
+        }
+    }
+}
+
+#[test]
+fn small_fitting_bases_reproduce_their_selected_polynomials() {
+    for (side, coefficients) in [(5, 3), (11, 6), (19, 6)] {
+        let (n, basis, inverse) = matrices(side, coefficients).unwrap();
+        let count = (side * side) as usize;
+        for row in 0..n as usize {
+            for column in 0..n as usize {
+                let actual: f64 = (0..count)
+                    .map(|i| {
+                        f64::from(inverse[row * count + i])
+                            * f64::from(basis[i * n as usize + column])
+                    })
+                    .sum();
+                let expected = f64::from(row == column);
+                assert!(
+                    (actual - expected).abs() < 1e-5,
+                    "side {side}, {row}/{column}: {actual}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn graph_identity_is_small_and_preserves_effective_geometry_and_gains() {
+    let prepared = describe(&metadata(1600, 640), [4.6, 2.2, 1.6]).unwrap();
     let mut inventory = crate::recipe::RetainedBytes::default();
     prepared.key().account(&mut inventory);
     let once = inventory.payload_bytes();
-    assert!(once > 1024 * 1024);
+    assert!(
+        once < 1024,
+        "a graph description must not retain fitting tables"
+    );
     prepared.key().account(&mut inventory);
     assert!(
         inventory.payload_bytes() - once < 128,
         "another output must not copy the geometry"
     );
-    let changed = prepare(&metadata(1600, 640), [4.5, 2.2, 1.6]).unwrap();
+    assert_eq!(
+        prepared.key(),
+        describe(&metadata(1600, 640), [4.6, 2.2, 1.6])
+            .unwrap()
+            .key()
+    );
+    let changed = describe(&metadata(1600, 640), [4.5, 2.2, 1.6]).unwrap();
     assert_ne!(prepared.key(), changed.key());
+    assert_ne!(
+        prepared.key(),
+        describe(&metadata(1600, 648), [4.6, 2.2, 1.6])
+            .unwrap()
+            .key()
+    );
 }
 #[test]
 #[ignore = "requires a working GPU adapter"]

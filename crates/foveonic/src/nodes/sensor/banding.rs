@@ -30,28 +30,45 @@ pub(crate) struct Prepared {
     pub tables: Shared<f32>,
     pub links: Shared<u32>,
     pub rows: Shared<[u32; 2]>,
-    pub samples: u32,
     pub contributions: u32,
     pub batches: Shared<[u32; 4]>,
 }
 
-impl Prepared {
+/// Cheap graph identity. Fitting tables are materialized only for executed work.
+pub(crate) struct Description {
+    params: Params,
+    native_height: u32,
+    scale: crate::render::Scale,
+    origin: [u32; 2],
+}
+impl Description {
     pub(crate) fn key(&self) -> crate::recipe::Key {
-        crate::recipe::Key::pod(&self.params)
-            .join(self.patches.key())
-            .join(self.tables.key())
-            .join(self.links.key())
-            .join(self.rows.key())
-            .with(&[self.samples, self.contributions])
-            .join(self.batches.key())
+        crate::recipe::Key::pod(&self.params).join(crate::recipe::Key::pod(&[
+            self.native_height,
+            self.scale.divisor(),
+            self.origin[0],
+            self.origin[1],
+        ]))
+    }
+    pub(crate) fn on_grid(mut self, grid: Option<crate::render::WorkingGrid>) -> Self {
+        if let Some(grid) = grid {
+            self.params.source[..2].copy_from_slice(&grid.extent);
+            self.params.area = grid.bounds(self.params.area);
+            self.scale = grid.scale;
+            self.origin = grid.origin;
+        }
+        self
+    }
+    pub(crate) fn materialize(&self) -> Result<Prepared> {
+        materialize(self)
     }
 }
 
-fn matrices(side: u32) -> Result<(u32, Vec<f32>, Vec<f32>)> {
-    if ![31, 73, 151].contains(&side) {
+fn matrices(side: u32, coefficients: u32) -> Result<(u32, Vec<f32>, Vec<f32>)> {
+    if !(3..=151).contains(&side) || side.is_multiple_of(2) || ![3, 6].contains(&coefficients) {
         return Err("unsupported row-banding patch side".into());
     }
-    let n = if side == 31 { 3 } else { 6 };
+    let n = coefficients as usize;
     let count = (side * side) as usize;
     let center = (side as f32 + 1.) * 0.5;
     let mut basis = Vec::with_capacity(count * n);
@@ -116,7 +133,7 @@ fn matrices(side: u32) -> Result<(u32, Vec<f32>, Vec<f32>)> {
     Ok((n as u32, basis, inverse))
 }
 
-pub(crate) fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Result<Prepared> {
+pub(crate) fn describe(metadata: &Metadata, calibration_gains: [f32; 3]) -> Result<Description> {
     let area = super::calibration::rectangle(metadata, "ActiveImageArea")?;
     if super::calibration::rectangle(metadata, "KeepImageArea")?
         != [0, 0, metadata.width as u32, metadata.height as u32]
@@ -134,7 +151,7 @@ pub(crate) fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Resul
     if calibration_gains.iter().any(|v| !v.is_finite() || *v <= 0.) {
         return Err("invalid row-correction gains".into());
     }
-    let mut params = Params {
+    let params = Params {
         source: [metadata.width as u32, metadata.height as u32, 0, 0],
         area,
         values: [
@@ -154,16 +171,35 @@ pub(crate) fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Resul
             0.,
         ],
     };
+    Ok(Description {
+        params,
+        native_height: metadata.height as u32,
+        scale: crate::render::Scale::NATIVE,
+        origin: [0; 2],
+    })
+}
+
+#[cfg(test)]
+fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Result<Prepared> {
+    describe(metadata, calibration_gains)?.materialize()
+}
+
+fn materialize(description: &Description) -> Result<Prepared> {
+    let mut params = description.params;
+    let area = params.area;
+    let width = params.source[0];
+    let height = params.source[1];
     let mut patches = Vec::new();
     let mut tables = Vec::new();
     let mut rows = Vec::new();
     let mut samples = 0_u32;
     let mut contributions = 0_u32;
     let mut batches = Vec::new();
-    let mut links = vec![Vec::new(); metadata.height];
-    for side in [31, 73, 151] {
+    let mut links = vec![Vec::new(); height as usize];
+    for (native_side, coefficients) in [(31_u32, 3), (73, 6), (151, 6)] {
+        let side = (native_side.div_ceil(description.scale.divisor()) | 1).max(3);
         let first = patches.len() as u32;
-        let (n, basis, inverse) = matrices(side)?;
+        let (n, basis, inverse) = matrices(side, coefficients)?;
         let table = tables.len() as u32;
         tables.extend(basis);
         tables.extend(inverse);
@@ -175,18 +211,20 @@ pub(crate) fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Resul
             } else {
                 (eighth as f32 / side as f32).ceil() * side as f32
             };
-            let rows = (span / side as f32).floor() as u32;
             let base = if bank == 0 {
                 area[1]
             } else {
-                bank * (metadata.height as u32 / 8)
+                // Bank phase belongs to the physical sensor, independently of
+                // working-grid padding and filter support.
+                bank * (description.native_height / 8) / description.scale.divisor()
+                    + description.origin[1]
             };
+            let rows =
+                ((span / side as f32).floor() as u32).min(height.saturating_sub(base + 1) / side);
             if columns == 0 || rows == 0 {
                 continue;
             }
-            if area[0] + columns * side > metadata.width as u32
-                || base + rows * side >= metadata.height as u32
-            {
+            if area[0] + columns * side > width || base + rows * side >= height {
                 return Err("row patch bank exceeds full sensor".into());
             }
             for row in 0..rows {
@@ -227,7 +265,6 @@ pub(crate) fn prepare(metadata: &Metadata, calibration_gains: [f32; 3]) -> Resul
         tables: tables.into(),
         links: flattened_links.into(),
         rows: rows.into(),
-        samples,
         contributions,
         batches: batches.into(),
     })
@@ -245,7 +282,7 @@ pub(crate) fn apply(
 ) -> Result<Output> {
     use crate::gpu::Kernel;
     let mut offsets = gpu.storage(
-        "Applied row biases and native counts",
+        "Applied row biases and sample counts",
         u64::from(p.params.source[1]) * 16,
     )?;
     if p.patches.is_empty() {
@@ -262,7 +299,7 @@ pub(crate) fn apply(
         });
     }
     let uniform = gpu.uniform(&p.params);
-    let patches = gpu.upload("Native row patch traversal", &p.patches)?;
+    let patches = gpu.upload("Row patch traversal", &p.patches)?;
     let tables = gpu.upload("Geometric fitting basis and inverse", &p.tables)?;
     let mut coefficients = gpu.storage(
         "Row patch fitted coefficients",
