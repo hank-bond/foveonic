@@ -17,7 +17,7 @@ const GUIDE_COMPONENTS: u64 = 4;
 const COMPONENT_BYTES: u64 = std::mem::size_of::<f32>() as u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Controls {
     pub strength: f32,
     /// Upper shadow boundary in stops below nominal linear white.

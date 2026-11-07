@@ -97,7 +97,7 @@ impl Default for ProcessingSections {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Settings {
     pub crop: crate::crop::Crop,
     pub rotation: crate::rotation::Rotation,

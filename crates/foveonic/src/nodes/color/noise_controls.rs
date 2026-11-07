@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Five cleanup choices and independent texture restoration.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Controls {
     /// Merrill cleanup and automatic ColorDQ. Inactive values stay saved.
     pub noise_enabled: bool,
@@ -21,7 +21,7 @@ pub struct Controls {
 
 /// Log-luminance band amounts and sizes. One restores neutral detail.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct TextureControls {
     pub fine: f32,
     pub coarse: f32,

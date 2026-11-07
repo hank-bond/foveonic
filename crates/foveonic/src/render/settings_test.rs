@@ -120,7 +120,10 @@ fn directional_banding_defaults_round_trip_and_retain_inactive_values() {
     assert!(
         serde_json::from_str::<Settings>(r#"{"merrill_banding":{"method":"unknown"}}"#).is_err()
     );
-    assert!(serde_json::from_str::<Settings>(r#"{"merrill_banding":{"unknown":1}}"#).is_err());
+    assert_eq!(
+        serde_json::from_str::<Settings>(r#"{"merrill_banding":{"unknown":1}}"#).unwrap(),
+        Settings::default()
+    );
 }
 
 #[test]

@@ -9,7 +9,7 @@ pub(crate) use apply::apply;
 pub(crate) use parameters::{Prepared, Stage};
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Controls {
     /// Actual nonnegative sensor-layer proportions, summing to one.
     pub mix: [f32; 3],

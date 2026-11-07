@@ -14,7 +14,7 @@ pub enum Aspect {
 
 /// Bounds are normalized, half-open edges of the complete oriented photograph.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Crop {
     pub bounds: [f64; 4],
     pub aspect: Aspect,

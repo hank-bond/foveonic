@@ -4,7 +4,7 @@ use crate::color_space::{inverse, ColorSpace, TiffColorSpace};
 use crate::source::Result;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Controls {
     /// Sampled neutral in D50 XYZ, normalized to Y=1, before this adjustment.
     pub neutral: Option<[f32; 3]>,

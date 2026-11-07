@@ -14,6 +14,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 
 - **[adaptive-tone](./adaptive-tone.md)** _(archived)._ Integrate the reviewed regional base responses across camera architectures with shared app limits and normal rendering/export ownership.
 - **[advanced-color-range](./advanced-color-range.md)** _(archived)._ Build and evaluate an Advanced Color Range wheel, saved HSL edit list.
+- **[alpha-sidecar-fields](./alpha-sidecar-fields.md)** _(archived)._ Use shared defaults and tolerate extra alpha editing fields without sidecar migrations.
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
 - **[browser-review](./browser-review.md)** _(archived)._ Add three browser views with independent review ratings, metadata sorting and shared search filters.
 - **[browser-thumbnail-budget](./browser-thumbnail-budget.md)** _(archived)._ Replace the browser thumbnail count limit with a persistent memory budget and group performance preferences.

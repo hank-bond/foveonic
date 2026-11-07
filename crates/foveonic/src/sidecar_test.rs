@@ -92,7 +92,10 @@ fn recipes_round_trip_all_settings_and_named_automatic_choices_exactly() {
     assert!(value["settings"].get("sensor_gain").is_none());
     let mut retired = value;
     retired["settings"]["sensor_gain"] = serde_json::json!(1.);
-    assert!(decode(&serde_json::to_vec(&retired).unwrap()).is_err());
+    assert_eq!(
+        decode(&serde_json::to_vec(&retired).unwrap()).unwrap(),
+        edited()
+    );
 }
 
 #[test]
@@ -142,6 +145,69 @@ fn missing_edit_fields_use_shared_defaults_and_preserve_supplied_values() {
 }
 
 #[test]
+fn extra_fields_at_every_recipe_object_are_ignored_without_changing_known_edits() {
+    fn add_extra(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for value in fields.values_mut() {
+                    add_extra(value);
+                }
+                fields.insert(
+                    "future_control".into(),
+                    serde_json::json!({"arbitrary":[1,2,3]}),
+                );
+            }
+            serde_json::Value::Array(values) => values.iter_mut().for_each(add_extra),
+            _ => {}
+        }
+    }
+    let mut original = edited();
+    // Tagged enum objects are values, not extensible control structs.
+    original.crop.aspect = crate::crop::Aspect::Original;
+    original.repair = None;
+    original
+        .photographic
+        .color_editor
+        .advanced
+        .push(Default::default());
+    let mut value: serde_json::Value = serde_json::from_slice(&encode(&original).unwrap()).unwrap();
+    add_extra(&mut value);
+    value["settings"]["research"] = serde_json::json!({
+        "noise":{"enabled":false},
+        "sharpening":{"method":"richardson_lucy","amount":3.47},
+        "monochrome":{"method":"Original"}
+    });
+    assert_eq!(
+        decode(&serde_json::to_vec(&value).unwrap()).unwrap(),
+        original
+    );
+    assert_eq!(decode(&encode(&original).unwrap()).unwrap(), original);
+}
+
+#[test]
+fn partial_nested_controls_default_missing_fields_and_ignore_extra_fields() {
+    let bytes = br#"{"format":"foveonic-editing","version":1,"settings":{
+        "exposure":0.75,
+        "rotation":{"turns":1,"future":true},
+        "white_balance_bias":{"warmth":0.25,"future":null},
+        "photographic":{"sharpening":{"amount":0.5,"future":[1,2]}},
+        "reconstruction":{"texture":{"fine":0.8,"future":{}}},
+        "research":{"anything":"ignored"}
+    }}"#;
+    let mut expected = Settings {
+        exposure: 0.75,
+        ..Default::default()
+    };
+    expected.rotation.turns = 1;
+    expected.white_balance_bias.warmth = 0.25;
+    expected.photographic.sharpening.amount = 0.5;
+    let mut noise = noise::Controls::default();
+    noise.texture.fine = 0.8;
+    expected.reconstruction = Some(noise);
+    assert_eq!(decode(bytes).unwrap(), expected);
+}
+
+#[test]
 fn monochrome_retains_both_modes_and_older_recipes_select_color() {
     let mut s = edited();
     s.rendering = crate::render::Rendering::Monochrome;
@@ -175,7 +241,7 @@ fn monochrome_retains_both_modes_and_older_recipes_select_color() {
 }
 
 #[test]
-fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
+fn malformed_recipes_versions_and_invalid_known_values_are_rejected() {
     assert!(decode(b"{").is_err());
     assert!(decode(&vec![b' '; MAX_BYTES as usize + 1]).is_err());
     for edit in [
@@ -192,7 +258,12 @@ fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
     assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
     value["settings"]["saturation"] = serde_json::json!(1.);
     value["settings"]["new_setting"] = serde_json::json!(1.);
-    assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    assert_eq!(
+        decode(&serde_json::to_vec(&value).unwrap())
+            .unwrap()
+            .saturation,
+        1.
+    );
     let mut invalid = edited();
     invalid.tone.highlights = f64::NAN;
     assert!(encode(&invalid).is_err());
@@ -221,21 +292,6 @@ fn malformed_unknown_version_fields_and_invalid_numbers_are_rejected() {
         value["settings"]["reconstruction"][field] = invalid;
         assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
     }
-    let mut value: serde_json::Value = serde_json::from_slice(&encode(&edited()).unwrap()).unwrap();
-    value["settings"]["last_folder"] = serde_json::json!("/some/folder");
-    assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
-    value["settings"]
-        .as_object_mut()
-        .unwrap()
-        .remove("last_folder");
-    value["settings"]["tone"]["last_folder"] = serde_json::json!("/some/folder");
-    assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
-    value["settings"]["tone"]
-        .as_object_mut()
-        .unwrap()
-        .remove("last_folder");
-    value["settings"]["reconstruction"]["overrides"]["unknown"] = serde_json::json!(0.5);
-    assert!(decode(&serde_json::to_vec(&value).unwrap()).is_err());
     let mut oversized = edited();
     oversized.color_mode = "a".repeat(MAX_BYTES as usize);
     assert!(encode(&oversized).is_err());
