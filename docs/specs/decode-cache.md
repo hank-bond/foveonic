@@ -7,6 +7,10 @@ implementation: conforming
 
 # Decoded source cache
 
+Decoded sample payloads must use lossless 16-bit integer storage, with signedness recorded per entry. Loading must restore the exact float32 sensor codes consumed by processing. Conversion must use bounded scratch storage and preserve cancellation checkpoints and payload checksums. Camera metadata and original X3F bytes remain unchanged. A sample that cannot round-trip exactly must reject cache publication rather than lose precision. Obsolete float32 entries are disposable cache misses and rebuild through ordinary decoding. No legacy format reader or migration is required.
+
+Compact storage and validation are recorded in the [compact decoded-cache plan](../../plans/archived/compact-decoded-cache.md).
+
 The app must group decoded-source caching and independent [thumbnail memory](./browser-previews.md) controls under Performance in Settings. The cache defaults to enabled with a 10 GB decimal disk budget. Merrill and Quattro default on, Classic off. Each family has its own checkbox. These are workspace preferences, separate from photo editing sidecars.
 
 Storage must stay under the platform temporary directory. Cache identity includes canonical source location, modification time and file length, plus the decoded-format version. Source changes must invalidate the associated identity during background refresh or folder reload. Foreground access to a ready entry uses the last background-verified identity without opening or statting the source. Cached entries may remain usable while the original is unavailable. A different observed identity must never reuse another source's samples. The cache must retain the original sensor layout, sample values, camera matrix encodings and property-list order. Complete entries must also retain exact original X3F bytes, capture properties, saved editing settings, a prepared thumbnail and any suitable larger preview. Original bytes and metadata companions share the same identity and disk budget as decoded samples. Photo edits do not invalidate decoded data.

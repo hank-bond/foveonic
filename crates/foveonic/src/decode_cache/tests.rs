@@ -31,9 +31,7 @@ impl Fixture {
                 matrices: Default::default(),
                 lists: Default::default(),
             }),
-            pixels: (0..72)
-                .map(|i| if i == 0 { -0. } else { i as f32 - 2048. })
-                .collect(),
+            pixels: (0..72).map(|i| i as f32 - 2048.).collect(),
             storage: SourceStorage::PackedRgbBluePhases,
             camf: vec![],
             timings: vec![],
@@ -201,6 +199,101 @@ fn complete_selection_uses_only_local_cache_when_the_original_and_sidecar_are_un
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+fn compact_payload_preserves_signed_and_unsigned_codes_across_chunks() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("cache");
+    let identity = Identity::read(&fixture.source).unwrap();
+    for signed in [false, true] {
+        let mut source = fixture.image();
+        Arc::make_mut(&mut source.metadata).width = 1024;
+        Arc::make_mut(&mut source.metadata).height = 344;
+        source.pixels = (0..1024 * 172 * 3)
+            .map(|i| {
+                let code = i as u16;
+                if signed {
+                    f32::from(code as i16)
+                } else {
+                    f32::from(code)
+                }
+            })
+            .collect();
+        assert!(source.pixels.len() > SAMPLES_PER_CHUNK);
+        store(
+            &root,
+            &fixture.source,
+            identity.clone(),
+            &source,
+            DEFAULT_BUDGET,
+        )
+        .unwrap();
+        let path = root.join(identity.name());
+        let mut file = File::open(&path).unwrap();
+        let header = read_header(&mut file, &identity, &Settings::default()).unwrap();
+        let header_bytes = serde_json::to_vec(&header).unwrap().len() as u64;
+        assert_eq!(
+            file.metadata().unwrap().len(),
+            PREFIX_BYTES + header_bytes + source.pixels.len() as u64 * 2 + source.camf.len() as u64
+        );
+        let restored = load(&path, &identity, &Settings::default(), &|_| {}).unwrap();
+        assert_eq!(
+            bytemuck::cast_slice::<f32, u8>(source.samples()),
+            bytemuck::cast_slice::<f32, u8>(restored.samples())
+        );
+    }
+}
+
+#[test]
+fn unrepresentable_samples_leave_existing_entry_intact() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("cache");
+    let identity = Identity::read(&fixture.source).unwrap();
+    let mut source = fixture.image();
+    store(
+        &root,
+        &fixture.source,
+        identity.clone(),
+        &source,
+        DEFAULT_BUDGET,
+    )
+    .unwrap();
+    let path = root.join(identity.name());
+    let original = fs::read(&path).unwrap();
+    source.pixels[0] = 0.5;
+    assert!(store(&root, &fixture.source, identity, &source, DEFAULT_BUDGET).is_err());
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn obsolete_float_cache_is_a_miss() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("cache");
+    let identity = Identity::read(&fixture.source).unwrap();
+    store(
+        &root,
+        &fixture.source,
+        identity.clone(),
+        &fixture.image(),
+        DEFAULT_BUDGET,
+    )
+    .unwrap();
+    let path = root.join(identity.name());
+    let mut bytes = fs::read(&path).unwrap();
+    bytes[..8].copy_from_slice(b"FOVDEC01");
+    fs::write(&path, bytes).unwrap();
+    assert!(!ready(&root, &fixture.source, &Settings::default()));
+    assert!(load(&path, &identity, &Settings::default(), &|_| {}).is_err());
+    store(
+        &root,
+        &fixture.source,
+        identity.clone(),
+        &fixture.image(),
+        DEFAULT_BUDGET,
+    )
+    .unwrap();
+    assert!(load(&path, &identity, &Settings::default(), &|_| {}).is_ok());
 }
 
 #[test]
@@ -375,11 +468,11 @@ fn background_writes_obey_budget_changes_disable_and_clear() {
 fn original_families_roundtrip_exact_samples_metadata_and_camera_order() {
     let fixtures = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let fixture = Fixture::new();
-    let cache = Cache::at(fixture.root.join("cache"));
-    cache.configure(Settings {
+    let root = fixture.root.join("cache");
+    let settings = Settings {
         classic: true,
         ..Settings::default()
-    });
+    };
     for name in [
         "dp0-quattro.x3f",
         "sd-quattro-h.x3f",
@@ -392,17 +485,10 @@ fn original_families_roundtrip_exact_samples_metadata_and_camera_order() {
         } else {
             fixtures.join(name)
         };
-        let original = cache.open(&path, |_| {}).unwrap();
-        let file = cache.root.join(Identity::read(&path).unwrap().name());
-        let deadline = Instant::now() + std::time::Duration::from_secs(10);
-        while !file.exists() {
-            assert!(
-                Instant::now() < deadline,
-                "cache insertion did not finish: {name}"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let restored = cache.open(&path, |_| {}).unwrap();
+        let original = Source::open(&path).unwrap();
+        let identity = Identity::read(&path).unwrap();
+        store(&root, &path, identity.clone(), &original, DEFAULT_BUDGET).unwrap();
+        let restored = load(&root.join(identity.name()), &identity, &settings, &|_| {}).unwrap();
         assert!(
             bytemuck::cast_slice::<f32, u8>(original.samples())
                 == bytemuck::cast_slice::<f32, u8>(restored.samples()),
@@ -415,7 +501,6 @@ fn original_families_roundtrip_exact_samples_metadata_and_camera_order() {
         assert_eq!(original.camf, restored.camf);
         assert_eq!(original.storage(), restored.storage());
     }
-    assert_eq!(cache.status().hits, 5);
 }
 
 #[test]

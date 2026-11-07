@@ -6,6 +6,7 @@ mod window;
 use lru::prune;
 mod original;
 mod previews;
+mod samples;
 mod selection;
 pub use selection::Selection;
 mod worker;
@@ -26,18 +27,19 @@ use std::{
 };
 
 // Bump when decoder semantics or the stored source representation change.
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 const NAMESPACE: &str = "foveonic-decoded-v1";
 pub const DEFAULT_BUDGET: u64 = 10_000_000_000;
 // Start all three sensor layers of the nearest photo together by default.
 const DEFAULT_DECODE_THREADS: usize = 3;
 const DEFAULT_PREFETCH_BEHIND: usize = 3;
 const DEFAULT_PREFETCH_AHEAD: usize = 7;
-const MAGIC: &[u8; 8] = b"FOVDEC01";
+const MAGIC: &[u8; 8] = b"FOVDEC02";
 // Signature, JSON length and JSON checksum precede the versioned header.
 const PREFIX_BYTES: u64 = (MAGIC.len() + size_of::<u64>() + size_of::<u32>()) as u64;
 const MAX_HEADER: u64 = 1024 * 1024;
 const MAX_CAMF: u64 = 64 * 1024 * 1024;
+const SAMPLES_PER_CHUNK: usize = crate::background::IO_CHUNK_BYTES / size_of::<u16>();
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +151,7 @@ struct Header {
     processing_version: Option<[u16; 4]>,
     properties: BTreeMap<String, String>,
     packed_phases: bool,
+    sample_encoding: samples::Encoding,
     samples: u64,
     camf_bytes: u64,
     checksum: u32,
@@ -468,21 +471,27 @@ fn load(
     let mut pixels = vec![0_f32; usize::try_from(header.samples)?];
     let mut camf = vec![0; usize::try_from(header.camf_bytes)?];
     let mut checksum = crc32fast::Hasher::new();
-    for output in [
-        bytemuck::cast_slice_mut::<f32, u8>(&mut pixels),
-        camf.as_mut_slice(),
-    ] {
-        for chunk in output.chunks_mut(crate::background::IO_CHUNK_BYTES) {
-            crate::background::checkpoint_or_cancel()?;
-            file.read_exact(chunk)?;
-            checksum.update(chunk);
-        }
+    let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(pixels.len())];
+    for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
+        crate::background::checkpoint_or_cancel()?;
+        let codes = &mut codes[..output.len()];
+        let bytes = bytemuck::cast_slice_mut::<u16, u8>(codes);
+        file.read_exact(bytes)?;
+        checksum.update(bytes);
+        header.sample_encoding.decode(codes, output);
+    }
+    for chunk in camf.chunks_mut(crate::background::IO_CHUNK_BYTES) {
+        crate::background::checkpoint_or_cancel()?;
+        file.read_exact(chunk)?;
+        checksum.update(chunk);
     }
     if checksum.finalize() != header.checksum {
         return Err("decoded cache checksum mismatch".into());
     }
-    let payload_timing =
-        crate::profile::Timing::elapsed("decoded cache payload read and checksum", payload_started);
+    let payload_timing = crate::profile::Timing::elapsed(
+        "decoded cache payload read, checksum and conversion",
+        payload_started,
+    );
     progress(LoadStage::FileRead);
     let metadata_started = Instant::now();
     let (matrices, lists) = crate::x3f::cached_camera_metadata(&camf)?;
@@ -556,7 +565,7 @@ fn read_header(file: &mut File, identity: &Identity, settings: &Settings) -> Res
     }
     let payload = header
         .samples
-        .checked_mul(std::mem::size_of::<f32>() as u64)
+        .checked_mul(size_of::<u16>() as u64)
         .and_then(|n| n.checked_add(header.camf_bytes))
         .ok_or("decoded cache size overflow")?;
     if header.camf_bytes > MAX_CAMF || payload.checked_add(length + PREFIX_BYTES) != Some(total) {
@@ -610,12 +619,14 @@ fn store_checked(
     if Identity::read(path)? != identity {
         return Err("source changed before caching".into());
     }
+    let sample_encoding = samples::Encoding::for_samples(&source.pixels);
     let mut checksum = crc32fast::Hasher::new();
-    for bytes in
-        bytemuck::cast_slice::<f32, u8>(&source.pixels).chunks(crate::background::IO_CHUNK_BYTES)
-    {
+    let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(source.pixels.len())];
+    for chunk in source.pixels.chunks(SAMPLES_PER_CHUNK) {
         crate::background::checkpoint_or_cancel()?;
-        checksum.update(bytes);
+        let codes = &mut codes[..chunk.len()];
+        sample_encoding.encode(chunk, codes)?;
+        checksum.update(bytemuck::cast_slice::<u16, u8>(codes));
     }
     checksum.update(&source.camf);
     let header = Header {
@@ -628,6 +639,7 @@ fn store_checked(
         processing_version: source.metadata.processing_version,
         properties: source.metadata.properties.clone(),
         packed_phases: source.storage() == SourceStorage::PackedRgbBluePhases,
+        sample_encoding,
         samples: source.pixels.len() as u64,
         camf_bytes: source.camf.len() as u64,
         checksum: checksum.finalize(),
@@ -635,7 +647,7 @@ fn store_checked(
     let json = serde_json::to_vec(&header)?;
     let bytes = PREFIX_BYTES
         + json.len() as u64
-        + std::mem::size_of_val(source.pixels.as_slice()) as u64
+        + source.pixels.len() as u64 * size_of::<u16>() as u64
         + source.camf.len() as u64;
     if bytes > budget || json.len() as u64 > MAX_HEADER {
         return Ok(());
@@ -661,11 +673,12 @@ fn store_checked(
         file.write_all(&(json.len() as u64).to_le_bytes())?;
         file.write_all(&crc32fast::hash(&json).to_le_bytes())?;
         file.write_all(&json)?;
-        for bytes in bytemuck::cast_slice::<f32, u8>(&source.pixels)
-            .chunks(crate::background::IO_CHUNK_BYTES)
-        {
+        let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(source.pixels.len())];
+        for chunk in source.pixels.chunks(SAMPLES_PER_CHUNK) {
             crate::background::checkpoint_or_cancel()?;
-            file.write_all(bytes)?;
+            let codes = &mut codes[..chunk.len()];
+            sample_encoding.encode(chunk, codes)?;
+            file.write_all(bytemuck::cast_slice::<u16, u8>(codes))?;
         }
         file.write_all(&source.camf)?;
         file.flush()?;

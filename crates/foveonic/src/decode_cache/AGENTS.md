@@ -18,6 +18,7 @@ The shared sensor-layer pool stays in `../decode_pool.rs` because X3F decoding a
 - **[mod.rs](./mod.rs)** Reuses decoded sources, original bytes, selection metadata and previews in a bounded temporary disk LRU.
 - **[original.rs](./original.rs)** Retains original X3F bytes for imports under the decoded cache's identity and budget.
 - **[previews.rs](./previews.rs)** Stores bounded display previews under the decoded cache's identity, recipe, and shared LRU budget.
+- **[samples.rs](./samples.rs)** Converts decoded sensor codes losslessly between compact disk integers and processing floats.
 - **[selection.rs](./selection.rs)** Keeps complete local selection metadata and thumbnails beside decoded sources.
 - **[window.rs](./window.rs)** Orders a bounded selection neighborhood for prefetch and cache retention.
 - **[worker.rs](./worker.rs)** Schedules bounded cache writes, selection prefetch, and readiness scans behind foreground work.
