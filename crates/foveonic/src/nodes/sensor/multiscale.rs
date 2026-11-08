@@ -1,5 +1,6 @@
-//! Filters native sensor-layer color differences at three scales while preserving their sum.
+//! Filters sensor-layer color differences with scale-aware supports and a local calibration basis.
 
+use super::calibration::Calibration;
 use crate::{
     gpu::{
         Binding::{Read, Write},
@@ -7,8 +8,10 @@ use crate::{
     },
     profile::Profile,
     recipe::Key,
+    render::WorkingGrid,
     source::Result,
 };
+use std::sync::Arc;
 
 const PAD_MULTIPLE: u32 = 16;
 const MINIMUM_ACTIVE_SIDE: u32 = 65;
@@ -57,11 +60,13 @@ struct Params {
     controls: [f32; 4],
     noise: [[f32; 4]; 3],
     neutral: [f32; 4],
+    sampling: [u32; 4],
 }
 
 #[derive(Clone, Debug)]
 pub struct Prepared {
     params: Params,
+    working: Option<(WorkingGrid, Arc<Calibration>)>,
 }
 
 impl Prepared {
@@ -101,7 +106,47 @@ impl Prepared {
                     [noise[i * 3], noise[i * 3 + 1], noise[i * 3 + 2], 0.]
                 }),
                 neutral: [neutral[0], neutral[1], neutral[2], sum],
+                sampling: [1, 0, 0, 0],
             },
+            working: None,
+        })
+    }
+
+    /// Calibrated area means are normalized locally inside the filter. Native
+    /// processing keeps its original code basis and operation order.
+    pub(crate) fn on_grid(mut self, grid: WorkingGrid, calibration: Arc<Calibration>) -> Self {
+        let d = grid.scale.divisor();
+        self.params.source[..2].copy_from_slice(&grid.extent);
+        self.params.area = grid.bounds(self.params.area);
+        self.params.source[2] =
+            (self.params.area[2] - self.params.area[0]).div_ceil(PAD_MULTIPLE) * PAD_MULTIPLE;
+        self.params.source[3] =
+            (self.params.area[3] - self.params.area[1]).div_ceil(PAD_MULTIPLE) * PAD_MULTIPLE;
+        for row in &mut self.params.noise {
+            for coefficient in &mut row[..3] {
+                *coefficient /= (u64::from(d) * u64::from(d)) as f32;
+            }
+        }
+        self.params.sampling = [d, grid.origin[0], grid.origin[1], 0];
+        self.working = Some((grid, calibration));
+        self
+    }
+
+    pub(crate) fn grid(&self) -> Option<WorkingGrid> {
+        self.working.as_ref().map(|(grid, _)| *grid)
+    }
+
+    fn stages(&self) -> [Stage; 3] {
+        let d = self.params.sampling[0];
+        STAGES.map(|stage| {
+            let scale = (stage.scale / d).max(1);
+            Stage {
+                scale,
+                radius: (stage.radius * stage.scale)
+                    .div_ceil(d.saturating_mul(scale))
+                    .max(1),
+                strength: stage.strength,
+            }
         })
     }
 
@@ -110,7 +155,13 @@ impl Prepared {
     }
 
     pub(crate) fn key(&self) -> Key {
-        Key::pod(&self.params)
+        let key = Key::pod(&self.params);
+        match &self.working {
+            Some((_, calibration)) => key
+                .with(&calibration.params)
+                .slice(&calibration.grid_values),
+            None => key,
+        }
     }
 }
 
@@ -121,17 +172,34 @@ fn workspace(gpu: &Gpu, extent: [u32; 2], components: u32) -> Result<ReadGuard> 
     )
 }
 
+pub(crate) enum Evidence<'a> {
+    Native {
+        original: &'a ReadGuard,
+        black: &'a ReadGuard,
+    },
+    Calibrated {
+        clipping: &'a ReadGuard,
+    },
+}
+
 pub(crate) fn apply(
     gpu: &Gpu,
     input: &ReadGuard,
-    original: &ReadGuard,
-    black: &ReadGuard,
+    evidence: Evidence<'_>,
     prepared: &Prepared,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
     let [width, height] = prepared.extent();
     let bytes = u64::from(width) * u64::from(height) * LAYER_BYTES;
-    if input.size() != bytes || original.size() != bytes || black.size() != LAYER_BYTES {
+    let valid = match &evidence {
+        Evidence::Native { original, black } => {
+            prepared.working.is_none() && original.size() == bytes && black.size() == LAYER_BYTES
+        }
+        Evidence::Calibrated { clipping } => {
+            prepared.working.is_some() && clipping.size() == bytes / 3
+        }
+    };
+    if input.size() != bytes || !valid {
         return Err("multiscale sensor filter input geometry mismatch".into());
     }
     let full = [prepared.params.source[2], prepared.params.source[3]];
@@ -140,26 +208,56 @@ pub(crate) fn apply(
     let mut params = prepared.params;
     let uniform = gpu.uniform(&params);
     let mut trace = gpu.trace(profile.mode.gpu(), MAXIMUM_TRACE_PASSES);
+    let calibration = prepared
+        .working
+        .as_ref()
+        .map(|(_, c)| -> Result<_> {
+            Ok((
+                gpu.uniform(&c.params),
+                gpu.upload("Multiscale spatial calibration", &c.grid_values)?,
+            ))
+        })
+        .transpose()?;
+    let (prepare, mut bindings) = match &evidence {
+        Evidence::Native { black, .. } => (
+            Kernel::MultiscalePrepare,
+            vec![
+                (0, Read(&uniform)),
+                (1, Read(input)),
+                (5, Write(current.write())),
+                (8, Read(black)),
+            ],
+        ),
+        Evidence::Calibrated { .. } => {
+            let (params, values) = calibration.as_ref().unwrap();
+            (
+                Kernel::MultiscalePrepareCalibrated,
+                vec![
+                    (0, Read(&uniform)),
+                    (1, Read(input)),
+                    (5, Write(current.write())),
+                    (10, Read(params)),
+                    (11, Read(values)),
+                ],
+            )
+        }
+    };
     gpu.dispatch(
-        Kernel::MultiscalePrepare,
-        &mut [
-            (0, Read(&uniform)),
-            (1, Read(input)),
-            (5, Write(current.write())),
-            (8, Read(black)),
-        ],
+        prepare,
+        &mut bindings,
         [
             full[0].div_ceil(WORKGROUP_SIDE),
             full[1].div_ceil(WORKGROUP_SIDE),
         ],
         &mut trace,
     );
+    drop(bindings);
 
     for Stage {
         scale,
         radius,
         strength,
-    } in STAGES
+    } in prepared.stages()
     {
         let coarse_extent = full.map(|v| v / scale);
         params.stage = [coarse_extent[0], coarse_extent[1], scale, radius];
@@ -284,17 +382,38 @@ pub(crate) fn apply(
         );
         spare = Some(std::mem::replace(&mut current, next));
     }
-    let mut output = gpu.storage("Multiscale native sensor layers", bytes)?;
+    let mut output = gpu.storage("Multiscale sensor layers", bytes)?;
     let uniform = gpu.uniform(&params);
+    let (finish, mut bindings) = match &evidence {
+        Evidence::Native { original, black } => (
+            Kernel::MultiscaleFinish,
+            vec![
+                (0, Read(&uniform)),
+                (1, Read(&current)),
+                (5, Write(output.write())),
+                (8, Read(black)),
+                (9, Read(original)),
+            ],
+        ),
+        Evidence::Calibrated { clipping } => {
+            let (params, values) = calibration.as_ref().unwrap();
+            (
+                Kernel::MultiscaleFinishCalibrated,
+                vec![
+                    (0, Read(&uniform)),
+                    (1, Read(&current)),
+                    (5, Write(output.write())),
+                    (9, Read(input)),
+                    (10, Read(params)),
+                    (11, Read(values)),
+                    (12, Read(clipping)),
+                ],
+            )
+        }
+    };
     gpu.dispatch(
-        Kernel::MultiscaleFinish,
-        &mut [
-            (0, Read(&uniform)),
-            (1, Read(&current)),
-            (5, Write(output.write())),
-            (8, Read(black)),
-            (9, Read(original)),
-        ],
+        finish,
+        &mut bindings,
         [
             width.div_ceil(WORKGROUP_SIDE),
             height.div_ceil(WORKGROUP_SIDE),

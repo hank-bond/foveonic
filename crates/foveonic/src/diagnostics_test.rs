@@ -232,10 +232,18 @@ fn capture_transition_never_blocks_emission_or_accepts_an_old_generation() {
     let old = capture_id().unwrap();
     let old_scope = scope(Category::Cpu, "old.scope");
     {
-        // Holding a scope must not hold the emission lock across application work.
-        let _transition = EMISSION
-            .try_write()
-            .expect("scope retained an emission lock");
+        // Other parallel tests can emit into the global capture. Allow those
+        // brief writes, but a scope retaining its lock must still fail promptly.
+        let deadline = Instant::now() + std::time::Duration::from_secs(1);
+        let _transition = loop {
+            match EMISSION.try_write() {
+                Ok(transition) => break transition,
+                Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("scope retained an emission lock: {error}"),
+            }
+        };
         event(Category::Ui, "transition", |_| {
             panic!("blocked emitter evaluated fields")
         });

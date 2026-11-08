@@ -4,6 +4,7 @@ struct Params {
     source: vec4<u32>, area: vec4<u32>, stage: vec4<u32>,
     // Strength, inverse scale squared, variance floor and update phase.
     controls: vec4<f32>, noise: array<vec4<f32>, 3>, neutral: vec4<f32>,
+    sampling: vec4<u32>,
 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> source: array<f32>;
@@ -15,6 +16,9 @@ struct Params {
 @group(0) @binding(7) var<storage, read_write> output_c: array<f32>;
 @group(0) @binding(8) var<storage, read> black: array<f32>;
 @group(0) @binding(9) var<storage, read> original: array<f32>;
+@group(0) @binding(10) var<uniform> calibration: CalibrationParams;
+@group(0) @binding(11) var<storage, read> grid_values: array<f32>;
+@group(0) @binding(12) var<storage, read> clipping: array<u32>;
 
 const LAYERS: u32 = 3u;
 const CLIPPED_CODE: f32 = 3900.;
@@ -61,6 +65,7 @@ fn load_horizontal_c(index: u32) -> vec3<f32> {
 }
 
 fn reflect(coordinate: i32, extent: u32) -> u32 {
+    if extent <= 1u { return 0u; }
     let period = 2 * (i32(extent) - 1);
     let folded = ((coordinate % period) + period) % period;
     return u32(min(folded, period - folded));
@@ -239,4 +244,35 @@ fn multiscale_finish(@builtin(global_invocation_id) id: vec3<u32>) {
         value = load_source(point.y * p.source.z + point.x) + vec3(black[0], black[1], black[2]);
     }
     store_a(pixel, value);
+}
+
+// Calibration varies slowly within a pooled cell. Its center supplies a local
+// sensor-code basis for filtering, not a second calibration of the photograph.
+fn working_gain(point: vec2<u32>) -> vec3<f32> {
+    let cell = min(vec2<u32>(max(vec2<i32>(point) - vec2<i32>(p.sampling.yz), vec2<i32>(0))),
+        (calibration.source.xy - vec2(1u)) / p.sampling.x);
+    let first = cell * p.sampling.x;
+    let last = min(first + vec2(p.sampling.x), calibration.source.xy);
+    return calibration_gain((vec2<f32>(first) + vec2<f32>(last) - vec2(1.)) * 0.5);
+}
+
+@compute @workgroup_size(8, 8)
+fn multiscale_prepare_calibrated(@builtin(global_invocation_id) id: vec3<u32>) {
+    if any(id.xy >= p.source.zw) { return; }
+    let point = vec2(reflect(i32(id.x), p.area.z - p.area.x), reflect(i32(id.y), p.area.w - p.area.y)) + p.area.xy;
+    store_a(id.y * p.source.z + id.x, load_source(point.y * p.source.x + point.x) / working_gain(point));
+}
+
+@compute @workgroup_size(8, 8)
+fn multiscale_finish_calibrated(@builtin(global_invocation_id) id: vec3<u32>) {
+    if any(id.xy >= p.source.xy) { return; }
+    let pixel = id.y * p.source.x + id.x;
+    let value = vec3(original[pixel * LAYERS], original[pixel * LAYERS + 1u], original[pixel * LAYERS + 2u]);
+    var corrected = value;
+    if all(id.xy >= p.area.xy) && all(id.xy < p.area.zw) && clipping[pixel] == 0u {
+        let point = id.xy - p.area.xy;
+        let gain = working_gain(id.xy);
+        corrected += (load_source(point.y * p.source.z + point.x) - value / gain) * gain;
+    }
+    store_a(pixel, corrected);
 }

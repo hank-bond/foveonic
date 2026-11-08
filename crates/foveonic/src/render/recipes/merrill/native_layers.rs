@@ -5,7 +5,7 @@ use super::layer_noise;
 use crate::{
     graph::{Graph, Operation},
     interactive::Execution,
-    nodes::sensor::{banding, calibration, color_field, despeckle, highlight},
+    nodes::sensor::{banding, calibration, color_field, despeckle, highlight, multiscale},
     profile::Profile,
     render::Settings,
     source::{Metadata, Result},
@@ -39,6 +39,7 @@ pub(super) enum Output {
         highlights: Option<Highlights>,
         calibration_gains: [f32; 3],
         sensor_codes: usize,
+        multiscale: Option<Arc<multiscale::Prepared>>,
     },
 }
 
@@ -55,6 +56,7 @@ pub(super) enum Highlights {
         original: usize,
         black: usize,
         unrepaired: usize,
+        repaired: usize,
     },
 }
 impl Highlights {
@@ -75,21 +77,23 @@ impl Highlights {
                 original,
                 black,
                 unrepaired,
+                repaired,
             } => {
                 // Recovery still needs the measured scalar table after native
                 // sensor buffers have been released.
                 graph.retain_for_seal(black);
-                let (original, unrepaired) = if let Some(grid) = grid {
+                let (original, unrepaired, repaired) = if let Some(grid) = grid {
                     (
                         grid.append(graph, original)?,
                         grid.append(graph, unrepaired)?,
+                        grid.append(graph, repaired)?,
                     )
                 } else {
-                    (original, unrepaired)
+                    (original, unrepaired, repaired)
                 };
                 graph.add(
                     Operation::ColorField(prepared.on_grid(working)),
-                    &[input, original, black, unrepaired],
+                    &[input, original, black, unrepaired, repaired],
                 )
             }
         }
@@ -129,6 +133,7 @@ pub(super) fn build(
     settings: &Settings,
     params: calibration::EncodeParams,
     policy: &Policy,
+    grid: Option<crate::render::WorkingGrid>,
     names: &[&str],
     profile: &mut Profile,
     execution: &mut Execution<'_>,
@@ -170,6 +175,7 @@ pub(super) fn build(
     })?;
     let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
     let calibration_params = calibration.params;
+    let mut working_multiscale = None;
     let defect_map = engine
         .noise_calibration
         .as_ref()
@@ -219,12 +225,19 @@ pub(super) fn build(
             corrected
         };
         if policy.multiscale {
-            let filtered = graph.add(
-                Operation::Multiscale(Arc::new(filter)),
-                &[corrected, input, black],
-            )?;
-            finish!();
-            filtered
+            if let Some(grid) = grid {
+                working_multiscale = Some(Arc::new(
+                    filter.on_grid(grid, Arc::new(calibration.clone())),
+                ));
+                corrected
+            } else {
+                let filtered = graph.add(
+                    Operation::Multiscale(Arc::new(filter)),
+                    &[corrected, input, black],
+                )?;
+                finish!();
+                filtered
+            }
         } else {
             corrected
         }
@@ -233,7 +246,7 @@ pub(super) fn build(
     };
     // The filter preserves original clipped triplets. Check mapped outliers in
     // those triplets again without weakening the immutable clipping evidence.
-    let corrected = if let Some(map) = defect_map.filter(|_| policy.multiscale) {
+    let corrected = if let Some(map) = defect_map.filter(|_| policy.multiscale && grid.is_none()) {
         let repaired = graph.add(
             Operation::CalibratedDefects(Arc::new(
                 crate::nodes::sensor::calibrated_defects::Prepared::new(map, true),
@@ -272,6 +285,7 @@ pub(super) fn build(
             original: input,
             black,
             unrepaired,
+            repaired: calibrated,
         })
     } else if settings.highlight_restoration {
         let prepared = match highlight_params {
@@ -296,6 +310,7 @@ pub(super) fn build(
         highlights,
         calibration_gains,
         sensor_codes: input,
+        multiscale: working_multiscale,
     })
 }
 

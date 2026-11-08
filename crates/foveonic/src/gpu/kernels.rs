@@ -39,12 +39,14 @@ pub enum Kernel {
     CapDefects,
     CalibratedDefectRepair,
     MultiscalePrepare,
+    MultiscalePrepareCalibrated,
     MultiscaleDownsample,
     MultiscaleMoments,
     MultiscaleCoefficients,
     MultiscaleAverage,
     MultiscaleApply,
     MultiscaleFinish,
+    MultiscaleFinishCalibrated,
     ShieldHistogram,
     ShieldGuard,
     ShieldProfile,
@@ -367,12 +369,14 @@ impl Kernel {
             Self::CapProfiles => "measure active cap profiles",
             Self::CapDefects => "identify persistent cap defects",
             Self::CalibratedDefectRepair => "repair serial-matched sensor defects",
+            Self::MultiscalePrepareCalibrated => "prepare resized calibrated layer filtering",
             Self::MultiscalePrepare => "prepare native layer color filtering",
-            Self::MultiscaleDownsample => "average native layers for color filtering",
-            Self::MultiscaleMoments => "measure native layer horizontal moments",
-            Self::MultiscaleCoefficients => "fit joint native layer guidance",
-            Self::MultiscaleAverage => "average native layer guidance horizontally",
-            Self::MultiscaleApply => "apply sum-preserving native color correction",
+            Self::MultiscaleDownsample => "average sensor layers for color filtering",
+            Self::MultiscaleMoments => "measure sensor layer horizontal moments",
+            Self::MultiscaleCoefficients => "fit joint sensor layer guidance",
+            Self::MultiscaleAverage => "average sensor layer guidance horizontally",
+            Self::MultiscaleApply => "apply sum-preserving sensor color correction",
+            Self::MultiscaleFinishCalibrated => "apply resized calibrated layer correction",
             Self::MultiscaleFinish => "restore original native layer geometry",
             Self::ShieldHistogram => "count original shield samples",
             Self::ShieldGuard => "measure shield medians and robust guards",
@@ -878,32 +882,76 @@ impl Gpu {
                 "calibrated_defect_repair",
             ),
             (
-                include_str!("../nodes/sensor/multiscale.wgsl"),
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
                 "multiscale_prepare",
             ),
             (
-                include_str!("../nodes/sensor/multiscale.wgsl"),
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
+                "multiscale_prepare_calibrated",
+            ),
+            (
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
                 "multiscale_downsample",
             ),
             (
-                include_str!("../nodes/sensor/multiscale.wgsl"),
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
                 "multiscale_moments",
             ),
             (
-                include_str!("../nodes/sensor/multiscale.wgsl"),
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
                 "multiscale_coefficients",
             ),
             (
-                include_str!("../nodes/sensor/multiscale.wgsl"),
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
                 "multiscale_average",
             ),
             (
-                include_str!("../nodes/sensor/multiscale.wgsl"),
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
                 "multiscale_apply",
             ),
             (
-                include_str!("../nodes/sensor/multiscale.wgsl"),
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
                 "multiscale_finish",
+            ),
+            (
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/multiscale.wgsl")
+                ),
+                "multiscale_finish_calibrated",
             ),
             (
                 include_str!("../nodes/sensor/shield_noise.wgsl"),
@@ -1221,7 +1269,14 @@ impl Gpu {
             (include_str!("../nodes/finish/code_crop.wgsl"), "code_crop"),
             (black, "histogram_pass"),
             (black, "mean_pass"),
-            (include_str!("../nodes/sensor/calibrate.wgsl"), "main"),
+            (
+                concat!(
+                    include_str!("../nodes/sensor/calibration_common.wgsl"),
+                    "\n",
+                    include_str!("../nodes/sensor/calibrate.wgsl")
+                ),
+                "main",
+            ),
             (include_str!("../nodes/color/color.wgsl"), "main"),
             (include_str!("../nodes/finish/tone.wgsl"), "main"),
             (photographic_tone.as_str(), "photographic_tone"),

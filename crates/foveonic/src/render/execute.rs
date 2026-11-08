@@ -614,16 +614,33 @@ impl Engine {
                     )?)
                 }
                 Operation::Multiscale(prepared) => {
-                    if inherited != prepared.extent()
-                        || input(1).description.map(|d| d.extent) != Some(inherited)
-                    {
+                    if inherited != prepared.extent() {
                         return Err("multiscale sensor filter extent mismatch".into());
                     }
+                    use crate::nodes::sensor::multiscale::Evidence;
+                    let flags = prepared
+                        .grid()
+                        .map(|grid| self.clipping_flags(context.metadata(), Some(grid)))
+                        .transpose()?;
+                    let clipping = flags
+                        .as_ref()
+                        .map(|flags| gpu.upload("Multiscale clipping evidence", flags))
+                        .transpose()?;
+                    let evidence = if let Some(clipping) = &clipping {
+                        Evidence::Calibrated { clipping }
+                    } else {
+                        if input(1).description.map(|d| d.extent) != Some(inherited) {
+                            return Err("multiscale original extent mismatch".into());
+                        }
+                        Evidence::Native {
+                            original: &input(1).buffer,
+                            black: &input(2).buffer,
+                        }
+                    };
                     Some(crate::nodes::sensor::multiscale::apply(
                         gpu,
                         &input(0).buffer,
-                        &input(1).buffer,
-                        &input(2).buffer,
+                        evidence,
                         prepared,
                         profile,
                     )?)
@@ -1581,6 +1598,7 @@ impl Engine {
                             original: &input(1).buffer,
                             black: &input(2).buffer,
                             unrepaired: &input(3).buffer,
+                            repaired: &input(4).buffer,
                             clipping: clipping.as_ref(),
                         },
                         prepared,

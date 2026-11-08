@@ -888,7 +888,7 @@ fn color_field_recovery_inputs_share_the_sensor_working_grid() {
                     DataType::BlackLevels
                 );
                 assert!(recipe.graph.sealed_outputs.contains(&node.inputs[2]));
-                for index in [0, 1, 3] {
+                for index in [0, 1, 3, 4] {
                     let output = &recipe.graph.outputs[node.inputs[index]];
                     match &recipe.graph.nodes[output.producer].operation {
                         Operation::ReduceLayers { prepared, .. } => {

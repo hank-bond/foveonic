@@ -65,7 +65,13 @@ fn full_option_cases(
     s.reconstruction.get_or_insert_with(Default::default);
     s.merrill_noise_method = super::super::MerrillNoiseMethod::MultiscaleRowsAndColumns;
     assert!(s.multiscale_noise_selected());
-    cases.push(("multiscale", s));
+    cases.push(("multiscale", s.clone()));
+    s.rendering = super::super::Rendering::Monochrome;
+    cases.push(("mono-multiscale", s));
+    let mut s = base.clone();
+    s.reconstruction.get_or_insert_with(Default::default);
+    s.merrill_noise_method = super::super::MerrillNoiseMethod::MultiscaleRows;
+    cases.push(("multiscale-rows", s));
     let mut s = base.clone();
     s.rendering = super::super::Rendering::Monochrome;
     s.monochrome.texture.fine = 0.5;
@@ -136,6 +142,18 @@ fn full_option_cases(
         s.highlight_mode = super::super::HighlightMode::ColorField;
         s.color_field.approach = approach;
         cases.push((name, s.clone()));
+        let mut multiscale = s.clone();
+        multiscale
+            .reconstruction
+            .get_or_insert_with(Default::default);
+        multiscale.merrill_noise_method = super::super::MerrillNoiseMethod::MultiscaleRows;
+        cases.push((
+            match approach {
+                super::super::ColorFieldApproach::LocalGradient => "multiscale-highlight-local",
+                super::super::ColorFieldApproach::Faithful => "multiscale-highlight-global",
+            },
+            multiscale,
+        ));
         s.merrill_speckles.method = super::super::MerrillSpeckleMethod::Compact;
         cases.push((
             match approach {
@@ -278,12 +296,38 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
             if session.metadata().processing_family().unwrap()
                 == crate::source::ProcessingFamily::Merrill
             {
+                if settings.directional_banding_selected()
+                    && settings.merrill_noise_method
+                        == super::super::MerrillNoiseMethod::MultiscaleRows
+                {
+                    let mut changed = settings.clone();
+                    changed.merrill_noise_method = super::super::MerrillNoiseMethod::Reference;
+                    assert!(
+                        matches!(
+                            engine
+                                .render_reduced_session(
+                                    &mut session,
+                                    &changed,
+                                    &["final"],
+                                    || false,
+                                    &mut Profile::default()
+                                )
+                                .unwrap(),
+                            ReducedRender::Rendered(_)
+                        ),
+                        "resized-only filter change {name} scale{divisor}"
+                    );
+                }
                 let mut changed = settings.clone();
-                changed.merrill_noise_method = if settings.multiscale_noise_selected() {
-                    super::super::MerrillNoiseMethod::Reference
+                // Noise-method changes can now affect only resized filtering
+                // when Directional already supplies the same shield inputs.
+                // White balance still changes native calibration and shielding.
+                changed.white_balance = if settings.white_balance == "Incandescent" {
+                    "Sunlight"
                 } else {
-                    super::super::MerrillNoiseMethod::MultiscaleRows
-                };
+                    "Incandescent"
+                }
+                .into();
                 let before = engine.gpu_activity();
                 assert!(
                     matches!(

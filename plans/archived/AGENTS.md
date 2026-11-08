@@ -91,6 +91,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[monochrome-performance](./monochrome-performance.md)** _(archived)._ Column-parallel GPU histogram storage cuts monochrome render time roughly three to four times with exact photographic output.
 - **[monochrome-refinement](./monochrome-refinement.md)** _(archived)._ Validated independent monochrome detail and shared color sensitivity while preserving the sensor mixture.
 - **[monochrome-rendering](./monochrome-rendering.md)** _(archived)._ GPU monochrome rendering, a triangular layer mixer, mode-specific editing, and linear monochrome DNG export are implemented and checked.
+- **[multiscale-working-grid](./multiscale-working-grid.md)** _(archived)._ Moves Merrill Multiscale filtering onto resized calibrated layers with explicit repair evidence and preserved native processing.
 - **[ordered-repair-and-node-audit](./ordered-repair-and-node-audit.md)** _(archived)._ Ordered camera repair fixes the leaf defect; the node audit led to the approved WB-scale fix and identifies remaining camera coverage gaps.
 - **[perfetto-recorder](./perfetto-recorder.md)** _(archived)._ Establish a shared bounded Perfetto recorder with scalar context and source/cache/CPU boundary observations.
 - **[photographic-exports](./photographic-exports.md)** _(archived)._ Add shared JPEG, PNG and JPEG XL exports and lossless TIFF compression.

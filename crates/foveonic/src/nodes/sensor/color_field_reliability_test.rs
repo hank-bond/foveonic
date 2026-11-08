@@ -36,7 +36,7 @@ pub(super) fn field_masks(
     black: &ReadGuard,
     input: &ReadGuard,
 ) -> Vec<u32> {
-    field_masks_with_clipping(gpu, params, original, black, input, None)
+    field_masks_with_clipping(gpu, params, original, black, input, None, None)
 }
 
 fn field_masks_with_clipping(
@@ -46,11 +46,12 @@ fn field_masks_with_clipping(
     black: &ReadGuard,
     input: &ReadGuard,
     clipping: Option<&[u32]>,
+    repair_pair: Option<(&ReadGuard, &ReadGuard)>,
 ) -> Vec<u32> {
     let mut params = *params;
     params.white[3] = f32::from(clipping.is_some());
     params.size[3] = 0;
-    params.options[2] = 0;
+    params.options[2] = u32::from(repair_pair.is_some());
     let n = params.size[2];
     gpu.prepare_color_field().unwrap();
     let mut resources = vec![
@@ -77,7 +78,8 @@ fn field_masks_with_clipping(
             gpu.storage("mask test targets", u64::from(n) * 4).unwrap(),
         ),
         (8, gpu.storage("mask test counts", 16).unwrap()),
-        (18, input.clone()),
+        (18, repair_pair.map_or(input, |pair| pair.0).clone()),
+        (22, repair_pair.map_or(input, |pair| pair.1).clone()),
         (
             21,
             gpu.upload("mask test original clipping", clipping.unwrap_or(&[0]))
@@ -200,8 +202,15 @@ fn pooled_original_clipping_overrides_below_threshold_means() {
         .unwrap();
     let black = gpu.upload("Black levels", &[0f32; 3]).unwrap();
     let clipping = [0u32, 1, 2, 3, 4, 5, 6, 7];
-    let actual =
-        field_masks_with_clipping(&gpu, &params, &original, &black, &input, Some(&clipping));
+    let actual = field_masks_with_clipping(
+        &gpu,
+        &params,
+        &original,
+        &black,
+        &input,
+        Some(&clipping),
+        None,
+    );
     for (mask, &flag) in actual.iter().zip(&clipping) {
         let expected = (0..3).fold(0u32, |m, c| {
             m | if flag & (4 >> c) == 0 {
@@ -211,5 +220,51 @@ fn pooled_original_clipping_overrides_below_threshold_means() {
             }
         });
         assert_eq!(mask & 0xffffff, expected, "clipping flags {flag}");
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn filtered_numerical_input_does_not_become_repair_evidence() {
+    let gpu = Gpu::new().unwrap();
+    let n = 128;
+    let params = Params {
+        size: [16, 8, n, 0],
+        grid: [2, 1, 2, 8],
+        crop: [0, 0, 16, 8],
+        gain: [1.; 4],
+        white: [4000., 4000., 4000., 0.],
+        neutral: [1.; 4],
+        luminance: [0.3, 0.6, 0.1, 0.],
+        metric: [1., 1., 0., 0.],
+        tuning: [0.035, 0.75, 1., 1.],
+        options: [1, 1, 1, 0],
+    };
+    let before = vec![[0.5_f32; 3]; n as usize];
+    let mut repaired = before.clone();
+    repaired[17][1] = 0.45;
+    let before = gpu.upload("Before camera repair", &before).unwrap();
+    let repaired = gpu.upload("After camera repair", &repaired).unwrap();
+    let filtered = gpu
+        .upload(
+            "Changed noise-filter input",
+            &vec![[0.4_f32, 0.5, 0.6]; n as usize],
+        )
+        .unwrap();
+    let original = gpu
+        .upload("Unclipped original codes", &vec![[1000_f32; 3]; n as usize])
+        .unwrap();
+    let black = gpu.upload("Black codes", &[0_f32; 3]).unwrap();
+    let masks = field_masks_with_clipping(
+        &gpu,
+        &params,
+        &original,
+        &black,
+        &filtered,
+        None,
+        Some((&before, &repaired)),
+    );
+    for (i, mask) in masks.into_iter().enumerate() {
+        assert_eq!(mask & 0x1000000 != 0, i == 17, "repair evidence at {i}");
     }
 }

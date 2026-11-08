@@ -330,6 +330,8 @@ pub(crate) struct Inputs<'a> {
     pub original: &'a ReadGuard,
     pub black: &'a ReadGuard,
     pub unrepaired: &'a ReadGuard,
+    /// Paired with `unrepaired` before later filtering changes the numerical input.
+    pub repaired: &'a ReadGuard,
     pub clipping: Option<&'a crate::recipe::Shared<u32>>,
 }
 
@@ -346,12 +348,20 @@ pub(crate) fn apply(
         original,
         black,
         unrepaired,
+        repaired,
         clipping,
     } = inputs;
     profile.measure("prepare optional color-field kernels", || {
         gpu.prepare_color_field()
     })?;
     let n = p.params.size[2];
+    if [input, original, unrepaired, repaired]
+        .iter()
+        .any(|buffer| buffer.size() != u64::from(n) * 12)
+        || black.size() != 12
+    {
+        return Err("color-field inputs and repair evidence must share one working grid".into());
+    }
     if clipping.is_some() != p.grid.is_some()
         || clipping.is_some_and(|flags| flags.len() != n as usize)
     {
@@ -394,6 +404,7 @@ pub(crate) fn apply(
             )?,
         ),
         (18, unrepaired.clone()),
+        (22, repaired.clone()),
         (
             21,
             gpu.upload(

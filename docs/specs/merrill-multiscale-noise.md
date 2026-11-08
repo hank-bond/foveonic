@@ -15,7 +15,11 @@ The filter should reduce broad green/magenta blotches and sensor-aligned color s
 
 ## Processing
 
-The optional filter must read the three native sensor layers jointly before camera color conversion. It must use their shared spatial structure and layer noise estimates at three scales. Image arithmetic must run on the GPU. Rust owns parameter preparation, fixed calibration data, and graph construction. Filtering preserves the native three-layer sum. Rendered luminance also depends on subsequent calibration and color conversion.
+The optional filter must read the three sensor layers jointly before camera color conversion. It must use their shared spatial structure and layer noise estimates at three physical scales. Image arithmetic must run on the GPU. Rust owns parameter preparation, fixed calibration data, and graph construction. Full and native DNG filtering preserve the original uncalibrated operation order and three-layer sum. Rendered luminance also depends on subsequent calibration and color conversion.
+
+Reduced photographs follow the [working-grid contract](./small-previews.md). Filter the calibrated area means after sensor reduction, with scale-aware neighborhoods and noise variance. Normalize through a local calibration basis and return only the converted correction, preserving the layer sum in that basis. Reuse shared calibration equations. Carry original clipping evidence on the same grid rather than requesting native images. Shield measurements and guarded rows keep their own native-coordinate contracts.
+
+Reduced auxiliary analysis follows the same filtering policy, including when the main photograph is Full. Adaptive Tone's fitted Full result may therefore vary within its accepted analysis tolerance. This does not change native layer filtering or the camera-response path.
 
 Shield correction must use the current photograph's shield measurements with shipped calibration coefficients. The calibration data describes a fixed fitted relationship between shield measurements and active-sensor offsets. It is not evidence that every Merrill body, ISO, exposure time, or sensor condition shares that relationship. Further calibration may replace these coefficients when independent validation supports it.
 

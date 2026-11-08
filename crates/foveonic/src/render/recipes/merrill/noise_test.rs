@@ -381,7 +381,7 @@ fn final_directional_banding(operation: &Operation) -> bool {
 
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
-fn multiscale_preview_order_and_export_preparation_share_native_inputs() {
+fn multiscale_uses_resized_layers_and_preserves_native_export_preparation() {
     let source = fixture();
     let engine = Engine::new().unwrap();
     let mut settings = settings();
@@ -431,15 +431,25 @@ fn multiscale_preview_order_and_export_preparation_share_native_inputs() {
             );
         }
 
-        settings.working_scale = Scale::new(2).unwrap();
-        let fast = photographic(&engine, &source, &settings);
-        let filter = position(&fast, |op| matches!(op, Operation::Multiscale(_)));
-        let reduction = position(&fast, |op| matches!(op, Operation::ReduceLayers { .. }));
-        assert!(
-            filter < reduction,
-            "Fast must filter the native sensor first"
-        );
-        assert_eq!(settings.merrill_noise_method, method);
+        for rendering in [Rendering::Color, Rendering::Monochrome] {
+            for divisor in [2, 4, 8, 64] {
+                let mut reduced = settings.clone();
+                reduced.working_scale = Scale::new(divisor).unwrap();
+                reduced.rendering = rendering;
+                let recipe = photographic(&engine, &source, &reduced);
+                let filter = position(&recipe, |op| matches!(op, Operation::Multiscale(_)));
+                let reduction =
+                    position(&recipe, |op| matches!(op, Operation::ReduceLayers { .. }));
+                assert!(reduction < filter, "filter must follow sensor reduction");
+                assert_eq!(recipe.graph.nodes[filter].inputs.len(), 1);
+                let Operation::Multiscale(p) = &recipe.graph.nodes[filter].operation else {
+                    unreachable!()
+                };
+                assert_eq!(p.grid().unwrap().scale, reduced.working_scale);
+                let input = &recipe.graph.outputs[recipe.graph.nodes[filter].inputs[0]];
+                assert_eq!(input.data, crate::graph::DataType::CalibratedLayers);
+            }
+        }
     }
 }
 

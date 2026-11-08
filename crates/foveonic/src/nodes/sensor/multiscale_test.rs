@@ -124,7 +124,7 @@ fn reference(
         scale,
         radius,
         strength,
-    } in STAGES
+    } in p.stages()
     {
         let scale = scale as usize;
         let mut coarse = Image {
@@ -198,7 +198,12 @@ fn reference(
 
 #[test]
 fn multiscale_shader_validates_without_a_device() {
-    let module = wgpu::naga::front::wgsl::parse_str(include_str!("multiscale.wgsl")).unwrap();
+    let module = wgpu::naga::front::wgsl::parse_str(concat!(
+        include_str!("calibration_common.wgsl"),
+        "\n",
+        include_str!("multiscale.wgsl")
+    ))
+    .unwrap();
     wgpu::naga::valid::Validator::new(
         wgpu::naga::valid::ValidationFlags::all(),
         wgpu::naga::valid::Capabilities::all(),
@@ -265,8 +270,10 @@ fn guided_three_scales_match_independent_equations_and_preserve_sensor_contracts
     let output = apply(
         &gpu,
         &source,
-        &original_buffer,
-        &black_buffer,
+        Evidence::Native {
+            original: &original_buffer,
+            black: &black_buffer,
+        },
         &prepared,
         &mut Profile::default(),
     )
@@ -306,8 +313,10 @@ fn guided_three_scales_match_independent_equations_and_preserve_sensor_contracts
     let output = apply(
         &gpu,
         &source,
-        &source,
-        &black_buffer,
+        Evidence::Native {
+            original: &source,
+            black: &black_buffer,
+        },
         &prepared,
         &mut Profile::default(),
     )
@@ -319,6 +328,148 @@ fn guided_three_scales_match_independent_equations_and_preserve_sensor_contracts
     {
         for c in 0..3 {
             assert!((actual[c] - expected[c]).abs() < 0.0001);
+        }
+    }
+}
+
+fn unit_calibration(extent: [u32; 2], gains: [f32; 3]) -> Arc<Calibration> {
+    Arc::new(Calibration {
+        params: super::super::calibration::CalibrationParams {
+            source: [extent[0], extent[1], 0, 0],
+            dark: [0; 4],
+            gains: [gains[0], gains[1], gains[2], 0.],
+            shading: [0.; 4],
+            shading_geometry: [0., 0., 1., 0.],
+            grids: [[0, 2, 2, 0], [4, 2, 2, 0], [8, 2, 2, 0]],
+        },
+        grid_values: vec![1.; 12],
+    })
+}
+
+#[test]
+fn working_grid_projects_noise_support_and_calibration_identity() {
+    let extent = [257, 193];
+    let base = Prepared::new(extent, [0, 0, 257, 193], [4.; 9], [1.; 3]).unwrap();
+    for d in [2, 4, 8, 16, 64, 256] {
+        let grid = WorkingGrid::new(extent, crate::render::Scale::new(d).unwrap(), 8).unwrap();
+        let p = base
+            .clone()
+            .on_grid(grid, unit_calibration(extent, [2., 3., 0.5]));
+        assert_eq!(p.extent(), grid.extent);
+        assert_eq!(p.params.noise[0][0], 4. / (d * d) as f32);
+        for (actual, native) in p.stages().into_iter().zip(STAGES) {
+            assert!(actual.scale >= 1 && actual.radius >= 1 && actual.radius <= 4);
+            assert_eq!(actual.scale, (native.scale / d).max(1));
+        }
+        let other = base
+            .clone()
+            .on_grid(grid, unit_calibration(extent, [2., 4., 0.5]));
+        assert!(p.key() != other.key());
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn calibrated_filter_matches_sensor_basis_and_preserves_original_clipping() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [257, 193];
+    let grid = WorkingGrid::new(extent, crate::render::Scale::new(2).unwrap(), 8).unwrap();
+    let gains = [2., 3., 0.5];
+    let p = Prepared::new(
+        extent,
+        [0, 0, 257, 193],
+        [16., 12., 9., 0.01, 0.02, 0.01, 0., 0., 0.],
+        [1.; 3],
+    )
+    .unwrap()
+    .on_grid(grid, unit_calibration(extent, gains));
+    let raw: Vec<[f32; 3]> = (0..grid.extent[0] * grid.extent[1])
+        .map(|i| {
+            let x = i % grid.extent[0];
+            let y = i / grid.extent[0];
+            let signal = 60. + x as f32 * 0.2 + y as f32 * 0.1;
+            let jitter = ((x * 17 + y * 29) % 19) as f32 - 9.;
+            [
+                signal + jitter,
+                signal - jitter * 0.6,
+                signal + jitter * 0.3,
+            ]
+        })
+        .collect();
+    let input: Vec<[f32; 3]> = raw
+        .iter()
+        .map(|v| std::array::from_fn(|c| v[c] * gains[c]))
+        .collect();
+    let mut flags = vec![0_u32; raw.len()];
+    flags[30 * grid.extent[0] as usize + 30] = 1;
+    let expected = reference(&raw, &raw, [0.; 3], &p);
+    let source = gpu.upload("Calibrated pooled input", &input).unwrap();
+    let clipping = gpu.upload("Pooled clipping evidence", &flags).unwrap();
+    let output = apply(
+        &gpu,
+        &source,
+        Evidence::Calibrated {
+            clipping: &clipping,
+        },
+        &p,
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let bytes = gpu.readback(&output).unwrap();
+    let actual = bytemuck::cast_slice::<u8, [f32; 3]>(&bytes);
+    let mut changed = 0;
+    for i in 0..actual.len() {
+        for c in 0..3 {
+            let want = if flags[i] != 0 {
+                input[i][c]
+            } else {
+                expected[i][c] * gains[c]
+            };
+            assert!(
+                (actual[i][c] - want).abs() < 0.04,
+                "pixel {i} channel {c}: {} != {want}",
+                actual[i][c]
+            );
+        }
+        changed += usize::from((actual[i][0] - input[i][0]).abs() > 0.01);
+    }
+    assert!(changed > 100, "must exercise filtering rather than bypass");
+    assert_eq!(
+        gpu.readback(&source).unwrap(),
+        bytemuck::cast_slice::<[f32; 3], u8>(&input)
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn calibrated_filter_handles_one_cell_and_replicated_padding() {
+    let gpu = Gpu::new().unwrap();
+    for d in [4, 8, 64, 512] {
+        let extent = [257, 193];
+        let grid = WorkingGrid::new(extent, crate::render::Scale::new(d).unwrap(), 8)
+            .unwrap()
+            .with_halo(8)
+            .unwrap();
+        let p = Prepared::new(extent, [0, 0, 257, 193], [1.; 9], [1.; 3])
+            .unwrap()
+            .on_grid(grid, unit_calibration(extent, [2., 3., 0.5]));
+        let input = vec![[120., 180., 30.]; (grid.extent[0] * grid.extent[1]) as usize];
+        let source = gpu.upload("Flat calibrated cells", &input).unwrap();
+        let flags = gpu
+            .upload("Unclipped cells", &vec![0_u32; input.len()])
+            .unwrap();
+        let output = apply(
+            &gpu,
+            &source,
+            Evidence::Calibrated { clipping: &flags },
+            &p,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        for value in bytemuck::cast_slice::<u8, [f32; 3]>(&gpu.readback(&output).unwrap()) {
+            for c in 0..3 {
+                assert!((value[c] - input[0][c]).abs() < 0.001);
+            }
         }
     }
 }

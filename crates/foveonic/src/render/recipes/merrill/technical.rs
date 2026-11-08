@@ -94,24 +94,33 @@ pub(super) fn build(
             && (names == ["final"] || names == ["linear.base"])
             && settings.working_scale.is_native(),
     );
-    let (recipe, highlights, calibration_gains, sensor_codes) = match native_layers::build(
-        engine,
-        source.metadata(),
-        settings,
-        native_params,
-        &policy,
-        names,
-        profile,
-        execution,
-    )? {
-        native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
-        native_layers::Output::Ready {
-            recipe,
-            highlights,
-            calibration_gains,
-            sensor_codes,
-        } => (recipe, highlights, calibration_gains, sensor_codes),
-    };
+    let (recipe, highlights, calibration_gains, sensor_codes, multiscale) =
+        match native_layers::build(
+            engine,
+            source.metadata(),
+            settings,
+            native_params,
+            &policy,
+            preview.as_ref().map(|grid| grid.grid),
+            names,
+            profile,
+            execution,
+        )? {
+            native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
+            native_layers::Output::Ready {
+                recipe,
+                highlights,
+                calibration_gains,
+                sensor_codes,
+                multiscale,
+            } => (
+                recipe,
+                highlights,
+                calibration_gains,
+                sensor_codes,
+                multiscale,
+            ),
+        };
     let mut graph = recipe.graph;
     let mut calibrated = recipe.final_id;
     let directional_banding_selected = policy.directional_banding;
@@ -131,6 +140,10 @@ pub(super) fn build(
     }
     if let Some(grid) = &preview {
         calibrated = grid.append(&mut graph, calibrated)?;
+    }
+    if let Some(filter) = multiscale {
+        calibrated = graph.add(Operation::Multiscale(filter), &[calibrated])?;
+        finish!();
     }
     if let Some(highlights) = highlights {
         calibrated = highlights.append(&mut graph, calibrated, preview.as_ref())?;

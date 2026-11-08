@@ -12,7 +12,7 @@ Keep existing recipes, typed graphs, execution and cache owners. Metadata remain
 
 The completed checkpoint uses area means, compact brightness guides, profile-sized Adaptive analysis, reduced bright-only speckle detection and original clipping evidence on the working grid. The investigation sections below are chronological. Their temporary alternatives are superseded by the later adoption sections and are not selectable application paths.
 
-Remaining work is native Multiscale/guarded-row filtering and the corresponding Classic/Quattro boundaries, followed by broader quality and latency acceptance. Calibration stays native for correctness. This checkpoint does not claim that the complete small-preview specification is implemented.
+Remaining work is native guarded-row filtering and the corresponding Classic/Quattro boundaries, followed by broader quality and latency acceptance. The Multiscale slice is complete and archived below. Calibration stays native for correctness. This checkpoint does not claim that the complete small-preview specification is implemented.
 
 - [x] Review recorder lifecycle, overflow metadata recovery and task-based work attribution before using traces.
 - [x] Map the current pre-pool stage chains and preserve a Full float baseline before numerical changes.
@@ -26,6 +26,10 @@ Remaining work is native Multiscale/guarded-row filtering and the corresponding 
 - [ ] Apply the same distinction to Quattro/Tiger mapped defects, phase calibration, neighborhood repairs and highlight recovery.
 - [ ] Verify all supported families and selected controls through the same scale contract. Record remaining native work explicitly.
 - [ ] Measure cached-source first preparation separately from retained edits and complete group delivery. Review photographic quality before release.
+
+## Completed Multiscale slice
+
+The owner accepted the review build and approved the checkpoint. The [completed slice](./archived/multiscale-working-grid.md) records signal units, explicit repair provenance, Full comparisons, Adaptive tolerance and timing evidence. Guarded-row estimation is the next Merrill stage.
 
 ## Findings
 

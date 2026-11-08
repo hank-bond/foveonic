@@ -8,7 +8,7 @@ use crate::{
 };
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CalibrationParams {
     pub source: [u32; 4],
     pub dark: [u32; 4],
@@ -18,6 +18,7 @@ pub struct CalibrationParams {
     pub grids: [[u32; 4]; 3],
 }
 
+#[derive(Clone, Debug)]
 pub struct Calibration {
     pub params: CalibrationParams,
     pub grid_values: Vec<f32>,

@@ -633,7 +633,7 @@ impl Operation {
             Self::ColumnGain(_) => "correct packed sensor columns",
             Self::BluePattern(_) => "correct directional blue patterns",
             Self::CalibratedDefects(_) => "repair calibrated sensor defects",
-            Self::Multiscale(_) => "filter native layer color at three scales",
+            Self::Multiscale(_) => "filter layer color at physical scales",
             Self::ShieldNoise(_) => "correct shield-predicted native color errors",
             Self::RowGuard(_) => "estimate guarded fine native row errors",
             Self::DirectionalBanding { stage, .. } => stage.label(),
@@ -811,7 +811,13 @@ impl Operation {
             ),
             Self::Source => (vec![], SensorLayers),
             Self::CalibratedDefects(_) => (vec![SensorLayers], SensorLayers),
-            Self::Multiscale(_) => (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers),
+            Self::Multiscale(p) => {
+                if p.grid().is_some() {
+                    (vec![CalibratedLayers], CalibratedLayers)
+                } else {
+                    (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers)
+                }
+            }
             Self::ShieldNoise(_) => (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers),
             Self::RowGuard(_) => (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers),
             Self::ColumnGain(p) => {
@@ -908,6 +914,7 @@ impl Operation {
                     CalibratedLayers,
                     SensorLayers,
                     BlackLevels,
+                    CalibratedLayers,
                     CalibratedLayers,
                 ],
                 CalibratedLayers,
