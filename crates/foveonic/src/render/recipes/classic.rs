@@ -348,7 +348,12 @@ fn compose(
                 response.evaluate_linear([code / f64::from(white); 3])[1]
             });
             Some(super::linear_edits::Adaptive::new(
-                settings, &recipe, space, white, curve, true,
+                settings,
+                &recipe,
+                space,
+                white,
+                curve,
+                crate::render::ControlCapabilities::from_metadata(metadata)?.thumb_scale(),
             )?)
         } else {
             None
@@ -360,11 +365,7 @@ fn compose(
             white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
             guide_white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
             scale: settings.working_scale.factor(),
-            analysis_grid: crate::render::AnalysisGrid::new(
-                settings.working_scale,
-                crate::render::Scale::NATIVE,
-                crate::render::Scale::NATIVE,
-            ),
+            haze_scale: settings.working_scale,
         };
         let context_white = context.white;
         super::linear_edits::build(

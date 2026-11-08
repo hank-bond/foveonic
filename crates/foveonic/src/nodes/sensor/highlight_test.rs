@@ -85,6 +85,7 @@ fn gpu_threshold_changes_only_brightness_blend_and_keeps_density_and_input() {
     let gpu = Gpu::new().unwrap();
     let count = 64 * 128;
     let mut prepared = Prepared {
+        grid: None,
         params: Params {
             source: [64, 128, count, count.div_ceil(256)],
             area: [8, 2, 48, 97],
@@ -325,6 +326,7 @@ fn gpu_highlight_restoration_matches_native_saturation_and_density() {
         .map(|c| (c[0] as u32) * 4 + (c[1] as u32) * 2 + c[2] as u32)
         .collect();
     let p = Prepared {
+        grid: None,
         params: Params {
             source: [w, h, w * h, (w * h).div_ceil(256)],
             area: values(&f["area"])
@@ -378,4 +380,144 @@ fn reduced_sensor_padding_keeps_highlight_halo_inside_the_original() {
     assert_eq!(prepared.params.area, [8, 2, 48, 125]);
     metadata.matrices.get_mut("ActiveImageArea").unwrap().values[3] = 128.;
     assert!(prepare(&metadata, None).is_err());
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn preview_original_clipping_survives_averaging() {
+    use crate::{
+        nodes::sensor::pool,
+        render::{Scale, WorkingGrid},
+    };
+    let gpu = Gpu::new().unwrap();
+    let extent = [64u32, 64u32];
+    let count = 64 * 64;
+    for divisor in [2, 4, 8, 16] {
+        let grid = WorkingGrid::new(extent, Scale::new(divisor).unwrap(), 8)
+            .unwrap()
+            .with_halo(4)
+            .unwrap();
+        let pooling = pool::Prepared::new(extent, divisor, pool::Signal::Rgb)
+            .unwrap()
+            .with_extent(grid.extent)
+            .unwrap()
+            .with_origin(grid.origin);
+        for saturated_cell in [false, true] {
+            let mut pixels = [5000f32, 5000., 4000.].repeat(count as usize);
+            let mut flags = vec![0u32; (grid.extent[0] * grid.extent[1]) as usize];
+            let first = 16u32;
+            let end = if saturated_cell {
+                first + divisor
+            } else {
+                first + 1
+            };
+            for y in first..end {
+                for x in first..end {
+                    let p = (y * 64 + x) as usize;
+                    pixels[3 * p + 2] = 12000.;
+                }
+            }
+            let source = gpu.upload("Calibrated source", &pixels).unwrap();
+
+            let input = pool::apply(&gpu, &source, &pooling, &mut Profile::default()).unwrap();
+            let cell = ((first / divisor + grid.origin[1]) * grid.extent[0]
+                + first / divisor
+                + grid.origin[0]) as usize;
+            flags[cell] = 1;
+            let before = gpu.readback(&input).unwrap();
+            let recovery = Prepared {
+                params: Params {
+                    source: [64, 64, count, count.div_ceil(256)],
+                    area: [2, 2, 61, 61],
+                    value: [20000., 0., 0., 0.],
+                },
+                flags: Some(flags.into()),
+                grid: Some(grid),
+            };
+            let actual = apply(
+                &gpu,
+                Some(&input),
+                &recovery,
+                false,
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .pixels
+            .unwrap();
+            let bytes = gpu.readback(&actual).unwrap();
+            let values: &[f32] = bytemuck::cast_slice(&bytes);
+            let p = ((16 / divisor + grid.origin[1]) * grid.extent[0]
+                + 16 / divisor
+                + grid.origin[0]) as usize;
+            assert!(
+                (values[3 * p + 2] - 4000.).abs() < 0.1,
+                "divisor {divisor}, whole cell {saturated_cell}: {}",
+                values[3 * p + 2]
+            );
+            assert_eq!(gpu.readback(&input).unwrap(), before);
+            assert_eq!(
+                gpu.readback(&source).unwrap(),
+                bytemuck::cast_slice::<f32, u8>(&pixels)
+            );
+            assert!(values.iter().all(|v| v.is_finite()));
+        }
+    }
+}
+
+#[test]
+fn original_clipping_projects_runs_points_partial_cells_and_halos() {
+    use crate::render::{Scale, WorkingGrid};
+    let mut m = threshold_metadata();
+    m.width = 63;
+    m.height = 127;
+    let count = m.width * m.height;
+    for c in ["R", "G", "B"] {
+        m.matrices.get_mut(&format!("SatMap{c}")).unwrap().values = vec![count as f64];
+    }
+    let points = [0usize, 3, 62, 65, 16 * 63 + 17, count - 1];
+    let mut runs = Vec::new();
+    let mut start = 0;
+    for p in points {
+        runs.extend([(p - start) as f64, 1.]);
+        start = p + 1;
+    }
+    runs.push((count - start) as f64);
+    m.matrices.get_mut("SatMapR").unwrap().values = runs;
+    m.matrices.remove("SatMapB");
+    m.matrices.insert(
+        "SatMapFullB".into(),
+        Matrix {
+            encoding: MatrixEncoding::Uint32,
+            representation: "fixture",
+            dimensions: vec![3],
+            values: vec![3., 64., (count - 1) as f64],
+        },
+    );
+    let native = saturation(&m).unwrap();
+    assert_eq!(native[3], 5);
+    for divisor in [2, 4, 8, 16, 64, 1 << 31] {
+        let grid = WorkingGrid::new([63, 127], Scale::new(divisor).unwrap(), 8)
+            .unwrap()
+            .with_halo(4)
+            .unwrap();
+        let actual = clipping(&m, Some(grid)).unwrap();
+        let mut expected = vec![0u32; actual.len()];
+        for (y, row) in native.chunks(m.width).enumerate() {
+            for (x, &flag) in row.iter().enumerate() {
+                let xx = x as u32 / divisor + grid.origin[0];
+                let yy = y as u32 / divisor + grid.origin[1];
+                expected[(yy * grid.extent[0] + xx) as usize] |= flag;
+            }
+        }
+        for y in 0..grid.extent[1] {
+            for x in 0..grid.extent[0] {
+                let xx = x.saturating_sub(grid.origin[0]).min(grid.logical[0] - 1) + grid.origin[0];
+                let yy = y.saturating_sub(grid.origin[1]).min(grid.logical[1] - 1) + grid.origin[1];
+                expected[(y * grid.extent[0] + x) as usize] =
+                    expected[(yy * grid.extent[0] + xx) as usize];
+            }
+        }
+        assert_eq!(actual, expected, "divisor {divisor}");
+        assert_eq!(actual.len(), (grid.extent[0] * grid.extent[1]) as usize);
+    }
 }

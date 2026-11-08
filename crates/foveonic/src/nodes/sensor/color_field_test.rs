@@ -109,6 +109,7 @@ fn gpu_color_field_matches_independent_cpu_recovery_equations() {
         let input = gpu.upload("identical normalized samples", &pixels).unwrap();
         let black = gpu.upload("zero black", &[0_f32; 3]).unwrap();
         let prepared = Prepared {
+            grid: None,
             params: Params {
                 size: [
                     width as u32,
@@ -119,7 +120,7 @@ fn gpu_color_field_matches_independent_cpu_recovery_equations() {
                 grid: [6, 4, 24, 8],
                 crop: [0, 0, width as u32, height as u32],
                 gain: [1.; 4],
-                white: [1.; 4],
+                white: [1., 1., 1., 0.],
                 neutral: [p[0] as f32, p[1] as f32, p[2] as f32, 0.],
                 luminance: [y[0] as f32, y[1] as f32, y[2] as f32, 0.],
                 metric: color_metric(p, matrix).unwrap(),
@@ -169,6 +170,7 @@ fn gpu_color_field_matches_independent_cpu_recovery_equations() {
         let output = apply(
             &gpu,
             Inputs {
+                clipping: None,
                 input: &input,
                 original: &input,
                 black: &black,
@@ -211,6 +213,7 @@ fn gpu_color_field_matches_independent_cpu_recovery_equations() {
         if scene == 1 {
             {
                 let mut experiment = Prepared {
+                    grid: None,
                     params: prepared.params,
                     repairs: prepared.repairs.clone(),
                 };
@@ -218,6 +221,7 @@ fn gpu_color_field_matches_independent_cpu_recovery_equations() {
                 let rendered = apply(
                     &gpu,
                     Inputs {
+                        clipping: None,
                         input: &input,
                         original: &input,
                         black: &black,
@@ -488,6 +492,7 @@ fn check_real_inputs(full: bool) {
         let output = apply(
             &gpu,
             Inputs {
+                clipping: None,
                 input: &input,
                 original: &raw,
                 black: &blacks,
@@ -550,6 +555,7 @@ fn gpu_color_field_reports_cancellation_and_invalid_preconditioners() {
     let gpu = Gpu::new().unwrap();
     let input = gpu.upload("cancelled input", &[1_f32; 3]).unwrap();
     let prepared = Prepared {
+        grid: None,
         params: Params::zeroed(),
         repairs: Vec::new(),
     };
@@ -562,6 +568,7 @@ fn gpu_color_field_reports_cancellation_and_invalid_preconditioners() {
     assert!(apply(
         &gpu,
         Inputs {
+            clipping: None,
             input: &input,
             original: &input,
             black: &input,
@@ -1056,7 +1063,7 @@ fn gpu_color_field_cutoff_changes_only_mixed_data_weights_not_original_neutral_w
             grid: [2, 1, 2, 8],
             crop: [0, 0, 16, 8],
             gain: [1.; 4],
-            white: [1.; 4],
+            white: [1., 1., 1., 0.],
             neutral: [0.284206, 0.604436, 1., cutoff],
             luminance: [-2.6575486, 3.3135306, -0.2476, 0.],
             metric: [1., 1., 0., 0.],
@@ -1085,6 +1092,10 @@ fn gpu_color_field_cutoff_changes_only_mixed_data_weights_not_original_neutral_w
             (20, gpu.uniform(&[2_u32, 2, 0, 0])),
         ];
         let mut trace = gpu.trace(false, 8);
+        resources.push((
+            21,
+            gpu.upload("Original clipping disabled", &[0u32]).unwrap(),
+        ));
         dispatch(&gpu, Kernel::FieldPrepare, &mut resources, 128, &mut trace);
         dispatch(&gpu, Kernel::FieldGrid, &mut resources, 2, &mut trace);
         gpu.field_batch(
@@ -1158,12 +1169,13 @@ fn gpu_color_field_cutoff_preserves_healthy_samples_brightness_and_consistent_re
         let mut baseline = Vec::<f32>::new();
         for amount in [0., 0.02, 0.01, 0.005] {
             let prepared = Prepared {
+                grid: None,
                 params: Params {
                     size: [width, height, width * height, 0],
                     grid: [5, 2, 10, 8],
                     crop: [0, 0, width, height],
                     gain: [1.; 4],
-                    white: [1.; 4],
+                    white: [1., 1., 1., 0.],
                     neutral: [
                         neutral[0] as f32,
                         neutral[1] as f32,
@@ -1185,6 +1197,7 @@ fn gpu_color_field_cutoff_preserves_healthy_samples_brightness_and_consistent_re
             let output = apply(
                 &gpu,
                 Inputs {
+                    clipping: None,
                     input: &input,
                     original: &input,
                     black: &black,
@@ -1312,4 +1325,31 @@ fn color_field_defaults_and_bounds() {
         .validate()
         .is_err());
     }
+}
+
+#[test]
+fn working_grid_maps_repair_sites_and_retains_complete_donor_cells() {
+    use crate::render::{Scale, WorkingGrid};
+    let mut params: Params = bytemuck::Zeroable::zeroed();
+    params.size = [65, 49, 65 * 49, 4];
+    params.crop = [0, 0, 65, 49];
+    params.grid = [9, 7, 63, 8];
+    let native = Prepared {
+        grid: None,
+        params,
+        repairs: vec![0, 1, 64, 65 * 48 + 64],
+    };
+    let grid = WorkingGrid::new([65, 49], Scale::new(8).unwrap(), 8)
+        .unwrap()
+        .with_halo(16)
+        .unwrap();
+    let reduced = native.on_grid(Some(grid));
+    assert_eq!(reduced.params.crop, [16, 16, 25, 23]);
+    assert_eq!(reduced.params.grid, [2, 1, 2, 8]);
+    assert_eq!(reduced.params.options[3], 1);
+    assert_eq!(
+        reduced.repairs,
+        vec![16 * 48 + 16, 16 * 48 + 24, 22 * 48 + 24]
+    );
+    assert_eq!(reduced.params.size, [48, 40, 48 * 40, 3]);
 }

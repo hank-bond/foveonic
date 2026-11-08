@@ -563,7 +563,7 @@ fn monochrome_chroma_keeps_only_doubled_small_support() {
         .values[0] = 101.;
     for level in 0..32 {
         let scale = crate::render::Scale::new(1 << level).unwrap();
-        let std = f64::from(crate::nodes::color::pyramid_resample::independent_noise_std(scale));
+        let std = f64::from(crate::nodes::sensor::pool::independent_noise_std(scale));
         let mono = prepare_chroma(&metadata, [1.; 3], true, scale).unwrap();
         let expected =
             chroma::Prepared::new([32, 32], [16. * std; 3], [0.8; 3], 0, 3, Support::Binomial3)

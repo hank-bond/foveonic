@@ -22,14 +22,14 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[camera_repair.rs](./camera_repair.rs)** Prepares ordered camera pixel repairs and dependency-safe batches of cluster searches.
 - **[chroma_clusters.rs](./chroma_clusters.rs)** Repairs ordered RGB clusters by matching nearby valid three-by-three templates.
 - **[chroma_repair.rs](./chroma_repair.rs)** Repairs ordered RGB defect records with directional and masked-neighborhood passes.
-- **[color_field.rs](./color_field.rs)** Owns original evidence, GPU brightness/color solves, and native highlight application.
+- **[color_field.rs](./color_field.rs)** Owns original evidence and working-grid GPU brightness/color recovery.
 - **[column_gain.rs](./column_gain.rs)** Applies per-column affine gains while preserving triplet or six-channel sensor storage.
 - **[despeckle.rs](./despeckle.rs)** Prepares camera-based thresholds and bounded dependency rounds for GPU speckle repair.
 - **[dynamic_range.rs](./dynamic_range.rs)** Reconstructs near-saturated channels from GPU cell colors and ordered global color-ratio fits.
 - **[estimated_iso.rs](./estimated_iso.rs)** Estimates processing ISO from camera histograms and reference metadata.
 - **[fixed_point.rs](./fixed_point.rs)** Executes signed fixed-point layer correction and nonlinear matrix transforms with explicit numerical contracts.
 - **[fppd.rs](./fppd.rs)** Corrects sparse RGB gains and paired mono defects with explicit numerical grids.
-- **[highlight.rs](./highlight.rs)** Keeps original clipping flags so GPU highlight recovery can use trustworthy neighboring samples.
+- **[highlight.rs](./highlight.rs)** Projects original camera clipping evidence and recovers highlights on the working grid.
 - **[highlight_restoration.rs](./highlight_restoration.rs)** Reconstructs saturated RGB through directional interpolation and inverse-camera neutralization.
 - **[hlp_calibration.rs](./hlp_calibration.rs)** Applies sparse blue correction and ordered shading while retaining pre-color scratch samples.
 - **[luma_cluster.rs](./luma_cluster.rs)** Repairs ordered mono clusters with parallel candidate scoring and stable source-order ties.

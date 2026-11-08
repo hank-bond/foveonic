@@ -13,6 +13,7 @@ use perfetto_sdk::{
         data_source_config::DataSourceConfig,
         trace_config::{
             BufferConfigFillPolicy, TraceConfig, TraceConfigBufferConfig, TraceConfigDataSource,
+            TraceConfigIncrementalStateConfig,
         },
         track_event::track_event_config::TrackEventConfig,
     },
@@ -168,6 +169,11 @@ fn start(config: CaptureConfig) -> Result<TracingSession> {
             trace.set_buffers(|buffer: &mut TraceConfigBufferConfig| {
                 buffer.set_size_kb(config.buffer_kib);
                 buffer.set_fill_policy(BufferConfigFillPolicy::RingBuffer);
+            });
+            // Re-emit descriptors so the recent tail remains readable after the
+            // ring overwrites earlier string and thread metadata.
+            trace.set_incremental_state_config(|state: &mut TraceConfigIncrementalStateConfig| {
+                state.set_clear_period_ms(1000);
             });
             trace.set_data_sources(|source: &mut TraceConfigDataSource| {
                 source.set_config(|source: &mut DataSourceConfig| {

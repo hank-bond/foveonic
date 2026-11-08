@@ -257,6 +257,7 @@ pub(crate) fn training_profiles(
     let params = Params::new(extent, regions, true)?;
     let mut trace = gpu.trace(false, 4);
     let measured = measure(gpu, original, &params, &mut trace)?;
+    gpu.finish_capture_trace(&trace)?;
     let bytes = gpu.readback(&measured.profiles)?;
     let values: Vec<_> = bytes
         .as_chunks::<4>()

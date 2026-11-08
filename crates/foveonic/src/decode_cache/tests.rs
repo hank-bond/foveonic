@@ -5,6 +5,54 @@ use super::*;
 use std::time::{Duration, UNIX_EPOCH};
 
 #[test]
+fn speculative_executor_never_waits_for_foreground_on_its_own_thread() {
+    let fixture = Fixture::new();
+    let cache = Cache::at(fixture.root.join("speculation"));
+    let foreground = cache.foreground();
+    assert!(cache.speculate(|_| panic!("foreground must win")).is_none());
+    drop(foreground);
+    assert_eq!(
+        cache.speculate(|cancel| {
+            assert!(!cancel());
+            let foreground = cache.foreground();
+            assert!(cancel());
+            drop(foreground);
+            assert!(
+                cancel(),
+                "completed foreground work still interrupts the attempt"
+            );
+            7
+        }),
+        Some(7)
+    );
+    assert_eq!(cache.speculate(|cancel| !cancel()), Some(true));
+}
+
+#[test]
+fn preparation_snapshot_uses_only_verified_local_neighborhood_entries() {
+    let fixture = Fixture::new();
+    let (cache, _foreground, identity) = fixture.ready_cache();
+    {
+        let mut state = cache.control.lock().unwrap();
+        state.nearby = vec![fixture.source.clone(), fixture.root.join("not-ready.x3f")];
+    }
+    fs::remove_file(&fixture.source).unwrap();
+    let (generation, paths) = cache.preparation_window();
+    assert_eq!(paths, vec![fixture.source.clone()]);
+    assert!(cache.preparation_is_current(generation));
+    assert_eq!(
+        cache.source_origin(&fixture.source),
+        Some(SourceOrigin::File(identity))
+    );
+    cache.configure(Settings {
+        enabled: false,
+        ..Default::default()
+    });
+    assert!(!cache.preparation_is_current(generation));
+    assert!(cache.preparation_window().1.is_empty());
+}
+
+#[test]
 fn diagnostic_namespace_is_confined_to_temporary_cache_storage() {
     let root = PathBuf::from("temporary-cache");
     assert_eq!(diagnostic_root(root.clone(), None).unwrap(), root);

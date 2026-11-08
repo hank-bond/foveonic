@@ -11,16 +11,16 @@ use crate::{
         tone_equalizer,
     },
     profile::Profile,
-    render::{AnalysisGrid, Engine, Rendering, Scale, Settings},
+    render::{Engine, Rendering, Scale, Settings},
     source::Result,
 };
 
-/// Numerical response and analysis-grid choice supplied by the camera adapter.
+/// Camera response and the shared profile-dependent analysis scale.
 #[derive(Clone)]
 pub(super) struct Adaptive {
     pub params: crate::nodes::finish::adaptive_tone::Params,
     pub curve: crate::recipe::Shared<f32>,
-    pub full_analysis: bool,
+    pub analysis_scale: Scale,
 }
 impl Adaptive {
     pub(super) fn new(
@@ -29,7 +29,7 @@ impl Adaptive {
         space: ColorSpace,
         white: f32,
         curve: impl Into<crate::recipe::Shared<f32>>,
-        full_analysis: bool,
+        thumb_scale: Scale,
     ) -> Result<Self> {
         let curve = curve.into();
         Ok(Self {
@@ -44,9 +44,20 @@ impl Adaptive {
             )?
             .with_exposure(settings.exposure)?,
             curve,
-            full_analysis,
+            analysis_scale: adaptive_analysis_scale(settings, thumb_scale)?,
         })
     }
+}
+
+/// Profiles select a target grid. Preparation never requests finer data than
+/// the main working grid, including explicit scales coarser than Thumb.
+fn adaptive_analysis_scale(settings: &Settings, thumb_scale: Scale) -> Result<Scale> {
+    let divisor = if settings.photographic.base_response == crate::render::BaseResponse::Strong {
+        (thumb_scale.divisor() / 2).max(1)
+    } else {
+        thumb_scale.divisor()
+    };
+    Ok(settings.working_scale.coarsest(Scale::new(divisor)?))
 }
 
 /// Camera recipes supply code units and geometry. Numerical nodes do not identify cameras.
@@ -61,7 +72,7 @@ pub(super) struct Context {
     pub guide_white: f32,
     /// Working pixels per native pixel, independent of viewport crop size.
     pub scale: f32,
-    pub analysis_grid: AnalysisGrid,
+    pub haze_scale: Scale,
 }
 
 /// Camera responses use a 16-bit code lattice. Evaluate metadata curves only.
@@ -170,7 +181,7 @@ pub(super) fn build(
         white,
         guide_white,
         scale,
-        analysis_grid,
+        haze_scale,
     } = context;
     let extent = recipe.rgb_extent;
     white_balance(recipe, settings, space)?;
@@ -194,16 +205,7 @@ pub(super) fn build(
         let input = recipe.final_id;
         recipe.graph.retain_for_session(input);
         let analysis = haze_analysis(
-            engine,
-            source,
-            settings,
-            recipe,
-            space,
-            white,
-            basis,
-            analysis_grid.source_scale,
-            profile,
-            execution,
+            engine, source, settings, recipe, space, white, basis, haze_scale, profile, execution,
         )?;
         recipe.graph.retain_for_session(analysis);
         recipe.graph.prioritize_for_session(analysis);
@@ -235,62 +237,62 @@ pub(super) fn build(
     if let Some(Adaptive {
         params,
         curve,
-        full_analysis,
+        analysis_scale,
     }) = adaptive
     {
         let params = params.with_geometry(extent, recipe.rgb_bounds, scale)?;
         let input = recipe.final_id;
         recipe.graph.retain_for_session(input);
-        let mask = recipe.graph.add(
-            Operation::AdaptiveToneGuide {
-                guide: tone_equalizer::Guide::new(
-                    extent,
-                    tone_equalizer::radius_for_scale(scale),
-                    space,
-                )?
-                .with_white(white),
-                space,
-            },
-            &[input],
-        )?;
+        let guide =
+            tone_equalizer::Guide::new(extent, tone_equalizer::radius_for_scale(scale), space)?
+                .with_white(white);
+        let mask = recipe
+            .graph
+            .add(Operation::AdaptiveToneGuide { guide, space }, &[input])?;
+        mask_inspection(&mut recipe.graph, mask, guide, "base-response.mask", names)?;
         recipe.graph.retain_for_session(mask);
-        let (analysis_rgb, analysis_mask, analysis) = if full_analysis
-            || (analysis_grid.source_scale == settings.working_scale
-                && analysis_grid.result_scale == settings.working_scale
-                && settings.preview_region.is_none())
-        {
-            let rgb = recipe.graph.add(
-                Operation::ImageAlias {
-                    dehaze_basis: None,
-                    data: DataType::LinearRgb(space),
-                    output: "base-response.analysis",
-                },
-                &[input],
-            )?;
-            let mask = recipe.graph.add(
-                Operation::ImageAlias {
-                    dehaze_basis: None,
-                    data: DataType::ScalarField,
-                    output: "base-response.analysis-mask",
-                },
-                &[mask],
-            )?;
-            (rgb, mask, params)
-        } else {
-            adaptive_analysis(
-                engine,
-                source,
-                settings,
-                recipe,
-                space,
-                white,
-                dehaze_basis,
-                params,
-                analysis_grid,
-                profile,
-                execution,
-            )?
-        };
+        let (analysis_rgb, analysis_mask, analysis) =
+            if analysis_scale == settings.working_scale && settings.preview_region.is_none() {
+                let rgb = recipe.graph.add(
+                    Operation::ImageAlias {
+                        dehaze_basis: None,
+                        data: DataType::LinearRgb(space),
+                        output: "base-response.analysis",
+                    },
+                    &[input],
+                )?;
+                let mask = recipe.graph.add(
+                    Operation::ImageAlias {
+                        dehaze_basis: None,
+                        data: DataType::BrightnessGuide,
+                        output: "base-response.analysis-guide",
+                    },
+                    &[mask],
+                )?;
+                mask_inspection(
+                    &mut recipe.graph,
+                    mask,
+                    guide,
+                    "base-response.analysis-mask",
+                    names,
+                )?;
+                (rgb, mask, params)
+            } else {
+                adaptive_analysis(
+                    engine,
+                    source,
+                    settings,
+                    recipe,
+                    space,
+                    white,
+                    dehaze_basis,
+                    params,
+                    analysis_scale,
+                    names,
+                    profile,
+                    execution,
+                )?
+            };
         recipe.final_id = recipe.graph.add(
             Operation::AdaptiveTone {
                 params,
@@ -432,6 +434,7 @@ pub(super) fn build(
             .graph
             .add(Operation::ToneMask { guide, space }, &[input])?;
         recipe.graph.retain_for_session(mask);
+        mask_inspection(&mut recipe.graph, mask, guide, "tonal-ranges.mask", names)?;
         if requested(&recipe.graph, names) {
             return Ok(());
         }
@@ -530,6 +533,30 @@ pub(super) fn build(
     alias(recipe, space, "linear.edits")
 }
 
+/// Shared camera RGB preparation for whole-photo analysis consumers. The caller
+/// owns its processing choices. This boundary owns only scale and presentation.
+fn whole_photo_rgb(
+    engine: &Engine,
+    source: super::RecipeInput<'_>,
+    mut settings: Settings,
+    scale: Scale,
+    profile: &mut Profile,
+    execution: &mut Execution<'_>,
+) -> Result<(Settings, BuiltRecipe)> {
+    settings.working_scale = scale;
+    settings.preview_region = None;
+    settings.output_size = None;
+    let recipe = super::build_camera(
+        engine,
+        source,
+        &settings,
+        &["linear.base"],
+        profile,
+        execution,
+    )?;
+    Ok((settings, recipe))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn adaptive_analysis(
     engine: &Engine,
@@ -540,29 +567,21 @@ fn adaptive_analysis(
     white: f32,
     dehaze_basis: Option<crate::nodes::finish::dehaze::Basis>,
     params: crate::nodes::finish::adaptive_tone::Params,
-    grid: AnalysisGrid,
+    analysis_scale: Scale,
+    names: &[&str],
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<(usize, usize, crate::nodes::finish::adaptive_tone::Params)> {
     let mut overview = settings.clone();
     overview.photographic.base_response = Default::default();
-    overview.working_scale = grid.source_scale;
-    overview.preview_region = None;
-    overview.output_size = None;
     overview.dehaze_estimate = false;
     let output = if settings.dehaze_active() {
         "dehaze.rgb"
     } else {
         "linear.edits-input"
     };
-    let mut branch = super::build_camera(
-        engine,
-        source,
-        &overview,
-        &["linear.base"],
-        profile,
-        execution,
-    )?;
+    let (overview, mut branch) =
+        whole_photo_rgb(engine, source, overview, analysis_scale, profile, execution)?;
     build(
         engine,
         source,
@@ -575,57 +594,45 @@ fn adaptive_analysis(
             space,
             white,
             guide_white: white,
-            scale: grid.source_scale.factor(),
-            analysis_grid: grid,
+            scale: analysis_scale.factor(),
+            haze_scale: analysis_scale,
         },
         |_| Err("tone pivot is not required for analysis preparation".into()),
         profile,
         execution,
     )?;
 
-    let mut bounds = branch.rgb_bounds;
-    let mut divisor = grid.source_scale.divisor();
-    while divisor < grid.result_scale.divisor() {
-        let extent = branch.rgb_extent;
-        branch.final_id = branch.graph.add_scoped(
-            Operation::AdaptiveToneOverview {
-                source: extent,
-                space,
-            },
-            &[branch.final_id],
-            &format!("analysis-overview/{divisor}"),
-        )?;
-        branch.rgb_extent = extent.map(|v| v.div_ceil(2));
-        bounds = Scale::new(2)?.bounds(bounds);
-        branch.params.output[..2]
-            .iter_mut()
-            .for_each(|v| *v = v.div_ceil(2));
-        divisor *= 2;
-    }
-    branch.rgb_bounds = bounds;
     alias(&mut branch, space, "base-response.analysis")?;
     let rgb = branch.final_id;
-    let mask = branch.graph.add(
-        Operation::AdaptiveToneGuide {
-            guide: tone_equalizer::Guide::new(
-                branch.rgb_extent,
-                tone_equalizer::radius_for_scale(grid.result_scale.factor()),
-                space,
-            )?
-            .with_white(white),
-            space,
-        },
-        &[rgb],
-    )?;
+    let guide = tone_equalizer::Guide::new(
+        branch.rgb_extent,
+        tone_equalizer::radius_for_scale(analysis_scale.factor()),
+        space,
+    )?
+    .with_white(white);
+    let mask = branch
+        .graph
+        .add(Operation::AdaptiveToneGuide { guide, space }, &[rgb])?;
     let mask = branch.graph.add(
         Operation::ImageAlias {
             dehaze_basis: None,
-            data: DataType::ScalarField,
-            output: "base-response.analysis-mask",
+            data: DataType::BrightnessGuide,
+            output: "base-response.analysis-guide",
         },
         &[mask],
     )?;
-    let analysis = params.with_geometry(branch.rgb_extent, bounds, grid.result_scale.factor())?;
+    mask_inspection(
+        &mut branch.graph,
+        mask,
+        guide,
+        "base-response.analysis-mask",
+        names,
+    )?;
+    let analysis = params.with_geometry(
+        branch.rgb_extent,
+        branch.rgb_bounds,
+        analysis_scale.factor(),
+    )?;
     let mapping = recipe.graph.append(branch.graph, "base-response-analysis");
     for id in [mapping[rgb], mapping[mask]] {
         recipe.graph.retain_for_session(id);
@@ -650,21 +657,12 @@ fn haze_analysis(
     let mut overview = settings.clone();
     overview.dehaze = Default::default();
     overview.photographic.base_response = Default::default();
-    overview.working_scale = analysis_scale;
-    overview.preview_region = None;
-    overview.output_size = None;
     let mut branch =
         if analysis_scale != settings.working_scale || settings.preview_region.is_some() {
             // The adapter supplies analysis sampling in physical sensor units.
             // Stop before shared edits so estimating the color never feeds back into itself.
-            let mut branch = super::build_camera(
-                engine,
-                source,
-                &overview,
-                &["linear.base"],
-                profile,
-                execution,
-            )?;
+            let (_, mut branch) =
+                whole_photo_rgb(engine, source, overview, analysis_scale, profile, execution)?;
             white_balance(&mut branch, settings, space)?;
             Some(branch)
         } else {
@@ -885,6 +883,20 @@ pub(super) fn bake(
         )?
     };
     execution.check()
+}
+
+/// Expanded masks belong to inspection, while processing retains the compact guide.
+fn mask_inspection(
+    graph: &mut Graph,
+    input: usize,
+    guide: tone_equalizer::Guide,
+    output: &'static str,
+    names: &[&str],
+) -> Result<()> {
+    if names.contains(&output) {
+        graph.add(Operation::ExpandBrightnessGuide { guide, output }, &[input])?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ use super::super::BuiltRecipe;
 use crate::{
     color_space::ColorSpace,
     graph::{Graph, Operation},
-    nodes::{color::pyramid_resample, sensor::calibration::EncodeParams},
+    nodes::sensor::{calibration::EncodeParams, pool},
     render::{Scale, WorkingGrid},
     source::Result,
 };
@@ -43,30 +43,20 @@ impl Grid {
     }
 
     pub fn append(&self, graph: &mut Graph, mut input: usize) -> Result<usize> {
-        let mut extent = [self.native.source[0], self.native.source[1]];
         let scope = graph.outputs[input].cache_name();
-        for level in 0..self.divisor.ilog2() {
-            let output = if level + 1 == self.divisor.ilog2() {
-                self.grid.extent
-            } else {
-                extent.map(|v| v.div_ceil(2))
-            };
-            let origin = if level + 1 == self.divisor.ilog2() {
-                self.grid.origin
-            } else {
-                [0; 2]
-            };
-            let prepared = pyramid_resample::Prepared::half_to(extent, output)?
-                .with_signed_codes()
-                .with_origin(origin)
-                .with_working_scale(Scale::new(1_u32 << (level + 1))?);
-            extent = prepared.output_extent();
-            input = graph.add_scoped(
-                Operation::ReduceLayers(prepared),
-                &[input],
-                &format!("sensor-grid/{scope}/{}", 1_u32 << (level + 1)),
-            )?;
-        }
+        let prepared = pool::Prepared::new(self.grid.native, self.divisor, pool::Signal::Rgb)?
+            .with_signed_codes()
+            .with_extent(self.grid.extent)?
+            .with_origin(self.grid.origin)
+            .with_working_scale(self.grid.scale);
+        input = graph.add_scoped(
+            Operation::ReduceLayers {
+                prepared,
+                data: crate::graph::DataType::CalibratedLayers,
+            },
+            &[input],
+            &format!("sensor-grid/{scope}/{}", self.divisor),
+        )?;
         graph.retain_for_seal(input);
         Ok(input)
     }

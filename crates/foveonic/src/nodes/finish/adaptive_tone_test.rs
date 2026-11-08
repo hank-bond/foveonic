@@ -14,6 +14,90 @@ use crate::{
 use std::sync::Arc;
 
 #[test]
+#[ignore = "requires GPU"]
+fn reduced_analysis_keeps_structure_in_histogram_and_regional_samples() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [64, 64];
+    let values: Vec<f32> = (0..64)
+        .flat_map(|_| (0..64).flat_map(|x| [4095. * (-13. + x as f32 / 16.).exp2(); 3]))
+        .collect();
+    let input = gpu.upload("Working log-light ramp", &values).unwrap();
+    let mask = gpu
+        .upload("Fixed brightness guide", &vec![0.5_f32; 32 * 32])
+        .unwrap();
+    let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
+    for divisor in [1, 2, 4, 8, 16, 64] {
+        let params = Params::new(
+            extent,
+            [0, 0, 64, 64],
+            4095.,
+            ColorSpace::Srgb,
+            BaseResponse::Natural,
+            Tuning::default(),
+            &curve,
+        )
+        .unwrap()
+        .with_geometry(
+            extent,
+            [0, 0, 64, 64],
+            crate::render::Scale::new(divisor).unwrap().factor(),
+        )
+        .unwrap();
+        let context = gpu.uniform(&params);
+        let mut histogram = gpu
+            .upload("Empty adaptive histogram", &vec![0_u32; 8192])
+            .unwrap();
+        let mut samples = gpu
+            .storage("Regional structure samples", 256 * 256 * 16)
+            .unwrap();
+        let mut trace = gpu.trace(false, 2);
+        gpu.dispatch(
+            Kernel::AdaptiveToneHistogram,
+            &mut [
+                (0, Read(&input)),
+                (1, Read(&mask)),
+                (3, Read(&context)),
+                (4, Write(histogram.write())),
+            ],
+            [32, 32],
+            &mut trace,
+        );
+        gpu.dispatch(
+            Kernel::AdaptiveToneSampleRegions,
+            &mut [
+                (0, Read(&input)),
+                (1, Read(&mask)),
+                (3, Read(&context)),
+                (8, Write(samples.write())),
+            ],
+            [32, 32],
+            &mut trace,
+        );
+        let bytes = gpu.readback(&histogram).unwrap();
+        let counts: &[u32] = bytemuck::cast_slice(&bytes);
+        assert_eq!(counts[..4096].iter().sum::<u32>(), 256 * 256);
+        let structure = counts[4096..].iter().map(|v| u64::from(*v)).sum::<u64>();
+        let bytes = gpu.readback(&samples).unwrap();
+        let samples: &[[f32; 4]] = bytemuck::cast_slice(&bytes);
+        let regional = samples
+            .iter()
+            .map(|sample| f64::from(sample[3]))
+            .sum::<f64>();
+        eprintln!(
+            "divisor {divisor}: histogram structure {structure}, regional structure {regional}"
+        );
+        assert!(
+            structure > 0,
+            "histogram lost the ramp at divisor {divisor}"
+        );
+        assert!(
+            regional > 0.,
+            "regional samples lost the ramp at divisor {divisor}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires GPU, FOVEONIC_TONAL_SOURCE and FOVEONIC_TONAL_OUTPUT for an isolated limit sweep"]
 fn photographic_shadow_limit_sweep() {
     use std::path::PathBuf;
@@ -202,13 +286,8 @@ fn regional_app_response_bakes_exports_and_preserves_reference() {
         settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
         for response in [BaseResponse::Natural, BaseResponse::Strong] {
             settings.photographic.base_response = response;
-            assert_eq!(
-                settings.working_scale_available(
-                    &source.metadata,
-                    crate::render::Scale::new(2).unwrap()
-                ),
-                rendering == Rendering::Color
-            );
+            assert!(settings
+                .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap()));
             assert!(!settings.regional_preview_available(&source.metadata));
             let mut images = engine
                 .render_artifacts(
@@ -257,6 +336,9 @@ fn adaptive_sessions_reuse_guide_and_invalidate_limits_without_touching_camera()
         .unwrap();
     settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
     settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    // Keep the positive reuse check below the checkpoint cache capacity. Full
+    // admission pressure is a separate cache-policy case, not invalidation.
+    settings.working_scale = crate::render::Scale::new(2).unwrap();
     settings.output_size = Some([320, 480]);
     settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
     let engine = Engine::new().unwrap();
@@ -343,7 +425,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
     let input = gpu.upload("signed adaptive fixture", &values).unwrap();
     let before = gpu.readback(&input).unwrap();
     let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
-    let guide = tone_equalizer::mask(
+    let guide = tone_equalizer::build_guide(
         &gpu,
         &input,
         tone_equalizer::Guide::new(extent, 24, ColorSpace::Srgb).unwrap(),
@@ -432,7 +514,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
         )
         .unwrap();
     let original = gpu.readback(&uniform).unwrap();
-    let guide = tone_equalizer::mask(
+    let guide = tone_equalizer::build_guide(
         &gpu,
         &uniform,
         tone_equalizer::Guide::new(extent, 24, ColorSpace::Srgb).unwrap(),
@@ -494,7 +576,7 @@ fn blacks_rescue_only_structured_near_black_without_flattening_or_touching_visib
     let input = gpu.upload("toe protection fixture", &values).unwrap();
     let before = gpu.readback(&input).unwrap();
     let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
-    let mask = tone_equalizer::mask(
+    let mask = tone_equalizer::build_guide(
         &gpu,
         &input,
         tone_equalizer::Guide::new(extent, 24, ColorSpace::Srgb).unwrap(),

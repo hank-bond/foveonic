@@ -16,12 +16,26 @@ fn encoding(rotation: u32) -> EncodeParams {
 }
 
 #[test]
+fn recovery_and_speckle_share_one_sensor_reduction_per_grid() {
+    let mut graph = Graph::default();
+    let source = graph.add(Operation::Source, &[]).unwrap();
+    let draft = Grid::new(encoding(0), None, Scale::new(4).unwrap()).unwrap();
+    let thumb = Grid::new(encoding(0), None, Scale::new(8).unwrap()).unwrap();
+    let pooled = draft.append(&mut graph, source).unwrap();
+    assert_eq!(draft.append(&mut graph, source).unwrap(), pooled);
+    assert_eq!(graph.nodes.len(), 2);
+    let smaller = thumb.append(&mut graph, source).unwrap();
+    assert_ne!(smaller, pooled);
+    assert_eq!(graph.sealed_outputs, [pooled, smaller]);
+}
+
+#[test]
 fn half_grid_preserves_crop_orientation_and_explicit_output_size() {
     for rotation in [0, 90, 180, 270] {
         let native = encoding(rotation);
         let grid = Grid::new(native, None, crate::render::Scale::new(2).unwrap()).unwrap();
         assert_eq!(grid.grid.logical, [2464, 1632]);
-        assert_eq!(grid.reductions[0].output_extent(), grid.grid.extent);
+        assert_eq!(grid.reduction.output_extent(), grid.grid.extent);
         assert_eq!(
             grid.encode.source,
             [grid.grid.extent[0], grid.grid.extent[1], rotation, 0]
@@ -61,7 +75,7 @@ fn arbitrary_sensor_scales_cover_edges_and_align_every_reconstruction_ratio() {
         assert_eq!(grid.grid.logical, scale.extent([4927, 3264]));
         assert!(grid.grid.extent.into_iter().all(|v| v.is_multiple_of(8)));
         assert_eq!(grid.encode.output[..2], scale.extent([4704, 3136]));
-        assert_eq!(grid.reductions.last().unwrap().working_scale(), Some(scale));
+        assert_eq!(grid.reduction.working_scale(), Some(scale));
         for reduction in [0.375, 0.5, 0.625, 0.75, 0.875, 1.] {
             let mut params = crate::noise::Parameters::zeroed();
             params.source = [grid.grid.native[0], grid.grid.native[1], 4, 4];
@@ -79,7 +93,7 @@ fn arbitrary_sensor_scales_cover_edges_and_align_every_reconstruction_ratio() {
             assert_eq!(working.source[..2], grid.grid.extent);
             assert_eq!(working.source[2..], [1, 1]);
             assert_eq!(working.column[2], 40_u32.div_ceil(divisor).max(1) as f32);
-            let std = pyramid_resample::independent_noise_std(scale);
+            let std = pool::independent_noise_std(scale);
             for (native, actual) in params.model.iter().zip(working.model) {
                 assert_eq!(actual, native.map(|v| v * (std * std)));
             }
@@ -187,10 +201,10 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
         crate::sidecar::encode(fast.settings()).unwrap(),
         saved_edits
     );
-    assert_eq!(
-        fast.description().extent,
-        full.view().extent.map(|v| v.div_ceil(2))
-    );
+    assert_eq!(fast.description().extent, {
+        let [left, top, right, bottom] = full.view().crop;
+        [right - left, bottom - top].map(|v| v.div_ceil(2))
+    });
     assert_eq!(
         fast.view().crop,
         [
@@ -262,13 +276,14 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
     let Content::Image(inspection) = artifacts.remove(0).content else {
         panic!("layers")
     };
-    assert_eq!(inspection.description().extent, full.description().extent);
+    let native_extent = [source.metadata.width as u32, source.metadata.height as u32];
+    assert_eq!(inspection.description().extent, native_extent);
     settings.reconstruction.as_mut().unwrap().texture.coarse = 0.25;
     let mut profile = Profile::new(Mode::Wall);
     let dng = engine
         .render_dng_base(&source, &settings, &mut profile)
         .unwrap();
-    assert_eq!(dng.description().extent, full.description().extent);
+    assert_eq!(dng.description().extent, native_extent);
     assert!(profile
         .host
         .iter()
@@ -293,6 +308,7 @@ fn row_correction_follows_sensor_pooling_for_color_and_monochrome() {
             let mut settings = Settings::new("Sunlight", "Standard");
             settings.reconstruction = Some(Default::default());
             settings.rendering = rendering;
+            settings.despeckle = false;
             settings.working_scale = Scale::new(divisor).unwrap();
             let recipe = crate::render::recipes::merrill::technical::build(
                 &engine,
@@ -318,13 +334,103 @@ fn row_correction_follows_sensor_pooling_for_color_and_monochrome() {
                 .collect();
             assert_eq!(nodes.len(), 1);
             let producer = recipe.graph.outputs[nodes[0].inputs[0]].producer;
+            let Operation::Highlights(highlights) = &recipe.graph.nodes[producer].operation else {
+                panic!("row input must include highlight recovery")
+            };
+            assert_eq!(highlights.grid.map_or(1, |g| g.scale.divisor()), divisor);
+            let input = recipe.graph.nodes[producer].inputs[0];
+            let before = recipe.graph.outputs[input].producer;
             assert_eq!(
                 matches!(
-                    recipe.graph.nodes[producer].operation,
-                    Operation::ReduceLayers(_)
+                    recipe.graph.nodes[before].operation,
+                    Operation::ReduceLayers { .. }
                 ),
-                divisor > 1,
+                divisor > 1
             );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn speckle_inputs_share_the_requested_working_grid() {
+    use crate::{
+        graph::{DataType, Operation},
+        interactive::Execution,
+        profile::Profile,
+        render::{Engine, MerrillSpeckleMethod, Rendering, Scale, Settings},
+        source::Source,
+    };
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(root.join("blue-parking-sign.x3f")).unwrap();
+    let engine = Engine::new().unwrap();
+    for divisor in [1, 2, 4, 8, 64, 1024] {
+        for (rendering, method) in [
+            (Rendering::Color, MerrillSpeckleMethod::Reference),
+            (Rendering::Color, MerrillSpeckleMethod::Compact),
+            (Rendering::Monochrome, MerrillSpeckleMethod::Reference),
+            (Rendering::Monochrome, MerrillSpeckleMethod::Compact),
+        ] {
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.rendering = rendering;
+            settings.working_scale = Scale::new(divisor).unwrap();
+            settings.merrill_speckles.method = method;
+            let recipe = super::super::technical::build(
+                &engine,
+                crate::render::recipes::RecipeInput::Original(&source),
+                &settings,
+                &["despeckle.layers"],
+                Some("Standard"),
+                &mut Profile::default(),
+                &mut Execution::default(),
+            )
+            .unwrap();
+            let super::super::technical::Prepared::Requested(recipe) = recipe else {
+                panic!("speckle inspection must stop construction");
+            };
+            let node = recipe
+                .graph
+                .nodes
+                .iter()
+                .find(|node| matches!(node.operation, Operation::Despeckle(_)))
+                .unwrap();
+            let Operation::Despeckle(prepared) = &node.operation else {
+                unreachable!()
+            };
+            assert_eq!(
+                node.inputs.len(),
+                if method == MerrillSpeckleMethod::Compact {
+                    2
+                } else {
+                    1
+                }
+            );
+            for (&input, data) in node
+                .inputs
+                .iter()
+                .zip([DataType::CalibratedLayers, DataType::SensorLayers])
+            {
+                let output = &recipe.graph.outputs[input];
+                assert_eq!(output.data, data);
+                match &recipe.graph.nodes[output.producer].operation {
+                    Operation::ReduceLayers {
+                        prepared: reduced, ..
+                    } => {
+                        assert!(divisor > 1);
+                        assert_eq!(reduced.working_scale(), Some(settings.working_scale));
+                        assert_eq!(reduced.output_extent(), prepared.params.source[..2]);
+                    }
+                    Operation::Highlights(highlights) => {
+                        assert_eq!(highlights.grid.map_or(1, |g| g.scale.divisor()), divisor);
+                        let extent = highlights.grid.map_or(
+                            [highlights.params.source[0], highlights.params.source[1]],
+                            |g| g.extent,
+                        );
+                        assert_eq!(extent, prepared.params.source[..2]);
+                    }
+                    _ => assert_eq!(divisor, 1, "native input reached reduced speckle node"),
+                }
+            }
         }
     }
 }
@@ -678,7 +784,7 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
 }
 
 #[test]
-fn draft_and_thumb_preserve_sensor_geometry_and_require_calibrated_inputs() {
+fn draft_and_thumb_preserve_sensor_geometry_and_layer_types() {
     use crate::render::Scale;
     let mut native = encoding(90);
     // Thumb must retain an active edge at a half reduced pixel.
@@ -686,11 +792,8 @@ fn draft_and_thumb_preserve_sensor_geometry_and_require_calibrated_inputs() {
     for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
         let grid = Grid::new(native, None, quality).unwrap();
         let divisor = quality.divisor();
-        assert_eq!(grid.reductions.len(), divisor.ilog2() as usize);
-        assert_eq!(
-            grid.reductions.last().unwrap().output_extent(),
-            grid.grid.extent
-        );
+        assert_eq!(grid.reduction.working_scale(), Some(quality));
+        assert_eq!(grid.reduction.output_extent(), grid.grid.extent);
         assert_eq!(
             grid.encode.output[..2],
             native.output[..2]
@@ -700,7 +803,7 @@ fn draft_and_thumb_preserve_sensor_geometry_and_require_calibrated_inputs() {
         );
         let mut graph = crate::graph::Graph::default();
         let source = graph.add(crate::graph::Operation::Source, &[]).unwrap();
-        // The numerical graph requires calibrated layers at its input.
+        // Reducing original codes must not relabel them as calibrated layers.
         let layers = graph
             .add(
                 crate::graph::Operation::ImageAlias {
@@ -711,9 +814,93 @@ fn draft_and_thumb_preserve_sensor_geometry_and_require_calibrated_inputs() {
                 &[source],
             )
             .unwrap();
-        assert!(
-            grid.append(&mut graph, layers).is_err(),
-            "sensor calibration must precede pooling"
+        let reduced = grid.append(&mut graph, layers).unwrap();
+        assert_eq!(
+            graph.outputs[reduced].data,
+            crate::graph::DataType::SensorLayers
         );
+        assert!(
+            graph
+                .add(
+                    crate::graph::Operation::ImageAlias {
+                        dehaze_basis: None,
+                        data: crate::graph::DataType::CalibratedLayers,
+                        output: "test.calibrated",
+                    },
+                    &[reduced]
+                )
+                .is_err(),
+            "reduction does not replace calibration"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
+fn color_field_recovery_inputs_share_the_sensor_working_grid() {
+    use crate::{
+        graph::{DataType, Operation},
+        interactive::Execution,
+        profile::Profile,
+        render::{ColorFieldApproach, Engine, HighlightMode, Rendering, Scale, Settings},
+        source::Source,
+    };
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(root.join("yellow-flowers-and-stroller.x3f")).unwrap();
+    let engine = Engine::new().unwrap();
+    for rendering in [Rendering::Color, Rendering::Monochrome] {
+        for approach in [
+            ColorFieldApproach::Faithful,
+            ColorFieldApproach::LocalGradient,
+        ] {
+            for divisor in [1, 2, 4, 8, 16, 64] {
+                let mut settings = Settings::new("Sunlight", "Standard");
+                settings.rendering = rendering;
+                settings.working_scale = Scale::new(divisor).unwrap();
+                settings.highlight_mode = HighlightMode::ColorField;
+                settings.color_field.approach = approach;
+                let result = crate::render::recipes::merrill::technical::build(
+                    &engine,
+                    crate::render::recipes::RecipeInput::Original(&source),
+                    &settings,
+                    &["highlight.layers"],
+                    Some("Standard"),
+                    &mut Profile::default(),
+                    &mut Execution::default(),
+                )
+                .unwrap();
+                let crate::render::recipes::merrill::technical::Prepared::Requested(recipe) =
+                    result
+                else {
+                    panic!("highlight inspection must stop")
+                };
+                let node = recipe
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|n| matches!(n.operation, Operation::ColorField(_)))
+                    .unwrap();
+                let Operation::ColorField(p) = &node.operation else {
+                    unreachable!()
+                };
+                assert_eq!(
+                    recipe.graph.outputs[node.inputs[2]].data,
+                    DataType::BlackLevels
+                );
+                assert!(recipe.graph.sealed_outputs.contains(&node.inputs[2]));
+                for index in [0, 1, 3] {
+                    let output = &recipe.graph.outputs[node.inputs[index]];
+                    match &recipe.graph.nodes[output.producer].operation {
+                        Operation::ReduceLayers { prepared, .. } => {
+                            assert!(divisor > 1);
+                            assert_eq!(prepared.working_scale(), Some(settings.working_scale));
+                            assert_eq!(prepared.output_extent(), p.params.size[..2]);
+                            assert!(matches!(prepared.signal(), pool::Signal::Rgb));
+                        }
+                        _ => assert_eq!(divisor, 1, "native image reached reduced Color Field"),
+                    }
+                }
+            }
+        }
     }
 }

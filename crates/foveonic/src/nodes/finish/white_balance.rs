@@ -135,6 +135,7 @@ pub(crate) fn pick(
         [1, 1],
         &mut trace,
     );
+    gpu.finish_capture_trace(&trace)?;
     let bytes = gpu.readback(&output)?;
     let values: &[f32] = bytemuck::cast_slice(&bytes);
     if values[3] < 9. {

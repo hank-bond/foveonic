@@ -42,6 +42,7 @@ impl Gpu {
     }
 }
 fn compile(device: &wgpu::Device) -> Result<FieldKernels> {
+    let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.field.compile");
     let field = format!(
         "{}\n{}",
         include_str!("../nodes/sensor/color_field_math.wgsl"),
@@ -101,6 +102,13 @@ fn compile(device: &wgpu::Device) -> Result<FieldKernels> {
             source: wgpu::ShaderSource::Wgsl(code.into()),
         });
         for &entry in entries {
+            let _scope = crate::diagnostics::scope_with(
+                crate::diagnostics::Category::Gpu,
+                "gpu.shader.compile",
+                |fields| {
+                    fields.str("entry", entry).str("family", "color-field");
+                },
+            );
             let ep = module
                 .entry_points
                 .iter()

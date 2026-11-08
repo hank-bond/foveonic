@@ -25,10 +25,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut goldens = None;
     let mut capture = None;
     let mut working_scale = foveonic::render::Scale::NATIVE;
+    let mut thumb = false;
     let mut controls = Vec::<OsString>::new();
     while let Some(arg) = args.next() {
         if arg == "--preview-quality" {
-            working_scale = match args.next().and_then(|v| v.into_string().ok()).as_deref() {
+            let quality = args.next().and_then(|v| v.into_string().ok());
+            thumb = quality.as_deref() == Some("thumb");
+            working_scale = match quality.as_deref() {
                 Some("full") => foveonic::render::Scale::NATIVE,
                 Some("fast") => foveonic::render::Scale::new(2).unwrap(),
                 Some("draft") => foveonic::render::Scale::new(4).unwrap(),
@@ -36,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 _ => return Err("preview quality requires full, fast, draft or thumb".into()),
             };
         } else if arg == "--working-scale" {
+            thumb = false;
             let divisor = args
                 .next()
                 .ok_or("missing working scale divisor")?
@@ -72,6 +76,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let source = Source::open(&input)?;
     let (mut settings, paths, mode) =
         options::parse_settings_for_camera(controls.into_iter(), &source.metadata)?;
+    if thumb {
+        working_scale =
+            foveonic::render::ControlCapabilities::from_metadata(&source.metadata)?.thumb_scale();
+    }
     settings.working_scale = working_scale;
     if !paths.is_empty() {
         return Err("unexpected extra input paths".into());

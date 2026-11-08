@@ -68,7 +68,70 @@ pub fn decode(bytes: &[u8]) -> Result<Settings> {
     // again so duplicated settings cannot slip through validation.
     let recipe: Recipe = serde_json::from_slice(bytes)?;
     recipe.settings.validate_values()?;
+    if crate::diagnostics::enabled() {
+        schema_diagnostics(&header, &recipe);
+    }
     Ok(recipe.settings)
+}
+
+/// Field differences are diagnostic metadata only. Ordinary loads need no model
+/// projection or field inventory, and the shared Serde models supply all defaults.
+/// The projection reports fields not retained on save, including empty optional labels.
+fn schema_diagnostics(input: &serde_json::Value, recipe: &Recipe) {
+    let Ok(model) = serde_json::to_value(recipe) else {
+        return;
+    };
+    let mut defaulted = Vec::new();
+    let mut ignored = Vec::new();
+    schema_fields(input, &model, "", &mut defaulted, &mut ignored);
+    if !defaulted.is_empty() || !ignored.is_empty() {
+        crate::diagnostics::event(
+            crate::diagnostics::Category::Cpu,
+            "sidecar.schema",
+            |fields| {
+                fields
+                    .str("defaulted", &serde_json::json!(defaulted).to_string())
+                    .str("not_retained", &serde_json::json!(ignored).to_string());
+            },
+        );
+    }
+}
+
+fn schema_fields(
+    input: &serde_json::Value,
+    model: &serde_json::Value,
+    path: &str,
+    defaulted: &mut Vec<String>,
+    ignored: &mut Vec<String>,
+) {
+    match (input, model) {
+        (serde_json::Value::Object(input), serde_json::Value::Object(model)) => {
+            let field_path =
+                |name: &str| format!("{path}/{}", name.replace('~', "~0").replace('/', "~1"));
+            for (name, value) in model {
+                if let Some(supplied) = input.get(name) {
+                    schema_fields(supplied, value, &field_path(name), defaulted, ignored);
+                } else {
+                    defaulted.push(field_path(name));
+                }
+            }
+            for name in input.keys().filter(|name| !model.contains_key(*name)) {
+                ignored.push(field_path(name));
+            }
+        }
+        (serde_json::Value::Array(input), serde_json::Value::Array(model)) => {
+            for (index, (supplied, value)) in input.iter().zip(model).enumerate() {
+                schema_fields(
+                    supplied,
+                    value,
+                    &format!("{path}/{index}"),
+                    defaulted,
+                    ignored,
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A missing sidecar means start with defaults. Other errors need to reach the

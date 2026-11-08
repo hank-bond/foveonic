@@ -23,9 +23,10 @@ struct Tone {
     key: Key,
     table: Shared<f32>,
 }
-struct Highlights {
+struct Clipping {
     metadata: Weak<Metadata>,
-    prepared: Arc<highlight::Prepared>,
+    grid: Option<super::WorkingGrid>,
+    flags: Shared<u32>,
 }
 enum Repair {
     Blue(Arc<ordered_blue_repair::Prepared>),
@@ -67,7 +68,7 @@ fn same_metadata(previous: &Weak<Metadata>, metadata: &Arc<Metadata>) -> bool {
 #[derive(Default)]
 pub(super) struct Cache {
     tones: Vec<Tone>,
-    highlights: Option<Highlights>,
+    clipping: Option<Clipping>,
     repairs: Vec<RepairEntry>,
 }
 impl Cache {
@@ -85,11 +86,11 @@ impl Cache {
             return true;
         }
         if self
-            .highlights
+            .clipping
             .as_ref()
             .is_some_and(|entry| cold(&entry.metadata))
         {
-            self.highlights = None;
+            self.clipping = None;
             return true;
         }
         if let Some(index) = self.repairs.iter().position(|entry| cold(&entry.metadata)) {
@@ -154,10 +155,8 @@ impl Cache {
             entry.key.account(retained);
             entry.table.account(retained);
         }
-        if let Some(entry) = &self.highlights {
-            if let Some(flags) = &entry.prepared.flags {
-                flags.account(retained);
-            }
+        if let Some(entry) = &self.clipping {
+            entry.flags.account(retained);
         }
         retained.add_bytes(self.repairs.capacity() * std::mem::size_of::<RepairEntry>());
         for entry in &self.repairs {
@@ -273,11 +272,11 @@ impl Engine {
     pub fn release_native_preparation(&self, metadata: &Arc<Metadata>) {
         let mut cache = self.preparation.lock().expect("metadata preparation cache");
         if cache
-            .highlights
+            .clipping
             .as_ref()
-            .is_some_and(|entry| same_metadata(&entry.metadata, metadata))
+            .is_some_and(|entry| same_metadata(&entry.metadata, metadata) && entry.grid.is_none())
         {
-            cache.highlights = None;
+            cache.clipping = None;
         }
     }
 
@@ -292,6 +291,17 @@ impl Engine {
             .lock()
             .map_err(|_| "metadata preparation cache poisoned")?
             .tone(metadata, mode, controls, monochrome)
+    }
+
+    pub(crate) fn clipping_flags(
+        &self,
+        metadata: &Arc<Metadata>,
+        grid: Option<super::WorkingGrid>,
+    ) -> Result<Shared<u32>> {
+        self.preparation
+            .lock()
+            .map_err(|_| "metadata preparation cache poisoned")?
+            .clipping_flags(metadata, grid)
     }
 
     pub(crate) fn materialize_highlights(
@@ -370,27 +380,36 @@ impl Cache {
         self.materialize_highlights(metadata, &highlight::deferred(metadata, threshold)?)
     }
 
+    fn clipping_flags(
+        &mut self,
+        metadata: &Arc<Metadata>,
+        grid: Option<super::WorkingGrid>,
+    ) -> Result<Shared<u32>> {
+        if let Some(entry) = self.clipping.as_ref().filter(|entry| {
+            same_metadata(&entry.metadata, metadata)
+                && highlight::clipping_key(entry.grid) == highlight::clipping_key(grid)
+        }) {
+            return Ok(entry.flags.clone());
+        }
+        let flags: Shared<u32> = highlight::clipping(metadata, grid)?.into();
+        self.clipping = Some(Clipping {
+            metadata: Arc::downgrade(metadata),
+            grid,
+            flags: flags.clone(),
+        });
+        Ok(flags)
+    }
     fn materialize_highlights(
         &mut self,
         metadata: &Arc<Metadata>,
         description: &highlight::Prepared,
     ) -> Result<Arc<highlight::Prepared>> {
-        let previous = self
-            .highlights
-            .as_ref()
-            .filter(|entry| same_metadata(&entry.metadata, metadata));
-        if let Some(entry) = previous.filter(|entry| {
-            bytemuck::bytes_of(&entry.prepared.params) == bytemuck::bytes_of(&description.params)
-        }) {
-            return Ok(entry.prepared.clone());
-        }
-        let flags = previous.and_then(|entry| entry.prepared.flags.clone());
-        let prepared = Arc::new(highlight::materialize(metadata, description, flags)?);
-        self.highlights = Some(Highlights {
-            metadata: Arc::downgrade(metadata),
-            prepared: prepared.clone(),
-        });
-        Ok(prepared)
+        let flags = self.clipping_flags(metadata, description.grid)?;
+        Ok(Arc::new(highlight::materialize(
+            metadata,
+            description,
+            Some(flags),
+        )?))
     }
 }
 

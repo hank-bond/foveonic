@@ -60,23 +60,6 @@ impl Scale {
     }
 }
 
-/// Camera-authored source and result sampling for shared analysis. The result
-/// can be coarser than its reconstructed input without changing that algorithm.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct AnalysisGrid {
-    pub source_scale: Scale,
-    pub result_scale: Scale,
-}
-impl AnalysisGrid {
-    pub fn new(requested: Scale, source_floor: Scale, result_floor: Scale) -> Self {
-        let source_scale = requested.coarsest(source_floor);
-        Self {
-            source_scale,
-            result_scale: source_scale.coarsest(result_floor),
-        }
-    }
-}
-
 /// Logical sensor coverage and algorithmic padding remain distinct. Camera
 /// recipes interpret native framing once and pass this geometry to operations.
 #[derive(Clone, Copy, Debug)]
@@ -204,21 +187,5 @@ mod tests {
             .unwrap();
         assert_eq!(native.origin, [0, 0]);
         assert_eq!(native.extent, [257, 193]);
-    }
-
-    #[test]
-    fn analysis_keeps_camera_sampling_floors_without_enlarging_reduced_work() {
-        let half = Scale::new(2).unwrap();
-        let native_mono = AnalysisGrid::new(Scale::NATIVE, Scale::NATIVE, half);
-        assert_eq!(native_mono.source_scale, Scale::NATIVE);
-        assert_eq!(native_mono.result_scale, half);
-        for divisor in [2, 4, 8, 16, 64, 1 << 31] {
-            let requested = Scale::new(divisor).unwrap();
-            for source_floor in [Scale::NATIVE, half] {
-                let analysis = AnalysisGrid::new(requested, source_floor, half);
-                assert_eq!(analysis.source_scale, requested);
-                assert_eq!(analysis.result_scale, requested);
-            }
-        }
     }
 }

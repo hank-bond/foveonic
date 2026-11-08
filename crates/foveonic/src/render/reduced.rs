@@ -492,7 +492,18 @@ impl ReducedWorkingSet {
             .is_some_and(|entry| entry.session.cache.trim_active_optional(obsolete_only))
     }
     pub(super) fn evict_oldest(&mut self) -> Option<u64> {
-        (!self.entries.is_empty()).then(|| self.entries.remove(0).id)
+        (!self.entries.is_empty()).then(|| {
+            let entry = self.entries.remove(0);
+            crate::diagnostics::event(
+                crate::diagnostics::Category::Cache,
+                "cache.processing.entry_released",
+                |fields| {
+                    fields.u64("session", entry.id);
+                    fields.u64("gpu_bytes", entry.session.cached_bytes());
+                },
+            );
+            entry.id
+        })
     }
     /// Deduplicated total of active, history and Engine preparation. Delivered images and scratch are separate.
     pub fn retained_bytes(&self, engine: &Engine) -> u64 {
@@ -656,7 +667,17 @@ impl ReducedWorkingSet {
             }
         }
         while !self.entries.is_empty() && self.historical_bytes() > self.limit {
-            evicted.push(self.entries.remove(0).id);
+            let id = self.evict_oldest().expect("nonempty reduced history");
+            crate::diagnostics::event(
+                crate::diagnostics::Category::Cache,
+                "cache.processing.evicted",
+                |fields| {
+                    fields.u64("session", id);
+                    fields.str("reason", "historical_memory_budget");
+                    fields.u64("budget_bytes", self.limit);
+                },
+            );
+            evicted.push(id);
         }
         evicted
     }

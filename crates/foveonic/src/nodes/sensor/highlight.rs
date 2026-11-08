@@ -1,4 +1,4 @@
-//! Keeps original clipping flags so GPU highlight recovery can use trustworthy neighboring samples.
+//! Projects original camera clipping evidence and recovers highlights on the working grid.
 
 //!
 //! Adapted with owner permission from Foveonic source.rs, gains.rs, highlight.rs,
@@ -17,15 +17,61 @@ pub(crate) struct Params {
     pub area: [u32; 4],
     pub value: [f32; 4],
 }
+#[derive(Clone)]
 #[cfg_attr(test, derive(Default))]
 pub(crate) struct Prepared {
     pub params: Params,
-    /// Native clipping evidence is materialized only when this operation executes.
+    /// Original camera evidence is materialized on this grid only when needed.
     pub flags: Option<crate::recipe::Shared<u32>>,
+    pub grid: Option<crate::render::WorkingGrid>,
 }
 impl Prepared {
+    pub(crate) fn on_grid(mut self, grid: Option<crate::render::WorkingGrid>) -> Self {
+        self.grid = grid;
+        if grid.is_some() {
+            // Materialized flags belong to the previous grid. Rebuild lazily
+            // from immutable camera metadata at execution.
+            self.flags = None;
+        }
+        self
+    }
+    pub(crate) fn sampling_key(&self) -> crate::recipe::Key {
+        let mut key = crate::recipe::Key::pod(&self.params);
+        if let Some(grid) = self.grid {
+            key = key
+                .with(&grid.scale.divisor())
+                .with(&grid.extent)
+                .with(&grid.origin);
+        }
+        key
+    }
+    fn processing_params(&self) -> Params {
+        let mut params = self.params;
+        if let Some(grid) = self.grid {
+            let [width, height] = grid.extent;
+            let count = width * height;
+            params.source = [width, height, count, count.div_ceil(256)];
+            let [l, t, r, b] = self.params.area;
+            let bounds = grid.bounds([l, t, r + 1, b + 1]);
+            let radius = (2. * grid.scale.factor()).round().max(1.) as u32;
+            params.area = [
+                bounds[0].max(radius),
+                bounds[1].max(radius),
+                bounds[2]
+                    .saturating_sub(1)
+                    .min(width.saturating_sub(radius + 1)),
+                bounds[3]
+                    .saturating_sub(1)
+                    .min(height.saturating_sub(radius + 1)),
+            ];
+            params.value[1] = 1. / ((2 * radius + 1) * (2 * radius + 1)) as f32;
+            params.value[2] = radius as f32;
+            params.value[3] = 1.;
+        }
+        params
+    }
     pub(crate) fn key(&self) -> crate::recipe::Key {
-        let key = crate::recipe::Key::pod(&self.params).with(&u32::from(self.flags.is_some()));
+        let key = self.sampling_key().with(&u32::from(self.flags.is_some()));
         if let Some(flags) = &self.flags {
             key.join(flags.key())
         } else {
@@ -45,12 +91,47 @@ fn unsigned(v: f64) -> Result<u32> {
         Ok(v as u32)
     }
 }
+#[cfg(test)]
 fn saturation(metadata: &Metadata) -> Result<Vec<u32>> {
+    clipping(metadata, None)
+}
+
+/// Clipping is immutable camera metadata. Decode runs directly onto their
+/// requested cells, without allocating or uploading a native-size flag image.
+pub(crate) fn clipping(
+    metadata: &Metadata,
+    grid: Option<crate::render::WorkingGrid>,
+) -> Result<Vec<u32>> {
     let count = metadata
         .width
         .checked_mul(metadata.height)
         .ok_or("saturation geometry overflow")?;
-    let mut flags = vec![0_u32; count];
+    let extent = grid.map_or([metadata.width as u32, metadata.height as u32], |g| {
+        g.extent
+    });
+    let mut flags = vec![0_u32; extent[0] as usize * extent[1] as usize];
+    let mut mark = |mut begin: usize, end: usize, bit: u32| {
+        if let Some(grid) = grid {
+            let d = grid.scale.divisor() as usize;
+            let width = metadata.width;
+            while begin < end {
+                let row = begin / width;
+                let stop = end.min((row + 1) * width);
+                let y = row / d + grid.origin[1] as usize;
+                let first = begin % width / d + grid.origin[0] as usize;
+                let last = (stop - 1) % width / d + grid.origin[0] as usize + 1;
+                let offset = y * extent[0] as usize;
+                for flag in &mut flags[offset + first..offset + last] {
+                    *flag |= bit;
+                }
+                begin = stop;
+            }
+        } else {
+            for flag in &mut flags[begin..end] {
+                *flag |= bit;
+            }
+        }
+    };
     for (c, suffix) in ["R", "G", "B"].into_iter().enumerate() {
         let runs = format!("SatMap{suffix}");
         let full = format!("SatMapFull{suffix}");
@@ -76,9 +157,7 @@ fn saturation(metadata: &Metadata) -> Result<Vec<u32>> {
                 if end > count {
                     return Err(format!("{runs} exceeds sensor").into());
                 }
-                for flag in &mut flags[begin..end] {
-                    *flag |= bit;
-                }
+                mark(begin, end, bit);
                 position = end;
             }
             if position.checked_add(*values.last().unwrap() as usize) != Some(count) {
@@ -90,13 +169,33 @@ fn saturation(metadata: &Metadata) -> Result<Vec<u32>> {
                 if p >= count {
                     return Err(format!("{full} exceeds sensor").into());
                 }
-                flags[p] |= bit;
+                mark(p, p + 1, bit);
             }
         } else {
             return Err(format!("missing original {suffix} saturation map").into());
         }
     }
+    if let Some(grid) = grid {
+        // Match numerical pooling's edge replication, including its halo.
+        for y in 0..extent[1] {
+            for x in 0..extent[0] {
+                let sx = x.saturating_sub(grid.origin[0]).min(grid.logical[0] - 1) + grid.origin[0];
+                let sy = y.saturating_sub(grid.origin[1]).min(grid.logical[1] - 1) + grid.origin[1];
+                flags[(y * extent[0] + x) as usize] = flags[(sy * extent[0] + sx) as usize];
+            }
+        }
+    }
     Ok(flags)
+}
+
+pub(crate) fn clipping_key(grid: Option<crate::render::WorkingGrid>) -> crate::recipe::Key {
+    match grid {
+        Some(g) => crate::recipe::Key::pod(&g.native)
+            .with(&g.scale.divisor())
+            .with(&g.extent)
+            .with(&g.origin),
+        None => crate::recipe::Key::default(),
+    }
 }
 pub(crate) fn validate_threshold(ev: Option<f32>) -> Result<()> {
     if ev.is_some_and(|v| !(-2. ..=2.).contains(&v)) {
@@ -192,12 +291,13 @@ fn prepare_description(
             area,
             value: [threshold, 0., 0., 0.],
         },
+        grid: None,
         flags: if deferred {
             None
         } else {
             Some(match flags {
                 Some(flags) => flags,
-                None => saturation(metadata)?.into(),
+                None => clipping(metadata, None)?.into(),
             })
         },
     })
@@ -210,14 +310,15 @@ pub(crate) fn materialize(
 ) -> Result<Prepared> {
     let flags = match flags {
         Some(flags) => flags,
-        None => saturation(metadata)?.into(),
+        None => clipping(metadata, description.grid)?.into(),
     };
-    if flags.len() != description.params.source[2] as usize {
+    if flags.len() != description.processing_params().source[2] as usize {
         return Err("original saturation map has the wrong sensor extent".into());
     }
     Ok(Prepared {
         params: description.params,
         flags: Some(flags),
+        grid: description.grid,
     })
 }
 
@@ -228,20 +329,17 @@ pub(crate) fn apply(
     want_density: bool,
     profile: &mut Profile,
 ) -> Result<Output> {
-    let size = u64::from(p.params.source[2]) * 4;
-    let uniform = gpu.uniform(&p.params);
+    let params = p.processing_params();
+    let size = u64::from(params.source[2]) * 4;
+    let uniform = gpu.uniform(&params);
     let original = gpu.upload(
-        "Original camera saturation flags",
+        "Original camera clipping flags",
         p.flags
             .as_ref()
             .ok_or("highlight clipping evidence must be materialized")?,
     )?;
     let mut flags = gpu.storage("Connected saturation processing copy", size)?;
-    let mut map = gpu.storage("Multi-layer clipped neighborhood map", size)?;
-    let groups = [
-        p.params.source[0].div_ceil(8),
-        p.params.source[1].div_ceil(8),
-    ];
+    let groups = [params.source[0].div_ceil(8), params.source[1].div_ceil(8)];
     let mut trace = gpu.trace(profile.mode.gpu(), 12);
     gpu.dispatch(
         Kernel::HighlightFlags,
@@ -253,6 +351,7 @@ pub(crate) fn apply(
         groups,
         &mut trace,
     );
+    let mut map = gpu.storage("Multi-layer clipped neighborhood map", size)?;
     gpu.dispatch(
         Kernel::HighlightMap,
         &mut [
@@ -283,13 +382,13 @@ pub(crate) fn apply(
         let mut marks = gpu.storage("Highlight donor ranks", size)?;
         let mut counts = gpu.storage(
             "Highlight donor prefix counts",
-            u64::from(p.params.source[3] + 1) * 4,
+            u64::from(params.source[3] + 1) * 4,
         )?;
         let mut donors = gpu.storage("Ordered highlight donor indices", size)?;
         let mut sorted = gpu.storage("Stable per-bin highlight donor indices", size)?;
         let mut histogram = gpu.storage(
             "Highlight block-bin counts/prefixes",
-            u64::from(p.params.source[3]) * 256 * 4,
+            u64::from(params.source[3]) * 256 * 4,
         )?;
         let mut starts = gpu.storage("Highlight bin start offsets", 257 * 4)?;
         let mut lookup = gpu.storage("Highlight blue correction table and counts", 512 * 4)?;
@@ -302,7 +401,7 @@ pub(crate) fn apply(
                 (6, Write(marks.write())),
                 (7, Write(counts.write())),
             ],
-            [p.params.source[3], 1],
+            [params.source[3], 1],
             &mut trace,
         );
         gpu.dispatch(
@@ -319,7 +418,7 @@ pub(crate) fn apply(
                 (7, Read(&counts)),
                 (8, Write(donors.write())),
             ],
-            [p.params.source[3], 1],
+            [params.source[3], 1],
             &mut trace,
         );
         gpu.dispatch(
@@ -332,7 +431,7 @@ pub(crate) fn apply(
                 (8, Read(&donors)),
                 (11, Write(histogram.write())),
             ],
-            [p.params.source[3], 1],
+            [params.source[3], 1],
             &mut trace,
         );
         gpu.dispatch(
@@ -357,7 +456,7 @@ pub(crate) fn apply(
                 (11, Read(&histogram)),
                 (12, Read(&starts)),
             ],
-            [p.params.source[3], 1],
+            [params.source[3], 1],
             &mut trace,
         );
         gpu.dispatch(

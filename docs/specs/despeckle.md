@@ -13,7 +13,7 @@ implementation: conforming
 - Despeckling **must** run after calibration and any enabled camera-record repair, before noise/detail reconstruction and camera color.
 - The stage **must** use reference-style metadata-derived channel thresholds, immutable-input extrema detection, and correction equivalent to deterministic bank/row order. Image arithmetic **must** run in shaders.
 - Threshold WB factors **must** match the actual factors applied by calibration, including its 2× scale and selected metadata adjustments. The camera adjustment **must** use the agreed native noise-derived scale without recomputing WB factors.
-- Peak detection **must** preserve the reference's 4095 headroom clamp. Valleys **must** retain negative signal values. Camera-derived scan margins **must** be distinct from the photographic crop.
+- Peak detection **must** preserve the reference's 4095 headroom clamp. Native processing **must** retain valley detection and signed signal values. Reduced working grids **must** detect bright extrema only, as specified by [Merrill speckles](./merrill-speckles.md). Camera-derived scan margins **must** be distinct from the photographic crop.
 - Correction **must** trim neighbor minima/maxima and anchor repaired channels to unaffected channels. Adjacent detections **must** read earlier corrections in reference order.
 - GUI/CLI settings and retained artifacts **must** preserve the selected enabling state. Disabled output **must** omit the stage; earlier inspection roots **must** avoid its preparation and execution.
 - Inspection **must** expose the corrected layers as `despeckle.layers`, with the normal cropped/oriented layer views.

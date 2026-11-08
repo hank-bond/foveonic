@@ -1,11 +1,14 @@
-// Native Fine correction followed by axis-coherent residual Coarse correction.
+// Fine correction followed by axis-coherent residual Coarse correction on the working grid.
 const FINE: u32 = 0u;
-const BLOCK_SIZE: u32 = 40u;
 // Preserve the accepted Fine block normalization in both residual passes.
 const BLOCK_DIVISOR_OFFSET: f32 = 1.0;
 // Pool along fixed sensor coordinates, allowing only slow band-amplitude drift.
-const POOL_RADIUS: u32 = 640u;
-const ALIGNMENT_SEPARATION: i32 = 160;
+fn alignment_separation() -> i32 { return max(1, i32((160u + band.scale - 1u) / band.scale)); }
+fn alignment_shift(index: u32) -> i32 {
+    let native = ALIGNMENT_SHIFTS[index];
+    let magnitude = (u32(abs(native)) + band.scale - 1u) / band.scale;
+    return select(i32(magnitude), -i32(magnitude), native < 0);
+}
 const PROFILE_HALF_TAPS: i32 = 4;
 const PROFILE_SPACING_DIVISOR: u32 = 16u;
 const ALIGNMENT_SHIFT_COUNT: u32 = 7u;
@@ -25,7 +28,7 @@ const CODE_MAX: f32 = 32766.0;
 struct BandParams {
     active_area: vec4<u32>,
     width: u32, axis: u32, kind: u32, reflect_samples: u32,
-    strength: f32, padding0: u32, padding1: u32, padding2: u32,
+    strength: f32, block_size: u32, pool_radius: u32, scale: u32,
 }
 @group(0) @binding(0) var<storage, read> input_pixels: array<f32>;
 @group(0) @binding(1) var<uniform> params: NoiseParams;
@@ -87,11 +90,11 @@ fn measurement_bounds(tile: u32) -> vec2<u32> {
 
 fn block_capacity() -> u32 {
     let length = params.tile[1u-band.axis];
-    return select((length+BLOCK_SIZE-1u)/BLOCK_SIZE+1u, length/BLOCK_SIZE, band.kind == FINE);
+    return select((length+band.block_size-1u)/band.block_size+1u, length/band.block_size, band.kind == FINE);
 }
 
 fn block_count(bounds: vec2<u32>) -> u32 {
-    let count = (bounds.y-bounds.x)/BLOCK_SIZE;
+    let count = (bounds.y-bounds.x)/band.block_size;
     return select(max(1u, count), count, band.kind == FINE);
 }
 
@@ -105,8 +108,8 @@ fn load_estimate(direction: u32, block: u32, tile: u32) -> vec3<f32> {
 }
 
 fn block_center(block: u32, bounds: vec2<u32>) -> f32 {
-    let first = bounds.x+block*BLOCK_SIZE;
-    let last = select(first+BLOCK_SIZE, bounds.y, block+1u == block_count(bounds));
+    let first = bounds.x+block*band.block_size;
+    let last = select(first+band.block_size, bounds.y, block+1u == block_count(bounds));
     return 0.5*f32(first+last-1u);
 }
 
@@ -163,8 +166,8 @@ fn block_deltas(@builtin(global_invocation_id)id: vec3<u32>) {
     let count = block_count(bounds);
     var delta = vec3(0.0);
     if block<count {
-        let first = bounds.x+block*BLOCK_SIZE;
-        let last = select(first+BLOCK_SIZE, bounds.y, block+1u == count);
+        let first = bounds.x+block*band.block_size;
+        let last = select(first+band.block_size, bounds.y, block+1u == count);
         var original = vec3(0.0);
         var filtered = vec3(0.0);
         for (var other = first;other<last;other++) {
@@ -202,14 +205,14 @@ fn pooled_axis_offset(direction: i32, along: i32) -> vec3<f32> {
     var weight = 0.0;
     // Equal global sample positions on either side of tile edges avoid a
     // separate fit per tile. A triangular window permits slow amplitude drift.
-    let center = (along/i32(BLOCK_SIZE))*i32(BLOCK_SIZE)+i32(BLOCK_SIZE/2u);
-    let radius = i32(POOL_RADIUS/BLOCK_SIZE);
+    let center = (along/i32(band.block_size))*i32(band.block_size)+i32(band.block_size/2u);
+    let radius = i32(band.pool_radius/band.block_size);
     for (var k = -radius;k <= radius;k++) {
-        let location = center+k*i32(BLOCK_SIZE);
+        let location = center+k*i32(band.block_size);
         if location<i32(band.active_area[1u-band.axis]) || location >= i32(band.active_area[3u-band.axis]) {
             continue;
         }
-        let w = max(0.0, 1.0-abs(f32(location-along))/f32(POOL_RADIUS+BLOCK_SIZE));
+        let w = max(0.0, 1.0-abs(f32(location-along))/f32(band.pool_radius+band.block_size));
         total += global_estimate(direction, location)*w;
         weight += w;
     }
@@ -217,7 +220,7 @@ fn pooled_axis_offset(direction: i32, along: i32) -> vec3<f32> {
 }
 
 fn axis_alignment_confidence(direction: i32, along: i32) -> f32 {
-    let distance = ALIGNMENT_SEPARATION;
+    let distance = alignment_separation();
     let perpendicular = 1u-band.axis;
     // A slope must improve both separated directions to count as a feature.
     // Test several slopes over a short profile, rather than comparing one noisy
@@ -236,7 +239,7 @@ fn axis_alignment_confidence(direction: i32, along: i32) -> f32 {
             }
             for (var tap = -PROFILE_HALF_TAPS;tap <= PROFILE_HALF_TAPS;tap++) {
                 let here = global_estimate(direction+tap*spacing, along);
-                let there = global_estimate(direction+tap*spacing+side*ALIGNMENT_SHIFTS[slope], location);
+                let there = global_estimate(direction+tap*spacing+side*alignment_shift(slope), location);
                 let difference = here-there;
                 error += dot(difference, difference);
                 count += 3.0;
@@ -283,7 +286,7 @@ fn interpolated_estimate(direction: u32, other: u32, tile: u32, bounds: vec2<u32
     if count == 1u {
         return load_estimate(direction, 0u, tile);
     }
-    let position = (f32(other)-block_center(0u, bounds))/f32(BLOCK_SIZE);
+    let position = (f32(other)-block_center(0u, bounds))/f32(band.block_size);
     let left = u32(clamp(floor(position), 0.0, f32(count-2u)));
     let right = min(left+1u, count-1u);
     let weight = clamp((f32(other)-block_center(left, bounds))/max(1.0, block_center(right, bounds)-block_center(left, bounds)), 0.0, 1.0);
@@ -307,9 +310,9 @@ fn correct(@builtin(global_invocation_id)id: vec3<u32>) {
     let in_active = all(global >= vec2<i32>(band.active_area.xy)) && all(global<vec2<i32>(band.active_area.zw));
     let half = band.width/2u;
     if count>0u && other >= bounds.x && other<bounds.y && direction >= half && direction<params.tile[band.axis]-half {
-        let limit = max(abs(value*RELATIVE_LIMIT), NOISE_SIGMAS*sqrt(variance(value, params)/f32(BLOCK_SIZE)));
+        let limit = max(abs(value*RELATIVE_LIMIT), NOISE_SIGMAS*sqrt(variance(value, params)/f32(band.block_size)));
         if band.kind == FINE && (band.reflect_samples == 0u || in_active) {
-            let block = min((other-bounds.x)/BLOCK_SIZE, count-1u);
+            let block = min((other-bounds.x)/band.block_size, count-1u);
             let delta = load_estimate(direction, block, point.z);
             let accepted_delta = select(vec3(0.0), delta, limit>abs(delta));
             let unit_corrected = clamp(value-accepted_delta, vec3(0.0), vec3(CODE_MAX));

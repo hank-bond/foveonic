@@ -65,7 +65,7 @@ impl Params {
             analysis: [0.; 4],
             limits: tuning.for_response(response).values(),
             natural_limits: tuning.natural.values(),
-            toe: [toe, toe_slope, 1., 0.],
+            toe: [toe, toe_slope, 2., 8.],
         })
     }
     pub(crate) fn with_exposure(mut self, exposure: f32) -> Result<Self> {
@@ -96,7 +96,10 @@ impl Params {
         }
         self.shape[..2].copy_from_slice(&extent);
         self.bounds = bounds;
-        self.toe[2] = scale;
+        // A zero-distance probe compares a pixel with itself and erases every
+        // structure score. Keep the smallest usable neighborhood on coarse grids.
+        self.toe[2] = (2. * scale).round().max(1.);
+        self.toe[3] = (8. * scale).round().max(1.);
         Ok(self)
     }
     pub(crate) fn key(self) -> Key {
@@ -114,18 +117,6 @@ pub(crate) struct Output {
 pub(crate) struct Samples<'a> {
     pub rgb: &'a ReadGuard,
     pub mask: &'a ReadGuard,
-}
-
-/// Reuse the numerical RGB resampler for an analysis-only quarter-pixel overview.
-pub(crate) fn overview(
-    gpu: &Gpu,
-    input: &ReadGuard,
-    extent: [u32; 2],
-    profile: &mut Profile,
-) -> Result<ReadGuard> {
-    let target = extent.map(|v| v.div_ceil(2));
-    let prepared = super::resample::Prepared::new(extent, target, 1, 0.5)?;
-    super::resample::apply(gpu, input, &prepared, profile)
 }
 
 #[cfg(test)]
@@ -157,6 +148,14 @@ pub(crate) fn apply_with_analysis(
     analysis_params: Params,
     profile: &mut Profile,
 ) -> Result<Output> {
+    for (samples, geometry) in [(&input, &params), (&analysis, &analysis_params)] {
+        let extent = [geometry.shape[0], geometry.shape[1]];
+        if samples.rgb.size() != u64::from(extent[0]) * u64::from(extent[1]) * 12
+            || samples.mask.size() != tone_equalizer::guide_storage_bytes(extent)
+        {
+            return Err("adaptive RGB and compact brightness guide do not share a domain".into());
+        }
+    }
     let Samples { rgb: input, mask } = input;
     let [width, height, _, _] = params.shape;
     let curve = gpu.upload("adaptive tone parameters", curve)?;

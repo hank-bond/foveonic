@@ -55,7 +55,7 @@ fn monochrome_spatial_support_follows_the_sensor_working_grid() {
         assert!(value.params.spatial[0] * 2 < grid.extent[0]);
         assert!(value.params.spatial[1] > 0);
         assert_eq!(value.params.detail[2], grid.scale.factor());
-        let std = crate::nodes::color::pyramid_resample::independent_noise_std(grid.scale);
+        let std = crate::nodes::sensor::pool::independent_noise_std(grid.scale);
         assert_eq!(value.params.detail[3], std * std);
         assert_eq!(value.params.filter, prepared(4928, 3264).params.filter);
     }

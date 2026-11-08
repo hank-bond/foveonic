@@ -21,7 +21,7 @@ const PARALLEL_ROUNDS: u32 = 8;
 pub(crate) struct Params {
     pub source: [u32; 4],   // width, height, block count, records per bank
     pub area: [u32; 4],     // inclusive detector bounds in full-sensor coordinates
-    pub detector: [u32; 4], // method, maximum radius, reserved
+    pub detector: [u32; 4], // method, maximum radius, bright-only, reserved
 }
 
 pub(crate) struct Prepared {
@@ -30,6 +30,44 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
+    pub(crate) fn needs_sensor_codes(&self) -> bool {
+        self.params.detector[0] == 1
+    }
+
+    /// Keep detector support and noise thresholds in the supplied image's units.
+    pub(crate) fn on_grid(mut self, grid: Option<crate::render::WorkingGrid>) -> Self {
+        if let Some(grid) = grid {
+            let divisor = grid.scale.divisor();
+            let [width, height] = grid.extent;
+            let blocks = (width * height).div_ceil(BLOCK);
+            self.params.source = [
+                width,
+                height,
+                blocks,
+                CAPACITY.min(blocks.div_ceil(BANKS) * BLOCK),
+            ];
+            let radius = self.params.detector[1].div_ceil(divisor).max(1);
+            self.params.detector[1] = radius;
+            // A pooled pixel spans scene structure that native dark-extremum
+            // repair can mistake for a defective layer. Keep native behavior
+            // unchanged and target bright speckles on reduced grids.
+            self.params.detector[2] = u32::from(grid.scale.is_reduced());
+            let [left, top, right, bottom] = self.params.area;
+            let area = grid.filter_bounds([left, top, right + 1, bottom + 1]);
+            self.params.area = [
+                area[0].max(radius),
+                area[1].max(radius),
+                area[2].saturating_sub(1).min(width - radius - 1),
+                area[3].saturating_sub(1).min(height - radius - 1),
+            ];
+            let noise = crate::nodes::sensor::pool::independent_noise_std(grid.scale);
+            for threshold in &mut self.tables {
+                *threshold *= noise;
+            }
+        }
+        self
+    }
+
     pub(crate) fn with_controls(
         mut self,
         controls: crate::render::MerrillSpeckleControls,
@@ -156,14 +194,21 @@ pub(crate) fn prepare(
 pub(crate) fn apply(
     gpu: &Gpu,
     input: &crate::gpu::ReadGuard,
-    original: &crate::gpu::ReadGuard,
+    original: Option<&crate::gpu::ReadGuard>,
     prepared: &Prepared,
     profile: &mut Profile,
 ) -> Result<crate::gpu::ReadGuard> {
     let p = prepared.params;
     let count = u64::from(p.source[0]) * u64::from(p.source[1]);
+    if input.size() != count * 12 {
+        return Err("despeckle input does not match its working extent".into());
+    }
     let mut output = gpu.storage("Despeckled sensor layers", count * 12)?;
-    if p.detector[0] == 1 {
+    if prepared.needs_sensor_codes() {
+        let original = original.ok_or("compact despeckle requires sensor codes")?;
+        if original.size() != input.size() {
+            return Err("compact despeckle inputs must share a working extent".into());
+        }
         let uniform = gpu.uniform(&p);
         let lookup = gpu.upload("Speckle threshold tables", &prepared.tables)?;
         let mut trace = gpu.trace(profile.mode.gpu(), 1);
@@ -183,7 +228,10 @@ pub(crate) fn apply(
         return Ok(output);
     }
 
-    let mut marks = gpu.storage("Speckle block ranks", count * 4)?;
+    let mut marks = gpu.storage(
+        "Speckle block ranks",
+        u64::from(p.source[2]) * u64::from(BLOCK) * 4,
+    )?;
     let mut counts = gpu.storage(
         "Speckle block prefixes and bank counts",
         u64::from(p.source[2] + BANKS) * 4,

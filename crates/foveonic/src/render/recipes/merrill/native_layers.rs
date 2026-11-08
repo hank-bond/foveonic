@@ -5,7 +5,7 @@ use super::layer_noise;
 use crate::{
     graph::{Graph, Operation},
     interactive::Execution,
-    nodes::sensor::{banding, calibration, color_field, despeckle},
+    nodes::sensor::{banding, calibration, color_field, despeckle, highlight},
     profile::Profile,
     render::Settings,
     source::{Metadata, Result},
@@ -30,13 +30,96 @@ impl Policy {
     }
 }
 
+// This short-lived recipe handoff stays on the stack.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Output {
     Requested(BuiltRecipe),
     Ready {
         recipe: BuiltRecipe,
-        couplings: Option<crate::noise::Couplings>,
-        rows: Option<banding::Description>,
+        highlights: Option<Highlights>,
+        calibration_gains: [f32; 3],
+        sensor_codes: usize,
     },
+}
+
+/// Recovery follows reduction with original camera clipping evidence on the
+/// working grid. Black levels remain a three-value table.
+// A transient recipe handoff keeps its small preparation inline.
+#[allow(clippy::large_enum_variant)]
+pub(super) enum Highlights {
+    Standard {
+        prepared: Arc<highlight::Prepared>,
+    },
+    ColorField {
+        prepared: color_field::Prepared,
+        original: usize,
+        black: usize,
+        unrepaired: usize,
+    },
+}
+impl Highlights {
+    pub fn append(
+        self,
+        graph: &mut Graph,
+        input: usize,
+        grid: Option<&super::preview::Grid>,
+    ) -> Result<usize> {
+        let working = grid.map(|g| g.grid);
+        match self {
+            Self::Standard { prepared } => graph.add(
+                Operation::Highlights(Arc::new((*prepared).clone().on_grid(working))),
+                &[input],
+            ),
+            Self::ColorField {
+                prepared,
+                original,
+                black,
+                unrepaired,
+            } => {
+                // Recovery still needs the measured scalar table after native
+                // sensor buffers have been released.
+                graph.retain_for_seal(black);
+                let (original, unrepaired) = if let Some(grid) = grid {
+                    (
+                        grid.append(graph, original)?,
+                        grid.append(graph, unrepaired)?,
+                    )
+                } else {
+                    (original, unrepaired)
+                };
+                graph.add(
+                    Operation::ColorField(prepared.on_grid(working)),
+                    &[input, original, black, unrepaired],
+                )
+            }
+        }
+    }
+}
+
+/// Each speckle input follows the same sampling grid. Only Compact needs codes.
+pub(super) struct Speckles {
+    prepared: despeckle::Prepared,
+    sensor_codes: usize,
+}
+impl Speckles {
+    pub fn append(
+        self,
+        graph: &mut Graph,
+        input: usize,
+        grid: Option<&super::preview::Grid>,
+    ) -> Result<usize> {
+        let mut inputs = vec![input];
+        if self.prepared.needs_sensor_codes() {
+            inputs.push(match grid {
+                Some(grid) => grid.append(graph, self.sensor_codes)?,
+                None => self.sensor_codes,
+            });
+        }
+        graph.add(
+            Operation::Despeckle(self.prepared.on_grid(grid.map(|grid| grid.grid))),
+            &inputs,
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -172,7 +255,7 @@ pub(super) fn build(
         calibrated = graph.add(Operation::Repair(prepared), &[calibrated, input])?;
         finish!();
     }
-    if settings.highlight_restoration
+    let highlights = if settings.highlight_restoration
         && settings.highlight_mode == crate::render::HighlightMode::ColorField
     {
         let prepared = profile.measure("prepare color-field highlights", || {
@@ -184,11 +267,12 @@ pub(super) fn build(
                 settings.color_field,
             )
         })?;
-        calibrated = graph.add(
-            Operation::ColorField(prepared),
-            &[calibrated, input, black, unrepaired],
-        )?;
-        finish!();
+        Some(Highlights::ColorField {
+            prepared,
+            original: input,
+            black,
+            unrepaired,
+        })
     } else if settings.highlight_restoration {
         let prepared = match highlight_params {
             Some(prepared) => prepared,
@@ -197,11 +281,39 @@ pub(super) fn build(
                     .map(Arc::new)
             })?,
         };
-        calibrated = graph.add(Operation::Highlights(prepared), &[calibrated])?;
-        finish!();
-    }
+        Some(Highlights::Standard { prepared })
+    } else {
+        None
+    };
+    Ok(Output::Ready {
+        recipe: BuiltRecipe {
+            graph,
+            final_id: calibrated,
+            params,
+            rgb_extent: [params.source[0], params.source[1]],
+            rgb_bounds: params.crop,
+        },
+        highlights,
+        calibration_gains,
+        sensor_codes: input,
+    })
+}
+
+/// Prepare later spatial corrections only after earlier requested outputs exist.
+pub(super) fn prepare_working(
+    metadata: &Metadata,
+    settings: &Settings,
+    calibration_gains: [f32; 3],
+    sensor_codes: usize,
+    reference_rows: bool,
+    profile: &mut Profile,
+) -> Result<(
+    Option<crate::noise::Couplings>,
+    Option<banding::Description>,
+    Option<Speckles>,
+)> {
     let mut couplings = None;
-    if settings.despeckle {
+    let speckles = if settings.despeckle {
         let recipe = profile.measure("prepare noise couplings", || {
             crate::noise::couplings(
                 metadata,
@@ -214,32 +326,21 @@ pub(super) fn build(
             despeckle::prepare(metadata, calibration_gains, recipe.despeckle_scale)?
                 .with_controls(settings.merrill_speckles)
         })?;
-        calibrated = graph.add(Operation::Despeckle(prepared), &[calibrated, input])?;
-        finish!();
-    }
-    // Keep the native boundary through refinement so returning to a sampled
-    // overview does not repeat sensor repair and highlights.
-    if policy.retain_calibrated {
-        graph.retain_for_session(calibrated);
-    }
-    let rows = if policy.reference_rows {
+        Some(Speckles {
+            prepared,
+            sensor_codes,
+        })
+    } else {
+        None
+    };
+    let rows = if reference_rows {
         Some(profile.measure("prepare row correction", || {
             banding::describe(metadata, calibration_gains)
         })?)
     } else {
         None
     };
-    Ok(Output::Ready {
-        recipe: BuiltRecipe {
-            graph,
-            final_id: calibrated,
-            params,
-            rgb_extent: [params.source[0], params.source[1]],
-            rgb_bounds: params.crop,
-        },
-        couplings,
-        rows,
-    })
+    Ok((couplings, rows, speckles))
 }
 
 #[cfg(test)]

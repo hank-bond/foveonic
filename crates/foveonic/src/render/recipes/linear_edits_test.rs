@@ -1227,8 +1227,32 @@ fn original_auto_exposure_matches_manual_preview_cache_and_dng_appearance() {
 }
 
 #[test]
+fn adaptive_analysis_policy_caps_profile_targets_at_the_working_grid() {
+    use crate::{render::BaseResponse, source::ProcessingFamily};
+    for (family, natural, strong) in [
+        (ProcessingFamily::Classic, 4, 2),
+        (ProcessingFamily::Merrill, 8, 4),
+        (ProcessingFamily::Quattro, 8, 4),
+    ] {
+        let thumb = ControlCapabilities::from_family(family).thumb_scale();
+        for (profile, target) in [
+            (BaseResponse::Natural, natural),
+            (BaseResponse::Strong, strong),
+        ] {
+            for divisor in [1, 2, 4, 8, 16, 64, 1 << 31] {
+                let mut settings = Settings::new("Sunlight", "Standard");
+                settings.photographic.base_response = profile;
+                settings.working_scale = Scale::new(divisor).unwrap();
+                let analysis = super::adaptive_analysis_scale(&settings, thumb).unwrap();
+                assert_eq!(analysis.divisor(), divisor.max(target));
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a supported X3F"]
-fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews() {
+fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid() {
     use crate::{
         graph::Operation,
         interactive::Execution,
@@ -1245,25 +1269,24 @@ fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews(
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         for response in [BaseResponse::Natural, BaseResponse::Strong] {
             settings.photographic.base_response = response;
-            let qualities = if settings
-                .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
-            {
-                vec![Scale::NATIVE, Scale::new(2).unwrap()]
-            } else {
-                vec![Scale::NATIVE]
-            };
-            let mut expected_analysis = None;
-            let mut expected_fit = None;
-            let mut full_extent = None;
-            for quality in qualities {
+            let mut qualities: Vec<_> = [1, 2, 4, 8, 16, 64]
+                .into_iter()
+                .map(|divisor| (Scale::new(divisor).unwrap(), None))
+                .collect();
+            if settings.regional_preview_available(&source.metadata) {
+                qualities.push((Scale::NATIVE, Some([100, 100, 400, 300])));
+            }
+            let mut expected = std::collections::HashMap::new();
+            for (quality, region) in qualities {
                 settings.working_scale = quality;
+                settings.preview_region = region;
                 let mut profile = Profile::default();
                 let mut execution = Execution::default();
                 let built = super::super::build_camera(
                     &engine,
                     crate::render::recipes::RecipeInput::Original(&source),
                     &settings,
-                    &["final"],
+                    &["final", "base-response.mask", "base-response.analysis-mask"],
                     &mut profile,
                     &mut execution,
                 )
@@ -1309,58 +1332,43 @@ fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews(
                 let [input, mask, analysis_rgb, analysis_mask, actual] = images.as_slice() else {
                     panic!("missing inputs")
                 };
-                if quality == Scale::NATIVE {
-                    if caps.family == crate::source::ProcessingFamily::Classic {
-                        assert_eq!(analysis_rgb.description.extent, input.description.extent);
-                    } else {
-                        for (small, large) in analysis_rgb
-                            .description
-                            .extent
-                            .into_iter()
-                            .zip(input.description.extent)
-                        {
-                            assert!((small as f32 / large as f32 - 0.5).abs() < 0.01);
-                        }
-                    }
+                let expected_scale =
+                    super::adaptive_analysis_scale(&settings, caps.thumb_scale()).unwrap();
+                assert_eq!(analysis_rgb.settings.working_scale, expected_scale);
+                assert_eq!(analysis_mask.settings.working_scale, expected_scale);
+                assert_eq!(input.settings.working_scale, quality);
+                if quality == expected_scale && region.is_none() {
+                    assert_eq!(analysis_rgb.description.extent, input.description.extent);
+                    assert_eq!(analysis_rgb.buffer.identity(), input.buffer.identity());
                 }
                 let gpu = engine.test_gpu();
                 let bytes = gpu.readback(&analysis_rgb.buffer).unwrap();
                 let guide = gpu.readback(&analysis_mask.buffer).unwrap();
-                if let Some((rgb, mask, key)) = &expected_analysis {
-                    assert_eq!(
-                        &bytes, rgb,
-                        "{response:?} {quality:?} changed analysis pixels"
-                    );
-                    assert_eq!(
-                        &guide, mask,
-                        "{response:?} {quality:?} changed analysis guide"
-                    );
-                    assert!(
-                        analysis_params.key() == *key,
-                        "preview quality changed fit parameters"
-                    );
-                } else {
-                    expected_analysis = Some((bytes, guide, analysis_params.key()));
-                }
-                if let Some(native) = full_extent {
-                    for (small, large) in analysis_rgb.description.extent.into_iter().zip(native) {
-                        assert!(
-                        (small as f32 / large as f32 - 0.5).abs() < 0.01,
-                        "analysis must use quarter pixels: analysis {:?}, main {:?}, baseline {:?}, quality {:?}", analysis_rgb.description.extent, input.description.extent, native, quality
-                    );
-                    }
-                } else {
-                    full_extent = Some(input.description.extent);
-                }
+                let pack = |image: &crate::image::RenderedImage| {
+                    let bytes = gpu.readback(&image.buffer).unwrap();
+                    let values: &[f32] = bytemuck::cast_slice(&bytes);
+                    let [width, height] = image.description.extent;
+                    let cells: Vec<f32> = (0..height)
+                        .step_by(2)
+                        .flat_map(|y| {
+                            (0..width)
+                                .step_by(2)
+                                .map(move |x| values[(y * width + x) as usize])
+                        })
+                        .collect();
+                    gpu.upload("Inspected brightness cells", &cells).unwrap()
+                };
+                let mask_cells = pack(mask);
+                let analysis_cells = pack(analysis_mask);
                 let replay = apply_with_analysis(
                     gpu,
                     Samples {
                         rgb: &input.buffer,
-                        mask: &mask.buffer,
+                        mask: &mask_cells,
                     },
                     Samples {
                         rgb: &analysis_rgb.buffer,
-                        mask: &analysis_mask.buffer,
+                        mask: &analysis_cells,
                     },
                     &curve,
                     params,
@@ -1368,18 +1376,31 @@ fn original_adaptive_tone_shares_the_architecture_analysis_grid_across_previews(
                     &mut Profile::default(),
                 )
                 .unwrap();
-                assert_eq!(
-                    gpu.readback(&replay.rgb).unwrap(),
-                    gpu.readback(&actual.buffer).unwrap()
+                assert!(
+                    gpu.readback(&replay.rgb).unwrap() == gpu.readback(&actual.buffer).unwrap(),
+                    "inspection replay changed RGB output"
                 );
                 let fit = gpu.readback(&replay.amounts).unwrap();
-                if let Some(expected) = &expected_fit {
+                let sample = (bytes, guide, analysis_params.key(), fit);
+                if let Some((rgb, mask, key, fit)) = expected.get(&expected_scale) {
                     assert_eq!(
-                        &fit, expected,
-                        "{response:?} {quality:?} changed the fitted response"
+                        &sample.0, rgb,
+                        "analysis RGB changed at {quality:?} {region:?}"
+                    );
+                    assert_eq!(
+                        &sample.1, mask,
+                        "analysis guide changed at {quality:?} {region:?}"
+                    );
+                    assert!(
+                        sample.2 == *key,
+                        "analysis parameters changed at {quality:?} {region:?}"
+                    );
+                    assert_eq!(
+                        &sample.3, fit,
+                        "fitted amounts changed at {quality:?} {region:?}"
                     );
                 } else {
-                    expected_fit = Some(fit);
+                    expected.insert(expected_scale, sample);
                 }
                 assert!(
                     bytemuck::cast_slice::<u8, f32>(&gpu.readback(&actual.buffer).unwrap())

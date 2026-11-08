@@ -31,12 +31,13 @@ fn gpu_color_field_boundary_preserves_distant_samples_and_supported_luminance() 
     let black = gpu.upload("boundary black", &[0_f32; 3]).unwrap();
     for brightness in [1, 2] {
         let prepared = Prepared {
+            grid: None,
             params: Params {
                 size: [width as u32, height as u32, (width * height) as u32, 0],
                 grid: [6, 4, 24, 8],
                 crop: [0, 0, width as u32, height as u32],
                 gain: [1.; 4],
-                white: [1.; 4],
+                white: [1., 1., 1., 0.],
                 neutral: [neutral[0] as f32, neutral[1] as f32, neutral[2] as f32, 0.],
                 luminance: [luminance[0], luminance[1], luminance[2], 0.],
                 metric: color_metric(neutral, matrix).unwrap(),
@@ -67,6 +68,7 @@ fn gpu_color_field_boundary_preserves_distant_samples_and_supported_luminance() 
         let output = apply(
             &gpu,
             Inputs {
+                clipping: None,
                 input: &input,
                 original: &original,
                 black: &black,
@@ -153,12 +155,13 @@ fn gpu_color_field_boundary_brightness_is_continuous_through_zero() {
     let black = gpu.upload("cross-zero black", &[0_f32; 3]).unwrap();
     for brightness in [1, 2] {
         let prepared = Prepared {
+            grid: None,
             params: Params {
                 size: [width as u32, height as u32, (width * height) as u32, 0],
                 grid: [6, 4, 24, 8],
                 crop: [0, 0, width as u32, height as u32],
                 gain: [1.; 4],
-                white: [1.; 4],
+                white: [1., 1., 1., 0.],
                 neutral: [neutral[0] as f32, neutral[1] as f32, neutral[2] as f32, 0.],
                 luminance: [y[0], y[1], y[2], 0.],
                 metric: color_metric(neutral, matrix).unwrap(),
@@ -170,6 +173,7 @@ fn gpu_color_field_boundary_brightness_is_continuous_through_zero() {
         let output = apply(
             &gpu,
             Inputs {
+                clipping: None,
                 input: &input,
                 original: &original,
                 black: &black,

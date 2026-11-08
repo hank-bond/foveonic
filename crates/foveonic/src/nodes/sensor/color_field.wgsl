@@ -18,6 +18,12 @@
 @group(0) @binding(17) var<storage,read_write> output_pixels:array<f32>;
 @group(0) @binding(18) var<storage,read> unrepaired:array<f32>;
 @group(0) @binding(19) var<storage,read_write> row_blocks:array<u32>;
+@group(0) @binding(21) var<storage,read> original_clipping:array<u32>;
+fn clipped_reliability(p:u32,q:vec3<u32>)->vec3<u32> {
+    if params.white.w==0.0{return q;}
+    let f=original_clipping[p];
+    return vec3(select(q.x,0u,(f&4u)!=0u),select(q.y,0u,(f&2u)!=0u),select(q.z,0u,(f&1u)!=0u));
+}
 struct CompactParams { size:vec4<u32> }; // extent, counter slot, reserved, reserved
 @group(0) @binding(20) var<uniform> compact_params:CompactParams;
 var<workgroup> row_scan:array<u32,256>;
@@ -81,7 +87,7 @@ fn connection(i:u32,k:u32)->f32{
 fn original_q(p:u32)->vec3<f32> {
     let c=p*3u;let b=vec3(black[0],black[1],black[2]);
     let raw=(vec3(original[c],original[c+1u],original[c+2u])-b)/(params.white.xyz-b);
-    return vec3(f32(reliability(raw.x)),f32(reliability(raw.y)),f32(reliability(raw.z)))/255.0;
+    return vec3<f32>(clipped_reliability(p,vec3(reliability(raw.x),reliability(raw.y),reliability(raw.z))))/255.0;
 }
 fn reliability_codes(q:vec3<f32>)->vec3<u32> {
     return vec3<u32>(floor(q*255.0+0.5));
@@ -114,15 +120,18 @@ fn source_severe(xy:vec2<i32>)->bool {
     let p=(u32(xy.y)*params.size.x+u32(xy.x))*3u;
     let b=vec3(black[0],black[1],black[2]);
     let raw=(vec3(original[p],original[p+1u],original[p+2u])-b)/(params.white.xyz-b);
-    return countOneBits(u32(raw.x>=0.97)|(u32(raw.y>=0.97)<<1u)|(u32(raw.z>=0.97)<<2u))>=2u;
+    var severe=u32(raw.x>=0.97)|(u32(raw.y>=0.97)<<1u)|(u32(raw.z>=0.97)<<2u);
+    if params.white.w!=0.0 {let f=original_clipping[p/3u];severe|=((f&4u)>>2u)|(f&2u)|((f&1u)<<2u);}
+    return countOneBits(severe)>=2u;
 }
 fn boundary_influence(xy:vec2<u32>)->f32 {
     var nearest=100.0;
-    for(var dy=-4;dy<=4;dy++){for(var dx=-4;dx<=4;dx++){
+    let radius=i32(select(4u,params.options.w,params.options.w!=0u));
+    for(var dy=-radius;dy<=radius;dy++){for(var dx=-radius;dx<=radius;dx++){
         let distance=length(vec2<f32>(f32(dx),f32(dy)));
         if distance<nearest && source_severe(vec2<i32>(xy)+vec2(dx,dy)){nearest=distance;}
     }}
-    return 1.0-smoothstep(0.0,4.0,nearest);
+    return 1.0-smoothstep(0.0,f32(radius),nearest);
 }
 fn boundary_ceiling(influence:f32)->u32 {
     return u32(clamp(floor(255.0*(1.0-influence)+0.5),0.0,255.0));
@@ -149,7 +158,7 @@ fn field_reliability(p:u32,xy:vec2<u32>,q:vec3<u32>)->vec3<u32> {
 fn prepare_source(@builtin(global_invocation_id)id:vec3<u32>){
     let p=id.x;if p>=params.size.z{return;}let xy=vec2(p%params.size.x,p/params.size.x);
     let c=p*3u;let b=vec3(black[0],black[1],black[2]);let raw=(vec3(original[c],original[c+1u],original[c+2u])-b)/(params.white.xyz-b);
-    let raw_q=vec3<u32>(reliability(raw.x),reliability(raw.y),reliability(raw.z));
+    let raw_q=clipped_reliability(p,vec3<u32>(reliability(raw.x),reliability(raw.y),reliability(raw.z)));
     let q=field_reliability(p,xy,raw_q);var mask=pack_reliability(q);
     if params.options.z!=0u && any(vec3(calibrated[c],calibrated[c+1u],calibrated[c+2u])!=vec3(unrepaired[c],unrepaired[c+1u],unrepaired[c+2u])){mask|=0x1000000u;}
     atomicStore(&masks[p],mask);

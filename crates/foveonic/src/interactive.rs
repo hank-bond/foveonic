@@ -1,6 +1,7 @@
 //! Reuses active-edit GPU inputs and bounded repair preparation while preserving earlier images.
 
 use crate::{
+    diagnostics::{self, Category},
     graph::{DataType, Graph},
     recipe::Key,
     render::{Settings, Value},
@@ -76,6 +77,10 @@ impl RenderSession {
     /// Exports need the original samples, not the cached result of a slider edit.
     pub fn source(&self) -> &Source {
         &self.source
+    }
+    /// Borrow the immutable decoded input without moving the active native session.
+    pub fn shared_source(&self) -> Arc<Source> {
+        self.source.clone()
     }
 
     /// Release native editing checkpoints while transferring decoded-source ownership.
@@ -348,6 +353,7 @@ impl Cache {
             .as_ref()
             .is_none_or(|old| !Arc::ptr_eq(old, owner))
         {
+            self.observe_invalidation("engine-owner");
             *self = Self {
                 owner: Some(owner.clone()),
                 ..Default::default()
@@ -357,6 +363,7 @@ impl Cache {
     /// Source provenance stays alive independently of decoded samples and reload metadata.
     pub(crate) fn bind_source(&mut self, source: &crate::source::SourceOrigin) {
         if self.source.as_ref().is_none_or(|old| old != source) {
+            self.observe_invalidation("source-origin");
             let owner = self.owner.clone();
             *self = Self {
                 owner,
@@ -376,6 +383,72 @@ impl Cache {
             })
             .map(|(_, entry)| entry.value.buffer.size())
             .sum()
+    }
+    fn diagnostic_source(&self, fields: &mut diagnostics::Fields<'_>) {
+        match &self.source {
+            Some(crate::source::SourceOrigin::File(identity)) => {
+                fields.str("cache_source", &String::from_utf8_lossy(&identity.location));
+            }
+            Some(crate::source::SourceOrigin::Memory(_)) => {
+                fields.str("cache_source_kind", "memory");
+            }
+            None => {
+                fields.str("cache_source_kind", "unbound");
+            }
+        }
+        fields.u64("cache_frame", self.frame);
+    }
+    fn observe_invalidation(&self, reason: &'static str) {
+        if self.entries.is_empty() && self.working.versions.is_empty() {
+            return;
+        }
+        diagnostics::event(Category::Cache, "cache.checkpoint.invalidated", |fields| {
+            self.diagnostic_source(fields);
+            fields
+                .str("reason", reason)
+                .u64("entries", self.entries.len() as u64)
+                .u64("cache_gpu_reference_bytes", self.bytes());
+        });
+    }
+    fn observe_checkpoint(
+        &self,
+        event: &'static str,
+        reason: &'static str,
+        version: &Version,
+        bytes: u64,
+    ) {
+        diagnostics::event(Category::Cache, event, |fields| {
+            self.diagnostic_source(fields);
+            fields
+                .str("reason", reason)
+                .str("role", version.recipe.role)
+                .u64("generation", version.generation)
+                .u64("buffer_reference_bytes", bytes)
+                .bool(
+                    "selected",
+                    self.current_priority(version.generation).is_some(),
+                )
+                .bool(
+                    "sensor_dependency",
+                    self.required_cuts.contains(&version.generation)
+                        || self.working.cuts.contains(&version.generation),
+                )
+                .bool(
+                    "restart_input",
+                    self.active_restart.contains(&version.generation),
+                );
+        });
+    }
+    /// Referenced bytes identify the entry, not memory freed: display frames or
+    /// another checkpoint may still share the same immutable buffer allocation.
+    fn remove_entry(&mut self, index: usize, reason: &'static str) {
+        let entry = self.entries.remove(index);
+        self.observe_checkpoint(
+            "cache.checkpoint.evicted",
+            reason,
+            &entry.version,
+            entry.value.buffer.size(),
+        );
     }
     pub(crate) fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
         let mut bytes = self.entries.capacity() * std::mem::size_of::<Entry>()
@@ -672,6 +745,56 @@ impl Cache {
                 entry.used = self.frame;
             }
         }
+        diagnostics::event(Category::Cache, "cache.checkpoint.plan", |fields| {
+            self.diagnostic_source(fields);
+            fields
+                .bool("initial", initial)
+                .bool("changed", changed)
+                .bool("sealing", sealing)
+                .u64("outputs", graph.outputs.len() as u64)
+                .u64("targets", targets.len() as u64)
+                .u64(
+                    "cached_outputs",
+                    cached.iter().filter(|cached| **cached).count() as u64,
+                )
+                .u64(
+                    "reused_outputs",
+                    needed
+                        .iter()
+                        .zip(&cached)
+                        .filter(|(needed, cached)| **needed && **cached)
+                        .count() as u64,
+                )
+                .u64("selected_inputs", self.working.selected.len() as u64)
+                .u64(
+                    "missing_selected_inputs",
+                    self.working
+                        .selected
+                        .iter()
+                        .filter(|name| {
+                            self.working.versions.get(*name).is_some_and(|version| {
+                                !self
+                                    .entries
+                                    .iter()
+                                    .any(|entry| entry.version.generation == version.generation)
+                            })
+                        })
+                        .count() as u64,
+                )
+                .u64(
+                    "missing_restart_inputs",
+                    self.working
+                        .restart
+                        .iter()
+                        .filter(|generation| {
+                            !self
+                                .entries
+                                .iter()
+                                .any(|entry| entry.version.generation == **generation)
+                        })
+                        .count() as u64,
+                );
+        });
         Ok(graph
             .outputs
             .iter()
@@ -690,6 +813,19 @@ impl Cache {
     }
     fn put(&mut self, name: &str, value: &Value) {
         if value.buffer.size() > Self::LIMIT {
+            if self
+                .working
+                .selected
+                .iter()
+                .any(|selected| selected == name)
+            {
+                self.observe_checkpoint(
+                    "cache.checkpoint.rejected",
+                    "value-capacity",
+                    &self.working.versions[name],
+                    value.buffer.size(),
+                );
+            }
             return;
         }
         if !self
@@ -708,6 +844,12 @@ impl Cache {
         {
             entry.used = self.frame;
             entry.pinned |= self.working.cuts.contains(&version.generation);
+            self.observe_checkpoint(
+                "cache.checkpoint.admitted",
+                "existing-version",
+                &version,
+                value.buffer.size(),
+            );
             return;
         }
         let pinned = self.working.cuts.contains(&version.generation);
@@ -736,9 +878,15 @@ impl Cache {
                 })
                 .map(|(index, _)| index);
             let Some(index) = candidate else {
+                self.observe_checkpoint(
+                    "cache.checkpoint.rejected",
+                    "local-priority",
+                    &version,
+                    value.buffer.size(),
+                );
                 return;
             };
-            self.entries.remove(index);
+            self.remove_entry(index, "local-pixel-capacity");
         }
         self.entries.push(Entry {
             version,
@@ -746,6 +894,13 @@ impl Cache {
             pinned,
             used: self.frame,
         });
+        let entry = self.entries.last().unwrap();
+        self.observe_checkpoint(
+            "cache.checkpoint.admitted",
+            "new-version",
+            &entry.version,
+            entry.value.buffer.size(),
+        );
     }
     fn current_priority(&self, generation: u64) -> Option<(u8, usize)> {
         self.working
@@ -832,7 +987,14 @@ impl Cache {
             })
             .map(|(index, _)| index);
         let Some(index) = candidate else { return false };
-        self.entries.remove(index);
+        self.remove_entry(
+            index,
+            if obsolete_only {
+                "shared-obsolete-history"
+            } else {
+                "shared-optional-frontier"
+            },
+        );
         self.prune_identities();
         true
     }
@@ -857,7 +1019,7 @@ impl Cache {
             let Some(index) = candidate else {
                 break;
             };
-            self.entries.remove(index);
+            self.remove_entry(index, "local-owner-capacity");
             self.prune_identities();
         }
     }
@@ -1203,6 +1365,7 @@ mod tests {
         let mut cache = Cache::default();
         let checkpoints = cache.plan(&graph, &[root]).unwrap();
         let value = Value {
+            view_baked: false,
             buffer: gpu.upload("restart input", &[1_f32; 3]).unwrap(),
             description: None,
             working_scale: crate::render::Scale::NATIVE,
@@ -1547,6 +1710,7 @@ mod tests {
         let gpu = crate::gpu::Gpu::new().unwrap();
         let buffer = gpu.upload("cache alias", &[0_f32; 16]).unwrap();
         let value = Value {
+            view_baked: false,
             buffer,
             description: None,
             working_scale: crate::render::Scale::NATIVE,
@@ -1622,6 +1786,7 @@ mod tests {
         cache.put(
             "finish.base",
             &Value {
+                view_baked: false,
                 buffer: gpu.upload("retained edit input", &[0.3_f32; 3]).unwrap(),
                 description: None,
                 working_scale: crate::render::Scale::NATIVE,

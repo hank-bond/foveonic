@@ -239,7 +239,11 @@ fn highlight_thresholds_share_clipping_evidence_and_remain_exact() {
     let mut cache = Cache::default();
     let original = cache.highlights(&metadata, None).unwrap();
     let repeated = cache.highlights(&metadata, None).unwrap();
-    assert!(Arc::ptr_eq(&original, &repeated));
+    assert!(original
+        .flags
+        .as_ref()
+        .unwrap()
+        .shares_storage(repeated.flags.as_ref().unwrap()));
     let changed = cache.highlights(&metadata, Some(-1.)).unwrap();
     assert!(!Arc::ptr_eq(&original, &changed));
     assert!(original
@@ -254,9 +258,13 @@ fn highlight_thresholds_share_clipping_evidence_and_remain_exact() {
     );
     assert_eq!(cache.bytes(), metadata.width * metadata.height * 4);
     assert!(cache.highlights(&metadata, Some(f32::NAN)).is_err());
-    assert!(Arc::ptr_eq(
-        &changed,
-        &cache.highlights(&metadata, Some(-1.)).unwrap()
+    assert!(changed.flags.as_ref().unwrap().shares_storage(
+        cache
+            .highlights(&metadata, Some(-1.))
+            .unwrap()
+            .flags
+            .as_ref()
+            .unwrap()
     ));
     let other = Arc::new((*metadata).clone());
     let changed_source = cache.highlights(&other, Some(-1.)).unwrap();
@@ -491,10 +499,12 @@ fn deferred_highlights_keep_small_keys_and_materialize_only_when_needed() {
         bytemuck::bytes_of(&description.params)
     );
     assert!(first.flags.is_some());
-    assert!(Arc::ptr_eq(
-        &first,
-        &cache
+    assert!(first.flags.as_ref().unwrap().shares_storage(
+        cache
             .materialize_highlights(&metadata, &description)
+            .unwrap()
+            .flags
+            .as_ref()
             .unwrap()
     ));
     let warm = highlight::deferred(&metadata, Some(-1.)).unwrap();
@@ -512,4 +522,34 @@ fn deferred_highlights_keep_small_keys_and_materialize_only_when_needed() {
         bytemuck::bytes_of(&next.params),
         bytemuck::bytes_of(&highlight::prepare(&metadata, Some(-0.5)).unwrap().params)
     );
+}
+
+#[test]
+fn clipping_cache_shares_consumers_and_separates_native_and_working_grids() {
+    use crate::render::{Scale, WorkingGrid};
+    let metadata = metadata();
+    let mut cache = Cache::default();
+    let native = cache.clipping_flags(&metadata, None).unwrap();
+    let grid = WorkingGrid::new(
+        [metadata.width as u32, metadata.height as u32],
+        Scale::new(4).unwrap(),
+        8,
+    )
+    .unwrap()
+    .with_halo(4)
+    .unwrap();
+    let reduced = cache.clipping_flags(&metadata, Some(grid)).unwrap();
+    assert!(!native.shares_storage(&reduced));
+    assert_eq!(reduced.len(), (grid.extent[0] * grid.extent[1]) as usize);
+    let description = highlight::deferred(&metadata, Some(-1.))
+        .unwrap()
+        .on_grid(Some(grid));
+    let restoration = cache
+        .materialize_highlights(&metadata, &description)
+        .unwrap();
+    assert!(reduced.shares_storage(restoration.flags.as_ref().unwrap()));
+    assert_eq!(cache.bytes(), reduced.len() * 4);
+    let native_again = cache.clipping_flags(&metadata, None).unwrap();
+    assert_eq!(native, native_again);
+    assert!(!native.shares_storage(&native_again));
 }

@@ -1,4 +1,4 @@
-struct Params { shape: vec4<u32>, controls: vec4<u32>, origin: vec4<u32> }
+struct Params { shape: vec4<u32>, controls: vec4<u32> }
 @group(0) @binding(0) var<storage, read> source: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read_write> destination: array<f32>;
@@ -17,10 +17,7 @@ fn pyramid_resample(@builtin(global_invocation_id) id: vec3<u32>) {
     // ComputeResampleParams at scale .5 has one four-tap phase advancing by two.
     // At scale 2 it alternates two-tap phases, advancing by one then zero.
     // Both use origin -1 and replicate source edges in each separable pass.
-    let origin = select(params.origin.x, params.origin.y, vertical);
-    // Padding repeats completed filtered cells, including the first/last phase.
-    let logical_coordinate = clamp(i32(coordinate) - i32(origin), 0, i32((source_length + 1u) / 2u) - 1);
-    var start = logical_coordinate * 2 - 1;
+    var start = i32(coordinate) * 2 - 1;
     var count = 4u;
     var weights = vec4<f32>(0.125, 0.375, 0.375, 0.125);
     if doubling {
@@ -38,11 +35,6 @@ fn pyramid_resample(@builtin(global_invocation_id) id: vec3<u32>) {
         // Each product and addition round separately in the native Float32 loop.
         let term = fma(value, vec3<f32>(weights[k]), vec3<f32>(0.0));
         total = fma(vec3<f32>(1.0), total, term);
-    }
-    // Signed-code consumers narrow integers. Round once after both filter axes
-    // so negative fractional codes do not acquire a truncation bias.
-    if vertical && params.controls.z != 0u {
-        total = sign(total) * floor(abs(total) + vec3<f32>(0.5));
     }
     let out = (id.y * out_width + id.x) * 3u;
     destination[out] = total.x;

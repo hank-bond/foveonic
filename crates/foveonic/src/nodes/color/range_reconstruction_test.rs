@@ -44,7 +44,7 @@ fn sampled_controls_preserve_code_units_and_native_physical_support() {
     for power in 1..32 {
         let scale = Scale::new(1 << power).unwrap();
         let sampled = native.clone().on_grid(scale);
-        let sigma = super::super::pyramid_resample::independent_noise_std(scale);
+        let sigma = crate::nodes::sensor::pool::independent_noise_std(scale);
         assert_eq!(
             sampled.color_noise[0][0],
             native.color_noise[0][0] * sigma * sigma

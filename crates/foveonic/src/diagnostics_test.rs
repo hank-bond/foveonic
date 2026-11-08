@@ -193,6 +193,8 @@ fn sdk_ring_buffer_bounds_capture_and_unsupported_configs_are_rejected() {
             fields.u64("index", index).str("payload", &text);
         });
     }
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    event(Category::Scenario, "overflow-tail-after-reset", |_| {});
     let directory = std::env::var_os("FOVEONIC_DIAGNOSTIC_SPIKE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| temporary.path().to_owned())

@@ -51,6 +51,35 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn preview_storage_policy_avoids_unused_handoffs_and_source_access() {
+    let fixture = Fixture::new();
+    let cache = Cache::at(fixture.root.join("cache"));
+    let metadata = Metadata {
+        width: 8,
+        height: 6,
+        rotation: 0,
+        processing_version: Some([3, 1, 2, 0]),
+        properties: [("CAMMODEL".into(), "SIGMA dp0 Quattro".into())].into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    let mut settings = crate::render::Settings::new("Sunlight", "Standard");
+    let preview = fixture.write(true, [100; 3]).preview;
+    fs::remove_file(&fixture.source).unwrap();
+    assert!(!cache.permits_preview_storage(&settings, &metadata).unwrap());
+    // Disabled storage must not inspect a source just to reject its preview.
+    cache
+        .save_preview(&fixture.source, &settings, &metadata, preview, None)
+        .unwrap();
+    cache.control.lock().unwrap().settings = Settings::default();
+    assert!(cache.permits_preview_storage(&settings, &metadata).unwrap());
+    settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
+    settings.photographic.base_response = crate::render::BaseResponse::Natural;
+    assert!(!cache.permits_preview_storage(&settings, &metadata).unwrap());
+    assert!(cache.control.lock().unwrap().preview.is_none());
+}
+
+#[test]
 fn user_defaults_invalidate_only_unsaved_rendered_previews_and_protect_them_from_late_jpegs() {
     let fixture = Fixture::new();
     let root = fixture.root.join("cache");

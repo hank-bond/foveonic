@@ -324,6 +324,7 @@ pub(crate) fn pick(gpu: &Gpu, guide: &ReadGuard, params: PickParams) -> Result<S
         [1, 1],
         &mut trace,
     );
+    gpu.finish_capture_trace(&trace)?;
     let bytes = gpu.readback(&output)?;
     Ok(*bytemuck::from_bytes::<Sample>(&bytes))
 }

@@ -75,9 +75,7 @@ pub enum Kernel {
     HlpCalibration,
     UvConvert,
     UvClassify,
-    PoolSignalHorizontal,
-    PoolSignalVertical,
-    PoolSignalPad,
+    PoolSignal,
     PyramidResample,
     RgbPrefilterGain,
     RgbPrefilterBlend,
@@ -153,6 +151,7 @@ pub enum Kernel {
     ToneMaskVertical,
     ToneMaskUpdate,
     ToneMaskFinish,
+    ToneMaskExpand,
     ToneEqualizerGain,
     ToneEqualizerApply,
     Encode,
@@ -405,9 +404,7 @@ impl Kernel {
             Self::HlpCalibration => "calibrate sparse highlight pixels",
             Self::UvConvert => "convert camera components",
             Self::UvClassify => "classify chroma neighborhoods",
-            Self::PoolSignalHorizontal => "pool corrected signal rows",
-            Self::PoolSignalVertical => "pool corrected signal columns",
-            Self::PoolSignalPad => "extend corrected signal edges",
+            Self::PoolSignal => "pool working signal blocks",
             Self::PyramidResample => "resample RGB pyramid",
             Self::RgbPrefilterGain => "scale RGB prefilter components",
             Self::RgbPrefilterBlend => "blend repaired RGB components",
@@ -495,7 +492,8 @@ impl Kernel {
             Self::ToneMaskCoefficients => "tonal guided coefficients",
             Self::ToneMaskVertical => "tonal coefficient vertical mean",
             Self::ToneMaskUpdate => "HDR multiscale base update",
-            Self::ToneMaskFinish => "spatial tonal brightness mask",
+            Self::ToneMaskFinish => "compact tonal brightness guide",
+            Self::ToneMaskExpand => "expand tonal guide for inspection",
             Self::ToneEqualizerGain => "HDR coordinated gains",
             Self::ToneEqualizerApply => "apply tonal range exposure",
             Self::Encode => "encode",
@@ -687,6 +685,8 @@ impl Gpu {
         profile: &mut crate::profile::Profile,
     ) -> Result<Self> {
         let began = profile.mode.enabled().then(std::time::Instant::now);
+        let _scope =
+            crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.pipelines.create");
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         let black = include_str!("../nodes/sensor/black.wgsl");
         let noise = include_str!("../nodes/color/noise_base.wgsl");
@@ -765,13 +765,14 @@ impl Gpu {
             include_str!("../nodes/finish/perceptual_color.wgsl"),
             include_str!("../nodes/finish/advanced_color.wgsl")
         );
+        let brightness_guide = include_str!("../nodes/finish/brightness_guide.wgsl");
         let tonal = format!(
-            "{}\n{}",
+            "{brightness_guide}\n{}\n{}",
             include_str!("../nodes/finish/hdr_response.wgsl"),
             include_str!("../nodes/finish/tone_equalizer.wgsl")
         );
         let visibility = format!(
-            "{}\n{}\n{}",
+            "{brightness_guide}\n{}\n{}\n{}",
             include_str!("../nodes/finish/hdr_response.wgsl"),
             include_str!("../nodes/finish/adaptive_tone.wgsl"),
             include_str!("../nodes/finish/adaptive_tone_regions.wgsl")
@@ -1018,15 +1019,7 @@ impl Gpu {
                 include_str!("../nodes/color/uv_repair_classify.wgsl"),
                 "uv_classify",
             ),
-            (
-                include_str!("../nodes/sensor/pool.wgsl"),
-                "pool_signal_horizontal",
-            ),
-            (
-                include_str!("../nodes/sensor/pool.wgsl"),
-                "pool_signal_vertical",
-            ),
-            (include_str!("../nodes/sensor/pool.wgsl"), "pool_signal_pad"),
+            (include_str!("../nodes/sensor/pool.wgsl"), "pool_signal"),
             (
                 include_str!("../nodes/color/pyramid_resample.wgsl"),
                 "pyramid_resample",
@@ -1246,6 +1239,7 @@ impl Gpu {
             (tonal.as_str(), "mean_vertical"),
             (tonal.as_str(), "update_base"),
             (tonal.as_str(), "finish_mask"),
+            (tonal.as_str(), "expand_mask"),
             (tonal.as_str(), "calculate_gain"),
             (tonal.as_str(), "apply_ranges"),
             (include_str!("../nodes/finish/encode.wgsl"), "main"),
@@ -1535,6 +1529,13 @@ impl Gpu {
             .iter()
             .enumerate()
             .map(|(index, &(code, entry))| {
+                let _scope = crate::diagnostics::scope_with(
+                    crate::diagnostics::Category::Gpu,
+                    "gpu.shader.compile",
+                    |fields| {
+                        fields.str("entry", entry).u64("kernel", index as u64);
+                    },
+                );
                 let camera_repair = [
                     Kernel::CameraRepair as usize,
                     Kernel::CameraDetect as usize,
@@ -1649,6 +1650,7 @@ impl Gpu {
             shader_writes,
             adapter_name,
             activity: Default::default(),
+            diagnostics: Default::default(),
         })
     }
 }

@@ -9,7 +9,9 @@ implementation: conforming
 
 The Speckles control must move from Corrections into Noise for Merrill Color and Monochrome. Camera-record Bad pixels remains in Corrections. Noise-scoped recipes must copy the speckle enable state and settings. Corrections-scoped recipes must preserve them. Explicit Noise bypass must disable speckle processing while retaining the authored settings. Other camera families retain their existing correction scope.
 
-Reference must remain the default and reproduce the existing detector at threshold 1. The threshold control multiplies camera-derived thresholds, with lower values detecting more outliers. The Compact threshold slider must have a lower limit of 0.2. The optional Compact method targets bright isolated points and small clusters using immutable native-layer ring neighborhoods. Sizes 3, 5 and 7 specify the largest native neighborhood diameter. Every smaller radius must also be checked.
+Reference must remain the default and reproduce the existing detector at native resolution and threshold 1. The threshold control multiplies camera-derived thresholds, with lower values detecting more outliers. The Compact threshold slider must have a lower limit of 0.2. On reduced working grids, both methods must target bright extrema only. Native Reference retains its dark-extremum detector. Threshold tables remain scaled for independent noise in area-averaged samples. Raising every threshold to protect natural dark detail must not replace this distinction, since that can miss genuine bright defects.
+
+The optional Compact method targets bright isolated points and small clusters using immutable native-layer ring neighborhoods. Sizes 3, 5 and 7 specify the largest native neighborhood diameter. Every smaller radius must also be checked.
 
 Compact must make one repair decision per pixel. An outlier in any layer may trigger repair, including a defect confined to one layer. Repair must replace all three layers together using the same donor pixels and weights at one shared radius. Layer-specific thresholds must not leave a partially repaired white speckle. Protected highlight evidence in any layer must preserve the whole pixel.
 

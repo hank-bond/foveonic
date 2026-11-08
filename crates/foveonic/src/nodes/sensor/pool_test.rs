@@ -202,3 +202,115 @@ fn pooling_maps_each_component_frame_with_its_own_origin() {
         }
     );
 }
+
+#[test]
+fn area_noise_and_signed_rounding_follow_the_working_grid() {
+    use crate::render::Scale;
+    for divisor in [1, 2, 4, 8, 16, 64, 1 << 31] {
+        assert_eq!(
+            independent_noise_std(Scale::new(divisor).unwrap()),
+            1. / divisor as f32
+        );
+    }
+    let float = Prepared::new([8, 8], 2, Signal::Rgb).unwrap();
+    let signed = float.with_signed_codes();
+    assert_ne!(float.key(), signed.key());
+    assert_eq!(float.output_extent(), signed.output_extent());
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn signed_area_means_round_once_without_negative_bias() {
+    let gpu = Gpu::new().unwrap();
+    for extent in [[8, 8], [9, 7]] {
+        let pixels: Vec<f32> = (0..extent[1])
+            .flat_map(|y| {
+                (0..extent[0]).flat_map(move |x| {
+                    let v = if x % 2 == 0 && y % 2 == 0 { 1. } else { 0. };
+                    [v, -2. * v, -32768.]
+                })
+            })
+            .collect();
+        let input = gpu.upload("Signed area fixture", &pixels).unwrap();
+        let prepared = Prepared::new(extent, 2, Signal::Rgb)
+            .unwrap()
+            .with_signed_codes();
+        let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let actual: &[f32] = bytemuck::cast_slice(&bytes);
+        let [w, h] = prepared.output_extent();
+        for y in 0..h {
+            for x in 0..w {
+                let count = (extent[0] - x * 2).min(2) * (extent[1] - y * 2).min(2);
+                let expected = [1. / count as f32, -2. / count as f32, -32768.].map(f32::round);
+                let i = ((y * w + x) * 3) as usize;
+                assert_eq!(&actual[i..i + 3], expected);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn a_sensor_spike_reaches_one_logical_cell_with_one_dispatch() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [17_u32, 13];
+    for point in [[0, 0], [7, 5], [16, 12]] {
+        let mut pixels = vec![100_f32; (extent[0] * extent[1] * 3) as usize];
+        pixels[((point[1] * extent[0] + point[0]) * 3) as usize] += 4000.;
+        let input = gpu.upload("Localized sensor spike", &pixels).unwrap();
+        for divisor in [2, 4, 8, 64] {
+            let base = Prepared::new(extent, divisor, Signal::Rgb).unwrap();
+            let logical = base.logical_extent();
+            let p = base
+                .with_extent(logical.map(|v| v + 6))
+                .unwrap()
+                .with_origin([3, 3]);
+            let before = gpu.activity();
+            let output = apply(&gpu, &input, &p, &mut Profile::default()).unwrap();
+            let activity = gpu.activity().since(before);
+            assert_eq!(activity.dispatches, 1);
+            assert_eq!(
+                activity.storage_bytes,
+                output.size(),
+                "no intermediate image allocation"
+            );
+            let bytes = gpu.readback(&output).unwrap();
+            let actual: &[f32] = bytemuck::cast_slice(&bytes);
+            let [w, h] = p.output_extent();
+            let cell = point.map(|v| v / divisor);
+            let count = (extent[0] - cell[0] * divisor).min(divisor)
+                * (extent[1] - cell[1] * divisor).min(divisor);
+            let mut changed = 0;
+            for y in 0..h {
+                for x in 0..w {
+                    let logical_xy = [
+                        x.saturating_sub(3).min(logical[0] - 1),
+                        y.saturating_sub(3).min(logical[1] - 1),
+                    ];
+                    let i = ((y * w + x) * 3) as usize;
+                    let expected = if logical_xy == cell {
+                        100. + 4000. / count as f32
+                    } else {
+                        100.
+                    };
+                    assert!((actual[i] - expected).abs() < 0.001);
+                    assert_eq!(&actual[i + 1..i + 3], [100., 100.]);
+                    if x >= 3
+                        && x < 3 + logical[0]
+                        && y >= 3
+                        && y < 3 + logical[1]
+                        && actual[i] != 100.
+                    {
+                        changed += 1;
+                    }
+                }
+            }
+            assert_eq!(changed, 1);
+        }
+        assert_eq!(
+            gpu.readback(&input).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&pixels)
+        );
+    }
+}

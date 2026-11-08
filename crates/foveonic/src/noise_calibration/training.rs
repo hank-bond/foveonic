@@ -57,6 +57,7 @@ fn black_levels(gpu: &Gpu, original: &ReadGuard, source: &Source) -> Result<Read
         [3, 1],
         &mut trace,
     );
+    gpu.finish_capture_trace(&trace)?;
     Ok(black)
 }
 fn measure_profiles(
@@ -77,6 +78,7 @@ fn measure_profiles(
         "Active cap profiles",
         2 * u64::from(params.source[3]) * 3 * 4,
     )?;
+    let mut trace = gpu.trace(false, 1);
     gpu.dispatch(
         Kernel::CapProfiles,
         &mut [
@@ -86,8 +88,9 @@ fn measure_profiles(
             (5, Write(profiles.write())),
         ],
         [params.source[3], 2],
-        &mut gpu.trace(false, 1),
+        &mut trace,
     );
+    gpu.finish_capture_trace(&trace)?;
     let values = floats(gpu.readback(&profiles)?);
     let profiles: [Vec<[f64; 3]>; 2] = std::array::from_fn(|axis| {
         let n = if axis == 0 {
@@ -181,6 +184,7 @@ fn measure_group(
                 .map_err(|e| format!("{}: {e}", path.display()))?,
         );
         let uniform = gpu.uniform(params);
+        let mut trace = gpu.trace(false, 1);
         gpu.dispatch(
             Kernel::CapAccumulate,
             &mut [
@@ -191,8 +195,9 @@ fn measure_group(
                 (4, Read(&black)),
             ],
             [extent[0].div_ceil(8), extent[1].div_ceil(8)],
-            &mut gpu.trace(false, 1),
+            &mut trace,
         );
+        gpu.finish_capture_trace(&trace)?;
         gpu.device.poll(wgpu::Maintain::Wait);
     }
     if cancelled() {
@@ -221,6 +226,7 @@ fn detect_defects(
         "Persistent cap defects",
         u64::from(MAXIMUM_GROUP_DEFECTS) * 16,
     )?;
+    let mut trace = gpu.trace(false, 1);
     gpu.dispatch(
         Kernel::CapDefects,
         &mut [
@@ -231,8 +237,9 @@ fn detect_defects(
             (7, Write(records.write())),
         ],
         [params.source[0].div_ceil(8), params.source[1].div_ceil(8)],
-        &mut gpu.trace(false, 1),
+        &mut trace,
     );
+    gpu.finish_capture_trace(&trace)?;
     let n = u32::from_le_bytes(gpu.readback(&count)?[..4].try_into().unwrap());
     if n > MAXIMUM_GROUP_DEFECTS {
         return Err(format!("Too many persistent defect candidates ({n}) for {} ISO {}. Check that all inputs are lens-cap captures.",condition.camera_model,condition.iso).into());

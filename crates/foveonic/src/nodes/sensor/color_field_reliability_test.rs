@@ -36,7 +36,19 @@ pub(super) fn field_masks(
     black: &ReadGuard,
     input: &ReadGuard,
 ) -> Vec<u32> {
+    field_masks_with_clipping(gpu, params, original, black, input, None)
+}
+
+fn field_masks_with_clipping(
+    gpu: &Gpu,
+    params: &Params,
+    original: &ReadGuard,
+    black: &ReadGuard,
+    input: &ReadGuard,
+    clipping: Option<&[u32]>,
+) -> Vec<u32> {
     let mut params = *params;
+    params.white[3] = f32::from(clipping.is_some());
     params.size[3] = 0;
     params.options[2] = 0;
     let n = params.size[2];
@@ -66,6 +78,11 @@ pub(super) fn field_masks(
         ),
         (8, gpu.storage("mask test counts", 16).unwrap()),
         (18, input.clone()),
+        (
+            21,
+            gpu.upload("mask test original clipping", clipping.unwrap_or(&[0]))
+                .unwrap(),
+        ),
     ];
     dispatch(
         gpu,
@@ -153,4 +170,46 @@ fn gpu_color_field_reliability_quantization_matches_original_sensor_codes() {
         maximum <= 1,
         "float32 reliability error exceeds one quantization bin"
     );
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn pooled_original_clipping_overrides_below_threshold_means() {
+    let gpu = Gpu::new().unwrap();
+    let n = 8u32;
+    let params = Params {
+        size: [n, 1, n, 0],
+        grid: [1, 1, 1, 8],
+        crop: [0, 0, n, 1],
+        gain: [1.; 4],
+        white: [1., 1., 1., 0.],
+        neutral: [1., 1., 1., 0.],
+        luminance: [1. / 3., 1. / 3., 1. / 3., 0.],
+        metric: [0.; 4],
+        tuning: [0.035, 0.75, 1., 1.],
+        options: [1, 1, 0, 1],
+    };
+    let original = gpu
+        .upload(
+            "Pooled below-threshold codes",
+            &vec![0.25f32; n as usize * 3],
+        )
+        .unwrap();
+    let input = gpu
+        .upload("No additional color rejection", &vec![0f32; n as usize * 3])
+        .unwrap();
+    let black = gpu.upload("Black levels", &[0f32; 3]).unwrap();
+    let clipping = [0u32, 1, 2, 3, 4, 5, 6, 7];
+    let actual =
+        field_masks_with_clipping(&gpu, &params, &original, &black, &input, Some(&clipping));
+    for (mask, &flag) in actual.iter().zip(&clipping) {
+        let expected = (0..3).fold(0u32, |m, c| {
+            m | if flag & (4 >> c) == 0 {
+                255 << (c * 8)
+            } else {
+                0
+            }
+        });
+        assert_eq!(mask & 0xffffff, expected, "clipping flags {flag}");
+    }
 }

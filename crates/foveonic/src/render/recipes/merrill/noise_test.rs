@@ -434,7 +434,7 @@ fn multiscale_preview_order_and_export_preparation_share_native_inputs() {
         settings.working_scale = Scale::new(2).unwrap();
         let fast = photographic(&engine, &source, &settings);
         let filter = position(&fast, |op| matches!(op, Operation::Multiscale(_)));
-        let reduction = position(&fast, |op| matches!(op, Operation::ReduceLayers(_)));
+        let reduction = position(&fast, |op| matches!(op, Operation::ReduceLayers { .. }));
         assert!(
             filter < reduction,
             "Fast must filter the native sensor first"
@@ -484,13 +484,17 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     let fast = photographic(&engine, &source, &settings);
     assert!(
         position(&fast, |op| matches!(op, Operation::RowGuard(_)))
-            < position(&fast, |op| matches!(op, Operation::ReduceLayers(_)))
+            < position(&fast, |op| matches!(op, Operation::ReduceLayers { .. }))
     );
     let fast_bands = position(&fast, final_directional_banding);
     assert!(
-        full.graph.nodes[local].operation.key("native bands")
-            == fast.graph.nodes[fast_bands].operation.key("native bands")
+        full.graph.nodes[local].operation.key("banding")
+            != fast.graph.nodes[fast_bands].operation.key("banding")
     );
+    if let Operation::DirectionalBanding { prepared, .. } = &fast.graph.nodes[fast_bands].operation
+    {
+        assert_eq!(prepared.params().sampling[0], 2);
+    }
     settings.working_scale = Scale::NATIVE;
     settings.output_size = Some([240, 160]);
     let mut session = RenderSession::new(source.clone());
@@ -529,17 +533,17 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     assert!(profile
         .host
         .iter()
-        .any(|t| t.stage == "correct native coarse row bands"));
+        .any(|t| t.stage == "correct coarse row bands"));
     assert!(!profile.host.iter().any(|t| matches!(
         t.stage,
         "prepare directional band tiles"
-            | "measure native fine column bands"
-            | "measure native fine row bands"
-            | "measure native coarse column bands"
-            | "measure native coarse row bands"
-            | "correct native fine column bands"
-            | "correct native fine row bands"
-            | "correct native coarse column bands"
+            | "measure fine column bands"
+            | "measure fine row bands"
+            | "measure coarse column bands"
+            | "measure coarse row bands"
+            | "correct fine column bands"
+            | "correct fine row bands"
+            | "correct coarse column bands"
     )));
 
     // Once a strength edit establishes its frontier, further nonzero changes
@@ -555,13 +559,13 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     assert!(profile
         .host
         .iter()
-        .any(|t| t.stage == "correct native fine row bands"));
+        .any(|t| t.stage == "correct fine row bands"));
     assert!(!profile.host.iter().any(|t| matches!(
         t.stage,
         "prepare directional band tiles"
-            | "measure native fine row bands"
-            | "measure native fine column bands"
-            | "correct native fine column bands"
+            | "measure fine row bands"
+            | "measure fine column bands"
+            | "correct fine column bands"
     )));
     let crate::inspection::Content::Image(edited) = &edited[0].content else {
         panic!("expected image")
@@ -581,12 +585,12 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     assert!(profile
         .host
         .iter()
-        .any(|t| t.stage == "measure native fine row bands"));
+        .any(|t| t.stage == "measure fine row bands"));
     assert!(!profile.host.iter().any(|t| matches!(
         t.stage,
         "prepare directional band tiles"
-            | "measure native fine column bands"
-            | "correct native fine column bands"
+            | "measure fine column bands"
+            | "correct fine column bands"
     )));
     let crate::inspection::Content::Image(edited) = &edited[0].content else {
         panic!("expected image")

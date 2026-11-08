@@ -21,7 +21,7 @@ Keep tiled sample meanings and side-output dependencies explicit. Noise controls
 - **[code_gain.rs](./code_gain.rs)** Applies a bounded Q12 gain to signed linear RGB codes independently of filtering.
 - **[color_dq.rs](./color_dq.rs)** Builds reference-derived ColorDQ lookup tables with an explicitly selected gain.
 - **[color_mode.rs](./color_mode.rs)** Resolves camera color modes and their camera-ordered tone records.
-- **[directional_banding.rs](./directional_banding.rs)** Measures native Fine bands, fits axis-coherent residual Coarse offsets, and shares their tiles with previews.
+- **[directional_banding.rs](./directional_banding.rs)** Measures Fine bands and residual Coarse offsets on explicit power-of-two working grids.
 - **[extract_blue.rs](./extract_blue.rs)** Copies the blue component of immutable RGB codes into a same-size scalar plane.
 - **[highlight_stream.rs](./highlight_stream.rs)** Executes delayed five-row highlight neutralization with explicit threshold controls.
 - **[histogram_bilateral.rs](./histogram_bilateral.rs)** Filters a scalar code plane with quantized range weights and an adaptive residual blend.

@@ -1,4 +1,4 @@
-//! Measures native Fine bands, fits axis-coherent residual Coarse offsets, and shares their tiles with previews.
+//! Measures Fine bands and residual Coarse offsets on explicit power-of-two working grids.
 
 use crate::{
     gpu::{
@@ -75,15 +75,15 @@ impl Stage {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Tiles => "prepare directional band tiles",
-            Self::Window => "select native band tiles",
-            Self::Measure(Band::Fine, Axis::Columns) => "measure native fine column bands",
-            Self::Measure(Band::Fine, Axis::Rows) => "measure native fine row bands",
-            Self::Measure(Band::Coarse, Axis::Columns) => "measure native coarse column bands",
-            Self::Measure(Band::Coarse, Axis::Rows) => "measure native coarse row bands",
-            Self::Correct(Band::Fine, Axis::Columns) => "correct native fine column bands",
-            Self::Correct(Band::Fine, Axis::Rows) => "correct native fine row bands",
-            Self::Correct(Band::Coarse, Axis::Columns) => "correct native coarse column bands",
-            Self::Correct(Band::Coarse, Axis::Rows) => "correct native coarse row bands",
+            Self::Window => "select band tiles",
+            Self::Measure(Band::Fine, Axis::Columns) => "measure fine column bands",
+            Self::Measure(Band::Fine, Axis::Rows) => "measure fine row bands",
+            Self::Measure(Band::Coarse, Axis::Columns) => "measure coarse column bands",
+            Self::Measure(Band::Coarse, Axis::Rows) => "measure coarse row bands",
+            Self::Correct(Band::Fine, Axis::Columns) => "correct fine column bands",
+            Self::Correct(Band::Fine, Axis::Rows) => "correct fine row bands",
+            Self::Correct(Band::Coarse, Axis::Columns) => "correct coarse column bands",
+            Self::Correct(Band::Coarse, Axis::Rows) => "correct coarse row bands",
         }
     }
 }
@@ -97,7 +97,9 @@ struct BandParams {
     kind: u32,
     reflect_samples: u32,
     strength: f32,
-    padding: [u32; 3],
+    block_size: u32,
+    pool_radius: u32,
+    scale: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -105,7 +107,7 @@ pub(crate) struct Prepared {
     params: Parameters,
     active: [u32; 4],
     controls: MerrillBandingControls,
-    native_extent: [u32; 2],
+    scale: crate::render::Scale,
 }
 
 impl Prepared {
@@ -113,6 +115,15 @@ impl Prepared {
         params: Parameters,
         active: [u32; 4],
         controls: MerrillBandingControls,
+    ) -> Result<Self> {
+        Self::on_scale(params, active, controls, crate::render::Scale::NATIVE)
+    }
+
+    pub(crate) fn on_scale(
+        params: Parameters,
+        active: [u32; 4],
+        controls: MerrillBandingControls,
+        scale: crate::render::Scale,
     ) -> Result<Self> {
         controls.validate()?;
         if params.source[..2].contains(&0)
@@ -125,7 +136,7 @@ impl Prepared {
                 !params.source[axis].is_multiple_of(params.source[axis + 2])
                     || params.tile[axis]
                         != params.source[axis] / params.source[axis + 2] + 2 * params.tile[2]
-                    || params.tile[axis] < BLOCK_SIZE
+                    || params.tile[axis] < BLOCK_SIZE.div_ceil(scale.divisor())
                     || active[axis] + 1 >= active[axis + 2]
                     || active[axis + 2] > params.source[axis]
                     || params.column_area[axis] >= params.column_area[axis + 2]
@@ -137,7 +148,13 @@ impl Prepared {
         {
             return Err("invalid directional banding geometry or noise model".into());
         }
-        for axis in [controls.columns, controls.rows] {
+        let prepared = Self {
+            params,
+            active,
+            controls,
+            scale,
+        };
+        for axis in [prepared.working_controls(0), prepared.working_controls(1)] {
             if axis
                 .bands
                 .iter()
@@ -146,20 +163,7 @@ impl Prepared {
                 return Err("directional banding width exceeds processing tile context".into());
             }
         }
-        Ok(Self {
-            params,
-            active,
-            controls,
-            native_extent: [params.source[0], params.source[1]],
-        })
-    }
-
-    pub(crate) fn with_native_extent(mut self, native: [u32; 2]) -> Result<Self> {
-        if native.contains(&0) || (0..2).any(|axis| self.params.source[axis] > native[axis]) {
-            return Err("invalid native directional banding extent".into());
-        }
-        self.native_extent = native;
-        Ok(self)
+        Ok(prepared)
     }
 
     fn working_controls(&self, direction: usize) -> BandingAxisControls {
@@ -168,33 +172,29 @@ impl Prepared {
         } else {
             self.controls.rows
         };
-        // Stored support is in native pixels. A reduced preview rounds the
-        // radius to the nearest working pixel. Equal working widths are valid.
+        // Stored support is in native pixels. A reduced preview covers the
+        // radius with complete working pixels. Equal working widths are valid.
         for band in &mut controls.bands {
-            let numerator = u64::from(band.size / 2) * u64::from(self.params.source[direction]);
-            let denominator = u64::from(self.native_extent[direction]);
-            let radius = ((numerator + denominator / 2) / denominator).max(1) as u32;
+            let divisor = self.scale.divisor();
+            let radius = (band.size / 2).div_ceil(divisor).max(1);
             band.size = radius * 2 + 1;
         }
         controls
     }
 
     fn uses_reference_fine_boundary(&self, direction: usize) -> bool {
-        self.extent() == self.native_extent
+        self.scale.is_native()
             && self.working_controls(direction).bands[0].size == REFERENCE_FINE_WIDTH
     }
 
     pub(crate) fn params(&self) -> Parameters {
         self.params
     }
-    pub(crate) fn extent(&self) -> [u32; 2] {
-        [self.params.source[0], self.params.source[1]]
-    }
 
     pub(crate) fn key(&self, stage: Stage) -> Key {
         let mut key = Key::pod(&self.params)
             .with(&self.active)
-            .with(&self.native_extent)
+            .with(&self.scale.divisor())
             .slice(stage.output().as_bytes());
         let (kind, axis) = match stage {
             Stage::Measure(kind, axis) | Stage::Correct(kind, axis) => (kind, axis),
@@ -223,20 +223,22 @@ impl Prepared {
             } else {
                 0.
             },
-            padding: [0; 3],
+            block_size: BLOCK_SIZE.div_ceil(self.scale.divisor()).max(1),
+            pool_radius: 640_u32.div_ceil(self.scale.divisor()).max(1),
+            scale: self.scale.divisor(),
         }
     }
 }
 
-fn block_capacity(p: Parameters, direction: usize, kind: Band) -> u32 {
+fn block_capacity(p: Parameters, direction: usize, kind: Band, block_size: u32) -> u32 {
     match kind {
-        Band::Fine => p.tile[1 - direction] / BLOCK_SIZE,
-        Band::Coarse => p.tile[1 - direction].div_ceil(BLOCK_SIZE) + 1,
+        Band::Fine => p.tile[1 - direction] / block_size,
+        Band::Coarse => p.tile[1 - direction].div_ceil(block_size) + 1,
     }
 }
 
-fn delta_bytes(p: Parameters, direction: usize, kind: Band) -> u64 {
-    u64::from(block_capacity(p, direction, kind))
+fn delta_bytes(p: Parameters, direction: usize, kind: Band, block_size: u32) -> u64 {
+    u64::from(block_capacity(p, direction, kind, block_size))
         * u64::from(p.tile[direction])
         * u64::from(p.tile_count())
         * COMPONENT_BYTES
@@ -256,13 +258,16 @@ fn measure_axis(
         return gpu.storage("Inactive directional band estimates", COMPONENT_BYTES);
     }
     if kind == Band::Coarse && p.window != p.full_frame().window {
-        return Err("Coarse band measurement requires full native context".into());
+        return Err("Coarse band measurement requires full working context".into());
     }
     let mut smooth = gpu.storage(
         "Directional neighborhoods",
         p.atlas_pixels() * COMPONENT_BYTES,
     )?;
-    let mut raw = gpu.storage("Measured band offsets", delta_bytes(p, direction, kind))?;
+    let mut raw = gpu.storage(
+        "Measured band offsets",
+        delta_bytes(p, direction, kind, band.block_size),
+    )?;
     let noise = gpu.uniform(&p);
     let uniform = gpu.uniform(&band);
     let lookup = gpu.upload(
@@ -284,7 +289,7 @@ fn measure_axis(
     );
     let groups = [
         p.tile[direction].div_ceil(DELTA_WORKGROUP),
-        block_capacity(p, direction, kind) * p.tile_count(),
+        block_capacity(p, direction, kind, band.block_size) * p.tile_count(),
     ];
     gpu.dispatch(
         Kernel::DirectionalBandingDeltas,
@@ -333,13 +338,10 @@ fn correct_axis(
     if band.strength == 0. {
         return Ok(input.clone());
     }
-    if estimates.size() != delta_bytes(p, direction, kind) {
-        return Err("Band estimates do not match native tile geometry".into());
+    if estimates.size() != delta_bytes(p, direction, kind, band.block_size) {
+        return Err("Band estimates do not match working tile geometry".into());
     }
-    let mut output = gpu.storage(
-        "Corrected native band tiles",
-        p.atlas_pixels() * COMPONENT_BYTES,
-    )?;
+    let mut output = gpu.storage("Corrected band tiles", p.atlas_pixels() * COMPONENT_BYTES)?;
     let noise = gpu.uniform(&p);
     let uniform = gpu.uniform(&band);
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
@@ -370,10 +372,7 @@ fn select_window(gpu: &Gpu, input: &ReadGuard, p: Parameters) -> Result<ReadGuar
         return Ok(input.clone());
     }
     let tile_bytes = u64::from(p.tile[0]) * u64::from(p.tile[1]) * COMPONENT_BYTES;
-    let mut output = gpu.storage(
-        "Regional native band tiles",
-        p.atlas_pixels() * COMPONENT_BYTES,
-    )?;
+    let mut output = gpu.storage("Regional band tiles", p.atlas_pixels() * COMPONENT_BYTES)?;
     let ranges = (0..p.tile_count()).map(|tile| {
         let x = p.window[0] + tile % p.window[2];
         let y = p.window[1] + tile / p.window[2];

@@ -30,6 +30,7 @@ fn pressure_discards_old_cuts_and_uncached_descriptors_before_current_inputs() {
         cache.plan_for(&graph, &[cut], true).unwrap();
         let value = Value {
             working_scale: crate::render::Scale::NATIVE,
+            view_baked: false,
             view: None,
             description: None,
             buffer: gpu
@@ -166,6 +167,7 @@ fn sealed_cut_matches_across_scopes_and_is_invalidated_by_upstream_parameters() 
     let (graph, source, cut, target) = source_graph("main", 16);
     cache.plan_for(&graph, &[cut], true).unwrap();
     let value = Value {
+        view_baked: false,
         buffer: gpu
             .upload("Sealed sensor", &[100_f32; 16 * 16 * 3])
             .unwrap(),
@@ -174,6 +176,7 @@ fn sealed_cut_matches_across_scopes_and_is_invalidated_by_upstream_parameters() 
         view: None,
     };
     let native = Value {
+        view_baked: false,
         buffer: gpu
             .upload("Temporary native", &[5_f32; 16 * 16 * 3])
             .unwrap(),
@@ -280,6 +283,7 @@ fn optional_frontier_history_recovers_an_older_geometry_without_a_quality_label(
         graph.retain_for_session(cut);
         cache.plan(&graph, &[target]).unwrap();
         let value = Value {
+            view_baked: false,
             buffer: gpu
                 .upload(
                     "Historical input",

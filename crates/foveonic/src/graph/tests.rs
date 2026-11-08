@@ -508,3 +508,42 @@ fn appended_camera_views_remain_owned_by_each_output() {
     assert_eq!(main.outputs[first].view, Some(view));
     assert_eq!(main.outputs[mapping[second]].view, Some(different));
 }
+
+#[test]
+fn brightness_guides_are_distinct_from_expanded_scalar_inspections() {
+    use crate::{color_space::ColorSpace, nodes::finish::tone_equalizer};
+    let mut graph = Graph::default();
+    let space = ColorSpace::Srgb;
+    let guide = tone_equalizer::Guide::new([25, 3], 4, space).unwrap();
+    let rgb = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::LinearRgb(space),
+            },
+            &[],
+        )
+        .unwrap();
+    let compact = graph
+        .add(Operation::ToneMask { guide, space }, &[rgb])
+        .unwrap();
+    assert_eq!(graph.outputs[compact].data, DataType::BrightnessGuide);
+    let inspection = graph
+        .add(
+            Operation::ExpandBrightnessGuide {
+                guide,
+                output: "test.mask",
+            },
+            &[compact],
+        )
+        .unwrap();
+    assert_eq!(graph.outputs[inspection].data, DataType::ScalarField);
+    assert!(graph
+        .add(
+            Operation::ExpandBrightnessGuide {
+                guide,
+                output: "test.invalid"
+            },
+            &[inspection]
+        )
+        .is_err());
+}

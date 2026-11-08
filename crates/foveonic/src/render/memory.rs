@@ -119,6 +119,7 @@ impl Engine {
         limit_bytes: u64,
         reservation: &MemoryReservation,
     ) -> MemoryTrim {
+        let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Memory, "memory.trim");
         let mut resources = self.memory_resources(native.as_deref(), reduced, reservation);
         let mut evicted_photos = Vec::new();
         for obsolete_only in [true, false] {
@@ -150,10 +151,49 @@ impl Engine {
                 let Some(id) = reduced.evict_oldest() else {
                     break;
                 };
+                crate::diagnostics::event(
+                    crate::diagnostics::Category::Cache,
+                    "cache.processing.evicted",
+                    |fields| {
+                        fields.u64("session", id);
+                        fields.str("reason", "shared_memory_budget");
+                        fields.u64("budget_bytes", limit_bytes);
+                    },
+                );
                 evicted_photos.push(id);
             }
             resources = self.memory_resources(native.as_deref(), reduced, reservation);
         }
+        crate::diagnostics::counter(
+            crate::diagnostics::Category::Memory,
+            "memory.retained_bytes",
+            resources.total_bytes as f64,
+        );
+        crate::diagnostics::counter(
+            crate::diagnostics::Category::Memory,
+            "memory.gpu_bytes",
+            resources.gpu_bytes as f64,
+        );
+        crate::diagnostics::counter(
+            crate::diagnostics::Category::Memory,
+            "memory.cpu_bytes",
+            resources.cpu_bytes as f64,
+        );
+        crate::diagnostics::counter(
+            crate::diagnostics::Category::Memory,
+            "memory.reserved_bytes",
+            resources.reserved_bytes as f64,
+        );
+        crate::diagnostics::counter(
+            crate::diagnostics::Category::Memory,
+            "memory.budget_bytes",
+            limit_bytes as f64,
+        );
+        crate::diagnostics::counter(
+            crate::diagnostics::Category::Memory,
+            "memory.over_budget_bytes",
+            resources.total_bytes.saturating_sub(limit_bytes) as f64,
+        );
         MemoryTrim {
             resources,
             over_budget_bytes: resources.total_bytes.saturating_sub(limit_bytes),

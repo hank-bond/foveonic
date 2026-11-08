@@ -108,6 +108,43 @@ fn full_option_cases(
             && all.multiscale_noise_selected()
     );
     cases.push(("full-combined", all));
+    let mut compact = base.clone();
+    compact.merrill_speckles = super::super::MerrillSpeckleControls {
+        method: super::super::MerrillSpeckleMethod::Compact,
+        threshold: 0.2,
+        size: 7,
+    };
+    cases.push(("compact-speckles", compact));
+    let mut mono_directional = base.clone();
+    mono_directional.rendering = super::super::Rendering::Monochrome;
+    mono_directional
+        .reconstruction
+        .get_or_insert_with(Default::default);
+    mono_directional.merrill_banding.method = super::super::MerrillBandingMethod::Directional;
+    cases.push(("mono-directional", mono_directional));
+    for (name, approach) in [
+        (
+            "highlight-local",
+            super::super::ColorFieldApproach::LocalGradient,
+        ),
+        (
+            "highlight-global",
+            super::super::ColorFieldApproach::Faithful,
+        ),
+    ] {
+        let mut s = base.clone();
+        s.highlight_mode = super::super::HighlightMode::ColorField;
+        s.color_field.approach = approach;
+        cases.push((name, s.clone()));
+        s.merrill_speckles.method = super::super::MerrillSpeckleMethod::Compact;
+        cases.push((
+            match approach {
+                super::super::ColorFieldApproach::LocalGradient => "highlight-local-compact",
+                super::super::ColorFieldApproach::Faithful => "highlight-global-compact",
+            },
+            s,
+        ));
+    }
     let mut applicable = Vec::new();
     for (name, mut settings) in cases {
         caps.normalize(&mut settings);
@@ -160,7 +197,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                 engine.cached_preparation_bytes()
                     < 8 * 1024 * 1024 + super::super::preparation::REPAIR_BYTES
             );
-            for edit in 0..4 {
+            for edit in 0..5 {
                 if edit == 1 {
                     settings.exposure += 0.35;
                 }
@@ -175,6 +212,16 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                         controls.chroma = 4;
                         controls.luminance = 4;
                         controls.texture.fine = 0.5;
+                    }
+                }
+                if edit == 4
+                    && session.metadata().processing_family().unwrap()
+                        == crate::source::ProcessingFamily::Merrill
+                {
+                    if settings.highlight_mode == super::super::HighlightMode::Classic {
+                        settings.highlight_threshold_ev = Some(-1.);
+                    } else {
+                        settings.color_field.selectivity = 0.8;
                     }
                 }
                 let mut artifacts = match engine
@@ -230,10 +277,13 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
             }
             if session.metadata().processing_family().unwrap()
                 == crate::source::ProcessingFamily::Merrill
-                && settings.highlight_restoration
             {
                 let mut changed = settings.clone();
-                changed.highlight_threshold_ev = Some(-1.);
+                changed.merrill_noise_method = if settings.multiscale_noise_selected() {
+                    super::super::MerrillNoiseMethod::Reference
+                } else {
+                    super::super::MerrillNoiseMethod::MultiscaleRows
+                };
                 let before = engine.gpu_activity();
                 assert!(
                     matches!(

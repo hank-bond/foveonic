@@ -80,10 +80,8 @@ fn validates_support_and_keys_each_axis_band_and_boundary() {
     short.tile[0] = 192;
     short.tile[1] = 160;
     assert!(Prepared::new(short, area, controls).is_err());
-    let reduced = Prepared::new(p, area, controls)
-        .unwrap()
-        .with_native_extent([256, 192])
-        .unwrap();
+    let reduced =
+        Prepared::on_scale(p, area, controls, crate::render::Scale::new(2).unwrap()).unwrap();
     assert_eq!(
         reduced.working_controls(0).bands.map(|band| band.size),
         [15, 61]
@@ -323,6 +321,51 @@ fn inactive_bands_preserve_source_and_directional_passes_reduce_matching_noise()
     }
     assert!(after < before * 0.2, "{after} versus {before}");
     assert_eq!(read(&gpu, &input), source);
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn reduced_bands_preserve_flat_fields_at_small_and_padded_extents() {
+    use crate::render::{Scale, WorkingGrid};
+    let gpu = Gpu::new().unwrap();
+    for divisor in [2, 4, 8, 64, 1024] {
+        let scale = Scale::new(divisor).unwrap();
+        let grid = WorkingGrid::new([128, 96], scale, 8)
+            .unwrap()
+            .with_halo(16)
+            .unwrap();
+        let mut p = parameters();
+        p.source[..2].copy_from_slice(&grid.extent);
+        p.tile[2] = (64_u32.div_ceil(divisor) + 5).max(8).div_ceil(8) * 8;
+        let halo = p.tile[2];
+        p.tile[..2].copy_from_slice(&grid.extent.map(|v| v + 2 * halo));
+        p.area = grid.filter_bounds([0, 0, 128, 96]);
+        p.column_area = grid.filter_bounds([4, 4, 124, 92]);
+        p.region = [0, 0, grid.extent[0], grid.extent[1]];
+        p.sampling[0] = divisor;
+        let noise = crate::nodes::sensor::pool::independent_noise_std(scale);
+        for value in p.model.iter_mut().flatten() {
+            *value *= noise * noise;
+        }
+        let mut controls = controls();
+        controls.rows.bands[1].strength = 1.;
+        controls.columns.bands[1].strength = 1.;
+        let prepared =
+            Prepared::on_scale(p, grid.filter_bounds([4, 4, 124, 92]), controls, scale).unwrap();
+        let uniform = prepared.uniform(0, Band::Fine);
+        assert_eq!(uniform.block_size, 40_u32.div_ceil(divisor));
+        assert_eq!(uniform.pool_radius, 640_u32.div_ceil(divisor));
+        let source = vec![100_f32; grid.extent[0] as usize * grid.extent[1] as usize * 3];
+        let input = gpu.upload("Reduced flat layers", &source).unwrap();
+        let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+        assert!(
+            read(&gpu, &output)
+                .iter()
+                .all(|v| (*v - 100.).abs() < 0.002),
+            "divisor {divisor}"
+        );
+        assert_eq!(read(&gpu, &input), source);
+    }
 }
 
 #[test]

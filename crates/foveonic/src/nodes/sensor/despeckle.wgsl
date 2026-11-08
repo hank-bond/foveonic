@@ -33,7 +33,7 @@ fn extremum(p: u32, c: u32) -> bool {
         let diagonal = max(max(sample(p-w-1u,c),sample(p-w+1u,c)),max(sample(p+w-1u,c),sample(p+w+1u,c)));
         return peak > diagonal + threshold;
     }
-    if center < left && center < right {
+    if params.detector.z == 0u && center < left && center < right {
         let threshold = thresholds[c * 4096u + u32(clamp(center, 0.0, 4095.0))];
         if center >= min(min(top,bottom),min(left,right)) - threshold { return false; }
         let diagonal = min(min(sample(p-w-1u,c),sample(p-w+1u,c)),min(sample(p+w-1u,c),sample(p+w+1u,c)));
@@ -46,10 +46,12 @@ fn detect(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocatio
     let p = id.x;
     let x = p % params.source.x; let y = p / params.source.x;
     var layers = 0u;
-    if x >= params.area.x && x <= params.area.z && y >= params.area.y && y <= params.area.w {
+    if p < params.source.x * params.source.y && x >= params.area.x && x <= params.area.z && y >= params.area.y && y <= params.area.w {
         for (var c=0u; c<3u; c++) { if extremum(p,c) { layers |= 4u >> c; } }
     }
-    for (var c=0u; c<3u; c++) { pixels[p*3u+c] = input_pixels[p*3u+c]; }
+    if p < params.source.x * params.source.y {
+        for (var c=0u; c<3u; c++) { pixels[p*3u+c] = input_pixels[p*3u+c]; }
+    }
     rank_block(layers, p, local, group.x);
 }
 fn rank_block(layers: u32, p: u32, local: u32, block: u32) {

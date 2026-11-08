@@ -33,32 +33,45 @@ pub(super) fn build(
     execution: &mut Execution<'_>,
     grid: Option<&super::preview::Grid>,
     rows: Option<crate::nodes::sensor::banding::Description>,
+    speckles: Option<super::native_layers::Speckles>,
 ) -> Result<Prepared> {
     let space = ColorSpace::from_metadata(metadata)?;
+    if let Some(speckles) = speckles {
+        recipe.final_id = speckles.append(&mut recipe.graph, recipe.final_id, grid)?;
+        execution.check()?;
+        if requested(&recipe.graph, names) {
+            return Ok(Prepared::Requested(recipe));
+        }
+    }
     if settings.directional_banding_selected() {
-        let params = profile.measure("prepare monochrome native bands", || {
+        let params = profile.measure("prepare monochrome bands", || {
             let params = crate::noise::prepare(
                 metadata,
                 &settings.white_balance,
                 settings.sensor_noise_controls(),
             )?;
-            crate::noise::banding_parameters(metadata, params, settings.merrill_banding)
+            let params = match grid {
+                Some(grid) => grid.noise(params)?,
+                None => params,
+            };
+            crate::noise::banding_parameters(
+                metadata,
+                params,
+                settings.merrill_banding,
+                grid.map(|grid| grid.grid),
+            )
         })?;
         let bands = super::reconstruction::append_banding(
             &mut recipe.graph,
             recipe.final_id,
             Arc::new(params),
         )?;
-        // The shared native estimator produces tiles. Its GPU projection keeps
-        // the dedicated monochrome mix on a full calibrated sensor image.
+        // Project the shared band estimates back onto the monochrome working layers.
         recipe.final_id = recipe.graph.named_output(bands, "column.layers")?;
         execution.check()?;
         if requested(&recipe.graph, names) {
             return Ok(Prepared::Requested(recipe));
         }
-    }
-    if let Some(grid) = grid {
-        recipe.final_id = grid.append(&mut recipe.graph, recipe.final_id)?;
     }
     if let Some(rows) = rows {
         recipe.final_id = recipe.graph.add(

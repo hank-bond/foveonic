@@ -31,7 +31,7 @@ pub use reduced::{
     ReducedWorkingSet, SessionResources,
 };
 pub use scale::Scale;
-pub(crate) use scale::{AnalysisGrid, WorkingGrid};
+pub(crate) use scale::WorkingGrid;
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
 pub fn native_extent(metadata: &crate::source::Metadata) -> crate::source::Result<[u32; 2]> {
     recipes::native_extent(metadata)

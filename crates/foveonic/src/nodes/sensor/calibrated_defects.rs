@@ -80,6 +80,7 @@ fn repair(
     let uniform = gpu.uniform(&params);
     let mut output = gpu.storage("Calibrated sensor defects", input.size())?;
     gpu.copy(input, output.write(), input.size());
+    let mut trace = gpu.trace(false, 1);
     gpu.dispatch(
         Kernel::CalibratedDefectRepair,
         &mut [
@@ -89,7 +90,8 @@ fn repair(
             (8, Write(output.write())),
         ],
         [(map.points.len() as u32).div_ceil(64), 1],
-        &mut gpu.trace(false, 1),
+        &mut trace,
     );
+    gpu.finish_capture_trace(&trace)?;
     Ok(output)
 }

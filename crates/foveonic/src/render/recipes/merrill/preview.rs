@@ -1,10 +1,10 @@
-//! Prepares filtered calibrated sensor grids and preserves fractional active-image framing.
+//! Prepares pooled calibrated sensor grids and preserves fractional active-image framing.
 
 use super::super::BuiltRecipe;
 use crate::{
     color_space::ColorSpace,
     graph::{Graph, Operation},
-    nodes::{color::pyramid_resample, sensor::calibration::EncodeParams},
+    nodes::sensor::{calibration::EncodeParams, pool},
     render::{Scale, WorkingGrid},
     source::Result,
 };
@@ -15,29 +15,39 @@ use crate::{
 const FILTER_HALO: u32 = (5_u32 * 8).div_ceil(3).div_ceil(8) * 8;
 
 pub(super) struct Grid {
-    reductions: Vec<pyramid_resample::Prepared>,
+    reduction: pool::Prepared,
     pub grid: WorkingGrid,
     native: EncodeParams,
     pub encode: EncodeParams,
 }
 impl Grid {
-    /// Filter calibrated layers before expensive noise and color reconstruction.
+    /// Filter triplet layers onto the same covered sensor grid.
     pub fn append(&self, graph: &mut Graph, mut input: usize) -> Result<usize> {
-        let scope = graph.outputs[input].cache_name();
-        for (step, prepared) in self.reductions.iter().enumerate() {
-            input = graph.add_scoped(
-                Operation::ReduceLayers(*prepared),
-                &[input],
-                &format!("sensor-grid/{scope}/{}", 1_u32 << (step + 1)),
-            )?;
+        // Recovery and Compact despeckle share the same pooled sensor codes.
+        if let Some(node) = graph.nodes.iter().find(|node| {
+            matches!(&node.operation, Operation::ReduceLayers { prepared, .. }
+                if prepared.key() == self.reduction.key())
+                && node.inputs == [input]
+        }) {
+            return Ok(node.outputs[0]);
         }
+        let scope = graph.outputs[input].cache_name();
+        let data = graph.outputs[input].data;
+        input = graph.add_scoped(
+            Operation::ReduceLayers {
+                prepared: self.reduction,
+                data,
+            },
+            &[input],
+            &format!("sensor-grid/{scope}/{}", self.grid.scale.divisor()),
+        )?;
         graph.retain_for_seal(input);
         Ok(input)
     }
 
     /// Retain noise controls on a smaller grid, using complete aligned processing tiles.
     pub fn noise(&self, mut params: crate::noise::Parameters) -> Result<crate::noise::Parameters> {
-        let extent = self.reductions.last().unwrap().output_extent();
+        let extent = self.reduction.output_extent();
         // Small previews fit one processing tile. Keeping the native 4×4 split
         // repeats large halos and can create fractional internal resampling grids.
         params.source[2..].fill(1);
@@ -50,14 +60,15 @@ impl Grid {
         // The native-code signal mean is unchanged by pooling. Only coefficients
         // representing its independent sensor noise change: layer models are
         // variances, while the luminance diffusion polynomial is a sigma.
-        let noise_std = pyramid_resample::independent_noise_std(self.grid.scale);
+        let noise_std = pool::independent_noise_std(self.grid.scale);
         for coefficient in params.model.iter_mut().flatten() {
             *coefficient *= noise_std * noise_std;
         }
         for coefficient in &mut params.mono[..3] {
             *coefficient *= noise_std;
         }
-        params.tile[2] = params.tile[2].div_ceil(divisor).max(8).div_ceil(8) * 8;
+        // Tile projection still blends five working pixels at its boundary.
+        params.tile[2] = (params.tile[2].div_ceil(divisor) + 5).max(8).div_ceil(8) * 8;
         params.tile[3] = (params.tile[3].div_ceil(divisor) | 1).max(3);
         params.geometry[0] = params.geometry[0].div_ceil(divisor).max(1);
         params.geometry[1] = params.geometry[1].div_ceil(divisor).max(1);
@@ -97,30 +108,17 @@ impl Grid {
         if quality.is_native() {
             return Err("sensor reduction requires a reduced working scale".into());
         }
-        let mut extent = grid.native;
-        let mut reductions = Vec::new();
-        for step in 0..divisor.ilog2() {
-            let output = if step + 1 == divisor.ilog2() {
-                grid.extent
-            } else {
-                extent.map(|v| v.div_ceil(2))
-            };
-            let reduction = pyramid_resample::Prepared::half_to(extent, output)?
-                .with_working_scale(Scale::new(1_u32 << (step + 1))?)
-                .with_origin(if step + 1 == divisor.ilog2() {
-                    grid.origin
-                } else {
-                    [0; 2]
-                });
-            extent = reduction.output_extent();
-            reductions.push(reduction);
-        }
+        let reduction = pool::Prepared::new(grid.native, divisor, pool::Signal::Rgb)?
+            .with_extent(grid.extent)?
+            .with_working_scale(quality)
+            .with_origin(grid.origin);
+        let extent = reduction.output_extent();
         encode.source[..2].copy_from_slice(&extent);
         encode.crop = grid.bounds(native.crop);
         let output = output_size.unwrap_or(quality.extent([native.output[0], native.output[1]]));
         encode.output[..2].copy_from_slice(&output);
         Ok(Self {
-            reductions,
+            reduction,
             grid,
             native,
             encode,

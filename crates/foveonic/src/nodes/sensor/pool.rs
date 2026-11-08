@@ -18,10 +18,17 @@ pub(crate) enum Signal {
     Flags,
 }
 
+/// Independent-noise sigma after a complete d×d area mean. Edge cells can
+/// contain fewer native samples. Native correction correlations are excluded.
+pub(crate) fn independent_noise_std(scale: crate::render::Scale) -> f32 {
+    scale.factor()
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Prepared {
     shape: [u32; 4],
+    // divisor, component count, mean/max/union/signed-mean, declared scale
     controls: [u32; 4],
     origin: [u32; 4],
 }
@@ -50,6 +57,14 @@ impl Prepared {
             ],
             origin: [0, 0, logical[0], logical[1]],
         })
+    }
+    /// Classic signed codes narrow once after the completed two-dimensional mean.
+    pub(crate) fn with_signed_codes(mut self) -> Self {
+        self.controls[2] = 3;
+        self
+    }
+    pub(crate) fn extent(&self) -> [u32; 2] {
+        [self.shape[0], self.shape[1]]
     }
     pub(crate) fn with_extent(mut self, extent: [u32; 2]) -> Result<Self> {
         if extent
@@ -110,8 +125,8 @@ pub(crate) fn apply(
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
     let pixel_bytes = u64::from(prepared.controls[1]) * 4;
-    let [width, height, out_width, out_height] = prepared.shape;
-    let [logical_width, logical_height] = prepared.logical_extent();
+    let [width, height] = prepared.extent();
+    let [out_width, out_height] = prepared.output_extent();
     if input.size() != u64::from(width) * u64::from(height) * pixel_bytes
         || prepared.origin[..2]
             .iter()
@@ -130,63 +145,23 @@ pub(crate) fn apply(
         return Ok(input.clone());
     }
     let uniform = gpu.uniform(prepared);
-    let mut trace = gpu.trace(profile.mode.gpu(), 3);
-    let logical = if prepared.controls[0] == 1 {
-        input.clone()
-    } else {
-        let mut horizontal = gpu.storage(
-            "Horizontal pooled signal",
-            u64::from(logical_width) * u64::from(height) * pixel_bytes,
-        )?;
-        let mut logical = gpu.storage(
-            "Logical pooled signal",
-            u64::from(logical_width) * u64::from(logical_height) * pixel_bytes,
-        )?;
-        gpu.dispatch(
-            Kernel::PoolSignalHorizontal,
-            &mut [
-                (0, Read(input)),
-                (1, Read(&uniform)),
-                (2, Write(horizontal.write())),
-            ],
-            [logical_width.div_ceil(8), height.div_ceil(8)],
-            &mut trace,
-        );
-        gpu.dispatch(
-            Kernel::PoolSignalVertical,
-            &mut [
-                (0, Read(&horizontal)),
-                (1, Read(&uniform)),
-                (2, Write(logical.write())),
-            ],
-            [logical_width.div_ceil(8), logical_height.div_ceil(8)],
-            &mut trace,
-        );
-        logical
-    };
-    let result = if [logical_width, logical_height] == [out_width, out_height]
-        && prepared.origin[..2] == [0, 0]
-    {
-        logical
-    } else {
-        let mut output = gpu.storage(
-            "Padded pooled signal",
-            u64::from(out_width) * u64::from(out_height) * pixel_bytes,
-        )?;
-        gpu.dispatch(
-            Kernel::PoolSignalPad,
-            &mut [
-                (0, Read(&logical)),
-                (1, Read(&uniform)),
-                (2, Write(output.write())),
-            ],
-            [out_width.div_ceil(8), out_height.div_ceil(8)],
-            &mut trace,
-        );
-        output
-    };
+    let mut output = gpu.storage(
+        "Pooled working signal",
+        u64::from(out_width) * u64::from(out_height) * pixel_bytes,
+    )?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 1);
+    gpu.dispatch(
+        Kernel::PoolSignal,
+        &mut [
+            (0, Read(input)),
+            (1, Read(&uniform)),
+            (2, Write(output.write())),
+        ],
+        [out_width.div_ceil(8), out_height.div_ceil(8)],
+        &mut trace,
+    );
     gpu.finish_trace(&trace, profile)?;
-    Ok(result)
+    Ok(output)
 }
 
 #[cfg(test)]

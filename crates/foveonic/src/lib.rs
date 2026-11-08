@@ -8,6 +8,7 @@ mod decode_pool;
 pub mod diagnostics;
 pub mod dng;
 mod gpu;
+pub use gpu::map_readback;
 mod graph;
 pub mod image;
 pub mod importing;

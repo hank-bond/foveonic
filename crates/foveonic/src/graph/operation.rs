@@ -13,8 +13,11 @@ use std::path::PathBuf;
 
 pub enum Operation {
     PoolSignal(crate::nodes::sensor::pool::Prepared),
-    /// Low-pass calibrated layers onto a grid with half the width and height.
-    ReduceLayers(crate::nodes::color::pyramid_resample::Prepared),
+    /// Average disjoint sensor blocks onto an explicit working grid.
+    ReduceLayers {
+        prepared: crate::nodes::sensor::pool::Prepared,
+        data: DataType,
+    },
     ResampleRgb {
         params: EncodeParams,
         space: ColorSpace,
@@ -249,10 +252,6 @@ pub enum Operation {
         params: crate::nodes::finish::photographic::Params,
         space: ColorSpace,
     },
-    AdaptiveToneOverview {
-        source: [u32; 2],
-        space: ColorSpace,
-    },
     AdaptiveToneGuide {
         guide: crate::nodes::finish::tone_equalizer::Guide,
         space: ColorSpace,
@@ -262,6 +261,10 @@ pub enum Operation {
         analysis: crate::nodes::finish::adaptive_tone::Params,
         curve: crate::recipe::Shared<f32>,
         space: ColorSpace,
+    },
+    ExpandBrightnessGuide {
+        guide: crate::nodes::finish::tone_equalizer::Guide,
+        output: &'static str,
     },
     ToneMask {
         guide: crate::nodes::finish::tone_equalizer::Guide,
@@ -299,7 +302,9 @@ impl Operation {
         use crate::{noise::RecipeStage as N, recipe::Key};
         let key = match self {
             Self::PoolSignal(p) => p.key(),
-            Self::ReduceLayers(p) => p.key(),
+            Self::ReduceLayers { prepared, data } => {
+                prepared.key().slice(format!("{data:?}").as_bytes())
+            }
             Self::ResampleRgb { params, space } => Key::pod(params).with(&(*space as u32)),
             Self::ImageRegion {
                 prepared,
@@ -423,8 +428,9 @@ impl Operation {
             | Self::LinearBrightness { params, .. }
             | Self::LinearLocalContrast { params, .. }
             | Self::LinearUniversalSharpen { params, .. } => params.key(),
-            Self::AdaptiveToneGuide { guide, .. } | Self::ToneMask { guide, .. } => guide.key(),
-            Self::AdaptiveToneOverview { source, .. } => Key::pod(source),
+            Self::AdaptiveToneGuide { guide, .. }
+            | Self::ToneMask { guide, .. }
+            | Self::ExpandBrightnessGuide { guide, .. } => guide.key(),
             Self::AdaptiveTone {
                 params,
                 analysis,
@@ -482,7 +488,7 @@ impl Operation {
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::PoolSignal(_) => "PoolSignal",
-            Self::ReduceLayers(_) => "ReduceLayers",
+            Self::ReduceLayers { .. } => "ReduceLayers",
             Self::ResampleRgb { .. } => "ResampleRgb",
             Self::ImageRegion { .. } => "ImageRegion",
             Self::LinearCodeBase => "LinearCodeBase",
@@ -588,10 +594,10 @@ impl Operation {
             Self::TransferLinearGain { .. } => "TransferLinearGain",
             Self::LinearBrightness { .. } => "LinearBrightness",
             Self::LinearLocalContrast { .. } => "LinearLocalContrast",
-            Self::AdaptiveToneOverview { .. } => "AdaptiveToneOverview",
             Self::AdaptiveToneGuide { .. } => "AdaptiveToneGuide",
             Self::AdaptiveTone { .. } => "AdaptiveTone",
             Self::ToneMask { .. } => "ToneMask",
+            Self::ExpandBrightnessGuide { .. } => "ExpandBrightnessGuide",
             Self::TonalRanges { .. } => "TonalRanges",
             Self::Tone { .. } => "Tone",
             Self::Encode { .. } => "Encode",
@@ -602,7 +608,7 @@ impl Operation {
     pub fn label(&self) -> &'static str {
         match self {
             Self::PoolSignal(_) => "pool corrected preview signals",
-            Self::ReduceLayers(_) => "reduce calibrated preview layers",
+            Self::ReduceLayers { .. } => "reduce preview layers",
             Self::ResampleRgb { .. } => "frame linear photograph preview",
             Self::LinearCodeBase => "retain linear RGB code base",
             Self::LinearCodeRgb { .. } => "declare linear RGB primaries",
@@ -721,10 +727,10 @@ impl Operation {
             Self::PhotographicTone { .. } => "finish.tone",
             Self::LinearBrightness { .. } => "linear.brightness",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",
-            Self::AdaptiveToneOverview { .. } => "prepare quarter-pixel tone analysis",
             Self::AdaptiveToneGuide { .. } => "prepare adaptive base guide",
             Self::AdaptiveTone { .. } => "fit regional base response",
             Self::ToneMask { .. } => "submit tonal brightness mask",
+            Self::ExpandBrightnessGuide { .. } => "expand brightness guide for inspection",
             Self::TonalRanges { .. } => "submit tonal range exposure",
             Self::Tone { .. } => "submit tone",
             Self::Encode { .. } => "submit encode",
@@ -744,7 +750,7 @@ impl Operation {
                 };
                 (vec![data], data)
             }
-            Self::ReduceLayers(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::ReduceLayers { data, .. } => (vec![*data], *data),
             Self::ResampleRgb { space, .. } => (vec![LinearRgb(*space)], LinearRgb(*space)),
             Self::ImageRegion { data, .. } => (vec![*data], *data),
             Self::PackedLab(p) => match p.direction() {
@@ -886,8 +892,16 @@ impl Operation {
             Self::Calibrate(_) => (vec![SensorLayers, BlackLevels], CalibratedLayers),
             Self::Color { space, .. } => (vec![CalibratedLayers], LinearRgb(*space)),
             Self::Repair(_) => (vec![CalibratedLayers, SensorLayers], CalibratedLayers),
-            Self::Despeckle(_) => (vec![CalibratedLayers, SensorLayers], CalibratedLayers),
-            Self::Highlights(_) | Self::Banding(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::Despeckle(p) => (
+                if p.needs_sensor_codes() {
+                    vec![CalibratedLayers, SensorLayers]
+                } else {
+                    vec![CalibratedLayers]
+                },
+                CalibratedLayers,
+            ),
+            Self::Highlights(_) => (vec![CalibratedLayers], CalibratedLayers),
+            Self::Banding(_) => (vec![CalibratedLayers], CalibratedLayers),
             Self::HighlightDensity(_) => (vec![], ScalarField),
             Self::ColorField(_) => (
                 vec![
@@ -998,22 +1012,20 @@ impl Operation {
                 (vec![ToneMappedRgb(*space)], ToneMappedRgb(*space))
             }
             Self::AdaptiveToneGuide { space, .. } | Self::ToneMask { space, .. } => {
-                (vec![LinearRgb(*space)], ScalarField)
+                (vec![LinearRgb(*space)], BrightnessGuide)
             }
-            Self::AdaptiveToneOverview { space, .. } => {
-                (vec![LinearRgb(*space)], LinearRgb(*space))
-            }
+            Self::ExpandBrightnessGuide { .. } => (vec![BrightnessGuide], ScalarField),
             Self::AdaptiveTone { space, .. } => (
                 vec![
                     LinearRgb(*space),
-                    ScalarField,
+                    BrightnessGuide,
                     LinearRgb(*space),
-                    ScalarField,
+                    BrightnessGuide,
                 ],
                 LinearRgb(*space),
             ),
             Self::TonalRanges { space, .. } => {
-                (vec![LinearRgb(*space), ScalarField], LinearRgb(*space))
+                (vec![LinearRgb(*space), BrightnessGuide], LinearRgb(*space))
             }
             Self::Tone { space, .. } => (vec![LinearRgb(*space)], ToneMappedRgb(*space)),
             Self::Encode {
@@ -1140,7 +1152,7 @@ impl Operation {
     pub fn output_name(&self) -> &'static str {
         match self {
             Self::PoolSignal(_) => "preview.corrected",
-            Self::ReduceLayers(_) => "preview.layers",
+            Self::ReduceLayers { .. } => "preview.layers",
             Self::ResampleRgb { .. } => "preview.framed-linear",
             Self::ImageRegion { output, .. } => output,
             Self::PackedLab(p) => match p.direction() {
@@ -1287,10 +1299,10 @@ impl Operation {
             Self::PhotographicTone { .. } => "finish.tone",
             Self::LinearBrightness { .. } => "linear.brightness",
             Self::LinearLocalContrast { .. } => "linear.local-contrast",
-            Self::AdaptiveToneOverview { .. } => "base-response.overview",
-            Self::AdaptiveToneGuide { .. } => "base-response.mask",
+            Self::AdaptiveToneGuide { .. } => "base-response.guide",
             Self::AdaptiveTone { .. } => "base-response.rgb",
-            Self::ToneMask { .. } => "tonal-ranges.mask",
+            Self::ToneMask { .. } => "tonal-ranges.guide",
+            Self::ExpandBrightnessGuide { output, .. } => output,
             Self::TonalRanges { .. } => "tonal-ranges.rgb",
             Self::Tone { .. } => "tone.rgb",
             Self::Saturation { .. } => "saturation.rgb",

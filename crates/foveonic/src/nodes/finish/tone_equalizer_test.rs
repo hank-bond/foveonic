@@ -53,8 +53,8 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
         .collect();
     let input = gpu.upload("HDR flat exposure steps", &data).unwrap();
     let guide = Guide::new(extent, 4, ColorSpace::Srgb).unwrap();
-    let values: Vec<f32> = (0..2)
-        .flat_map(|_| levels.into_iter().flat_map(|ev| [(ev + 8.) / 8.; 8]))
+    let values: Vec<f32> = (0..1)
+        .flat_map(|_| levels.into_iter().flat_map(|ev| [(ev + 8.) / 8.; 4]))
         .collect();
     let field = gpu.upload("Constant HDR response bases", &values).unwrap();
     let same = apply(
@@ -142,7 +142,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
         .flat_map(|i| [i as f32 - 40., 4095., 16000.])
         .collect();
     let input = gpu.upload("HDR signed headroom", &signed).unwrap();
-    let field = mask(&gpu, &input, guide, &mut Profile::default()).unwrap();
+    let field = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
     for amount in [-1., 1.] {
         let output = apply(
             &gpu,
@@ -202,11 +202,11 @@ fn gpu_hdr_preserves_native_control_coupling_and_detail_direction() {
         (0.5, -1., [0.0000048572033, 0.06143027, 0.77813244]),
         (0.5, 1., [23.457682, 3.044465, 1.7864335]),
     ] {
-        let values: Vec<f32> = (0..2)
+        let values: Vec<f32> = (0..1)
             .flat_map(|_| {
                 levels
                     .into_iter()
-                    .flat_map(|ev| [(ev - residual + 8.) / 8.; 8])
+                    .flat_map(|ev| [(ev - residual + 8.) / 8.; 4])
             })
             .collect();
         let field = gpu.upload("Independent HDR base", &values).unwrap();
@@ -257,17 +257,17 @@ fn gpu_spatial_mask_smooths_texture_and_keeps_strong_edges() {
         .collect();
     let input = gpu.upload("Textured brightness step", &data).unwrap();
     let guide = Guide::new(extent, 5, ColorSpace::AdobeRgb).unwrap();
-    let spatial = mask(&gpu, &input, guide, &mut Profile::default()).unwrap();
+    let spatial = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
     let s = gpu.readback(&spatial).unwrap();
     let s: &[f32] = bytemuck::cast_slice(&s);
-    let at = |x: usize, y: usize| y * 256 + x;
+    let at = |x: usize, y: usize| (y / 2) * 128 + x / 2;
     assert!((s[at(32, 64)] - s[at(36, 64)]).abs() < (0.25 / 8.) * 0.25);
     assert!((s[at(124, 64)] - s[at(132, 64)]).abs() > 4. / 8.);
     assert!(s.iter().all(|v| v.is_finite()));
     let constant = gpu
         .upload("Black mask fixture", &vec![0_f32; 256 * 128 * 3])
         .unwrap();
-    let black = mask(&gpu, &constant, guide, &mut Profile::default()).unwrap();
+    let black = build_guide(&gpu, &constant, guide, &mut Profile::default()).unwrap();
     let bytes = gpu.readback(&black).unwrap();
     assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
         .iter()
@@ -289,14 +289,14 @@ fn gpu_regional_mask_matches_full_with_aligned_support() {
         .collect();
     let input = gpu.upload("Full mask field", &data).unwrap();
     let guide = Guide::new(extent, 4, ColorSpace::Srgb).unwrap();
-    let full = mask(&gpu, &input, guide, &mut Profile::default()).unwrap();
+    let full = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
     let region_extent = [196, 144];
     let mut region = Vec::new();
     for y in 24..168 {
         region.extend_from_slice(&data[((y * 257 + 32) * 3)..((y * 257 + 228) * 3)]);
     }
     let input = gpu.upload("Aligned regional mask field", &region).unwrap();
-    let local = mask(
+    let local = build_guide(
         &gpu,
         &input,
         Guide::new(region_extent, 4, ColorSpace::Srgb).unwrap(),
@@ -309,7 +309,10 @@ fn gpu_regional_mask_matches_full_with_aligned_support() {
     let local: &[f32] = bytemuck::cast_slice(&local);
     for y in 40..104 {
         for x in 40..156 {
-            assert!((local[y * 196 + x] - full[(y + 24) * 257 + x + 32]).abs() < 0.00001);
+            assert!(
+                (local[(y / 2) * 98 + x / 2] - full[((y + 24) / 2) * 129 + (x + 32) / 2]).abs()
+                    < 0.00001
+            );
         }
     }
 }
@@ -328,7 +331,7 @@ fn gpu_hdr_matches_across_declared_linear_code_units() {
         ColorSpace::AdobeRgb,
         ColorSpace::ProPhotoRgb,
     ] {
-        let ma = mask(
+        let ma = build_guide(
             &gpu,
             &a,
             Guide::new(extent, 4, space).unwrap().with_white(1.),
@@ -358,7 +361,7 @@ fn gpu_hdr_matches_across_declared_linear_code_units() {
         for white in [4095., 4096., 16384.] {
             let codes: Vec<f32> = normalized.iter().map(|v| v * white).collect();
             let b = gpu.upload("camera code samples", &codes).unwrap();
-            let mb = mask(
+            let mb = build_guide(
                 &gpu,
                 &b,
                 Guide::new(extent, 4, space).unwrap().with_white(white),
@@ -385,6 +388,36 @@ fn gpu_hdr_matches_across_declared_linear_code_units() {
                     "{space:?} white {white}: {a} vs {}",
                     b / white
                 );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_compact_guide_expands_exactly_over_odd_edges() {
+    let gpu = Gpu::new().unwrap();
+    for extent in [[24, 2], [257, 193], [25, 3], [1, 1]] {
+        let [width, height] = extent;
+        let data: Vec<f32> = (0..width * height)
+            .flat_map(|p| {
+                let level = 1. + (p * 37 % 4095) as f32;
+                [level, level * 0.7, level * 1.1]
+            })
+            .collect();
+        let input = gpu.upload("Compact guide odd-edge fixture", &data).unwrap();
+        let guide = Guide::new(extent, 4, ColorSpace::Srgb).unwrap();
+        let compact = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
+        assert_eq!(compact.size(), guide_storage_bytes(extent));
+        let expanded = expand_mask(&gpu, &compact, guide, &mut Profile::default()).unwrap();
+        assert_eq!(expanded.size(), u64::from(width) * u64::from(height) * 4);
+        let compact = gpu.readback(&compact).unwrap();
+        let expanded = gpu.readback(&expanded).unwrap();
+        for y in 0..height {
+            for x in 0..width {
+                let cell = ((y / 2) * width.div_ceil(2) + x / 2) as usize * 4;
+                let pixel = (y * width + x) as usize * 4;
+                assert_eq!(&expanded[pixel..pixel + 4], &compact[cell..cell + 4]);
             }
         }
     }

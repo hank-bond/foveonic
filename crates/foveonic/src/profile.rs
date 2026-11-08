@@ -166,18 +166,20 @@ impl Profile {
     }
 
     pub(crate) fn record(&mut self, stage: &'static str, start: Instant) {
+        crate::diagnostics::interval_since(crate::diagnostics::Category::Cpu, stage, start, |_| {});
         if self.mode.enabled() {
             self.host.push(Timing::elapsed(stage, start));
         }
     }
 
     pub fn measure<T>(&mut self, stage: &'static str, work: impl FnOnce() -> T) -> T {
+        let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Cpu, stage);
         if !self.mode.enabled() {
             return work();
         }
         let start = Instant::now();
         let value = work();
-        self.record(stage, start);
+        self.host.push(Timing::elapsed(stage, start));
         value
     }
 }

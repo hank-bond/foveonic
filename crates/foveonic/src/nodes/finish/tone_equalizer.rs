@@ -161,6 +161,9 @@ impl Guide {
         self.luma = self.luma.map(|v| v * NOMINAL_WHITE / white);
         self
     }
+    pub(crate) fn storage_extent(self) -> [u32; 2] {
+        [self.shape[2], self.shape[3]]
+    }
     pub(crate) fn extent(self) -> [u32; 2] {
         [self.shape[0], self.shape[1]]
     }
@@ -191,7 +194,12 @@ impl Guide {
     }
 }
 
-pub(crate) fn mask(
+/// One encoded Float32 cell represents each covered 2×2 image block.
+pub(crate) fn guide_storage_bytes(extent: [u32; 2]) -> u64 {
+    u64::from(extent[0].div_ceil(GUIDE_SCALE)) * u64::from(extent[1].div_ceil(GUIDE_SCALE)) * 4
+}
+
+pub(crate) fn build_guide(
     gpu: &Gpu,
     input: &ReadGuard,
     guide: Guide,
@@ -201,8 +209,8 @@ pub(crate) fn mask(
     if input.size() != pixels * 12 {
         return Err("HDR mask input extent mismatch".into());
     }
-    let mut output = gpu.storage("HDR brightness base", pixels * 4)?;
-    let full = [guide.shape[0].div_ceil(8), guide.shape[1].div_ceil(8)];
+    let compact_pixels = u64::from(guide.shape[2]) * u64::from(guide.shape[3]);
+    let mut output = gpu.storage("Compact HDR brightness base", compact_pixels * 4)?;
     let fine_groups = [guide.shape[2].div_ceil(8), guide.shape[3].div_ceil(8)];
     // Two guide reductions, seven passes per scale, and the inspectable base.
     let passes = 3 + PASSES_PER_SCALE * ((guide.filter[0] as u32).ilog2() + 1);
@@ -343,7 +351,38 @@ pub(crate) fn mask(
             (5, Write(output.write())),
             (9, Read(previous)),
         ],
-        full,
+        fine_groups,
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, profile)?;
+    Ok(output)
+}
+
+/// Materialize the existing full-image scalar inspection without retaining it in edits.
+pub(crate) fn expand_mask(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    guide: Guide,
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    let [width, height] = guide.extent();
+    let [compact_width, compact_height] = guide.storage_extent();
+    if input.size() != u64::from(compact_width) * u64::from(compact_height) * 4 {
+        return Err("brightness guide does not match its compact extent".into());
+    }
+    let mut output = gpu.storage(
+        "Brightness mask inspection",
+        u64::from(width) * u64::from(height) * 4,
+    )?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 1);
+    gpu.dispatch(
+        Kernel::ToneMaskExpand,
+        &mut [
+            (1, Read(&gpu.uniform(&guide))),
+            (4, Read(input)),
+            (5, Write(output.write())),
+        ],
+        [width.div_ceil(8), height.div_ceil(8)],
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
@@ -374,7 +413,7 @@ pub(crate) fn apply_with_white(
     let pixels = u64::from(extent[0]) * u64::from(extent[1]);
     if extent.contains(&0)
         || input.size() != pixels * 12
-        || mask.size() != pixels * 4
+        || mask.size() != guide_storage_bytes(extent)
         || !pivot.is_finite()
     {
         return Err("invalid HDR input geometry or pivot".into());

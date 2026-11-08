@@ -94,7 +94,7 @@ pub(super) fn build(
             && (names == ["final"] || names == ["linear.base"])
             && settings.working_scale.is_native(),
     );
-    let (recipe, couplings, rows) = match native_layers::build(
+    let (recipe, highlights, calibration_gains, sensor_codes) = match native_layers::build(
         engine,
         source.metadata(),
         settings,
@@ -107,16 +107,14 @@ pub(super) fn build(
         native_layers::Output::Requested(recipe) => return Ok(Prepared::Requested(recipe)),
         native_layers::Output::Ready {
             recipe,
-            couplings,
-            rows,
-        } => (recipe, couplings, rows),
+            highlights,
+            calibration_gains,
+            sensor_codes,
+        } => (recipe, highlights, calibration_gains, sensor_codes),
     };
     let mut graph = recipe.graph;
     let mut calibrated = recipe.final_id;
     let directional_banding_selected = policy.directional_banding;
-    if preview.is_none() {
-        graph.retain_for_seal(calibrated);
-    }
     macro_rules! finish {
         () => {
             execution.check()?;
@@ -130,6 +128,27 @@ pub(super) fn build(
                 }));
             }
         };
+    }
+    if let Some(grid) = &preview {
+        calibrated = grid.append(&mut graph, calibrated)?;
+    }
+    if let Some(highlights) = highlights {
+        calibrated = highlights.append(&mut graph, calibrated, preview.as_ref())?;
+        finish!();
+    }
+    let (couplings, rows, speckles) = native_layers::prepare_working(
+        source.metadata(),
+        settings,
+        calibration_gains,
+        sensor_codes,
+        policy.reference_rows,
+        profile,
+    )?;
+    if preview.is_none() {
+        graph.retain_for_seal(calibrated);
+    }
+    if policy.retain_calibrated {
+        graph.retain_for_session(calibrated);
     }
     if settings.is_monochrome() {
         return match super::monochrome::build(
@@ -147,14 +166,15 @@ pub(super) fn build(
             execution,
             preview.as_ref(),
             rows,
+            speckles,
         )? {
             Prepared::Linear(recipe, mode, _) => Ok(Prepared::Linear(recipe, mode, preview)),
             requested => Ok(requested),
         };
     }
-    let native_calibrated = calibrated;
-    if let Some(grid) = &preview {
-        calibrated = grid.append(&mut graph, calibrated)?;
+    if let Some(speckles) = speckles {
+        calibrated = speckles.append(&mut graph, calibrated, preview.as_ref())?;
+        finish!();
     }
     if let Some(rows) = rows {
         calibrated = graph.add(
@@ -207,7 +227,6 @@ pub(super) fn build(
                 preview: preview.as_ref(),
                 region: region.as_ref(),
                 directional_banding: directional_banding_selected,
-                native_calibrated,
                 view: super::super::camera_view(params),
             },
             &mut graph,

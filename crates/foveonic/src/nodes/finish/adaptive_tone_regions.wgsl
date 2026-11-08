@@ -18,11 +18,11 @@ fn sample_regions(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = id.y*context.shape.z+id.x;
     if y<=exp2(-14.0) { samples[index]=vec4<f32>(-32.0,0.0,0.0,0.0); return; }
     let p=vec2<i32>(point);
-    let g2=vec2<f32>(ev_at(p+vec2<i32>(round(vec2<f32>(2.,0.)*context.toe.z)))-ev_at(p-vec2<i32>(round(vec2<f32>(2.,0.)*context.toe.z))),ev_at(p+vec2<i32>(round(vec2<f32>(0.,2.)*context.toe.z)))-ev_at(p-vec2<i32>(round(vec2<f32>(0.,2.)*context.toe.z))));
-    let g8=vec2<f32>(ev_at(p+vec2<i32>(round(vec2<f32>(8.,0.)*context.toe.z)))-ev_at(p-vec2<i32>(round(vec2<f32>(8.,0.)*context.toe.z))),ev_at(p+vec2<i32>(round(vec2<f32>(0.,8.)*context.toe.z)))-ev_at(p-vec2<i32>(round(vec2<f32>(0.,8.)*context.toe.z))));
+    let g2 = light_gradient(p, i32(context.toe.z));
+    let g8 = light_gradient(p, i32(context.toe.w));
     let coherence=clamp(sqrt(max(dot(g2,g8),0.0))/0.3,0.0,1.0);
     let peak=max(max(rgb.x,rgb.y),rgb.z)/context.values.x;
-    samples[index]=vec4<f32>(log2(y),base_mask[point.y*context.shape.x+point.x]*8.0-8.0,max(0.0,log2(max(peak/y,1.0))),coherence);
+    samples[index]=vec4<f32>(log2(y),encoded_guide(point)*8.0-8.0,max(0.0,log2(max(peak/y,1.0))),coherence);
 }
 fn window(index:u32)->vec3<u32> {
     if index<961u { return vec3<u32>((index%31u)*8u,(index/31u)*8u,16u); }

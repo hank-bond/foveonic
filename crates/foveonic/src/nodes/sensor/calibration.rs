@@ -64,6 +64,23 @@ pub fn rectangle(metadata: &Metadata, name: &str) -> Result<[u32; 4]> {
     Ok([left, top, right + 1, bottom + 1])
 }
 
+/// Original sensor code saturation shared by working-grid clipping classifiers.
+pub(crate) fn raw_white(metadata: &Metadata) -> Result<[f32; 3]> {
+    let white = if metadata.matrix("ImageDepth").is_some() {
+        let depth = metadata.fixed::<1>("ImageDepth")?[0];
+        if depth.fract() != 0. || !(1. ..=16.).contains(&depth) {
+            return Err("invalid sensor image depth".into());
+        }
+        [((1_u32 << depth as u32) - 1) as f32; 3]
+    } else {
+        metadata.fixed::<3>("RawSaturationLevel")?.map(|v| v as f32)
+    };
+    if white.iter().any(|v| !v.is_finite() || *v <= 0.) {
+        return Err("invalid sensor raw white levels".into());
+    }
+    Ok(white)
+}
+
 pub fn black(metadata: &Metadata) -> Result<CalibrationParams> {
     let dark = rectangle(metadata, "DarkShieldTop")?;
     let dark_count = (dark[2] - dark[0]) * (dark[3] - dark[1]);

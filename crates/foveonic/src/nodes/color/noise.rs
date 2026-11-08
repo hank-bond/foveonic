@@ -183,6 +183,7 @@ pub(crate) fn banding_parameters(
     metadata: &Metadata,
     mut p: Parameters,
     controls: crate::render::MerrillBandingControls,
+    grid: Option<crate::render::WorkingGrid>,
 ) -> Result<super::directional_banding::Prepared> {
     let native = [metadata.width as u32, metadata.height as u32];
     if native.contains(&0) {
@@ -195,22 +196,14 @@ pub(crate) fn banding_parameters(
     full.tile[..2].copy_from_slice(&native);
     let column = column_parameters(metadata, full)?.column_area;
     let mut active = crate::nodes::sensor::calibration::rectangle(metadata, "ActiveImageArea")?;
-    for axis in 0..2 {
-        let scale = |value: u32, upper: bool| -> u32 {
-            let value = u64::from(value) * u64::from(p.source[axis]);
-            let native = u64::from(native[axis]);
-            if upper {
-                value.div_ceil(native) as u32
-            } else {
-                (value / native) as u32
-            }
-        };
-        active[axis] = scale(active[axis], false);
-        active[axis + 2] = scale(active[axis + 2], true);
-        p.column_area[axis] = scale(column[axis], false);
-        p.column_area[axis + 2] = scale(column[axis + 2], true);
+    if let Some(grid) = grid {
+        active = grid.filter_bounds(active);
+        p.column_area = grid.filter_bounds(column);
+        super::directional_banding::Prepared::on_scale(p, active, controls, grid.scale)
+    } else {
+        p.column_area = column;
+        super::directional_banding::Prepared::new(p, active, controls)
     }
-    super::directional_banding::Prepared::new(p, active, controls)?.with_native_extent(native)
 }
 
 pub(crate) fn pattern_parameters(

@@ -41,6 +41,17 @@ impl ControlCapabilities {
         }
     }
 
+    /// Thumb keeps the smaller Classic captures at the same grid as Draft.
+    /// Explicit numerical working scales remain independent of preview labels.
+    pub fn thumb_scale(&self) -> super::Scale {
+        super::Scale::new(if self.family == ProcessingFamily::Classic {
+            4
+        } else {
+            8
+        })
+        .expect("preview scales are powers of two")
+    }
+
     /// Authored exposure limits before extending the row to a captured automatic value.
     pub fn exposure_range(&self) -> [f32; 2] {
         if self.family == ProcessingFamily::Quattro {

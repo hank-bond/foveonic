@@ -208,6 +208,25 @@ fn partial_nested_controls_default_missing_fields_and_ignore_extra_fields() {
 }
 
 #[test]
+fn schema_differences_are_metadata_and_do_not_change_deserialization() {
+    let input = serde_json::json!({"settings": {
+        "exposure":1.,"future":{"arbitrary":true},"white_balance_bias":{"warmth":0.25}
+    }, "extra/envelope":null});
+    let model = serde_json::json!({"settings": {
+        "exposure":1.,"rotation":{},"white_balance_bias":{"warmth":0.25,"tint":0.}
+    }});
+    let mut defaulted = Vec::new();
+    let mut ignored = Vec::new();
+    schema_fields(&input, &model, "", &mut defaulted, &mut ignored);
+    ignored.sort();
+    assert_eq!(
+        defaulted,
+        ["/settings/rotation", "/settings/white_balance_bias/tint"]
+    );
+    assert_eq!(ignored, ["/extra~1envelope", "/settings/future"]);
+}
+
+#[test]
 fn monochrome_retains_both_modes_and_older_recipes_select_color() {
     let mut s = edited();
     s.rendering = crate::render::Rendering::Monochrome;

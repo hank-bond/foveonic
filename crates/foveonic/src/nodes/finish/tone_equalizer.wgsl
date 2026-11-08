@@ -121,18 +121,22 @@ fn update_base(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 @compute @workgroup_size(8, 8)
 fn finish_mask(@builtin(global_invocation_id) id: vec3<u32>) {
+    if any(id.xy >= guide.shape.zw) { return; }
+    let i = id.y * guide.shape.z + id.x;
+    output_mask[i] = encode_mask(previous_base[i].x);
+}
+@compute @workgroup_size(8, 8)
+fn expand_mask(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= guide.shape.xy) { return; }
-    let p = id.xy / 2u;
-    output_mask[id.y * guide.shape.x + id.x] = encode_mask(previous_base[p.y * guide.shape.z + p.x].x);
+    output_mask[id.y * guide.shape.x + id.x] = brightness_mask[brightness_cell_index(id.xy, guide.shape.xy)];
 }
 
 @compute @workgroup_size(8, 8)
 fn calculate_gain(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= adjustment.shape.zw) { return; }
     let sample = u32(adjustment.pivot.y);
-    let p = min(id.xy * sample, adjustment.shape.xy - 1u);
     let light = cell_exposure(id.xy, sample, adjustment.shape.xy, adjustment.luma.xyz) - adjustment.pivot.x;
-    let base = brightness_mask[p.y * adjustment.shape.x + p.x] * MASK_SPAN_EV + MASK_FLOOR_EV - adjustment.pivot.x;
+    let base = brightness_mask[id.y * adjustment.shape.z + id.x] * MASK_SPAN_EV + MASK_FLOOR_EV - adjustment.pivot.x;
     output_gain[id.y * adjustment.shape.z + id.x] = hdr_gain(light, base, adjustment.amounts);
 }
 fn gain_at(p: vec2<i32>) -> f32 {

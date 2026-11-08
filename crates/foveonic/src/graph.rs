@@ -19,6 +19,8 @@ pub enum DataType {
     SensorLayers,
     SensorMask,
     ScalarField,
+    /// Encoded brightness cells for 2×2 blocks of the logical RGB image domain.
+    BrightnessGuide,
     Monochrome,
     LuminanceRatio,
     SignedDetail,
@@ -80,7 +82,8 @@ impl DataType {
             Self::LinearRgb(space) => Space::LinearRgb(space),
             Self::ToneMappedRgb(space) => Space::ToneMappedRgb(space),
             Self::EncodedRgb16(space) => Space::EncodedRgb16(space),
-            Self::BlackLevels
+            Self::BrightnessGuide
+            | Self::BlackLevels
             | Self::Histogram
             | Self::RowTable
             | Self::ShadowColorGuide

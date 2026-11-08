@@ -18,7 +18,7 @@ use std::{
 
 pub const MAX_SIDE: u32 = 2048;
 // Bump when photographic processing or preview encoding changes its appearance.
-const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE20";
+const PREVIEW_MAGIC: &[u8; 8] = b"FOVPRE21";
 // Allow the largest RGB16 image plus its TIFF and compression overhead.
 const MAX_ENCODED: u64 = 32 * 1024 * 1024;
 // Signature, JSON length, and JSON CRC32 share the decoded source prefix layout.
@@ -184,6 +184,21 @@ impl Cache {
         })
     }
 
+    /// Check storage policy without reading a source or recipe. Publication still verifies both.
+    pub fn permits_preview_storage(
+        &self,
+        settings: &crate::render::Settings,
+        metadata: &Metadata,
+    ) -> Result<bool> {
+        // Shared Adaptive tuning has no persistent preview identity yet.
+        if settings.adaptive_tone_active() {
+            return Ok(false);
+        }
+        let family = metadata.processing_family()?;
+        let control = self.control.lock().unwrap();
+        Ok(control.settings.permits(family) && !control.clear)
+    }
+
     /// Queue the newest whole-photo RGB16 display preview with its declared primaries. Recipe checks happen on
     /// the caller's background thread, never in the UI or main render worker.
     pub fn save_preview(
@@ -194,9 +209,7 @@ impl Cache {
         preview: Preview,
         calibration: Option<&str>,
     ) -> Result<()> {
-        // Shared tuning is intentionally absent from photo recipes. Until it has
-        // a persistent preview identity, publish adaptive previews in memory only.
-        if settings.adaptive_tone_active() {
+        if !self.permits_preview_storage(settings, metadata)? {
             return Ok(());
         }
         let key = self.preview_key(path)?;
@@ -296,8 +309,15 @@ fn read_file(
     {
         return Err("obsolete preview cache entry".into());
     }
+    let source = String::from_utf8_lossy(&key.source.location);
+    let mut file = crate::diagnostics::io::ObservedReader::new(
+        file,
+        "preview-cache",
+        Path::new(source.as_ref()),
+    );
     let mut encoded = Vec::new();
-    file.take(MAX_ENCODED).read_to_end(&mut encoded)?;
+    (&mut file).take(MAX_ENCODED).read_to_end(&mut encoded)?;
+    file.complete();
     if crc32fast::hash(&encoded) != header.checksum {
         return Err("preview cache checksum mismatch".into());
     }

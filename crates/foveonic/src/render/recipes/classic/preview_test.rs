@@ -47,9 +47,9 @@ fn grids_cover_all_scales_and_preserve_fractional_camera_framing() {
                 graph
                     .nodes
                     .iter()
-                    .filter(|node| matches!(node.operation, Operation::ReduceLayers(_)))
+                    .filter(|node| matches!(node.operation, Operation::ReduceLayers { .. }))
                     .count(),
-                power as usize
+                1
             );
             let rgb = graph
                 .add(
@@ -140,7 +140,7 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
                 .graph
                 .nodes
                 .iter()
-                .position(|node| matches!(node.operation, Operation::ReduceLayers(_)))
+                .position(|node| matches!(node.operation, Operation::ReduceLayers { .. }))
                 .unwrap();
             let calibration = recipe
                 .graph

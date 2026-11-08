@@ -1,4 +1,4 @@
-//! Owns original evidence, GPU brightness/color solves, and native highlight application.
+//! Owns original evidence and working-grid GPU brightness/color recovery.
 //!
 //! N2 equations are adapted from the pinned CPU recovery implementation at 2b0dd443.
 //! Copyright 2026 Sang Lee and contributors. Apache-2.0. See color_field/NOTICE.
@@ -88,6 +88,7 @@ pub(crate) struct Params {
     pub grid: [u32; 4],
     pub crop: [u32; 4],
     pub gain: [f32; 4],
+    /// Raw white codes and a flag enabling original working-grid clipping evidence.
     pub white: [f32; 4],
     pub neutral: [f32; 4],
     pub luminance: [f32; 4],
@@ -99,10 +100,43 @@ pub(crate) struct Params {
 pub(crate) struct Prepared {
     pub params: Params,
     pub repairs: Vec<u32>,
+    pub grid: Option<crate::render::WorkingGrid>,
 }
 impl Prepared {
+    pub(crate) fn on_grid(mut self, grid: Option<crate::render::WorkingGrid>) -> Self {
+        self.grid = grid;
+        if let Some(grid) = grid {
+            self.params.white[3] = 1.;
+            let width = self.params.size[0];
+            for point in &mut self.repairs {
+                let x = *point % width;
+                let y = *point / width;
+                *point = (y / grid.scale.divisor() + grid.origin[1]) * grid.extent[0]
+                    + x / grid.scale.divisor()
+                    + grid.origin[0];
+            }
+            self.repairs.sort_unstable();
+            self.repairs.dedup();
+            self.params.size = [
+                grid.extent[0],
+                grid.extent[1],
+                grid.extent[0] * grid.extent[1],
+                self.repairs.len() as u32,
+            ];
+            self.params.crop = grid.bounds(self.params.crop);
+            // Solver cells retain enough working samples to classify donors.
+            let step = self.params.grid[3];
+            let cols = (self.params.crop[2] - self.params.crop[0]).div_ceil(step);
+            let rows = (self.params.crop[3] - self.params.crop[1]).div_ceil(step);
+            self.params.grid = [cols, rows, cols * rows, step];
+            self.params.options[3] = (4. * grid.scale.factor()).round().max(1.) as u32;
+        }
+        self
+    }
     pub(crate) fn key(&self) -> crate::recipe::Key {
-        crate::recipe::Key::pod(&self.params).slice(&self.repairs)
+        crate::recipe::Key::pod(&self.params)
+            .slice(&self.repairs)
+            .join(super::highlight::clipping_key(self.grid))
     }
 }
 
@@ -202,18 +236,7 @@ pub(crate) fn prepare(
     }
     // Recover before the active-area crop, preserving the sensor grid and neighbors.
     let crop = [0, 0, metadata.width as u32, metadata.height as u32];
-    let white = if metadata.matrix("ImageDepth").is_some() {
-        let depth = metadata.fixed::<1>("ImageDepth")?[0];
-        if depth.fract() != 0. || !(1. ..=16.).contains(&depth) {
-            return Err("invalid color-field image depth".into());
-        }
-        [((1_u32 << depth as u32) - 1) as f32; 3]
-    } else {
-        metadata.fixed::<3>("RawSaturationLevel")?.map(|v| v as f32)
-    };
-    if white.iter().any(|v| !v.is_finite() || *v <= 0.) {
-        return Err("invalid color-field raw white levels".into());
-    }
+    let white = super::calibration::raw_white(metadata)?;
     let mut repairs = Vec::new();
     if repair {
         for key in ["BadPixelsF20", "Jpeg_BadClusters"] {
@@ -263,6 +286,7 @@ pub(crate) fn prepare(
             ],
         },
         repairs,
+        grid: None,
     })
 }
 
@@ -306,6 +330,7 @@ pub(crate) struct Inputs<'a> {
     pub original: &'a ReadGuard,
     pub black: &'a ReadGuard,
     pub unrepaired: &'a ReadGuard,
+    pub clipping: Option<&'a crate::recipe::Shared<u32>>,
 }
 
 pub(crate) fn apply(
@@ -321,11 +346,18 @@ pub(crate) fn apply(
         original,
         black,
         unrepaired,
+        clipping,
     } = inputs;
     profile.measure("prepare optional color-field kernels", || {
         gpu.prepare_color_field()
     })?;
     let n = p.params.size[2];
+    if clipping.is_some() != p.grid.is_some()
+        || clipping.is_some_and(|flags| flags.len() != n as usize)
+    {
+        return Err("color-field clipping evidence does not match its working grid".into());
+    }
+
     let g = p.params.grid[2];
     let mut trace = gpu.trace(profile.mode.gpu(), 32);
     let mut resources = vec![
@@ -362,6 +394,13 @@ pub(crate) fn apply(
             )?,
         ),
         (18, unrepaired.clone()),
+        (
+            21,
+            gpu.upload(
+                "Color-field original clipping flags",
+                clipping.map_or(&[0][..], |flags| &flags[..]),
+            )?,
+        ),
         (
             19,
             gpu.storage(

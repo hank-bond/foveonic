@@ -927,7 +927,7 @@ fn compose(
                 space,
                 appearance::LINEAR_CODE_WHITE as f32,
                 curve,
-                false,
+                crate::render::ControlCapabilities::from_metadata(metadata)?.thumb_scale(),
             )?)
         } else {
             None
@@ -935,15 +935,11 @@ fn compose(
         let context = super::linear_edits::Context {
             dehaze_basis,
             adaptive,
-            analysis_grid: crate::render::AnalysisGrid::new(
-                grid,
-                if settings.is_monochrome() {
-                    WorkingGrid::NATIVE
-                } else {
-                    WorkingGrid::new(2)?
-                },
-                WorkingGrid::new(2)?,
-            ),
+            haze_scale: grid.coarsest(if settings.is_monochrome() {
+                WorkingGrid::NATIVE
+            } else {
+                WorkingGrid::new(2)?
+            }),
             space,
             white: appearance::LINEAR_CODE_WHITE as f32,
             guide_white: appearance::LINEAR_CODE_WHITE as f32,

@@ -116,8 +116,7 @@ impl Prepared {
             self.params.spatial[0] = 9_u32.div_ceil(grid.scale.divisor()).max(1);
             self.params.spatial[1] = 40_u32.div_ceil(grid.scale.divisor()).max(1);
             self.params.detail[2] = grid.scale.factor();
-            let noise_std =
-                crate::nodes::color::pyramid_resample::independent_noise_std(grid.scale);
+            let noise_std = crate::nodes::sensor::pool::independent_noise_std(grid.scale);
             self.params.detail[3] = noise_std * noise_std;
         }
         Ok(self)

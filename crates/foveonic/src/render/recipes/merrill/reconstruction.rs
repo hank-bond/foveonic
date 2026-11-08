@@ -21,7 +21,6 @@ pub(super) struct Request<'a> {
     pub preview: Option<&'a preview::Grid>,
     pub region: Option<&'a region::Prepared>,
     pub directional_banding: bool,
-    pub native_calibrated: usize,
     pub view: crate::image::View,
 }
 
@@ -106,31 +105,21 @@ pub(super) fn append(
     let conditioned = if request.directional_banding && effects.noise {
         let bands = append_banding(
             graph,
-            request.native_calibrated,
+            calibrated,
             Arc::new(crate::noise::banding_parameters(
                 request.source.metadata(),
-                native_columns,
+                if request.region.is_some() {
+                    native_columns
+                } else {
+                    column_params
+                },
                 request.settings.merrill_banding,
+                request.preview.map(|grid| grid.grid),
             )?),
         )?;
-        // Pooling uses the same complete native field for every view. Regional
-        // views pack original tiles, preserving their halos and seam phase.
         if request.region.is_some() {
             graph.retain_for_session(bands);
-        }
-        if let Some(grid) = request.preview {
-            let native = graph.named_output(bands, "column.layers")?;
-            let reduced = grid.append(graph, native)?;
-            // The native estimator has already corrected these samples.
-            // Packing their working tiles needs only numerical grid geometry.
-            graph.add(
-                Operation::Column {
-                    params: column_params,
-                    enabled: false,
-                },
-                &[reduced],
-            )?
-        } else if request.region.is_some() {
+
             graph.add(
                 Operation::DirectionalBanding {
                     stage: crate::nodes::color::directional_banding::Stage::Window,
@@ -138,6 +127,7 @@ pub(super) fn append(
                         request.source.metadata(),
                         column_params,
                         request.settings.merrill_banding,
+                        None,
                     )?),
                 },
                 &[bands],

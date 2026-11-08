@@ -66,6 +66,8 @@ impl std::error::Error for SourceRequired {}
 pub(crate) struct Value {
     pub(crate) working_scale: super::Scale,
     pub(crate) view: Option<crate::image::View>,
+    // Framing also crosses opaque numerical guides. Image descriptions snapshot it.
+    pub(crate) view_baked: bool,
     pub(crate) buffer: crate::gpu::ReadGuard,
     pub(crate) description: Option<Description>,
 }
@@ -89,7 +91,16 @@ impl Engine {
         profile: &mut Profile,
         execution: &mut Execution<'_>,
     ) -> Result<Vec<Value>> {
-        let preparation = profile.mode.enabled().then(Instant::now);
+        let _execution_scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Graph,
+            "graph.execute",
+            |fields| {
+                fields.u64("nodes", graph.nodes.len() as u64);
+                fields.u64("targets", targets.len() as u64);
+            },
+        );
+        let preparation =
+            (profile.mode.enabled() || crate::diagnostics::enabled()).then(Instant::now);
         let gpu = &self.gpu;
         let mut completed_allocation_bytes = allocated_bytes(gpu.activity());
         let mut trace = gpu.trace(profile.mode.gpu(), graph.nodes.len() as u32 * 2);
@@ -164,7 +175,31 @@ impl Engine {
         let mut shared_ranges = profile.mode.gpu().then(Vec::new);
         for (node_index, node) in graph.nodes.iter().enumerate() {
             execution.check()?;
+            let _node_context = crate::diagnostics::current_context().map(|mut context| {
+                context.node = Some(node_index as u64);
+                crate::diagnostics::enter(context)
+            });
             let run = node.outputs.iter().any(|id| required[*id] && !cached[*id]);
+            let _node_scope = crate::diagnostics::scope_with(
+                crate::diagnostics::Category::Graph,
+                node.operation.label(),
+                |fields| {
+                    fields.u64("node", node_index as u64);
+                    fields.str("operation", node.operation.kind());
+                    fields.bool("executed", run);
+                    fields.u64("outputs", node.outputs.len() as u64);
+                    fields.u64(
+                        "seed_hits",
+                        node.outputs.iter().filter(|id| cached[**id]).count() as u64,
+                    );
+                    for (slot, id) in node.inputs.iter().enumerate() {
+                        fields.u64(&format!("input_{slot}"), *id as u64);
+                    }
+                    for (slot, id) in node.outputs.iter().enumerate() {
+                        fields.u64(&format!("output_{slot}"), *id as u64);
+                    }
+                },
+            );
             let diagnostic = if let Some(reachable) = &reachable {
                 Some((
                     crate::profile::NodeObservation {
@@ -208,6 +243,7 @@ impl Engine {
                 continue;
             }
             let index = node.outputs[0];
+            let mut submission_stage = gpu.background_stage(execution.cancel.is_some());
             let start = Instant::now();
             let input = |slot: usize| {
                 values[node.inputs[slot]].as_ref().unwrap_or_else(|| {
@@ -249,23 +285,21 @@ impl Engine {
                     Input::Rendered(image) => image.settings.working_scale,
                     _ => super::Scale::NATIVE,
                 },
-                Operation::ReduceLayers(prepared) => {
+                Operation::ReduceLayers { prepared, .. } => {
                     prepared.working_scale().map_or_else(coarser, Ok)?
                 }
                 Operation::PoolSignal(prepared) => {
                     prepared.working_scale().map_or_else(coarser, Ok)?
                 }
-                Operation::AdaptiveToneOverview { .. } => coarser()?,
                 _ => inherited_scale,
             };
             let extent = match &node.operation {
                 Operation::PoolSignal(prepared) => prepared.output_extent(),
-                Operation::ReduceLayers(prepared) => prepared.output_extent(),
+                Operation::ReduceLayers { prepared, .. } => prepared.output_extent(),
                 Operation::ResampleRgb { params, .. } => [params.output[0], params.output[1]],
-                Operation::AdaptiveToneOverview { source, .. } => source.map(|v| v.div_ceil(2)),
-                Operation::ToneMask { guide, .. } | Operation::AdaptiveToneGuide { guide, .. } => {
-                    guide.extent()
-                }
+                Operation::ToneMask { guide, .. }
+                | Operation::AdaptiveToneGuide { guide, .. }
+                | Operation::ExpandBrightnessGuide { guide, .. } => guide.extent(),
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
                 Operation::ProjectColorTiles { params, .. } => params.output_extent(),
                 Operation::NoiseContext(p) => reconstruction::context_extent(*p),
@@ -286,19 +320,27 @@ impl Engine {
             let inherited_view = reads[node_index]
                 .iter()
                 .find_map(|id| values[*id].as_ref().and_then(|value| value.view));
+            crate::diagnostics::event(
+                crate::diagnostics::Category::Graph,
+                "graph.geometry",
+                |fields| {
+                    fields.u64("node", node_index as u64);
+                    fields.str("operation", node.operation.kind());
+                    fields.u64("scale", working_scale.divisor() as u64);
+                    fields.u64("width", extent[0] as u64);
+                    fields.u64("height", extent[1] as u64);
+                    fields.u64("input_scale", inherited_scale.divisor() as u64);
+                    fields.u64("input_width", inherited[0] as u64);
+                    fields.u64("input_height", inherited[1] as u64);
+                },
+            );
             let view = match &node.operation {
-                Operation::ReduceLayers(prepared) => {
+                Operation::ReduceLayers { prepared, .. } => {
                     inherited_view.map(|view| prepared.map_view(view))
                 }
                 Operation::PoolSignal(prepared) => {
                     inherited_view.map(|view| prepared.map_view(view))
                 }
-                Operation::AdaptiveToneOverview { .. } => inherited_view.map(|mut view| {
-                    let half = super::Scale::new(2).expect("power of two");
-                    view.crop = half.bounds(view.crop);
-                    view.extent = half.extent(view.extent);
-                    view
-                }),
                 Operation::CodeCrop(_) | Operation::Encode { .. } | Operation::NoiseContext(_) => {
                     Some(crate::image::View {
                         crop: [0, 0, extent[0], extent[1]],
@@ -315,12 +357,10 @@ impl Engine {
             let view_baked = matches!(
                 node.operation,
                 Operation::CodeCrop(_) | Operation::Encode { .. }
-            ) || reads[node_index].iter().any(|id| {
-                values[*id]
-                    .as_ref()
-                    .and_then(|v| v.description)
-                    .is_some_and(|d| d.view_baked)
-            }) || matches!((&node.operation, &context), (Operation::RenderedInput { .. }, Input::Rendered(image)) if image.description.view_baked);
+            ) || reads[node_index]
+                .iter()
+                .any(|id| values[*id].as_ref().is_some_and(|v| v.view_baked))
+                || matches!((&node.operation, &context), (Operation::RenderedInput { .. }, Input::Rendered(image)) if image.description.view_baked);
             let desc = graph.outputs[index]
                 .data
                 .image_description(extent)
@@ -369,14 +409,9 @@ impl Engine {
                     prepared,
                     profile,
                 )?),
-                Operation::ReduceLayers(prepared) => {
-                    Some(crate::nodes::color::pyramid_resample::apply(
-                        gpu,
-                        &input(0).buffer,
-                        prepared,
-                        profile,
-                    )?)
-                }
+                Operation::ReduceLayers { prepared, .. } => Some(
+                    crate::nodes::sensor::pool::apply(gpu, &input(0).buffer, prepared, profile)?,
+                ),
                 Operation::ImageRegion { prepared, .. } => Some(
                     crate::nodes::finish::image_region::apply(gpu, &input(0).buffer, prepared)?,
                 ),
@@ -443,6 +478,7 @@ impl Engine {
                         if required[side] {
                             values[side] = Some(Value {
                                 working_scale,
+                                view_baked,
                                 view,
                                 buffer: output.mask,
                                 description: None,
@@ -671,6 +707,7 @@ impl Engine {
                             if required[side] {
                                 values[side] = Some(Value {
                                     working_scale,
+                                    view_baked,
                                     view,
                                     buffer,
                                     description: Some(Description::new(
@@ -697,6 +734,7 @@ impl Engine {
                         if required[side] {
                             values[side] = Some(Value {
                                 working_scale,
+                                view_baked,
                                 view,
                                 buffer: output.source_after,
                                 description: Some(Description::new(
@@ -722,6 +760,7 @@ impl Engine {
                         if required[side] {
                             values[side] = Some(Value {
                                 working_scale,
+                                view_baked,
                                 view,
                                 buffer: output.source_after,
                                 description: Some(Description::new(
@@ -747,6 +786,7 @@ impl Engine {
                         if required[side] {
                             values[side] = Some(Value {
                                 working_scale,
+                                view_baked,
                                 view,
                                 buffer: output.mask,
                                 description: None,
@@ -757,6 +797,7 @@ impl Engine {
                         if required[side] {
                             values[side] = Some(Value {
                                 working_scale,
+                                view_baked,
                                 view,
                                 buffer: output
                                     .recovery_mask
@@ -818,6 +859,7 @@ impl Engine {
                     if required[node.outputs[1]] {
                         values[node.outputs[1]] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: output.residual,
                             description: Some(Description::new(
@@ -851,6 +893,7 @@ impl Engine {
                     if required[node.outputs[1]] {
                         values[node.outputs[1]] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: output.detail,
                             description: Some(Description::new(
@@ -920,6 +963,7 @@ impl Engine {
                         if required[side] {
                             values[side] = Some(Value {
                                 working_scale,
+                                view_baked,
                                 view,
                                 buffer,
                                 description: graph.outputs[side].data.image_description(extent),
@@ -951,6 +995,7 @@ impl Engine {
                         if required[side] {
                             values[side] = Some(Value {
                                 working_scale,
+                                view_baked,
                                 view,
                                 buffer,
                                 description: graph.outputs[side].data.image_description(extent),
@@ -984,6 +1029,7 @@ impl Engine {
                     if required[side] {
                         values[side] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: blue,
                             description: graph.outputs[side]
@@ -1043,6 +1089,7 @@ impl Engine {
                     if required[layer_id] {
                         values[layer_id] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: layers,
                             description: DataType::CalibratedLayers.image_description(inherited),
@@ -1107,6 +1154,7 @@ impl Engine {
                     if required[detail_id] {
                         values[detail_id] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: result.detail,
                             description: DataType::SignedDetail.image_description(inherited),
@@ -1187,6 +1235,7 @@ impl Engine {
                     if required[side] {
                         values[side] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: histogram,
                             description: None,
@@ -1230,6 +1279,7 @@ impl Engine {
                     if required[edge_id] {
                         values[edge_id] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: context.edges,
                             description: DataType::ScalarField.image_description(extent),
@@ -1265,6 +1315,7 @@ impl Engine {
                     if required[projected] {
                         values[projected] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(
                                 gpu,
@@ -1280,6 +1331,7 @@ impl Engine {
                     if required[edge_id] {
                         values[edge_id] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(
                                 gpu,
@@ -1295,6 +1347,7 @@ impl Engine {
                     if required[node.outputs[3]] {
                         values[node.outputs[3]] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: base.seed.unwrap(),
                             description: None,
@@ -1320,6 +1373,7 @@ impl Engine {
                     if let Some(&projected) = node.outputs.get(1).filter(|id| required[**id]) {
                         values[projected] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(gpu, &tiles, params, 3, profile)?,
                             description: DataType::CalibratedLayers
@@ -1338,6 +1392,7 @@ impl Engine {
                     if required[projected] {
                         values[projected] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: DataType::CalibratedLayers
@@ -1358,6 +1413,7 @@ impl Engine {
                     if required[projected] {
                         values[projected] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(gpu, &ratio, *params, 1, profile)?,
                             description: DataType::LuminanceRatio
@@ -1381,6 +1437,7 @@ impl Engine {
                     if required[projected] {
                         values[projected] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(
                                 gpu,
@@ -1396,6 +1453,7 @@ impl Engine {
                     if required[mask] {
                         values[mask] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(
                                 gpu,
@@ -1441,6 +1499,7 @@ impl Engine {
                     if let Some(buffer) = result.change {
                         values[node.outputs[1]] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer,
                             description: DataType::LuminanceRatio
@@ -1456,6 +1515,7 @@ impl Engine {
                     if required[projected] {
                         values[projected] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: graph.outputs[projected]
@@ -1472,6 +1532,7 @@ impl Engine {
                     if required[projected] {
                         values[projected] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: reconstruction::project(gpu, &tiles, *params, 3, profile)?,
                             description: graph.outputs[projected]
@@ -1490,6 +1551,7 @@ impl Engine {
                     if required[rows] {
                         values[rows] = Some(Value {
                             working_scale,
+                            view_baked,
                             view,
                             buffer: result.rows,
                             description: None,
@@ -1507,18 +1569,25 @@ impl Engine {
                     };
                     highlight::apply(gpu, Some(&input(0).buffer), prepared, false, profile)?.pixels
                 }
-                Operation::ColorField(prepared) => Some(color_field::apply(
-                    gpu,
-                    color_field::Inputs {
-                        input: &input(0).buffer,
-                        original: &input(1).buffer,
-                        black: &input(2).buffer,
-                        unrepaired: &input(3).buffer,
-                    },
-                    prepared,
-                    profile,
-                    execution,
-                )?),
+                Operation::ColorField(prepared) => {
+                    let clipping = prepared
+                        .grid
+                        .map(|grid| self.clipping_flags(context.metadata(), Some(grid)))
+                        .transpose()?;
+                    Some(color_field::apply(
+                        gpu,
+                        color_field::Inputs {
+                            input: &input(0).buffer,
+                            original: &input(1).buffer,
+                            black: &input(2).buffer,
+                            unrepaired: &input(3).buffer,
+                            clipping: clipping.as_ref(),
+                        },
+                        prepared,
+                        profile,
+                        execution,
+                    )?)
+                }
                 Operation::HighlightDensity(prepared) => {
                     let materialized;
                     let prepared = if prepared.flags.is_none() {
@@ -1532,7 +1601,7 @@ impl Engine {
                 Operation::Despeckle(prepared) => Some(despeckle::apply(
                     gpu,
                     &input(0).buffer,
-                    &input(1).buffer,
+                    prepared.needs_sensor_codes().then(|| &input(1).buffer),
                     prepared,
                     profile,
                 )?),
@@ -1721,18 +1790,18 @@ impl Engine {
                     )?)
                 }
                 Operation::ToneMask { guide, .. } | Operation::AdaptiveToneGuide { guide, .. } => {
-                    Some(crate::nodes::finish::tone_equalizer::mask(
+                    Some(crate::nodes::finish::tone_equalizer::build_guide(
                         gpu,
                         &input(0).buffer,
                         *guide,
                         profile,
                     )?)
                 }
-                Operation::AdaptiveToneOverview { source, .. } => {
-                    Some(crate::nodes::finish::adaptive_tone::overview(
+                Operation::ExpandBrightnessGuide { guide, .. } => {
+                    Some(crate::nodes::finish::tone_equalizer::expand_mask(
                         gpu,
                         &input(0).buffer,
-                        *source,
+                        *guide,
                         profile,
                     )?)
                 }
@@ -1923,6 +1992,7 @@ impl Engine {
             if !cached[index] {
                 values[index] = output.map(|buffer| Value {
                     working_scale,
+                    view_baked,
                     view,
                     buffer,
                     description: desc,
@@ -1945,7 +2015,7 @@ impl Engine {
             }
             // Queuing a whole outdated render would delay both drawing and newer edits.
             // Finish submitted work off-thread, then check for newer work between stages.
-            // Background executors also yield at GPU submission boundaries.
+            // Background graph work uses this same completed-operation boundary.
             let pending_allocation_bytes =
                 allocated_bytes(gpu.activity()).saturating_sub(completed_allocation_bytes);
             if execution.cancel.is_some()
@@ -1966,6 +2036,7 @@ impl Engine {
                 }
                 completed_allocation_bytes = allocated_bytes(gpu.activity());
             }
+            submission_stage.complete();
             stage_completed += 1;
             if let Some(progress) = execution.progress {
                 progress(super::RenderProgress::Stage {

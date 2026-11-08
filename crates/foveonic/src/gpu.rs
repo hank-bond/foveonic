@@ -4,33 +4,61 @@ use crate::profile::{Profile, Timing};
 use crate::source::Result;
 use wgpu::util::DeviceExt;
 
+mod diagnostics;
 mod field;
 mod kernels;
+mod scheduling;
 pub(crate) mod scratch;
 mod storage;
 pub use kernels::Kernel;
 pub(crate) use storage::{Binding, ReadGuard, WriteGuard};
 
+#[derive(Clone)]
+struct TracePass {
+    label: &'static str,
+    submission: u64,
+    context: Option<crate::diagnostics::Context>,
+}
+
 #[derive(Default)]
 pub(crate) struct GpuTrace {
     query: Option<wgpu::QuerySet>,
-    labels: Vec<&'static str>,
+    passes: Vec<TracePass>,
+    capture: Option<std::sync::Arc<diagnostics::CaptureTrace>>,
+    finished: std::cell::Cell<bool>,
+    legacy: bool,
+    omitted: u32,
+    maximum_passes: u32,
 }
 
 impl GpuTrace {
     pub(crate) fn len(&self) -> usize {
-        self.labels.len()
+        self.passes.len()
     }
 
     fn writes(&mut self, kernel: Kernel) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
         let query = self.query.as_ref()?;
-        let index = self.labels.len() as u32 * 2;
-        self.labels.push(kernel.label());
+        let index = self.passes.len() as u32 * 2;
+        if !self.legacy && self.passes.len() >= self.maximum_passes as usize {
+            self.omitted += 1;
+            return None;
+        }
+        self.passes.push(TracePass {
+            label: kernel.label(),
+            submission: 0,
+            context: crate::diagnostics::current_context(),
+        });
         Some(wgpu::ComputePassTimestampWrites {
             query_set: query,
             beginning_of_pass_write_index: Some(index),
             end_of_pass_write_index: Some(index + 1),
         })
+    }
+
+    fn submitted(&mut self, first: usize, submission: u64) {
+        for pass in &mut self.passes[first..] {
+            pass.submission = submission;
+        }
     }
 }
 
@@ -43,6 +71,7 @@ pub struct Gpu {
     shader_writes: Vec<u32>,
     pub adapter_name: String,
     activity: std::sync::Mutex<crate::profile::GpuActivity>,
+    diagnostics: std::sync::Arc<diagnostics::DeviceDiagnostics>,
 }
 
 impl Gpu {
@@ -56,6 +85,7 @@ impl Gpu {
             shader_writes: self.shader_writes.clone(),
             adapter_name: self.adapter_name.clone(),
             activity: Default::default(),
+            diagnostics: self.diagnostics.clone(),
         }
     }
     pub fn new() -> Result<Self> {
@@ -84,21 +114,67 @@ impl Gpu {
     }
 
     fn submit(&self, encoder: wgpu::CommandEncoder) {
+        self.submit_buffer(encoder, false);
+    }
+
+    fn submit_buffer(&self, encoder: wgpu::CommandEncoder, diagnostic: bool) -> u64 {
         // Import renders inherit the cache's foreground gate. Never queue an
         // entire batch ahead of interactive work on the shared device queue.
-        crate::background::checkpoint();
+        if !diagnostic {
+            crate::background::checkpoint();
+        }
+        let id = self.diagnostics.submission();
+        let command = {
+            let _scope =
+                crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.encode.finish");
+            encoder.finish()
+        };
         self.activity
             .lock()
             .expect("GPU activity counter")
             .submissions += 1;
-        let submitted = self.queue.submit(Some(encoder.finish()));
-        if crate::background::context().is_some() {
+        let submitted = {
+            let _scope = crate::diagnostics::scope_with(
+                crate::diagnostics::Category::Gpu,
+                "gpu.submit",
+                |fields| {
+                    fields
+                        .u64("submission", id)
+                        .u64("clock_id", self.diagnostics.clock)
+                        .bool("diagnostic", diagnostic);
+                },
+            );
+            self.queue.submit(Some(command))
+        };
+        if !diagnostic
+            && crate::background::context().is_some()
+            && !scheduling::stage_controls(self)
+        {
+            let _scope = crate::diagnostics::scope_with(
+                crate::diagnostics::Category::Gpu,
+                "gpu.wait",
+                |fields| {
+                    fields
+                        .u64("submission", id)
+                        .str("reason", "existing-foreground-gate");
+                },
+            );
             self.device
                 .poll(wgpu::Maintain::WaitForSubmissionIndex(submitted));
         }
+        id
     }
 
     pub fn upload<T: bytemuck::Pod>(&self, label: &str, values: &[T]) -> Result<ReadGuard> {
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Gpu,
+            "gpu.upload",
+            |fields| {
+                fields
+                    .str("label", label)
+                    .u64("bytes", std::mem::size_of_val(values) as u64);
+            },
+        );
         crate::background::checkpoint();
         self.check_size(std::mem::size_of_val(values) as u64)?;
         {
@@ -122,6 +198,13 @@ impl Gpu {
     }
 
     pub fn uniform<T: bytemuck::Pod>(&self, value: &T) -> ReadGuard {
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Gpu,
+            "gpu.uniform",
+            |fields| {
+                fields.u64("bytes", std::mem::size_of::<T>() as u64);
+            },
+        );
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
             activity.uniform_bytes += std::mem::size_of::<T>() as u64;
@@ -139,6 +222,13 @@ impl Gpu {
     }
 
     pub fn storage(&self, label: &str, size: u64) -> Result<ReadGuard> {
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Gpu,
+            "gpu.storage",
+            |fields| {
+                fields.str("label", label).u64("bytes", size);
+            },
+        );
         self.check_size(size)?;
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
@@ -209,29 +299,46 @@ impl Gpu {
     }
 
     pub fn trace(&self, enabled: bool, maximum_passes: u32) -> GpuTrace {
+        if !enabled && !crate::diagnostics::active_mode().gpu() {
+            return GpuTrace::default();
+        }
+        let supported = self
+            .device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY);
+        let capture = self.diagnostics.capture(maximum_passes, supported);
         GpuTrace {
-            query: (enabled
-                && self
-                    .device
-                    .features()
-                    .contains(wgpu::Features::TIMESTAMP_QUERY))
-            .then(|| {
+            query: ((enabled || capture.is_some()) && supported && maximum_passes > 0).then(|| {
                 self.device.create_query_set(&wgpu::QuerySetDescriptor {
                     label: Some("Stage timestamps"),
                     ty: wgpu::QueryType::Timestamp,
                     count: maximum_passes * 2,
                 })
             }),
-            labels: Vec::new(),
+            passes: Vec::new(),
+            capture,
+            finished: Default::default(),
+            legacy: enabled,
+            omitted: 0,
+            maximum_passes,
         }
     }
 
     pub fn finish_trace(&self, trace: &GpuTrace, profile: &mut Profile) -> Result<()> {
-        if trace.labels.is_empty() {
+        if !profile.mode.gpu() {
+            return self.finish_capture_trace(trace);
+        }
+        if trace.finished.replace(true) {
+            return Ok(());
+        }
+        if trace.passes.is_empty() {
+            if let Some(capture) = &trace.capture {
+                capture.resolved(0);
+            }
             return Ok(());
         }
         let query = trace.query.as_ref().expect("timestamps have a query set");
-        let count = trace.labels.len() as u32 * 2;
+        let count = trace.passes.len() as u32 * 2;
         let resolved = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Resolved timestamps"),
             size: u64::from(count) * 8,
@@ -250,12 +357,13 @@ impl Gpu {
         let bytes = self.readback(&ReadGuard::new(resolved, "Resolved timestamps"))?;
         let timestamps = bytemuck::cast_slice::<u8, u64>(&bytes);
         let period = f64::from(self.queue.get_timestamp_period());
-        for (&stage, pair) in trace.labels.iter().zip(timestamps.as_chunks::<2>().0) {
+        for (pass, pair) in trace.passes.iter().zip(timestamps.as_chunks::<2>().0) {
             profile.gpu.push(Timing {
-                stage,
+                stage: pass.label,
                 milliseconds: pair[1].wrapping_sub(pair[0]) as f64 * period / 1_000_000.,
             });
         }
+        diagnostics::publish_trace(trace, timestamps, period);
         Ok(())
     }
 
@@ -333,6 +441,9 @@ impl Gpu {
         resources: &mut [(u32, ReadGuard)],
         trace: &mut GpuTrace,
     ) {
+        let _scope =
+            crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.encode.field_batch");
+        let first = trace.len();
         let access = |kernel: Kernel| {
             self.field_data().bindings[kernel as usize - Kernel::FieldPrepare as usize]
         };
@@ -417,7 +528,8 @@ impl Gpu {
             .lock()
             .expect("GPU activity counter")
             .dispatches += tasks.len() as u64;
-        self.submit(encoder);
+        let submission = self.submit_buffer(encoder, false);
+        trace.submitted(first, submission);
         for (_, binding) in &mut bindings {
             binding.submitted("color-field batch");
         }
@@ -459,6 +571,17 @@ impl Gpu {
         groups: [u32; 2],
         trace: &mut GpuTrace,
     ) {
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Gpu,
+            "gpu.encode.dispatch",
+            |fields| {
+                fields
+                    .str("kernel", kernel.label())
+                    .u64("groups_x", groups[0] as u64)
+                    .u64("groups_y", groups[1] as u64);
+            },
+        );
+        let first = trace.len();
         self.activity
             .lock()
             .expect("GPU activity counter")
@@ -483,7 +606,8 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(groups[0], groups[1], 1);
         }
-        self.submit(encoder);
+        let submission = self.submit_buffer(encoder, false);
+        trace.submitted(first, submission);
     }
 
     #[cfg(test)]
@@ -526,6 +650,13 @@ impl Gpu {
     }
 
     pub fn readback(&self, source: &ReadGuard) -> Result<Vec<u8>> {
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Gpu,
+            "gpu.readback",
+            |fields| {
+                fields.u64("bytes", source.size());
+            },
+        );
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
             activity.readbacks += 1;
@@ -544,16 +675,47 @@ impl Gpu {
             });
         encoder.copy_buffer_to_buffer(source.raw(), 0, &staging, 0, source.size());
         self.submit(encoder);
+        map_readback(&self.device, &staging)?;
         let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        self.device.poll(wgpu::Maintain::Wait);
-        rx.recv()??;
         let data = slice.get_mapped_range().to_vec();
         staging.unmap();
         Ok(data)
+    }
+}
+
+/// Map a submitted staging buffer for CPU reading. The caller unmaps it after use.
+/// Background work yields through its existing priority gate and uses nonblocking
+/// device polls so it cannot hold a device-wide completion wait over new interaction.
+pub fn map_readback(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<()> {
+    let background = crate::background::context().is_some();
+    let _wait =
+        crate::diagnostics::scope_with(crate::diagnostics::Category::Gpu, "gpu.wait", |fields| {
+            fields
+                .str("reason", "readback")
+                .bool("blocking_poll", !background);
+        });
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+    if !background {
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+        return Ok(());
+    }
+    loop {
+        crate::background::checkpoint_or_cancel()?;
+        device.poll(wgpu::Maintain::Poll);
+        match rx.recv_timeout(std::time::Duration::from_millis(1)) {
+            Ok(result) => {
+                result?;
+                return Ok(());
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
 }
 
@@ -564,6 +726,48 @@ mod scheduling_tests {
         sync::{mpsc, Arc},
         time::Duration,
     };
+
+    #[test]
+    #[ignore = "requires a working GPU adapter"]
+    fn background_readback_yields_to_foreground_and_preserves_samples() {
+        let gpu = Gpu::new().unwrap();
+        let expected = [0x12345678_u32, 0xfedcba98, 7, 0];
+        let staging = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cooperative readback fixture"),
+                contents: bytemuck::cast_slice(&expected),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            });
+        let gate = Arc::new(crate::background::Gate::default());
+        let active = gate.foreground();
+        let background_gate = gate.clone();
+        let device = gpu.device.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            crate::background::run(Some(background_gate), || {
+                entered_tx.send(()).unwrap();
+                map_readback(&device, &staging).unwrap();
+                let actual = staging.slice(..).get_mapped_range().to_vec();
+                staging.unmap();
+                done_tx.send(actual).unwrap();
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+        let input = gpu.upload("Foreground fixture", &expected).unwrap();
+        assert_eq!(
+            gpu.readback(&input).unwrap(),
+            bytemuck::cast_slice::<u32, u8>(&expected)
+        );
+        drop(active);
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            bytemuck::cast_slice::<u32, u8>(&expected)
+        );
+        thread.join().unwrap();
+    }
 
     #[test]
     #[ignore = "requires a GPU"]

@@ -80,6 +80,13 @@ impl Gate {
         if self.available(context.priority) || context.interrupted() {
             return;
         }
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Cpu,
+            "priority.wait",
+            |fields| {
+                fields.u64("priority", context.priority as u64);
+            },
+        );
         if rayon::current_thread_index().is_some() {
             // A paused CPU task must not occupy the last worker needed by the
             // foreground task that will release its gate. Help without holding
@@ -120,7 +127,7 @@ pub(crate) struct Context {
     priority: Priority,
 }
 impl Context {
-    fn interrupted(&self) -> bool {
+    pub(crate) fn interrupted(&self) -> bool {
         self.interrupt_epoch.is_some_and(|epoch| {
             !self.gate.available(Priority::Thumbnail)
                 || self.gate.epoch.load(Ordering::Acquire) != epoch

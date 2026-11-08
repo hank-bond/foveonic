@@ -316,6 +316,44 @@ impl Cache {
             work()
         })
     }
+    /// Run one optional attempt only while higher-priority work is absent.
+    /// The cancellation probe also notices foreground work that has already finished.
+    /// Unlike pausable background work, this can run on the foreground executor:
+    /// an arriving foreground request cancels it instead of waiting for that executor.
+    pub fn speculate<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
+        if !self.gate.idle() {
+            return None;
+        }
+        crate::background::interruptible(self.gate.clone(), || {
+            let context = crate::background::context().expect("speculative context");
+            let cancel = || context.interrupted();
+            (!cancel()).then(|| work(&cancel))
+        })
+    }
+    /// Background-verified ready paths in the current bounded prefetch order.
+    /// This snapshot never reads or stats an original file.
+    pub fn preparation_window(&self) -> (u64, Vec<PathBuf>) {
+        let control = self.control.lock().unwrap();
+        let paths = if control.settings.enabled && control.settings.max_bytes > 0 && !control.clear
+        {
+            control
+                .nearby
+                .iter()
+                .filter(|path| control.identities.contains_key(*path))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        (control.generation, paths)
+    }
+    pub fn preparation_is_current(&self, generation: u64) -> bool {
+        let control = self.control.lock().unwrap();
+        control.generation == generation
+            && control.settings.enabled
+            && control.settings.max_bytes > 0
+            && !control.clear
+    }
     /// Run requested work behind interaction without maintenance-level throttling.
     pub fn processing<T>(&self, work: impl FnOnce() -> T) -> T {
         crate::background::processing(self.gate.clone(), work)

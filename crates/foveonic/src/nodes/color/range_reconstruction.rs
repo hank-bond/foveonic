@@ -51,7 +51,7 @@ impl Controls {
             return self;
         }
         let divisor = scale.divisor();
-        let sigma = f64::from(super::pyramid_resample::independent_noise_std(scale));
+        let sigma = f64::from(crate::nodes::sensor::pool::independent_noise_std(scale));
         let variance = sigma * sigma;
         self.window = 2 * (self.window / 2).div_ceil(divisor).max(1) + 1;
         self.local_decay = f64::from(self.local_decay).powf(f64::from(divisor)) as f32;

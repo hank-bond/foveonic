@@ -18,7 +18,7 @@ implementation: conforming
 - Processing dispatches **must** declare read and write bindings explicitly. Guards **must** remain live through submission of the last corresponding read or write; ordered-queue reuse **must not** require a per-operation GPU completion fence.
 - Raw processing buffer handles **must** remain encapsulated in the GPU/storage layer. Diagnostics **should** identify allocations, write generations and the stage using them.
 
-Active-photo checkpoint caching follows [interactive rendering](./interactive-rendering.md). Resource ownership and processing boundaries must permit intermediate retention without treating retained storage as scratch. General multi-photo caching remains deferred. GUI toolkit, display color management, and DNG calibration decisions remain separate.
+Active-photo checkpoint caching follows [interactive rendering](./interactive-rendering.md), with multi-photo ownership and resource direction in [multi-edit](./multi-edit.md). Resource ownership and processing boundaries must permit intermediate retention without treating retained storage as scratch. GUI toolkit, display color management, and DNG calibration decisions remain separate.
 
 ## Conformance
 

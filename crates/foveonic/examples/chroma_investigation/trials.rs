@@ -226,7 +226,11 @@ pub(super) fn seed(session: &mut RenderSession, buffer: ReadGuard) -> Result<()>
         .get(name)
         .or_else(|| session.cache.get("column.tiles"))
         .ok_or("texture input provenance")?;
-    let (working_scale, view) = (provenance.working_scale, provenance.view);
+    let (working_scale, view, view_baked) = (
+        provenance.working_scale,
+        provenance.view,
+        provenance.view_baked,
+    );
     // Canonical versions can be recovered out of creation order. Invalidate
     // actual descendants of the replaced probe surface rather than newer IDs.
     session.cache.entries.retain(|entry| {
@@ -244,6 +248,7 @@ pub(super) fn seed(session: &mut RenderSession, buffer: ReadGuard) -> Result<()>
         version,
         used: session.cache.frame,
         value: crate::render::Value {
+            view_baked,
             buffer,
             description: None,
             working_scale,

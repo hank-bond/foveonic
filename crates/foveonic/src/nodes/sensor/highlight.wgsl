@@ -22,13 +22,14 @@ var<workgroup> donor_rgb:array<vec3<f32>,128>;
 fn in_image(xy:vec2<u32>)->bool{return xy.x<params.source.x && xy.y<params.source.y;}
 fn work(xy:vec2<u32>)->bool{return all(xy>=params.area.xy) && all(xy<=params.area.zw);}
 fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u]);}
+fn clipped(p:u32)->u32 { return original[p]; }
 @compute @workgroup_size(8,8)
 fn connected_flags(@builtin(global_invocation_id)id:vec3<u32>){
-    let xy=id.xy;if !in_image(xy){return;}let p=xy.y*params.source.x+xy.x;var connected=original[p];
-    if all(xy>=vec2(1u)) && xy.x+1u<params.source.x && xy.y+1u<params.source.y{
+    let xy=id.xy;if !in_image(xy){return;}let p=xy.y*params.source.x+xy.x;var connected=clipped(p);
+    if params.value.w==0.0 && all(xy>=vec2(1u)) && xy.x+1u<params.source.x && xy.y+1u<params.source.y{
         var neighbors=0u;
         for(var dy=-1;dy<=1;dy++){for(var dx=-1;dx<=1;dx++){
-            if dx!=0 || dy!=0{let q=vec2<i32>(xy)+vec2(dx,dy);neighbors|=original[u32(q.y)*params.source.x+u32(q.x)];}
+            if dx!=0 || dy!=0{let q=vec2<i32>(xy)+vec2(dx,dy);neighbors|=clipped(u32(q.y)*params.source.x+u32(q.x));}
         }}
         // Connected flags keep each other, so only originally isolated flags can
         // disappear. That lets us read an unchanged map in parallel without
@@ -40,25 +41,26 @@ fn connected_flags(@builtin(global_invocation_id)id:vec3<u32>){
 @compute @workgroup_size(8,8)
 fn neighborhood_map(@builtin(global_invocation_id)id:vec3<u32>){
     let xy=id.xy;if !in_image(xy){return;}var marked=false;
-    for(var dy=-2;dy<=2;dy++){for(var dx=-2;dx<=2;dx++){
+    for(var dy=-radius();dy<=radius();dy++){for(var dx=-radius();dx<=radius();dx++){
         let q=vec2<i32>(xy)+vec2(dx,dy);
-        if all(q>=vec2(2)) && q.x<i32(params.source.x)-2 && q.y<i32(params.source.y)-2{
+        if all(q>=vec2(radius())) && q.x<i32(params.source.x)-radius() && q.y<i32(params.source.y)-radius(){
             if countOneBits(flags[u32(q.y)*params.source.x+u32(q.x)])>=2u{marked=true;}
         }
     }}
     map[xy.y*params.source.x+xy.x]=select(0.0,1.0,marked);
 }
+fn radius()->i32{return select(2,i32(params.value.z),params.value.z>0.0);}
 fn density(xy:vec2<u32>)->f32{
     var sum=0.0;
-    for(var dy=-2;dy<=2;dy++){for(var dx=-2;dx<=2;dx++){
+    for(var dy=-radius();dy<=radius();dy++){for(var dx=-radius();dx<=radius();dx++){
         let q=vec2<i32>(xy)+vec2(dx,dy);sum+=map[u32(q.y)*params.source.x+u32(q.x)];
     }}
-    return sum*0.04;
+    return sum*select(0.04,params.value.y,params.value.z>0.0);
 }
 @compute @workgroup_size(8,8)
 fn density_field(@builtin(global_invocation_id)id:vec3<u32>){
     let xy=id.xy;if !in_image(xy){return;}var value=0.0;
-    if all(xy>=vec2(2u)) && xy.x+2u<params.source.x && xy.y+2u<params.source.y{value=density(xy);}
+    if all(xy>=vec2(u32(radius()))) && xy.x+u32(radius())<params.source.x && xy.y+u32(radius())<params.source.y{value=density(xy);}
     output[xy.y*params.source.x+xy.x]=value;
 }
 @compute @workgroup_size(256)

@@ -158,7 +158,7 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_input() {
         let out = apply(
             &gpu,
             &input,
-            &input,
+            Some(&input),
             &p,
             &mut Profile::new(crate::profile::Mode::Gpu),
         )
@@ -184,7 +184,7 @@ fn gpu_despeckle_matches_ordered_reference_and_preserves_input() {
     let out = apply(
         &gpu,
         &input,
-        &input,
+        Some(&input),
         &p,
         &mut Profile::new(crate::profile::Mode::Off),
     )
@@ -223,7 +223,14 @@ fn gpu_scale_matched_thresholds_keep_marginal_detail_and_correct_strong_defects(
     {
         let original = &source;
         let input = gpu.upload("WB scale fixture", original).unwrap();
-        let output = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+        let output = apply(
+            &gpu,
+            &input,
+            Some(&input),
+            &prepared,
+            &mut Profile::default(),
+        )
+        .unwrap();
         let bytes = gpu.readback(&output).unwrap();
         let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
         assert_eq!(actual[marginal], original[marginal]);
@@ -241,7 +248,7 @@ fn gpu_scale_matched_thresholds_keep_marginal_detail_and_correct_strong_defects(
                 params: prepared.params,
                 tables: old_tables.clone(),
             };
-            let output = apply(&gpu, &input, &input, &old, &mut Profile::default()).unwrap();
+            let output = apply(&gpu, &input, Some(&input), &old, &mut Profile::default()).unwrap();
             let bytes = gpu.readback(&output).unwrap();
             let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
             assert!((actual[marginal] - (200. - gap)).abs() < 0.002);
@@ -299,7 +306,7 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
     let expected = apply(
         &gpu,
         &images[0].buffer,
-        &images[0].buffer,
+        Some(&images[0].buffer),
         &prepared,
         &mut Profile::default(),
     )
@@ -368,7 +375,14 @@ fn compact_speckles_remove_small_clusters_and_preserve_lines_and_source() {
             size,
         })
         .unwrap();
-        let output = apply(&gpu, &source, &source, &prepared, &mut Profile::default()).unwrap();
+        let output = apply(
+            &gpu,
+            &source,
+            Some(&source),
+            &prepared,
+            &mut Profile::default(),
+        )
+        .unwrap();
         let bytes = gpu.readback(&output).unwrap();
         let actual: &[f32] = bytemuck::cast_slice(&bytes);
         assert_eq!(actual[(40 * 64 + 44) * 3], 100.);
@@ -413,7 +427,14 @@ fn compact_repairs_white_speckles_when_only_one_layer_crosses_threshold() {
                 size,
             })
             .unwrap();
-            let output = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+            let output = apply(
+                &gpu,
+                &input,
+                Some(&input),
+                &prepared,
+                &mut Profile::default(),
+            )
+            .unwrap();
             let bytes = gpu.readback(&output).unwrap();
             let actual: &[f32] = bytemuck::cast_slice(&bytes);
             assert!(
@@ -481,7 +502,14 @@ fn compact_uses_shared_trimmed_donors_including_tied_extremes() {
                 size: 7,
             })
             .unwrap();
-            let output = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+            let output = apply(
+                &gpu,
+                &input,
+                Some(&input),
+                &prepared,
+                &mut Profile::default(),
+            )
+            .unwrap();
             let bytes = gpu.readback(&output).unwrap();
             let actual: &[f32] = bytemuck::cast_slice(&bytes);
             for c in 0..3 {
@@ -525,7 +553,14 @@ fn compact_uses_smallest_detected_radius_for_every_layer() {
             size,
         })
         .unwrap();
-        let output = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+        let output = apply(
+            &gpu,
+            &input,
+            Some(&input),
+            &prepared,
+            &mut Profile::default(),
+        )
+        .unwrap();
         let bytes = gpu.readback(&output).unwrap();
         let actual: &[f32] = bytemuck::cast_slice(&bytes);
         assert_eq!(&actual[center..center + 3], &[200., 100., 100.]);
@@ -565,7 +600,7 @@ fn compact_uses_original_highlight_codes_after_calibration() {
             size,
         })
         .unwrap();
-        let out = apply(&gpu, &input, &raw, &prepared, &mut Profile::default()).unwrap();
+        let out = apply(&gpu, &input, Some(&raw), &prepared, &mut Profile::default()).unwrap();
         let bytes = gpu.readback(&out).unwrap();
         let actual: &[f32] = bytemuck::cast_slice(&bytes);
         assert_eq!(
@@ -637,7 +672,7 @@ fn compact_repairs_isolated_clipped_layers_but_preserves_supported_highlights() 
             size,
         })
         .unwrap();
-        let out = apply(&gpu, &input, &raw, &prepared, &mut Profile::default()).unwrap();
+        let out = apply(&gpu, &input, Some(&raw), &prepared, &mut Profile::default()).unwrap();
         let bytes = gpu.readback(&out).unwrap();
         let actual: &[f32] = bytemuck::cast_slice(&bytes);
         for (p, &value) in actual.iter().enumerate() {
@@ -785,7 +820,7 @@ fn parallel_speckle_rounds_match_serial_chains_capacity_and_empty_work() {
             let actual = apply(
                 &gpu,
                 &input,
-                &input,
+                Some(&input),
                 &p,
                 &mut Profile::new(crate::profile::Mode::Off),
             )
@@ -867,7 +902,7 @@ fn parallel_speckle_originals_match_serial_and_measure_completed_work() {
             let actual = apply(
                 gpu,
                 &input.buffer,
-                &input.buffer,
+                Some(&input.buffer),
                 &prepared,
                 &mut Profile::new(crate::profile::Mode::Off),
             )
@@ -903,7 +938,14 @@ fn unequal_speckle_banks_include_the_last_detector_block() {
         params: parameters(width as u32, height as u32, [8, 8, 56, 64]).unwrap(),
         tables: vec![0.; 3 * 4096],
     };
-    let actual = apply(&gpu, &input, &input, &prepared, &mut Profile::default()).unwrap();
+    let actual = apply(
+        &gpu,
+        &input,
+        Some(&input),
+        &prepared,
+        &mut Profile::default(),
+    )
+    .unwrap();
     assert!(
         bytemuck::cast_slice::<u8, f32>(&gpu.readback(&actual).unwrap())
             .iter()
@@ -913,4 +955,190 @@ fn unequal_speckle_banks_include_the_last_detector_block() {
         gpu.readback(&input).unwrap(),
         bytemuck::cast_slice::<f32, u8>(&pixels)
     );
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR containing the low-light speaker photograph"]
+fn reduced_speaker_defects_are_removed_by_both_detectors() {
+    use crate::{
+        color_space::ColorSpace,
+        inspection::Content,
+        render::{ControlCapabilities, Engine, MerrillSpeckleMethod, Rendering, Scale},
+        source::Source,
+    };
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(root.join("low-light-speaker-and-desk.x3f")).unwrap();
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let engine = Engine::new().unwrap();
+    let native = super::super::calibration::encode(
+        &source.metadata,
+        ColorSpace::from_metadata(&source.metadata).unwrap(),
+    )
+    .unwrap();
+    for method in [
+        MerrillSpeckleMethod::Reference,
+        MerrillSpeckleMethod::Compact,
+    ] {
+        for divisor in [2, 4, 8] {
+            let mut settings = caps
+                .editing_defaults(&source.metadata, Rendering::Color)
+                .unwrap();
+            settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+            settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+            settings.working_scale = Scale::new(divisor).unwrap();
+            settings.merrill_speckles.method = method;
+            let artifacts = engine
+                .render_artifacts(
+                    &source,
+                    &settings,
+                    &["preview.layers", "despeckle.layers"],
+                    &mut Profile::default(),
+                )
+                .unwrap();
+            let images: Vec<_> = artifacts
+                .iter()
+                .map(|a| {
+                    let Content::Image(image) = &a.content else {
+                        panic!("image")
+                    };
+                    image
+                })
+                .collect();
+            assert_eq!(
+                images[0].description().extent,
+                images[1].description().extent
+            );
+            let [width, _] = images[0].description().extent;
+            let expected_crop = settings.working_scale.bounds(native.crop);
+            let actual_crop = images[0].view().crop;
+            let origin = [
+                actual_crop[0] - expected_crop[0],
+                actual_crop[1] - expected_crop[1],
+            ];
+            let before = engine.readback_image(images[0]).unwrap();
+            let after = engine.readback_image(images[1]).unwrap();
+            let before: &[f32] = bytemuck::cast_slice(&before);
+            let after: &[f32] = bytemuck::cast_slice(&after);
+            // Original sensor coordinates of the reported red and green spikes.
+            for (x, y, channel) in [(145, 152, 0), (860, 87, 1)] {
+                let i = (((y / divisor + origin[1]) * width + x / divisor + origin[0]) * 3
+                    + channel) as usize;
+                assert!(
+                    before[i] > 30.,
+                    "fixture no longer exposes the reported spike"
+                );
+                assert!(
+                    after[i] < before[i] * 0.25,
+                    "{method:?} divisor {divisor}: {} -> {}",
+                    before[i],
+                    after[i]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn reduced_detection_repairs_bright_masks_and_preserves_dark_structure() {
+    use crate::render::{Scale, WorkingGrid};
+    let gpu = Gpu::new().unwrap();
+    let mut pixels = [100_f32; 3].repeat(64 * 64);
+    for mask in 1..=7_u32 {
+        let x = 8 + mask as usize * 6;
+        for c in 0..3 {
+            if mask & (4 >> c) != 0 {
+                for (y, value) in [(16, 400.), (32, 20.), (48, -20.)] {
+                    pixels[(y * 64 + x) * 3 + c] = value;
+                }
+            }
+        }
+    }
+    let input = gpu
+        .upload("Bright peaks and dark scene structure", &pixels)
+        .unwrap();
+    for divisor in [1, 2, 4, 8] {
+        let grid = WorkingGrid::new([64 * divisor; 2], Scale::new(divisor).unwrap(), 8).unwrap();
+        let prepared = Prepared {
+            params: parameters(
+                64 * divisor,
+                64 * divisor,
+                [8 * divisor, 8 * divisor, 56 * divisor, 56 * divisor],
+            )
+            .unwrap(),
+            tables: vec![10.; 3 * 4096],
+        }
+        .on_grid(Some(grid));
+        let output = apply(
+            &gpu,
+            &input,
+            Some(&input),
+            &prepared,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let actual: &[f32] = bytemuck::cast_slice(&bytes);
+        for mask in 1..=7_u32 {
+            let x = 8 + mask as usize * 6;
+            for c in 0..3 {
+                assert!((actual[(16 * 64 + x) * 3 + c] - 100.).abs() < 0.001);
+                for y in [32, 48] {
+                    let index = (y * 64 + x) * 3 + c;
+                    let expected = if divisor == 1 { 100. } else { pixels[index] };
+                    assert!((actual[index] - expected).abs() < 0.001);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&pixels)
+    );
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
+fn reduced_flower_repair_preserves_yellow_detail() {
+    use crate::{
+        inspection::Content,
+        render::{Engine, MerrillSpeckleMethod, Scale, Settings},
+        source::Source,
+    };
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let source = Source::open(root.join("yellow-flowers-and-stroller.x3f")).unwrap();
+    let engine = Engine::new().unwrap();
+    for method in [
+        MerrillSpeckleMethod::Reference,
+        MerrillSpeckleMethod::Compact,
+    ] {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.reconstruction = Some(Default::default());
+        settings.working_scale = Scale::new(8).unwrap();
+        settings.merrill_speckles.method = method;
+        let artifact = engine
+            .render_artifacts(&source, &settings, &["final"], &mut Profile::default())
+            .unwrap()
+            .pop()
+            .unwrap();
+        let Content::Image(image) = artifact.content else {
+            panic!("image")
+        };
+        let [left, top, right, bottom] = image.view().crop;
+        let [width, _] = image.description().extent;
+        let bytes = engine.readback_image(&image).unwrap();
+        let pixels: &[f32] = bytemuck::cast_slice(&bytes);
+        // Two adjacent output samples previously became saturated blue/red
+        // after a false dark-layer repair and downstream reconstruction.
+        for x in [461., 462.] {
+            let px = left + ((x + 0.5) / 588. * (right - left) as f32) as u32;
+            let py = top + (291.5 / 392. * (bottom - top) as f32) as u32;
+            let index = ((py * width + px) * 3) as usize;
+            let rgb = &pixels[index..index + 3];
+            assert!(
+                rgb[1] > 0.003 && rgb[2] < rgb[1] && rgb[0] > rgb[2],
+                "{method:?}: yellow detail became {rgb:?}"
+            );
+        }
+    }
 }

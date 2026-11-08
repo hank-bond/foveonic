@@ -4,7 +4,7 @@ use super::super::reference::RECURSIVE_CHROMA_THRESHOLD;
 use super::{capture_iso, scalar, vector, Metadata, Result};
 use crate::nodes::color::{
     chroma::{self, Support},
-    log_reconstruction, pyramid_resample,
+    log_reconstruction,
 };
 use crate::render::Scale;
 
@@ -50,7 +50,8 @@ pub(crate) fn prepare_chroma(
             } else {
                 amplitude
             };
-            let amplitude = amplitude * f64::from(pyramid_resample::independent_noise_std(scale));
+            let amplitude =
+                amplitude * f64::from(crate::nodes::sensor::pool::independent_noise_std(scale));
             let p = chroma::Prepared::new(
                 extent,
                 [amplitude; 3],
@@ -81,7 +82,9 @@ pub(crate) fn prepare_recursive_chroma(
     // This late color-domain pass uses the full ISO ratio, independently of
     // the earlier sensor-domain statistics multiplier.
     let scale = f64::from(ratio + ratio) / 3.;
-    let noise_std = f64::from(pyramid_resample::independent_noise_std(working_scale));
+    let noise_std = f64::from(crate::nodes::sensor::pool::independent_noise_std(
+        working_scale,
+    ));
     let amplitudes =
         std::array::from_fn(|c| scale * (gains[c] / f64::from(pre)) * dq[c] * 0.5 * noise_std);
     let regularizer =

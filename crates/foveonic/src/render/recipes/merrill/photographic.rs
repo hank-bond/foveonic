@@ -55,7 +55,7 @@ pub(in crate::render::recipes) fn build(
             space,
             LINEAR_CODE_WHITE,
             curve,
-            false,
+            crate::render::ControlCapabilities::from_metadata(source.metadata())?.thumb_scale(),
         )?)
     } else {
         None
@@ -102,15 +102,13 @@ pub(in crate::render::recipes) fn build(
         } else {
             settings.working_scale.factor()
         },
-        analysis_grid: crate::render::AnalysisGrid::new(
-            settings.working_scale,
-            if settings.is_monochrome() {
+        haze_scale: settings
+            .working_scale
+            .coarsest(if settings.is_monochrome() {
                 crate::render::Scale::NATIVE
             } else {
                 crate::render::Scale::new(2)?
-            },
-            crate::render::Scale::new(2)?,
-        ),
+            }),
     };
     linear_edits::build(
         engine,
