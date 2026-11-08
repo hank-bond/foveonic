@@ -2,6 +2,7 @@
 
 use crate::{viewport, worker::Frame};
 use eframe::{egui, egui_wgpu, wgpu};
+use foveonic::diagnostics as trace;
 use foveonic::image::{ImageTexture, Space};
 use std::{
     path::PathBuf,
@@ -69,6 +70,7 @@ impl Key {
 }
 #[derive(Clone)]
 struct Job {
+    diagnostic_task: crate::timing::DeliveredTask,
     key: Key,
     source: Arc<ImageTexture>,
     input: Option<Arc<ImageTexture>>,
@@ -105,7 +107,8 @@ impl Navigator {
         let (tx, replies) = mpsc::sync_channel(1);
         let staging = crate::display_image::Staging::default();
         let worker_staging = staging.clone();
-        std::thread::spawn(move || loop {
+        let builder = std::thread::Builder::new().name("navigator".into());
+        let spawned = builder.spawn(move || loop {
             let job = {
                 let mut state = slot.0.lock().unwrap();
                 while state.job.is_none() && !state.stop {
@@ -119,6 +122,22 @@ impl Navigator {
                 state.revision = state.revision.wrapping_add(1);
                 job
             };
+            let _context = trace::enabled().then(|| {
+                trace::enter(crate::timing::context_for(
+                    job.diagnostic_task.id,
+                    job.diagnostic_task.revision,
+                    &job.key.path,
+                    "navigator",
+                ))
+            });
+            let _job =
+                trace::scope_with(trace::Category::Presentation, "navigator.job", |fields| {
+                    fields
+                        .str("source", &job.key.path.to_string_lossy())
+                        .str("output", &job.key.root)
+                        .u64("presentation_revision", job.key.revision)
+                        .str("image_purpose", job.diagnostic_task.purpose);
+                });
             let started = Instant::now();
             let size = tile_extent(job.key.extent);
             let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -152,11 +171,12 @@ impl Navigator {
                         native_extent: job.source.description().extent,
                     }),
             );
-            gpu.device.poll(wgpu::Maintain::Wait);
+            // Presentation uses the same ordered queue. Its later draw observes
+            // this texture after the submitted preparation without a CPU wait.
             if crate::timing::enabled() {
                 crate::timing::emit(
                     "navigator",
-                    serde_json::json!({"revision":job.key.revision,"completed_ms":started.elapsed().as_secs_f64()*1000.,"bytes":size[0]*size[1]*TEXEL_BYTES}),
+                    || serde_json::json!({"revision":job.key.revision,"submitted_ms":started.elapsed().as_secs_f64()*1000.,"bytes":size[0]*size[1]*TEXEL_BYTES}),
                 );
             }
             let ready_key = job.key.clone();
@@ -165,11 +185,20 @@ impl Navigator {
                 state.ready.push(ready_key.clone());
                 state.revision = state.revision.wrapping_add(1);
             }
-            let sent = tx.send(Tile {
-                key: job.key,
-                texture,
-                memory,
-            });
+            let sent = {
+                let _send = trace::scope_with(
+                    trace::Category::Coordinator,
+                    "navigator.reply_send",
+                    |fields| {
+                        fields.str("measurement", "host_wait").u64("capacity", 1);
+                    },
+                );
+                tx.send(Tile {
+                    key: job.key,
+                    texture,
+                    memory,
+                })
+            };
             {
                 let mut state = slot.0.lock().unwrap();
                 state.active = None;
@@ -183,6 +212,7 @@ impl Navigator {
             }
             context.request_repaint();
         });
+        spawned.expect("start navigator thread");
         Self {
             rs,
             pending,
@@ -272,6 +302,7 @@ impl Navigator {
             self.resource_revision = self.resource_revision.wrapping_add(1);
             self.wanted = Some((
                 Job {
+                    diagnostic_task: frame.diagnostic_task,
                     key: key.clone(),
                     source: frame.view(mapping.input).clone(),
                     input: if mapping.difference_gain > 0. {

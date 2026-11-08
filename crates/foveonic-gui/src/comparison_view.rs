@@ -122,7 +122,7 @@ impl App {
                     frame.display_extent(false),
                     self.srgb_target,
                     index,
-                    frame.revision,
+                    frame.diagnostic_identity(false),
                 );
             } else {
                 // Larger display previews belong only to the bounded editing set.
@@ -147,6 +147,23 @@ impl App {
             let response = response.on_hover_text(if selecting {
                 "Click to edit this photo. Option-click toggles editing. Shift-click selects a range up to the editing limit."
             } else { "Photo tools preserve the viewport editing selection. Press V to select photographs." });
+            if crate::timing::enabled()
+                && ui.input(|input| {
+                    input.pointer.button_released(egui::PointerButton::Primary)
+                        && input
+                            .pointer
+                            .latest_pos()
+                            .is_some_and(|pos| rect.contains(pos))
+                })
+            {
+                crate::timing::emit("viewport.tile.release", || {
+                    serde_json::json!({
+                    "source":path,"photo":foveonic::diagnostics::photo_id(path),
+                    "clicked":response.clicked(),"hovered":response.hovered(),
+                    "selecting":selecting,"active":active,"widget":response.id.value(),
+                    "rect":[rect.min.x,rect.min.y,rect.max.x,rect.max.y]})
+                });
+            }
             if selecting && response.clicked() {
                 let modifiers = ui.input(|input| input.modifiers);
                 self.comparison_selection = Some(Request {

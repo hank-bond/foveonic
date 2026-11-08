@@ -19,7 +19,9 @@ pub fn show(
     cache: &Cache,
     managed: bool,
     memory: crate::worker::MemoryStatus,
-) {
+    diagnostics: &mut crate::diagnostics::Controller,
+) -> Option<crate::diagnostics::Action> {
+    let mut capture_action = None;
     let settings = &mut preferences.decode_cache;
     let gamut = &mut preferences.display_gamut;
     let before = settings.clone();
@@ -135,6 +137,10 @@ pub fn show(
                 "Nearby photos are decoded in the background. ",
                 "Dots beside filenames show cache readiness.",
             ));
+            ui.separator();
+            ui.collapsing("Diagnostics", |ui| {
+                capture_action = diagnostics.controls(ui);
+            });
             });
         });
     if &before != settings {
@@ -143,6 +149,7 @@ pub fn show(
     if *open {
         ctx.request_repaint_after(STATUS_REFRESH);
     }
+    capture_action
 }
 
 fn adaptive_id() -> egui::Id {

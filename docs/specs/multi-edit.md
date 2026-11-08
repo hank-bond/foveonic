@@ -27,6 +27,18 @@ Dropdowns display “Multi” when their selected values differ. Choosing an opt
 
 Import keeps edits in memory under its existing write policy. Browse persists each photograph’s requested settings through the existing asynchronous sidecar owner. Copy/paste remains scoped to browser selection.
 
+## Interactive latency
+
+Application latency is the current performance priority. Unchanged viewport selection and retained re-adds must reuse compatible results without photographic processing or source payload reads. Repeated edits should reuse every still-valid graph dependency. Avoid unnecessary preparation, submission and delivery work before optimizing arithmetic inside individual nodes.
+
+The immediate workflow is culling a selected set of up to eight similar photographs in Thumb and adjusting exposure quickly. Measure source reads, RAW decoding, decoded-cache loading, upload and processing preparation separately. Prioritize getting the selected set ready and reusing its data. A future loupe will request native detail, but its implementation is outside the current latency work. Reduced previews must preserve the existing ability to recover authoritative native input on demand.
+
+Prepare reusable processing data ahead of demand where the known recipe, priority and shared memory budget allow it. Speculative preparation must yield to foreground interaction and retain its distinct admission and recency policy. Use the existing dependency identities and working-set owners. The complete selected pipeline must follow the [small-preview scale contract](./small-previews.md). Measure necessary native work separately from working-grid work and fixed scheduling cost, and avoid repeating native work when retained dependencies remain valid.
+
+The decoded prefetch neighborhood may also prepare reusable Thumb processing state while the app is idle. Use low-priority host work and the existing foreground gate. New foreground work must interrupt the attempt at processing boundaries. Already-submitted GPU work may finish. Speculative entries must not displace the active photograph or promote themselves above actually used entries. Keep prepared state within the shared memory budget and recover native detail through the existing source path. A decoded-cache readiness indicator continues to describe local source availability, independently of GPU preparation.
+
+The [latency plan](../../plans/multi-edit-latency.md) tracks the application-wide investigation and proposed implementation sequence.
+
 ## Resource direction
 
 Disk caching and in-memory caching are separate user concepts and settings. The memory budget must be user-set with a sensible default designed for a 16 GB machine. Approximately 2 GB steady application memory and 4 GB peak application memory are the initial targets, to be validated by measurement rather than treated as guaranteed allocator limits.

@@ -1,18 +1,14 @@
 """Sample settled macOS memory at explicit boundaries in an owned headless render run."""
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import time
-
-
-def digest(path):
-    with path.open('rb') as source:
-        return hashlib.file_digest(source, 'sha256').hexdigest()
+from watch_workloads import require_quiet
+from file_hash import digest
 
 
 def main():
@@ -37,12 +33,14 @@ def main():
     identities = {'binary_sha256': digest(args.binary), 'cases_sha256': digest(args.cases)}
     with (directory / 'stderr.txt').open('w') as errors, \
             (directory / 'samples.jsonl').open('w') as samples:
+        preflight = require_quiet()
         process = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL,
                                    stderr=errors)
         consumed = 0
         try:
             (directory / 'manifest.json').write_text(json.dumps({
                 'pid': process.pid, 'command': command, 'mode': 'off', **identities,
+                'preflight': preflight,
                 'sampling': 'vmmap after completion, outside render interval',
                 'hold_ms': 5000,
             }, indent=2) + '\n')

@@ -46,6 +46,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[comparison_view.rs](./comparison_view.rs)** Fits browser-selected photographs into bounded comparison tiles with explicit viewport editing targets.
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.
 - **[crop_tool.rs](./crop_tool.rs)** Owns crop gestures and aspect options within the shared photograph-tool lifecycle.
+- **[diagnostics.rs](./diagnostics.rs)** Controls bounded manual and scripted captures through the shared background recorder.
 - **[display.rs](./display.rs)** Declares the window's display encoding and tags its native Metal layer for host color matching.
 - **[display_image.rs](./display_image.rs)** Uploads bounded linear-light photographic previews without clipping them to sRGB.
 - **[export.rs](./export.rs)** Shares camera-choice resolution and Full photographic and DNG exports between interactive and batch workers.
@@ -71,6 +72,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[processing.rs](./processing.rs)** Remembers per-mode output choices and edits them independently of photographic recipes.
 - **[progress.rs](./progress.rs)** Shows request-to-image time and discrete completed loading and rendering stages.
 - **[render_coordinator.rs](./render_coordinator.rs)** Owns desired photo renders and publishes one immutable plan to the serialized executor.
+- **[render_delivery.rs](./render_delivery.rs)** Classifies completed images for pixel reuse, per-photo feedback and current-view delivery.
 - **[rotate_tool.rs](./rotate_tool.rs)** Owns line and freehand rotation gestures within the shared photograph-tool lifecycle.
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
@@ -78,12 +80,15 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
 - **[smart.rs](./smart.rs)** Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
-- **[timing.rs](./timing.rs)** Measures GUI events when requested without changing when the app repaints.
+- **[smoke_capture.rs](./smoke_capture.rs)** Saves existing smoke checks through the shared capture controller without changing their actions.
+- **[smoke_scenarios.rs](./smoke_scenarios.rs)** Runs declared native diagnostic cases through the existing application and capture controller.
+- **[timing.rs](./timing.rs)** Connects GUI tasks, native drawing and existing measurements to the shared Perfetto capture.
 - **[toolbar.rs](./toolbar.rs)** Shares padded processing rows and a responsive right-aligned image-tool region.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
 - **[viewport_selection.rs](./viewport_selection.rs)** Keeps bounded viewport editing targets separate from browser selection and active-photo context.
 - **[widgets.rs](./widgets.rs)** Shares numeric display policy, control sizes and workspace widgets.
 - **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
+- **[worker_preparation.rs](./worker_preparation.rs)** Prepares ready decoded neighbors during idle time using the render worker's existing owners.
 - **[worker_presentation.rs](./worker_presentation.rs)** Reframes one immutable whole-image result without reopening sources or running photographic nodes.
 - **[worker_reduced.rs](./worker_reduced.rs)** Reuses bounded reduced-photo inputs while native requests keep the existing worker session.
 

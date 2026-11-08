@@ -96,4 +96,6 @@ Native checks caught two additional selection transitions. A compatible retained
 
 ## Intermittent cached-selection investigation
 
+The current owner priority and implementation proposal are tracked in the [multi-edit latency plan](./multi-edit-latency.md). Focus on work avoidance, preparation reuse, scheduling and scale behavior rather than individual full-resolution kernel arithmetic.
+
 The owner reported eight-photo Import selections taking 2–3.3 seconds despite green disk-cache indicators and Reference processing. Other selections were quick. Inspection found matching local decoded headers and complete companion bundles for both groups. During a slow mixed set, three decoded entries recorded successful local reads. This establishes some disk-cache hits, but does not yet attribute the complete selection delay or exclude all source accesses. The progress label measures the whole request lifecycle, rather than file reading alone. Trace initial selection separately from warmed exposure edits and preserve the distinction between local decoded data and retained processing checkpoints. A failed local read must also invalidate the green indicator immediately, including through later readiness scans.

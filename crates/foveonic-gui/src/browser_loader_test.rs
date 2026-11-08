@@ -35,6 +35,36 @@ fn visible_requests_move_ahead_without_losing_the_remaining_folder_order() {
 }
 
 #[test]
+fn stopping_with_full_image_replies_releases_priority_before_background_join() {
+    let cache = Arc::new(Cache::new());
+    let (tx, rx) = mpsc::sync_channel(REPLY_CAPACITY);
+    let (loaded, loads) = mpsc::channel();
+    let worker = Worker::start_with(
+        Kind::Thumbnail,
+        Some(cache.clone()),
+        egui::Context::default(),
+        tx,
+        move |_| {
+            loaded.send(()).unwrap();
+            Err("fixture".into())
+        },
+    );
+    worker.replace((0..REPLY_CAPACITY + 4).map(request).collect(), &[]);
+    for _ in 0..=REPLY_CAPACITY {
+        loads.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+    let (finished, done) = mpsc::channel();
+    let background = std::thread::spawn(move || {
+        cache.background(|| finished.send(()).unwrap());
+    });
+    worker.stop();
+    done.recv_timeout(Duration::from_secs(2))
+        .expect("background shutdown must not wait for a full image mailbox to drain");
+    background.join().unwrap();
+    drop(rx);
+}
+
+#[test]
 fn queued_folder_replacement_discards_old_work_and_late_results() {
     let (started, entered) = mpsc::channel();
     let (advance, wait) = mpsc::channel();

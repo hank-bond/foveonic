@@ -486,7 +486,7 @@ pub(crate) fn paint_comparison(
     extent: [u32; 2],
     srgb_target: bool,
     slot: usize,
-    revision: u64,
+    identity: Option<crate::timing::ImageIdentity>,
 ) {
     let (canvas, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
     let scale =
@@ -513,7 +513,7 @@ pub(crate) fn paint_comparison(
             texture,
             input: None,
             params,
-            probe: crate::timing::DrawProbe::new(revision),
+            probe: crate::timing::DrawProbe::new(identity),
         },
     ));
 }
@@ -808,7 +808,7 @@ impl Viewport {
         input: Option<Arc<ImageTexture>>,
         mapping: Mapping,
         srgb_target: bool,
-        revision: u64,
+        identity: Option<crate::timing::ImageIdentity>,
     ) {
         let (rect, image) = self.layout(ui, display_extent);
         self.last_image = Some((rect, image));
@@ -833,7 +833,7 @@ impl Viewport {
                 texture,
                 input,
                 params: mapping.apply(params),
-                probe: crate::timing::DrawProbe::new(revision),
+                probe: crate::timing::DrawProbe::new(identity),
             },
         ));
     }
@@ -895,7 +895,7 @@ impl Viewport {
         window: [u32; 4],
         mapping: Mapping,
         srgb_target: bool,
-        revision: u64,
+        identity: Option<crate::timing::ImageIdentity>,
     ) {
         let Some((canvas, image)) = self.last_image else {
             return;
@@ -929,7 +929,7 @@ impl Viewport {
                 texture,
                 input: None,
                 params: mapping.apply(params),
-                probe: crate::timing::DrawProbe::new(revision),
+                probe: crate::timing::DrawProbe::new(identity),
             },
         ));
     }

@@ -7,6 +7,11 @@ use crate::{
 use eframe::egui;
 use std::path::PathBuf;
 
+#[path = "smoke_capture.rs"]
+mod capture;
+#[path = "smoke_scenarios.rs"]
+mod scenarios;
+
 const ROTATE_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -372,6 +377,8 @@ pub fn editor_review_active() -> bool {
 }
 
 pub struct Smoke {
+    scenario: Option<scenarios::Scenario>,
+    capture: capture::Capture,
     directory: PathBuf,
     targets: &'static [&'static str],
     index: usize,
@@ -382,6 +389,11 @@ pub struct Smoke {
     fast_region: Option<crate::viewport::PixelRegion>,
     smart_full_revision: Option<u64>,
     smart_scrub_checked: bool,
+    smart_reopen: Option<(
+        std::sync::Weak<foveonic::image::ImageTexture>,
+        crate::timing::DeliveredTask,
+        foveonic::render::Scale,
+    )>,
     display_revision: Option<u64>,
     authored: Option<foveonic::render::Settings>,
     name_revision: Option<u64>,
@@ -403,12 +415,13 @@ impl Smoke {
             || self.targets == ROTATE_TARGETS
             || self.targets == STATUS_TARGETS
             || self.targets == MULTI_EDIT_TARGETS
+            || self.scenario.is_some()
         {
             // Inject focused input without moving the owner's system pointer or focus.
             input.focused = true;
         }
         if let Some(events) = self.direct_events.pop_front() {
-            if self.targets == MULTI_EDIT_TARGETS {
+            if self.targets == MULTI_EDIT_TARGETS || self.scenario.is_some() {
                 input.modifiers = events
                     .iter()
                     .find_map(|event| {
@@ -427,6 +440,8 @@ impl Smoke {
     }
     pub fn from_env() -> Option<Self> {
         std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").map(|directory| Self {
+            scenario: scenarios::Scenario::from_env(),
+            capture: Default::default(),
             directory: directory.into(),
             targets: if std::env::var_os("FOVEONIC_GUI_SMOKE_WHITE_BALANCE").is_some() {
                 WHITE_BALANCE_TARGETS
@@ -493,6 +508,7 @@ impl Smoke {
             fast_region: None,
             smart_full_revision: None,
             smart_scrub_checked: false,
+            smart_reopen: None,
             display_revision: None,
             authored: None,
             name_revision: None,
@@ -512,9 +528,14 @@ impl Smoke {
             multi_sweep_ms: Vec::new(),
         })
     }
+    pub(super) fn configure_cache(&self, settings: &mut foveonic::decode_cache::Settings) {
+        if let Some(scenario) = &self.scenario {
+            scenario.configure_cache(settings);
+        }
+    }
     /// Hold processing replies until the embedded preview has been captured.
     pub fn preview_pending(&self) -> bool {
-        self.index == 0
+        self.scenario.is_none() && self.index == 0
     }
 }
 
@@ -541,7 +562,23 @@ impl App {
     }
 
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
-        if self.smoke.is_none() {
+        if self.smoke.is_none() || self.smoke_capture_tick(ctx) {
+            return;
+        }
+        let _smoke_scope = self
+            .smoke
+            .as_ref()
+            .and_then(|smoke| smoke.scenario.is_none().then(|| smoke.diagnostic_scope()));
+        if self
+            .smoke
+            .as_ref()
+            .is_some_and(|smoke| smoke.scenario.is_some())
+        {
+            let mut smoke = self.smoke.take().unwrap();
+            let mut scenario = smoke.scenario.take().unwrap();
+            scenario.tick(self, ctx, &mut smoke);
+            smoke.scenario = Some(scenario);
+            self.smoke = Some(smoke);
             return;
         }
         if self
@@ -606,7 +643,7 @@ impl App {
         };
         if let Some(close_at) = smoke.close_at {
             if std::time::Instant::now() >= close_at {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                smoke.capture.request_close(ctx);
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
             }
@@ -614,7 +651,7 @@ impl App {
         }
         // A background repaint may arrive before the window handles Close.
         if smoke.index >= smoke.targets.len() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            smoke.capture.request_close(ctx);
             return;
         }
         if smoke.targets == SMART_TARGETS
@@ -877,43 +914,49 @@ impl App {
                     "browser changes must not rerender the image"
                 );
             }
-            std::fs::create_dir_all(&smoke.directory).unwrap();
-            let bytes: Vec<_> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
-            if smoke.targets == DEHAZE_TARGETS {
-                use image::{
-                    codecs::png::{CompressionType, FilterType, PngEncoder},
-                    ImageEncoder,
-                };
-                // Lossless fast encoding keeps debug capture from blocking native interaction.
-                let file = std::fs::File::create(
-                    smoke
-                        .directory
-                        .join(format!("{}.png", smoke.targets[smoke.index])),
-                )
-                .unwrap();
-                PngEncoder::new_with_quality(
-                    file,
-                    CompressionType::Uncompressed,
-                    FilterType::NoFilter,
-                )
-                .write_image(
-                    &bytes,
-                    image.width() as u32,
-                    image.height() as u32,
-                    image::ExtendedColorType::Rgba8,
-                )
-                .unwrap();
-            } else {
-                image::save_buffer(
-                    smoke
-                        .directory
-                        .join(format!("{}.png", smoke.targets[smoke.index])),
-                    &bytes,
-                    image.width() as u32,
-                    image.height() as u32,
-                    image::ColorType::Rgba8,
-                )
-                .unwrap();
+            {
+                let _artifact = foveonic::diagnostics::scope(
+                    foveonic::diagnostics::Category::Scenario,
+                    "smoke.artifact.png",
+                );
+                std::fs::create_dir_all(&smoke.directory).unwrap();
+                let bytes: Vec<_> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                if smoke.targets == DEHAZE_TARGETS {
+                    use image::{
+                        codecs::png::{CompressionType, FilterType, PngEncoder},
+                        ImageEncoder,
+                    };
+                    // Lossless fast encoding keeps debug capture from blocking native interaction.
+                    let file = std::fs::File::create(
+                        smoke
+                            .directory
+                            .join(format!("{}.png", smoke.targets[smoke.index])),
+                    )
+                    .unwrap();
+                    PngEncoder::new_with_quality(
+                        file,
+                        CompressionType::Uncompressed,
+                        FilterType::NoFilter,
+                    )
+                    .write_image(
+                        &bytes,
+                        image.width() as u32,
+                        image.height() as u32,
+                        image::ExtendedColorType::Rgba8,
+                    )
+                    .unwrap();
+                } else {
+                    image::save_buffer(
+                        smoke
+                            .directory
+                            .join(format!("{}.png", smoke.targets[smoke.index])),
+                        &bytes,
+                        image.width() as u32,
+                        image.height() as u32,
+                        image::ColorType::Rgba8,
+                    )
+                    .unwrap();
+                }
             }
             if smoke.targets == SMART_TARGETS && smoke.preview_pending() {
                 assert_eq!(
@@ -1092,14 +1135,30 @@ impl App {
                             | "cache-settings"
                             | "cache-list"
                     );
-                    assert_eq!(
-                        frame.artifact.settings.working_scale,
-                        if full {
-                            foveonic::render::Scale::NATIVE
-                        } else {
-                            foveonic::render::Scale::new(2).unwrap()
-                        }
-                    );
+                    if target == "cache-reopen" {
+                        let (texture, task, scale) = smoke.smart_reopen.as_ref().unwrap();
+                        let texture = texture
+                            .upgrade()
+                            .expect("reopening discarded retained pixels");
+                        assert!(
+                            std::sync::Arc::ptr_eq(&texture, &frame.texture),
+                            "same-photo selection replaced retained pixels"
+                        );
+                        assert_eq!(
+                            frame.diagnostic_task, *task,
+                            "same-photo selection replaced the delivered task"
+                        );
+                        assert_eq!(frame.artifact.settings.working_scale, *scale);
+                    } else {
+                        assert_eq!(
+                            frame.artifact.settings.working_scale,
+                            if full {
+                                foveonic::render::Scale::NATIVE
+                            } else {
+                                foveonic::render::Scale::new(2).unwrap()
+                            }
+                        );
+                    }
                     assert_eq!(frame.artifact.settings.preview_region, None);
                     if target == "smart-pan" {
                         assert_eq!(
@@ -1194,11 +1253,12 @@ impl App {
                 )
                 .unwrap();
             }
+            smoke.diagnostic_checked(self.frame.as_ref(), self.worker.busy());
             smoke.index += 1;
             smoke.awaiting = false;
             if smoke.index == smoke.targets.len() {
                 if smoke.targets == SCREENSHOT_TARGETS {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    smoke.capture.request_close(ctx);
                     return;
                 }
                 // Exercise native preference restoration on a subsequent isolated launch.
@@ -1215,10 +1275,11 @@ impl App {
                         Some(std::time::Instant::now() + std::time::Duration::from_secs(seconds));
                     ctx.request_repaint();
                 } else {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    smoke.capture.request_close(ctx);
                 }
                 return;
             }
+            smoke.diagnostic_begin();
             match smoke.targets[smoke.index] {
                 "status-error" | "status-new-error" => {
                     let path = smoke.directory.join(smoke.targets[smoke.index]);
@@ -2041,7 +2102,18 @@ impl App {
                 }
                 "cache-reopen" => {
                     self.settings_open = false;
-                    self.select(self.selected.clone().unwrap(), false);
+                    // Compatible same-photo selection retains the exact current image.
+                    let frame = self.frame.as_ref().unwrap();
+                    smoke.smart_reopen = Some((
+                        std::sync::Arc::downgrade(&frame.texture),
+                        frame.diagnostic_task,
+                        frame.artifact.settings.working_scale,
+                    ));
+                    let path = self.selected.clone().unwrap();
+                    // This fixture authors edits directly, so seed its nonpersistent recipe.
+                    self.sidecars.set_memory_only(true);
+                    self.sidecars.apply(path.clone(), self.settings.clone());
+                    self.select(path, false);
                 }
                 "fast" | "fast-again" => {
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;
@@ -2558,7 +2630,7 @@ impl App {
         let mut smoke = self.smoke.take().unwrap();
         if let Some(close_at) = smoke.close_at {
             if std::time::Instant::now() >= close_at {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                smoke.capture.request_close(ctx);
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
             }
@@ -2566,7 +2638,7 @@ impl App {
             return;
         }
         if smoke.index >= smoke.targets.len() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            smoke.capture.request_close(ctx);
             self.smoke = Some(smoke);
             return;
         }
@@ -2626,20 +2698,26 @@ impl App {
                     .collect();
             }
             self.smoke_multi_assert(&smoke, target);
-            std::fs::create_dir_all(&smoke.directory).unwrap();
-            let bytes: Vec<_> = image
-                .pixels
-                .iter()
-                .flat_map(|pixel| pixel.to_array())
-                .collect();
-            image::save_buffer(
-                smoke.directory.join(format!("{target}.png")),
-                &bytes,
-                image.width() as u32,
-                image.height() as u32,
-                image::ColorType::Rgba8,
-            )
-            .unwrap();
+            {
+                let _artifact = foveonic::diagnostics::scope(
+                    foveonic::diagnostics::Category::Scenario,
+                    "smoke.artifact.png",
+                );
+                std::fs::create_dir_all(&smoke.directory).unwrap();
+                let bytes: Vec<_> = image
+                    .pixels
+                    .iter()
+                    .flat_map(|pixel| pixel.to_array())
+                    .collect();
+                image::save_buffer(
+                    smoke.directory.join(format!("{target}.png")),
+                    &bytes,
+                    image.width() as u32,
+                    image.height() as u32,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
             let photos: Vec<_> = self
                 .edit_selection
                 .paths()
@@ -2669,10 +2747,12 @@ impl App {
                     "progress_running":progress.map(|progress| progress.running()),"progress_fraction":progress.map(|progress| progress.fraction),
                     "photos":photos,"retained":memory.resources,
                     "over_budget_bytes":memory.over_budget_bytes,"sweep_group_ms":smoke.multi_sweep_ms})).unwrap()).unwrap();
+            smoke.diagnostic_checked(self.frame.as_ref(), self.worker.busy());
             smoke.index += 1;
             smoke.awaiting = false;
             smoke.settled_frames = 0;
             if smoke.index < smoke.targets.len() {
+                smoke.diagnostic_begin();
                 self.smoke_multi_enter(ctx, &mut smoke);
             } else if let Some(seconds) = std::env::var_os("FOVEONIC_GUI_SMOKE_HOLD_SECONDS")
                 .and_then(|value| value.to_str().and_then(|value| value.parse::<u64>().ok()))
@@ -2680,7 +2760,7 @@ impl App {
                 smoke.close_at =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(seconds));
             } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                smoke.capture.request_close(ctx);
             }
         } else if !smoke.awaiting && self.smoke_multi_ready(&smoke, target) {
             if target == "multi-choice" && self.smoke_multi_sweep(&mut smoke) {
@@ -2986,6 +3066,19 @@ impl App {
             .read_response(egui::Id::new(("comparison photo", path)))
             .unwrap_or_else(|| panic!("comparison tile is not visible: {}", path.display()));
         let pos = response.rect.center();
+        foveonic::diagnostics::event(
+            foveonic::diagnostics::Category::Scenario,
+            "scenario.pointer_click",
+            |fields| {
+                fields
+                    .str("source", &path.to_string_lossy())
+                    .u64("photo", foveonic::diagnostics::photo_id(path))
+                    .f64("x", pos.x as f64)
+                    .f64("y", pos.y as f64)
+                    .bool("alt", modifiers.alt)
+                    .bool("shift", modifiers.shift);
+            },
+        );
         smoke.direct_events.extend([true, false].map(|pressed| {
             vec![
                 egui::Event::PointerMoved(pos),

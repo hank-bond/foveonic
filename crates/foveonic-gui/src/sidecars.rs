@@ -1,6 +1,7 @@
 //! Keeps each photo's latest edits saved without making rendering wait for disk access.
 
 use eframe::egui;
+use foveonic::diagnostics as trace;
 use foveonic::{render::Settings, sidecar};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -41,7 +42,19 @@ fn restore(
     enabled: bool,
     cache: &foveonic::decode_cache::Cache,
 ) -> (Result<Option<Settings>, String>, Settings) {
+    let _restore = trace::scope_with(trace::Category::Cpu, "sidecars.restore", |fields| {
+        fields
+            .str("source", &path.to_string_lossy())
+            .bool("sidecar_enabled", enabled);
+    });
     let cached = cache.selection(path);
+    trace::event(
+        trace::Category::Cache,
+        "sidecars.selection_snapshot",
+        |fields| {
+            fields.bool("hit", cached.is_some());
+        },
+    );
     let result = if enabled {
         (if let Some(cached) = &cached {
             Ok(cached.settings.clone())
@@ -63,16 +76,45 @@ fn restore(
             .map(Ok)
             .unwrap_or_else(|| cache.capture_properties(path))
             .ok()
-            .and_then(|properties| {
-                if defaults.is_empty() {
-                    capture_defaults(properties).ok()
-                } else {
-                    defaults.from_properties(&properties).ok()
-                }
-            })
+            .and_then(|properties| source_defaults(properties, defaults).ok())
             .unwrap_or_default()
     };
     (result, fresh)
+}
+
+/// An immutable recipe snapshot for optional work on already-local sources.
+/// Resolution stays here with foreground recipe restoration and never probes a card.
+#[derive(Clone, PartialEq)]
+pub(crate) struct CachedRecipes {
+    defaults: foveonic::render::RecipeDefaults,
+    enabled: bool,
+    recent: BTreeMap<PathBuf, Settings>,
+}
+impl CachedRecipes {
+    pub fn resolve(
+        &self,
+        path: &std::path::Path,
+        selection: foveonic::decode_cache::Selection,
+    ) -> foveonic::source::Result<Settings> {
+        if let Some(settings) = self.recent.get(path) {
+            return Ok(settings.clone());
+        }
+        if let Some(settings) = selection.settings.filter(|_| self.enabled) {
+            return Ok(settings);
+        }
+        source_defaults(selection.properties, &self.defaults)
+    }
+}
+
+fn source_defaults(
+    properties: BTreeMap<String, String>,
+    defaults: &foveonic::render::RecipeDefaults,
+) -> foveonic::source::Result<Settings> {
+    if defaults.is_empty() {
+        capture_defaults(properties)
+    } else {
+        defaults.from_properties(&properties)
+    }
 }
 
 struct Store {
@@ -85,7 +127,8 @@ impl Store {
         let pending = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let slot = pending.clone();
         let (sender, replies) = mpsc::channel();
-        let thread = std::thread::spawn(move || loop {
+        let builder = std::thread::Builder::new().name("sidecars".into());
+        let thread = builder.spawn(move || loop {
             enum Job {
                 Load(
                     u64,
@@ -119,15 +162,67 @@ impl Store {
             };
             let reply = match job {
                 Job::Resolve(generation, path, defaults) => {
+                    let _context = trace::enabled().then(|| {
+                        trace::enter(crate::timing::context_for(
+                            0,
+                            generation,
+                            &path,
+                            "sidecar_resolve",
+                        ))
+                    });
+                    let _job =
+                        trace::scope_with(trace::Category::Cpu, "sidecars.resolve_job", |fields| {
+                            fields
+                                .u64("generation", generation)
+                                .str("source", &path.to_string_lossy());
+                        });
                     let (saved, fresh) = restore(&path, None, &defaults, enabled, &cache);
+                    trace::event(
+                        trace::Category::Coordinator,
+                        "sidecars.resolve_result",
+                        |fields| {
+                            fields.bool("success", saved.is_ok());
+                        },
+                    );
                     Reply::Resolved(generation, path, saved.map(|saved| saved.unwrap_or(fresh)))
                 }
                 Job::Load(generation, path, recent, defaults) => {
+                    let _context = trace::enabled().then(|| {
+                        trace::enter(crate::timing::context_for(
+                            0,
+                            generation,
+                            &path,
+                            "sidecar_load",
+                        ))
+                    });
+                    let _job =
+                        trace::scope_with(trace::Category::Cpu, "sidecars.load_job", |fields| {
+                            fields
+                                .u64("generation", generation)
+                                .str("source", &path.to_string_lossy());
+                        });
                     let (result, fresh) = restore(&path, recent, &defaults, enabled, &cache);
+                    trace::event(
+                        trace::Category::Coordinator,
+                        "sidecars.load_result",
+                        |fields| {
+                            fields.bool("success", result.is_ok());
+                        },
+                    );
                     Reply::Loaded(generation, path, result, Box::new(fresh))
                 }
                 Job::Save(path, settings) => {
+                    let _context = trace::enabled().then(|| {
+                        trace::enter(crate::timing::context_for(0, 0, &path, "sidecar_save"))
+                    });
+                    let _job =
+                        trace::scope_with(trace::Category::Io, "sidecars.save_job", |fields| {
+                            fields.str("source", &path.to_string_lossy());
+                        });
                     let result = sidecar::save(&path, &settings).map_err(|e| e.to_string());
+                    trace::event(trace::Category::Io, "sidecars.save_result", |fields| {
+                        fields.bool("success", result.is_ok());
+                    });
                     if result.is_ok() {
                         cache.saved_settings(&path, &settings);
                     }
@@ -140,6 +235,7 @@ impl Store {
             let _ = sender.send(reply);
             ctx.request_repaint();
         });
+        let thread = thread.expect("start sidecars thread");
         Self {
             pending,
             replies,
@@ -147,6 +243,15 @@ impl Store {
         }
     }
     fn load(&self, generation: u64, path: PathBuf, defaults: foveonic::render::RecipeDefaults) {
+        trace::event(
+            trace::Category::Coordinator,
+            "sidecars.load_requested",
+            |fields| {
+                fields
+                    .u64("generation", generation)
+                    .str("source", &path.to_string_lossy());
+            },
+        );
         let (lock, wake) = &*self.pending;
         lock.lock().unwrap().load = Some((generation, path, defaults));
         wake.notify_one();
@@ -256,6 +361,20 @@ impl Session {
         self.requested.get(path).or_else(|| self.unsaved.get(path))
     }
 
+    pub fn cached_recipes(&self, paths: &[PathBuf]) -> CachedRecipes {
+        CachedRecipes {
+            defaults: self.defaults.clone(),
+            enabled: self.enabled,
+            recent: paths
+                .iter()
+                .filter_map(|path| {
+                    self.requested_settings(path)
+                        .map(|settings| (path.clone(), settings.clone()))
+                })
+                .collect(),
+        }
+    }
+
     /// Resolve one replaceable editing subset on the existing background recipe owner.
     pub fn resolve_settings(&mut self, paths: &[PathBuf]) {
         self.resolve_generation += 1;
@@ -287,6 +406,15 @@ impl Session {
                 Reply::Resolved(generation, path, settings)
                     if generation == self.resolve_generation =>
                 {
+                    trace::event(
+                        trace::Category::Coordinator,
+                        "sidecars.resolve_received",
+                        |fields| {
+                            fields
+                                .u64("generation", generation)
+                                .str("source", &path.to_string_lossy());
+                        },
+                    );
                     // An edit can arrive while a background read is completing.
                     let settings = self
                         .requested_settings(&path)
@@ -298,6 +426,15 @@ impl Session {
                 Reply::Loaded(generation, path, result, fresh)
                     if generation == self.generation && self.selected.as_ref() == Some(&path) =>
                 {
+                    trace::event(
+                        trace::Category::Coordinator,
+                        "sidecars.load_received",
+                        |fields| {
+                            fields
+                                .u64("generation", generation)
+                                .str("source", &path.to_string_lossy());
+                        },
+                    );
                     self.ready = true;
                     match result {
                         Ok(saved) => {

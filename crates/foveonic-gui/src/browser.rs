@@ -163,6 +163,14 @@ pub struct Browser {
     resource_revision: u64,
     reveal_selection: bool,
 }
+impl Drop for Browser {
+    fn drop(&mut self) {
+        // Metadata joins during field destruction. Release queued thumbnail
+        // priority first, even when image replies can no longer be drained.
+        self.thumbnail_worker.stop();
+        self.preview_worker.stop();
+    }
+}
 impl Browser {
     #[cfg(test)]
     pub fn new(context: egui::Context) -> Self {
@@ -740,6 +748,8 @@ impl Browser {
         selected: Option<&Path>,
         mode: crate::preferences::Organizer,
     ) -> Option<Selection> {
+        let _scope =
+            foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.browser");
         self.apply_query();
         self.review_clicked = false;
         self.clear_selection = false;

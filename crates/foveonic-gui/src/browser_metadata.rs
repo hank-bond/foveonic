@@ -2,6 +2,7 @@
 
 use super::query::Entry;
 use eframe::egui;
+use foveonic::diagnostics as trace;
 use foveonic::{
     decode_cache::Cache,
     review::{self, Rating},
@@ -45,7 +46,8 @@ impl Loader {
         let state = Arc::new((Mutex::new(State::default()), Condvar::new()));
         let slot = state.clone();
         let (sender, replies) = mpsc::channel();
-        let thread = std::thread::spawn(move || {
+        let builder = std::thread::Builder::new().name("browser-metadata".into());
+        let thread = builder.spawn(move || {
             let mut folders = HashMap::new();
             let mut generation = 0;
             loop {
@@ -82,6 +84,24 @@ impl Loader {
                 };
                 let reply = match job {
                     Job::Save(folder, ratings) => {
+                        let _context = trace::enabled().then(|| {
+                            trace::enter(trace::Context {
+                                task: 0,
+                                revision: 0,
+                                photo: 0,
+                                purpose: "browser_ratings",
+                                node: None,
+                            })
+                        });
+                        let _save = trace::scope_with(
+                            trace::Category::Io,
+                            "browser.ratings_save",
+                            |fields| {
+                                fields
+                                    .str("folder", &folder.to_string_lossy())
+                                    .u64("photos", ratings.len() as u64);
+                            },
+                        );
                         let changes = ratings
                             .iter()
                             .map(|(path, rating)| {
@@ -91,6 +111,9 @@ impl Loader {
                         let error = review::save_many(&folder, &changes)
                             .err()
                             .map(|e| e.to_string());
+                        trace::event(trace::Category::Io, "browser.ratings_result", |fields| {
+                            fields.bool("success", error.is_none());
+                        });
                         if let Some(error) = &error {
                             eprintln!("Cannot save ratings for {}: {error}", folder.display());
                         }
@@ -98,14 +121,37 @@ impl Loader {
                         Reply::Saved { ratings, error }
                     }
                     Job::Load(request) => {
+                        let _context = trace::enabled().then(|| {
+                            trace::enter(crate::timing::context_for(
+                                0,
+                                request.generation,
+                                &request.path,
+                                "browser_metadata",
+                            ))
+                        });
+                        let _job = trace::scope_with(
+                            trace::Category::Cpu,
+                            "browser.metadata_job",
+                            |fields| {
+                                fields
+                                    .str("source", &request.path.to_string_lossy())
+                                    .u64("generation", request.generation);
+                            },
+                        );
                         if generation != request.generation {
                             generation = request.generation;
                             folders.clear();
                         }
                         let mut read = || {
                             if slot.0.lock().unwrap().generation != request.generation {
+                                trace::event(
+                                    trace::Category::Coordinator,
+                                    "browser.metadata_superseded",
+                                    |_| {},
+                                );
                                 return None;
                             }
+                            let _read = trace::scope(trace::Category::Cpu, "browser.metadata_read");
                             let folder = request.path.parent().unwrap_or(Path::new(""));
                             let ratings = folders
                                 .entry(folder.to_owned())
@@ -158,6 +204,7 @@ impl Loader {
                 ctx.request_repaint();
             }
         });
+        let thread = thread.expect("start browser-metadata thread");
         Self {
             state,
             replies,

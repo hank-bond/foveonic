@@ -1,4 +1,4 @@
-"""Summarize native feedback and completed-processing JSON reports, keeping modes and stage domains separate."""
+"""Summarize declared aggregate benchmark JSON; native SDK captures use trace_analysis.py."""
 
 import argparse
 from collections import Counter, defaultdict
@@ -157,7 +157,8 @@ def summarize(records, pointers=None, settle=1.):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('records', type=Path, help='native stderr.jsonl or completed-processing stdout JSONL')
+    parser.add_argument('--input-kind', choices=['benchmark-json'], required=True)
+    parser.add_argument('records', type=Path, help='aggregate benchmark report JSONL')
     parser.add_argument('--pointers', type=Path)
     parser.add_argument('--settle', type=float, default=1.)
     args = parser.parse_args()

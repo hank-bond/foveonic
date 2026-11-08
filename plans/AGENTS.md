@@ -35,9 +35,10 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
 - **[merrill-banding-width](./merrill-banding-width.md)** Compare scale-separated native row and column correction against the accepted fine-band baseline.
+- **[multi-edit-latency](./multi-edit-latency.md)** Reduce multi-edit application latency through work avoidance, reusable preparation, scale-aware execution and coordinated delivery.
 - **[multi-edit](./multi-edit.md)** Implement independent viewport editing selection, Pointer-only selection routing and shared mixed-value controls before finalizing memory policy.
 - **[perceptual-editing](./perceptual-editing.md)** Evaluate shared colorfulness and an Exposure, spatial HDR and anchored Brightness workflow.
-- **[performance-diagnostics](./performance-diagnostics.md)** Design and review a shared trace foundation and repeatable application scenarios before continuing renderer optimization.
+- **[performance-diagnostics](./performance-diagnostics.md)** Integrate the owner-approved Perfetto recorder and application scenarios, then validate causal coverage, capture completeness and overhead before renderer experiments.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.

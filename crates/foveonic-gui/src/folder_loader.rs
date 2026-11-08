@@ -2,6 +2,7 @@
 
 use crate::preferences::FolderMode;
 use eframe::egui;
+use foveonic::diagnostics as trace;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
@@ -16,6 +17,9 @@ pub struct Discovery {
 }
 
 pub fn discover(path: &Path) -> std::io::Result<Discovery> {
+    let _scope = trace::scope_with(trace::Category::Io, "folder.discover", |fields| {
+        fields.str("path", &path.to_string_lossy());
+    });
     let info = std::fs::metadata(path)?;
     let (folder, selected) = if info.is_dir() {
         (path.to_owned(), None)
@@ -103,7 +107,8 @@ impl Loader {
     ) -> Self {
         let state = Arc::new((Mutex::new(State::default()), Condvar::new()));
         let worker = state.clone();
-        thread::spawn(move || loop {
+        let builder = thread::Builder::new().name("folder-loader".into());
+        let spawned = builder.spawn(move || loop {
             let request = {
                 let mut state = worker.0.lock().unwrap();
                 while !state.stop && state.pending.is_none() {
@@ -114,6 +119,20 @@ impl Loader {
                 }
                 state.pending.take().unwrap()
             };
+            let _context = trace::enabled().then(|| {
+                trace::enter(trace::Context {
+                    task: 0,
+                    revision: request.generation,
+                    photo: 0,
+                    purpose: "folder_scan",
+                    node: None,
+                })
+            });
+            let _scan = trace::scope_with(trace::Category::Cpu, "folder.scan_job", |fields| {
+                fields
+                    .str("path", &request.path.to_string_lossy())
+                    .u64("generation", request.generation);
+            });
             let result = read(&request.path).map(|discovery| {
                 let mode = request.mode.resolve(discovery.canonical.as_deref());
                 (discovery, mode)
@@ -122,6 +141,25 @@ impl Loader {
             if state.stop {
                 return;
             }
+            trace::event(
+                trace::Category::Coordinator,
+                "folder.scan_result",
+                |fields| {
+                    fields.str(
+                        "outcome",
+                        if request.generation != state.current {
+                            "superseded"
+                        } else if result.is_ok() {
+                            "ready"
+                        } else {
+                            "failed"
+                        },
+                    );
+                    if let Ok((discovery, _)) = &result {
+                        fields.u64("files", discovery.files.len() as u64);
+                    }
+                },
+            );
             if request.generation == state.current {
                 state.ready = Some(Ready {
                     path: request.path,
@@ -130,6 +168,7 @@ impl Loader {
                 context.request_repaint();
             }
         });
+        spawned.expect("start folder-loader thread");
         Self { state }
     }
     pub fn request(&self, path: PathBuf, mode: Mode) {
@@ -142,6 +181,16 @@ impl Loader {
         });
         state.ready = None;
         state.loading = true;
+        trace::event(
+            trace::Category::Coordinator,
+            "folder.scan_requested",
+            |fields| {
+                fields.u64("generation", state.current).str(
+                    "path",
+                    &state.pending.as_ref().unwrap().path.to_string_lossy(),
+                );
+            },
+        );
         self.state.1.notify_one();
     }
     pub fn receive(&self) -> Option<Ready> {

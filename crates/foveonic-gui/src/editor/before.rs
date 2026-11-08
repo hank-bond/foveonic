@@ -150,6 +150,10 @@ mod tests {
         };
         current.white_balance_bias.warmth = 0.3;
         current.working_scale = foveonic::render::Scale::new(2).unwrap();
+        current.crop.bounds = [0.1, 0.2, 0.9, 0.8];
+        current.rotation.turns = 1;
+        current.rotation.degrees = 3.;
+        current.output_size = Some([1200, 800]);
         let mut defaults = RecipeDefaults::default();
         let mut default = Settings::default();
         default.photographic.tone_method = PhotographicMethod::Universal;
@@ -165,6 +169,7 @@ mod tests {
         let baseline = before
             .settings(&current, Some(&metadata), &defaults)
             .unwrap();
+        assert!(crate::smart::same_geometry(&current, &baseline));
         assert_eq!(baseline.exposure, 0.);
         assert_eq!(baseline.white_balance, "");
         assert_eq!(baseline.white_balance_bias.warmth, 0.);
@@ -173,6 +178,7 @@ mod tests {
         let baseline = before
             .settings(&current, Some(&metadata), &defaults)
             .unwrap();
+        assert!(crate::smart::same_geometry(&current, &baseline));
         assert_eq!(
             baseline.photographic.tone_method,
             PhotographicMethod::Universal

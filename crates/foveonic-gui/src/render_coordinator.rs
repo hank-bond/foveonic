@@ -3,6 +3,7 @@
 use crate::editor::Rendition;
 use crate::worker::{ColorPickRequest, Request, ScopeRequest};
 use foveonic::source::SourceOrigin;
+use serde_json::json;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -96,6 +97,17 @@ struct Desired {
     admitted: u64,
     delivered: Option<(TaskId, Arc<crate::worker::presentation::Snapshot>)>,
 }
+fn retired(entry: &Desired, reason: &'static str) {
+    crate::timing::task(
+        &entry.task.stamp,
+        if entry.settled {
+            "retired"
+        } else {
+            "cancelled"
+        },
+        || json!({"reason":reason}),
+    );
+}
 #[derive(Default)]
 pub struct RenderCoordinator {
     next_id: u64,
@@ -128,9 +140,10 @@ impl RenderCoordinator {
                         &request.settings,
                     ))
             {
+                retired(entry, "detail_replaced");
                 return false;
             }
-            entry.task.stamp.target.path != target.path
+            let keep = entry.task.stamp.target.path != target.path
                 || entry.task.stamp.target == target
                 || match &target.purpose {
                     Purpose::Camera | Purpose::Defaults => !matches!(
@@ -144,7 +157,11 @@ impl RenderCoordinator {
                         !matches!(entry.task.stamp.target.purpose, Purpose::Inspection(_, _))
                     }
                     _ => true,
-                }
+                };
+            if !keep {
+                retired(entry, "purpose_replaced");
+            }
+            keep
         });
         let existing = self
             .desired
@@ -156,6 +173,11 @@ impl RenderCoordinator {
                 && crate::worker::same_delivery_request(&old.request, &request)
             {
                 let id = old.stamp.id;
+                crate::timing::task(
+                    &old.stamp,
+                    "coalesced",
+                    || json!({"desired_revision":request.revision,"settled":self.desired[index].settled}),
+                );
                 if old.origin.is_none() && origin.is_some() {
                     let mut task = (**old).clone();
                     task.origin = origin;
@@ -192,9 +214,20 @@ impl RenderCoordinator {
             queued_at,
             seed,
         });
+        crate::timing::task(&task.stamp, "desired", || {
+            json!({"nominal_scale":task.request.preview_quality.working_scale().divisor(),"preview_quality":format!("{:?}",task.request.preview_quality),
+            "output":task.request.output,"settings":task.request.settings,"pixel_reuse":compatible})
+        });
         if let Some(index) = existing {
             let entry = &mut self.desired[index];
             let same_delivery = entry.task.stamp == task.stamp;
+            if !same_delivery {
+                crate::timing::task(
+                    &entry.task.stamp,
+                    "replaced",
+                    || json!({"by_task":task.stamp.id.0,"by_revision":task.stamp.revision,"pixel_reuse":compatible}),
+                );
+            }
             entry.task = task;
             if !same_delivery {
                 entry.settled = false;
@@ -216,9 +249,13 @@ impl RenderCoordinator {
             .filter(|entry| entry.delivered.is_some())
             .count();
         self.desired.retain(|entry| {
-            entry.task.stamp.target.purpose != Purpose::Current
+            let keep = entry.task.stamp.target.purpose != Purpose::Current
                 || paths.contains(&entry.task.stamp.target.path)
-                || (entry.settled && retained.contains(&entry.task.stamp.target.path))
+                || (entry.settled && retained.contains(&entry.task.stamp.target.path));
+            if !keep {
+                retired(entry, "target_removed");
+            }
+            keep
         });
         if self
             .desired
@@ -236,9 +273,13 @@ impl RenderCoordinator {
         }
         self.active = Some(path.to_owned());
         self.desired.retain(|entry| {
-            entry.task.stamp.target.purpose == Purpose::Current
+            let keep = entry.task.stamp.target.purpose == Purpose::Current
                 || entry.task.stamp.target.purpose == Purpose::Export
-                || entry.task.stamp.target.path == path
+                || entry.task.stamp.target.path == path;
+            if !keep {
+                retired(entry, "active_photo_changed");
+            }
+            keep
         });
         self.scopes = None;
         self.pick = None;
@@ -250,11 +291,15 @@ impl RenderCoordinator {
             .filter(|entry| entry.delivered.is_some())
             .count();
         self.desired.retain(|entry| {
-            entry.task.stamp.target.path != path
+            let keep = entry.task.stamp.target.path != path
                 || !matches!(
                     entry.task.stamp.target.purpose,
                     Purpose::Camera | Purpose::Defaults
-                )
+                );
+            if !keep {
+                retired(entry, "before_retired");
+            }
+            keep
         });
         if self
             .desired
@@ -267,6 +312,9 @@ impl RenderCoordinator {
         }
     }
     pub fn clear(&mut self) {
+        for entry in &self.desired {
+            retired(entry, "clear");
+        }
         self.desired.clear();
         self.scopes = None;
         self.pick = None;
@@ -278,7 +326,7 @@ impl RenderCoordinator {
         origin: Option<SourceOrigin>,
         queued_at: Instant,
     ) -> Arc<Task> {
-        Arc::new(Task {
+        let task = Arc::new(Task {
             stamp: Stamp {
                 id: self.id(),
                 target: Target::of(&request),
@@ -288,7 +336,13 @@ impl RenderCoordinator {
             origin,
             queued_at,
             seed: None,
-        })
+        });
+        crate::timing::task(
+            &task.stamp,
+            "desired",
+            || json!({"frozen_export":true,"output":task.request.output}),
+        );
+        task
     }
     pub fn plan(&self) -> Arc<WorkPlan> {
         Arc::new(WorkPlan {
@@ -305,33 +359,68 @@ impl RenderCoordinator {
     pub fn busy(&self) -> bool {
         self.desired.iter().any(|entry| !entry.settled)
     }
+    pub fn is_settled_and_admitted(&self, id: TaskId, revision: u64) -> bool {
+        self.desired.iter().any(|entry| {
+            entry.task.stamp.id == id
+                && entry.task.stamp.revision == revision
+                && entry.settled
+                && entry.admitted == revision
+        })
+    }
     pub fn finish(&mut self, stamp: &Stamp) -> Completion {
         let Some(entry) = self
             .desired
             .iter_mut()
             .find(|entry| entry.task.stamp.target == stamp.target)
         else {
+            crate::timing::task(stamp, "completion_removed", || json!({}));
             return Completion::Removed;
         };
         if entry.task.stamp == *stamp {
             entry.settled = true;
+            crate::timing::task(stamp, "completed", || json!({}));
             Completion::Current
         } else {
+            crate::timing::task(
+                stamp,
+                "completion_superseded",
+                || json!({"current_revision":entry.task.stamp.revision}),
+            );
             Completion::Superseded
         }
     }
-    pub fn admit(&mut self, stamp: &Stamp) -> bool {
+    pub fn admit(&mut self, stamp: &Stamp, origin: &SourceOrigin) -> bool {
         let Some(entry) = self
             .desired
             .iter_mut()
             .find(|entry| entry.task.stamp.target == stamp.target)
         else {
+            crate::timing::task(stamp, "rejected", || json!({"reason":"target_removed"}));
             return false;
         };
+        if entry
+            .task
+            .origin
+            .as_ref()
+            .is_some_and(|expected| expected != origin)
+        {
+            crate::timing::task(stamp, "rejected", || json!({"reason":"source_changed"}));
+            return false;
+        }
         if stamp.revision <= entry.admitted {
+            crate::timing::task(
+                stamp,
+                "rejected",
+                || json!({"reason":"out_of_order","admitted_revision":entry.admitted}),
+            );
             return false;
         }
         entry.admitted = stamp.revision;
+        crate::timing::task(
+            stamp,
+            "admitted",
+            || json!({"desired_revision":entry.task.stamp.revision}),
+        );
         true
     }
     pub fn note_pixels(&mut self, stamp: &Stamp, frame: &crate::worker::Frame) {
@@ -401,12 +490,26 @@ impl RenderCoordinator {
             .as_ref()
             .is_some_and(|task| task.request.key == request.key)
         {
+            crate::timing::emit(
+                "scope_coalesced",
+                || json!({"task":self.scopes.as_ref().unwrap().id.0,"revision":request.key.revision}),
+            );
             return;
+        }
+        if let Some(old) = &self.scopes {
+            crate::timing::emit(
+                "scope_replaced",
+                || json!({"task":old.id.0,"revision":old.request.key.revision,"by_revision":request.key.revision}),
+            );
         }
         self.scopes = Some(Arc::new(ScopeTask {
             id: self.id(),
             request: Arc::new(request),
         }));
+        crate::timing::emit(
+            "scope_desired",
+            || json!({"task":self.scopes.as_ref().unwrap().id.0,"revision":self.scopes.as_ref().unwrap().request.key.revision}),
+        );
     }
     pub fn pick(
         &mut self,
@@ -414,14 +517,28 @@ impl RenderCoordinator {
         image_revision: u64,
         origin: Option<SourceOrigin>,
     ) {
+        if let Some(old) = &self.pick {
+            crate::timing::emit(
+                "pick_replaced",
+                || json!({"task":old.id.0,"revision":old.image_revision}),
+            );
+        }
         self.pick = Some(Arc::new(PickTask {
             id: self.id(),
             image_revision,
             origin,
             request: Arc::new(request),
         }));
+        crate::timing::emit(
+            "pick_desired",
+            || json!({"task":self.pick.as_ref().unwrap().id.0,"revision":image_revision,"source":self.pick.as_ref().unwrap().request.path}),
+        );
     }
     pub fn finish_scope(&mut self, id: TaskId) -> bool {
+        crate::timing::emit(
+            "scope_completed",
+            || json!({"task":id.0,"current":self.scopes.as_ref().is_some_and(|task|task.id==id)}),
+        );
         if self.scopes.as_ref().is_some_and(|task| task.id == id) {
             self.scopes = None;
             true
@@ -430,6 +547,10 @@ impl RenderCoordinator {
         }
     }
     pub fn finish_pick(&mut self, id: TaskId) -> bool {
+        crate::timing::emit(
+            "pick_completed",
+            || json!({"task":id.0,"current":self.pick.as_ref().is_some_and(|task|task.id==id)}),
+        );
         if self.pick.as_ref().is_some_and(|task| task.id == id) {
             self.pick = None;
             true

@@ -3,6 +3,7 @@
 use super::PreparedPreview;
 use eframe::egui;
 use foveonic::decode_cache::{Activity, Cache};
+use foveonic::diagnostics as trace;
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -103,7 +104,15 @@ impl Worker {
         let source = cache.clone();
         let staging = crate::display_image::Staging::default();
         let worker_staging = staging.clone();
-        std::thread::spawn(move || {
+        let builder = std::thread::Builder::new().name(
+            (if kind == Kind::Thumbnail {
+                "browser-thumbnail-loader"
+            } else {
+                "browser-preview-loader"
+            })
+            .into(),
+        );
+        let spawned = builder.spawn(move || {
             loop {
                 let request = {
                     let mut state = pending.0.lock().unwrap();
@@ -117,10 +126,30 @@ impl Worker {
                     state.active = Some(request.clone());
                     request
                 };
+                let purpose = if kind == Kind::Thumbnail {
+                    "browser_thumbnail"
+                } else {
+                    "browser_preview"
+                };
+                let _context = trace::enabled().then(|| {
+                    trace::enter(crate::timing::context_for(
+                        0,
+                        request.version,
+                        &request.path,
+                        purpose,
+                    ))
+                });
+                let _job = trace::scope_with(trace::Category::Cpu, "browser.image_job", |fields| {
+                    fields
+                        .str("source", &request.path.to_string_lossy())
+                        .u64("browser_version", request.version)
+                        .str("kind", purpose);
+                });
                 let load = || {
                     if !pending.0.lock().unwrap().current(&request) {
                         return Err("Preview request superseded".into());
                     }
+                    let _read = trace::scope(trace::Category::Cpu, "browser.image_load");
                     read(&request.path).map_err(|e| e.to_string())
                 };
                 let image = match source.as_ref() {
@@ -138,11 +167,36 @@ impl Worker {
                     state.reserve(kind, source.as_deref());
                     current
                 };
+                trace::event(
+                    trace::Category::Presentation,
+                    "browser.image_result",
+                    |fields| {
+                        fields.str(
+                            "outcome",
+                            if !current {
+                                "superseded"
+                            } else if image.is_ok() {
+                                "ready"
+                            } else {
+                                "failed"
+                            },
+                        );
+                    },
+                );
                 if current {
                     // Wake before a bounded send so a full reply queue can always drain.
                     context.request_repaint();
                     let memory = worker_staging
                         .track(image.as_ref().map_or(0, PreparedPreview::retained_bytes));
+                    let _publish = trace::scope_with(
+                        trace::Category::Coordinator,
+                        "browser.image_reply_send",
+                        |fields| {
+                            fields
+                                .u64("capacity", REPLY_CAPACITY as u64)
+                                .str("measurement", "host_wait");
+                        },
+                    );
                     if replies
                         .send(Reply {
                             path: request.path,
@@ -159,6 +213,7 @@ impl Worker {
                 }
             }
         });
+        spawned.expect("start browser loader thread");
         Self {
             state,
             cache,
@@ -221,9 +276,7 @@ impl Worker {
         state.wanted.retain(|path, _| paths.contains(path));
         state.reserve(self.kind, self.cache.as_deref());
     }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
+    pub fn stop(&self) {
         let mut state = self.state.0.lock().unwrap();
         state.stop = true;
         state.requests.clear();
@@ -232,12 +285,27 @@ impl Drop for Worker {
         self.state.1.notify_one();
     }
 }
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
 
 fn load(
     kind: Kind,
     cache: Option<&Cache>,
     path: &Path,
 ) -> foveonic::source::Result<PreparedPreview> {
+    let _scope = trace::scope_with(trace::Category::Cpu, "browser.prepare_preview", |fields| {
+        fields.str("source", &path.to_string_lossy()).str(
+            "kind",
+            if kind == Kind::Thumbnail {
+                "thumbnail"
+            } else {
+                "preview"
+            },
+        );
+    });
     let preview = match kind {
         Kind::Thumbnail => {
             match cache

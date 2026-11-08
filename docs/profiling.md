@@ -1,21 +1,21 @@
 ---
-summary: "Measure completed full processing and warm native feedback with explicit modes, JSON context and separate validation."
+summary: "Capture native application behavior with shared Perfetto traces and compare explicit Off baselines, aggregate benchmarks and separate numerical checks."
 kind: how-to
 ---
 
 # Profiling
 
-The [requirements](./specs/profiling.md) distinguish three modes:
+The [shared diagnostic requirements](./specs/performance-diagnostics.md) define native captures. The [processing profile requirements](./specs/profiling.md) also cover the aggregate reports used by existing scientific harnesses. Keep their output formats and measurement costs distinct.
 
-| Mode | What it records | Scheduling |
+| Mode | Shared native capture | Scheduling |
 | --- | --- | --- |
-| `off` | No optional core/GUI reports | Normal |
-| `wall` | Current host stages, lifecycle/frame/callback observations and engine activity | No profiling-only waits or repaint requests |
-| `gpu` | Wall observations plus supported GPU-pass timestamps | Existing timestamp resolution adds synchronization; diagnostic only |
+| `off` | No optional trace | Normal baseline |
+| `wall` | Host scopes, task flows, cache/I/O observations, delivery and resource counters | No profiling-only GPU waits |
+| `gpu` | Wall observations plus supported device timestamp observations | Queries resolve after normal completion |
 
-Use CLI `--profile wall` or `--profile gpu`. For the GUI, set `FOVEONIC_PROFILE=wall` or `gpu` before startup; the default is `off`. GPU diagnostics fail explicitly if timestamps are unavailable. These replace bare CLI `--profile` and the old GUI timing/GPU flags.
+The GUI defaults to Off. Start a bounded capture from Settings → Diagnostics, or set `FOVEONIC_PROFILE=wall` or `gpu` for startup capture. Saving produces `trace.pftrace`, `manifest.json` and `summary.json` through the same SDK-backed Perfetto recorder for manual and scripted runs. Console output remains ordinary text. The active implementation and pending acceptance checks are tracked in the [diagnostics plan](../plans/performance-diagnostics.md).
 
-Reports are JSON lines with `foveonic_profile: 1`, `event`, `mode`, `synchronized`, and `data`. Other stderr remains ordinary text. The core owns host/GPU stage vectors and engine activity; frontend reports add source, settings, execution and revision context. Loading appears in its own event, not in every warm render. GUI request settings may contain unresolved camera defaults; processing reports contain the selected WB/mode and controls. Derived camera tables are reproduced from the recorded source, not dumped into logs.
+Existing headless examples retain their declared aggregate JSON reports and CLI `--profile` or `--mode` options. Some explicitly synchronized GPU diagnostic routes remain useful for isolated pass measurements. They do not describe the synchronization behavior of shared native capture. Their relative host intervals cannot be placed on a common timeline across independent runs.
 
 ## Shared build artifacts
 
@@ -29,7 +29,7 @@ Build with `cargo build --release -p foveonic --example profile_pipeline`. Use a
 target/release/examples/profile_pipeline INPUT.x3f .local/profile-method-a \
   --warm 5 --wb Sunlight --mode Standard --reconstruction --profile wall \
   > .local/profile-method-a.jsonl
-python3 scripts/profiling/summarize.py .local/profile-method-a.jsonl
+python3 scripts/profiling/summarize.py --input-kind benchmark-json .local/profile-method-a.jsonl
 ```
 
 The runner shares the normal photographic option parser, so new algorithm controls should be added there once. Each iteration executes the complete selected final recipe from the decoded source, without an interactive retained boundary. Its first iteration is cold; warm repetitions are separate in the summary. GPU initialization is outside render intervals, and source file-cache state is uncontrolled. Choose enough repetitions for the actual comparison; one method/recipe per dataset is easiest to interpret.
@@ -72,48 +72,125 @@ python3 scripts/profiling/resources.py \
 
 The macOS recorder starts only its own headless process, preserves raw `vmmap` snapshots, and samples outside render intervals. Run it separately from acceptance timings, builds and other measured renders. Peak physical footprint includes driver resources. The allocation window limits queued allocation traffic, not resident memory. Fresh sessions retain checkpoints while stateless renders do not, so compare completed and released states separately. The switch route loads all sources before measurement and does not emulate retaining the previous displayed photo during a transition.
 
-## Native feedback
+## Manual native capture
 
-Coordinate GPU work and pointer focus with the owner first. In one terminal:
+Coordinate GPU work and pointer focus with the owner first. In Settings → Diagnostics, choose whether to include available GPU timestamps, press Start, reproduce the interaction and optionally add a named Mark. Press Stop and save… and choose a parent folder. The app stays open while the bounded capture is saved in a unique child folder. `FOVEONIC_DIAGNOSTICS_DIR` can select that parent folder for a controlled launch. An active or starting capture also saves on orderly application exit. Without a configured parent, exit saves under the platform temporary directory in `foveonic-captures/`. Closing during an already-requested save waits for its completion.
+
+Before each app launch, the maintained launchers check actual executables for another Foveonic instance, compiler/build or measured workload. An existing app from another checkout also blocks the run. Resolve the competing work before retrying. The workload monitor continues through the owned app's lifetime. Any observed competing workload marks timing invalid separately from behavioral correctness. `--no-monitor` on the scenario runner also marks timing invalid, rather than treating an unchecked run as uncontended.
+
+The maintained native launcher supplies isolated preferences, build/input identities and workload observations. It uses the app's capture controller and does not record a second event stream:
 
 ```sh
 python3 scripts/profiling/native.py record \
   --binary target/release/Foveonic.app/Contents/MacOS/foveonic-gui \
-  --fixture INPUT.x3f --directory .local/native-method-a --mode wall
+  --fixture INPUT.x3f --directory .local/native-method-a --mode wall \
+  --trace-processor PATH_TO_LOCAL_TRACE_PROCESSOR
 ```
 
-The recorder starts only its own app with isolated preferences, explicit mode, no smoke automation and no repaint override. It starts the workload monitor before the app, records raw stderr and observations, and stops both owned processes on exit. Its manifest includes binary and fixture hashes, plus a fingerprint of nonignored Rust, WGSL, Cargo and bundled asset inputs at recording time. The fingerprint does not prove the binary was built from those inputs and excludes ignored generated inputs. Ctrl-C stops the recorded app, not an existing owner process.
+The controlled launcher uses a unique `record-…` temporary cache namespace by default and records it in `launch.json`. Use `--cache-namespace NAME` for explicit reuse of one validated component. It does not use or clear the owner's normal cache. Starting a capture inside an ordinary running app keeps that app's existing cache unchanged.
 
-Set up the desired source, full-quality controls, window geometry, navigator/scopes and view scale. Warm up first and retain screenshots/settings evidence. Supply actual screen coordinates for the desired slider; they are not guessed or embedded in the tool:
+Use the app's Stop and save… action to save while continuing to work, or close the recorded app normally to save on exit. The launcher keeps `launch.json`, raw `stdout.txt` and `stderr.txt`, and shared captures under `captures/`. It stops only its own app and monitor. Ctrl-C terminates that owned app and preserves partial artifacts. Forced termination cannot turn an unsaved recording into a complete capture. The source fingerprint describes checkout inputs at launch, not proof of the loaded binary. Capture manifests distinguish an on-disk executable hash from loaded-image attestation.
+
+Set up the source, controls, window geometry, navigator/scopes and view scale. Supply actual screen coordinates for a physical macOS pointer drag:
 
 ```sh
 python3 scripts/profiling/native.py drag --directory .local/native-method-a \
   --start 1414 --end 1532 --y 805 --steps 61 --seconds 2 --label detail-up
-python3 scripts/profiling/summarize.py .local/native-method-a/stderr.jsonl \
-  --pointers .local/native-method-a/pointer.jsonl
 ```
 
-Coordinates above are illustrative, not portable across layouts. Keep warm-up pointer records separate from measured ones. Run matched before/after repeats with GPU timestamps disabled; review raw overlap records and final-current images. Memory sampling, such as `vmmap -summary PID`, belongs after timed interactions and settlement. The workload monitor catches known commands, not all system GPU use.
+Coordinates are illustrative. External `pointer.jsonl` records dispatch evidence on its own clock. They are not merged into the trace as precise screen-presentation timestamps. Keep warm-up actions separate from measured ones. Memory sampling such as `vmmap -summary PID` belongs after timed interactions and settlement. The workload monitor detects known commands, not every competing GPU workload.
 
-## Interpret results
+## Scripted native scenarios
 
-Browse and Import processing use the same profiling mode as interactive rendering. `source_load` and `export` records identify batch work with `frontend: "batch"`. They include cache/original input classification and the export's existing host/GPU stage timings. `batch_photo` reports the whole photo operation, including source loading, original copying in Import, output publication and history. Whole-photo time can include pauses for interactive work. Nested stage durations overlap and must not be added to that total.
+The runner extends the existing opt-in native smoke driver. It launches the actual app and uses existing browser commands, edit descriptors and egui pointer dispatch. Each step labels `direct-command` versus `input-dispatch` coverage. These are not physical mouse tests. Native runs support one Draft photograph or one through eight Thumb photographs, matching the product's multi-photo overview policy. Use the headless editing harness for multi-photo Draft experiments.
 
-Host times are wall durations, including driver work or waits where applicable; they are not CPU-active measurements. Nested spans are not additive. GPU timestamps cover passes, not implicit resource initialization or inter-pass queue delays. Wall time minus GPU time is not pure queue waiting. Allocation/transfer totals are not memory residency. Repeated passes aggregate by stage with sample counts and totals per profile, not list position.
+Supply an existing `profile_editing` case array containing `source` and optional serialized `settings`, or repeat `--source INPUT.x3f` for camera defaults:
 
-Native receipt, callback encoding and callback gaps do not establish screen scanout. External pointer/pipe timestamps select interaction windows but do not provide precise event-to-screen latency. Keep fresh full-processing costs separate from warm session feedback: a cached edit can skip the denoiser entirely. Summaries aggregate a supplied dataset; compare methods in separate datasets and use raw source/settings context when interpreting interactive sweeps.
+```sh
+python3 scripts/profiling/scenarios.py \
+  --binary target/release/Foveonic.app/Contents/MacOS/foveonic-gui \
+  --cases CASES.json --directory .local/native-warm-edit \
+  --scenario warm-edit --count 8 --quality thumb --mode wall \
+  --trials 3 --repeats 5 --trace-processor PATH_TO_LOCAL_TRACE_PROCESSOR
+```
 
-Run portable tool tests with `python3 -m unittest discover -s scripts/profiling -p 'test_*.py'`. No dashboard, tracing service or installation is required.
+The destination must be new. Inputs are hard-linked into each owned trial folder so recipes can be staged without modifying caller sidecars or copying RAW payloads. Source and destination must support hard links. The manifest records the selected inputs, recipes, hashes, hardware, quality, cache setup and automation coverage.
+
+| Scenario | Measured actions after setup |
+| --- | --- |
+| `initial` | Select the declared group with processing state reset and disk state as found in the isolated namespace |
+| `warm-disk` | Select the group after local decoded inputs are ready, with processing state reset |
+| `prefetched-selection` | Wait for idle Thumb preparation of ready neighbors, then select the set without clearing retained processing state and repeat exposure edits |
+| `warm-edit` | Initial selection followed by repeated relative exposure edits |
+| `cached-switch` | Cached selection changes, removal and re-addition around a pending edit |
+| `rapid-supersession` | Repeated edits without waiting for each intermediate result |
+| `memory-pressure` | Apply the existing memory-cache preference, then repeat unique exposure edits |
+
+`--rapid-edits`, `--pressure-mib`, `--repeats`, `--step-timeout` and `--timeout` control these existing actions. A single active image and device are set up before capture. Input hashing warms the OS filesystem cache, so `initial` does not claim a cold storage device. Warm disk means a ready local decoded entry, not a retained GPU checkpoint. Actual payload reads establish which input path ran.
+
+`prefetched-selection` requires at least two Thumb photographs and enabled disk and memory caches large enough for the declared set. All photographs must appear in the render worker's retained-source snapshot before selection. The active native session may lend its immutable decoded source without being replaced. The measured selection must not read original or decoded payloads. This scenario validates foreground reuse after prework, independently of the time and resources spent preparing the set. Use `--memory-cache-bytes` to declare retained-memory capacity separately from `--disk-cache-bytes`. The workload key verifies the effective application settings.
+
+Each run uses a unique `FOVEONIC_DIAGNOSTICS_CACHE_NAMESPACE` by default, isolated from the owner's normal temporary cache. `--cache-namespace NAME` explicitly reuses a validated single-component namespace for controlled trials. The runner does not clear the global cache. A new staged source path may still require a new entry, so interpret reuse from the recorded identity and reads rather than the namespace name alone.
+
+Each trial saves the same shared capture files as manual recording, plus `evidence/scenario-result.json` and raw console output. The parent `regression.json` aggregates matched trial results. Use a separate new directory with `--mode off` for the baseline. Off results contain elapsed group measurements without a trace. Keep these results distinct from Wall/GPU attribution. Fresh numerical equality is not inferred from native frame/settings checks. Associate the same fixture/recipe manifest with a separate headless cached-versus-fresh verification outside timing.
+
+The [implementation plan](../plans/performance-diagnostics.md) records the native scenario, smoke, numerical and overhead checks. Physical manual-control verification remains pending desktop availability. Portable tests alone do not establish native behavior or latency.
+
+## Compare controlled Off baselines
+
+New scenario reports include one matched-workload key derived from ordered RAW hashes, declared recipe hashes, actual initial settings/scales, case parameters, recorded host hardware and measurement setup. Staged paths, task revisions and build identities do not define the work. The runner rejects mixed trial keys and preserves a failed report. Full initial settings and per-trial build/artifact identities remain in the existing results.
+
+Run matched baseline and candidate scenarios in separate new directories with `--mode off`, repeated trials and the monitor enabled. Compare their reports:
+
+```sh
+python3 scripts/profiling/compare.py \
+  .local/baseline/regression.json .local/candidate/regression.json \
+  --output .local/comparison.json
+```
+
+The command requires complete behavioral success, checked/uncontended timing for every trial, identical workload keys and matching action groups. It reports median and nearest-rank p95 deltas by action, with sample counts and preserved report/build/artifact identities. Wall/GPU runs, failed or partial trials, mixed inputs/settings and contended or unmonitored timings are rejected. Reports created before workload keys were recorded are not accepted.
+
+Without a budget it reports deltas without a regression verdict. An explicit `--max-regression-percent 10` checks both median and p95 against a caller-selected 10% maximum increase. `--budget warm-edit=5` overrides the limit for that action. Limits are examples, not recommended thresholds. A budget violation returns a nonzero status after emitting the comparison. Choose budgets from controlled repeated variability and review the raw trials. These samples do not establish statistical significance.
+
+Hardware matching includes the recorded host descriptor and actual application adapter, backend, vendor, device and related hardware fields from the native result. Window and viewport geometry are not yet recorded in this key. Match those and other operating conditions separately when making a performance claim. No additional app geometry or capture work is introduced by this comparison command.
+
+## Capture an existing smoke suite
+
+Existing opt-in smoke modes also use the shared startup recorder. Add `FOVEONIC_PROFILE=wall` or `gpu` to an existing smoke invocation. After its original assertions and optional final hold complete, the driver saves to `FOVEONIC_GUI_SMOKE_DIR/capture` before closing. Off runs preserve their ordinary screenshot/check behavior without starting a recorder.
+
+```sh
+FOVEONIC_GUI_SMOKE_DIR="$PWD/.local/smoke-smart-trace" \
+FOVEONIC_GUI_SMOKE_SMART=1 FOVEONIC_PROFILE=wall \
+target/release/Foveonic.app/Contents/MacOS/foveonic-gui INPUT.x3f
+```
+
+Use each suite's existing fixture and setup requirements. Capture does not broaden its assertions or impose a different photo-completion order. `smoke.step` records suite, target, mode, begin and checked phases. Checked frames retain original delivered identities separately from presentation revision. The analyzer requires all declared checks and the terminal `smoke.completed` marker. It preserves intentional pending-preview checks rather than requiring every target to have an idle worker.
+
+`smoke.tick` scopes identify driver work, with screenshot PNG encoding under `smoke.artifact.png`. These smoke intervals include existing screenshot readback and artifact work, so use the named scenarios or Off comparisons for latency measurements. A fatal assertion after App construction preserves an active smoke capture during unwinding, emits `smoke.failed` and records the failure in the manifest. This failure-only path waits for the existing background save after the measured interaction has failed. The analyzer reports behavioral failure even if no step marker was reached or trace saving completed successfully. External termination and startup failures before App construction can still prevent a save.
+
+## Analyze a shared capture
+
+Open `trace.pftrace` in the Perfetto viewer for interactive scopes, threads, task flows and counters. Use a separately acquired, explicit local [Trace Processor](https://perfetto.dev/docs/reference/trace-processor-cli) executable for machine analysis. Normal runs do not download or install it:
+
+```sh
+python3 scripts/profiling/trace_analysis.py \
+  .local/native-warm-edit/trial-00/capture \
+  --trace-processor PATH_TO_LOCAL_TRACE_PROCESSOR
+```
+
+The analyzer preserves its SQL, CSV results and tool stderr under `analysis/`, records the tool version/hash and attaches results to `summary.json`. `analysis/scope-hierarchy.json` retains recorded slice parents, depth, ancestor names and process/thread metadata. These are instrumented scope relationships, not sampled function stacks. The compact summary groups inclusive elapsed stages by exact task/photo lineage and GPU pass durations by node/submission/clock. Nested stage totals remain nonadditive. It checks expected photo/task/revision identities, actual scale, desired-work/progress settlement and original versus local RAW payload reads. Every current photo must also have a matching native encoding event at the requested scale, including an old task reused by cached switching. Per-photo lifecycle observations distinguish recorded queue residence, render elapsed time, request-to-UI latency and receipt-to-encoding delay without adding overlapping measures. Preview and metadata reads remain separate storage kinds. Cached image reuse can have no new receipt event, so the report does not invent one.
+
+First-current and all-current observations, whole-group completion, per-photo median/tail values, task outcomes and counter peaks use the recorded common host clock. Original delivered task/revision/photo identities remain distinct from later presentation revisions. Draw milestones refer to native command encoding, not physical screen presentation. Node identity is present when execution knows the graph node.
+
+A successful save sets `complete`, not loss-free validity. Incremental descriptors refresh every second so recent ring-buffer data can still be decoded after overflow. Overwritten captures remain invalid for complete-work or latency claims. The analyzer must find Trace Processor buffer statistics and inspect nonzero data-loss/error records, per-buffer overwritten/discarded data and explicit emission-transition drops. SDK service-lifetime discard warnings stay visible and cannot independently identify loss in this session. Check `validity`, `behavior_valid` and any separate GPU query status. A manual recording has no invented scenario pass/fail result.
+
+GPU observations retain raw ticks, period, clock ID, submission and known task/node provenance. Unavailable calibration remains explicit. Query starts, resolutions, pending work, drops and failures describe GPU observation completeness separately from host trace validity. The report retains every unresolved query identity and groups status by purpose, so completed current images cannot hide an auxiliary Scopes or Navigator tail. Stopping a capture can naturally cut that tail. Aggregate GPU completeness remains false without adding a GPU wait to finish the recording. Host scopes are elapsed intervals, not CPU-active samples. Nested or parallel scopes cannot be added. Retrospective elapsed observations use their explicit `start_ns`, `end_ns` and `duration_ns` fields. GPU times are not moved onto fabricated host positions, and wall time minus GPU duration is not a measurement of queue waiting.
+
+Use `python3 scripts/profiling/summarize.py --input-kind benchmark-json REPORT.jsonl` for a declared aggregate headless report. It summarizes that dataset without converting independent relative clocks into a shared timeline. Shared captures use `trace_analysis.py`. Run portable tool checks with `python3 -m unittest discover -s scripts/profiling -p 'test_*.py'`.
 
 ## Capture an early loading stall
 
-Run the current app with wall profiling and redirect stderr to a local file:
-
-```sh
-FOVEONIC_PROFILE=wall cargo run --release -p foveonic-gui 2> target/interactive-profile.log
-```
-
-Launch the executable directly through Cargo so its environment and stderr stay attached to the terminal. Use Browse or Import normally and quit after reproducing the stall. Ordinary build messages may share this file with the marked JSON records. `selection` reports the start and recipe-ready delay before image submission. `worker_started` reports queue delay. `source_load.input` distinguishes `decoded-cache` from `original`, with separate cached identity lookup, header, payload read/checksum and camera-metadata timings. Existing processing and presentation events cover the remaining path. Nested durations overlap. Logging remains opt-in and creates no profiling-only GPU waits.
+Set `FOVEONIC_PROFILE=wall` on a direct native launch, or use `native.py record --mode wall`, before reproducing the loading problem. Startup capture uses the same controller. Stop and save from Settings while the app remains open. Task admission, source access and image delivery can then be queried from the shared trace. For a later loading stall, start a manual capture before opening the folder. Console redirection alone does not save a trace.
 
 ## Headless browser CPU work
 
@@ -127,9 +204,11 @@ Run `cargo test --release -p foveonic-gui batch_progress_profile -- --ignored --
 
 ## Startup host work
 
-With `FOVEONIC_PROFILE=wall`, the GUI emits `startup` records for App construction and the first update. Construction begins after eframe has created the window and device. Its nested host spans separate GPU pipeline creation including the existing validation-scope completion from bundled calibration-map parsing and total engine initialization. These spans overlap and must not be added. The first update is not a presentation or scanout measurement. Wall mode adds no profiling-only GPU waits. Use an isolated native launch and retain the executable and source hashes with the raw JSON.
+Startup observations begin after eframe creates the native window and device. The shared capture records App construction and later update work when recording is active. Existing engine-initialization spans distinguish pipeline creation and calibration-map preparation. Nested host spans overlap and must not be added. Capture-start readiness bounds what can be observed, so startup capture does not imply coverage before the recorder becomes active. The first update is not a screen-presentation measurement.
 
 ## Cached multi-photo edits and host scheduling
+
+Named Thumb quality follows the application policy: Classic uses one-quarter dimensions, while Merrill and Quattro use one-eighth. Explicit `--scale-divisor` requests retain their numeric divisor. Mixed-family runs report each photograph's resolved working scale separately.
 
 Build the maintained harness once in optimized mode. Use the same executable and distinct originals for each schedule. The example below uses shell placeholders for original paths:
 
@@ -141,7 +220,7 @@ target/release/examples/profile_editing .local/editing-profile/serial.jsonl \
   --quality thumb --workers 1 --repeats 7 --verify PHOTO_A.x3f PHOTO_B.x3f
 target/release/examples/profile_editing .local/editing-profile/concurrent.jsonl \
   --quality thumb --workers 2 --repeats 7 --verify PHOTO_A.x3f PHOTO_B.x3f
-python3 scripts/profiling/summarize.py .local/editing-profile/serial.jsonl
+python3 scripts/profiling/summarize.py --input-kind benchmark-json .local/editing-profile/serial.jsonl
 ```
 
 Add up to the intended real photo-set size. The runner rejects repeated canonical paths and existing report files. It loads each original and warms one retained session on its own executor. Executors share compiled kernels and the ordered device queue. A fixed Rayon pool schedules complete renders with the requested host concurrency. Each measured edit alternates exposure by ±0.25 EV around the supplied base, or chroma reconstruction strength between 1 and 2 with `--edit noise`. Warmup sets chroma to zero for the latter. Optional photographic CLI controls follow `--`. Use `--sidecars` to require each saved recipe and `--gui-analysis` to match the GUI’s automatic-analysis request. Use `--sweep` for unique exposure values instead of alternating two values. Named quality choices map to sensor divisors 1, 2, 4 and 8. `--scale-divisor N` accepts any positive power of two. Reports record requested and effective divisors with the exact settings.
@@ -173,11 +252,4 @@ The ignored `decode_cache::tests::parallel_prefetch_throughput_preserves_exact_s
 
 Every photo reports its host start/end relative to its edit group. Whole-group completion and first-photo completion measure throughput and initial feedback separately. Existing device-wide completion waits may include other executors' work, so individual concurrent durations are not isolated GPU costs. Host concurrency does not implement stage-major scheduling across photographs. Use this baseline to justify any later executor/submission changes.
 
-For a host timeline, export one complete capture and open it in a Chrome-trace-compatible viewer:
-
-```sh
-python3 scripts/profiling/timeline.py .local/editing-profile/wall.jsonl \
-  .local/editing-profile/host-trace.json
-```
-
-Photo tracks show executed nodes with operation, publication, existing wait and retirement durations in their details. Node timestamps use each profile's host origin within its group. Groups are placed consecutively with a synthetic 1 ms gap, rather than pretending their independent clocks include report-writing and verification time. GPU pass durations remain in the raw report and summaries. They do not have a shared host-clock origin and are not plotted on this timeline.
+Use the shared native trace for a causal application timeline. Aggregate headless report timestamps retain their own group origins. They are not exported with synthetic placement between groups. GPU pass durations in aggregate reports remain isolated diagnostic measurements with their declared synchronization cost.

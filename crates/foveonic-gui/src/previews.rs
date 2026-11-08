@@ -2,6 +2,7 @@
 
 use crate::{preview_image::PreparedPreview, viewport, worker::Frame};
 use eframe::{egui, egui_wgpu, wgpu};
+use foveonic::diagnostics as trace;
 use foveonic::{
     decode_cache::Cache, image::ImageTexture, preview::Preview, render::Settings, source::Metadata,
 };
@@ -24,6 +25,7 @@ const READY_CAPACITY: usize = 1;
 
 #[derive(Clone)]
 struct Job {
+    diagnostic_task: crate::timing::DeliveredTask,
     epoch: u64,
     calibration_signature: Option<String>,
     path: PathBuf,
@@ -50,6 +52,7 @@ pub struct Ready {
 }
 pub struct Previews {
     render_state: egui_wgpu::RenderState,
+    cache: Arc<Cache>,
     epoch: u64,
     invalid_paths: HashSet<PathBuf>,
     pending: Arc<(Mutex<Pending>, Condvar)>,
@@ -70,12 +73,14 @@ impl Previews {
     }
     pub fn new(rs: egui_wgpu::RenderState, context: egui::Context, cache: Arc<Cache>) -> Self {
         let render_state = rs.clone();
+        let policy = cache.clone();
         let pending = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let worker = pending.clone();
         let (tx, replies) = mpsc::sync_channel(READY_CAPACITY);
         let staging = crate::display_image::Staging::default();
         let worker_staging = staging.clone();
-        std::thread::spawn(move || {
+        let builder = std::thread::Builder::new().name("rendered-previews".into());
+        let spawned = builder.spawn(move || {
             loop {
                 let job = {
                     let mut state = worker.0.lock().unwrap();
@@ -90,7 +95,28 @@ impl Previews {
                     state.revision = state.revision.wrapping_add(1);
                     job
                 };
+                let _context = trace::enabled().then(|| {
+                    trace::enter(crate::timing::context_for(
+                        job.diagnostic_task.id,
+                        job.diagnostic_task.revision,
+                        &job.path,
+                        "preview_generation",
+                    ))
+                });
+                let _job =
+                    trace::scope_with(trace::Category::Presentation, "preview.job", |fields| {
+                        fields
+                            .str("source", &job.path.to_string_lossy())
+                            .u64("presentation_revision", job.revision)
+                            .u64("epoch", job.epoch);
+                    });
                 let result = cache.background(|| {
+                    if !cache
+                        .permits_preview_storage(&job.settings, &job.metadata)
+                        .unwrap_or(false)
+                    {
+                        return None;
+                    }
                     // A newer frame can replace this job while it waits for foreground work.
                     {
                         let state = worker.0.lock().unwrap();
@@ -100,9 +126,15 @@ impl Previews {
                                 .as_ref()
                                 .is_some_and(|j| j.revision > job.revision)
                         {
+                            trace::event(
+                                trace::Category::Coordinator,
+                                "preview.superseded",
+                                |_| {},
+                            );
                             return None;
                         }
                     }
+                    let _generate = trace::scope(trace::Category::Cpu, "preview.generate");
                     let preview = downsample(&rs, &job.source).ok()?;
                     let prepared = PreparedPreview::new(
                         Preview {
@@ -115,7 +147,8 @@ impl Previews {
                         true,
                     )
                     .ok()?;
-                    let _ = cache.save_preview(
+                    let _persist = trace::scope(trace::Category::Cache, "preview.persist_request");
+                    let persisted = cache.save_preview(
                         &job.path,
                         &job.settings,
                         &job.metadata,
@@ -125,10 +158,25 @@ impl Previews {
                         },
                         job.calibration_signature.as_deref(),
                     );
+                    trace::event(trace::Category::Cache, "preview.persist_result", |fields| {
+                        fields.bool("api_ok", persisted.is_ok());
+                    });
                     Some(prepared)
+                });
+                trace::event(trace::Category::Presentation, "preview.result", |fields| {
+                    fields.bool("ready", result.is_some());
                 });
                 if let Some(image) = result {
                     let memory = worker_staging.track(image.retained_bytes());
+                    let _send = trace::scope_with(
+                        trace::Category::Coordinator,
+                        "preview.reply_send",
+                        |fields| {
+                            fields
+                                .str("measurement", "host_wait")
+                                .u64("capacity", READY_CAPACITY as u64);
+                        },
+                    );
                     if tx
                         .send(Ready {
                             epoch: job.epoch,
@@ -152,8 +200,10 @@ impl Previews {
                 state.revision = state.revision.wrapping_add(1);
             }
         });
+        spawned.expect("start rendered-previews thread");
         Self {
             render_state,
+            cache: policy,
             epoch: 0,
             invalid_paths: HashSet::new(),
             pending,
@@ -221,7 +271,13 @@ impl Previews {
     /// Keep one replaceable pending whole-image job. Diagnostics never become
     /// photographic thumbnails, even when they are displayed in the navigator.
     pub fn update(&mut self, frame: Option<&Frame>, busy: bool, context: &egui::Context) {
-        let Some(frame) = frame.filter(|f| photographic(f)) else {
+        let Some(frame) = frame.filter(|f| {
+            photographic(f)
+                && self
+                    .cache
+                    .permits_preview_storage(&f.artifact.settings, &f.artifact.metadata)
+                    .unwrap_or(false)
+        }) else {
             if self.wanted.is_some() {
                 self.resource_revision = self.resource_revision.wrapping_add(1);
             }
@@ -240,6 +296,7 @@ impl Previews {
             self.resource_revision = self.resource_revision.wrapping_add(1);
             self.wanted = Some((
                 Job {
+                    diagnostic_task: frame.diagnostic_task,
                     epoch: self.epoch,
                     calibration_signature: frame.calibration_signature.clone(),
                     path: frame.path.clone(),
@@ -292,6 +349,9 @@ fn scaled_texture(
     space: foveonic::image::Space,
     side: u32,
 ) -> wgpu::Texture {
+    let _scope = trace::scope_with(trace::Category::Gpu, "preview.render_texture", |fields| {
+        fields.u64("maximum_side", u64::from(side));
+    });
     let extent = [source.width(), source.height()];
     let scale = (side as f32 / extent[0].max(extent[1]) as f32).min(1.);
     let size = extent.map(|v| (v as f32 * scale).round().max(1.) as u32);
@@ -332,6 +392,7 @@ fn downsample_texture(
     source: &wgpu::Texture,
     space: foveonic::image::Space,
 ) -> Result<Preview, String> {
+    let _scope = trace::scope(trace::Category::Cpu, "preview.downsample_readback");
     let extent = [source.width(), source.height()];
     let target = scaled_texture(rs, source, space, PREVIEW_SIDE);
     let size = [target.width(), target.height()];
@@ -362,14 +423,12 @@ fn downsample_texture(
         target.size(),
     );
     rs.queue.submit(Some(encoder.finish()));
-    let (tx, rx) = mpsc::channel();
-    buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    rs.device.poll(wgpu::Maintain::Wait);
-    rx.recv()
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    {
+        let _wait = trace::scope_with(trace::Category::Gpu, "preview.readback_wait", |fields| {
+            fields.str("measurement", "host_wait");
+        });
+        foveonic::map_readback(&rs.device, &buffer).map_err(|e| e.to_string())?;
+    }
     let color_space = foveonic::color_space::TiffColorSpace::ProPhotoRgb;
     let matrix = color_space.transform(foveonic::image::ColorSpace::Srgb);
     let rgb = {

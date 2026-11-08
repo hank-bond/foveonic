@@ -7,6 +7,8 @@ implementation: incomplete
 
 # Interactive rendering
 
+The [implementation architecture map](../interactive-rendering-architecture.md) describes current ownership, request flow and distributed policy. The requirements here remain the behavior contract.
+
 ## Requirements
 
 - Slider-to-image feedback **must** be the priority; some delay switching photos is acceptable. Measure completed input-to-image latency and UI frame stalls separately from submission and scope latency.
@@ -28,6 +30,8 @@ implementation: incomplete
 The editor owns authored settings and selection. The render coordinator owns requested work, per-target generations and completion state. The worker owns numerical execution and processing resources. Immutable completions must not overwrite authored settings. A multi-edit updates its desired target set atomically and must preserve work for other selected photographs when one changes.
 
 Cancellation is advisory. Admission must reject incompatible or out-of-order completions even when a cancelled job finishes. Cache admission and current-view admission are separate decisions. Crop/rotation and memory-configuration changes must preserve matching pixel work. Before and inspection are distinct purposes, while scopes and picks identify their input image. Active feedback receives priority while other selected targets make progress during continuous editing. After input stops, every selected target must settle on its latest requested state.
+
+Completion classification must explicitly distinguish reusable pixels, per-photo result feedback and delivery to the active view or an overview tile. The UI applies those decisions without repeating their compatibility conditions. The existing coordinator owns exact settlement, source identity and admitted revision ordering. Improvements to this path should preserve the current scheduling and cache owners and be validated in small usable checkpoints before a broader orchestration migration.
 
 Use existing Rust worker/channel primitives. Test the observed completion-order, target-removal, Before-cancellation and continuous-input cases with a deterministic fake executor, then validate real GPU delivery. The first version does not require a generic actor framework, additional runtime, parallel GPU executor or speculative recovery system.
 

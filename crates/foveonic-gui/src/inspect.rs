@@ -317,7 +317,7 @@ pub fn preview_quality(
 ) -> bool {
     use crate::preferences::PreviewMode;
     let mut changed = false;
-    let explanation = "Fast uses half the sensor width and height. Draft uses one quarter and Thumb one eighth. Smart starts with Fast and switches to Full above 100% for detail. Every mode runs the selected processing controls; exports use Full.";
+    let explanation = "Fast uses half the sensor width and height. Draft uses one quarter. Thumb uses one eighth on Merrill and Quattro, and one quarter on Classic. Smart starts with Fast and switches to Full above 100% for detail. Every mode runs the selected processing controls; exports use Full.";
     widgets::button_group(ui, |ui| {
         widgets::centered_control_row(ui, |ui| {
             ui.label("Preview");

@@ -10,6 +10,7 @@ mod chromaticity;
 mod comparison_view;
 mod controls;
 mod crop_tool;
+mod diagnostics;
 mod display;
 mod display_image;
 mod editor;
@@ -36,6 +37,7 @@ mod previews;
 mod processing;
 mod progress;
 mod render_coordinator;
+mod render_delivery;
 mod rotate_tool;
 mod scopes;
 mod sections;
@@ -72,6 +74,7 @@ struct Opening {
 
 struct App {
     context: egui::Context,
+    diagnostics: diagnostics::Controller,
     noise_calibration: noise_calibration::State,
     comparison_selection: Option<viewport_selection::Request>,
     edit_selection: viewport_selection::Selection,
@@ -122,7 +125,63 @@ struct App {
     last_frame: Option<std::time::Instant>,
     startup_ready: Option<std::time::Instant>,
 }
+impl Drop for App {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            if let Some(directory) = std::env::var_os("FOVEONIC_GUI_SMOKE_DIR") {
+                self.diagnostics
+                    .save_smoke_failure(PathBuf::from(directory).join("capture"));
+            }
+        } else if self.diagnostics.save_on_exit_enabled() {
+            let state = self.diagnostic_state();
+            self.diagnostics.set_end_state(state);
+            if let Err(error) = self.diagnostics.save_on_exit() {
+                eprintln!("Cannot save diagnostic capture on exit: {error}");
+            }
+        }
+    }
+}
 impl App {
+    fn diagnostic_hardware(&self) -> serde_json::Value {
+        let adapter = self.render_state.adapter.get_info();
+        serde_json::json!({"adapter":adapter.name,"vendor":adapter.vendor,"device":adapter.device,
+            "device_type":format!("{:?}",adapter.device_type),"backend":format!("{:?}",adapter.backend),
+            "gpu_timestamps_available":timing::gpu_available(),"os":std::env::consts::OS,"arch":std::env::consts::ARCH})
+    }
+    fn diagnostic_state(&self) -> serde_json::Value {
+        let mut photos = self.multi_edit.retained_paths();
+        if let Some(path) = &self.selected {
+            if !photos.contains(path) {
+                photos.push(path.clone());
+            }
+        }
+        let photos: Vec<_> = photos
+            .iter()
+            .map(|path| {
+                let settings = if self.selected.as_ref() == Some(path) {
+                    Some(&self.settings)
+                } else {
+                    self.sidecars
+                        .requested_settings(path)
+                        .or_else(|| self.multi_edit.settings(path))
+                };
+                serde_json::json!({"source":path,
+                    "photo":timing::context_for(0,0,path,"snapshot").photo,
+                    "settings":settings})
+            })
+            .collect();
+        serde_json::json!({"workspace_mode":if self.browser.import_mode {"import"} else {"browse"},
+            "active_photo":self.selected,"targets":self.edit_selection.paths(),"photos":photos,
+            "settings":self.settings,"preview_policy":self.preferences.preview_quality,
+            "displayed":self.frame.as_ref().map(|frame|serde_json::json!({"source":frame.path,
+                "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
+                "presentation_revision":frame.revision,"artifact":frame.artifact.name,
+                "scale":frame.artifact.settings.working_scale.divisor(),"purpose":frame.diagnostic_task.purpose})),
+            "output":self.output,"rendition":format!("{:?}",self.before.active),
+            "render_pending":self.worker.busy(),"disk_cache":self.preferences.decode_cache,
+            "memory_cache_bytes":self.preferences.memory_cache_bytes,"multi_edit_limit":self.preferences.multi_edit_limit,
+            "hardware":self.diagnostic_hardware()})
+    }
     fn multi_photo_overview(&self) -> bool {
         multi_photo_overview(&self.viewport_paths, self.selected.as_deref())
     }
@@ -155,19 +214,29 @@ impl App {
             .as_ref()
             .ok_or("wgpu renderer unavailable")?;
         timing::check_gpu_features(rs.device.features())?;
+        let mut diagnostics = diagnostics::Controller::default();
+        if let Some(requested) = timing::requested_mode() {
+            let mode = if requested == foveonic::diagnostics::Mode::Gpu && !timing::gpu_available()
+            {
+                foveonic::diagnostics::Mode::Wall
+            } else {
+                requested
+            };
+            diagnostics.start(mode, serde_json::json!({"entry":"environment",
+                "adapter":rs.adapter.get_info().name,"gpu_timestamps_available":timing::gpu_available()}))?;
+        }
         timing::emit(
             "session",
-            serde_json::json!({"frontend":"gui","adapter":rs.adapter.get_info().name,"gpu_supported":rs.adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY),"gpu_enabled":rs.device.features().contains(wgpu::Features::TIMESTAMP_QUERY)}),
+            || serde_json::json!({"frontend":"gui","adapter":rs.adapter.get_info().name,"gpu_supported":rs.adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY),"gpu_enabled":rs.device.features().contains(wgpu::Features::TIMESTAMP_QUERY)}),
         );
         let display = display::Host::new(cc)?;
-        timing::emit(
-            "display",
+        timing::emit("display", || {
             serde_json::json!({
                 "format": format!("{:?}", rs.target_format),
                 "encoding": format!("{:?}", display.target),
                 "managed": display.target.managed(),
-            }),
-        );
+            })
+        });
         viewport::install(rs);
         widgets::install_style(&cc.egui_ctx);
         if smoke::screenshot_active() {
@@ -190,6 +259,10 @@ impl App {
         };
         let overrides = [settings.white_balance.clone(), settings.color_mode.clone()];
         let mut preferences = preferences::Preferences::load(cc.storage);
+        let smoke = smoke::Smoke::from_env();
+        if let Some(smoke) = &smoke {
+            smoke.configure_cache(&mut preferences.decode_cache);
+        }
         editor::direct_color::configure(&cc.egui_ctx, preferences.direct_color);
         if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
             preferences.preview_quality = preferences::PreviewMode::Smart;
@@ -221,6 +294,7 @@ impl App {
         );
         let mut app = Self {
             context: cc.egui_ctx.clone(),
+            diagnostics,
             noise_calibration,
             comparison_selection: None,
             edit_selection: Default::default(),
@@ -242,7 +316,8 @@ impl App {
             capture: capture::Loader::new(cc.egui_ctx.clone(), worker.cache.clone()),
             sidecars: sidecars::Session::new(
                 cc.egui_ctx.clone(),
-                std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_none(),
+                std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_none()
+                    || std::env::var_os("FOVEONIC_GUI_SCENARIO_MANIFEST").is_some(),
                 worker.cache.clone(),
             ),
             worker,
@@ -271,7 +346,7 @@ impl App {
             srgb_target: rs.target_format.is_srgb(),
             display,
             render_state: rs.clone(),
-            smoke: smoke::Smoke::from_env(),
+            smoke,
             last_frame: None,
             startup_ready: None,
         };
@@ -295,13 +370,17 @@ impl App {
         );
         app.viewport.zoom_snap = app.preferences.zoom_snap;
         app.update_memory();
+        if timing::requested_mode().is_some() {
+            let state = app.diagnostic_state();
+            app.diagnostics.set_start_state(state);
+        }
         if let Some((path, mode)) = app.preferences.startup_request(path) {
             app.folder_loader.request(path, mode);
         }
         if let Some(began) = startup_began {
             timing::emit(
                 "startup",
-                serde_json::json!({"phase":"app_constructed", "elapsed_ms": began.elapsed().as_secs_f64() * 1000., "profile": startup_profile}),
+                || serde_json::json!({"phase":"app_constructed", "elapsed_ms": began.elapsed().as_secs_f64() * 1000.}),
             );
             app.startup_ready = Some(std::time::Instant::now());
         }
@@ -390,6 +469,7 @@ impl App {
                     .source_origin(&path)
                     .is_none_or(|origin| origin == frame.origin)
         });
+        let retain_current = self.selected.as_ref() == Some(&path) && cached_selection;
         if let Some(previous) = &self.selected {
             self.worker.retire_before(previous);
         }
@@ -407,7 +487,7 @@ impl App {
         self.selected = Some(path);
         self.settings = cached_settings.unwrap_or_else(|| Settings::new("", ""));
         self.revision += 1;
-        if !self.multi_photo_overview() {
+        if !self.multi_photo_overview() && !retain_current {
             self.worker.clear();
         }
         if !cached_selection {
@@ -418,6 +498,13 @@ impl App {
         self.output = "final".into();
         self.channel = -1;
         self.frame = cached_frame;
+        if cached_selection {
+            if let Some(frame) = &mut self.frame {
+                // Reusing pixels starts a new presentation, while their delivered
+                // task identity continues to describe the original work.
+                frame.revision = self.revision;
+            }
+        }
         self.detail = None;
         self.smart.reset();
         self.scope_key = None;
@@ -523,6 +610,10 @@ impl App {
     }
 
     fn receive(&mut self, ctx: &egui::Context) {
+        let _scope = foveonic::diagnostics::scope(
+            foveonic::diagnostics::Category::Coordinator,
+            "ui.receive",
+        );
         self.browser.receive(ctx);
         while let Ok(preview) = self.previews.replies.try_recv() {
             if self.previews.accepts(&preview)
@@ -582,7 +673,17 @@ impl App {
                     continue;
                 }
             };
+            timing::task(
+                &reply.stamp,
+                "reply_dequeued",
+                || serde_json::json!({"mailbox":"image_replies"}),
+            );
             let completion = if reply.exported.is_some() {
+                timing::task(
+                    &reply.stamp,
+                    "completed",
+                    || serde_json::json!({"frozen_export":true,"success":reply.result.is_ok()}),
+                );
                 self.exporting = false;
                 render_coordinator::Completion::Current
             } else {
@@ -590,30 +691,13 @@ impl App {
             };
             let current = completion == render_coordinator::Completion::Current;
             self.sync_render_progress((current && reply.result.is_err()).then_some(reply.revision));
-            if completion == render_coordinator::Completion::Removed {
-                continue;
+            let delivery = self.image_delivery(completion, &reply);
+            if delivery.retain_pixels {
+                if let Ok(Some(frame)) = &reply.result {
+                    self.worker.retain_pixels(&reply.stamp, frame);
+                }
             }
-            if reply.exported.is_none()
-                && reply
-                    .result
-                    .as_ref()
-                    .ok()
-                    .and_then(Option::as_ref)
-                    .is_some_and(|frame| {
-                        frame.calibration_signature.as_deref()
-                            != self
-                                .noise_calibration
-                                .selected(self.preferences.noise_profile)
-                                .as_ref()
-                                .map(|p| p.signature())
-                    })
-            {
-                continue;
-            }
-            if let Ok(Some(frame)) = &reply.result {
-                self.worker.retain_pixels(&reply.stamp, frame);
-            }
-            if current {
+            if delivery.update_photo {
                 self.multi_edit.complete(
                     &reply.path,
                     reply.metadata.clone(),
@@ -622,84 +706,52 @@ impl App {
                     &reply.settings,
                 );
             }
-            let current_overview = reply.rendition == editor::Rendition::Current
-                && reply.stamp.target.purpose == render_coordinator::Purpose::Current;
-            if self.selected.as_ref() != Some(&reply.path)
-                || (current_overview
-                    && (self.before.active != editor::Rendition::Current
-                        || self.output != "final"
-                        || self.comparison.requested()))
-            {
-                if current_overview && self.edit_selection.contains(&reply.path) {
-                    match reply.result {
-                        Ok(Some(frame)) => {
-                            let geometry =
-                                self.multi_edit
-                                    .settings(&frame.path)
-                                    .is_some_and(|settings| {
-                                        smart::same_geometry(settings, &frame.requested)
-                                    });
-                            if geometry && self.worker.admit_image(&reply.stamp, &frame) {
-                                if let Some((thumbnail, preview)) = self.previews.snapshot(&frame) {
-                                    self.browser.rendered_texture(
-                                        frame.path.clone(),
-                                        frame.revision,
-                                        thumbnail,
-                                        preview,
-                                    );
-                                }
-                                self.multi_edit.retain(frame);
-                            }
-                        }
-                        Err(error) if current => {
-                            self.fail(format!("{}: {error}", reply.path.display()))
-                        }
-                        _ => {}
-                    }
+            let destination = match delivery.destination {
+                Ok(destination) => destination,
+                Err(rejection) => {
+                    timing::task(
+                        &reply.stamp,
+                        "image_rejected",
+                        || serde_json::json!({"reason":rejection.reason()}),
+                    );
+                    continue;
                 }
-                continue;
-            }
-            if reply
-                .result
-                .as_ref()
-                .ok()
-                .and_then(Option::as_ref)
-                .is_some_and(|frame| frame.framing_preview != self.framing_preview_active())
-            {
-                continue;
-            }
-            if reply.rendition != self.before.active {
-                continue;
-            }
-            if !current
-                && !reply
-                    .result
-                    .as_ref()
-                    .ok()
-                    .and_then(Option::as_ref)
-                    .is_some_and(|frame| {
-                        !self.exporting
-                            && self.selected.as_ref() == Some(&frame.path)
-                            && self.output == frame.output
-                            && smart::same_geometry(&frame.requested, &self.view_settings())
-                            && (!self.comparison.requested() || frame.comparison.is_some())
-                            && self
-                                .frame
-                                .as_ref()
-                                .is_none_or(|displayed| frame.revision > displayed.revision)
-                            && (frame.artifact.settings.preview_region.is_none()
-                                || self
-                                    .detail
-                                    .as_ref()
-                                    .is_none_or(|displayed| frame.revision > displayed.revision))
-                    })
-            {
-                continue;
-            }
+            };
             if let Ok(Some(frame)) = &reply.result {
                 if !self.worker.admit_image(&reply.stamp, frame) {
                     continue;
                 }
+            }
+            if destination == render_delivery::Destination::Overview {
+                match reply.result {
+                    Ok(Some(frame)) => {
+                        timing::image_received(
+                            &reply.stamp,
+                            current,
+                            frame.queued_at,
+                            frame.milliseconds,
+                        );
+                        timing::task(&reply.stamp, "image_accepted", || {
+                            serde_json::json!({"current":current,
+                            "destination":"overview","scale":frame.artifact.settings.working_scale.divisor(),
+                            "artifact":frame.artifact.name,"extent":frame.texture.description().extent})
+                        });
+                        if let Some((thumbnail, preview)) = self.previews.snapshot(&frame) {
+                            self.browser.rendered_texture(
+                                frame.path.clone(),
+                                frame.revision,
+                                thumbnail,
+                                preview,
+                            );
+                        }
+                        self.multi_edit.retain(frame);
+                    }
+                    Err(error) if current => {
+                        self.fail(format!("{}: {error}", reply.path.display()))
+                    }
+                    _ => {}
+                }
+                continue;
             }
             if current {
                 if let Some(metadata) = reply.metadata {
@@ -723,16 +775,17 @@ impl App {
                         self.before
                             .retain_current(&mut self.frame, &mut self.detail);
                     }
-                    timing::event(frame.revision, "image_received");
-                    if self.smoke.is_some() {
-                        eprintln!("{}: {:.0} ms", frame.artifact.name, frame.milliseconds);
-                    }
                     timing::image_received(
-                        frame.revision,
+                        &reply.stamp,
                         current,
                         frame.queued_at,
                         frame.milliseconds,
                     );
+                    timing::task(&reply.stamp, "image_accepted", || {
+                        serde_json::json!({"current":current,
+                        "scale":frame.artifact.settings.working_scale.divisor(),"artifact":frame.artifact.name,
+                        "extent":frame.texture.description().extent})
+                    });
                     if let Some((thumbnail, preview)) = self.previews.snapshot(&frame) {
                         self.browser.rendered_texture(
                             frame.path.clone(),
@@ -864,6 +917,9 @@ impl App {
         self.worker.submit_scopes(worker::ScopeRequest {
             key,
             image: (**image).clone(),
+            photo: foveonic::diagnostics::photo_id(&frame.path),
+            parent_render_task: frame.diagnostic_task.id,
+            parent_render_revision: frame.diagnostic_task.revision,
         });
         self.scope_key = Some(key);
     }
@@ -882,6 +938,8 @@ impl App {
         );
     }
     fn toolbar(&mut self, ui: &mut egui::Ui) -> bool {
+        let _scope =
+            foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.toolbar");
         let mut changed = false;
         self.import
             .prepare_browse(&self.browser, self.selected.as_deref());
@@ -1099,6 +1157,7 @@ impl App {
         }
     }
     fn tools(&mut self, ui: &mut egui::Ui) -> bool {
+        let _scope = foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.editor");
         let mut changed = false;
         let mut movement = None;
         egui::ScrollArea::vertical()
@@ -1189,6 +1248,8 @@ impl App {
         mapping
     }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
+        let _scope =
+            foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.viewport");
         let mut changed = false;
         let overview = self.multi_photo_overview();
         let background_width = 2. * widgets::ControlSize::Medium.side()
@@ -1420,7 +1481,7 @@ impl App {
                 frame.comparison.as_ref().map(|c| c.texture.clone()),
                 mapping,
                 self.srgb_target,
-                frame.revision,
+                frame.diagnostic_identity(mapping.input),
             );
             if let Some(detail) = self.smart_detail(ui.ctx().pixels_per_point()) {
                 self.viewport.show_region(
@@ -1430,7 +1491,7 @@ impl App {
                     frame.display_window(false),
                     mapping,
                     self.srgb_target,
-                    detail.revision,
+                    detail.diagnostic_identity(false),
                 );
             }
         } else if let Some(path) = &self.selected {
@@ -1511,6 +1572,7 @@ impl eframe::App for App {
         if let Some(smoke) = &mut self.smoke {
             smoke.inject_direct_color(input, ctx);
         }
+        timing::pointer_input(input, photo_tools::selects_photos(ctx));
         self.capture_actions(ctx, input);
     }
 
@@ -1519,10 +1581,12 @@ impl eframe::App for App {
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.diagnostics.poll(ctx);
+        let _update = timing::Span::new(self.revision, "ui_update");
         if let Some(ready) = self.startup_ready.take() {
             timing::emit(
                 "startup",
-                serde_json::json!({"phase":"first_update", "since_constructed_ms": ready.elapsed().as_secs_f64() * 1000.}),
+                || serde_json::json!({"phase":"first_update", "since_constructed_ms": ready.elapsed().as_secs_f64() * 1000.}),
             );
         }
         self.activity.observe(
@@ -1579,7 +1643,21 @@ impl eframe::App for App {
                             foveonic::source::ProcessingFamily::from_camera_model(model)
                         }),
                 );
-                if !self.multi_edit.multiple() {
+                let retained_current = self.frame.as_ref().is_some_and(|frame| {
+                    frame.path == *path
+                        && frame.rendition == editor::Rendition::Current
+                        && frame.output == "final"
+                        && self.output == "final"
+                        && frame.framing_preview == self.framing_preview_active()
+                        && smart::same_edits(&frame.requested, &self.view_settings())
+                        && self
+                            .worker
+                            .cache
+                            .source_origin(path)
+                            .is_none_or(|origin| origin == frame.origin)
+                        && self.worker.is_settled_and_admitted(frame)
+                });
+                if !self.multi_edit.multiple() && !retained_current {
                     self.submit(None);
                 }
             }
@@ -1627,14 +1705,40 @@ impl eframe::App for App {
             .inner;
         let previous_gamut = self.preferences.display_gamut;
         let previous_limits = self.preferences.adaptive_tone_tuning;
-        application_settings::show(
+        let capture_action = application_settings::show(
             ctx,
             &mut self.settings_open,
             &mut self.preferences,
             &self.worker.cache,
             self.display.target.managed(),
             self.worker.memory_status(),
+            &mut self.diagnostics,
         );
+        if let Some(action) = capture_action {
+            let result = match action {
+                diagnostics::Action::Start(mode) => {
+                    let state = self.diagnostic_state();
+                    self.diagnostics
+                        .start(mode, serde_json::json!({"entry":"manual"}))
+                        .map(|()| self.diagnostics.set_start_state(state))
+                }
+                diagnostics::Action::Mark(label) => {
+                    self.diagnostics.mark(
+                        &label,
+                        serde_json::json!({"source":self.selected,"revision":self.revision}),
+                    );
+                    Ok(())
+                }
+                diagnostics::Action::StopSave(directory) => {
+                    let state = self.diagnostic_state();
+                    self.diagnostics.set_end_state(state);
+                    self.diagnostics.stop_to(directory)
+                }
+            };
+            if let Err(error) = result {
+                self.diagnostics.fail(error);
+            }
+        }
         application_settings::adaptive(ctx, &mut self.preferences);
         self.browser
             .set_thumbnail_budget(self.preferences.thumbnail_cache_bytes());
@@ -1788,8 +1892,13 @@ impl eframe::App for App {
             self.clear_selection();
         } else if let Some(request) = self.comparison_selection.take() {
             let clicked = request.path.clone();
-            self.edit_selection
+            let selection_changed = self
+                .edit_selection
                 .apply(request, self.preferences.multi_edit_limit);
+            timing::emit("viewport.selection.applied", || {
+                serde_json::json!({"source":clicked,"photo":foveonic::diagnostics::photo_id(&clicked),
+                    "changed":selection_changed,"targets":self.edit_selection.paths()})
+            });
             self.sync_multi_edit();
             let active = if self.edit_selection.contains(&clicked) {
                 Some(clicked)
@@ -1828,6 +1937,15 @@ impl eframe::App for App {
                 .cache
                 .prefetch_window(paths, self.selected.clone());
         }
+        let (_, preparation_paths) = self.worker.cache.preparation_window();
+        self.worker
+            .configure_preparation(worker::PreparationConfig {
+                recipes: self.sidecars.cached_recipes(&preparation_paths),
+                overrides: self.camera_overrides.clone(),
+                calibration: self
+                    .noise_calibration
+                    .selected(self.preferences.noise_profile),
+            });
         self.editor_ui.dialog(ctx, &mut self.preferences.editor);
         self.activity.show(ctx);
         if !self.multi_photo_overview() {
@@ -1844,12 +1962,6 @@ impl eframe::App for App {
             ctx,
         );
         self.update_memory();
-        if timing::enabled() {
-            timing::emit(
-                "ui_update",
-                serde_json::json!({"elapsed_ms":began.elapsed().as_secs_f64()*1000.}),
-            );
-        }
     }
 }
 fn multi_photo_overview(paths: &[PathBuf], active: Option<&std::path::Path>) -> bool {

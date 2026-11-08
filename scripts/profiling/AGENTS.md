@@ -12,10 +12,13 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 
 ### Source files
 
-- **[native.py](./native.py)** Record an owned native GUI session and inject explicit macOS pointer drags without changing app scheduling.
+- **[compare.py](./compare.py)** Compare matched, uncontended native Off reports with explicit optional regression budgets.
+- **[file_hash.py](./file_hash.py)** Hash profiling inputs and tools without retaining their complete file contents.
+- **[native.py](./native.py)** Record shared native captures and inject explicit macOS pointer drags without changing app scheduling.
 - **[resources.py](./resources.py)** Sample settled macOS memory at explicit boundaries in an owned headless render run.
-- **[summarize.py](./summarize.py)** Summarize native feedback and completed-processing JSON reports, keeping modes and stage domains separate.
-- **[timeline.py](./timeline.py)** Export multi-photo host node spans to a Chrome trace without inventing GPU start times.
-- **[watch_workloads.py](./watch_workloads.py)** Flag known executing build, test and measurement programs without interpreting shell text as GPU contention.
+- **[scenarios.py](./scenarios.py)** Run declared real-app diagnostic scenarios with isolated inputs and shared Perfetto artifacts.
+- **[summarize.py](./summarize.py)** Summarize declared aggregate benchmark JSON; native SDK captures use trace_analysis.py.
+- **[trace_analysis.py](./trace_analysis.py)** Query real Perfetto captures for loss, scenario correctness and shared-clock latency.
+- **[watch_workloads.py](./watch_workloads.py)** Check and record actual app, compiler and measurement processes that can contaminate timings.
 
 <!-- INDEX:END -->

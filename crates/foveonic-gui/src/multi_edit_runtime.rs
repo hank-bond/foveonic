@@ -721,6 +721,10 @@ impl crate::App {
     }
 
     pub(crate) fn sync_multi_edit(&mut self) {
+        let _scope = foveonic::diagnostics::scope(
+            foveonic::diagnostics::Category::Coordinator,
+            "ui.multi_sync",
+        );
         if self.multi_edit.sync(
             self.edit_selection.paths(),
             self.preferences.multi_edit_limit,

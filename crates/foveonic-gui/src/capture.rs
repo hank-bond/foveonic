@@ -1,6 +1,7 @@
 //! Shows capture details without waiting for rendering or publishing an older selection.
 
 use eframe::egui;
+use foveonic::diagnostics as trace;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -44,7 +45,8 @@ impl Loader {
     ) -> Self {
         let state = Arc::new((Mutex::new(State::default()), Condvar::new()));
         let slot = state.clone();
-        thread::spawn(move || {
+        let builder = thread::Builder::new().name("capture-metadata".into());
+        let spawned = builder.spawn(move || {
             loop {
                 let request = {
                     let (lock, wake) = &*slot;
@@ -57,19 +59,48 @@ impl Loader {
                     }
                     state.pending.take().unwrap()
                 };
+                let _context = trace::enabled().then(|| {
+                    trace::enter(crate::timing::context_for(
+                        0,
+                        request.generation,
+                        &request.path,
+                        "capture-metadata",
+                    ))
+                });
+                let _job = trace::scope_with(trace::Category::Cpu, "capture.job", |fields| {
+                    fields
+                        .str("source", &request.path.to_string_lossy())
+                        .u64("generation", request.generation);
+                });
                 let result = read(&request.path);
                 let mut state = slot.0.lock().unwrap();
+                let current = state.selected.as_ref() == Some(&request);
+                trace::event(trace::Category::Coordinator, "capture.result", |fields| {
+                    fields.str(
+                        "outcome",
+                        if state.stop {
+                            "stopped"
+                        } else if !current {
+                            "superseded"
+                        } else if result.is_ok() {
+                            "ready"
+                        } else {
+                            "failed"
+                        },
+                    );
+                });
                 if state.stop {
                     break;
                 }
                 // Returning to the same path is still a new selection. A path check
                 // alone would let an earlier load publish into that newer selection.
-                if state.selected.as_ref() == Some(&request) {
+                if current {
                     state.ready = Some(result);
                     context.request_repaint();
                 }
             }
         });
+        spawned.expect("start capture-metadata thread");
         Self {
             state,
             generation: 0,
@@ -88,6 +119,17 @@ impl Loader {
         });
         state.pending = state.selected.clone();
         state.ready = None;
+        if let Some(request) = &state.selected {
+            trace::event(
+                trace::Category::Coordinator,
+                "capture.requested",
+                |fields| {
+                    fields
+                        .str("source", &request.path.to_string_lossy())
+                        .u64("generation", request.generation);
+                },
+            );
+        }
         wake.notify_one();
     }
 

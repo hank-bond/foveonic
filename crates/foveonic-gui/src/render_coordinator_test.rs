@@ -33,10 +33,10 @@ fn removing_b_while_a_remains_active_rejects_b_from_the_same_cohort() {
     let a = desire(&mut coordinator, request("a.x3f", 10, 0.));
     let b = desire(&mut coordinator, request("b.x3f", 10, 0.));
     assert_eq!(coordinator.finish(&a), Completion::Current);
-    assert!(coordinator.admit(&a));
+    assert!(coordinator.admit(&a, &SourceOrigin::default()));
     coordinator.retain_overviews(&["a.x3f".into()], &[]);
     assert_eq!(coordinator.finish(&b), Completion::Removed);
-    assert!(!coordinator.admit(&b));
+    assert!(!coordinator.admit(&b, &SourceOrigin::default()));
     assert!(!coordinator.busy());
     assert_eq!(coordinator.desired(&a.target).unwrap().stamp, a);
 }
@@ -158,6 +158,38 @@ fn crop_and_rotation_keep_pixel_work_but_require_latest_composition_delivery() {
 }
 
 #[test]
+fn cached_images_require_the_exact_settled_and_admitted_delivery() {
+    let mut coordinator = RenderCoordinator::default();
+    let original = desire(&mut coordinator, request("a.x3f", 1, 0.));
+    assert!(!coordinator.is_settled_and_admitted(original.id, original.revision));
+    coordinator.finish(&original);
+    assert!(!coordinator.is_settled_and_admitted(original.id, original.revision));
+    assert!(coordinator.admit(&original, &SourceOrigin::default()));
+    assert!(coordinator.is_settled_and_admitted(original.id, original.revision));
+
+    let unchanged = desire(&mut coordinator, request("a.x3f", 2, 0.));
+    assert_eq!(unchanged, original);
+    assert!(coordinator.is_settled_and_admitted(original.id, original.revision));
+
+    let changed = desire(&mut coordinator, request("a.x3f", 3, 0.5));
+    assert!(!coordinator.is_settled_and_admitted(original.id, original.revision));
+    coordinator.finish(&changed);
+    assert!(coordinator.admit(&changed, &SourceOrigin::default()));
+    assert!(coordinator.is_settled_and_admitted(changed.id, changed.revision));
+
+    let mut composition = (*request("a.x3f", 4, 0.5)).clone();
+    composition.settings.rotation.degrees = 3.;
+    let composition = desire(&mut coordinator, Arc::new(composition));
+    assert_eq!(composition.id, changed.id);
+    assert!(!coordinator.is_settled_and_admitted(changed.id, changed.revision));
+    coordinator.finish(&composition);
+    assert!(coordinator.admit(&composition, &SourceOrigin::default()));
+    assert!(coordinator.is_settled_and_admitted(composition.id, composition.revision));
+    coordinator.clear();
+    assert!(!coordinator.is_settled_and_admitted(composition.id, composition.revision));
+}
+
+#[test]
 fn identical_intents_and_memory_observation_do_not_restart_settled_pixels() {
     let mut coordinator = RenderCoordinator::default();
     let original = request("a.x3f", 1, 0.);
@@ -193,7 +225,7 @@ fn replacement_plans_preserve_fair_progress_and_settle_every_latest_target() {
             );
         }
         assert_eq!(coordinator.finish(&running.stamp), Completion::Superseded);
-        assert!(coordinator.admit(&running.stamp));
+        assert!(coordinator.admit(&running.stamp, &SourceOrigin::default()));
     }
     assert_eq!(
         serviced,
@@ -207,7 +239,7 @@ fn replacement_plans_preserve_fair_progress_and_settle_every_latest_target() {
     let mut settled = Vec::new();
     while let Some(task) = cursor.next(&coordinator.plan()) {
         assert_eq!(coordinator.finish(&task.stamp), Completion::Current);
-        assert!(coordinator.admit(&task.stamp));
+        assert!(coordinator.admit(&task.stamp, &SourceOrigin::default()));
         settled.push(task.stamp.target.path.clone());
     }
     settled.sort();
@@ -220,9 +252,9 @@ fn late_progress_cannot_replace_an_already_admitted_newer_result() {
     let mut coordinator = RenderCoordinator::default();
     let old = desire(&mut coordinator, request("a.x3f", 10, 0.));
     let new = desire(&mut coordinator, request("a.x3f", 11, 0.5));
-    assert!(coordinator.admit(&new));
-    assert!(!coordinator.admit(&old));
-    assert!(!coordinator.admit(&new));
+    assert!(coordinator.admit(&new, &SourceOrigin::default()));
+    assert!(!coordinator.admit(&old, &SourceOrigin::default()));
+    assert!(!coordinator.admit(&new, &SourceOrigin::default()));
 }
 
 #[test]
@@ -338,4 +370,33 @@ fn identical_delivery_coalescing_keeps_a_newly_resolved_source_identity() {
     );
     assert_ne!(replacement, same);
     assert!(coordinator.busy());
+}
+
+#[test]
+fn wrong_source_cannot_advance_admission_or_settle_the_replacement() {
+    let mut coordinator = RenderCoordinator::default();
+    let old_origin = SourceOrigin::default();
+    let old_request = request("a.x3f", 1, 0.);
+    let target = Target::of(&old_request);
+    coordinator.desire(old_request, Some(old_origin.clone()), Instant::now());
+    let old = coordinator.desired(&target).unwrap().stamp.clone();
+    let new_origin = SourceOrigin::default();
+    coordinator.desire(
+        request("a.x3f", 2, 0.),
+        Some(new_origin.clone()),
+        Instant::now(),
+    );
+    let latest = coordinator.desired(&target).unwrap().stamp.clone();
+
+    assert_eq!(coordinator.finish(&old), Completion::Superseded);
+    assert!(!coordinator.admit(&old, &old_origin));
+    assert!(coordinator.busy());
+    assert!(!coordinator.admit(&latest, &old_origin));
+    assert!(
+        coordinator.admit(&latest, &new_origin),
+        "rejection must not consume the revision"
+    );
+    assert_eq!(coordinator.finish(&latest), Completion::Current);
+    assert!(!coordinator.busy());
+    assert!(coordinator.is_settled_and_admitted(latest.id, latest.revision));
 }

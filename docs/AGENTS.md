@@ -18,7 +18,8 @@ Give each requirement or fact one home and link to it from related documents. Re
 - **[fuji-rendering-research](./fuji-rendering-research.md)** _(reference)._ Film-rendering inspection connects Fujifilm DR metadata, simulation transforms and candidate X3F/DNG rendering approaches.
 - **[gui-screenshot](./gui-screenshot.md)** _(how-to)._ Explicitly refresh the README's lossless WebP screenshot from a fixed native GUI capture recipe and shared example-photo cache.
 - **[help-examples](./help-examples.md)** _(how-to)._ Download official photographs and explicitly render named comparisons whose PNGs are embedded in photographic help.
-- **[profiling](./profiling.md)** _(how-to)._ Measure completed full processing and warm native feedback with explicit modes, JSON context and separate validation.
+- **[interactive-rendering-architecture](./interactive-rendering-architecture.md)** _(explanation)._ Maps implemented editing, scheduling, cache ownership and delivery boundaries, including places where control policy is distributed.
+- **[profiling](./profiling.md)** _(how-to)._ Capture native application behavior with shared Perfetto traces and compare explicit Off baselines, aggregate benchmarks and separate numerical checks.
 - **[releases](./releases.md)** _(how-to)._ Configure Developer ID signing, review versioned changes, and manually publish the unnotarized macOS app from its draft GitHub Release.
 - **[render-resources](./render-resources.md)** _(reference)._ The render API returns owned full-sensor floating images with separate logical views, GPU texture preparation, and export consumers.
 - **[specs/](./specs/AGENTS.md)** Specifications record agreed application, graph, and output behavior independently of implementation progress.

@@ -1,4 +1,4 @@
-"""Record an owned native GUI session and inject explicit macOS pointer drags without changing app scheduling."""
+"""Record shared native captures and inject explicit macOS pointer drags without changing app scheduling."""
 
 import argparse
 import ctypes
@@ -7,11 +7,15 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
+import uuid
+
+from watch_workloads import require_quiet, concurrent_workloads
 
 
 def append_event(stream, **fields):
@@ -28,7 +32,7 @@ def drag_points(start, end, y, steps, seconds):
 
 def recording_environment(home, mode):
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith('FOVEONIC_GUI_SMOKE_') and k not in
+           if not k.startswith(('FOVEONIC_GUI_SMOKE_', 'FOVEONIC_GUI_SCENARIO_', 'FOVEONIC_DIAGNOSTICS_')) and k not in
            ['FOVEONIC_PROFILE', 'FOVEONIC_UI_TIMING', 'FOVEONIC_UI_GPU_PROFILE']}
     env.update(HOME=str(home), FOVEONIC_PROFILE=mode)
     return env
@@ -95,6 +99,10 @@ def workload_monitor(output, cancelled=lambda: False):
 
 
 def record(args):
+    namespace=getattr(args,'cache_namespace',None)
+    if namespace is None:namespace='record-'+uuid.uuid4().hex
+    if re.fullmatch(r'[A-Za-z0-9_-]{1,64}',namespace) is None:
+        raise ValueError('cache namespace must be one ASCII alphanumeric, dash or underscore component (up to 64 characters)')
     directory = args.directory.resolve()
     directory.mkdir(parents=True, exist_ok=False)
     home = directory / 'home'
@@ -121,36 +129,56 @@ def record(args):
         with workload_monitor(monitor_output, lambda: stopped) as monitor_tool:
             if stopped:
                 return
-            with (directory / 'stderr.jsonl').open('x') as events:
-                process = subprocess.Popen([str(binary), str(fixture)],
-                                           env=recording_environment(home, args.mode),
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                           text=True, bufsize=1)
+            capture_parent = directory / 'captures'
+            capture_parent.mkdir()
+            env = recording_environment(home, args.mode)
+            env['FOVEONIC_DIAGNOSTICS_DIR'] = str(capture_parent)
+            env['FOVEONIC_DIAGNOSTICS_CACHE_NAMESPACE'] = namespace
+            with (directory / 'stderr.txt').open('x') as errors, (directory / 'stdout.txt').open('x') as output:
+                preflight = require_quiet()
+                process = subprocess.Popen([str(binary), str(fixture)], env=env,
+                                           stdout=output, stderr=errors, start_new_session=True)
+                manifest = {'pid':process.pid,'binary':str(binary),'fixture':str(fixture),
+                            'binary_sha256':binary_hash,'source_sha256':source_hash,
+                            'source_tree_sha256':source_tree,
+                            'source_tree_scope':'nonignored Rust, WGSL, Cargo and bundled asset inputs',
+                            'workload_monitor':{'tool':str(monitor_tool),'output':str(monitor_output),'interval_seconds':.5},
+                            'home':str(home),'startup_mode':args.mode,'capture_directory':str(capture_parent),'cache_namespace':namespace,
+                            'smoke_enabled':False,'repaint_override':False,'preflight':preflight,
+                            'instructions':'Use native Stop/Save to keep working, or close normally to save on exit; captures use the shared SDK recorder.'}
+                (directory / 'launch.json').write_text(json.dumps(manifest,indent=2)+'\n')
+                print(json.dumps(manifest),flush=True)
                 try:
-                    if stopped:
-                        stop(None, None)
-                    manifest = {'pid': process.pid, 'binary': str(binary), 'fixture': str(fixture),
-                                'binary_sha256': binary_hash, 'source_sha256': source_hash,
-                                'source_tree_sha256': source_tree,
-                                'source_tree_scope': 'nonignored Rust, WGSL, Cargo and bundled asset inputs',
-                                'workload_monitor': {'tool': str(monitor_tool), 'output': str(monitor_output),
-                                                     'interval_seconds': .5},
-                                'home': str(home), 'started_monotonic_ns': time.monotonic_ns(),
-                                'mode': args.mode, 'smoke_enabled': False, 'repaint_override': False}
-                    (directory / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-                    print(json.dumps(manifest), flush=True)
-                    for line in process.stderr:
-                        append_event(events, line=line.rstrip('\n'))
+                    if stopped:stop(None,None)
                     process.wait()
                 except KeyboardInterrupt:
-                    stop(None, None)
+                    stop(None,None)
                 finally:
-                    if process.poll() is None:
-                        stop(None, None)
+                    if process.poll() is None:stop(None,None)
                     process.wait()
-                    append_event(events, kind='recorder_exit', returncode=process.returncode)
-                if not stopped and process.returncode:
-                    raise SystemExit(process.returncode)
+        contention = concurrent_workloads(monitor_output, owned_pids=[process.pid])
+        manifest.update(contention=contention, timing_valid=contention['checked'] and contention['uncontended'])
+        captures=[]
+        for saved in sorted(capture_parent.glob('*/manifest.json')):
+            capture=saved.parent
+            if not (capture/'trace.pftrace').is_file() or not (capture/'summary.json').is_file():continue
+            data=json.loads(saved.read_text())
+            data['application']['external_launch']=manifest
+            saved.write_text(json.dumps(data,indent=2)+'\n')
+            summary_path=capture/'summary.json'
+            summary=json.loads(summary_path.read_text())
+            summary.update(contention=contention,timing_valid=manifest['timing_valid'])
+            summary_path.write_text(json.dumps(summary,indent=2)+'\n')
+            captures.append(str(capture))
+            if getattr(args,'trace_processor',None):
+                from trace_analysis import analyze_capture
+                analyze_capture(capture,args.trace_processor)
+        manifest.update(returncode=process.returncode,captures=captures,capture_saved=bool(captures))
+        (directory/'launch.json').write_text(json.dumps(manifest,indent=2)+'\n')
+        if not stopped and process.returncode:raise SystemExit(process.returncode)
+        if not stopped and args.mode!='off' and not captures:
+            raise RuntimeError('no shared capture was saved; close normally or use native Stop/Save before quitting')
+
     except KeyboardInterrupt:
         pass
     finally:
@@ -160,7 +188,7 @@ def record(args):
 def drag(args):
     if sys.platform != 'darwin':
         raise RuntimeError('native pointer injection requires macOS')
-    manifest = json.loads((args.directory / 'manifest.json').read_text())
+    manifest = json.loads((args.directory / 'launch.json').read_text())
     pid = manifest['pid']
     command = subprocess.check_output(['ps', '-p', str(pid), '-o', 'comm='], text=True).strip()
     if command != manifest['binary']:
@@ -215,6 +243,8 @@ def main():
     capture.add_argument('--fixture', type=Path, required=True)
     capture.add_argument('--directory', type=Path, required=True)
     capture.add_argument('--mode', choices=['off', 'wall', 'gpu'], default='wall')
+    capture.add_argument('--trace-processor', type=Path, help='explicit local tool for authoritative saved-trace analysis')
+    capture.add_argument('--cache-namespace', help='explicit controlled reuse; default is a unique isolated record namespace')
     capture.set_defaults(run=record)
     pointer = commands.add_parser('drag')
     pointer.add_argument('--directory', type=Path, required=True)

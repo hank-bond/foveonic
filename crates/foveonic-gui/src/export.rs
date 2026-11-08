@@ -1,5 +1,6 @@
 //! Shares camera-choice resolution and Full photographic and DNG exports between interactive and batch workers.
 
+use foveonic::diagnostics as trace;
 use foveonic::{
     importing::ConflictPolicy,
     inspection::Content,
@@ -52,6 +53,11 @@ pub fn write(
     profile: &mut Profile,
     progress: impl Fn(foveonic::render::RenderProgress),
 ) -> foveonic::source::Result<()> {
+    let _export = trace::scope_with(trace::Category::Cpu, "export.write", |fields| {
+        fields
+            .str("destination", &export.path.to_string_lossy())
+            .str("format", export.format.extension());
+    });
     let mut settings = settings.clone();
     settings.processing_sections = export.sections;
     settings.tiff_color_space = export.tiff_color_space;
@@ -63,7 +69,7 @@ pub fn write(
     if !errors.is_empty() {
         return Err(errors.join("; ").into());
     }
-    foveonic::importing::write_output(&export.path, export.conflict, |temporary| {
+    let result = foveonic::importing::write_output(&export.path, export.conflict, |temporary| {
         match export.format {
             ExportFormat::Dng => {
                 foveonic::dng::write_source(
@@ -93,7 +99,11 @@ pub fn write(
             }
         }
         Ok(())
-    })
+    });
+    trace::event(trace::Category::Io, "export.result", |fields| {
+        fields.bool("success", result.is_ok());
+    });
+    result
 }
 
 /// Camera defaults fill missing choices only. Otherwise loading metadata

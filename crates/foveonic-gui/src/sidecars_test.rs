@@ -7,6 +7,39 @@ use std::{
     time::{Duration, Instant},
 };
 static NEXT: AtomicU64 = AtomicU64::new(1);
+
+#[test]
+fn idle_recipe_snapshot_uses_requested_then_saved_then_camera_defaults_without_io() {
+    let path = PathBuf::from("unavailable-card/photo.x3f");
+    let saved = Settings {
+        exposure: 1.,
+        ..Default::default()
+    };
+    let requested = Settings {
+        exposure: -1.,
+        ..Default::default()
+    };
+    let selection = || {
+        serde_json::from_value(serde_json::json!({
+            "properties":{}, "settings":saved, "thumbnail":null, "original_checksum":0,
+        }))
+        .unwrap()
+    };
+    let mut recipes = CachedRecipes {
+        defaults: Default::default(),
+        enabled: true,
+        recent: Default::default(),
+    };
+    assert_eq!(recipes.resolve(&path, selection()).unwrap(), saved);
+    recipes.recent.insert(path.clone(), requested.clone());
+    assert_eq!(recipes.resolve(&path, selection()).unwrap(), requested);
+    recipes.recent.clear();
+    recipes.enabled = false;
+    assert_eq!(
+        recipes.resolve(&path, selection()).unwrap(),
+        Settings::default()
+    );
+}
 struct Directory(PathBuf);
 impl Directory {
     fn new() -> Self {

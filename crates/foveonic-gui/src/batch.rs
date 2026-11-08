@@ -2,6 +2,7 @@
 
 use crate::export::{self, Export, ExportFormat};
 use eframe::egui;
+use foveonic::diagnostics as trace;
 use foveonic::{
     decode_cache::Cache,
     importing::{self, ConflictPolicy, Disposition, History, Identity, Record},
@@ -117,7 +118,8 @@ impl Worker {
         let directory = Arc::new(Mutex::new(None));
         let checked_directory = directory.clone();
         let mut engine = engine;
-        std::thread::spawn(move || {
+        let builder = std::thread::Builder::new().name("batch".into());
+        let spawned = builder.spawn(move || {
             loop {
                 let (scan, batch, directory) = {
                     let mut state = slot.0.lock().unwrap();
@@ -145,6 +147,22 @@ impl Worker {
                     (scan, batch, directory)
                 };
                 if let Some(path) = directory {
+                    let _context = trace::enabled().then(|| {
+                        trace::enter(trace::Context {
+                            task: 0,
+                            revision: 0,
+                            photo: 0,
+                            purpose: "destination_probe",
+                            node: None,
+                        })
+                    });
+                    let _probe = trace::scope_with(
+                        trace::Category::Io,
+                        "batch.destination_probe",
+                        |fields| {
+                            fields.str("path", &path.to_string_lossy());
+                        },
+                    );
                     let available = path.is_dir();
                     *checked_directory.lock().unwrap() = Some((path, available));
                 }
@@ -182,6 +200,7 @@ impl Worker {
                 context.request_repaint();
             }
         });
+        spawned.expect("start batch thread");
         Self {
             pending,
             progress,
@@ -242,6 +261,23 @@ fn scan_files(
     cache: &Cache,
     checkpoint: impl Fn(),
 ) -> Scanned {
+    let _context = trace::enabled().then(|| {
+        trace::enter(trace::Context {
+            task: 0,
+            revision: scan.generation,
+            photo: 0,
+            purpose: "import_scan",
+            node: None,
+        })
+    });
+    let _scan = trace::scope_with(trace::Category::Cpu, "batch.scan", |fields| {
+        fields
+            .u64("generation", scan.generation)
+            .u64("files", scan.files.len() as u64);
+        if let Some(path) = &scan.destination {
+            fields.str("destination", &path.to_string_lossy());
+        }
+    });
     let mut result = Scanned {
         generation: scan.generation,
         sources: HashMap::new(),
@@ -263,6 +299,17 @@ fn scan_files(
     };
     let mut ratings = HashMap::new();
     for path in scan.files {
+        let _context = trace::enabled().then(|| {
+            trace::enter(crate::timing::context_for(
+                0,
+                scan.generation,
+                &path,
+                "import_scan",
+            ))
+        });
+        let _photo = trace::scope_with(trace::Category::Cpu, "batch.scan_photo", |fields| {
+            fields.str("source", &path.to_string_lossy());
+        });
         checkpoint();
         let identity = match cache
             .import_identity(&path)
@@ -361,6 +408,11 @@ fn run_batch(
     context: &egui::Context,
     stop: impl Fn() -> bool,
 ) {
+    let _batch = trace::scope_with(trace::Category::Cpu, "batch.run", |fields| {
+        fields
+            .u64("photos", batch.photos.len() as u64)
+            .str("destination", &batch.destination.to_string_lossy());
+    });
     let result = (|| -> Result<()> {
         fs::create_dir_all(&batch.destination)?;
         let mut history = match batch.operation {
@@ -379,6 +431,22 @@ fn run_batch(
             .map(|photo| photo.path.clone())
             .collect();
         for photo in &batch.photos {
+            let purpose = if history.is_some() {
+                "batch_import"
+            } else {
+                "batch_export"
+            };
+            let _context = trace::enabled()
+                .then(|| trace::enter(crate::timing::context_for(0, 0, &photo.path, purpose)));
+            let _photo = trace::scope_with(trace::Category::Cpu, "batch.photo", |fields| {
+                fields
+                    .str("source", &photo.path.to_string_lossy())
+                    .str("operation", purpose)
+                    .str(
+                        "settings",
+                        &serde_json::to_string(&photo.settings).unwrap_or_default(),
+                    );
+            });
             let started = crate::timing::enabled().then(Instant::now);
             if stop() {
                 break;
@@ -442,16 +510,15 @@ fn run_batch(
                 )
             };
             if let Some(started) = started {
-                crate::timing::emit(
-                    "batch_photo",
+                crate::timing::emit("batch_photo", || {
                     serde_json::json!({
                         "source":photo.path,"destination":batch.destination,
                         "operation":if history.is_some(){"import"}else{"browse"},
                         "completed_ms":started.elapsed().as_secs_f64()*1000.,
                         "status":if result.is_ok(){"complete"}else{"error"},
                         "error":result.as_ref().err().map(ToString::to_string),
-                    }),
-                );
+                    })
+                });
             }
             let mut status = progress.lock().unwrap();
             status.completed += 1;
@@ -604,16 +671,15 @@ fn source_loaded(
             .load_timings()
             .iter()
             .any(|t| t.stage == "decoded cache read");
-        crate::timing::emit(
-            "source_load",
+        crate::timing::emit("source_load", || {
             serde_json::json!({
                 "frontend":"batch","source":path,"timings":source.load_timings(),
                 "camera":source.metadata.properties.get("CAMMODEL"),
                 "input":if cached {"decoded-cache"}else if copied.is_some(){"copied-original"}else{"original"},
                 "read_from":if cached {None}else{Some(copied.unwrap_or(path))},
                 "extent":[source.metadata.width,source.metadata.height],
-            }),
-        );
+            })
+        });
     }
 }
 
@@ -634,15 +700,14 @@ fn write_export(
         |_| {},
     );
     if let Some(started) = started {
-        crate::timing::emit(
-            "export",
+        crate::timing::emit("export", || {
             serde_json::json!({
                 "frontend":"batch","source":photo.path,"destination":output.path,
-                "format":output.format.extension(),"settings":photo.settings,"profile":profile,
+                "format":output.format.extension(),"settings":photo.settings,
                 "completed_ms":started.elapsed().as_secs_f64()*1000.,
                 "status":if result.is_ok(){"complete"}else{"error"},
-            }),
-        );
+            })
+        });
     }
     result
 }
