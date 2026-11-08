@@ -1,0 +1,75 @@
+{
+  "title": "Auto Exposure & Adaptive tone | sunlit metal latch",
+  "note": "Daylight WB | Standard | Noise 2 | Local highlight recovery. Rows: Adaptive Disabled / Natural. Columns: EV 0 / EV A / EV -2.",
+  "base_args": [
+    "--wb",
+    "Sunlight",
+    "--mode",
+    "Standard",
+    "--tone-method",
+    "universal",
+    "--tiff-color-space",
+    "srgb",
+    "--reconstruction",
+    "--highlight-mode",
+    "color-field-local"
+  ],
+  "variants": [
+    {
+      "label": "Disabled | EV 0",
+      "args": [
+        "--base-response",
+        "camera",
+        "--exposure",
+        "0"
+      ]
+    },
+    {
+      "label": "Disabled | EV A (-0.7EV)",
+      "args": [
+        "--base-response",
+        "camera",
+        "--auto-exposure",
+        "--auto-exposure-compensation",
+        "both"
+      ]
+    },
+    {
+      "label": "Disabled | EV -2",
+      "args": [
+        "--base-response",
+        "camera",
+        "--exposure",
+        "-2"
+      ]
+    },
+    {
+      "label": "Natural | EV 0",
+      "args": [
+        "--base-response",
+        "natural",
+        "--exposure",
+        "0"
+      ]
+    },
+    {
+      "label": "Natural | EV A (-0.7EV)",
+      "args": [
+        "--base-response",
+        "natural",
+        "--auto-exposure",
+        "--auto-exposure-compensation",
+        "both"
+      ]
+    },
+    {
+      "label": "Natural | EV -2",
+      "args": [
+        "--base-response",
+        "natural",
+        "--exposure",
+        "-2"
+      ]
+    }
+  ]
+}

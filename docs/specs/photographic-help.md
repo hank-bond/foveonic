@@ -19,6 +19,10 @@ implementation: conforming
 - Minimum/maximum comparisons **should** be used when informative; representative values or off/on comparisons **may** replace uninformative extremes.
 - Example crops **must** be reviewed before becoming application help assets. If existing sources do not demonstrate an effect clearly, request a suitable photograph from the owner rather than exaggerating or claiming a subtle difference is obvious.
 
+## Standalone comparisons
+
+The explicit comparison creator must also accept a source X3F and a JSON list of labelled rendering arguments for release illustrations. Shared arguments apply to every variant. Reuse the existing renderer, colour-profile conversion and common framing, without reading GUI edits. Freeze one renderer executable for each run. A grid may use ordinary row order or a clockwise progression across two complete rows. Save a labelled sRGB PNG outside application help assets. Generating a standalone comparison must not change checked-in help images.
+
 ## Popover presentation
 
 - Popover body text, notes, and captions **must** use the app's normal 13 pt body style. They **must not** use tiny footnote text.

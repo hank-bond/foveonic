@@ -12,6 +12,45 @@ import examples
 
 
 class ExampleTests(unittest.TestCase):
+    def test_standalone_comparison_keeps_render_settings_and_clockwise_order(self):
+        if importlib.util.find_spec('PIL') is None:
+            self.skipTest('Pillow is required only for explicit comparison rendering')
+        from PIL import Image, ImageCms
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255),
+                  (255, 255, 0), (0, 255, 255), (255, 0, 255)]
+        profile = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, renderer = root / 'source.x3f', root / 'renderer'
+            source.write_bytes(b'original')
+            renderer.write_bytes(b'frozen renderer')
+            settings, output = root / 'settings.json', root / 'comparison.png'
+            settings.write_text(json.dumps(dict(title='Test', base_args=['--wb', 'Sunlight'],
+                variants=[dict(label=str(i + 1), args=['--exposure', str(i)]) for i in range(6)])))
+
+            def render(command, **_):
+                self.assertEqual(command[2], str(source))
+                self.assertEqual(Path(command[0]).read_bytes(), b'frozen renderer')
+                self.assertEqual(command[4:6], ['--wb', 'Sunlight'])
+                Image.new('RGB', (8, 6), colors[int(command[-1])]).save(command[3], icc_profile=profile)
+
+            with patch.object(examples.subprocess, 'run', side_effect=render) as calls:
+                examples.compare(source, settings, renderer, output, 3, True, 80)
+                self.assertEqual(calls.call_count, 6)
+            with Image.open(output) as image:
+                self.assertTrue(image.info['icc_profile'])
+                pixels = list(image.getdata())
+                positions = []
+                for index, color in enumerate(colors):
+                    first = pixels.index(color)
+                    positions.append((first // image.width, first % image.width, index))
+                self.assertEqual([index for _, _, index in sorted(positions)], [0, 1, 2, 5, 4, 3])
+            self.assertEqual(source.read_bytes(), b'original')
+            self.assertEqual({p.name for p in root.iterdir()},
+                             {'source.x3f', 'renderer', 'settings.json', 'comparison.png'})
+        with self.assertRaises(ValueError):
+            examples.grid_order(5, 3, True)
+
     def test_manifests_reject_unsafe_names_and_invalid_comparisons(self):
         source = next(examples.CATALOG.glob('*/comparison.json'))
         manifest = json.loads(source.read_text())

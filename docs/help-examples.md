@@ -60,6 +60,25 @@ python3 scripts/help-examples/examples.py render highlight-correction --write
 
 This explicitly updates the comparison directory's PNGs. Review those changes before committing. The manifest records the source photograph, crop, image size, and processing arguments; Git tracks the manifest and PNGs together. Regenerate images when those rendering settings change. Correcting copy alone only requires rebuilding the app.
 
+## Standalone release comparisons
+
+The same tool accepts a source X3F and a JSON settings list without creating an application help example. Use Python with Pillow and LittleCMS available, and build the current renderer first:
+
+```sh
+cargo build --offline --release -p foveonic
+python3 scripts/help-examples/examples.py compare \
+  .local/example-photographs/sunlit-metal-latch.x3f \
+  scripts/help-examples/adaptive-exposure.json \
+  --columns 3 --tile-width 600 \
+  --output .local/release-comparisons/adaptive-exposure/comparison.png
+```
+
+The [Adaptive/Exposure preset](../scripts/help-examples/adaptive-exposure.json) supplies the six sunlit-latch settings. EV A uses the capture's inverse compensation, −0.70 EV. Disabled fills the top row and Natural the bottom row. Columns compare EV 0, EV A (-0.7EV), and EV −2.
+
+For another comparison, provide `title`, optional `note`, shared `base_args`, and a `variants` list. Each variant needs `label` and `args`, using the renderer's normal CLI options. Optional `crop` uses exclusive oriented-pixel bounds. By default the tool shows the full photograph, preserves its aspect ratio, and uses up to three columns in ordinary row order. `--clockwise` requires two complete rows. `--renderer` selects another built executable.
+
+Every variant uses the same frozen renderer, crop and display size. The tool checks matching rendered dimensions, converts the embedded profile to sRGB, then resizes for display. The final PNG is an 8-bit display comparison with an sRGB profile. Original photographs and GUI sidecars remain untouched, and temporary TIFFs are removed. Standalone generation does not update application assets.
+
 ## Build and check
 
 ```sh

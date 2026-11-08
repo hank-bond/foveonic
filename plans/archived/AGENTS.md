@@ -115,6 +115,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[release-0.5.0](./release-0.5.0.md)** _(archived)._ Clean up the shared photographic editor and prepare the local 0.5.0 feature release for review.
 - **[release-0.6.0](./release-0.6.0.md)** _(archived)._ Prepare the reviewed Merrill noise and banding feature set as a local release candidate.
 - **[release-0.6.0-final](./release-0.6.0-final.md)** _(archived)._ Review the combined editor, browser and Merrill changes and cut the signed 0.6.0 release.
+- **[release-0.7.0](./release-0.7.0.md)** _(archived)._ Records the verified 0.7.0 release and its standalone photographic comparison tooling.
 - **[release-0.7.1](./release-0.7.1.md)** _(archived)._ Record verified 0.7.1 publication with the appearance, processing and responsiveness fixes.
 - **[release-0.7.2](./release-0.7.2.md)** _(archived)._ Prepare, verify and publish the 0.7.2 Smart preview, Merrill editing and licensing release.
 - **[release-0.8.0](./release-0.8.0.md)** _(archived)._ Version 0.8.0 has a verified signed draft covering white balance, rotation and reduced RAW support.

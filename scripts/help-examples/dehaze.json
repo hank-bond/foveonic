@@ -1,0 +1,14 @@
+{
+  "title": "Dehaze | Merrill hazy coast",
+  "note": "Daylight WB | Standard | EV 0 | Adaptive disabled | Noise 2 | Local highlight recovery. Other settings are identical.",
+  "base_args": [
+    "--wb", "Sunlight", "--mode", "Standard",
+    "--tone-method", "universal", "--base-response", "camera", "--exposure", "0",
+    "--tiff-color-space", "srgb", "--reconstruction",
+    "--highlight-mode", "color-field-local"
+  ],
+  "variants": [
+    {"label": "Dehaze 0", "args": ["--dehaze", "0"]},
+    {"label": "Dehaze 100 | Auto colour", "args": ["--dehaze", "100", "--haze-color", "auto"]}
+  ]
+}

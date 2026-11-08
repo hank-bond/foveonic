@@ -1,0 +1,27 @@
+{
+  "title": "Universal saturation | Yellow flowers and stroller",
+  "note": "Daylight WB | Standard | EV A (-1 EV) | Adaptive disabled | Noise 2 | Local color-field recovery. Same 1840 x 1896 crop; saturation 100 is full slider strength.",
+  "crop": [1268, 51, 3108, 1947],
+  "base_args": [
+    "--wb", "Sunlight", "--mode", "Standard",
+    "--tone-method", "universal", "--base-response", "camera",
+    "--auto-exposure", "--auto-exposure-compensation", "both",
+    "--tiff-color-space", "srgb", "--reconstruction",
+    "--highlight-mode", "color-field-local",
+    "--saturation-method", "universal"
+  ],
+  "variants": [
+    {
+      "label": "Saturation 0",
+      "args": ["--universal-saturation", "0", "--prevent-color-clipping"]
+    },
+    {
+      "label": "Saturation 100 | Clipping protection On",
+      "args": ["--universal-saturation", "2", "--prevent-color-clipping"]
+    },
+    {
+      "label": "Saturation 100 | Clipping protection Off",
+      "args": ["--universal-saturation", "2", "--no-prevent-color-clipping"]
+    }
+  ]
+}

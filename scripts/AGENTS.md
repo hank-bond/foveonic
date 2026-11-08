@@ -13,7 +13,7 @@ Keep measurement orchestration outside the Rust processing and GUI layers. Do no
 ### Directories
 
 - **[classic/](./classic/AGENTS.md)** Classic experiment tools capture bounded reference implementation fixtures for signed processing operations.
-- **[help-examples/](./help-examples/AGENTS.md)** Python tooling explicitly renders manifest-driven help comparisons from the source cache maintained by Cargo.
+- **[help-examples/](./help-examples/AGENTS.md)** Python tooling renders photographic help and standalone comparison grids through the shared renderer.
 - **[profiling/](./profiling/AGENTS.md)** Profiling tools record owned native sessions, summarize shared JSON reports, and flag known overlapping workloads.
 
 ### Source files
