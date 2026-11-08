@@ -1,4 +1,4 @@
-//! Checks multiscale method switching, bypasses, native preview order, and shared export preparation.
+//! Checks noise method switching, scaled correction order and shared export preparation.
 
 use super::super::BuiltRecipe;
 use crate::{
@@ -490,21 +490,43 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
                 == dng.graph.nodes[other].operation.key("shared")
         );
     }
-    settings.working_scale = Scale::new(2).unwrap();
-    let fast = photographic(&engine, &source, &settings);
-    assert!(
-        position(&fast, |op| matches!(op, Operation::RowGuard(_)))
-            < position(&fast, |op| matches!(op, Operation::ReduceLayers { .. }))
-    );
-    let fast_bands = position(&fast, final_directional_banding);
-    assert!(
-        full.graph.nodes[local].operation.key("banding")
-            != fast.graph.nodes[fast_bands].operation.key("banding")
-    );
-    if let Operation::DirectionalBanding { prepared, .. } = &fast.graph.nodes[fast_bands].operation
-    {
-        assert_eq!(prepared.params().sampling[0], 2);
+    for rendering in [Rendering::Color, Rendering::Monochrome] {
+        settings.rendering = rendering;
+        for divisor in [2, 4, 8, 64] {
+            settings.working_scale = Scale::new(divisor).unwrap();
+            let reduced = photographic(&engine, &source, &settings);
+            let guard = position(&reduced, |op| matches!(op, Operation::RowGuard(_)));
+            let filter = position(&reduced, |op| matches!(op, Operation::Multiscale(_)));
+            let node = &reduced.graph.nodes[guard];
+            assert!(guard < filter);
+            assert_eq!(node.inputs.len(), 4);
+            for &input in &node.inputs[..3] {
+                assert!(matches!(
+                    reduced.graph.nodes[reduced.graph.outputs[input].producer].operation,
+                    Operation::ReduceLayers { .. }
+                ));
+            }
+            let Operation::RowGuard(prepared) = &node.operation else {
+                unreachable!()
+            };
+            assert_eq!(prepared.grid().unwrap().scale.divisor(), divisor);
+            assert_eq!(
+                reduced.graph.outputs[node.outputs[0]].data,
+                crate::graph::DataType::CalibratedLayers
+            );
+            let bands = position(&reduced, final_directional_banding);
+            assert!(
+                full.graph.nodes[local].operation.key("banding")
+                    != reduced.graph.nodes[bands].operation.key("banding")
+            );
+            if let Operation::DirectionalBanding { prepared, .. } =
+                &reduced.graph.nodes[bands].operation
+            {
+                assert_eq!(prepared.params().sampling[0], divisor);
+            }
+        }
     }
+    settings.rendering = Rendering::Color;
     settings.working_scale = Scale::NATIVE;
     settings.output_size = Some([240, 160]);
     let mut session = RenderSession::new(source.clone());

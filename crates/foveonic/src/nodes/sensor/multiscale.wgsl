@@ -246,21 +246,11 @@ fn multiscale_finish(@builtin(global_invocation_id) id: vec3<u32>) {
     store_a(pixel, value);
 }
 
-// Calibration varies slowly within a pooled cell. Its center supplies a local
-// sensor-code basis for filtering, not a second calibration of the photograph.
-fn working_gain(point: vec2<u32>) -> vec3<f32> {
-    let cell = min(vec2<u32>(max(vec2<i32>(point) - vec2<i32>(p.sampling.yz), vec2<i32>(0))),
-        (calibration.source.xy - vec2(1u)) / p.sampling.x);
-    let first = cell * p.sampling.x;
-    let last = min(first + vec2(p.sampling.x), calibration.source.xy);
-    return calibration_gain((vec2<f32>(first) + vec2<f32>(last) - vec2(1.)) * 0.5);
-}
-
 @compute @workgroup_size(8, 8)
 fn multiscale_prepare_calibrated(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= p.source.zw) { return; }
     let point = vec2(reflect(i32(id.x), p.area.z - p.area.x), reflect(i32(id.y), p.area.w - p.area.y)) + p.area.xy;
-    store_a(id.y * p.source.z + id.x, load_source(point.y * p.source.x + point.x) / working_gain(point));
+    store_a(id.y * p.source.z + id.x, load_source(point.y * p.source.x + point.x) / working_calibration_gain(point, p.sampling.x, p.sampling.yz));
 }
 
 @compute @workgroup_size(8, 8)
@@ -271,7 +261,7 @@ fn multiscale_finish_calibrated(@builtin(global_invocation_id) id: vec3<u32>) {
     var corrected = value;
     if all(id.xy >= p.area.xy) && all(id.xy < p.area.zw) && clipping[pixel] == 0u {
         let point = id.xy - p.area.xy;
-        let gain = working_gain(id.xy);
+        let gain = working_calibration_gain(id.xy, p.sampling.x, p.sampling.yz);
         corrected += (load_source(point.y * p.source.z + point.x) - value / gain) * gain;
     }
     store_a(pixel, corrected);

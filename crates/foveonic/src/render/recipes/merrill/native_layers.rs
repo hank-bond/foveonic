@@ -5,7 +5,9 @@ use super::layer_noise;
 use crate::{
     graph::{Graph, Operation},
     interactive::Execution,
-    nodes::sensor::{banding, calibration, color_field, despeckle, highlight, multiscale},
+    nodes::sensor::{
+        banding, calibration, color_field, despeckle, highlight, multiscale, row_guard,
+    },
     profile::Profile,
     render::Settings,
     source::{Metadata, Result},
@@ -40,7 +42,31 @@ pub(super) enum Output {
         calibration_gains: [f32; 3],
         sensor_codes: usize,
         multiscale: Option<Arc<multiscale::Prepared>>,
+        rows: Option<WorkingRows>,
     },
+}
+
+pub(super) struct WorkingRows {
+    prepared: Arc<row_guard::Prepared>,
+    original: usize,
+    shield: usize,
+    black: usize,
+}
+impl WorkingRows {
+    pub fn append(
+        self,
+        graph: &mut Graph,
+        input: usize,
+        grid: &super::preview::Grid,
+    ) -> Result<usize> {
+        let original = grid.append(graph, self.original)?;
+        let shield = grid.append(graph, self.shield)?;
+        graph.retain_for_seal(self.black);
+        graph.add(
+            Operation::RowGuard(self.prepared),
+            &[input, original, shield, self.black],
+        )
+    }
 }
 
 /// Recovery follows reduction with original camera clipping evidence on the
@@ -176,6 +202,7 @@ pub(super) fn build(
     let calibration_gains = std::array::from_fn(|c| calibration.params.gains[c]);
     let calibration_params = calibration.params;
     let mut working_multiscale = None;
+    let mut working_rows = None;
     let defect_map = engine
         .noise_calibration
         .as_ref()
@@ -215,12 +242,22 @@ pub(super) fn build(
             let guard = profile.measure("prepare guarded native rows", || {
                 layer_noise::prepare_row_guard(metadata, model)
             })?;
-            let guarded = graph.add(
-                Operation::RowGuard(Arc::new(guard)),
-                &[input, corrected, black],
-            )?;
-            finish!();
-            guarded
+            if let Some(grid) = grid {
+                working_rows = Some(WorkingRows {
+                    prepared: Arc::new(guard.on_grid(grid, Arc::new(calibration.clone()))),
+                    original: input,
+                    shield: corrected,
+                    black,
+                });
+                corrected
+            } else {
+                let guarded = graph.add(
+                    Operation::RowGuard(Arc::new(guard)),
+                    &[input, corrected, black],
+                )?;
+                finish!();
+                guarded
+            }
         } else {
             corrected
         };
@@ -311,6 +348,7 @@ pub(super) fn build(
         calibration_gains,
         sensor_codes: input,
         multiscale: working_multiscale,
+        rows: working_rows,
     })
 }
 

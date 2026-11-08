@@ -94,7 +94,7 @@ pub(super) fn build(
             && (names == ["final"] || names == ["linear.base"])
             && settings.working_scale.is_native(),
     );
-    let (recipe, highlights, calibration_gains, sensor_codes, multiscale) =
+    let (recipe, highlights, calibration_gains, sensor_codes, multiscale, guarded_rows) =
         match native_layers::build(
             engine,
             source.metadata(),
@@ -113,12 +113,14 @@ pub(super) fn build(
                 calibration_gains,
                 sensor_codes,
                 multiscale,
+                rows,
             } => (
                 recipe,
                 highlights,
                 calibration_gains,
                 sensor_codes,
                 multiscale,
+                rows,
             ),
         };
     let mut graph = recipe.graph;
@@ -140,6 +142,10 @@ pub(super) fn build(
     }
     if let Some(grid) = &preview {
         calibrated = grid.append(&mut graph, calibrated)?;
+        if let Some(rows) = guarded_rows {
+            calibrated = rows.append(&mut graph, calibrated, grid)?;
+            finish!();
+        }
     }
     if let Some(filter) = multiscale {
         calibrated = graph.add(Operation::Multiscale(filter), &[calibrated])?;

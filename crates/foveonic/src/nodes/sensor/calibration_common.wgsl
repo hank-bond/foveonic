@@ -24,3 +24,13 @@ fn calibration_gain(point: vec2<f32>) -> vec3<f32> {
     let shading = vec3<f32>(1.0 + calibration.shading.x * r4 + calibration.shading.y * r2, 1.0, 1.0 + calibration.shading.z * r4 + calibration.shading.w * r2);
     return vec3(spatial_gain(0u, point), spatial_gain(1u, point), spatial_gain(2u, point)) * calibration.gains.xyz * shading;
 }
+
+// Calibration varies slowly within a pooled cell. Its center supplies a local
+// sensor-code basis for filtering, not a second calibration of the photograph.
+fn working_calibration_gain(point: vec2<u32>, divisor: u32, origin: vec2<u32>) -> vec3<f32> {
+    let cell = min(vec2<u32>(max(vec2<i32>(point) - vec2<i32>(origin), vec2<i32>(0))),
+        (calibration.source.xy - vec2(1u)) / divisor);
+    let first = cell * divisor;
+    let last = min(first + vec2(divisor), calibration.source.xy);
+    return calibration_gain((vec2<f32>(first) + vec2<f32>(last) - vec2(1.)) * 0.5);
+}

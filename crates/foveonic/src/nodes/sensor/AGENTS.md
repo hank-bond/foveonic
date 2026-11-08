@@ -43,7 +43,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[red_detail.rs](./red_detail.rs)** Adds signed red-channel detail using a separable five-row binomial support.
 - **[repair.rs](./repair.rs)** Selects camera-derived cutoffs and preserves ordered camera records for masked GPU correction.
 - **[rgb_despeckle.rs](./rgb_despeckle.rs)** Removes isolated RGB excursions using immutable masked five-by-five neighborhoods.
-- **[row_guard.rs](./row_guard.rs)** Bounds fine native row offsets using independent image spans and fixed layer covariance.
+- **[row_guard.rs](./row_guard.rs)** Bounds row offsets with scale-aware image evidence, Gaussian supports and layer covariance.
 - **[shield_noise.rs](./shield_noise.rs)** Predicts native green-magenta row and column errors from the original shield samples.
 - **[signed_repair.rs](./signed_repair.rs)** Repairs signed RGB code values with ordered packed records or a vertically ordered despeckle sweep.
 - **[sparse_repair.rs](./sparse_repair.rs)** Repairs sparse RGB defects with optional four-phase blue ghost and pattern passes.

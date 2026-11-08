@@ -152,6 +152,15 @@ fn full_option_cases(
                 super::super::ColorFieldApproach::LocalGradient => "multiscale-highlight-local",
                 super::super::ColorFieldApproach::Faithful => "multiscale-highlight-global",
             },
+            multiscale.clone(),
+        ));
+        multiscale.merrill_banding.enabled = true;
+        multiscale.merrill_banding.method = super::super::MerrillBandingMethod::Directional;
+        cases.push((
+            match approach {
+                super::super::ColorFieldApproach::LocalGradient => "directional-highlight-local",
+                super::super::ColorFieldApproach::Faithful => "directional-highlight-global",
+            },
             multiscale,
         ));
         s.merrill_speckles.method = super::super::MerrillSpeckleMethod::Compact;

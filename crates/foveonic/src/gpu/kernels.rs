@@ -3,6 +3,12 @@
 use super::Gpu;
 use crate::source::Result;
 
+const ROW_GUARD_SHADER: &str = concat!(
+    include_str!("../nodes/sensor/calibration_common.wgsl"),
+    "\n",
+    include_str!("../nodes/sensor/row_guard.wgsl")
+);
+
 #[derive(Clone, Copy)]
 pub enum Kernel {
     LinearBasis,
@@ -55,6 +61,7 @@ pub enum Kernel {
     ShieldReduce,
     ShieldApply,
     RowGuardEvidence,
+    RowGuardEvidenceReduced,
     RowGuardProfiles,
     RowGuardRobust,
     RowGuardReliability,
@@ -63,6 +70,7 @@ pub enum Kernel {
     RowGuardConfidence,
     RowGuardHorizontal,
     RowGuardApply,
+    RowGuardApplyCalibrated,
     DirectionalBandingSmooth,
     DirectionalBandingDeltas,
     DirectionalBandingFit,
@@ -385,6 +393,7 @@ impl Kernel {
             Self::ShieldPredict => "predict native color bands from shields",
             Self::ShieldReduce => "remove predicted color spatial means",
             Self::ShieldApply => "correct shield-predicted native color errors",
+            Self::RowGuardEvidenceReduced => "measure resized row evidence",
             Self::RowGuardEvidence => "measure native row pixel evidence",
             Self::RowGuardProfiles => "measure independent native row spans",
             Self::RowGuardRobust => "combine robust native row evidence",
@@ -393,6 +402,7 @@ impl Kernel {
             Self::RowGuardMean => "center native row correction fields",
             Self::RowGuardConfidence => "bound native row correction confidence",
             Self::RowGuardHorizontal => "prepare native row signal guide",
+            Self::RowGuardApplyCalibrated => "apply resized row correction in calibrated layers",
             Self::RowGuardApply => "apply guarded fine native row correction",
             Self::DirectionalBandingSmooth => "measure native directional neighborhoods",
             Self::DirectionalBandingDeltas => "estimate native directional band offsets",
@@ -981,42 +991,17 @@ impl Gpu {
                 include_str!("../nodes/sensor/shield_noise.wgsl"),
                 "shield_apply",
             ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_evidence",
-            ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_profiles",
-            ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_robust",
-            ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_reliability",
-            ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_highpass",
-            ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_mean",
-            ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_confidence",
-            ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_horizontal",
-            ),
-            (
-                include_str!("../nodes/sensor/row_guard.wgsl"),
-                "row_guard_apply",
-            ),
+            (ROW_GUARD_SHADER, "row_guard_evidence"),
+            (ROW_GUARD_SHADER, "row_guard_evidence_reduced"),
+            (ROW_GUARD_SHADER, "row_guard_profiles"),
+            (ROW_GUARD_SHADER, "row_guard_robust"),
+            (ROW_GUARD_SHADER, "row_guard_reliability"),
+            (ROW_GUARD_SHADER, "row_guard_highpass"),
+            (ROW_GUARD_SHADER, "row_guard_mean"),
+            (ROW_GUARD_SHADER, "row_guard_confidence"),
+            (ROW_GUARD_SHADER, "row_guard_horizontal"),
+            (ROW_GUARD_SHADER, "row_guard_apply"),
+            (ROW_GUARD_SHADER, "row_guard_apply_calibrated"),
             (
                 include_str!("../nodes/color/directional_banding.wgsl"),
                 "neighborhoods",

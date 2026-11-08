@@ -13,7 +13,7 @@ This requirement extends [Merrill multiscale noise](./merrill-multiscale-noise.m
 
 The objective is more even shadow appearance with useful color, detail, and natural independent brightness grain retained. Fine grain is acceptable. Stronger fine-noise suppression is not a substitute for correcting wider bands. Broad image gradients and real colored structures must retain their appearance.
 
-Image corrections must operate on native sensor layers before color conversion and run on the GPU. The three layers must be considered jointly. A correction must not introduce a hue error through inconsistent decisions about individual layers.
+Image corrections must operate on sensor layers before color conversion and run on the GPU. Reduced previews use the explicit working geometry described in [small previews](./small-previews.md). The three layers must be considered jointly. A correction must not introduce a hue error through inconsistent decisions about individual layers.
 
 Row and column correction should share an estimator formulation so their behavior can be compared directly. Their measured coefficients and uncertainty may differ. Width coverage and applied strength must be assessed independently. Correction fields must remain continuous where separate spatial estimates meet.
 
@@ -33,7 +33,7 @@ Directional correction must complete Fine columns and Fine rows before measuring
 
 Coarse must pool local residual estimates along the same native row or column with a triangular window of radius 640 pixels. Its confidence must decrease where a short offset profile matches better after a consistent diagonal shift than at fixed sensor coordinates. This preserves slowly varying band amplitude while reducing corrections that follow diagonal scene structure. Interpolation between fitted estimates must avoid the former 40-pixel steps. Genuine low-contrast features aligned with a sensor axis remain ambiguous to this image-based estimator.
 
-Full, Fast, and regional views must share the same complete native correction field. Regional views must select existing native tiles with their original halo and phase. Fast may reduce the corrected native layers after estimation. Measurement and application must have separate graph identities so changing a nonzero strength can reuse that band's measured offsets. Changing Fine must invalidate subsequent Coarse estimates because they measure the Fine-corrected residual.
+Full and regional views must share the same complete native correction field. Regional views must select existing native tiles with their original halo and phase. Reduced previews estimate and apply their correction on the requested working grid, with widths stored in native units and projected beside the operation. Guarded-row measurement retains separate original and post-shield raw means on that grid and applies its correction to the repaired calibrated layers. Measurement and application must have separate graph identities so changing a nonzero strength can reuse that band's measured offsets. Changing Fine must invalidate subsequent Coarse estimates because they measure the Fine-corrected residual.
 
 ## Interactive controls
 

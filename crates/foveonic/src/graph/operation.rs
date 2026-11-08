@@ -819,7 +819,16 @@ impl Operation {
                 }
             }
             Self::ShieldNoise(_) => (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers),
-            Self::RowGuard(_) => (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers),
+            Self::RowGuard(p) => {
+                if p.grid().is_some() {
+                    (
+                        vec![CalibratedLayers, SensorLayers, SensorLayers, BlackLevels],
+                        CalibratedLayers,
+                    )
+                } else {
+                    (vec![SensorLayers, SensorLayers, BlackLevels], SensorLayers)
+                }
+            }
             Self::ColumnGain(p) => {
                 let data = if p.is_triplets() {
                     SensorLayers

@@ -27,7 +27,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[dehaze](./dehaze.md)** Adapt recovered haze estimation and patch picking into a saved GPU Dehaze correction.
 - **[display-color-management](./display-color-management.md)** Integrate ICC-derived display limits, managed macOS presentation and gamut-preserving previews.
 - **[dng-export](./dng-export.md)** Implement uncompressed uint16 DNG export through the existing TIFF writer, with baked technical corrections and one embedded appearance; evaluate compression later.
-- **[early-sensor-reduction](./early-sensor-reduction.md)** Move the sensor reduction boundary earlier with working-resolution inputs, unchanged Full output and existing recipe ownership.
+- **[early-sensor-reduction](./early-sensor-reduction.md)** Move the sensor reduction boundary earlier with working-resolution inputs, preserved native algorithms and existing recipe ownership.
 - **[editing-optimization-handoff](./editing-optimization-handoff.md)** Continue native editing measurements with guarded GPU ownership while preserving the deferred mismatch evidence.
 - **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._

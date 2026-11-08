@@ -651,13 +651,35 @@ impl Engine {
                     {
                         return Err("guarded row extent mismatch".into());
                     }
+                    use crate::nodes::sensor::row_guard::Inputs;
+                    let flags = prepared
+                        .grid()
+                        .map(|grid| self.clipping_flags(context.metadata(), Some(grid)))
+                        .transpose()?;
+                    let clipping = flags
+                        .as_ref()
+                        .map(|flags| gpu.upload("Row guard clipping evidence", flags))
+                        .transpose()?;
+                    let inputs = if let Some(clipping) = &clipping {
+                        if input(2).description.map(|d| d.extent) != Some(inherited) {
+                            return Err("guarded row shield evidence extent mismatch".into());
+                        }
+                        Inputs::Calibrated {
+                            input: &input(0).buffer,
+                            original: &input(1).buffer,
+                            shield_corrected: &input(2).buffer,
+                            black: &input(3).buffer,
+                            clipping,
+                        }
+                    } else {
+                        Inputs::Native {
+                            original: &input(0).buffer,
+                            shield_corrected: &input(1).buffer,
+                            black: &input(2).buffer,
+                        }
+                    };
                     Some(crate::nodes::sensor::row_guard::apply(
-                        gpu,
-                        &input(0).buffer,
-                        &input(1).buffer,
-                        &input(2).buffer,
-                        prepared,
-                        profile,
+                        gpu, inputs, prepared, profile,
                     )?)
                 }
                 Operation::ShieldNoise(prepared) => {

@@ -5,6 +5,7 @@ struct Params {
     reserved0: u32,
     reserved1: u32,
     reserved2: u32,
+    radii: vec4<u32>, offsets: vec4<u32>, sampling: vec4<u32>, limits: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage, read> original: array<f32>;
@@ -20,21 +21,14 @@ struct Params {
 @group(0) @binding(11) var<storage, read_write> output_pixels: array<f32>;
 @group(0) @binding(12) var<storage, read_write> evidence_residual: array<f32>;
 @group(0) @binding(13) var<storage, read_write> evidence_variance: array<f32>;
+@group(0) @binding(15) var<uniform> calibration: CalibrationParams;
+@group(0) @binding(16) var<storage, read> grid_values: array<f32>;
+@group(0) @binding(17) var<storage, read> clipping: array<u32>;
+@group(0) @binding(18) var<storage, read> calibrated_input: array<f32>;
 const LAYERS: u32 = 3u;
 const SPANS: u32 = 12u;
 const SPAN_COMPONENTS: u32 = 3u * LAYERS;
 const ROW_COMPONENTS: u32 = 3u * LAYERS;
-const FINE_RADIUS: i32 = 5;
-const SIGNAL_RADIUS: i32 = 12;
-const RELIABILITY_RADIUS: i32 = 32;
-const GUIDE_RADIUS: i32 = 16;
-const FINE_KERNEL: u32 = 0u;
-const SIGNAL_KERNEL: u32 = u32(2 * FINE_RADIUS + 1);
-const RELIABILITY_KERNEL: u32 = SIGNAL_KERNEL + u32(2 * SIGNAL_RADIUS + 1);
-const GUIDE_KERNEL: u32 = RELIABILITY_KERNEL + u32(2 * RELIABILITY_RADIUS + 1);
-const VARIANCE_FLOOR: f32 = 1e-5;
-const ERROR_FLOOR: f32 = 1e-6;
-const MINIMUM_SCATTER: f32 = 0.05;
 const MAD_SIGMA: f32 = 1.4826;
 const HUBER_PASSES: u32 = 2u;
 const HUBER_SIGMAS: f32 = 1.5;
@@ -91,7 +85,7 @@ fn vertical(x: u32, y: u32, radius: i32, kernel: u32) -> vec3<f32> {
 }
 fn sorted12(input: array<f32, SPANS>) -> array<f32, SPANS> {
     var a = input;
-    for (var i = 1u; i < SPANS; i++) {
+    for (var i = 1u; i < p.sampling.y; i++) {
         let value = a[i];
         var j = i;
         loop {
@@ -110,7 +104,8 @@ fn sorted12(input: array<f32, SPANS>) -> array<f32, SPANS> {
 }
 fn median12(input: array<f32, SPANS>) -> f32 {
     let a = sorted12(input);
-    return (a[SPANS / 2u - 1u] + a[SPANS / 2u]) * 0.5;
+    if (p.sampling.y % 2u) != 0u { return a[p.sampling.y / 2u]; }
+    return (a[p.sampling.y / 2u - 1u] + a[p.sampling.y / 2u]) * 0.5;
 }
 fn gaussian_field(y: u32, radius: i32, kernel: u32) -> vec3<f32> {
     var value = vec3(0.);
@@ -120,22 +115,14 @@ fn gaussian_field(y: u32, radius: i32, kernel: u32) -> vec3<f32> {
     }
     return value;
 }
-@compute @workgroup_size(64)
-fn row_guard_evidence(@builtin(global_invocation_id) id: vec3<u32>) {
-    // This entry dispatches one pixel per invocation rather than one complete
-    // row span. The span reduction keeps its original compensated sum order.
-    let x = id.x;
-    let y = id.y;
-    if x >= p.source.z || y >= p.source.w {
-        return;
-    }
+fn write_evidence(x: u32, y: u32, valid: bool) {
     let z = sample(x, y);
-    var v = vec3(0.);
+    var v = select(vec3(-1.), vec3(0.), valid);
     var r = vec3(0.);
-    if all(z < vec3(VALID_MAXIMUM)) && all(z > vec3(VALID_MINIMUM)) {
-        v = max(variance(vertical(x, y, SIGNAL_RADIUS, SIGNAL_KERNEL)), vec3(VARIANCE_FLOOR));
+    if valid && all(z < vec3(VALID_MAXIMUM)) && all(z > vec3(VALID_MINIMUM)) {
+        v = max(variance(vertical(x, y, i32(p.radii.y), p.offsets.y)), vec3(p.limits.x));
         let limit = RESIDUAL_SIGMAS * sqrt(v);
-        r = clamp(z - vertical(x, y, FINE_RADIUS, FINE_KERNEL), -limit, limit);
+        r = clamp(z - vertical(x, y, i32(p.radii.x), p.offsets.x), -limit, limit);
     }
     let i = (y * p.source.z + x) * LAYERS;
     for (var c = 0u; c < LAYERS; c++) {
@@ -144,14 +131,25 @@ fn row_guard_evidence(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 @compute @workgroup_size(64)
+fn row_guard_evidence(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= p.source.z || id.y >= p.source.w { return; }
+    write_evidence(id.x, id.y, true);
+}
+@compute @workgroup_size(64)
+fn row_guard_evidence_reduced(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= p.source.z || id.y >= p.source.w { return; }
+    let pixel = (id.y + p.area.y) * p.source.x + id.x + p.area.x;
+    write_evidence(id.x, id.y, clipping[pixel] == 0u);
+}
+@compute @workgroup_size(64)
 fn row_guard_profiles(@builtin(global_invocation_id) id: vec3<u32>) {
     let y = id.x;
     let span = id.y;
     if y >= p.source.w {
         return;
     }
-    let base_width = p.source.z / SPANS;
-    let remainder = p.source.z % SPANS;
+    let base_width = p.source.z / p.sampling.y;
+    let remainder = p.source.z % p.sampling.y;
     let start = span * base_width + min(span, remainder);
     let end = start + base_width + u32(span < remainder);
     var residual = vec3(0.);
@@ -174,6 +172,7 @@ fn row_guard_profiles(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         let e = (y * p.source.z + x) * LAYERS;
         let v = vec3(evidence_variance[e], evidence_variance[e + 1u], evidence_variance[e + 2u]);
+        if any(v < vec3(0.)) { continue; }
         let r = vec3(evidence_residual[e], evidence_residual[e + 1u], evidence_residual[e + 2u]);
         let corrected_residual = r - residual_error;
         let next_residual = residual + corrected_residual;
@@ -204,13 +203,13 @@ fn row_guard_robust(@builtin(global_invocation_id) id: vec3<u32>) {
         var values: array<f32, SPANS>;
         var deviations: array<f32, SPANS>;
         var reference = 0.;
-        for (var s = 0u; s < SPANS; s++) {
+        for (var s = 0u; s < p.sampling.y; s++) {
             let i = (s * p.source.w + y) * SPAN_COMPONENTS;
             values[s] = spans[i + c];
             reference += spans[i + 2u * LAYERS + c];
         }
         let median = median12(values);
-        for (var s = 0u; s < SPANS; s++) {
+        for (var s = 0u; s < p.sampling.y; s++) {
             deviations[s] = abs(values[s] - median);
         }
         let scatter = MAD_SIGMA * median12(deviations);
@@ -218,15 +217,15 @@ fn row_guard_robust(@builtin(global_invocation_id) id: vec3<u32>) {
         for (var iteration = 0u; iteration < HUBER_PASSES; iteration++) {
             var sum = 0.;
             var normalization = 0.;
-            for (var s = 0u; s < SPANS; s++) {
-                let weight = min(1., HUBER_SIGMAS * max(scatter, MINIMUM_SCATTER) / max(abs(values[s] - center), ERROR_FLOOR));
+            for (var s = 0u; s < p.sampling.y; s++) {
+                let weight = min(1., HUBER_SIGMAS * max(scatter, p.limits.z) / max(abs(values[s] - center), p.limits.y));
                 sum += values[s] * weight;
                 normalization += weight;
             }
             center = sum / normalization;
         }
         stats[y * ROW_COMPONENTS + c] = center;
-        stats[y * ROW_COMPONENTS + LAYERS + c] = max(scatter * scatter / f32(SPANS), ERROR_FLOOR);
+        stats[y * ROW_COMPONENTS + LAYERS + c] = max(scatter * scatter / f32(p.sampling.y), p.limits.y);
         stats[y * ROW_COMPONENTS + 2u * LAYERS + c] = reference;
     }
 }
@@ -238,14 +237,14 @@ fn row_guard_reliability(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     var power = vec3(0.);
     var uncertainty = vec3(0.);
-    for (var d = -RELIABILITY_RADIUS; d <= RELIABILITY_RADIUS; d++) {
+    for (var d = -i32(p.radii.z); d <= i32(p.radii.z); d++) {
         let i = reflect(i32(y) + d, p.source.w) * ROW_COMPONENTS;
         let value = row_stat(i);
-        let w = weights[RELIABILITY_KERNEL + u32(d + RELIABILITY_RADIUS)];
+        let w = weights[p.offsets.z + u32(d + i32(p.radii.z))];
         power += value * value * w;
         uncertainty += row_stat(i + LAYERS) * w;
     }
-    let reliability = clamp(vec3(1.) - uncertainty / max(power, vec3(ERROR_FLOOR)), vec3(0.), vec3(1.));
+    let reliability = clamp(vec3(1.) - uncertainty / max(power, vec3(p.limits.y)), vec3(0.), vec3(1.));
     let value = row_stat(y * ROW_COMPONENTS) * reliability;
     for (var c = 0u; c < LAYERS; c++) {
         field[y * LAYERS + c] = value[c];
@@ -259,7 +258,7 @@ fn row_guard_highpass(@builtin(global_invocation_id) id: vec3<u32>) {
     if y >= p.source.w {
         return;
     }
-    let value = field_value(y * LAYERS) - gaussian_field(y, RELIABILITY_RADIUS, RELIABILITY_KERNEL);
+    let value = field_value(y * LAYERS) - gaussian_field(y, i32(p.radii.z), p.offsets.z);
     for (var c = 0u; c < LAYERS; c++) {
         guarded[y * LAYERS + c] = value[c];
     }
@@ -286,26 +285,26 @@ fn row_guard_confidence(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let row = y * ROW_COMPONENTS;
     var reference = row_stat(row + 2u * LAYERS);
-    for (var d = -FINE_RADIUS; d <= FINE_RADIUS; d++) {
+    for (var d = -i32(p.radii.x); d <= i32(p.radii.x); d++) {
         let i = reflect(i32(y) + d, p.source.w) * ROW_COMPONENTS + 2u * LAYERS;
-        reference -= row_stat(i) * weights[FINE_KERNEL + u32(d + FINE_RADIUS)];
+        reference -= row_stat(i) * weights[p.offsets.x + u32(d + i32(p.radii.x))];
     }
     let estimate = field_value(y * LAYERS) - field_mean(0u) - reference;
     let projected = vec3(dot(p.inverse_covariance[0].xyz, estimate), dot(p.inverse_covariance[1].xyz, estimate), dot(p.inverse_covariance[2].xyz, estimate));
     let mahalanobis = max(dot(estimate, projected), 0.) / INNOVATION_VARIANCE;
     var distances: array<f32, SPANS>;
     let center = row_stat(row);
-    for (var s = 0u; s < SPANS; s++) {
+    for (var s = 0u; s < p.sampling.y; s++) {
         let i = (s * p.source.w + y) * SPAN_COMPONENTS;
         let difference = span_value(i) - center;
-        distances[s] = dot(difference * difference / max(span_value(i + LAYERS), vec3(ERROR_FLOOR)), vec3(1.));
+        distances[s] = dot(difference * difference / max(span_value(i + LAYERS), vec3(p.limits.y)), vec3(1.));
     }
     let ordered = sorted12(distances);
     var agreement = 0.;
-    for (var s = 0u; s < AGREEMENT_SPANS; s++) {
+    for (var s = 0u; s < min(AGREEMENT_SPANS, p.sampling.y); s++) {
         agreement += ordered[s];
     }
-    let heterogeneity = max(agreement / f32(AGREEMENT_SPANS) / AGREEMENT_VARIANCE - 1., 0.);
+    let heterogeneity = max(agreement / f32(min(AGREEMENT_SPANS, p.sampling.y)) / AGREEMENT_VARIANCE - 1., 0.);
     let confidence = 1. / ((1. + mahalanobis * mahalanobis) * (1. + heterogeneity * heterogeneity));
     let value = estimate * confidence;
     for (var c = 0u; c < LAYERS; c++) {
@@ -318,8 +317,8 @@ fn row_guard_horizontal(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     var value = vec3(0.);
-    for (var d = -GUIDE_RADIUS; d <= GUIDE_RADIUS; d++) {
-        value += sample(reflect(i32(id.x) + d, p.source.z), id.y) * weights[GUIDE_KERNEL + u32(d + GUIDE_RADIUS)];
+    for (var d = -i32(p.radii.w); d <= i32(p.radii.w); d++) {
+        value += sample(reflect(i32(id.x) + d, p.source.z), id.y) * weights[p.offsets.w + u32(d + i32(p.radii.w))];
     }
     let i = (id.y * p.source.z + id.x) * LAYERS;
     for (var c = 0u; c < LAYERS; c++) {
@@ -341,16 +340,34 @@ fn row_guard_apply(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let point = id.xy - p.area.xy;
-    var signal = vec3(0.);
-    for (var d = -GUIDE_RADIUS; d <= GUIDE_RADIUS; d++) {
-        let offset = (reflect(i32(point.y) + d, p.source.w) * p.source.z + point.x) * LAYERS;
-        signal += guide_value(offset) * weights[GUIDE_KERNEL + u32(d + GUIDE_RADIUS)];
-    }
-    let snr = max(dot(signal, vec3(1.)), 0.) / sqrt(max(dot(variance(signal), vec3(1.)), ERROR_FLOOR));
-    let t = clamp((SNR_ZERO - snr) / (SNR_ZERO - SNR_FULL), 0., 1.);
-    let gate = t * t * (3. - 2. * t);
+    let gate = brightness_gate(point);
     let correction = guarded_value(point.y * LAYERS) - field_mean(LAYERS);
     for (var c = 0u; c < LAYERS; c++) {
         output_pixels[i + c] = shield_corrected[i + c] - correction[c] * gate;
     }
+}
+
+fn brightness_gate(point: vec2<u32>) -> f32 {
+    var signal = vec3(0.);
+    for (var d = -i32(p.radii.w); d <= i32(p.radii.w); d++) {
+        let offset = (reflect(i32(point.y) + d, p.source.w) * p.source.z + point.x) * LAYERS;
+        signal += guide_value(offset) * weights[p.offsets.w + u32(d + i32(p.radii.w))];
+    }
+    let snr = max(dot(signal, vec3(1.)), 0.) / sqrt(max(dot(variance(signal), vec3(1.)) * p.limits.w, p.limits.y * p.limits.w));
+    let t = clamp((SNR_ZERO - snr) / (SNR_ZERO - SNR_FULL), 0., 1.);
+    return t * t * (3. - 2. * t);
+}
+@compute @workgroup_size(8, 8)
+fn row_guard_apply_calibrated(@builtin(global_invocation_id) id: vec3<u32>) {
+    if any(id.xy >= p.source.xy) { return; }
+    let pixel = id.y * p.source.x + id.x;
+    let i = pixel * LAYERS;
+    var value = vec3(calibrated_input[i], calibrated_input[i + 1u], calibrated_input[i + 2u]);
+    if all(id.xy >= p.area.xy) && all(id.xy < p.area.zw) && clipping[pixel] == 0u {
+        let point = id.xy - p.area.xy;
+        let correction = guarded_value(point.y * LAYERS) - field_mean(LAYERS);
+        let gain = working_calibration_gain(id.xy, p.sampling.x, p.sampling.zw);
+        value -= correction * brightness_gate(point) * gain;
+    }
+    for (var c = 0u; c < LAYERS; c++) { output_pixels[i + c] = value[c]; }
 }

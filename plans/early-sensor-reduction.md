@@ -1,5 +1,5 @@
 ---
-summary: "Move the sensor reduction boundary earlier with working-resolution inputs, unchanged Full output and existing recipe ownership."
+summary: "Move the sensor reduction boundary earlier with working-resolution inputs, preserved native algorithms and existing recipe ownership."
 ---
 
 # Early sensor reduction
@@ -12,7 +12,7 @@ Keep existing recipes, typed graphs, execution and cache owners. Metadata remain
 
 The completed checkpoint uses area means, compact brightness guides, profile-sized Adaptive analysis, reduced bright-only speckle detection and original clipping evidence on the working grid. The investigation sections below are chronological. Their temporary alternatives are superseded by the later adoption sections and are not selectable application paths.
 
-Remaining work is native guarded-row filtering and the corresponding Classic/Quattro boundaries, followed by broader quality and latency acceptance. The Multiscale slice is complete and archived below. Calibration stays native for correctness. This checkpoint does not claim that the complete small-preview specification is implemented.
+The guarded-row implementation is complete for this checkpoint. Remaining implementation work is the corresponding Classic/Quattro boundaries, followed by broader quality and latency acceptance. The Multiscale slice is complete and archived below. Calibration stays native for correctness. This checkpoint does not claim that the complete small-preview specification is implemented.
 
 - [x] Review recorder lifecycle, overflow metadata recovery and task-based work attribution before using traces.
 - [x] Map the current pre-pool stage chains and preserve a Full float baseline before numerical changes.
@@ -21,15 +21,21 @@ Remaining work is native guarded-row filtering and the corresponding Classic/Qua
 - [x] Resolve reduced speckle correctness after resampling. Keep every input on its declared grid, preserve Full, and review both detectors at preview sizes.
 - [x] Correct Adaptive Tone structure probes that collapse to zero at Draft and Thumb. Preserve Full/Fast output and compare automatic brightness across scales.
 - [x] Move Merrill highlight recovery after basic calibration and mapped repairs. Retain separate evidence only where the selected algorithm requires it.
-- [ ] Resolve native shield/row calibration separately from multiscale neighborhood processing.
+- [x] Resolve native shield/row calibration separately from multiscale neighborhood processing.
 - [x] Move Directional cleanup to the working grid without retaining an alternate native branch or bypassing selected speckle processing.
 - [ ] Apply the same distinction to Quattro/Tiger mapped defects, phase calibration, neighborhood repairs and highlight recovery.
 - [ ] Verify all supported families and selected controls through the same scale contract. Record remaining native work explicitly.
 - [ ] Measure cached-source first preparation separately from retained edits and complete group delivery. Review photographic quality before release.
 
+The owner reported a six-second Draft render during app use. No trace was saved for that run, and compiler/GPU correctness work overlapped part of the app session. Its cause is unverified. The owner deferred reproduction to a later testing pass. Capture any recurrence in an isolated real-app run rather than attributing it to a particular pipeline stage.
+
 ## Completed Multiscale slice
 
-The owner accepted the review build and approved the checkpoint. The [completed slice](./archived/multiscale-working-grid.md) records signal units, explicit repair provenance, Full comparisons, Adaptive tolerance and timing evidence. Guarded-row estimation is the next Merrill stage.
+The owner accepted the review build and approved the checkpoint. The [completed slice](./archived/multiscale-working-grid.md) records signal units, explicit repair provenance, Full comparisons, Adaptive tolerance and timing evidence. The following guarded-row checkpoint completes the planned Merrill stage moves.
+
+## Completed guarded-row slice
+
+The owner approved the scoped checkpoint and requested committing it. The [completed report](./archived/guarded-rows-working-grid.md) records shared raw/calibrated input geometry, projected row covariance, native rounding bounds, retained-edit checks and timing evidence. Merrill's planned expensive-stage moves are complete. Basic native calibration and sensor-location corrections remain before pooling.
 
 ## Findings
 
