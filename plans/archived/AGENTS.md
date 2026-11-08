@@ -66,6 +66,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[highlight-threshold](./highlight-threshold.md)** _(archived)._ Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** _(archived)._ A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
 - **[import-workflow](./import-workflow.md)** _(archived)._ Added inline import review and bounded asynchronous processing with shared recipes and foreground priority.
+- **[independent-camera-clusters](./independent-camera-clusters.md)** _(archived)._ Run independent Merrill camera-cluster searches concurrently while preserving native ordering and exact outputs.
 - **[inspection-differences](./inspection-differences.md)** _(archived)._ Inspect operation inputs and outputs alongside amplified signed layer/channel differences.
 - **[inspection-popup-help](./inspection-popup-help.md)** _(archived)._ Prevent Quattro inspection menus from crashing when a stage lacks explanatory help.
 - **[keyboard-actions](./keyboard-actions.md)** _(archived)._ Centralize workspace shortcuts and apply copied editing recipes to highlighted photographs.

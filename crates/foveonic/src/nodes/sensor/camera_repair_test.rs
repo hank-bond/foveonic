@@ -280,7 +280,7 @@ fn preparation_preserves_full_low_badness_lists_and_cluster_quality_order() {
 }
 #[test]
 #[ignore = "requires a working GPU adapter"]
-fn cooperative_cluster_search_preserves_first_tie_empty_search_and_uniform_padding() {
+fn cooperative_cluster_search_preserves_first_tie_and_empty_search() {
     let gpu = Gpu::new().unwrap();
     let mut pixels = [10_f32, 20., 30.].repeat(96);
     pixels[13 * 3..13 * 3 + 3].copy_from_slice(&[111., 222., 333.]);
@@ -295,7 +295,7 @@ fn cooperative_cluster_search_preserves_first_tie_empty_search_and_uniform_paddi
         )
         .unwrap();
     let members = gpu.upload("Tie member", &[[69_u32, 69, 0, 0]]).unwrap();
-    let params = gpu.uniform(&[12_u32, 8, 1, 2]);
+    let params = gpu.uniform(&[12_u32, 8, 0, 0]);
     for (known, expected) in [(256_u32, [111_f32, 222., 333.]), (0, [0., 0., 0.])] {
         let mut output = gpu.upload("Tie pixels", &pixels).unwrap();
         let mut masks = gpu.upload("Tie masks", &[known; 96]).unwrap();
@@ -564,4 +564,123 @@ fn flower_dark_defect_is_restored_by_complete_camera_repair() {
         gpu.readback(i.buffer()).unwrap(),
         bytemuck::cast_slice::<f32, u8>(&data[0])
     );
+}
+
+#[test]
+fn independent_cluster_batches_keep_overlapping_searches_in_order() {
+    let mut p = Prepared::default();
+    for (i, rect) in [
+        [0, 0, 10, 10],
+        [30, 0, 10, 10],
+        [5, 0, 10, 10],
+        [35, 0, 10, 10],
+        [12, 0, 10, 10],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        p.clusters.push(Cluster {
+            rect,
+            indices: [0, 0, 0, i as u32],
+        });
+    }
+    let original = p.clusters.clone();
+    prepare_cluster_batches(&mut p);
+    assert_eq!(p.cluster_batches, [[0, 2], [2, 2], [4, 1]]);
+    let mut levels = vec![0; original.len()];
+    for (level, &[start, count]) in p.cluster_batches.iter().enumerate() {
+        for c in &p.clusters[start as usize..(start + count) as usize] {
+            levels[c.indices[3] as usize] = level;
+        }
+    }
+    for i in 0..original.len() {
+        for j in 0..i {
+            let a = original[i].rect;
+            let b = original[j].rect;
+            if a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+            {
+                assert!(levels[j] < levels[i]);
+            }
+        }
+    }
+    let mut empty = Prepared::default();
+    prepare_cluster_batches(&mut empty);
+    assert!(empty.cluster_batches.is_empty());
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn independent_cluster_batches_match_ordered_dispatches() {
+    let gpu = Gpu::new().unwrap();
+    let width = 160usize;
+    let height = 96usize;
+    let mut p = Prepared {
+        params: Params {
+            source: [width as u32, height as u32, 0, 0],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut words = Vec::new();
+    for (x, y) in [
+        (16u16, 16u16),
+        (64, 16),
+        (112, 16),
+        (20, 18),
+        (68, 18),
+        (116, 18),
+        (40, 64),
+        (88, 64),
+        (136, 64),
+    ] {
+        words.extend([
+            2u16 << 14 | 2 << 7 | 2,
+            y,
+            x,
+            8 << 8 | 2,
+            7,
+            1 << 10 | 1 << 4 | 2,
+        ]);
+    }
+    prepare_clusters(&mut p, &words, 2, 8).unwrap();
+    let original = p.clusters.clone();
+    prepare_cluster_batches(&mut p);
+    assert!(p.cluster_batches.iter().any(|b| b[1] > 1));
+    assert!(p.cluster_batches.len() > 1);
+    let samples: Vec<f32> = (0..width * height * 3)
+        .map(|i| ((i * 8191 + i / 17) % 4093) as f32 * 0.13)
+        .collect();
+    let run = |clusters: &[Cluster], batches: &[[u32; 2]]| {
+        let mut output = gpu.upload("Cluster scheduling pixels", &samples).unwrap();
+        let clusters = gpu
+            .upload("Cluster scheduling descriptors", clusters)
+            .unwrap();
+        let members = gpu
+            .upload("Cluster scheduling members", &p.members)
+            .unwrap();
+        let mut masks = gpu.upload("Cluster scheduling masks", &p.masks).unwrap();
+        for &[first, count] in batches {
+            let uniform = gpu.uniform(&[width as u32, height as u32, first, 0]);
+            gpu.dispatch(
+                Kernel::ClusterRepair,
+                &mut [
+                    (0, Write(output.write())),
+                    (1, Read(&clusters)),
+                    (2, Read(&members)),
+                    (3, Write(masks.write())),
+                    (4, Read(&uniform)),
+                ],
+                [count, 1],
+                &mut Default::default(),
+            );
+        }
+        (
+            gpu.readback(&output).unwrap(),
+            gpu.readback(&masks).unwrap(),
+        )
+    };
+    let ordered: Vec<_> = (0..original.len() as u32).map(|i| [i, 1]).collect();
+    let serial = run(&original, &ordered);
+    let concurrent = run(&p.clusters, &p.cluster_batches);
+    assert_eq!(serial, concurrent);
 }

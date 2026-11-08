@@ -19,7 +19,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[blue_refresh.rs](./blue_refresh.rs)** Refreshes RGB blue from four spatial blue phases while preserving red and green.
 - **[calibrated_defects.rs](./calibrated_defects.rs)** Repairs serial-matched persistent sensor locations before noise filtering and restores clipped defects afterward.
 - **[calibration.rs](./calibration.rs)** Resolves metadata-derived calibration, white balance, camera color, and image geometry.
-- **[camera_repair.rs](./camera_repair.rs)** Prepares camera repair lists so the GPU can fix pixels in the camera's order.
+- **[camera_repair.rs](./camera_repair.rs)** Prepares ordered camera pixel repairs and dependency-safe batches of cluster searches.
 - **[chroma_clusters.rs](./chroma_clusters.rs)** Repairs ordered RGB clusters by matching nearby valid three-by-three templates.
 - **[chroma_repair.rs](./chroma_repair.rs)** Repairs ordered RGB defect records with directional and masked-neighborhood passes.
 - **[color_field.rs](./color_field.rs)** Owns original evidence, GPU brightness/color solves, and native highlight application.

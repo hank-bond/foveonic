@@ -1,4 +1,4 @@
-//! Prepares camera repair lists so the GPU can fix pixels in the camera's order.
+//! Prepares ordered camera pixel repairs and dependency-safe batches of cluster searches.
 
 //!
 //! Adapted with owner permission from Foveonic repair_setup.rs, bad_reds.rs,
@@ -33,6 +33,7 @@ pub(crate) struct Prepared {
     repair_order: Vec<u32>,
     phases: Vec<[u32; 2]>,
     clusters: Vec<Cluster>,
+    cluster_batches: Vec<[u32; 2]>,
     members: Vec<[u32; 4]>,
     masks: Vec<u32>,
 }
@@ -55,6 +56,7 @@ impl Prepared {
         add_capacity!(self.repair_order, u32);
         add_capacity!(self.phases, [u32; 2]);
         add_capacity!(self.clusters, Cluster);
+        add_capacity!(self.cluster_batches, [u32; 2]);
         add_capacity!(self.members, [u32; 4]);
         add_capacity!(self.masks, u32);
         Some(bytes)
@@ -73,6 +75,7 @@ impl Prepared {
             .slice(&self.repair_order)
             .slice(&self.phases)
             .slice(&self.clusters)
+            .slice(&self.cluster_batches)
             .slice(&self.members)
             .slice(&self.masks)
     }
@@ -127,6 +130,7 @@ pub(crate) fn prepare(metadata: &Metadata, threshold: Threshold) -> Result<Prepa
         repair_order: Vec::new(),
         phases: Vec::new(),
         clusters: Vec::new(),
+        cluster_batches: Vec::new(),
         members: Vec::new(),
         masks: Vec::new(),
     };
@@ -163,12 +167,43 @@ pub(crate) fn prepare(metadata: &Metadata, threshold: Threshold) -> Result<Prepa
         prepare_clusters(&mut prepared, &words, cluster_class, margin)?;
     }
     prepare_phases(&mut prepared);
+    prepare_cluster_batches(&mut prepared);
     Ok(prepared)
 }
 
-// Nearby repairs can read each other's writes, including repeated centers.
-// Keep those records in camera order. Distant centers can run together safely
-// because they do not share pixels or radius-one neighbors.
+// Each search can read its complete rectangle and earlier repaired members.
+// Preserve camera order for intersecting rectangles and run disjoint searches
+// together. Members and masks retain their existing offsets when descriptors move.
+fn prepare_cluster_batches(p: &mut Prepared) {
+    let overlaps = |a: [u32; 4], b: [u32; 4]| {
+        a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+    };
+    let mut levels = vec![0usize; p.clusters.len()];
+    for i in 0..p.clusters.len() {
+        for j in 0..i {
+            if overlaps(p.clusters[i].rect, p.clusters[j].rect) {
+                levels[i] = levels[i].max(levels[j] + 1);
+            }
+        }
+    }
+    let mut clusters = Vec::with_capacity(p.clusters.len());
+    for level in 0..levels.iter().copied().max().map_or(0, |v| v + 1) {
+        let first = clusters.len() as u32;
+        clusters.extend(
+            p.clusters
+                .iter()
+                .zip(&levels)
+                .filter(|(_, l)| **l == level)
+                .map(|(c, _)| *c),
+        );
+        p.cluster_batches
+            .push([first, clusters.len() as u32 - first]);
+    }
+    p.clusters = clusters;
+}
+
+// Nearby pixel repairs can read each other's writes, including repeated centers.
+// Distant centers can run together when their radius-one neighborhoods are disjoint.
 fn prepare_phases(p: &mut Prepared) {
     let w = p.params.source[0];
     let h = p.params.source[1];
@@ -424,31 +459,31 @@ pub(crate) fn apply(
     gpu.copy(input, output.write(), input.size());
     let mut records = gpu.upload("Main JPEG and detected repair records", &p.records)?;
     let uniform = gpu.uniform(&p.params);
-    let mut trace = gpu.trace(profile.mode.gpu(), p.phases.len() as u32 + 6);
+    let mut trace = gpu.trace(
+        profile.mode.gpu(),
+        (p.phases.len() + p.cluster_batches.len()) as u32 + 6,
+    );
     select_bad_reds(gpu, original, &mut records, &uniform, p.params, &mut trace)?;
     correct_lists(gpu, &records, &mut output, &uniform, p, &mut trace)?;
     if !p.clusters.is_empty() {
         let clusters = gpu.upload("Camera cluster descriptors", &p.clusters)?;
         let members = gpu.upload("Stable quality ordered cluster members", &p.members)?;
         let mut masks = gpu.upload("Cluster known and channel masks", &p.masks)?;
-        let uniform = gpu.uniform(&[
-            p.params.source[0],
-            p.params.source[1],
-            p.clusters.len() as u32,
-            p.clusters.iter().map(|c| c.indices[1]).max().unwrap(),
-        ]);
-        gpu.dispatch(
-            Kernel::ClusterRepair,
-            &mut [
-                (0, Write(output.write())),
-                (1, Read(&clusters)),
-                (2, Read(&members)),
-                (3, Write(masks.write())),
-                (4, Read(&uniform)),
-            ],
-            [1, 1],
-            &mut trace,
-        );
+        for &[first, count] in &p.cluster_batches {
+            let uniform = gpu.uniform(&[p.params.source[0], p.params.source[1], first, 0]);
+            gpu.dispatch(
+                Kernel::ClusterRepair,
+                &mut [
+                    (0, Write(output.write())),
+                    (1, Read(&clusters)),
+                    (2, Read(&members)),
+                    (3, Write(masks.write())),
+                    (4, Read(&uniform)),
+                ],
+                [count, 1],
+                &mut trace,
+            );
+        }
     }
     gpu.finish_trace(&trace, profile)?;
     Ok(output)
