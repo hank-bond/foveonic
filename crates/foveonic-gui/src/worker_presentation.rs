@@ -1,7 +1,12 @@
 //! Reframes one immutable whole-image result without reopening sources or running photographic nodes.
 
 use super::{Comparison, Request};
-use crate::{editor::Rendition, export::resolve_camera_settings, preferences::PreviewMode};
+use crate::{
+    editor::Rendition,
+    export::resolve_camera_settings,
+    preferences::PreviewMode,
+    render_matching::{same_calibration_snapshot, same_pixel_settings},
+};
 use foveonic::{
     decode_cache::Cache as DecodeCache,
     image::{ImageTexture, RenderedImage},
@@ -10,40 +15,6 @@ use foveonic::{
     source::{Metadata, Result, SourceOrigin},
 };
 use std::{path::PathBuf, sync::Arc};
-
-/// Crop and rotation change the view. Existing workspace grid flags and range
-/// names retain the same normalization used for Smart's pixel revisions.
-pub(crate) fn same_pixels(a: &Settings, b: &Settings) -> bool {
-    let mut b = b.clone();
-    b.crop = a.crop;
-    b.rotation = a.rotation;
-    crate::smart::same_edits(a, &b)
-}
-fn same_calibration(
-    a: &Option<Arc<foveonic::noise_calibration::Calibration>>,
-    b: &Option<Arc<foveonic::noise_calibration::Calibration>>,
-) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-        _ => false,
-    }
-}
-pub(super) fn same_context(a: &Request, b: &Request) -> bool {
-    a.path == b.path
-        && a.output == b.output
-        && a.rendition == b.rendition
-        && a.comparison == b.comparison
-        && a.preview_policy == b.preview_policy
-        && a.export.is_none()
-        && b.export.is_none()
-        && same_calibration(&a.calibration, &b.calibration)
-}
-pub(super) fn presentation_change(a: &Request, b: &Request) -> bool {
-    a.framing_preview != b.framing_preview
-        || a.settings.crop != b.settings.crop
-        || a.settings.rotation != b.settings.rotation
-}
 
 #[derive(Clone)]
 struct Image {
@@ -179,7 +150,7 @@ impl Presentation {
         if !changed
             && request.preview_quality == PreviewMode::Full
             && whole.images[0].image.settings().working_scale != Scale::NATIVE
-            && same_pixels(&whole.settings, &settings)
+            && same_pixel_settings(&whole.settings, &settings)
         {
             return None;
         }
@@ -191,7 +162,7 @@ impl Presentation {
             && whole.rendition == request.rendition
             && whole.comparison == request.comparison
             && whole.policy == request.preview_policy
-            && same_calibration(&whole.calibration, &request.calibration)
+            && same_calibration_snapshot(&whole.calibration, &request.calibration)
             && ((whole.framing && request.framing_preview)
                 || whole.framing != request.framing_preview
                 || whole.settings.crop != request.settings.crop
@@ -210,7 +181,7 @@ impl Presentation {
             || whole.rendition != request.rendition
             || whole.comparison != request.comparison
             || whole.policy != request.preview_policy
-            || !same_calibration(&whole.calibration, &request.calibration)
+            || !same_calibration_snapshot(&whole.calibration, &request.calibration)
         {
             return Ok(None);
         }
@@ -222,7 +193,7 @@ impl Presentation {
         }
         let mut settings = request.settings.clone();
         resolve_camera_settings(&mut settings, &whole.images[0].metadata);
-        if !same_pixels(&whole.settings, &settings) {
+        if !same_pixel_settings(&whole.settings, &settings) {
             return Ok(None);
         }
         let changed = whole.framing != request.framing_preview
@@ -444,43 +415,6 @@ mod tests {
         assert_eq!(frame.texture.description(), expected.description());
         assert_eq!(pixels(engine, &frame.texture), pixels(engine, &expected));
     }
-    #[test]
-    fn pixel_boundary_preserves_control_source_and_workspace_policy_guards() {
-        let path = std::path::Path::new("test.x3f");
-        let settings = Settings::new("Sunlight", "Standard");
-        let a = request(
-            path,
-            1,
-            PreviewMode::Full,
-            PreviewMode::Smart,
-            &settings,
-            false,
-        );
-        let mut b = request(
-            path,
-            2,
-            PreviewMode::Smart,
-            PreviewMode::Smart,
-            &settings,
-            true,
-        );
-        b.settings.crop.bounds = [0.1, 0.2, 0.9, 0.8];
-        b.settings.rotation.degrees = 7.;
-        assert!(
-            same_context(&a, &b)
-                && same_pixels(&a.settings, &b.settings)
-                && presentation_change(&a, &b)
-        );
-        b.settings.exposure = 0.5;
-        assert!(!same_pixels(&a.settings, &b.settings));
-        b.settings = settings;
-        b.preview_policy = PreviewMode::Full;
-        assert!(!same_context(&a, &b));
-        b.preview_policy = PreviewMode::Smart;
-        b.path = "another.x3f".into();
-        assert!(!same_context(&a, &b));
-    }
-
     #[test]
     #[ignore = "requires GPU and MERRILL_X3F"]
     fn crop_and_rotate_reuse_thumb_smart_fit_and_smart_full_without_numerical_dispatches() {

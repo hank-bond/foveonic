@@ -372,7 +372,6 @@ impl Photos {
         )? {
             match outcome {
                 ReducedRender::Rendered(artifacts) => {
-                    *native = None;
                     self.report_retention(engine, loaded.revision, "render");
                     self.prune();
                     return Ok(Some(artifacts));
@@ -393,13 +392,7 @@ impl Photos {
         }
         let original = if let Some(source) = loaded.source.take() {
             source
-        } else if native
-            .as_ref()
-            .is_some_and(|(path, _)| *path == loaded.path)
-        {
-            native.take().unwrap().1.into_source()
         } else {
-            *native = None;
             open_source(cache, &loaded.path, loaded.revision, loaded_progress)?
         };
         if self.working.contains(loaded.id) {
@@ -460,7 +453,6 @@ impl Photos {
         });
         self.report_retention(engine, loaded.revision, "insert");
         self.prune();
-        *native = None;
         match outcome {
             ReducedRender::Rendered(artifacts) => Ok(Some(artifacts)),
             ReducedRender::Superseded => Ok(None),

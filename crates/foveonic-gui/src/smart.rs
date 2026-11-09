@@ -1,8 +1,12 @@
 //! Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
 
-use crate::{preferences, worker, App};
+use crate::{
+    preferences,
+    render_matching::{same_authored_edits, same_image_geometry},
+    worker, App,
+};
 use eframe::egui;
-use foveonic::render::{Scale, Settings};
+use foveonic::render::Scale;
 // Keep a small margin around the clicked viewport while the whole frame catches up.
 const DETAIL_OVERSCAN_PIXELS: u32 = 64;
 
@@ -37,25 +41,6 @@ impl Controller {
 pub fn contains(outer: [u32; 4], inner: [u32; 4]) -> bool {
     outer[0] <= inner[0] && outer[1] <= inner[1] && outer[2] >= inner[2] && outer[3] >= inner[3]
 }
-pub fn same_edits(a: &Settings, b: &Settings) -> bool {
-    let mut a = a.clone();
-    let mut b = b.clone();
-    a.working_scale = Scale::NATIVE;
-    b.working_scale = Scale::NATIVE;
-    a.preview_region = None;
-    b.preview_region = None;
-    a.dehaze_estimate = false;
-    b.dehaze_estimate = false;
-    a.photographic.color_editor.advanced.clear_names();
-    b.photographic.color_editor.advanced.clear_names();
-    a == b
-}
-
-/// Artistic edits can keep the previous image visible. Framing changes cannot
-/// reuse a tile's old mapping into the photograph.
-pub fn same_geometry(a: &Settings, b: &Settings) -> bool {
-    a.crop == b.crop && a.rotation == b.rotation && a.output_size == b.output_size
-}
 
 impl App {
     pub(super) fn smart_detail(&self, pixels_per_point: f32) -> Option<&worker::Frame> {
@@ -76,7 +61,7 @@ impl App {
                 && detail.output == self.output
                 && detail.rendition == self.before.active
                 && detail.framing_preview == self.framing_preview_active()
-                && same_geometry(&detail.requested, &self.view_settings())
+                && same_image_geometry(&detail.requested, &self.view_settings())
                 // A completed newer whole image supersedes this tile even when
                 // another edit is already pending. Never rewind to an older base.
                 && self.frame.as_ref().is_none_or(|base| base.revision < detail.revision)
@@ -108,7 +93,7 @@ impl App {
                 && frame.framing_preview == self.framing_preview_active()
                 && frame.artifact.settings.output_size.is_none()
                 && requested.output_size.is_none()
-                && same_geometry(&frame.requested, &requested)
+                && same_image_geometry(&frame.requested, &requested)
         })?;
         let visible = self.viewport.visible_pixels()?;
         if !requested.regional_preview_available(&frame.artifact.metadata) {
@@ -180,19 +165,20 @@ impl App {
                 let full_completed = self.frame.as_ref().is_some_and(|frame| {
                     frame.revision > detail.revision
                         && frame.artifact.settings.working_scale == Scale::NATIVE
-                        && same_edits(&frame.requested, &self.view_settings())
+                        && same_authored_edits(&frame.requested, &self.view_settings())
                 });
                 !full_completed
                     && self.selected.as_ref() == Some(&detail.path)
                     && detail.rendition == self.before.active
-                    && same_edits(&detail.requested, &self.view_settings())
+                    && same_authored_edits(&detail.requested, &self.view_settings())
             })
         {
             self.submit_with_quality(None, None, preferences::PreviewMode::Full);
             return;
         }
         let Some(frame) = self.frame.as_ref().filter(|f| {
-            f.rendition == self.before.active && same_edits(&f.requested, &self.view_settings())
+            f.rendition == self.before.active
+                && same_authored_edits(&f.requested, &self.view_settings())
         }) else {
             return;
         };

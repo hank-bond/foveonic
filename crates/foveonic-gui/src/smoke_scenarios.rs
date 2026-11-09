@@ -451,7 +451,7 @@ impl Scenario {
             && frame.diagnostic_task.revision >= minimum
             && Some(frame.artifact.settings.working_scale)
                 == self.config.quality.expected_scale(&frame.artifact.metadata)
-            && crate::smart::same_edits(
+            && crate::render_matching::same_authored_edits(
                 &frame.requested,
                 self.expected
                     .get(path)

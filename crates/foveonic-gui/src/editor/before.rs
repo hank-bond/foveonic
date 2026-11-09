@@ -69,7 +69,7 @@ impl App {
             self.exit_before();
             if self.frame.as_ref().is_none_or(|f| {
                 f.framing_preview != self.framing_preview_active()
-                    || !crate::smart::same_edits(&f.requested, &self.settings)
+                    || !crate::render_matching::same_authored_edits(&f.requested, &self.settings)
             }) {
                 self.submit(None);
             }
@@ -169,7 +169,9 @@ mod tests {
         let baseline = before
             .settings(&current, Some(&metadata), &defaults)
             .unwrap();
-        assert!(crate::smart::same_geometry(&current, &baseline));
+        assert!(crate::render_matching::same_image_geometry(
+            &current, &baseline
+        ));
         assert_eq!(baseline.exposure, 0.);
         assert_eq!(baseline.white_balance, "");
         assert_eq!(baseline.white_balance_bias.warmth, 0.);
@@ -178,7 +180,9 @@ mod tests {
         let baseline = before
             .settings(&current, Some(&metadata), &defaults)
             .unwrap();
-        assert!(crate::smart::same_geometry(&current, &baseline));
+        assert!(crate::render_matching::same_image_geometry(
+            &current, &baseline
+        ));
         assert_eq!(
             baseline.photographic.tone_method,
             PhotographicMethod::Universal

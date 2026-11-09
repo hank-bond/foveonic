@@ -135,7 +135,7 @@ impl RenderCoordinator {
                 && entry.task.stamp.target.purpose == Purpose::Detail
                 && (entry.settled
                     || entry.task.request.preview_policy != request.preview_policy
-                    || !crate::worker::presentation::same_pixels(
+                    || !crate::render_matching::same_pixel_settings(
                         &entry.task.request.settings,
                         &request.settings,
                     ))
@@ -170,7 +170,7 @@ impl RenderCoordinator {
         if let Some(index) = existing {
             let old = &self.desired[index].task;
             if (old.origin.is_none() || origin.is_none() || old.origin == origin)
-                && crate::worker::same_delivery_request(&old.request, &request)
+                && crate::render_matching::same_delivery_request(&old.request, &request)
             {
                 let id = old.stamp.id;
                 crate::timing::task(
@@ -189,7 +189,7 @@ impl RenderCoordinator {
         let compatible = existing.is_some_and(|index| {
             let old = &self.desired[index].task;
             (old.origin.is_none() || origin.is_none() || old.origin == origin)
-                && crate::worker::same_pixel_request(&old.request, &request)
+                && crate::render_matching::can_share_pixel_work(&old.request, &request)
         });
         let id = if compatible {
             self.desired[existing.unwrap()].task.stamp.id

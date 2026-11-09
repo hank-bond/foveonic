@@ -13,6 +13,7 @@ use crate::export::ExportFormat;
 use crate::{
     export::{self, resolve_camera_settings, Export},
     preferences::PreviewMode,
+    render_matching::{presentation_changed, same_pixel_settings, same_request_context},
 };
 use eframe::egui;
 #[cfg(test)]
@@ -65,19 +66,6 @@ fn effective_working_scale(request: &Request) -> Scale {
     } else {
         request.preview_quality.working_scale()
     }
-}
-pub(crate) fn same_pixel_request(a: &Request, b: &Request) -> bool {
-    presentation::same_context(a, b)
-        && presentation::same_pixels(&a.settings, &b.settings)
-        && (presentation::presentation_change(a, b)
-            || (a.preview_quality == b.preview_quality
-                && a.settings.preview_region == b.settings.preview_region))
-}
-pub(crate) fn same_delivery_request(a: &Request, b: &Request) -> bool {
-    same_pixel_request(a, b)
-        && !presentation::presentation_change(a, b)
-        && a.settings == b.settings
-        && a.preview_quality == b.preview_quality
 }
 
 fn resolve_preview(
@@ -611,7 +599,6 @@ impl Worker {
                             .unwrap_or_default()
                     } else { source.as_ref().unwrap().1.changed_parameters(&settings) };
                     let cancel=||{
-                        if request.export.is_some(){return false;}
                         let state=slot.0.lock().unwrap();
                         if state.clear || state.stop { return true; }
                         let Some(desired) = state.plan.task(&task.stamp.target) else { return true; };
@@ -621,9 +608,9 @@ impl Worker {
                         let mut next=pending.settings.clone();
                         resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
                         if resolve_preview(pending, &mut next, metadata.as_ref().unwrap()).is_err() { return true; }
-                        if presentation::same_context(request, pending) && presentation::presentation_change(request, pending)
-                            && presentation::same_pixels(&settings, &next) { return false; }
-                        !presentation::same_context(request, pending) || settings.working_scale!=next.working_scale || settings.preview_region!=next.preview_region
+                        if same_request_context(request, pending) && presentation_changed(request, pending)
+                            && same_pixel_settings(&settings, &next) { return false; }
+                        !same_request_context(request, pending) || settings.working_scale!=next.working_scale || settings.preview_region!=next.preview_region
                             || (!edit.is_empty() && settings.changed_parameters(&next).iter().any(|parameter| !edit.contains(parameter)))
                     };
                     let mut profile = Profile::new(crate::timing::mode());
@@ -631,8 +618,8 @@ impl Worker {
                     let cache_before = before.map(|_|if reusing_pixels { 0 } else if let Some(loaded) = &reduced_loaded { reduced.cached_bytes(loaded) }
                         else { source.as_ref().unwrap().1.cached_bytes() });
                     let mut used_reduced = false;
-                    let root=if request.export.is_some(){"final"}else{&request.output};
-                    let input = if request.comparison && request.export.is_none() {
+                    let root=request.output.as_str();
+                    let input = if request.comparison {
                         Some(foveonic::inspection::comparison_input(&settings, root, metadata.as_deref())
                             .ok_or("selected output has no operation-input comparison")?)
                     } else {
@@ -2352,7 +2339,10 @@ mod preview_tests {
         request.preview_quality = PreviewMode::Fast;
         resolve_preview(&request, &mut resolved, &metadata).unwrap();
         assert_eq!(resolved.working_scale, Scale::new(2).unwrap());
-        assert!(crate::smart::same_edits(&resolved, &request.settings));
+        assert!(crate::render_matching::same_authored_edits(
+            &resolved,
+            &request.settings
+        ));
         request.settings.working_scale = Scale::new(4).unwrap();
         request.preview_quality = PreviewMode::Full;
         resolve_preview(&request, &mut resolved, &metadata).unwrap();

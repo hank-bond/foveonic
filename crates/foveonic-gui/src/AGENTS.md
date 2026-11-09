@@ -73,6 +73,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[progress.rs](./progress.rs)** Shows request-to-image time and discrete completed loading and rendering stages.
 - **[render_coordinator.rs](./render_coordinator.rs)** Owns desired photo renders and publishes one immutable plan to the serialized executor.
 - **[render_delivery.rs](./render_delivery.rs)** Classifies completed images for pixel reuse, per-photo feedback and current-view delivery.
+- **[render_matching.rs](./render_matching.rs)** Defines shared settings and request comparisons without selecting work or admitting results.
 - **[rotate_tool.rs](./rotate_tool.rs)** Owns line and freehand rotation gestures within the shared photograph-tool lifecycle.
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.

@@ -38,6 +38,7 @@ mod processing;
 mod progress;
 mod render_coordinator;
 mod render_delivery;
+mod render_matching;
 mod rotate_tool;
 mod scopes;
 mod sections;
@@ -454,15 +455,14 @@ impl App {
         let cached_metadata = self.multi_edit.metadata(&path);
         let cached_settings = self.multi_edit.settings(&path).cloned();
         let cached_selection = cached_frame.as_ref().is_some_and(|frame| {
-            cached_settings
-                .as_ref()
-                .is_some_and(|settings| smart::same_edits(&frame.requested, settings))
-                && frame.calibration_signature.as_deref()
-                    == self
-                        .noise_calibration
-                        .selected(self.preferences.noise_profile)
-                        .as_ref()
-                        .map(|profile| profile.signature())
+            cached_settings.as_ref().is_some_and(|settings| {
+                render_matching::same_authored_edits(&frame.requested, settings)
+            }) && frame.calibration_signature.as_deref()
+                == self
+                    .noise_calibration
+                    .selected(self.preferences.noise_profile)
+                    .as_ref()
+                    .map(|profile| profile.signature())
                 && self
                     .worker
                     .cache
@@ -1649,7 +1649,10 @@ impl eframe::App for App {
                         && frame.output == "final"
                         && self.output == "final"
                         && frame.framing_preview == self.framing_preview_active()
-                        && smart::same_edits(&frame.requested, &self.view_settings())
+                        && render_matching::same_authored_edits(
+                            &frame.requested,
+                            &self.view_settings(),
+                        )
                         && self
                             .worker
                             .cache

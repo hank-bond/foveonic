@@ -9,6 +9,8 @@ This is a code-based map of the current implementation, including diagnostics an
 
 The [orchestration proposal](./specs/render-orchestration.md) describes possible replacement interfaces and concurrency rules. It is a draft, separate from this implemented-code map.
 
+The [coordination consistency inventory](../plans/render-coordination-consistency.md) records the broader source audit and contract questions to review before selecting incremental cleanup slices. Its findings are structural observations unless runtime evidence is stated explicitly.
+
 ## Request and delivery flow
 
 ```mermaid
@@ -94,6 +96,8 @@ The shared memory target is an accounting and retention policy, not a hard proce
 | Calibration signature and view context | Compatibility of a completion with the current processing and display context. |
 
 Source identity, cache validity, task settlement and display acceptance are separate decisions. For example, a superseded completion can contain reusable compatible pixels without settling the newest request. A valid cached result can also belong to a photograph no longer visible.
+
+[render_matching.rs](../crates/foveonic-gui/src/render_matching.rs) owns the shared settings and request comparisons used by Smart, presentation reuse, worker continuation, coordinator coalescing and delivery. Authored-edit equality ignores transient processing requests and range labels. Pixel-settings equality also ignores crop and rotation. Geometry equality checks crop, rotation and output size. Request comparisons add consumer context and quality/region requirements. They do not establish source identity, graph validity or permission to update a view. Those decisions remain with their existing owners.
 
 ## Scheduling and completion boundaries
 

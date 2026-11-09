@@ -54,10 +54,9 @@ impl Runtime {
             let photo = self.photos.entry(path.clone()).or_default();
             if !previous.contains(path)
                 && photo.settings.as_ref().is_some_and(|settings| {
-                    photo
-                        .frame
-                        .as_ref()
-                        .is_none_or(|frame| !crate::smart::same_edits(&frame.requested, settings))
+                    photo.frame.as_ref().is_none_or(|frame| {
+                        !crate::render_matching::same_authored_edits(&frame.requested, settings)
+                    })
                 })
             {
                 photo.dirty = true;

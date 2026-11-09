@@ -3,7 +3,7 @@
 use crate::{
     editor::Rendition,
     render_coordinator::{Completion, Purpose},
-    smart, worker, App,
+    render_matching, worker, App,
 };
 use foveonic::render::Settings;
 use std::path::Path;
@@ -154,9 +154,9 @@ fn destination(
             return Err(Rejection::NotVisible);
         }
         if reply.image.as_ref().is_some_and(|image| {
-            !view
-                .overview_settings
-                .is_some_and(|settings| smart::same_geometry(settings, image.requested))
+            !view.overview_settings.is_some_and(|settings| {
+                render_matching::same_image_geometry(settings, image.requested)
+            })
         }) {
             return Err(Rejection::GeometryChanged);
         }
@@ -177,7 +177,7 @@ fn destination(
             !view.exporting
                 && view.active == Some(image.path)
                 && view.output == image.output
-                && smart::same_geometry(image.requested, view.settings)
+                && render_matching::same_image_geometry(image.requested, view.settings)
                 && (!view.comparison || image.comparison)
                 && view
                     .displayed_revision

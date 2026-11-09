@@ -412,7 +412,7 @@ mod tests {
             a.photographic.color_editor.advanced.push(range);
             let mut b = a.clone();
             b.photographic.color_editor.advanced.ranges[0].name = "Blue sky".try_into().unwrap();
-            assert!(crate::smart::same_edits(&a, &b));
+            assert!(crate::render_matching::same_authored_edits(&a, &b));
         }
     }
     #[test]

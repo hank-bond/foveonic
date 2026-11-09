@@ -10,6 +10,8 @@ Implements the latency direction in [multi-edit](../docs/specs/multi-edit.md), [
 
 The owner confirmed Draft, Thumb and multi-edit as the intended 0.8 feature set. Stabilize the existing implementation before revisiting the orchestration proposal. Correct processing boundaries, consolidate repeated state decisions and remove unused paths while retaining the current coordinator, executor and cache owners. No new execution runtime or concurrent GPU scheduler is part of this pass.
 
+After the downsampling checkpoint, the [coordination consistency pass](./render-coordination-consistency.md) tracks small code-based cleanup and owner app-review slices before the larger architecture migration.
+
 - [x] Separate the completed compact-cache and tolerant-sidecar changes into independently checked main-based commits.
 - [x] Isolate the completed Perfetto foundation and application instrumentation in reviewed checkpoints.
 - [x] Check unchanged group selection, active-photo switching, relative edits, rapid scrubbing and complete progress settlement through the real application.
