@@ -1,6 +1,4 @@
 const UNSET_ANCHOR_COORDINATE=3000u;
-const NEUTRAL_RATIO_MIN=0.66;
-const NEUTRAL_RATIO_MAX=1.5;
 const BRIGHTNESS_OFFSET=5.;
 @group(0) @binding(4) var<storage,read_write> output:array<f32>;
 
@@ -16,13 +14,13 @@ fn highlight_prepare(@builtin(global_invocation_id) id:vec3<u32>){
  let converted=color(weighted,0u);let minimum=min(converted.x,min(converted.y,converted.z));work[p.shape.z*LOW_CAMERA_MARKER+n]=f32(f32(i32(minimum))<p.thresholds.z);
  var total=0.;if x>=2u&&x<p.shape.x-2u&&y>=2u&&y<p.shape.y-1u{
    // Only the central three rows have nonzero convolution weights.
-   for(var dy=-1;dy<=1;dy++){for(var dx=-1;dx<=1;dx++){let weight=select(1.,0.25,dx!=0&&dy!=0);let offset=(u32(i32(y)+dy)*p.shape.x+u32(i32(x)+dx))*3u;total=fma(weight,f32(pixels[offset+1u]>=p.thresholds.y),total);}}
+   for(var dy=-1;dy<=1;dy++){for(var dx=-1;dx<=1;dx++){let weight=select(1.,0.25,dx!=0&&dy!=0);let neighbor=u32(i32(y)+dy)*p.shape.x+u32(i32(x)+dx);total=fma(weight,f32(original_rgb(neighbor).y>=p.thresholds.y),total);}}
  }
- green_mask[n]=u32(ceil(min(total*255.,255.)));
+ green_mask[n]=u32(ceil(min(total*255.,255.)));if p.controls.x!=0u{green_mask[n]=select(0u,u32(evidence[n*2u+1u].w),evidence_valid(n));}
 }
 @compute @workgroup_size(8,8)
 fn highlight_classify(@builtin(global_invocation_id) id:vec3<u32>){
- let x=id.x;let y=id.y;if x>=p.shape.x||y>=p.shape.y{return;}let n=y*p.shape.x+x;let cells=p.shape.z;var ring=work[cells*CLIPPED_MARKER+n];
+ let x=id.x;let y=id.y;if x>=p.shape.x||y>=p.shape.y{return;}let n=y*p.shape.x+x;let cells=p.shape.z;if p.controls.x!=0u{work[cells*DIRECTIONAL_MARKER+n]=select(0.,evidence[n*2u].w,evidence_valid(n));return;}var ring=work[cells*CLIPPED_MARKER+n];
  if x>0u&&y>0u&&x<p.shape.x-1u&&y<p.shape.y-1u{var any_set=false;var any_clear=false;for(var dy=-1;dy<=1;dy++){for(var dx=-1;dx<=1;dx++){let v=work[cells*CLIPPED_MARKER+u32(i32(y)+dy)*p.shape.x+u32(i32(x)+dx)];any_set=any_set||v!=0.;any_clear=any_clear||v==0.;}}ring=f32(any_set&&any_clear);}
  var directional=0.;if x>=p.rectangle.x&&y>=p.rectangle.y&&x<p.rectangle.z&&y<p.rectangle.w&&work[cells*GREEN_MARKER+n]==0.{
    var count=0.;for(var dy=-1;dy<=1;dy++){for(var dx=-1;dx<=1;dx++){if dx!=0||dy!=0{count=count+work[cells*GREEN_MARKER+u32(i32(y)+dy)*p.shape.x+u32(i32(x)+dx)];}}}
@@ -58,7 +56,7 @@ fn highlight_vertical(@builtin(global_invocation_id) id:vec3<u32>){if id.x<p.sha
 @compute @workgroup_size(8,8)
 fn highlight_finish(@builtin(global_invocation_id) id:vec3<u32>){
  if id.x>=p.shape.x||id.y>=p.shape.y{return;}let n=id.y*p.shape.x+id.x;var value=load_rgb(0u,n);
- if work[p.shape.z*DIRECTIONAL_MARKER+n]==1.{let a=load_rgb(HORIZONTAL_RGB,n);let b=load_rgb(VERTICAL_RGB,n);let square=vec3(fma(a.x,a.x,fma(b.x,b.x,0.)),fma(a.y,a.y,fma(b.y,b.y,0.)),fma(a.z,a.z,fma(b.z,b.z,0.)));value=sqrt(square*0.5);}
- value=finite(value);if p.shape.w==CHANNEL_EXTENSION{value=value/p.gains.xyz;let i=n*3u;output[i]=value.x;output[i+1u]=value.y;output[i+2u]=value.z;return;}let mean=fma(1.,fma(1.,value.x,value.y),value.z)/3.;var amount=clamp((mean-p.neutralization.x)/p.neutralization.y,0.,1.);if value.z<=p.neutralization.z{amount=amount*0.;}let transformed=color(value,INVERSE_CAMERA_MATRIX);let other=1.-amount;
- value=vec3(fma(amount,transformed.x,value.x*other),fma(amount,transformed.y,value.y*other),fma(amount,transformed.z,value.z*other))/p.gains.xyz;let i=n*3u;output[i]=value.x;output[i+1u]=value.y;output[i+2u]=value.z;
+ let coverage=work[p.shape.z*DIRECTIONAL_MARKER+n];if coverage>0.{let a=load_rgb(HORIZONTAL_RGB,n);let b=load_rgb(VERTICAL_RGB,n);let square=vec3(fma(a.x,a.x,fma(b.x,b.x,0.)),fma(a.y,a.y,fma(b.y,b.y,0.)),fma(a.z,a.z,fma(b.z,b.z,0.)));let recovered=sqrt(square*0.5);if p.controls.x==0u||coverage==1.{value=recovered;}else{value=mix(value,recovered,coverage);}}
+ value=finite(value);if p.shape.w==CHANNEL_EXTENSION{value=value/p.gains.xyz;let i=n*3u;output[i]=value.x;output[i+1u]=value.y;output[i+2u]=value.z;return;}if evidence_valid(n){value=(value+evidence[n*2u+1u].xyz)/p.gains.xyz;}else{let amount=neutralization_weight(value);let transformed=color(value,INVERSE_CAMERA_MATRIX);let other=1.-amount;
+ value=vec3(fma(amount,transformed.x,value.x*other),fma(amount,transformed.y,value.y*other),fma(amount,transformed.z,value.z*other))/p.gains.xyz;}let i=n*3u;output[i]=value.x;output[i+1u]=value.y;output[i+2u]=value.z;
 }

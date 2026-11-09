@@ -30,7 +30,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 - **[fixed_point.rs](./fixed_point.rs)** Executes signed fixed-point layer correction and nonlinear matrix transforms with explicit numerical contracts.
 - **[fppd.rs](./fppd.rs)** Corrects sparse RGB gains and paired mono defects with explicit numerical grids.
 - **[highlight.rs](./highlight.rs)** Projects original camera clipping evidence and recovers highlights on the working grid.
-- **[highlight_restoration.rs](./highlight_restoration.rs)** Reconstructs saturated RGB through directional interpolation and inverse-camera neutralization.
+- **[highlight_restoration.rs](./highlight_restoration.rs)** Preserves native highlight evidence and reconstructs saturated RGB through directional interpolation.
 - **[hlp_calibration.rs](./hlp_calibration.rs)** Applies sparse blue correction and ordered shading while retaining pre-color scratch samples.
 - **[luma_cluster.rs](./luma_cluster.rs)** Repairs ordered mono clusters with parallel candidate scoring and stable source-order ties.
 - **[mod.rs](./mod.rs)** Prepares and corrects original camera layers before rendering-specific reconstruction.

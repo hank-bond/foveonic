@@ -13,6 +13,164 @@ fn validates_sparse_context_and_finite_controls() {
 }
 
 #[test]
+#[ignore = "requires GPU"]
+fn requested_outputs_preserve_complete_repairs_and_avoid_unused_blue_work() {
+    let gpu = Gpu::new().unwrap();
+    let extent: [u32; 2] = [256, 128];
+    let n = (extent[0] * extent[1]) as usize;
+    let noise = [1., 0., 0., 1., 0., 0., 1., 0., 0.];
+    for rgb_only in [false, true] {
+        for preserve in [false, true] {
+            let mut rgb = vec![0_f32; n * 3];
+            let blue_extent = if rgb_only {
+                extent
+            } else {
+                extent.map(|v| v * 2)
+            };
+            let mut blue = vec![0_f32; (blue_extent[0] * blue_extent[1]) as usize];
+            for y in 0..extent[1] {
+                for x in 0..extent[0] {
+                    let hot = x >= 16
+                        && x + 1 < extent[0]
+                        && y >= 4
+                        && x.is_multiple_of(16)
+                        && y.is_multiple_of(4);
+                    let base = 100. + ((x * 17 + y * 13 + x * y) % 31) as f32;
+                    let i = (y * extent[0] + x) as usize;
+                    for c in 0..3 {
+                        rgb[i * 3 + c] = if hot {
+                            15000.
+                        } else {
+                            base * [1.2, 0.8, 1.][c]
+                        };
+                    }
+                    if rgb_only {
+                        blue[i] = base;
+                    } else {
+                        for phase in 0..4 {
+                            let index =
+                                ((y * 2 + phase / 2) * blue_extent[0] + x * 2 + phase % 2) as usize;
+                            blue[index] = if hot {
+                                16000. + phase as f32
+                            } else {
+                                base * (1. + phase as f32 * 0.1)
+                            };
+                        }
+                    }
+                }
+            }
+            let input_rgb = gpu.upload("Sparse demand fixture RGB", &rgb).unwrap();
+            let input_blue = gpu.upload("Sparse demand fixture blue", &blue).unwrap();
+            let prepared = Prepared::new(extent, noise, [1., 0., 0.], 1., preserve).unwrap();
+            let prepared = if rgb_only {
+                prepared.with_rgb_only()
+            } else {
+                prepared
+            };
+            let start = gpu.activity();
+            let complete = apply(
+                &gpu,
+                &input_rgb,
+                &input_blue,
+                &prepared,
+                Requested {
+                    blue: true,
+                    defects: true,
+                },
+                &mut Profile::default(),
+            )
+            .unwrap();
+            let full_activity = gpu.activity().since(start);
+            let expected_rgb = gpu.readback(&complete.rgb).unwrap();
+            let expected_blue = gpu.readback(complete.blue.as_ref().unwrap()).unwrap();
+            let expected_defects = gpu.readback(complete.defects.as_ref().unwrap()).unwrap();
+            assert_eq!(full_activity.dispatches, if rgb_only { 7 } else { 12 });
+            let pixels: &[f32] = bytemuck::cast_slice(&expected_rgb);
+            assert!(
+                (0..n).any(|i| {
+                    let x = i as u32 % extent[0];
+                    let y = i as u32 / extent[0];
+                    !(x >= 16
+                        && x + 1 < extent[0]
+                        && y >= 4
+                        && x.is_multiple_of(16)
+                        && y.is_multiple_of(4))
+                        && pixels[i * 3..i * 3 + 3] != rgb[i * 3..i * 3 + 3]
+                }),
+                "fixture must execute interpolation outside the selected sensor sites"
+            );
+            if !rgb_only {
+                assert!(
+                    bytemuck::cast_slice::<u8, u32>(&expected_defects)
+                        .iter()
+                        .any(|v| *v > 7),
+                    "fixture must exercise density's exported mask writes"
+                );
+            }
+            for requested in [
+                Requested::default(),
+                Requested {
+                    blue: false,
+                    defects: true,
+                },
+                Requested {
+                    blue: true,
+                    defects: false,
+                },
+            ] {
+                let start = gpu.activity();
+                let output = apply(
+                    &gpu,
+                    &input_rgb,
+                    &input_blue,
+                    &prepared,
+                    requested,
+                    &mut Profile::default(),
+                )
+                .unwrap();
+                let activity = gpu.activity().since(start);
+                assert_eq!(
+                    activity.dispatches,
+                    if rgb_only {
+                        7
+                    } else if requested.blue {
+                        12
+                    } else if requested.defects {
+                        8
+                    } else {
+                        7
+                    }
+                );
+                assert_eq!(
+                    gpu.readback(&output.rgb).unwrap(),
+                    expected_rgb,
+                    "RGB mode{rgb_only} preserve{preserve}"
+                );
+                assert_eq!(output.blue.is_some(), requested.blue);
+                assert_eq!(output.defects.is_some(), requested.defects);
+                if let Some(blue) = output.blue {
+                    assert_eq!(gpu.readback(&blue).unwrap(), expected_blue);
+                }
+                if let Some(defects) = output.defects {
+                    assert_eq!(gpu.readback(&defects).unwrap(), expected_defects);
+                }
+                if !rgb_only && !requested.blue && !requested.defects {
+                    assert!(activity.storage_bytes < full_activity.storage_bytes);
+                }
+            }
+            assert_eq!(
+                gpu.readback(&input_rgb).unwrap(),
+                bytemuck::cast_slice::<f32, u8>(&rgb)
+            );
+            assert_eq!(
+                gpu.readback(&input_blue).unwrap(),
+                bytemuck::cast_slice::<f32, u8>(&blue)
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires a GPU and SPARSE_REPAIR_REFERENCE with native wrapper fixtures"]
 fn complete_ordinary_hi_wrapper_matches_native_planes_and_defects() {
     let directory = std::path::PathBuf::from(std::env::var("SPARSE_REPAIR_REFERENCE").unwrap());
@@ -51,8 +209,19 @@ fn complete_ordinary_hi_wrapper_matches_native_planes_and_defects() {
             case["preserve"].as_bool().unwrap(),
         )
         .unwrap();
-        let result = apply(&gpu, &rgb, &blue, &params, &mut Profile::default()).unwrap();
-        for (label, buffer) in [("rgb", result.rgb), ("blue", result.blue)] {
+        let result = apply(
+            &gpu,
+            &rgb,
+            &blue,
+            &params,
+            Requested {
+                blue: true,
+                defects: true,
+            },
+            &mut Profile::default(),
+        )
+        .unwrap();
+        for (label, buffer) in [("rgb", result.rgb), ("blue", result.blue.unwrap())] {
             let expected = read(label);
             let actual = gpu.readback(&buffer).unwrap();
             assert_eq!(actual.len(), expected.len());
@@ -80,7 +249,7 @@ fn complete_ordinary_hi_wrapper_matches_native_planes_and_defects() {
             assert_eq!(count, 0, "{name} {label}");
         }
         let expected = read("defects");
-        let actual = gpu.readback(&result.defects).unwrap();
+        let actual = gpu.readback(&result.defects.unwrap()).unwrap();
         let actual = bytemuck::cast_slice::<u8, u32>(&actual);
         let actual: Vec<u8> = actual.iter().map(|&v| v as u8).collect();
         assert_eq!(actual, expected, "{name} defects");
@@ -117,9 +286,20 @@ fn complete_original_hi_wrapper_matches_native_boundary() {
     let blue = load("blue");
     let params = Prepared::new(extent, noise_rgb, noise_blue, 1., true).unwrap();
     let mut profile = Profile::new(crate::profile::Mode::Gpu);
-    let result = apply(&gpu, &rgb, &blue, &params, &mut profile).unwrap();
+    let result = apply(
+        &gpu,
+        &rgb,
+        &blue,
+        &params,
+        Requested {
+            blue: true,
+            defects: true,
+        },
+        &mut profile,
+    )
+    .unwrap();
     eprintln!("sparse original GPU passes {:?}", profile.gpu);
-    for (label, buffer) in [("rgb", result.rgb), ("blue", result.blue)] {
+    for (label, buffer) in [("rgb", result.rgb), ("blue", result.blue.unwrap())] {
         let expected = std::fs::read(directory.join(format!("sparse-output-{label}.f32"))).unwrap();
         let actual = gpu.readback(&buffer).unwrap();
         let mut count = 0;
@@ -179,7 +359,18 @@ fn rgb_only_sparse_repair_matches_reference_workers() {
         )
         .unwrap()
         .with_rgb_only();
-        let output = super::apply(&gpu, &input, &blue, &prepared, &mut Default::default()).unwrap();
+        let output = super::apply(
+            &gpu,
+            &input,
+            &blue,
+            &prepared,
+            Requested {
+                blue: true,
+                defects: true,
+            },
+            &mut Default::default(),
+        )
+        .unwrap();
         let bytes = gpu.readback(&output.rgb).unwrap();
         let actual: &[f32] = bytemuck::cast_slice(&bytes);
         let reference: &[f32] = bytemuck::cast_slice(&expected);

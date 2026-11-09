@@ -2,6 +2,8 @@
 // Work contains RGB (0..3), green/clipped/low-camera markers (3..6),
 // directional markers (6..7), horizontal RGB (7..10), and vertical RGB (10..13).
 const CHANNEL_EXTENSION=1u;
+const NEUTRAL_RATIO_MIN=0.66;
+const NEUTRAL_RATIO_MAX=1.5;
 const INVERSE_CAMERA_MATRIX=9u;
 const GREEN_MARKER=3u;
 const CLIPPED_MARKER=4u;
@@ -11,13 +13,32 @@ const HORIZONTAL_RGB=7u;
 const VERTICAL_RGB=10u;
 struct Params {
     shape: vec4<u32>, rectangle: vec4<u32>, gains: vec4<f32>,
-    thresholds: vec4<f32>, neutralization: vec4<f32>, ceilings: vec4<f32>
+    thresholds: vec4<f32>, neutralization: vec4<f32>, ceilings: vec4<f32>, controls: vec4<u32>
 }
 @group(0) @binding(0) var<storage,read> pixels:array<f32>;
 @group(0) @binding(1) var<uniform> p:Params;
 @group(0) @binding(2) var<storage,read> matrix:array<vec2<f32>>;
 @group(0) @binding(3) var<storage,read_write> work:array<f32>;
 @group(0) @binding(5) var<storage,read_write> green_mask:array<u32>;
+@group(0) @binding(8) var<storage,read> evidence:array<vec4<f32>>;
+@group(0) @binding(10) var<storage,read> unfiltered:array<f32>;
+// A repaired speckle must not regain its original clipping or local correction.
+fn evidence_valid(index:u32)->bool {
+ if p.controls.x==0u{return false;}
+ let i=index*3u;
+ return pixels[i]==unfiltered[i]&&pixels[i+1u]==unfiltered[i+1u]&&pixels[i+2u]==unfiltered[i+2u];
+}
+fn original_rgb(index:u32)->vec3<f32>{
+ let i=index*3u;
+ if evidence_valid(index){return evidence[index*2u].xyz;}
+ return vec3(pixels[i],pixels[i+1u],pixels[i+2u]);
+}
+fn neutralization_weight(value:vec3<f32>)->f32 {
+ let mean=fma(1.,fma(1.,value.x,value.y),value.z)/3.;
+ var amount=clamp((mean-p.neutralization.x)/p.neutralization.y,0.,1.);
+ if value.z<=p.neutralization.z{amount=amount*0.;}
+ return amount;
+}
 fn load_rgb(plane:u32,index:u32)->vec3<f32>{let i=plane*p.shape.z+index*3u;return vec3(work[i],work[i+1u],work[i+2u]);}
 fn store_rgb(plane:u32,index:u32,value:vec3<f32>){let i=plane*p.shape.z+index*3u;work[i]=value.x;work[i+1u]=value.y;work[i+2u]=value.z;}
 fn finite(value:vec3<f32>)->vec3<f32>{return select(vec3(0.),value,(value==value)&(abs(value)<=vec3(3.402823466e38)));}

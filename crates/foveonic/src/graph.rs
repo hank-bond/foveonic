@@ -12,6 +12,8 @@ pub enum DataType {
     DefectFlags,
     /// Integer processing flags. Inspection requires explicit floating conversion.
     HighlightMask,
+    /// Working-cell clipping peaks, native detector coverage and pointwise correction.
+    HighlightEvidence,
     SensorRgb,
     SensorBlue,
     CorrectedSensorRgb,
@@ -61,9 +63,11 @@ impl DataType {
     pub(crate) fn image_description(self, extent: [u32; 2]) -> Option<crate::image::Description> {
         use crate::image::{Description, Space};
         let space = match self {
-            Self::PhaseCells | Self::DefectFlags | Self::HighlightMask | Self::PackedLabCodes => {
-                return None
-            }
+            Self::PhaseCells
+            | Self::DefectFlags
+            | Self::HighlightMask
+            | Self::HighlightEvidence
+            | Self::PackedLabCodes => return None,
             Self::CorrectedSensorRgb => Space::CorrectedSensorRgb,
             Self::CorrectedSensorBlue => Space::CorrectedSensorBlue,
             Self::SensorRgb => Space::SensorRgb,

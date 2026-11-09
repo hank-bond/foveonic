@@ -101,6 +101,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[processing-node-audit](./processing-node-audit.md)** _(archived)._ Audit graph execution, validate bounded repair preparation reuse, and record the selected and rejected cleanup trials.
 - **[profiling-consolidation](./profiling-consolidation.md)** _(archived)._ Consolidate retained core, GUI and native profiling into explicit modes and reusable structured reports.
 - **[quattro-dng](./quattro-dng.md)** _(archived)._ Add ordinary Quattro color and monochrome DNG export with a canonical technical base and one approximate embedded appearance.
+- **[quattro-early-reduction](./quattro-early-reduction.md)** _(archived)._ Record LOW-style Quattro Draft and Thumb working layers with original source calibration and measured preview quality.
 - **[quattro-integration](./quattro-integration.md)** _(archived)._ Implement Quattro input, calibration and reconstruction through family-owned multiresolution recipes.
 - **[quattro-organization](./quattro-organization.md)** _(archived)._ Review Quattro consistency across family controls, recipe preparation, numerical nodes and shared execution.
 - **[quattro-performance](./quattro-performance.md)** _(archived)._ Completed output-equivalent repair and cache optimizations cut Quattro render latency roughly threefold.

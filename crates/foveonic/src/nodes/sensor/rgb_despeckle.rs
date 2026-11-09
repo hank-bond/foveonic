@@ -14,7 +14,9 @@ use crate::{
 struct Params {
     extent: [u32; 2],
     strength: f32,
-    _padding: u32,
+    radius: u32,
+    bright_only: u32,
+    _padding: [u32; 3],
 }
 #[derive(Clone, Debug)]
 pub struct Prepared {
@@ -44,7 +46,9 @@ impl Prepared {
             params: Params {
                 extent,
                 strength,
-                _padding: 0,
+                radius: 2,
+                bright_only: 0,
+                _padding: [0; 3],
             },
             noise,
             projection: super::chroma_repair::projection(matrix)?,
@@ -52,6 +56,21 @@ impl Prepared {
     }
     pub(crate) fn extent(&self) -> [u32; 2] {
         self.params.extent
+    }
+    /// Pooling changes independent noise and the physical neighborhood pitch.
+    /// Reduced detection repairs isolated bright excursions without treating
+    /// naturally darker pooled details as sensor defects.
+    pub(crate) fn on_grid(mut self, grid: crate::render::WorkingGrid, energy: f64) -> Result<Self> {
+        if grid.native != self.extent() || !energy.is_finite() || energy <= 0. || energy > 1. {
+            return Err("invalid RGB despeckle working grid".into());
+        }
+        self.params.extent = grid.extent;
+        self.params.radius = 2_u32.div_ceil(grid.scale.divisor()).max(1);
+        self.params.bright_only = u32::from(grid.scale.is_reduced());
+        for coefficient in &mut self.noise {
+            *coefficient *= energy as f32;
+        }
+        Ok(self)
     }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params)

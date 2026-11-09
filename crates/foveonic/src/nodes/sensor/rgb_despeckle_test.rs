@@ -6,6 +6,49 @@ fn rejects_invalid_controls() {
 }
 
 #[test]
+#[ignore = "requires GPU"]
+fn reduced_detection_repairs_bright_outliers_and_keeps_dark_details() {
+    let gpu = Gpu::new().unwrap();
+    for divisor in [2, 4, 8] {
+        let grid = crate::render::WorkingGrid::new(
+            [72, 72],
+            crate::render::Scale::new(divisor).unwrap(),
+            8,
+        )
+        .unwrap()
+        .with_halo(4)
+        .unwrap();
+        let prepared = Prepared::new([72, 72], [0.; 9], 1., [1., 0., 0., 0., 1., 0., 0., 0., 1.])
+            .unwrap()
+            .on_grid(grid, 1. / f64::from(divisor * divisor))
+            .unwrap();
+        let [w, h] = grid.extent;
+        let center = ((h / 2 * w + w / 2) * 3) as usize;
+        for value in [0., 1000.] {
+            let mut values = vec![100_f32; (w * h * 3) as usize];
+            values[center..center + 3].fill(value);
+            let input = gpu
+                .upload("Reduced RGB detection fixture", &values)
+                .unwrap();
+            let flags = gpu
+                .upload("Reduced RGB detection mask", &vec![0_u32; (w * h) as usize])
+                .unwrap();
+            let output = apply(&gpu, &input, &flags, &prepared, &mut Profile::default()).unwrap();
+            let bytes = gpu.readback(&output).unwrap();
+            let result: &[f32] = bytemuck::cast_slice(&bytes);
+            let expected = if value == 0. { 0. } else { 100. };
+            assert!(result[center..center + 3]
+                .iter()
+                .all(|v| (*v - expected).abs() < 0.01));
+            assert_eq!(
+                gpu.readback(&input).unwrap(),
+                bytemuck::cast_slice::<f32, u8>(&values)
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires a GPU"]
 fn isolated_rgb_outlier_is_repaired_unless_masked() {
     let gpu = Gpu::new().unwrap();

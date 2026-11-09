@@ -76,6 +76,32 @@ impl Prepared {
     pub(crate) fn extent(&self) -> [u32; 2] {
         self.extent
     }
+    /// Sample the existing native gain field at each pooled cell's center.
+    /// Edge padding repeats the gain of the same completed sensor cell.
+    pub(crate) fn on_grid(mut self, grid: crate::render::WorkingGrid) -> Result<Self> {
+        if grid.native != self.extent {
+            return Err("spatial color-gain working grid differs from source".into());
+        }
+        let coordinate = |axis: usize, pixel: u32| {
+            let cell = pixel
+                .saturating_sub(grid.origin[axis])
+                .min(grid.logical[axis] - 1);
+            let first = u64::from(cell) * u64::from(grid.scale.divisor());
+            let end = (first + u64::from(grid.scale.divisor())).min(u64::from(grid.native[axis]));
+            ((first + end - 1) / 2) as usize
+        };
+        let mut axes = Vec::with_capacity((grid.extent[0] + grid.extent[1]) as usize);
+        for x in 0..grid.extent[0] {
+            axes.push(self.axes[coordinate(0, x)]);
+        }
+        for y in 0..grid.extent[1] {
+            axes.push(self.axes[self.extent[0] as usize + coordinate(1, y)]);
+        }
+        self.axes = axes;
+        self.extent = grid.extent;
+        self.shape[..2].copy_from_slice(&grid.extent);
+        Ok(self)
+    }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.shape)
             .slice(&self.tables)

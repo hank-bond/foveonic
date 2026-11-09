@@ -280,6 +280,9 @@ impl Engine {
                 )
             };
             let working_scale = match &node.operation {
+                Operation::HighlightEvidence(prepared) => {
+                    prepared.grid().working_scale().map_or_else(coarser, Ok)?
+                }
                 Operation::Source | Operation::SourcePhaseCells => super::Scale::NATIVE,
                 Operation::RenderedInput { .. } => match &context {
                     Input::Rendered(image) => image.settings.working_scale,
@@ -294,6 +297,7 @@ impl Engine {
                 _ => inherited_scale,
             };
             let extent = match &node.operation {
+                Operation::HighlightEvidence(prepared) => prepared.grid().output_extent(),
                 Operation::PoolSignal(prepared) => prepared.output_extent(),
                 Operation::ReduceLayers { prepared, .. } => prepared.output_extent(),
                 Operation::ResampleRgb { params, .. } => [params.output[0], params.output[1]],
@@ -335,6 +339,9 @@ impl Engine {
                 },
             );
             let view = match &node.operation {
+                Operation::HighlightEvidence(prepared) => {
+                    inherited_view.map(|view| prepared.grid().map_view(view))
+                }
                 Operation::ReduceLayers { prepared, .. } => {
                     inherited_view.map(|view| prepared.map_view(view))
                 }
@@ -403,6 +410,9 @@ impl Engine {
                 Operation::ResampleRgb { params, .. } => Some(
                     crate::nodes::finish::resize::apply(gpu, &input(0).buffer, params, profile)?.0,
                 ),
+                Operation::HighlightEvidence(prepared) => {
+                    Some(prepared.apply(gpu, &input(0).buffer, profile)?)
+                }
                 Operation::PoolSignal(prepared) => Some(crate::nodes::sensor::pool::apply(
                     gpu,
                     &input(0).buffer,
@@ -818,6 +828,12 @@ impl Engine {
                     let output = crate::nodes::sensor::highlight_restoration::apply(
                         gpu,
                         &input(0).buffer,
+                        prepared.requires_evidence().then(|| {
+                            crate::nodes::sensor::highlight_restoration::EvidenceInput {
+                                controls: &input(1).buffer,
+                                unfiltered: &input(2).buffer,
+                            }
+                        }),
                         prepared,
                         profile,
                     )?;
@@ -993,6 +1009,10 @@ impl Engine {
                         &input(0).buffer,
                         &input(1).buffer,
                         prepared,
+                        crate::nodes::sensor::sparse_repair::Requested {
+                            blue: required[node.outputs[1]],
+                            defects: required[node.outputs[2]],
+                        },
                         profile,
                     )?;
                     for (side, buffer, extent) in [
@@ -1004,7 +1024,7 @@ impl Engine {
                                 working_scale,
                                 view_baked,
                                 view,
-                                buffer,
+                                buffer: buffer.ok_or("missing requested sparse repair output")?,
                                 description: graph.outputs[side].data.image_description(extent),
                             });
                         }

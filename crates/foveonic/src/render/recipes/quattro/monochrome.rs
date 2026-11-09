@@ -30,7 +30,8 @@ pub(super) fn prepare_stage1_on_grid(
     grid: super::WorkingGrid,
 ) -> Result<channel_noise::Prepared> {
     let extent = super::color_grid(metadata, grid)?.extent;
-    let energy = super::pool_noise_energy(super::calibration::color_extent(metadata)?, grid);
+    let sampling = super::color_scale(metadata, grid);
+    let energy = super::pool_noise_energy(super::calibration::color_extent(metadata)?, sampling);
     let model = CHANNEL_NOISE_MODEL.map(|v| v * energy);
     let despeckle = blue_despeckle::Prepared::new(
         extent,
@@ -60,7 +61,7 @@ pub(super) fn prepare_stage1_on_grid(
         intensity,
         range,
         RANGE_WEIGHT_SCALE,
-        RANGE_RADIUS.div_ceil(grid.divisor()).max(1),
+        RANGE_RADIUS.div_ceil(sampling.divisor()).max(1),
         None,
     )?;
     channel_noise::Prepared::new(extent, despeckle, ratio, decorrelate, filter)

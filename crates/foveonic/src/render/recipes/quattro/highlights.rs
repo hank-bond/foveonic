@@ -147,7 +147,8 @@ mod tests {
             .unwrap();
         let start = std::time::Instant::now();
         let output =
-            highlight_restoration::apply(&gpu, &input, &prepared, &mut Default::default()).unwrap();
+            highlight_restoration::apply(&gpu, &input, None, &prepared, &mut Default::default())
+                .unwrap();
         let b = gpu.readback(&output.rgb).unwrap();
         eprintln!("Highlight GPU+readback {:?}", start.elapsed());
         let actual = bytemuck::cast_slice::<u8, f32>(&b);

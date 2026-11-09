@@ -1,4 +1,4 @@
-//! Reconstructs saturated RGB through directional interpolation and inverse-camera neutralization.
+//! Preserves native highlight evidence and reconstructs saturated RGB through directional interpolation.
 use crate::{
     gpu::{
         Binding::{Read, Write},
@@ -29,6 +29,7 @@ pub(super) struct Params {
     thresholds: [f32; 4],
     neutralization: [f32; 4],
     ceilings: [f32; 4],
+    controls: [u32; 4],
 }
 #[derive(Clone, Debug)]
 pub struct Prepared {
@@ -87,6 +88,7 @@ impl Prepared {
                     CLIPPING_CEILING / normalization,
                     0.,
                 ],
+                controls: [0; 4],
             },
             matrix: coefficients,
         })
@@ -117,12 +119,93 @@ impl Prepared {
     pub(crate) fn has_recovery_mask(&self) -> bool {
         self.params.shape[3] != DIRECTIONAL_ONLY
     }
+    /// Numerical RGB and original recovery evidence share one padded grid.
+    /// Native detection coverage prevents pooled boundaries from widening.
+    pub(crate) fn on_grid(mut self, grid: crate::render::WorkingGrid) -> Result<Self> {
+        if grid.native != self.extent() {
+            return Err("highlight restoration working grid differs from source".into());
+        }
+        let [w, h] = grid.extent;
+        let mut rectangle = grid.bounds(self.params.rectangle);
+        rectangle[0] = rectangle[0].max(1).min(w - 2);
+        rectangle[1] = rectangle[1].max(1).min(h - 2);
+        rectangle[2] = rectangle[2].max(rectangle[0] + 1).min(w - 1);
+        rectangle[3] = rectangle[3].max(rectangle[1] + 1).min(h - 1);
+        self.params.shape[..3].copy_from_slice(&[w, h, w * h]);
+        self.params.rectangle = rectangle;
+        self.params.controls[0] = 1;
+        Ok(self)
+    }
+    pub(crate) fn requires_evidence(&self) -> bool {
+        self.params.controls[0] != 0
+    }
+
+    pub(crate) fn evidence(&self, grid: crate::nodes::sensor::pool::Prepared) -> Result<Evidence> {
+        if self.extent() != grid.extent() {
+            return Err("highlight evidence grid differs from native source".into());
+        }
+        Ok(Evidence {
+            params: self.params,
+            matrix: self.matrix.clone(),
+            grid,
+        })
+    }
 
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params).slice(&self.matrix)
+    }
+}
+
+/// A compact recovery control, separate from the numerical camera image.
+#[derive(Clone, Debug)]
+pub struct Evidence {
+    params: Params,
+    matrix: Vec<[f32; 2]>,
+    grid: crate::nodes::sensor::pool::Prepared,
+}
+impl Evidence {
+    pub(crate) fn grid(&self) -> crate::nodes::sensor::pool::Prepared {
+        self.grid
+    }
+    pub(crate) fn key(&self) -> Key {
+        Key::pod(&self.params).with(&self.grid).slice(&self.matrix)
+    }
+    pub(crate) fn apply(
+        &self,
+        gpu: &Gpu,
+        input: &ReadGuard,
+        profile: &mut Profile,
+    ) -> Result<ReadGuard> {
+        let native = self.grid.extent();
+        if input.size() != u64::from(native[0]) * u64::from(native[1]) * 12 {
+            return Err("highlight evidence source geometry mismatch".into());
+        }
+        let [w, h] = self.grid.output_extent();
+        let mut output = gpu.storage(
+            "Pooled original highlight evidence",
+            u64::from(w) * u64::from(h) * 32,
+        )?;
+        let params = gpu.uniform(&self.params);
+        let grid = gpu.uniform(&self.grid);
+        let matrix = gpu.upload("Highlight evidence camera matrices", &self.matrix)?;
+        let mut trace = gpu.trace(profile.mode.gpu(), 1);
+        gpu.dispatch(
+            Kernel::HighlightEvidence,
+            &mut [
+                (0, Read(input)),
+                (1, Read(&params)),
+                (2, Read(&matrix)),
+                (4, Write(output.write())),
+                (9, Read(&grid)),
+            ],
+            [w.div_ceil(8), h.div_ceil(8)],
+            &mut trace,
+        );
+        gpu.finish_trace(&trace, profile)?;
+        Ok(output)
     }
 }
 fn reference_inverse(matrix: [f64; 9]) -> Result<[f32; 9]> {
@@ -163,9 +246,14 @@ pub(crate) struct Output {
     pub mask: ReadGuard,
     pub recovery_mask: Option<ReadGuard>,
 }
+pub(crate) struct EvidenceInput<'a> {
+    pub controls: &'a ReadGuard,
+    pub unfiltered: &'a ReadGuard,
+}
 pub(crate) fn apply(
     gpu: &Gpu,
     input: &ReadGuard,
+    evidence: Option<EvidenceInput<'_>>,
     prepared: &Prepared,
     profile: &mut Profile,
 ) -> Result<Output> {
@@ -174,6 +262,16 @@ pub(crate) fn apply(
     if input.size() != cells * 12 {
         return Err("highlight RGB geometry mismatch".into());
     }
+    if prepared.requires_evidence() != evidence.is_some()
+        || evidence.as_ref().is_some_and(|evidence| {
+            evidence.controls.size() != cells * 32 || evidence.unfiltered.size() != input.size()
+        })
+    {
+        return Err("highlight clipping evidence geometry mismatch".into());
+    }
+    let (evidence, unfiltered) = evidence
+        .map(|evidence| (evidence.controls, evidence.unfiltered))
+        .unwrap_or((input, input));
     let params = gpu.uniform(&prepared.params);
     let matrix = gpu.upload("Highlight camera matrices", &prepared.matrix)?;
     // Three RGB work planes and four scalar classifications share one allocation.
@@ -188,6 +286,8 @@ pub(crate) fn apply(
         Some(super::dynamic_range::prepare(
             gpu,
             input,
+            evidence,
+            unfiltered,
             &params,
             &matrix,
             &mut work,
@@ -205,6 +305,8 @@ pub(crate) fn apply(
                 (2, Read(&matrix)),
                 (3, Write(work.write())),
                 (5, Write(mask.write())),
+                (8, Read(evidence)),
+                (10, Read(unfiltered)),
             ],
             [w.div_ceil(8), h.div_ceil(8)],
             &mut trace,
@@ -213,7 +315,13 @@ pub(crate) fn apply(
     };
     gpu.dispatch(
         Kernel::HighlightClassify,
-        &mut [(1, Read(&params)), (3, Write(work.write()))],
+        &mut [
+            (0, Read(input)),
+            (1, Read(&params)),
+            (3, Write(work.write())),
+            (8, Read(evidence)),
+            (10, Read(unfiltered)),
+        ],
         [w.div_ceil(8), h.div_ceil(8)],
         &mut trace,
     );
@@ -232,10 +340,13 @@ pub(crate) fn apply(
     gpu.dispatch(
         Kernel::HighlightFinish,
         &mut [
+            (0, Read(input)),
             (1, Read(&params)),
             (2, Read(&matrix)),
             (3, Read(&work)),
             (4, Write(rgb.write())),
+            (8, Read(evidence)),
+            (10, Read(unfiltered)),
         ],
         [w.div_ceil(8), h.div_ceil(8)],
         &mut trace,

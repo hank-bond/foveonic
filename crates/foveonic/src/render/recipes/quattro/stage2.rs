@@ -279,7 +279,7 @@ pub(super) fn build_reduced_signals(
     use crate::graph::Operation;
     use std::sync::Arc;
     let extent = rendering.response.extent();
-    // Both histories have already received native selected-WB shading.
+    // Both histories have already received selected-WB shading on their grid.
     let inputs = if rendering.response.requires_highlight_mask() {
         vec![
             filtered,

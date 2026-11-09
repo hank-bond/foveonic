@@ -139,14 +139,14 @@ pub(super) fn prepare_reconstruction_on_grid(
     let color_extent = super::color_grid(metadata, grid)?.extent;
     let energy = super::pool_noise_energy([metadata.width as u32, metadata.height as u32], grid);
     let noise = BLUE_VARIANCE.map(|v| v * energy);
-    let kernel = |native: u32| {
-        if grid.is_native() {
+    let kernel = |native: u32, sampling: super::WorkingGrid| {
+        if sampling.is_native() {
             native
         } else {
-            ((native / 2).div_ceil(grid.divisor()).max(1) * 2 + 1).min(31)
+            ((native / 2).div_ceil(sampling.divisor()).max(1) * 2 + 1).min(31)
         }
     };
-    if metadata.is_quattro_low() {
+    if super::same_resolution(metadata, grid) {
         let iso_gain = (metadata.scalar("CaptureISO")? / 100.) as f32;
         let filter = blend
             .map(|adaptive| {
@@ -157,7 +157,8 @@ pub(super) fn prepare_reconstruction_on_grid(
                 };
                 crate::nodes::color::scalar_bilateral::Prepared::new(
                     color_extent,
-                    kernel(5),
+                    // LOW-size support follows the R/G sampling pitch.
+                    kernel(5, super::color_scale(metadata, grid)),
                     noise,
                     strengths[usize::from(step)],
                     BLUE_FILTER_RANGE_CUTOFF,
@@ -177,7 +178,7 @@ pub(super) fn prepare_reconstruction_on_grid(
         .map(|table| {
             histogram_bilateral::Prepared::new(
                 output_extent,
-                kernel(BLUE_FILTER_KERNEL),
+                kernel(BLUE_FILTER_KERNEL, grid),
                 noise,
                 BLUE_FILTER_STRENGTHS[usize::from(step)],
                 BLUE_FILTER_RANGE_CUTOFF,

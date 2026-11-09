@@ -1,4 +1,4 @@
-//! Checks native sparse-sensor correction before reduced interchangeable-lens previews.
+//! Checks Quattro working grids, native correction histories and source-free preview edits.
 
 use super::*;
 use crate::{
@@ -6,6 +6,15 @@ use crate::{
     profile::Profile,
     render::{ControlCapabilities, Rendering, Scale},
 };
+
+fn preview_divisors(default: &[u32]) -> Vec<u32> {
+    let Some(selected) = std::env::var("SMALL_PREVIEW_SCALES").ok() else {
+        return default.to_vec();
+    };
+    let divisors: Vec<u32> = selected.split(',').map(|v| v.parse().unwrap()).collect();
+    assert!(!divisors.is_empty());
+    divisors
+}
 
 #[test]
 #[ignore = "requires GPU and QUATTRO_X3F original for synthetic LOW geometry"]
@@ -101,7 +110,7 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
                 );
             }
         }
-        for divisor in [2, 4, 8, 16, 64, 1 << 31] {
+        for divisor in preview_divisors(&[2, 4, 8, 16, 64, 1 << 31]) {
             let mut reduced = settings.clone();
             reduced.working_scale = Scale::new(divisor).unwrap();
             reduced.preview_region = None;
@@ -116,7 +125,10 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
             let bytes = engine.readback_image(&result).unwrap();
             let pixels: &[f32] = bytemuck::cast_slice(&bytes);
             assert!(pixels.iter().all(|v| v.is_finite()));
-            assert!(pixels.iter().any(|v| *v > 0.));
+            assert!(
+                pixels.iter().any(|v| *v > 0.),
+                "{rendering:?} LOW divisor {divisor} has no positive output"
+            );
         }
         let tiff = exports.path().join(format!("{rendering:?}.tiff"));
         let dng = exports.path().join(format!("{rendering:?}.dng"));
@@ -230,8 +242,12 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
     let mut settings = Settings::new("Auto", "Standard");
     settings.reconstruction = Some(controls::default_noise_controls());
     let mut native = None;
-    for divisor in [1, 2, 4, 8, 16, 64, 1 << 31] {
+    for divisor in preview_divisors(&[1, 2, 4, 8, 16, 64, 1 << 31]) {
         let quality = Scale::new(divisor).unwrap();
+        eprintln!(
+            "Checking HIGH {:?} color histories and retained edits",
+            quality
+        );
         settings.working_scale = quality;
         let recipe = build(
             &engine,
@@ -304,17 +320,25 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
                 }
             })
             .collect();
+        let same_size = same_resolution(&source.metadata, quality);
         assert_eq!(
             pools.len(),
-            if tiger::supported(&source.metadata) {
-                4
+            if quality.divisor() >= 4 {
+                1
             } else {
-                3
+                2 + usize::from(!same_size) + usize::from(tiger::supported(&source.metadata))
             }
         );
         assert_eq!(pools[0].output_extent(), extent);
-        assert_eq!(pools[1].output_extent(), blue_extent);
-        assert_eq!(pools[2].output_extent(), extent);
+        if same_size {
+            assert_eq!(extent, blue_extent);
+            if quality.divisor() < 4 {
+                assert_eq!(pools[1].output_extent(), extent);
+            }
+        } else {
+            assert_eq!(pools[1].output_extent(), blue_extent);
+            assert_eq!(pools[2].output_extent(), extent);
+        }
         assert!(pools
             .iter()
             .all(|pool| pool.working_scale() == Some(quality)));
@@ -327,7 +351,7 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
                     assert_eq!(p.extent(), extent);
                     assert_eq!(p.blue_extent(), blue_extent);
                     assert_eq!(p.output_extent(), blue_extent);
-                    assert!(p.doubles_output());
+                    assert_eq!(p.doubles_output(), !same_size);
                 }
                 _ => {}
             }
@@ -387,7 +411,16 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
             .render(&source, &edited, &mut Profile::default())
             .unwrap();
         let edited_bytes = engine.readback_image(&fresh).unwrap();
-        assert!(engine.readback_image(&warm).unwrap() == edited_bytes);
+        let retained_bytes = engine.readback_image(&warm).unwrap();
+        let difference = bytemuck::cast_slice::<u8, f32>(&retained_bytes)
+            .iter()
+            .zip(bytemuck::cast_slice::<u8, f32>(&edited_bytes))
+            .map(|(a, b)| (a - b).abs())
+            .fold(0_f32, f32::max);
+        assert!(
+            retained_bytes == edited_bytes,
+            "{quality:?} retained/fresh maximum difference {difference}"
+        );
         assert!(edited_bytes != bytes);
         assert!(engine.readback_image(&image).unwrap() == bytes);
     }
@@ -448,18 +481,49 @@ fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention()
     let engine = Engine::new().unwrap();
     let native_cell_bytes = source.samples().len() as u64 * 4;
     for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
-        for noise_edit in [false, true] {
+        for (noise_edit, combined_edit) in [(false, false), (true, false), (true, true)] {
             let mut settings = Settings::new("Auto", "Standard");
             settings.working_scale = quality;
             settings.reconstruction = Some(controls::default_noise_controls());
+            // Equal-resolution Draft retains more reduced color samples than
+            // the doubled route. Several working histories can exceed one
+            // native source in aggregate without retaining a native image.
+            let extent = output_grid(&source.metadata, quality).unwrap().extent;
+            // Recovery evidence packs two RGBA records per working cell.
+            let largest_working_image = u64::from(extent[0]) * u64::from(extent[1]) * 32;
+            let recipe = build(
+                &engine,
+                crate::render::recipes::RecipeInput::Original(&source),
+                &settings,
+                &["final"],
+                &mut Profile::default(),
+                &mut Execution::default(),
+            )
+            .unwrap();
+            let required = recipe.graph.required(&[recipe.final_id]).unwrap();
+            for node in &recipe.graph.nodes {
+                if !node.outputs.iter().any(|id| required[*id]) {
+                    continue;
+                }
+                match &node.operation {
+                    Operation::RgbDespeckle(p) => assert_eq!(p.extent(), extent),
+                    Operation::HighlightRestoration(p) => {
+                        assert_eq!(p.extent(), extent);
+                        assert!(p.requires_evidence());
+                        assert_eq!(node.inputs.len(), 3);
+                    }
+                    _ => {}
+                }
+            }
             let mut session = crate::interactive::RenderSession::new(source.clone());
+            let mut initial_profile = Profile::new(crate::profile::Mode::Wall);
             let initial = engine
                 .render_session(
                     &mut session,
                     &settings,
                     &["final"],
                     || false,
-                    &mut Profile::default(),
+                    &mut initial_profile,
                 )
                 .unwrap()
                 .unwrap()
@@ -469,13 +533,46 @@ fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention()
                 panic!("initial image")
             };
             let initial_bytes = engine.readback_image(&initial).unwrap();
+            assert!(initial_profile.nodes.iter().any(|n| n.executed));
+            if let Some(sparse) = initial_profile
+                .nodes
+                .iter()
+                .find(|n| n.executed && n.operation == "SparseRepair")
+            {
+                assert_eq!(
+                    sparse.activity.unwrap().dispatches,
+                    7,
+                    "an RGB-only preview must not run the HIGH blue finishing passes"
+                );
+            }
             assert!(
-                session.cached_bytes() < native_cell_bytes,
+                initial_profile.nodes.iter().all(|n| !n.executed
+                    || !matches!(
+                        n.operation,
+                        "OrderedBlueRepair"
+                            | "BluePattern"
+                            | "BlueDespeckle"
+                            | "LumaClusters"
+                            | "BlueMismatch"
+                    )),
+                "equal-resolution previews must not execute the separate HIGH blue chain"
+            );
+            assert!(
+                session
+                    .cache
+                    .buffers()
+                    .all(|buffer| buffer.size() <= largest_working_image),
                 "initial small preparation must not retain native cells"
             );
             if noise_edit {
                 settings.reconstruction.as_mut().unwrap().chroma = 4;
             } else {
+                settings.exposure = 0.25;
+            }
+            if combined_edit {
+                let controls = settings.reconstruction.as_mut().unwrap();
+                controls.luminance = 4;
+                controls.detail = 0.;
                 settings.exposure = 0.25;
             }
             let mut profile = Profile::new(crate::profile::Mode::Wall);
@@ -501,7 +598,10 @@ fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention()
             );
             assert_eq!(profile.nodes[noise].executed, noise_edit);
             assert!(
-                session.cached_bytes() < native_cell_bytes,
+                session
+                    .cache
+                    .buffers()
+                    .all(|buffer| buffer.size() <= largest_working_image),
                 "a small restart must not retain the native cells"
             );
             assert!(activity.upload_bytes < native_cell_bytes);
@@ -553,7 +653,10 @@ fn component_grids_keep_native_metadata_and_cover_every_sensor_scale() {
                 let color = color_grid(&metadata, scale).unwrap();
                 let output = output_grid(&metadata, scale).unwrap();
                 assert_eq!(color.native, native_color);
-                assert_eq!(color.logical, scale.extent(native_color));
+                assert_eq!(
+                    color.logical,
+                    color_scale(&metadata, scale).extent(native_color)
+                );
                 assert_eq!(output.logical, scale.extent(sensor.map(|v| v as u32)));
                 if scale.is_native() {
                     assert_eq!(color.extent, native_color);
@@ -569,15 +672,35 @@ fn component_grids_keep_native_metadata_and_cover_every_sensor_scale() {
                         .zip(output.origin)
                         .zip(output.logical)
                         .all(|((&extent, origin), logical)| extent >= logical + origin * 2));
-                    assert_eq!(color.origin, [support / if low { 1 } else { 2 }; 2]);
+                    assert_eq!(
+                        color.origin,
+                        [support
+                            / if same_resolution(&metadata, scale) {
+                                1
+                            } else {
+                                2
+                            }; 2]
+                    );
                 }
                 assert_eq!(
                     output.extent,
-                    color.extent.map(|v| v * if low { 1 } else { 2 })
+                    color
+                        .extent
+                        .map(|v| v * if same_resolution(&metadata, scale) {
+                            1
+                        } else {
+                            2
+                        })
                 );
                 assert_eq!(
                     output.origin,
-                    color.origin.map(|v| v * if low { 1 } else { 2 })
+                    color
+                        .origin
+                        .map(|v| v * if same_resolution(&metadata, scale) {
+                            1
+                        } else {
+                            2
+                        })
                 );
                 assert_eq!([metadata.width, metadata.height], sensor);
             }

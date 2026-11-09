@@ -21,6 +21,7 @@ mod luma_repair;
 mod mcc;
 mod monochrome;
 mod optical;
+mod preview;
 mod region;
 mod repair;
 pub(crate) mod resources;
@@ -56,13 +57,40 @@ const COLOR_HP_CORRECTION: bool = false;
 /// Camera component grids share one numerical scale without changing metadata.
 pub(super) use crate::render::Scale as WorkingGrid;
 
+/// Draft and smaller previews use the existing equal-resolution numerical route.
+/// Source LOW still selects its own calibration independently of this geometry.
+pub(super) fn same_resolution(metadata: &crate::source::Metadata, scale: WorkingGrid) -> bool {
+    metadata.is_quattro_low() || scale.divisor() >= 4
+}
+
+pub(super) fn color_scale(metadata: &crate::source::Metadata, scale: WorkingGrid) -> WorkingGrid {
+    if !metadata.is_quattro_low() && same_resolution(metadata, scale) {
+        WorkingGrid::new(scale.divisor() / 2).expect("power-of-two component sampling")
+    } else {
+        scale
+    }
+}
+
 pub(super) fn color_grid(
     metadata: &crate::source::Metadata,
     scale: WorkingGrid,
 ) -> Result<crate::render::WorkingGrid> {
-    let component_ratio = if metadata.is_quattro_low() { 1 } else { 2 };
-    crate::render::WorkingGrid::new(calibration::color_extent(metadata)?, scale, 4)?
-        .with_halo(sensor_halo(scale) / component_ratio)
+    let component_ratio = if same_resolution(metadata, scale) {
+        1
+    } else {
+        2
+    };
+    let alignment = if !metadata.is_quattro_low() && component_ratio == 1 {
+        8
+    } else {
+        4
+    };
+    crate::render::WorkingGrid::new(
+        calibration::color_extent(metadata)?,
+        color_scale(metadata, scale),
+        alignment,
+    )?
+    .with_halo(sensor_halo(scale) / component_ratio)
 }
 
 fn sensor_halo(scale: WorkingGrid) -> u32 {
@@ -175,6 +203,7 @@ fn compose(
         settings.working_scale
     };
     let reduced = grid.is_reduced();
+    let early_reduction = grid.divisor() >= 4;
     let color_geometry = color_grid(metadata, grid)?;
     let output_geometry = output_grid(metadata, grid)?;
     let available = outputs(Some(metadata));
@@ -339,8 +368,9 @@ fn compose(
         &[general, mask],
     )?;
     finish!(despeckled);
+    let cluster_controls = std::sync::Arc::new(defects::prepare_clusters(metadata)?);
     let chroma = graph.add(
-        Operation::ChromaClusters(std::sync::Arc::new(defects::prepare_clusters(metadata)?)),
+        Operation::ChromaClusters(cluster_controls.clone()),
         &[despeckled, mask],
     )?;
     finish!(chroma);
@@ -447,11 +477,9 @@ fn compose(
     finish!(mismatch);
     // The DP1 optical correction belongs after factory repairs and before
     // highlight restoration. Other DP recipes keep the same RGB history.
-    let chroma = if let Some(prepared) = optical::prepare(metadata)? {
-        graph.add(
-            Operation::PurpleFringe(std::sync::Arc::new(prepared)),
-            &[chroma],
-        )?
+    let optical_controls = optical::prepare(metadata)?.map(std::sync::Arc::new);
+    let chroma = if let Some(prepared) = &optical_controls {
+        graph.add(Operation::PurpleFringe(prepared.clone()), &[chroma])?
     } else {
         chroma
     };
@@ -518,7 +546,26 @@ fn compose(
     } else {
         None
     };
-    let (noise_input, mismatch, highlight_mask, recovery_mask) = if reduced {
+    let (noise_input, mismatch, highlight_mask, recovery_mask) = if early_reduction {
+        let inputs = preview::build(
+            &mut graph,
+            metadata,
+            grid,
+            preview::NativeRepairs {
+                rgb: general,
+                defects: mask,
+                clusters: cluster_controls,
+                optical: optical_controls,
+            },
+            small_white_balance.as_deref().expect("reduced balance"),
+        )?;
+        (
+            inputs.rgb,
+            inputs.blue,
+            inputs.highlight_mask,
+            inputs.recovery_mask,
+        )
+    } else if reduced {
         use crate::nodes::sensor::pool::{Prepared, Signal};
         let (shaded, blue) = stage2::shade_preprocessing(
             &mut graph,
@@ -529,7 +576,7 @@ fn compose(
         )?;
         let mut pool =
             |input, native, geometry: crate::render::WorkingGrid, signal, scope| -> Result<usize> {
-                let prepared = Prepared::new(native, grid.divisor(), signal)?
+                let prepared = Prepared::new(native, geometry.scale.divisor(), signal)?
                     .with_extent(geometry.extent)?
                     .with_origin(geometry.origin)
                     .with_working_scale(grid);

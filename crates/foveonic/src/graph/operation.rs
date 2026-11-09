@@ -12,6 +12,7 @@ use crate::render::TiffColorSpace;
 use std::path::PathBuf;
 
 pub enum Operation {
+    HighlightEvidence(crate::nodes::sensor::highlight_restoration::Evidence),
     PoolSignal(crate::nodes::sensor::pool::Prepared),
     /// Average disjoint sensor blocks onto an explicit working grid.
     ReduceLayers {
@@ -301,6 +302,7 @@ impl Operation {
     pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {
         use crate::{noise::RecipeStage as N, recipe::Key};
         let key = match self {
+            Self::HighlightEvidence(p) => p.key(),
             Self::PoolSignal(p) => p.key(),
             Self::ReduceLayers { prepared, data } => {
                 prepared.key().slice(format!("{data:?}").as_bytes())
@@ -487,6 +489,7 @@ impl Operation {
     /// Stable exhaustive operation identity for diagnostic attribution.
     pub(crate) fn kind(&self) -> &'static str {
         match self {
+            Self::HighlightEvidence(_) => "HighlightEvidence",
             Self::PoolSignal(_) => "PoolSignal",
             Self::ReduceLayers { .. } => "ReduceLayers",
             Self::ResampleRgb { .. } => "ResampleRgb",
@@ -607,6 +610,7 @@ impl Operation {
 
     pub fn label(&self) -> &'static str {
         match self {
+            Self::HighlightEvidence(_) => "pool original highlight evidence",
             Self::PoolSignal(_) => "pool corrected preview signals",
             Self::ReduceLayers { .. } => "reduce preview layers",
             Self::ResampleRgb { .. } => "frame linear photograph preview",
@@ -741,6 +745,7 @@ impl Operation {
     pub(super) fn types(&self) -> (Vec<DataType>, DataType) {
         use DataType::*;
         match self {
+            Self::HighlightEvidence(_) => (vec![CorrectedSensorRgb], HighlightEvidence),
             Self::PoolSignal(p) => {
                 use crate::nodes::sensor::pool::Signal;
                 let data = match p.signal() {
@@ -852,6 +857,10 @@ impl Operation {
                     vec![CorrectedSensorBlue]
                 },
                 CorrectedSensorBlue,
+            ),
+            Self::HighlightRestoration(p) if p.requires_evidence() => (
+                vec![CorrectedSensorRgb, HighlightEvidence, CorrectedSensorRgb],
+                CorrectedSensorRgb,
             ),
             Self::HighlightRestoration(_) | Self::TwoScaleNoise(_) => {
                 (vec![CorrectedSensorRgb], CorrectedSensorRgb)
@@ -1087,12 +1096,21 @@ impl Operation {
                 vec![("noise.source-after", CorrectedSensorRgb, vec![0])]
             }
             Self::HighlightRestoration(p) => {
-                let mut outputs = vec![("highlight-restoration.mask", HighlightMask, vec![0])];
+                let dependencies = if p.requires_evidence() {
+                    vec![0, 1, 2]
+                } else {
+                    vec![0]
+                };
+                let mut outputs = vec![(
+                    "highlight-restoration.mask",
+                    HighlightMask,
+                    dependencies.clone(),
+                )];
                 if p.has_recovery_mask() {
                     outputs.push((
                         "highlight-restoration.recovery-flags",
                         HighlightMask,
-                        vec![0],
+                        dependencies,
                     ));
                 }
                 outputs
@@ -1167,6 +1185,7 @@ impl Operation {
 
     pub fn output_name(&self) -> &'static str {
         match self {
+            Self::HighlightEvidence(_) => "highlight-restoration.evidence",
             Self::PoolSignal(_) => "preview.corrected",
             Self::ReduceLayers { .. } => "preview.layers",
             Self::ResampleRgb { .. } => "preview.framed-linear",

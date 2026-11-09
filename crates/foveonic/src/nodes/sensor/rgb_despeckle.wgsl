@@ -1,4 +1,4 @@
-struct Params {extent:vec2<u32>,strength:f32,padding:u32}
+struct Params {extent:vec2<u32>,strength:f32,radius:u32,bright_only:u32,pad0:u32,pad1:u32,pad2:u32}
 @group(0) @binding(0) var<storage,read> pixels:array<f32>;
 @group(0) @binding(1) var<storage,read> mask:array<u32>;
 @group(0) @binding(2) var<uniform> p:Params;
@@ -12,10 +12,11 @@ fn color(v:vec3<f32>,base:u32)->vec3<f32>{var result:vec3<f32>;for(var c=0u;c<3u
 fn rgb_despeckle(@builtin(global_invocation_id) id:vec3<u32>){
  let x=id.x;let y=id.y;if x>=p.extent.x||y>=p.extent.y{return;}
  let index=(y*p.extent.x+x)*3u;let center=load(x,y);var result=center;
- if x>=2u&&y>=2u&&x<p.extent.x-2u&&y<p.extent.y-2u&&mask[y*p.extent.x+x]==0u{
+ let radius=p.radius;
+ if x>=radius&&y>=radius&&x<p.extent.x-radius&&y<p.extent.y-radius&&mask[y*p.extent.x+x]==0u{
     // The native extrema seed is retained even if this corner is masked.
-    var low=load(x-2u,y-2u);var high=low;var chroma_low=vec3(3.402823466e38);var chroma_high=-chroma_low;var inner=0u;
-    for(var dy=-2;dy<=2;dy++){for(var dx=-2;dx<=2;dx++){
+    var low=load(x-radius,y-radius);var high=low;var chroma_low=vec3(3.402823466e38);var chroma_high=-chroma_low;var inner=0u;
+    for(var dy=-i32(radius);dy<=i32(radius);dy++){for(var dx=-i32(radius);dx<=i32(radius);dx++){
       if (dx==0&&dy==0)||mask[u32(i32(y)+dy)*p.extent.x+u32(i32(x)+dx)]!=0u{continue;}
       let neighbor=load(u32(i32(x)+dx),u32(i32(y)+dy));low=min(low,neighbor);high=max(high,neighbor);
       if abs(dx)<=1&&abs(dy)<=1{let projected=color(neighbor,0u);chroma_low=min(chroma_low,projected);chroma_high=max(chroma_high,projected);inner++;}
@@ -24,7 +25,7 @@ fn rgb_despeckle(@builtin(global_invocation_id) id:vec3<u32>){
     let threshold=fma(1.,fma(1.,sigma.x,sigma.y),sigma.z);
     let bright=fma(-1.,high.z,fma(1.,center.z,fma(-1.,high.y,fma(1.,center.y,fma(-1.,high.x,center.x)))));
     let dark=fma(-1.,center.z,fma(1.,low.z,fma(-1.,center.y,fma(1.,low.y,fma(-1.,center.x,low.x)))));
-    var candidate=center;var replace=false;if bright>threshold{candidate=high;replace=true;}else if dark>threshold{candidate=low;replace=true;}
+    var candidate=center;var replace=false;if bright>threshold{candidate=high;replace=true;}else if p.bright_only==0u&&dark>threshold{candidate=low;replace=true;}
     // No valid immediate neighbor leaves no source-defined chroma range.
     if replace&&inner!=0u{var projected=color(candidate,0u);projected.y=clamp(projected.y,chroma_low.y,chroma_high.y);projected.z=clamp(projected.z,chroma_low.z,chroma_high.z);result=color(projected,9u);}
  }

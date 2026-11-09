@@ -106,6 +106,7 @@ pub enum Kernel {
     RgbDespeckle,
     ChromaClusters,
     LumaCluster,
+    HighlightEvidence,
     DynamicRangePrepare,
     DynamicRangeCells,
     DynamicRangeFit,
@@ -439,6 +440,7 @@ impl Kernel {
             Self::RgbDespeckle => "filter camera RGB speckles",
             Self::ChromaClusters => "repair ordered RGB defect clusters",
             Self::LumaCluster => "repair ordered mono defect clusters",
+            Self::HighlightEvidence => "pool original highlight recovery controls",
             Self::DynamicRangePrepare => "prepare channel highlight limits",
             Self::DynamicRangeCells => "measure highlight color cells",
             Self::DynamicRangeFit => "fit and propagate highlight colors",
@@ -1125,6 +1127,10 @@ impl Gpu {
                 "luma_cluster",
             ),
             (
+                include_str!("../nodes/sensor/highlight_evidence.wgsl"),
+                "highlight_evidence",
+            ),
+            (
                 include_str!("../nodes/sensor/dynamic_range.wgsl"),
                 "dynamic_range_prepare",
             ),
@@ -1614,7 +1620,7 @@ impl Gpu {
                         include_str!("../nodes/color/noise_common.wgsl")
                     )
                     .into()
-                } else if (Kernel::DynamicRangePrepare as usize..=Kernel::HighlightFinish as usize)
+                } else if (Kernel::HighlightEvidence as usize..=Kernel::HighlightFinish as usize)
                     .contains(&index)
                 {
                     format!(

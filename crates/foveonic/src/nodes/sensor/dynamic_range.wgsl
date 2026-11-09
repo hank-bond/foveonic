@@ -55,8 +55,10 @@ fn dynamic_range_prepare(@builtin(global_invocation_id) id: vec3<u32>) {
     var value=min(source, p.ceilings.xyz)*p.gains.xyz;
     let flags=vec3<u32>(value>=limits);
     let count=flags.x+flags.y+flags.z;
+    let original=original_rgb(n);
     work[p.shape.z*GREEN_MARKER+n]=f32(source.y>=p.thresholds.y);
     work[p.shape.z*CLIPPED_MARKER+n]=f32(count>=1u);
+    if p.controls.x!=0u {work[p.shape.z*CLIPPED_MARKER+n]=f32(any(original>=p.ceilings.xyz));}
     if count>=2u {
         value=vec3(median(limits));
     }
@@ -66,12 +68,12 @@ fn dynamic_range_prepare(@builtin(global_invocation_id) id: vec3<u32>) {
         for(var dy=-1;dy<=1;dy++) {
             for(var dx=-1;dx<=1;dx++) {
                 let weight=select(1., 0.25, dx!=0&&dy!=0);
-                let index=(u32(i32(y)+dy)*p.shape.x+u32(i32(x)+dx))*3u;
-                total=fma(weight, f32(pixels[index+1u]>=p.thresholds.y), total);
+                let index=u32(i32(y)+dy)*p.shape.x+u32(i32(x)+dx);
+                total=fma(weight, f32(original_rgb(index).y>=p.thresholds.y), total);
             }
         }
     }
-    green_mask[n]=u32(ceil(min(total*255., 255.)));
+    green_mask[n]=u32(ceil(min(total*255., 255.)));if p.controls.x!=0u{green_mask[n]=select(0u,u32(evidence[n*2u+1u].w),evidence_valid(n));}
 }
 @compute @workgroup_size(8, 8)
 fn dynamic_range_cells(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -93,6 +95,7 @@ fn dynamic_range_cells(@builtin(global_invocation_id) id: vec3<u32>) {
                 let value=load_rgb(0u, n);
                 sum=vec3(fma(value.x, CELL_MEAN_WEIGHT, sum.x), fma(value.y, CELL_MEAN_WEIGHT, sum.y), fma(value.z, CELL_MEAN_WEIGHT, sum.z));
                 maximum=max(maximum, max(divide(value.x, limits.x), max(divide(value.y, limits.y), divide(value.z, limits.z))));
+                if p.controls.x!=0u&&work[p.shape.z*CLIPPED_MARKER+n]!=0. {maximum=max(maximum,1.);}
             }
         }
     }
@@ -189,7 +192,9 @@ fn dynamic_range_apply(@builtin(global_invocation_id) id: vec3<u32>) {
     var mask=0u;
     if p.shape.w==CHANNEL_EXTENSION {
         let normalized=vec3(divide(source.x, limits.x), divide(source.y, limits.y), divide(source.z, limits.z));
-        let maximum=max(normalized.x, max(normalized.y, normalized.z));
+        var classified=normalized;
+        if p.controls.x!=0u {classified=max(normalized,original_rgb(n)/p.ceilings.xyz);}
+        let maximum=max(classified.x, max(classified.y, classified.z));
         let cell=grid[(id.y/CELL_SIDE)*((p.shape.x+CELL_SIDE-1u)/CELL_SIDE)+id.x/CELL_SIDE];
         let cell_ratios=vec3(divide(cell.x, cell.z), divide(cell.x, cell.y), divide(cell.y, cell.z));
         var gb_slope=coefficients[4];
@@ -201,10 +206,10 @@ fn dynamic_range_apply(@builtin(global_invocation_id) id: vec3<u32>) {
         for(var channel=0u;channel<3u;channel++) {
             let a=(channel+1u)%3u;
             let b=(channel+2u)%3u;
-            if !(normalized[channel]>RECOVERY_START&&normalized[channel]==maximum&&normalized[a]<1.&&normalized[b]<1.) {
+            if !(classified[channel]>RECOVERY_START&&classified[channel]==maximum&&classified[a]<1.&&classified[b]<1.) {
                 continue;
             }
-            let amount=clamp(divide(plus(normalized[channel], -RECOVERY_START), RECOVERY_SPAN), 0., 1.);
+            let amount=clamp(divide(plus(classified[channel], -RECOVERY_START), RECOVERY_SPAN), 0., 1.);
             var reconstructed=0.;
             if channel==0u {
                 reconstructed=times(source.z, fma(divide(source.y, max(1., source.z)), coefficients[2], coefficients[3]));

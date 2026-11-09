@@ -83,6 +83,8 @@ impl Prepared {
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }
+    /// Select the native LOW three-component input model. Omitting a HIGH
+    /// blue output must not change its six-component repair features.
     pub(crate) fn with_rgb_only(mut self) -> Self {
         self.params.controls[3] = 1.;
         self.scratch_words = self.params.offsets[0] * 2 + 4;
@@ -98,13 +100,49 @@ impl Prepared {
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params).join(self.lut.key())
     }
+
+    fn last_phase(&self, requested: Requested) -> Phase {
+        if self.rgb_only() {
+            Phase::DirectionalClamp
+        } else if requested.blue {
+            Phase::SmoothResidual
+        } else if requested.defects {
+            Phase::Density
+        } else {
+            Phase::DirectionalClamp
+        }
+    }
+}
+
+/// RGB is needed internally for every repair. Side outputs can stop execution
+/// before the later blue-only processing without changing the feature model.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Requested {
+    pub blue: bool,
+    pub defects: bool,
 }
 
 pub(crate) struct Output {
     pub(crate) rgb: ReadGuard,
-    pub(crate) blue: ReadGuard,
+    pub(crate) blue: Option<ReadGuard>,
     /// One unsigned byte-valued word per RGB pixel.
-    pub(crate) defects: ReadGuard,
+    pub(crate) defects: Option<ReadGuard>,
+}
+
+#[derive(Clone, Copy)]
+enum Phase {
+    Initialize,
+    HotPixels,
+    AugmentMask,
+    CountEligible,
+    Interpolation,
+    SnapshotForClamp,
+    DirectionalClamp,
+    Density,
+    SnapshotForPattern,
+    PatternCorrection,
+    MedianGuide,
+    SmoothResidual,
 }
 
 pub(crate) fn apply(
@@ -112,6 +150,7 @@ pub(crate) fn apply(
     rgb: &ReadGuard,
     blue: &ReadGuard,
     prepared: &Prepared,
+    requested: Requested,
     profile: &mut Profile,
 ) -> Result<Output> {
     let [width, height] = prepared.extent();
@@ -123,29 +162,32 @@ pub(crate) fn apply(
     let mut output_rgb = gpu.storage("Sparse repaired RGB", n * 12)?;
     let blue_bytes = if prepared.rgb_only() { 4 } else { n * 16 };
     let mut work_blue = gpu.storage("Sparse repaired blue before smoothing", blue_bytes)?;
-    let mut final_blue = gpu.storage("Sparse repaired blue", blue_bytes)?;
+    let last_phase = prepared.last_phase(requested);
+    let complete_blue = !prepared.rgb_only() && requested.blue;
+    let mut final_blue = gpu.storage(
+        "Sparse repaired blue",
+        if complete_blue { blue_bytes } else { 4 },
+    )?;
     let mut defects = gpu.storage("Sparse defect mask", n * 4)?;
     let mut scratch = gpu.storage(
         "Sparse repair phase snapshots and density",
-        u64::from(prepared.scratch_words) * 4 + 4,
+        if !prepared.rgb_only() && !requested.blue && !requested.defects {
+            // The first four phase snapshots and classification plane are the
+            // complete RGB dependency. Density and the median guide are later.
+            n * 5 * 4 + 4
+        } else {
+            u64::from(prepared.scratch_words) * 4 + 4
+        },
     )?;
-    let lut = gpu.upload("Ghost pattern response", &prepared.lut)?;
+    // The response table is read only by blue pattern correction. Earlier
+    // phases still require a binding, which can borrow an existing read input.
+    let lut = if complete_blue {
+        gpu.upload("Ghost pattern response", &prepared.lut)?
+    } else {
+        rgb.clone()
+    };
     // The sparse grid separates interpolation stores from neighboring reads.
     // Density reconstructs the ordered mask bits from an immutable snapshot.
-    enum Phase {
-        Initialize,
-        HotPixels,
-        AugmentMask,
-        CountEligible,
-        Interpolation,
-        SnapshotForClamp,
-        DirectionalClamp,
-        Density,
-        SnapshotForPattern,
-        PatternCorrection,
-        MedianGuide,
-        SmoothResidual,
-    }
     let phases = [
         Phase::Initialize,
         Phase::HotPixels,
@@ -160,11 +202,7 @@ pub(crate) fn apply(
         Phase::MedianGuide,
         Phase::SmoothResidual,
     ];
-    let count = if prepared.rgb_only() {
-        Phase::Density as usize
-    } else {
-        phases.len()
-    };
+    let count = last_phase as usize + 1;
     let mut trace = gpu.trace(profile.mode.gpu(), count as u32);
     for phase in phases.into_iter().take(count) {
         let phase = phase as u32;
@@ -191,12 +229,14 @@ pub(crate) fn apply(
     gpu.finish_trace(&trace, profile)?;
     Ok(Output {
         rgb: output_rgb,
-        blue: if prepared.rgb_only() {
-            blue.clone()
+        blue: if !requested.blue {
+            None
+        } else if prepared.rgb_only() {
+            Some(blue.clone())
         } else {
-            final_blue
+            Some(final_blue)
         },
-        defects,
+        defects: requested.defects.then_some(defects),
     })
 }
 

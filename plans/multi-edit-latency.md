@@ -17,9 +17,11 @@ The owner confirmed Draft, Thumb and multi-edit as the intended 0.8 feature set.
 - [ ] Correct demonstrated pipeline/preparation inefficiencies within the current design. Keep native sensor corrections distinct from scale-aware downstream processing.
 - [ ] Review the remaining current-architecture changes as small tested units before release.
 
+The owner deferred the Dehaze enabled/disabled transition to this consistency pass after the downsampling work. Reported scrubbing takes about 100 ms while resetting Amount to zero takes about 600 ms. Static inspection confirms that zero removes the Dehaze graph branch and its retained input alias. Lost checkpoint reuse is a hypothesis, not yet a traced attribution. Compare reachable restart inputs and executed stages across nonzero edits and the zero transition before choosing a fix.
+
 ## Existing owners and evidence
 
-The current checkpoint includes explicit completion classification, source-aware admission, idle Thumb preparation, cooperative GPU waits and application-wide Perfetto capture/scenarios. Native checks below cover the demonstrated interaction paths. The [early-reduction plan](./early-sensor-reduction.md) owns the completed working-grid changes and remaining native noise stages. Further orchestration migration, wider latency acceptance and physical manual-capture controls remain open. The owner authorized committing all completed 0.8 work as a clean starting point for those follow-ups.
+The current checkpoint includes explicit completion classification, source-aware admission, idle Thumb preparation, cooperative GPU waits and application-wide Perfetto capture/scenarios. Native checks below cover the demonstrated interaction paths. The [early-reduction plan](./early-sensor-reduction.md) owns the completed working-grid changes, retained native boundaries and wider preview acceptance. Further orchestration migration, wider latency acceptance and physical manual-capture controls remain open. The owner authorized committing all completed 0.8 work as a clean starting point for those follow-ups.
 
 The UI coordinator owns desired photo/purpose requests and completion admission. One worker owns numerical execution, reduced-photo sessions and presentation history. Core graph identities and dependency cuts determine numerical reuse. Preserve these owners instead of introducing another request lifecycle or per-node cache policy.
 

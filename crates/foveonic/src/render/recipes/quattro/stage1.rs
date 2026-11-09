@@ -240,9 +240,10 @@ pub(super) fn prepare_filter_on_grid(
         return prepare_filter(metadata, chroma_step);
     }
     let mut controls = prepare(metadata, chroma_step)?;
-    let energy = super::pool_noise_energy(controls.extent, grid);
+    let sampling = super::color_scale(metadata, grid);
+    let energy = super::pool_noise_energy(controls.extent, sampling);
     controls.extent = super::color_grid(metadata, grid)?.extent;
-    numerical_scaled(&controls, grid.divisor(), energy)
+    numerical_scaled(&controls, sampling.divisor(), energy)
 }
 
 fn numerical(controls: &Stage1Controls) -> Result<crate::nodes::color::two_scale_noise::Prepared> {

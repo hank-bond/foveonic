@@ -12,7 +12,7 @@ Keep existing recipes, typed graphs, execution and cache owners. Metadata remain
 
 The completed checkpoint uses area means, compact brightness guides, profile-sized Adaptive analysis, reduced bright-only speckle detection and original clipping evidence on the working grid. The investigation sections below are chronological. Their temporary alternatives are superseded by the later adoption sections and are not selectable application paths.
 
-The guarded-row implementation is complete for this checkpoint. Remaining implementation work is the corresponding Classic/Quattro boundaries, followed by broader quality and latency acceptance. The Multiscale slice is complete and archived below. Calibration stays native for correctness. This checkpoint does not claim that the complete small-preview specification is implemented.
+The planned Merrill neighborhood moves and Quattro Draft/Thumb migration are complete for this checkpoint. Calibration, sensor-location repairs and original recovery evidence stay native for correctness. Classic retains its audited native correction prefix, with reconstruction and finishing on the working grid. Broader option, quality and application-latency acceptance remains separate from those completed moves. This checkpoint does not claim that the complete small-preview specification is implemented.
 
 - [x] Review recorder lifecycle, overflow metadata recovery and task-based work attribution before using traces.
 - [x] Map the current pre-pool stage chains and preserve a Full float baseline before numerical changes.
@@ -23,11 +23,24 @@ The guarded-row implementation is complete for this checkpoint. Remaining implem
 - [x] Move Merrill highlight recovery after basic calibration and mapped repairs. Retain separate evidence only where the selected algorithm requires it.
 - [x] Resolve native shield/row calibration separately from multiscale neighborhood processing.
 - [x] Move Directional cleanup to the working grid without retaining an alternate native branch or bypassing selected speckle processing.
-- [ ] Apply the same distinction to Quattro/Tiger mapped defects, phase calibration, neighborhood repairs and highlight recovery.
+- [x] Apply the same distinction to Quattro/Tiger mapped defects, phase calibration, neighborhood repairs and highlight recovery.
 - [ ] Verify all supported families and selected controls through the same scale contract. Record remaining native work explicitly.
 - [ ] Measure cached-source first preparation separately from retained edits and complete group delivery. Review photographic quality before release.
 
 The owner reported a six-second Draft render during app use. No trace was saved for that run, and compiler/GPU correctness work overlapped part of the app session. Its cause is unverified. The owner deferred reproduction to a later testing pass. Capture any recurrence in an isolated real-app run rather than attributing it to a particular pipeline stage.
+
+The final representative option sweep passes 970 exact source-free/fresh comparisons, alongside Classic original-file and Quattro history/grid checks. The [completed Quattro report](./archived/quattro-early-reduction.md) records their scope. Whole-sensor one-cell Quattro LOW output remains an unresolved extreme-scale limitation reproduced on the preceding checkpoint. A genuine photographic LOW fixture is still needed beyond the synthetic coverage. Keep the small-preview specification incomplete until its broader acceptance work is satisfied. The [latency consistency pass](./multi-edit-latency.md) owns the deferred Dehaze zero transition and end-to-end interaction work.
+
+## Other-family profiling
+
+The owner prioritized Quattro because of its larger sensor data and existing mixed-resolution processing. Classic receives a lighter audit because its native images are smaller. This slice maps and measures current recipes before selecting numerical changes.
+
+- [x] Map the native correction, repair and highlight dependencies before each preview pool, separating camera-coordinate evidence from neighborhood image processing.
+- [x] Measure resident-source fresh Full/Fast/Draft/Thumb recipes and separate synchronized GPU attribution across DP, sd Quattro and Quattro H. Sample representative Classic Full/Thumb routes.
+- [x] Check retained exposure and reconstruction edits independently of first preparation. Include representative Monochrome and Adaptive options.
+- [x] Propose the smallest high-value moves using actual stage costs and existing grid support. Keep necessary sensor-location corrections native.
+
+The [completed Quattro migration](./archived/quattro-early-reduction.md) records baseline profiling, the accepted LOW-style Draft/Thumb representation and the subsequent reduced RGB despeckle/recovery slice. HIGH source calibration remains unchanged. Catalogue and sparse repairs stay native. Compact original recovery evidence feeds working-grid spatial recovery, with source-free edits and Full/Fast camera-response parity verified. The owner accepted the reduced recovery slice. Sparse execution now uses the executor's requested-output set to omit unused HIGH-blue finishing, preserving output bytes while reducing DP Thumb preparation to about 134–143 ms. Native sensor-site repair, catalogue searches, evidence and source transfer/preparation remain the main costs.
 
 ## Completed Multiscale slice
 
@@ -228,13 +241,13 @@ The reduced-only implementation passes all sixteen ignored speckle GPU/photograp
 
 A matched-location comparison follows the hazy-coast green deficit through all four working scales. Bright-only leaves a small pink residual at Fast, with negligible difference at Draft/Thumb in that crop. Reduced bright-only is a preview tradeoff rather than native-repair equivalence. Its parameter flag participates in the existing node key and adds no image buffer, graph branch or GPU pass. Owner visual review remains pending.
 
-## Remaining native-prefix costs
+## Native-prefix baseline before the migrations
 
 A current Merrill Thumb measurement on hazy coast and the low-light speaker separates already-resident decoded-source preparation from disk opening and retained edits. Three warmed ordinary Wall renders per configuration give complete fresh-render medians of about 101–128 ms with Reference noise, 206–232 ms with multiscale rows/columns and 273–289 ms with Directional bands. Workload monitoring finds no competing app or compiler. These two photographs are not an application interaction benchmark.
 
 Separate synchronized GPU diagnostics attribute roughly 1 ms to black measurement, 3.4 ms to calibration and 13–33 ms to camera repair before the first sensor pool. Shield correction adds about 5–6 ms when selected. Native multiscale filtering adds about 66 ms, while the native guarded row estimator used by Directional adds about 161 ms. The first area pool costs about 3.9 ms, with a separate sensor-code pool required by recovery. Source upload/submission takes about 27–30 ms of host time. GPU attribution and host observations overlap and must not be added as an end-to-end total. CPU node-encoding timestamps do not indicate when queued GPU work has completed.
 
-Black measurement is therefore inexpensive relative to the remaining native filters. The selected original-clipping-evidence integration is still incomplete. Native shield/row/multiscale separation remains open, and Classic/Quattro still contain native neighborhood/recovery operations before their pool. The bright-only reduced-speckle fix does not complete the cross-family early-reduction plan.
+At that checkpoint, black measurement was inexpensive relative to the remaining native filters. Original-clipping integration and native shield/row/multiscale separation remained open, and Classic/Quattro still contained native neighborhood/recovery operations before their pool. The subsequent completed slices record the current boundary.
 
 ## Completed camera-cluster scheduling
 
