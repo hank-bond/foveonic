@@ -1,7 +1,5 @@
 //! Reuses bounded reduced-photo inputs while native requests keep the existing worker session.
 
-use super::Request;
-use crate::preferences::PreviewMode;
 use foveonic::{
     decode_cache::Cache,
     inspection::Artifact,
@@ -178,15 +176,6 @@ impl Photos {
         let result = engine.trim_memory(native, &mut self.working, limit, reservation);
         self.prune();
         result
-    }
-    pub fn requested(request: &Request) -> bool {
-        matches!(
-            request.preview_quality,
-            PreviewMode::Fast | PreviewMode::Draft | PreviewMode::Thumb
-        ) && request.output == "final"
-            && !request.comparison
-            && request.export.is_none()
-            && request.settings.preview_region.is_none()
     }
     pub fn clear(&mut self, engine: &Engine) {
         *self = Self::default();
@@ -480,21 +469,6 @@ mod tests {
     use super::*;
     use foveonic::{inspection::Content, render::Scale};
 
-    fn request() -> Request {
-        Request {
-            framing_preview: false,
-            calibration: None,
-            rendition: Default::default(),
-            revision: 1,
-            path: "photo.x3f".into(),
-            settings: Settings::new("Sunlight", "Standard"),
-            preview_quality: PreviewMode::Thumb,
-            preview_policy: PreviewMode::Thumb,
-            output: "final".into(),
-            comparison: false,
-            export: None,
-        }
-    }
     #[test]
     fn verified_identity_snapshot_keeps_offline_reduced_edits_independent_of_source_stats() {
         let directory = tempfile::tempdir().unwrap();
@@ -524,45 +498,6 @@ mod tests {
         assert_eq!(
             source_identity(&path, Some(current.clone()), Some(old)).unwrap(),
             current
-        );
-    }
-    #[test]
-    fn only_explicit_small_final_requests_use_the_reduced_set() {
-        let mut request = request();
-        assert!(Photos::requested(&request));
-        request.preview_quality = PreviewMode::Draft;
-        assert!(Photos::requested(&request));
-        for quality in [PreviewMode::Full, PreviewMode::Smart] {
-            request.preview_quality = quality;
-            assert!(!Photos::requested(&request));
-        }
-        request.preview_quality = PreviewMode::Thumb;
-        request.comparison = true;
-        assert!(!Photos::requested(&request));
-        request.comparison = false;
-        request.output = "linear.base".into();
-        assert!(!Photos::requested(&request));
-    }
-
-    #[test]
-    fn reduced_requests_have_no_camera_or_option_eligibility_gate() {
-        let mut request = request();
-        request.settings.rendering = foveonic::render::Rendering::Monochrome;
-        request.settings.dehaze.amount = 35.;
-        request.settings.photographic.tone_method = foveonic::render::PhotographicMethod::Universal;
-        request.settings.photographic.base_response = foveonic::render::BaseResponse::Strong;
-        for mode in [PreviewMode::Fast, PreviewMode::Draft, PreviewMode::Thumb] {
-            request.preview_quality = mode;
-            assert!(Photos::requested(&request));
-            assert_eq!(
-                super::super::effective_working_scale(&request),
-                mode.working_scale()
-            );
-        }
-        request.preview_quality = PreviewMode::Smart;
-        assert!(
-            !Photos::requested(&request),
-            "Smart retains native warm continuation"
         );
     }
     #[test]

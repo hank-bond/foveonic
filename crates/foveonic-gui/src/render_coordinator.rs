@@ -1,7 +1,9 @@
 //! Owns desired photo renders and publishes one immutable plan to the serialized executor.
 
-use crate::editor::Rendition;
-use crate::worker::{ColorPickRequest, Request, ScopeRequest};
+use crate::{
+    render_request::{Purpose, Request},
+    worker::{ColorPickRequest, ScopeRequest},
+};
 use foveonic::source::SourceOrigin;
 use serde_json::json;
 use std::{
@@ -12,37 +14,15 @@ use std::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Purpose {
-    Current,
-    Camera,
-    Defaults,
-    Detail,
-    Inspection(String, bool),
-    Export,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Target {
     pub path: PathBuf,
     pub purpose: Purpose,
 }
 impl Target {
     pub fn of(request: &Request) -> Self {
-        let purpose = if request.export.is_some() {
-            Purpose::Export
-        } else {
-            match request.rendition {
-                Rendition::Camera => Purpose::Camera,
-                Rendition::Defaults => Purpose::Defaults,
-                Rendition::Current if request.output != "final" || request.comparison => {
-                    Purpose::Inspection(request.output.clone(), request.comparison)
-                }
-                Rendition::Current if request.settings.preview_region.is_some() => Purpose::Detail,
-                Rendition::Current => Purpose::Current,
-            }
-        };
         Self {
             path: request.path.clone(),
-            purpose,
+            purpose: request.purpose(),
         }
     }
 }

@@ -9,11 +9,12 @@ mod reduced;
 pub(crate) use preparation::Config as PreparationConfig;
 
 #[cfg(test)]
-use crate::export::ExportFormat;
+use crate::export::{Export, ExportFormat};
 use crate::{
-    export::{self, resolve_camera_settings, Export},
+    export::{self, resolve_camera_settings},
     preferences::PreviewMode,
     render_matching::{presentation_changed, same_pixel_settings, same_request_context},
+    render_request::Request,
 };
 use eframe::egui;
 #[cfg(test)]
@@ -40,54 +41,6 @@ struct Checks {
 }
 #[cfg(test)]
 thread_local! { static CHECKS: std::cell::RefCell<Option<Arc<Checks>>> = const { std::cell::RefCell::new(None) }; }
-
-#[derive(Clone)]
-pub struct Request {
-    pub framing_preview: bool,
-    pub calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
-    pub rendition: crate::editor::Rendition,
-    pub revision: u64,
-    pub path: PathBuf,
-    pub settings: Settings,
-    pub preview_quality: PreviewMode,
-    /// Workspace choice, independent of Smart refinement passes.
-    pub preview_policy: PreviewMode,
-    pub output: String,
-    pub comparison: bool,
-    pub export: Option<Export>,
-}
-fn effective_working_scale(request: &Request) -> Scale {
-    if request.export.is_some()
-        || request.output != "final"
-        || request.comparison
-        || request.settings.preview_region.is_some()
-    {
-        Scale::NATIVE
-    } else {
-        request.preview_quality.working_scale()
-    }
-}
-
-fn resolve_preview(
-    request: &Request,
-    settings: &mut Settings,
-    metadata: &Metadata,
-) -> foveonic::source::Result<()> {
-    settings.working_scale = effective_working_scale(request);
-    if request.preview_quality == PreviewMode::Thumb && settings.working_scale.is_reduced() {
-        settings.working_scale =
-            foveonic::render::ControlCapabilities::from_metadata(metadata)?.thumb_scale();
-    }
-    if request.preview_quality != PreviewMode::Smart
-        || request.export.is_some()
-        || request.comparison
-        || request.output != "final"
-        || !settings.regional_preview_available(metadata)
-    {
-        settings.preview_region = None;
-    }
-    Ok(())
-}
 
 pub struct Frame {
     pub diagnostic_task: crate::timing::DeliveredTask,
@@ -529,7 +482,7 @@ impl Worker {
                 }
                 let prepare_defaults = matches!(
                     task.stamp.target.purpose,
-                    crate::render_coordinator::Purpose::Current
+                    crate::render_request::Purpose::Current
                 ) && request.preview_quality == PreviewMode::Thumb;
                 previous = Some(task.stamp.clone());
                 progress_updates.begin(request.revision, queued_at);
@@ -557,7 +510,7 @@ impl Worker {
                     let mut composed = presented.prepare(request, &decoded_cache)?;
                     let reused_display = composed.as_ref().and_then(|composed| composed.display.clone());
                     let reusing_pixels = composed.is_some();
-                    let mut reduced_loaded = if !reusing_pixels && reduced::Photos::requested(request)
+                    let mut reduced_loaded = if !reusing_pixels && request.uses_reduced_session()
                         && composition_quality.is_none_or(|scale| scale.is_reduced()) {
                         Some(reduced.load(&request.path, request.revision, &decoded_cache, &engine, &mut source, &|stage| reporter.loaded(stage))?)
                     } else { None };
@@ -578,7 +531,7 @@ impl Worker {
                         settings.working_scale = composed.quality;
                         settings.preview_region = None;
                     } else {
-                        resolve_preview(request, &mut settings, metadata.as_ref().unwrap())?;
+                        request.apply_preview(&mut settings, metadata.as_ref().unwrap())?;
                         if let Some(quality) = composition_quality { settings.working_scale = quality; settings.preview_region = None; }
                     }
                     if let Some(export) = request.export.as_ref() {
@@ -607,7 +560,7 @@ impl Worker {
                         let pending = &desired.request;
                         let mut next=pending.settings.clone();
                         resolve_camera_settings(&mut next,metadata.as_ref().unwrap());
-                        if resolve_preview(pending, &mut next, metadata.as_ref().unwrap()).is_err() { return true; }
+                        if pending.apply_preview(&mut next, metadata.as_ref().unwrap()).is_err() { return true; }
                         if same_request_context(request, pending) && presentation_changed(request, pending)
                             && same_pixel_settings(&settings, &next) { return false; }
                         !same_request_context(request, pending) || settings.working_scale!=next.working_scale || settings.preview_region!=next.preview_region
@@ -2265,207 +2218,6 @@ mod tests {
 #[cfg(test)]
 mod preview_tests {
     use super::*;
-    fn metadata() -> Metadata {
-        use foveonic::source::{Matrix, MatrixEncoding};
-        Metadata {
-            width: 5888,
-            height: 3776,
-            rotation: 0,
-            processing_version: Some([3, 1, 2, 0]),
-            properties: [("CAMMODEL".into(), "SIGMA sd Quattro".into())].into(),
-            matrices: [("CAMERAID", 40.), ("CaptureISO", 100.)]
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k.into(),
-                        Matrix {
-                            encoding: MatrixEncoding::Float32,
-                            representation: "test",
-                            dimensions: vec![1],
-                            values: vec![v],
-                        },
-                    )
-                })
-                .collect(),
-            lists: Default::default(),
-        }
-    }
-    #[test]
-    fn merrill_smart_uses_fast_overview_and_regional_full_without_changing_edits() {
-        use foveonic::source::{Matrix, MatrixEncoding};
-        let mut metadata = metadata();
-        metadata.width = 4928;
-        metadata.height = 3264;
-        metadata.processing_version = None;
-        metadata
-            .properties
-            .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
-        metadata.matrices.insert(
-            "ActiveImageArea".into(),
-            Matrix {
-                encoding: MatrixEncoding::Uint32,
-                representation: "test",
-                dimensions: vec![4],
-                values: vec![112., 64., 4815., 3199.],
-            },
-        );
-        let mut request = Request {
-            framing_preview: false,
-            calibration: None,
-            rendition: Default::default(),
-            revision: 1,
-            path: "merrill.x3f".into(),
-            settings: Settings::new("Sunlight", "Standard"),
-            preview_quality: PreviewMode::Smart,
-            preview_policy: PreviewMode::Smart,
-            output: "final".into(),
-            comparison: false,
-            export: None,
-        };
-        request.settings.dehaze.amount = 35.;
-        let mut resolved = request.settings.clone();
-        resolve_preview(&request, &mut resolved, &metadata).unwrap();
-        assert_eq!(resolved.working_scale, Scale::new(2).unwrap());
-        assert_eq!(resolved.preview_region, None);
-        assert!(resolved.row_correction && resolved.despeckle);
-        for (mode, quality) in [
-            (PreviewMode::Draft, Scale::new(4).unwrap()),
-            (PreviewMode::Thumb, Scale::new(8).unwrap()),
-        ] {
-            request.preview_quality = mode;
-            resolve_preview(&request, &mut resolved, &metadata).unwrap();
-            assert_eq!(resolved.working_scale, quality);
-        }
-        request.preview_quality = PreviewMode::Fast;
-        resolve_preview(&request, &mut resolved, &metadata).unwrap();
-        assert_eq!(resolved.working_scale, Scale::new(2).unwrap());
-        assert!(crate::render_matching::same_authored_edits(
-            &resolved,
-            &request.settings
-        ));
-        request.settings.working_scale = Scale::new(4).unwrap();
-        request.preview_quality = PreviewMode::Full;
-        resolve_preview(&request, &mut resolved, &metadata).unwrap();
-        assert_eq!(resolved.working_scale, Scale::NATIVE);
-        request.preview_quality = PreviewMode::Smart;
-        request.settings.preview_region = Some([100, 100, 400, 300]);
-        resolved = request.settings.clone();
-        resolve_preview(&request, &mut resolved, &metadata).unwrap();
-        assert_eq!(resolved.working_scale, Scale::NATIVE);
-        assert_eq!(
-            resolved.preview_region, request.settings.preview_region,
-            "Merrill must preserve the requested native detail region"
-        );
-        for format in [ExportFormat::Tiff, ExportFormat::Dng] {
-            request.export = Some(Export {
-                path: "export.output".into(),
-                format,
-                tiff_color_space: None,
-                encoding: Default::default(),
-                sections: Default::default(),
-                conflict: foveonic::importing::ConflictPolicy::Rename,
-            });
-            resolve_preview(&request, &mut resolved, &metadata).unwrap();
-            assert_eq!(resolved.working_scale, Scale::NATIVE);
-            assert_eq!(resolved.preview_region, None);
-        }
-    }
-    #[test]
-    fn classic_thumb_resolves_the_entire_preview_to_draft_resolution() {
-        let mut request = Request {
-            framing_preview: false,
-            calibration: None,
-            rendition: Default::default(),
-            revision: 1,
-            path: "preview.x3f".into(),
-            settings: Settings::new("Sunlight", "Standard"),
-            preview_quality: PreviewMode::Thumb,
-            preview_policy: PreviewMode::Thumb,
-            output: "final".into(),
-            comparison: false,
-            export: None,
-        };
-        for (model, divisor) in [
-            ("SIGMA SD14", 4),
-            ("SIGMA DP1", 4),
-            ("SIGMA DP2 Merrill", 8),
-            ("SIGMA dp2 Quattro", 8),
-        ] {
-            let mut metadata = metadata();
-            metadata.processing_version = None;
-            metadata.properties.insert("CAMMODEL".into(), model.into());
-            request.preview_quality = PreviewMode::Thumb;
-            let mut resolved = request.settings.clone();
-            resolve_preview(&request, &mut resolved, &metadata).unwrap();
-            assert_eq!(resolved.working_scale.divisor(), divisor, "{model}");
-            request.preview_quality = PreviewMode::Draft;
-            resolve_preview(&request, &mut resolved, &metadata).unwrap();
-            assert_eq!(resolved.working_scale.divisor(), 4);
-            request.preview_quality = PreviewMode::Thumb;
-            request.output = "linear.base".into();
-            resolve_preview(&request, &mut resolved, &metadata).unwrap();
-            assert_eq!(resolved.working_scale, Scale::NATIVE);
-            request.output = "final".into();
-            request.comparison = true;
-            resolve_preview(&request, &mut resolved, &metadata).unwrap();
-            assert_eq!(resolved.working_scale, Scale::NATIVE);
-            request.comparison = false;
-        }
-    }
-
-    #[test]
-    fn numeric_modes_preserve_controls_and_native_purposes_are_explicit() {
-        let mut r = Request {
-            framing_preview: false,
-            calibration: None,
-            rendition: Default::default(),
-            revision: 1,
-            path: "test.x3f".into(),
-            settings: Settings::new("Sunlight", "Standard"),
-            preview_quality: PreviewMode::Fast,
-            preview_policy: PreviewMode::Fast,
-            output: "final".into(),
-            comparison: false,
-            export: None,
-        };
-        r.settings.rendering = foveonic::render::Rendering::Monochrome;
-        r.settings.dehaze.amount = 35.;
-        r.settings.photographic.tone_method = foveonic::render::PhotographicMethod::Universal;
-        r.settings.photographic.base_response = foveonic::render::BaseResponse::Strong;
-        for mode in [
-            PreviewMode::Full,
-            PreviewMode::Fast,
-            PreviewMode::Smart,
-            PreviewMode::Draft,
-            PreviewMode::Thumb,
-        ] {
-            r.preview_quality = mode;
-            assert_eq!(effective_working_scale(&r), mode.working_scale());
-        }
-        r.settings.output_size = Some([640, 480]);
-        assert_eq!(effective_working_scale(&r), Scale::new(8).unwrap());
-        r.output = "sensor.rgb".into();
-        assert_eq!(effective_working_scale(&r), Scale::NATIVE);
-        r.output = "final".into();
-        r.comparison = true;
-        assert_eq!(effective_working_scale(&r), Scale::NATIVE);
-        r.comparison = false;
-        r.settings.preview_region = Some([100, 100, 400, 300]);
-        assert_eq!(effective_working_scale(&r), Scale::NATIVE);
-        r.settings.preview_region = None;
-        for format in [ExportFormat::Tiff, ExportFormat::Dng] {
-            r.export = Some(Export {
-                path: "test.output".into(),
-                format,
-                tiff_color_space: None,
-                encoding: Default::default(),
-                sections: Default::default(),
-                conflict: foveonic::importing::ConflictPolicy::Rename,
-            });
-            assert_eq!(effective_working_scale(&r), Scale::NATIVE);
-        }
-    }
-
     #[test]
     #[ignore = "requires GPU and QUATTRO_X3F"]
     fn fast_preference_exports_full_files_and_returns_to_fast_preview() {

@@ -1,6 +1,6 @@
 //! Resolves bounded viewport edit targets and retains their revision-matched settings and images.
 
-use crate::{multi_edit_controls, sidecars, worker};
+use crate::{multi_edit_controls, render_request, sidecars, worker};
 use foveonic::{render::Settings, source::Metadata};
 use std::{
     collections::BTreeMap,
@@ -780,7 +780,7 @@ impl crate::App {
                 settings.preview_region = None;
                 let framing_preview =
                     self.selected.as_ref() == Some(&path) && self.framing_preview_active();
-                worker::Request {
+                render_request::Request {
                     framing_preview,
                     calibration: calibration.clone(),
                     rendition: crate::editor::Rendition::Current,

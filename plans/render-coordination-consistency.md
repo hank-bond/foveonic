@@ -56,6 +56,14 @@ For each unit, identify what rule now has one home, which callers migrated and w
 
 For pass 6, compare matched Off workloads before and after and use separate Wall/GPU captures for attribution. Check one-photo and multi-photo edits, rapid supersession, foreground arrival during background work and memory pressure where affected. Do not trade slower cancellation or unbounded GPU backlog for a faster completed-render number.
 
+### Vocabulary and source organization
+
+The owner approved physical module/file reorganization after committing the request-policy checkpoint to obtain a clean tree. Move the GUI request, matching, coordinator, delivery and Smart modules under `rendering/`. Keep execution-specific presentation, reduced-session and preparation adapters under `rendering/worker/`. Preserve behavior and visibility during this mechanical unit, then continue settings/default-preparation cleanup.
+
+Resolve broader concept names together during the new architecture design. Current extraction names are working names, not a settled architecture vocabulary. The owner suggested `AppDefault`, `UserDefault` and `Current` or `Requested` as clearer candidates for the existing Before/edit choices. These remain candidates. Distinguish which settings are used from the lifecycle of a render request before choosing the final terms. Do not implement isolated enum renames during this cleanup.
+
+Use [UIX's documentation strategy](https://github.com/hank-bond/uix/tree/main/docs) as design inspiration. Its [documentation layers](https://github.com/hank-bond/uix/blob/main/docs/AGENTS.md) separate open design, accepted decisions, specifications, implementation plans and living architecture. Its [concept vocabulary](https://github.com/hank-bond/uix/blob/main/docs/architecture/concepts.md) and [knowledge-placement guidance](https://github.com/hank-bond/uix/blob/main/docs/contributing/knowledge-placement.md) connect stable terms and durable knowledge owners. Review which practices to adopt alongside architecture design. A repository-wide documentation migration has not been selected.
+
 ### Deferred changes
 
 New preparation coverage, prewarming heuristics, cache formats, cross-executor shared caches, revised eviction policy, centralized CPU/GPU scheduling and stage-grouped multi-photo execution belong to later decisions. Existing cache correctness and duplicate work can be fixed within the passes above without introducing these concepts. Keep the wider orchestration proposal as the destination for ownership changes that exceed the current boundaries.
@@ -68,9 +76,20 @@ New preparation coverage, prewarming heuristics, cache formats, cross-executor s
 - [x] Remove export-only alternatives from preview execution after the early export return. Keep frozen export behavior and the separate export path unchanged.
 - [x] Pass all ordinary workspace tests, including 423 GUI checks, and four existing GPU checks covering framing reuse, reduced refresh/native promotion and Merrill/Quattro TIFF/DNG export round trips. Export checks compare independent native outputs exactly. Framing/reduced checks verify fresh pixels and work avoidance at their existing boundaries.
 - [x] Pass workspace Clippy with warnings denied, formatting, generated documentation/index checks, diff whitespace checks and the five artwork checks.
-- [ ] Review request purpose and quality/grid resolution as the next unit. Keep it separate from this completed comparison/dead-branch checkpoint.
+- [x] Commit the comparison/dead-branch checkpoint as `063617d` before continuing with request resolution.
 
 The inventory below records the original source findings at `0fa7bbe`. This checkpoint addresses comparison ownership in B1 and C6's dead branches. Remaining purpose/grid resolution, request-type ownership, cancellation policy, cache behavior and delivery lifecycles are unchanged.
+
+### Request policy checkpoint
+
+- [x] Move `Request` and `Purpose` into [render_request.rs](../crates/foveonic-gui/src/render_request.rs). Migrate callers directly instead of retaining worker/coordinator re-exports.
+- [x] Derive coordinator targets through `Request::purpose()`. Preserve precedence among export, Before renditions, inspection/comparison and detail.
+- [x] Put nominal working scale, camera-aware preview application and reduced-session selection beside the request. Remove these decisions from worker/resource-owner helpers. Preserve Smart's native history and camera/default Before previews at reduced quality.
+- [x] Share camera-aware scale selection between foreground requests and idle preparation through the existing core capability policy. Keep framing-plane reuse at its existing actual grid and keep request metadata independent of graph cache identity.
+- [x] Move the five existing purpose/scale/eligibility tests alongside the request contract. Add checks for mixed-purpose precedence and the independence of Before rendition and processing resolution.
+- [x] Pass 425 ordinary GUI checks and five existing GPU checks for multi-photo Thumb delivery, framing reuse, pending-exposure composition, explicit quality changes and Merrill/Quattro TIFF/DNG export round trips. Pass workspace Clippy with warnings denied, formatting, generated indexes/documentation, artwork and diff checks.
+- [x] Pass the full ordinary workspace run, including 531 processor tests and 425 GUI tests. This checkpoint is ready for review, with scheduling, cache eviction and numerical processing unchanged.
+- [x] Owner reviewed the request-policy checkpoint and approved committing it, reorganizing the render modules from a clean tree, then continuing cleanup.
 
 ## Coverage and existing boundaries
 

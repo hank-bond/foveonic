@@ -1,6 +1,7 @@
 //! Reframes one immutable whole-image result without reopening sources or running photographic nodes.
 
-use super::{Comparison, Request};
+use super::Comparison;
+use crate::render_request::Request;
 use crate::{
     editor::Rendition,
     export::resolve_camera_settings,

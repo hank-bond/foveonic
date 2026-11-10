@@ -39,6 +39,7 @@ mod progress;
 mod render_coordinator;
 mod render_delivery;
 mod render_matching;
+mod render_request;
 mod rotate_tool;
 mod scopes;
 mod sections;
@@ -560,7 +561,7 @@ impl App {
             } else if small_preview && zoomed {
                 quality = preferences::PreviewMode::Full;
             }
-            let request = worker::Request {
+            let request = render_request::Request {
                 framing_preview: export.is_none() && self.framing_preview_active(),
                 calibration: self
                     .noise_calibration

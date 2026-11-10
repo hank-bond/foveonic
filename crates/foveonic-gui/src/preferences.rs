@@ -74,7 +74,7 @@ pub enum PreviewMode {
     Thumb,
 }
 impl PreviewMode {
-    /// Nominal scale before the worker resolves camera-specific Thumb sizing.
+    /// Nominal workspace scale before render requests resolve camera-specific Thumb sizing.
     pub fn working_scale(self) -> foveonic::render::Scale {
         let divisor = match self {
             Self::Full => 1,

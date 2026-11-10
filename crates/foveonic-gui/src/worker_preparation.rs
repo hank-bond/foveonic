@@ -1,13 +1,16 @@
 //! Prepares ready decoded neighbors during idle time using the render worker's existing owners.
 
 use super::reduced::Photos;
-use crate::{export::resolve_camera_settings, sidecars::CachedRecipes};
+use crate::{
+    export::resolve_camera_settings, preferences::PreviewMode,
+    render_request::camera_preview_scale, sidecars::CachedRecipes,
+};
 use foveonic::{
     decode_cache::Cache,
     diagnostics::{self as trace, Category},
     noise_calibration::Calibration,
     profile::Profile,
-    render::{ControlCapabilities, Engine, MemoryReservation, RenderSession},
+    render::{Engine, MemoryReservation, RenderSession},
     source::SourceOrigin,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -125,7 +128,7 @@ impl Preparation {
                     return Ok(false);
                 }
                 settings.working_scale =
-                    ControlCapabilities::from_metadata(&source.metadata)?.thumb_scale();
+                    camera_preview_scale(PreviewMode::Thumb, &source.metadata)?;
                 settings.preview_region = None;
                 settings.color_range_preview = None;
                 settings.dehaze_estimate = settings.dehaze_auto();

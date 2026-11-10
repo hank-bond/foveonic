@@ -1,6 +1,7 @@
 //! Checks delivery decisions under edits, view changes and out-of-order completions without a GPU.
 
 use super::*;
+use crate::render_request;
 
 fn view(settings: &Settings) -> ViewContext<'_> {
     ViewContext {
@@ -284,7 +285,7 @@ fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding(
     let request = |path: &str, revision, exposure| {
         let mut requested = settings.clone();
         requested.exposure = exposure;
-        Arc::new(worker::Request {
+        Arc::new(render_request::Request {
             path: path.into(),
             revision,
             settings: requested,

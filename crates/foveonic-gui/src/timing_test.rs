@@ -51,7 +51,7 @@ fn task_context_reuses_coordinator_identity_without_owning_photo_data() {
         id: crate::render_coordinator::TaskId(7),
         target: crate::render_coordinator::Target {
             path: "photo.x3f".into(),
-            purpose: crate::render_coordinator::Purpose::Current,
+            purpose: crate::render_request::Purpose::Current,
         },
         revision: 42,
     };

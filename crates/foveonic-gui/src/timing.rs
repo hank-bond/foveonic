@@ -262,8 +262,8 @@ fn flow_id(domain: &str, task: u64, revision: u64) -> u64 {
     (domain, task, revision).hash(&mut flow);
     flow.finish()
 }
-pub fn purpose(purpose: &crate::render_coordinator::Purpose) -> &'static str {
-    use crate::render_coordinator::Purpose;
+pub fn purpose(purpose: &crate::render_request::Purpose) -> &'static str {
+    use crate::render_request::Purpose;
     match purpose {
         Purpose::Current => "current",
         Purpose::Camera => "camera",

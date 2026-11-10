@@ -1,6 +1,7 @@
 //! Exercises observed render interleavings without threads, timers or a GPU.
 
 use super::*;
+use crate::editor::Rendition;
 use crate::preferences::PreviewMode;
 use foveonic::render::Settings;
 

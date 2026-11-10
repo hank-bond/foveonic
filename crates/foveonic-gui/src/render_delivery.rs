@@ -1,9 +1,8 @@
 //! Classifies completed images for pixel reuse, per-photo feedback and current-view delivery.
 
 use crate::{
-    editor::Rendition,
-    render_coordinator::{Completion, Purpose},
-    render_matching, worker, App,
+    editor::Rendition, render_coordinator::Completion, render_matching, render_request::Purpose,
+    worker, App,
 };
 use foveonic::render::Settings;
 use std::path::Path;
