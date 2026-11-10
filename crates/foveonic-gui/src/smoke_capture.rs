@@ -63,7 +63,7 @@ impl Smoke {
     }
     pub(super) fn diagnostic_checked(
         &self,
-        frame: Option<&crate::worker::Frame>,
+        frame: Option<&crate::rendering::worker::Frame>,
         worker_busy: bool,
     ) {
         self.diagnostic_marker("checked", frame, worker_busy);
@@ -71,7 +71,7 @@ impl Smoke {
     fn diagnostic_marker(
         &self,
         phase: &str,
-        frame: Option<&crate::worker::Frame>,
+        frame: Option<&crate::rendering::worker::Frame>,
         worker_busy: bool,
     ) {
         trace::event(Category::Scenario, "smoke.step", |fields| {

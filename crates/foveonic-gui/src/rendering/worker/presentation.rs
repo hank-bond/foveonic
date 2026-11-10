@@ -1,12 +1,12 @@
 //! Reframes one immutable whole-image result without reopening sources or running photographic nodes.
 
 use super::Comparison;
-use crate::render_request::Request;
+use crate::rendering::request::Request;
 use crate::{
     editor::Rendition,
     export::resolve_camera_settings,
     preferences::PreviewMode,
-    render_matching::{same_calibration_snapshot, same_pixel_settings},
+    rendering::matching::{same_calibration_snapshot, same_pixel_settings},
 };
 use foveonic::{
     decode_cache::Cache as DecodeCache,
@@ -298,7 +298,7 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::{Frame, Update, Worker};
+    use crate::rendering::worker::{Frame, Update, Worker};
     use eframe::{egui, wgpu};
     use foveonic::{profile::Profile, render::Engine, source::Source};
     use std::sync::atomic::Ordering;

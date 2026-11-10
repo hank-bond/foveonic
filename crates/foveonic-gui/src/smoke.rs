@@ -603,7 +603,7 @@ impl App {
         let shown_detail = self.smart_detail(ctx.pixels_per_point()).map(|detail| {
             (
                 detail.framing_preview,
-                crate::render_matching::same_authored_edits(&detail.requested, &self.settings),
+                crate::rendering::matching::same_authored_edits(&detail.requested, &self.settings),
             )
         });
         if self.smoke.as_ref().is_some_and(|smoke| {
@@ -681,7 +681,7 @@ impl App {
         }
         if smoke.targets == SMART_TARGETS && smoke.targets[smoke.index] == "smart-adaptive-edit" {
             if let Some(frame) = self.frame.as_ref().filter(|frame| {
-                crate::render_matching::same_authored_edits(&frame.requested, &self.settings)
+                crate::rendering::matching::same_authored_edits(&frame.requested, &self.settings)
                     && self.settings.adaptive_tone_active()
             }) {
                 assert_eq!(
@@ -835,7 +835,7 @@ impl App {
                         let detail = self.detail.as_ref().unwrap();
                         let visible = self.viewport.visible_pixels().unwrap();
                         let window = frame.display_window(false);
-                        assert!(crate::smart::contains(
+                        assert!(crate::rendering::smart::contains(
                             detail.artifact.settings.preview_region.unwrap(),
                             [
                                 visible.top_left[0] + window[0],
@@ -1097,7 +1097,7 @@ impl App {
                         assert_eq!(frame.requested.exposure, 0.75);
                     }
                     let rect = region.unwrap();
-                    assert!(crate::smart::contains(
+                    assert!(crate::rendering::smart::contains(
                         rect,
                         [
                             visible.top_left[0],
@@ -1176,7 +1176,7 @@ impl App {
                         | "smart-transition-full"
                 ) {
                     assert_eq!(frame.revision, self.revision);
-                    assert!(crate::render_matching::same_authored_edits(
+                    assert!(crate::rendering::matching::same_authored_edits(
                         &frame.requested,
                         &self.settings
                     ));
@@ -2404,7 +2404,7 @@ impl App {
                     || match smoke.targets[smoke.index] {
                         "smart-detail" | "smart-edit-detail" if regional_smart => {
                             self.detail.as_ref().is_some_and(|detail| {
-                                crate::render_matching::same_authored_edits(
+                                crate::rendering::matching::same_authored_edits(
                                     &detail.requested,
                                     &self.settings,
                                 )
@@ -2420,7 +2420,7 @@ impl App {
                         | "smart-crop-leave"
                         | "smart-transition-full" => self.frame.as_ref().is_some_and(|frame| {
                             frame.revision == self.revision
-                                && crate::render_matching::same_authored_edits(
+                                && crate::rendering::matching::same_authored_edits(
                                     &frame.requested,
                                     &self.settings,
                                 )
@@ -2575,7 +2575,7 @@ impl App {
                         }
                         && self.frame.as_ref().is_some_and(|f| {
                             f.revision == self.revision
-                                && crate::render_matching::same_authored_edits(
+                                && crate::rendering::matching::same_authored_edits(
                                     &f.requested,
                                     &self.settings,
                                 )
@@ -2876,7 +2876,7 @@ impl App {
                 .map(|index| &smoke.multi_expected[index]);
             frame.is_some_and(|frame| {
                 expected.is_none_or(|expected| {
-                    crate::render_matching::same_authored_edits(&frame.requested, expected)
+                    crate::rendering::matching::same_authored_edits(&frame.requested, expected)
                 }) && frame.artifact.settings.working_scale.divisor() == 8
             })
         })

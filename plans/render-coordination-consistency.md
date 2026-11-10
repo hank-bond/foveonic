@@ -14,6 +14,8 @@ This inventory is based on source inspection at `0fa7bbe`, with no production ch
 
 The [coordination overhead investigation](./coordination-overhead-profile.md) separately measures data movement, preparation, waiting and delivery to help decide what can improve within the current architecture.
 
+The owner subsequently narrowed the next rounds to local improvements whose correctness follows from existing contracts. Keep the broader ownership, lifecycle and vocabulary questions for architecture design. Use read-only subagent reviews across bounded code areas to identify candidates, then review concrete findings before selecting fixes. The broader sequence below remains context rather than authorization to reshape those boundaries now.
+
 - [x] Trace active-photo, multi-photo, Smart, presentation-only, inspection and export routes.
 - [x] Inspect idle preparation, decoded-cache prefetch, browser previews, navigator, scopes and picks.
 - [x] Inspect source acquisition, numerical checkpoints, shared preparation, memory accounting and invalidation.
@@ -70,7 +72,7 @@ New preparation coverage, prewarming heuristics, cache formats, cross-executor s
 
 ### First implementation checkpoint
 
-- [x] Give settings/request comparisons one home in [render_matching.rs](../crates/foveonic-gui/src/render_matching.rs). Migrate every caller from Smart, worker and presentation helpers. Retain distinct authored-edit, image-geometry, pixel-settings, compatible-work and exact-delivery rules.
+- [x] Give settings/request comparisons one home in [matching.rs](../crates/foveonic-gui/src/rendering/matching.rs). Migrate every caller from Smart, worker and presentation helpers. Retain distinct authored-edit, image-geometry, pixel-settings, compatible-work and exact-delivery rules.
 - [x] Keep transient scale/region/estimate and descriptive range-name normalization in one private helper. Preserve framing, output-size, workspace-policy, calibration-snapshot and source-admission distinctions.
 - [x] Remove the reduced renderer's unreachable native-session lookup after `native.take()`, along with redundant assignments of that already-empty slot. Preserve taking the matching source for refresh and releasing native preparation.
 - [x] Remove export-only alternatives from preview execution after the early export return. Keep frozen export behavior and the separate export path unchanged.
@@ -82,7 +84,7 @@ The inventory below records the original source findings at `0fa7bbe`. This chec
 
 ### Request policy checkpoint
 
-- [x] Move `Request` and `Purpose` into [render_request.rs](../crates/foveonic-gui/src/render_request.rs). Migrate callers directly instead of retaining worker/coordinator re-exports.
+- [x] Move `Request` and `Purpose` into [request.rs](../crates/foveonic-gui/src/rendering/request.rs). Migrate callers directly instead of retaining worker/coordinator re-exports.
 - [x] Derive coordinator targets through `Request::purpose()`. Preserve precedence among export, Before renditions, inspection/comparison and detail.
 - [x] Put nominal working scale, camera-aware preview application and reduced-session selection beside the request. Remove these decisions from worker/resource-owner helpers. Preserve Smart's native history and camera/default Before previews at reduced quality.
 - [x] Share camera-aware scale selection between foreground requests and idle preparation through the existing core capability policy. Keep framing-plane reuse at its existing actual grid and keep request metadata independent of graph cache identity.
@@ -90,6 +92,19 @@ The inventory below records the original source findings at `0fa7bbe`. This chec
 - [x] Pass 425 ordinary GUI checks and five existing GPU checks for multi-photo Thumb delivery, framing reuse, pending-exposure composition, explicit quality changes and Merrill/Quattro TIFF/DNG export round trips. Pass workspace Clippy with warnings denied, formatting, generated indexes/documentation, artwork and diff checks.
 - [x] Pass the full ordinary workspace run, including 531 processor tests and 425 GUI tests. This checkpoint is ready for review, with scheduling, cache eviction and numerical processing unchanged.
 - [x] Owner reviewed the request-policy checkpoint and approved committing it, reorganizing the render modules from a clean tree, then continuing cleanup.
+
+### Module organization and numeric preparation checkpoint
+
+- [x] Commit request-policy cleanup as `1a696d7` and verify a clean tree before moving files.
+- [x] Group request, matching, coordinator, delivery and Smart under `rendering/`, with execution adapters under `rendering/worker/`. Use ordinary Rust module layout, move adjacent tests, migrate callers and update documentation links/indexes. Preserve the previous effective visibility of Smart helpers.
+- [x] Pass 425 GUI tests and workspace all-target Clippy after the mechanical move. Keep application-wide diagnostics, progress and memory inventory outside this module.
+- [x] Move numeric control/reset preparation from multi-edit runtime to the processor's existing [editing-settings code](../crates/foveonic/src/render/edits.rs). Export the existing `numeric_settings` helper through the renderer and migrate its worker caller directly.
+- [x] Keep authored automatic choices separate from derived numeric/reset snapshots. The worker still supplies render-produced Dehaze estimates. Preserve absent-value/error handling in this unit. Add checks for Auto exposure, disabled automatic sharpening, authored-value preservation and manual/reset separation.
+- [x] Pass the full ordinary workspace suite after extraction, including 533 processor tests and 425 GUI tests.
+- [x] Pass workspace all-target Clippy with warnings denied, formatting, documentation/index checks, artwork tests and diff checks. Pass three existing GPU checks for multi-edit Thumb delivery and Merrill/Quattro TIFF/DNG export round trips. Verify the moved numeric-preparation body matches its previous implementation after namespace changes.
+- [x] Owner reviewed the combined checkpoint and approved committing it before local-improvement audits. Further settings-state handoff changes remain deferred.
+
+This addresses A3/H3's worker-to-UI preparation dependency. It does not settle requested/effective settings authority, missing-value error presentation, recipe restoration precedence or the shared presentation-snapshot boundary. Broader vocabulary changes remain deferred to architecture design.
 
 ## Coverage and existing boundaries
 
@@ -117,7 +132,7 @@ Sources: [main](../crates/foveonic-gui/src/main.rs), [multi-edit runtime](../cra
 
 ## B. Request meaning and identity
 
-Sources: [worker request/resolution](../crates/foveonic-gui/src/worker.rs), [presentation compatibility](../crates/foveonic-gui/src/worker_presentation.rs), [reduced eligibility](../crates/foveonic-gui/src/worker_reduced.rs), [Smart comparisons](../crates/foveonic-gui/src/smart.rs), [target identity](../crates/foveonic-gui/src/render_coordinator.rs).
+Sources: [worker request/resolution](../crates/foveonic-gui/src/rendering/worker/mod.rs), [presentation compatibility](../crates/foveonic-gui/src/rendering/worker/presentation.rs), [reduced eligibility](../crates/foveonic-gui/src/rendering/worker/reduced.rs), [Smart comparisons](../crates/foveonic-gui/src/rendering/smart.rs), [target identity](../crates/foveonic-gui/src/rendering/coordinator.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -129,7 +144,7 @@ Sources: [worker request/resolution](../crates/foveonic-gui/src/worker.rs), [pre
 
 ## C. Work selection, execution and interruption
 
-Sources: [worker loop](../crates/foveonic-gui/src/worker.rs), [service cursor](../crates/foveonic-gui/src/render_coordinator.rs), [priority gate](../crates/foveonic/src/background.rs), [CPU admission](../crates/foveonic/src/decode_pool.rs), [graph executor](../crates/foveonic/src/render/execute.rs), [GPU completion scope](../crates/foveonic/src/gpu/scheduling.rs).
+Sources: [worker loop](../crates/foveonic-gui/src/rendering/worker/mod.rs), [service cursor](../crates/foveonic-gui/src/rendering/coordinator.rs), [priority gate](../crates/foveonic/src/background.rs), [CPU admission](../crates/foveonic/src/decode_pool.rs), [graph executor](../crates/foveonic/src/render/execute.rs), [GPU completion scope](../crates/foveonic/src/gpu/scheduling.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -142,7 +157,7 @@ Sources: [worker loop](../crates/foveonic-gui/src/worker.rs), [service cursor](.
 
 ## D. Completion, delivery and progress
 
-Sources: [reply handling](../crates/foveonic-gui/src/main.rs), [delivery classifier](../crates/foveonic-gui/src/render_delivery.rs), [coordinator settlement/admission](../crates/foveonic-gui/src/render_coordinator.rs), [runtime completion](../crates/foveonic-gui/src/multi_edit_runtime.rs), [progress](../crates/foveonic-gui/src/progress.rs).
+Sources: [reply handling](../crates/foveonic-gui/src/main.rs), [delivery classifier](../crates/foveonic-gui/src/rendering/delivery.rs), [coordinator settlement/admission](../crates/foveonic-gui/src/rendering/coordinator.rs), [runtime completion](../crates/foveonic-gui/src/multi_edit_runtime.rs), [progress](../crates/foveonic-gui/src/progress.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -153,7 +168,7 @@ Sources: [reply handling](../crates/foveonic-gui/src/main.rs), [delivery classif
 
 ## E. Cache reuse and preparation
 
-Sources: [decoded cache API](../crates/foveonic/src/decode_cache/mod.rs), [disk retention](../crates/foveonic/src/decode_cache/lru.rs), [preview identity](../crates/foveonic/src/decode_cache/previews.rs), [source identity snapshot](../crates/foveonic/src/decode_cache/original.rs), [reduced adapter](../crates/foveonic-gui/src/worker_reduced.rs), [idle preparation](../crates/foveonic-gui/src/worker_preparation.rs), [graph cache](../crates/foveonic/src/interactive.rs), [shared analysis](../crates/foveonic/src/render/recipes/linear_edits.rs).
+Sources: [decoded cache API](../crates/foveonic/src/decode_cache/mod.rs), [disk retention](../crates/foveonic/src/decode_cache/lru.rs), [preview identity](../crates/foveonic/src/decode_cache/previews.rs), [source identity snapshot](../crates/foveonic/src/decode_cache/original.rs), [reduced adapter](../crates/foveonic-gui/src/rendering/worker/reduced.rs), [idle preparation](../crates/foveonic-gui/src/rendering/worker/preparation.rs), [graph cache](../crates/foveonic/src/interactive.rs), [shared analysis](../crates/foveonic/src/render/recipes/linear_edits.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -180,7 +195,7 @@ Sources: [decoded cache API](../crates/foveonic/src/decode_cache/mod.rs), [disk 
 
 ## F. Memory, retention and invalidation
 
-Sources: [frontend inventory](../crates/foveonic-gui/src/memory.rs), [shared trimming](../crates/foveonic/src/render/memory.rs), [working-set ownership](../crates/foveonic/src/render/reduced.rs), [preparation cache](../crates/foveonic/src/render/preparation.rs), [source-statistic ownership](../crates/foveonic/src/render/source_preparation.rs), [idle admission](../crates/foveonic-gui/src/worker_reduced.rs).
+Sources: [frontend inventory](../crates/foveonic-gui/src/memory.rs), [shared trimming](../crates/foveonic/src/render/memory.rs), [working-set ownership](../crates/foveonic/src/render/reduced.rs), [preparation cache](../crates/foveonic/src/render/preparation.rs), [source-statistic ownership](../crates/foveonic/src/render/source_preparation.rs), [idle admission](../crates/foveonic-gui/src/rendering/worker/reduced.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -191,7 +206,7 @@ Sources: [frontend inventory](../crates/foveonic-gui/src/memory.rs), [shared tri
 
 ## G. Background and auxiliary worker consistency
 
-Sources: [idle preparation](../crates/foveonic-gui/src/worker_preparation.rs), [cache prefetch](../crates/foveonic/src/decode_cache/worker.rs), [browser loader](../crates/foveonic-gui/src/browser_loader.rs), [navigator](../crates/foveonic-gui/src/navigator.rs), [rendered previews](../crates/foveonic-gui/src/previews.rs), [capture metadata](../crates/foveonic-gui/src/capture.rs), [folder discovery](../crates/foveonic-gui/src/folder_loader.rs), [batch](../crates/foveonic-gui/src/batch.rs).
+Sources: [idle preparation](../crates/foveonic-gui/src/rendering/worker/preparation.rs), [cache prefetch](../crates/foveonic/src/decode_cache/worker.rs), [browser loader](../crates/foveonic-gui/src/browser_loader.rs), [navigator](../crates/foveonic-gui/src/navigator.rs), [rendered previews](../crates/foveonic-gui/src/previews.rs), [capture metadata](../crates/foveonic-gui/src/capture.rs), [folder discovery](../crates/foveonic-gui/src/folder_loader.rs), [batch](../crates/foveonic-gui/src/batch.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -203,7 +218,7 @@ Sources: [idle preparation](../crates/foveonic-gui/src/worker_preparation.rs), [
 
 ## H. Evidence, naming and source organization
 
-Sources: [GUI timing adapter](../crates/foveonic-gui/src/timing.rs), [aggregate profiles](../crates/foveonic/src/profile.rs), [native scenarios](../crates/foveonic-gui/src/smoke_scenarios.rs), [trace analysis](../scripts/profiling/trace_analysis.py), [coordinator tests](../crates/foveonic-gui/src/render_coordinator_test.rs), [delivery tests](../crates/foveonic-gui/src/render_delivery_test.rs), [architecture map](../docs/interactive-rendering-architecture.md).
+Sources: [GUI timing adapter](../crates/foveonic-gui/src/timing.rs), [aggregate profiles](../crates/foveonic/src/profile.rs), [native scenarios](../crates/foveonic-gui/src/smoke_scenarios.rs), [trace analysis](../scripts/profiling/trace_analysis.py), [coordinator tests](../crates/foveonic-gui/src/rendering/coordinator_test.rs), [delivery tests](../crates/foveonic-gui/src/rendering/delivery_test.rs), [architecture map](../docs/interactive-rendering-architecture.md).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |

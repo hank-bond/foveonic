@@ -1,6 +1,6 @@
 //! Defines shared settings and request comparisons without selecting work or admitting results.
 
-use crate::render_request::Request;
+use super::request::Request;
 use foveonic::{
     noise_calibration::Calibration,
     render::{Scale, Settings},

@@ -26,6 +26,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[crop_tool/](./crop_tool/AGENTS.md)** Crop interaction separates pointer geometry and aspect-ratio preferences from the shared image view.
 - **[editor/](./editor/AGENTS.md)** Editor workflow separates scoped settings, application presets and defaults from authored photos and transient comparisons.
 - **[noise_calibration/](./noise_calibration/AGENTS.md)** Calibration separates capture storage and availability, background job control, and shared-metadata presentation.
+- **[rendering/](./rendering/AGENTS.md)** Render coordination separates request meaning, work matching, target scheduling, delivery and serialized execution.
 
 ### Source files
 
@@ -71,16 +72,11 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[previews.rs](./previews.rs)** Retains edited GPU previews immediately and persists bounded photographic previews after foreground work yields.
 - **[processing.rs](./processing.rs)** Remembers per-mode output choices and edits them independently of photographic recipes.
 - **[progress.rs](./progress.rs)** Shows request-to-image time and discrete completed loading and rendering stages.
-- **[render_coordinator.rs](./render_coordinator.rs)** Owns desired photo renders and publishes one immutable plan to the serialized executor.
-- **[render_delivery.rs](./render_delivery.rs)** Classifies completed images for pixel reuse, per-photo feedback and current-view delivery.
-- **[render_matching.rs](./render_matching.rs)** Defines shared settings and request comparisons without selecting work or admitting results.
-- **[render_request.rs](./render_request.rs)** Describes photo render requests and resolves their purpose and preview geometry independently of execution.
 - **[rotate_tool.rs](./rotate_tool.rs)** Owns line and freehand rotation gestures within the shared photograph-tool lifecycle.
 - **[scopes.rs](./scopes.rs)** Draws histograms, waveforms, and parades for the selected image buffer.
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
 - **[shortcuts.rs](./shortcuts.rs)** Defines workspace actions and routes their keys before widgets, preserving text and modal input.
 - **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
-- **[smart.rs](./smart.rs)** Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
 - **[smoke_capture.rs](./smoke_capture.rs)** Saves existing smoke checks through the shared capture controller without changing their actions.
 - **[smoke_scenarios.rs](./smoke_scenarios.rs)** Runs declared native diagnostic cases through the existing application and capture controller.
@@ -89,9 +85,5 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
 - **[viewport_selection.rs](./viewport_selection.rs)** Keeps bounded viewport editing targets separate from browser selection and active-photo context.
 - **[widgets.rs](./widgets.rs)** Shares numeric display policy, control sizes and workspace widgets.
-- **[worker.rs](./worker.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
-- **[worker_preparation.rs](./worker_preparation.rs)** Prepares ready decoded neighbors during idle time using the render worker's existing owners.
-- **[worker_presentation.rs](./worker_presentation.rs)** Reframes one immutable whole-image result without reopening sources or running photographic nodes.
-- **[worker_reduced.rs](./worker_reduced.rs)** Reuses bounded reduced-photo inputs while native requests keep the existing worker session.
 
 <!-- INDEX:END -->

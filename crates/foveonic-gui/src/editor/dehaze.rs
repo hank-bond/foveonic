@@ -2,7 +2,7 @@
 
 use crate::{
     photo_tools::{self, Tool},
-    worker::{ColorPickReply, ColorPickRequest, ColorPickTool},
+    rendering::worker::{ColorPickReply, ColorPickRequest, ColorPickTool},
 };
 use eframe::egui;
 use foveonic::render::Settings;

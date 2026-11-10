@@ -3,6 +3,63 @@
 use super::*;
 use crate::render::{MerrillNoiseMethod, PhotographicMethod, Scale, TiffColorSpace};
 
+fn classic_metadata() -> Metadata {
+    Metadata {
+        processing_version: None,
+        width: 1,
+        height: 1,
+        rotation: 0,
+        properties: [
+            ("CAMMODEL".into(), "SIGMA SD14".into()),
+            ("EXPCOMP".into(), "-1.5".into()),
+        ]
+        .into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    }
+}
+
+#[test]
+fn numeric_snapshots_leave_authored_automatic_choices_unchanged() {
+    let settings = Settings {
+        exposure_auto: true,
+        exposure: 0.123,
+        sharpening_enabled: false,
+        ..Default::default()
+    };
+    let before = settings.clone();
+    let (numeric, reset) = numeric_settings(&settings, &classic_metadata()).unwrap();
+    assert_eq!(settings, before);
+    assert_eq!(numeric.exposure, 1.5);
+    assert!(numeric.exposure_auto);
+    assert_eq!(numeric.sharpen_amount, Some(1.));
+    assert!(numeric.reconstruction.is_some());
+    assert_eq!(reset.sharpen_amount, Some(1.));
+    assert!(settings.sharpen_amount.is_none());
+    assert!(settings.reconstruction.is_none());
+}
+
+#[test]
+fn explicit_numeric_values_do_not_become_reset_values() {
+    let mut settings = Settings {
+        exposure: -0.712345,
+        reconstruction: Some(Default::default()),
+        sharpen_amount: Some(0.37),
+        highlight_threshold_ev: Some(0.8),
+        highlight_amount: Some(0.42),
+        monochrome_smoothness: Some(0.23),
+        ..Default::default()
+    };
+    settings.dehaze.shadow = Some([0.1, 0.2, 0.3]);
+    let (numeric, reset) = numeric_settings(&settings, &classic_metadata()).unwrap();
+    assert_eq!(numeric, settings);
+    assert_eq!(reset.sharpen_amount, Some(1.));
+    assert_eq!(reset.highlight_threshold_ev, Some(0.));
+    assert_eq!(reset.highlight_amount, Some(1.));
+    assert_eq!(reset.monochrome_smoothness, Some(0.5));
+    assert!(reset.dehaze.shadow.is_none());
+}
+
 #[test]
 fn directional_banding_follows_only_merrill_noise_scope_and_reset() {
     let mut source = Settings::default();

@@ -1,6 +1,6 @@
 //! Keeps navigator previews small and lets the main image reach the screen first.
 
-use crate::{viewport, worker::Frame};
+use crate::{rendering::worker::Frame, viewport};
 use eframe::{egui, egui_wgpu, wgpu};
 use foveonic::diagnostics as trace;
 use foveonic::image::{ImageTexture, Space};

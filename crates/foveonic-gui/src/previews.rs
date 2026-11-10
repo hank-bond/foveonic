@@ -1,6 +1,6 @@
 //! Retains edited GPU previews immediately and persists bounded photographic previews after foreground work yields.
 
-use crate::{preview_image::PreparedPreview, viewport, worker::Frame};
+use crate::{preview_image::PreparedPreview, rendering::worker::Frame, viewport};
 use eframe::{egui, egui_wgpu, wgpu};
 use foveonic::diagnostics as trace;
 use foveonic::{

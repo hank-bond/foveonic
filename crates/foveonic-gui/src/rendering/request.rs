@@ -103,5 +103,5 @@ pub(crate) fn camera_preview_scale(quality: PreviewMode, metadata: &Metadata) ->
 }
 
 #[cfg(test)]
-#[path = "render_request_test.rs"]
+#[path = "request_test.rs"]
 mod tests;

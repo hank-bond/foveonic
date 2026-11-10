@@ -152,7 +152,7 @@ pub fn requested(
     output: &str,
     settings: &foveonic::render::Settings,
 ) {
-    trace::event(trace::Category::Ui, "render_request", |fields| {
+    trace::event(trace::Category::Ui, "request", |fields| {
         fields.u64("revision", revision);
         fields.str("source", &path.to_string_lossy());
         fields.str("output", output);
@@ -196,7 +196,7 @@ pub fn native_frame(revision: u64, previous_cpu: Option<f32>, gap_ms: Option<f64
     );
 }
 pub fn image_received(
-    stamp: &crate::render_coordinator::Stamp,
+    stamp: &crate::rendering::coordinator::Stamp,
     current: bool,
     queued_at: Instant,
     worker_ms: f64,
@@ -228,7 +228,7 @@ pub fn scenario_step(name: &str, action_kind: &str, metadata: Value) {
     });
 }
 pub fn task(
-    stamp: &crate::render_coordinator::Stamp,
+    stamp: &crate::rendering::coordinator::Stamp,
     phase: &'static str,
     metadata: impl FnOnce() -> Value,
 ) {
@@ -262,8 +262,8 @@ fn flow_id(domain: &str, task: u64, revision: u64) -> u64 {
     (domain, task, revision).hash(&mut flow);
     flow.finish()
 }
-pub fn purpose(purpose: &crate::render_request::Purpose) -> &'static str {
-    use crate::render_request::Purpose;
+pub fn purpose(purpose: &crate::rendering::request::Purpose) -> &'static str {
+    use crate::rendering::request::Purpose;
     match purpose {
         Purpose::Current => "current",
         Purpose::Camera => "camera",
@@ -281,8 +281,8 @@ pub struct DeliveredTask {
     pub revision: u64,
     pub purpose: &'static str,
 }
-impl From<&crate::render_coordinator::Stamp> for DeliveredTask {
-    fn from(stamp: &crate::render_coordinator::Stamp) -> Self {
+impl From<&crate::rendering::coordinator::Stamp> for DeliveredTask {
+    fn from(stamp: &crate::rendering::coordinator::Stamp) -> Self {
         Self {
             id: stamp.id.0,
             revision: stamp.revision,
@@ -326,7 +326,7 @@ impl ImageIdentity {
             .u64("draw", draw);
     }
 }
-pub fn context(stamp: &crate::render_coordinator::Stamp) -> trace::Context {
+pub fn context(stamp: &crate::rendering::coordinator::Stamp) -> trace::Context {
     context_for(
         stamp.id.0,
         stamp.revision,

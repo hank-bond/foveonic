@@ -48,7 +48,7 @@ pub use banding_controls::{
 };
 pub use capabilities::ControlCapabilities;
 pub use edits::{
-    camera_settings, camera_settings_from_properties, Defaults as RecipeDefaults,
+    camera_settings, camera_settings_from_properties, numeric_settings, Defaults as RecipeDefaults,
     Scope as EditScope, Section as EditSection,
 };
 

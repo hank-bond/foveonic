@@ -86,7 +86,7 @@ pub fn pick(
     path: &std::path::Path,
     settings: &mut foveonic::render::Settings,
     allowed: bool,
-) -> (bool, Option<crate::worker::ColorPickRequest>) {
+) -> (bool, Option<crate::rendering::worker::ColorPickRequest>) {
     if editor::white_balance::active(ui.ctx()) || editor::white_balance::pending(ui.ctx()) {
         editor::white_balance::photo(ui, response, uv, path, settings, allowed)
     } else if editor::dehaze::active(ui.ctx()) || editor::dehaze::pending(ui.ctx()) {

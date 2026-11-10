@@ -77,7 +77,7 @@ fn merrill_smart_uses_fast_overview_and_regional_full_without_changing_edits() {
     request.preview_quality = PreviewMode::Fast;
     request.apply_preview(&mut resolved, &metadata).unwrap();
     assert_eq!(resolved.working_scale, Scale::new(2).unwrap());
-    assert!(crate::render_matching::same_authored_edits(
+    assert!(crate::rendering::matching::same_authored_edits(
         &resolved,
         &request.settings
     ));

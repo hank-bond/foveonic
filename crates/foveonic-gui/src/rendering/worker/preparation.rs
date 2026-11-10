@@ -3,7 +3,7 @@
 use super::reduced::Photos;
 use crate::{
     export::resolve_camera_settings, preferences::PreviewMode,
-    render_request::camera_preview_scale, sidecars::CachedRecipes,
+    rendering::request::camera_preview_scale, sidecars::CachedRecipes,
 };
 use foveonic::{
     decode_cache::Cache,

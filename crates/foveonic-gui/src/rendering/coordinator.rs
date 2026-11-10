@@ -1,7 +1,7 @@
 //! Owns desired photo renders and publishes one immutable plan to the serialized executor.
 
-use crate::{
-    render_request::{Purpose, Request},
+use super::{
+    request::{Purpose, Request},
     worker::{ColorPickRequest, ScopeRequest},
 };
 use foveonic::source::SourceOrigin;
@@ -40,7 +40,7 @@ pub struct Task {
     pub request: Arc<Request>,
     pub origin: Option<SourceOrigin>,
     pub queued_at: Instant,
-    pub seed: Option<Arc<crate::worker::presentation::Snapshot>>,
+    pub seed: Option<Arc<crate::rendering::worker::presentation::Snapshot>>,
 }
 #[derive(Clone)]
 pub struct ScopeTask {
@@ -75,7 +75,10 @@ struct Desired {
     task: Arc<Task>,
     settled: bool,
     admitted: u64,
-    delivered: Option<(TaskId, Arc<crate::worker::presentation::Snapshot>)>,
+    delivered: Option<(
+        TaskId,
+        Arc<crate::rendering::worker::presentation::Snapshot>,
+    )>,
 }
 fn retired(entry: &Desired, reason: &'static str) {
     crate::timing::task(
@@ -115,7 +118,7 @@ impl RenderCoordinator {
                 && entry.task.stamp.target.purpose == Purpose::Detail
                 && (entry.settled
                     || entry.task.request.preview_policy != request.preview_policy
-                    || !crate::render_matching::same_pixel_settings(
+                    || !crate::rendering::matching::same_pixel_settings(
                         &entry.task.request.settings,
                         &request.settings,
                     ))
@@ -150,7 +153,7 @@ impl RenderCoordinator {
         if let Some(index) = existing {
             let old = &self.desired[index].task;
             if (old.origin.is_none() || origin.is_none() || old.origin == origin)
-                && crate::render_matching::same_delivery_request(&old.request, &request)
+                && crate::rendering::matching::same_delivery_request(&old.request, &request)
             {
                 let id = old.stamp.id;
                 crate::timing::task(
@@ -169,7 +172,7 @@ impl RenderCoordinator {
         let compatible = existing.is_some_and(|index| {
             let old = &self.desired[index].task;
             (old.origin.is_none() || origin.is_none() || old.origin == origin)
-                && crate::render_matching::can_share_pixel_work(&old.request, &request)
+                && crate::rendering::matching::can_share_pixel_work(&old.request, &request)
         });
         let id = if compatible {
             self.desired[existing.unwrap()].task.stamp.id
@@ -403,7 +406,7 @@ impl RenderCoordinator {
         );
         true
     }
-    pub fn note_pixels(&mut self, stamp: &Stamp, frame: &crate::worker::Frame) {
+    pub fn note_pixels(&mut self, stamp: &Stamp, frame: &crate::rendering::worker::Frame) {
         self.bind_origin(stamp, &frame.origin);
         let Some(entry) = self.desired.iter_mut().find(|entry| {
             entry.task.stamp.target == stamp.target && entry.task.stamp.id == stamp.id
@@ -411,7 +414,7 @@ impl RenderCoordinator {
             return;
         };
         if let Some(snapshot) =
-            crate::worker::presentation::Snapshot::from_frame(frame, &entry.task.request)
+            crate::rendering::worker::presentation::Snapshot::from_frame(frame, &entry.task.request)
         {
             let snapshot = Arc::new(snapshot);
             entry.delivered = Some((stamp.id, snapshot.clone()));
@@ -610,5 +613,5 @@ impl Cursor {
 }
 
 #[cfg(test)]
-#[path = "render_coordinator_test.rs"]
+#[path = "coordinator_test.rs"]
 mod tests;

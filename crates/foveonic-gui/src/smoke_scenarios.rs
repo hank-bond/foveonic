@@ -434,7 +434,11 @@ impl Scenario {
     fn settings<'a>(&self, app: &'a App, path: &Path) -> &'a Settings {
         app.multi_edit.settings(path).unwrap_or(&app.settings)
     }
-    fn frame<'a>(&self, app: &'a App, path: &PathBuf) -> Option<&'a crate::worker::Frame> {
+    fn frame<'a>(
+        &self,
+        app: &'a App,
+        path: &PathBuf,
+    ) -> Option<&'a crate::rendering::worker::Frame> {
         app.frame
             .as_ref()
             .filter(|frame| frame.path == *path)
@@ -444,14 +448,14 @@ impl Scenario {
         &self,
         app: &App,
         path: &PathBuf,
-        frame: &crate::worker::Frame,
+        frame: &crate::rendering::worker::Frame,
         minimum: u64,
     ) -> bool {
         frame.rendition == crate::editor::Rendition::Current
             && frame.diagnostic_task.revision >= minimum
             && Some(frame.artifact.settings.working_scale)
                 == self.config.quality.expected_scale(&frame.artifact.metadata)
-            && crate::render_matching::same_authored_edits(
+            && crate::rendering::matching::same_authored_edits(
                 &frame.requested,
                 self.expected
                     .get(path)

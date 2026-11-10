@@ -18,7 +18,7 @@ pub fn show(
     preferences: &mut preferences::Preferences,
     cache: &Cache,
     managed: bool,
-    memory: crate::worker::MemoryStatus,
+    memory: crate::rendering::worker::MemoryStatus,
     diagnostics: &mut crate::diagnostics::Controller,
 ) -> Option<crate::diagnostics::Action> {
     let mut capture_action = None;

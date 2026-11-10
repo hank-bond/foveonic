@@ -179,11 +179,11 @@ mod tests {
     use super::*;
 
     fn desire(
-        coordinator: &mut crate::render_coordinator::RenderCoordinator,
+        coordinator: &mut crate::rendering::coordinator::RenderCoordinator,
         path: &str,
         revision: u64,
-    ) -> crate::render_coordinator::Stamp {
-        let request = Arc::new(crate::render_request::Request {
+    ) -> crate::rendering::coordinator::Stamp {
+        let request = Arc::new(crate::rendering::request::Request {
             framing_preview: false,
             calibration: None,
             rendition: crate::editor::Rendition::Current,
@@ -196,14 +196,14 @@ mod tests {
             comparison: false,
             export: None,
         });
-        let target = crate::render_coordinator::Target::of(&request);
+        let target = crate::rendering::coordinator::Target::of(&request);
         coordinator.desire(request, None, Instant::now());
         coordinator.desired(&target).unwrap().stamp.clone()
     }
 
     #[test]
     fn sibling_completion_order_cannot_leave_settled_progress_running() {
-        let mut coordinator = crate::render_coordinator::RenderCoordinator::default();
+        let mut coordinator = crate::rendering::coordinator::RenderCoordinator::default();
         let a = desire(&mut coordinator, "a.x3f", 1);
         let b = desire(&mut coordinator, "b.x3f", 2);
         let tracker = Tracker::default();
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn retiring_last_desire_settles_without_another_image_reply() {
-        let mut coordinator = crate::render_coordinator::RenderCoordinator::default();
+        let mut coordinator = crate::rendering::coordinator::RenderCoordinator::default();
         let a = desire(&mut coordinator, "a.x3f", 1);
         let b = desire(&mut coordinator, "b.x3f", 2);
         let tracker = Tracker::default();

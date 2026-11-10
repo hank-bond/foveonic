@@ -1,7 +1,7 @@
 //! Checks delivery decisions under edits, view changes and out-of-order completions without a GPU.
 
 use super::*;
-use crate::render_request;
+use crate::rendering::request;
 
 fn view(settings: &Settings) -> ViewContext<'_> {
     ViewContext {
@@ -277,7 +277,7 @@ fn frozen_export_completion_survives_calibration_changes() {
 
 #[test]
 fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding() {
-    use crate::{preferences::PreviewMode, render_coordinator::RenderCoordinator};
+    use crate::{coordinator::RenderCoordinator, preferences::PreviewMode};
     use foveonic::source::SourceOrigin;
     use std::{sync::Arc, time::Instant};
 
@@ -285,7 +285,7 @@ fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding(
     let request = |path: &str, revision, exposure| {
         let mut requested = settings.clone();
         requested.exposure = exposure;
-        Arc::new(render_request::Request {
+        Arc::new(request::Request {
             path: path.into(),
             revision,
             settings: requested,

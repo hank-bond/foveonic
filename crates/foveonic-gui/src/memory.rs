@@ -1,6 +1,6 @@
 //! Counts shared photographic samples and distinct frontend display pools for the worker budget.
 
-use crate::worker;
+use crate::rendering::worker;
 use eframe::egui;
 use foveonic::{image::ImageTexture, inspection::Content, render::MemoryReservation};
 use std::sync::{Arc, Weak};

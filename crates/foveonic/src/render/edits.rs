@@ -1,7 +1,7 @@
-//! Shares scoped photographic recipes and user defaults between interactive loading, batch work and preview caching.
+//! Shares scoped recipes, user defaults and camera-derived numeric editing values.
 
 use super::Settings;
-use crate::source::ProcessingFamily;
+use crate::source::{Metadata, ProcessingFamily};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -36,6 +36,62 @@ pub fn camera_settings_from_properties(
         lists: Default::default(),
     };
     camera_settings(&metadata, None)
+}
+
+/// Derive numeric control values and context-dependent reset values from camera metadata.
+/// The returned pair is `(numeric_values, reset_values)`. Both are editing
+/// snapshots, not authored or executable recipes. Automatic choices remain in
+/// the caller's settings. Render-produced estimates are supplied separately.
+pub fn numeric_settings(
+    settings: &Settings,
+    metadata: &Metadata,
+) -> crate::source::Result<(Settings, Settings)> {
+    let capabilities = super::ControlCapabilities::from_metadata(metadata)?;
+    let defaults = capabilities.editing_defaults(metadata, settings.rendering)?;
+    let mut reset = defaults.clone();
+    reset.reconstruction = Some(capabilities.editable_noise_controls_for_metadata(metadata, None)?);
+    let mut automatic = settings.clone();
+    automatic.sharpening_enabled = true;
+    automatic.sharpen_amount = None;
+    reset.sharpen_amount = Some(automatic.effective_sharpen_amount(metadata)?);
+    automatic.color_dq_gain = None;
+    if capabilities.color_dq_adjustable {
+        reset.color_dq_gain = Some(automatic.effective_color_dq_gain(metadata)?);
+    }
+    reset.highlight_threshold_ev = Some(0.);
+    reset.highlight_amount = Some(defaults.highlight_amount.unwrap_or(1.));
+    reset.monochrome_smoothness = Some(defaults.monochrome_smoothness.unwrap_or(0.5));
+    reset.dehaze.shadow = None;
+    let mut numeric = settings.clone();
+    if numeric.reconstruction.is_none() {
+        numeric.reconstruction = Some(
+            capabilities.editable_noise_controls_for_metadata(metadata, settings.reconstruction)?,
+        );
+    }
+    if numeric.sharpen_amount.is_none() {
+        numeric.sharpen_amount = reset.sharpen_amount;
+    }
+    if numeric.color_dq_gain.is_none() && capabilities.color_dq_adjustable {
+        numeric.color_dq_gain = reset.color_dq_gain;
+    }
+    if numeric.highlight_threshold_ev.is_none() {
+        numeric.highlight_threshold_ev = Some(0.);
+    }
+    if numeric.highlight_amount.is_none() {
+        numeric.highlight_amount = Some(defaults.highlight_amount.unwrap_or(1.));
+    }
+    if numeric.monochrome_smoothness.is_none() {
+        numeric.monochrome_smoothness = Some(defaults.monochrome_smoothness.unwrap_or(0.5));
+    }
+    if settings.exposure_auto {
+        let capture =
+            crate::source::CaptureExposureCompensation::from_properties(&metadata.properties);
+        numeric.exposure = settings
+            .exposure_auto_compensation
+            .inverse(capture)
+            .unwrap_or(0.);
+    }
+    Ok((numeric, reset))
 }
 
 /// Photographic sections used by scoped recipes, independently of pipeline execution order.

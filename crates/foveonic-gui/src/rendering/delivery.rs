@@ -1,9 +1,7 @@
 //! Classifies completed images for pixel reuse, per-photo feedback and current-view delivery.
 
-use crate::{
-    editor::Rendition, render_coordinator::Completion, render_matching, render_request::Purpose,
-    worker, App,
-};
+use super::{coordinator::Completion, matching, request::Purpose, worker};
+use crate::{editor::Rendition, App};
 use foveonic::render::Settings;
 use std::path::Path;
 
@@ -153,9 +151,9 @@ fn destination(
             return Err(Rejection::NotVisible);
         }
         if reply.image.as_ref().is_some_and(|image| {
-            !view.overview_settings.is_some_and(|settings| {
-                render_matching::same_image_geometry(settings, image.requested)
-            })
+            !view
+                .overview_settings
+                .is_some_and(|settings| matching::same_image_geometry(settings, image.requested))
         }) {
             return Err(Rejection::GeometryChanged);
         }
@@ -176,7 +174,7 @@ fn destination(
             !view.exporting
                 && view.active == Some(image.path)
                 && view.output == image.output
-                && render_matching::same_image_geometry(image.requested, view.settings)
+                && matching::same_image_geometry(image.requested, view.settings)
                 && (!view.comparison || image.comparison)
                 && view
                     .displayed_revision
@@ -220,5 +218,5 @@ impl App {
 }
 
 #[cfg(test)]
-#[path = "render_delivery_test.rs"]
+#[path = "delivery_test.rs"]
 mod tests;

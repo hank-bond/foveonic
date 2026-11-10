@@ -1,20 +1,19 @@
 //! Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
-#[path = "worker_preparation.rs"]
 mod preparation;
-#[path = "worker_presentation.rs"]
 pub(crate) mod presentation;
-#[path = "worker_reduced.rs"]
 mod reduced;
 pub(crate) use preparation::Config as PreparationConfig;
 
+use super::{
+    matching::{presentation_changed, same_pixel_settings, same_request_context},
+    request::Request,
+};
 #[cfg(test)]
 use crate::export::{Export, ExportFormat};
 use crate::{
     export::{self, resolve_camera_settings},
     preferences::PreviewMode,
-    render_matching::{presentation_changed, same_pixel_settings, same_request_context},
-    render_request::Request,
 };
 use eframe::egui;
 #[cfg(test)]
@@ -139,7 +138,7 @@ pub struct Comparison {
     pub texture: Arc<ImageTexture>,
 }
 pub struct Reply {
-    pub stamp: crate::render_coordinator::Stamp,
+    pub stamp: crate::rendering::coordinator::Stamp,
     pub path: PathBuf,
     pub rendition: crate::editor::Rendition,
     pub revision: u64,
@@ -171,11 +170,11 @@ pub struct ScopeSnapshot {
 pub enum Update {
     Image(Box<Reply>),
     ColorPick {
-        id: crate::render_coordinator::TaskId,
+        id: crate::rendering::coordinator::TaskId,
         reply: ColorPickReply,
     },
     Scopes {
-        id: crate::render_coordinator::TaskId,
+        id: crate::rendering::coordinator::TaskId,
         key: ScopeKey,
         result: Result<foveonic::scopes::Scopes, String>,
     },
@@ -207,8 +206,8 @@ pub struct ColorPickReply {
 struct Pending {
     memory: Option<MemoryBudget>,
     preparation: Option<Arc<PreparationConfig>>,
-    plan: Arc<crate::render_coordinator::WorkPlan>,
-    export: Option<Arc<crate::render_coordinator::Task>>,
+    plan: Arc<crate::rendering::coordinator::WorkPlan>,
+    export: Option<Arc<crate::rendering::coordinator::Task>>,
     activity: Option<foveonic::decode_cache::Activity>,
     stop: bool,
     clear: bool,
@@ -241,7 +240,7 @@ pub struct Worker {
     pub cache: Arc<foveonic::decode_cache::Cache>,
     context: egui::Context,
     memory: Arc<Mutex<MemoryStatus>>,
-    coordinator: RefCell<crate::render_coordinator::RenderCoordinator>,
+    coordinator: RefCell<crate::rendering::coordinator::RenderCoordinator>,
 }
 impl Worker {
     pub fn new(engine: Engine, context: egui::Context) -> Self {
@@ -282,8 +281,8 @@ impl Worker {
             let mut budget = MemoryBudget::default();
             let mut pending_images = Vec::<crate::memory::PendingImage>::new();
             reduced.configure_memory(budget.limit);
-            let mut cursor = crate::render_coordinator::Cursor::default();
-            let mut previous: Option<crate::render_coordinator::Stamp> = None;
+            let mut cursor = crate::rendering::coordinator::Cursor::default();
+            let mut previous: Option<crate::rendering::coordinator::Stamp> = None;
             let mut preparation = preparation::Preparation::default();
             'worker: loop {
                 let memory_update = slot.0.lock().unwrap().memory.take();
@@ -482,7 +481,7 @@ impl Worker {
                 }
                 let prepare_defaults = matches!(
                     task.stamp.target.purpose,
-                    crate::render_request::Purpose::Current
+                    crate::rendering::request::Purpose::Current
                 ) && request.preview_quality == PreviewMode::Thumb;
                 previous = Some(task.stamp.clone());
                 progress_updates.begin(request.revision, queued_at);
@@ -689,7 +688,7 @@ impl Worker {
                 settings.dehaze_estimate = false;
                 let resolved_numeric = if prepare_defaults {
                     metadata.as_deref().and_then(|metadata| {
-                        crate::multi_edit_runtime::numeric_settings(&settings, metadata).ok()
+                        foveonic::render::numeric_settings(&settings, metadata).ok()
                     })
                 } else {
                     None
@@ -874,7 +873,7 @@ impl Worker {
             self.pending.0.lock().unwrap().export = Some(task);
         } else {
             let mut coordinator = self.coordinator.borrow_mut();
-            let target = crate::render_coordinator::Target::of(&request);
+            let target = crate::rendering::coordinator::Target::of(&request);
             let previous = coordinator.desired(&target).map(|task| task.stamp.clone());
             let revision = request.revision;
             coordinator.desire(Arc::new(request), origin, queued_at);
@@ -911,33 +910,33 @@ impl Worker {
     }
     pub fn is_settled_and_admitted(&self, frame: &Frame) -> bool {
         self.coordinator.borrow().is_settled_and_admitted(
-            crate::render_coordinator::TaskId(frame.diagnostic_task.id),
+            crate::rendering::coordinator::TaskId(frame.diagnostic_task.id),
             frame.diagnostic_task.revision,
         )
     }
     pub fn finish_image(
         &self,
-        stamp: &crate::render_coordinator::Stamp,
-    ) -> crate::render_coordinator::Completion {
+        stamp: &crate::rendering::coordinator::Stamp,
+    ) -> crate::rendering::coordinator::Completion {
         let result = self.coordinator.borrow_mut().finish(stamp);
         self.publish();
         result
     }
-    pub fn admit_image(&self, stamp: &crate::render_coordinator::Stamp, frame: &Frame) -> bool {
+    pub fn admit_image(&self, stamp: &crate::rendering::coordinator::Stamp, frame: &Frame) -> bool {
         let admitted = self.coordinator.borrow_mut().admit(stamp, &frame.origin);
         self.publish();
         admitted
     }
-    pub fn retain_pixels(&self, stamp: &crate::render_coordinator::Stamp, frame: &Frame) {
+    pub fn retain_pixels(&self, stamp: &crate::rendering::coordinator::Stamp, frame: &Frame) {
         self.coordinator.borrow_mut().note_pixels(stamp, frame);
         self.publish();
     }
-    pub fn finish_scope(&self, id: crate::render_coordinator::TaskId) -> bool {
+    pub fn finish_scope(&self, id: crate::rendering::coordinator::TaskId) -> bool {
         let current = self.coordinator.borrow_mut().finish_scope(id);
         self.publish();
         current
     }
-    pub fn finish_pick(&self, id: crate::render_coordinator::TaskId) -> bool {
+    pub fn finish_pick(&self, id: crate::rendering::coordinator::TaskId) -> bool {
         let current = self.coordinator.borrow_mut().finish_pick(id);
         self.publish();
         current
@@ -1130,7 +1129,7 @@ fn analyze_scopes(
     slot: &Arc<(Mutex<Pending>, Condvar)>,
     tx: &mpsc::SyncSender<Update>,
     context: &egui::Context,
-    task: Arc<crate::render_coordinator::ScopeTask>,
+    task: Arc<crate::rendering::coordinator::ScopeTask>,
 ) -> bool {
     let request = &task.request;
     let _diagnostic_context = crate::timing::enabled().then(|| {

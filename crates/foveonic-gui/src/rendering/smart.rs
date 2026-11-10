@@ -1,10 +1,10 @@
 //! Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
 
-use crate::{
-    preferences,
-    render_matching::{same_authored_edits, same_image_geometry},
-    worker, App,
+use super::{
+    matching::{same_authored_edits, same_image_geometry},
+    worker,
 };
+use crate::{preferences, App};
 use eframe::egui;
 use foveonic::render::Scale;
 // Keep a small margin around the clicked viewport while the whole frame catches up.
@@ -43,7 +43,7 @@ pub fn contains(outer: [u32; 4], inner: [u32; 4]) -> bool {
 }
 
 impl App {
-    pub(super) fn smart_detail(&self, pixels_per_point: f32) -> Option<&worker::Frame> {
+    pub(crate) fn smart_detail(&self, pixels_per_point: f32) -> Option<&worker::Frame> {
         if self.multi_photo_overview()
             || self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.framing_preview_active()
@@ -69,7 +69,7 @@ impl App {
     }
 
     /// Keep the previous image visible while a zoomed edit renders at Full quality.
-    pub(super) fn smart_edit_request(
+    pub(crate) fn smart_edit_request(
         &mut self,
     ) -> Option<(preferences::PreviewMode, Option<[u32; 4]>)> {
         if self.multi_photo_overview()
@@ -111,7 +111,7 @@ impl App {
             .map(|region| (preferences::PreviewMode::Smart, Some(region)))
     }
 
-    pub(super) fn update_smart(&mut self, ctx: &egui::Context) {
+    pub(crate) fn update_smart(&mut self, ctx: &egui::Context) {
         if self.framing_preview_active() {
             if !self.busy && self.viewport.explicit_zoom_pending() {
                 self.viewport.take_explicit_zoom();

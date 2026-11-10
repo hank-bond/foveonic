@@ -19,7 +19,7 @@ The [public renderer](../render.rs) owns the engine and display/export entry poi
 - **[artifacts.rs](./artifacts.rs)** Collects requested graph outputs as owned images or diagnostic tables.
 - **[banding_controls.rs](./banding_controls.rs)** Stores independent native-pixel widths and strengths for Merrill directional band cleanup.
 - **[capabilities.rs](./capabilities.rs)** Resolves supported photographic adjustments and compatible defaults at family boundaries.
-- **[edits.rs](./edits.rs)** Shares scoped photographic recipes and user defaults between interactive loading, batch work and preview caching.
+- **[edits.rs](./edits.rs)** Shares scoped recipes, user defaults and camera-derived numeric editing values.
 - **[execute.rs](./execute.rs)** Executes typed graph operations with selective outputs and guarded GPU storage.
 - **[memory.rs](./memory.rs)** Inventories shared processing owners and trims optional history under one caller-set budget.
 - **[preparation.rs](./preparation.rs)** Reuses bounded immutable metadata preparation independently of decoded sensor ownership.

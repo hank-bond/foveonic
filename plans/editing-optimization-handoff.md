@@ -22,7 +22,7 @@ This plan summarizes the measurements and rejected trial without depending on te
 
 ## Boundaries
 
-Prioritize native editing and GUI scheduling/presentation measurements. Relevant code is [worker](../crates/foveonic-gui/src/worker.rs), [viewport](../crates/foveonic-gui/src/viewport.rs), [navigator](../crates/foveonic-gui/src/navigator.rs), and [timing](../crates/foveonic-gui/src/timing.rs). Coordinate shared-file changes with other active work. Preserve attribution and evidence.
+Prioritize native editing and GUI scheduling/presentation measurements. Relevant code is [worker](../crates/foveonic-gui/src/rendering/worker/mod.rs), [viewport](../crates/foveonic-gui/src/viewport.rs), [navigator](../crates/foveonic-gui/src/navigator.rs), and [timing](../crates/foveonic-gui/src/timing.rs). Coordinate shared-file changes with other active work. Preserve attribution and evidence.
 
 A separate worktree prevents source/build interference, not physical GPU contention. Never use timings collected during another render, benchmark, memory sample, or native smoke run as acceptance evidence. Do not stop the owner's application without permission.
 

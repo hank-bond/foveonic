@@ -1,6 +1,6 @@
 //! Keeps transient camera/default renditions separate from authored edits and photographic preview publication.
 
-use crate::{worker, App};
+use crate::{rendering::worker, App};
 use eframe::egui;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -69,7 +69,10 @@ impl App {
             self.exit_before();
             if self.frame.as_ref().is_none_or(|f| {
                 f.framing_preview != self.framing_preview_active()
-                    || !crate::render_matching::same_authored_edits(&f.requested, &self.settings)
+                    || !crate::rendering::matching::same_authored_edits(
+                        &f.requested,
+                        &self.settings,
+                    )
             }) {
                 self.submit(None);
             }
@@ -169,7 +172,7 @@ mod tests {
         let baseline = before
             .settings(&current, Some(&metadata), &defaults)
             .unwrap();
-        assert!(crate::render_matching::same_image_geometry(
+        assert!(crate::rendering::matching::same_image_geometry(
             &current, &baseline
         ));
         assert_eq!(baseline.exposure, 0.);
@@ -180,7 +183,7 @@ mod tests {
         let baseline = before
             .settings(&current, Some(&metadata), &defaults)
             .unwrap();
-        assert!(crate::render_matching::same_image_geometry(
+        assert!(crate::rendering::matching::same_image_geometry(
             &current, &baseline
         ));
         assert_eq!(

@@ -36,23 +36,18 @@ mod preview_image;
 mod previews;
 mod processing;
 mod progress;
-mod render_coordinator;
-mod render_delivery;
-mod render_matching;
-mod render_request;
+mod rendering;
 mod rotate_tool;
 mod scopes;
 mod sections;
 mod shortcuts;
 mod sidecars;
-mod smart;
 mod smoke;
 mod timing;
 mod toolbar;
 mod viewport;
 mod viewport_selection;
 mod widgets;
-mod worker;
 
 use eframe::{egui, egui_wgpu, wgpu};
 use foveonic::{
@@ -60,6 +55,7 @@ use foveonic::{
     source::Metadata,
 };
 use preferences::{FolderMode, Section};
+use rendering::{coordinator, delivery, matching, request, smart, worker};
 use std::{path::PathBuf, sync::Arc};
 
 // Keep folder readiness responsive during prefetch without polling idle folders at frame rate.
@@ -456,14 +452,15 @@ impl App {
         let cached_metadata = self.multi_edit.metadata(&path);
         let cached_settings = self.multi_edit.settings(&path).cloned();
         let cached_selection = cached_frame.as_ref().is_some_and(|frame| {
-            cached_settings.as_ref().is_some_and(|settings| {
-                render_matching::same_authored_edits(&frame.requested, settings)
-            }) && frame.calibration_signature.as_deref()
-                == self
-                    .noise_calibration
-                    .selected(self.preferences.noise_profile)
-                    .as_ref()
-                    .map(|profile| profile.signature())
+            cached_settings
+                .as_ref()
+                .is_some_and(|settings| matching::same_authored_edits(&frame.requested, settings))
+                && frame.calibration_signature.as_deref()
+                    == self
+                        .noise_calibration
+                        .selected(self.preferences.noise_profile)
+                        .as_ref()
+                        .map(|profile| profile.signature())
                 && self
                     .worker
                     .cache
@@ -561,7 +558,7 @@ impl App {
             } else if small_preview && zoomed {
                 quality = preferences::PreviewMode::Full;
             }
-            let request = render_request::Request {
+            let request = request::Request {
                 framing_preview: export.is_none() && self.framing_preview_active(),
                 calibration: self
                     .noise_calibration
@@ -686,11 +683,11 @@ impl App {
                     || serde_json::json!({"frozen_export":true,"success":reply.result.is_ok()}),
                 );
                 self.exporting = false;
-                render_coordinator::Completion::Current
+                coordinator::Completion::Current
             } else {
                 self.worker.finish_image(&reply.stamp)
             };
-            let current = completion == render_coordinator::Completion::Current;
+            let current = completion == coordinator::Completion::Current;
             self.sync_render_progress((current && reply.result.is_err()).then_some(reply.revision));
             let delivery = self.image_delivery(completion, &reply);
             if delivery.retain_pixels {
@@ -723,7 +720,7 @@ impl App {
                     continue;
                 }
             }
-            if destination == render_delivery::Destination::Overview {
+            if destination == delivery::Destination::Overview {
                 match reply.result {
                     Ok(Some(frame)) => {
                         timing::image_received(
@@ -1650,10 +1647,7 @@ impl eframe::App for App {
                         && frame.output == "final"
                         && self.output == "final"
                         && frame.framing_preview == self.framing_preview_active()
-                        && render_matching::same_authored_edits(
-                            &frame.requested,
-                            &self.view_settings(),
-                        )
+                        && matching::same_authored_edits(&frame.requested, &self.view_settings())
                         && self
                             .worker
                             .cache
