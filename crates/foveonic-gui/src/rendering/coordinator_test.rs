@@ -30,6 +30,8 @@ fn desire(coordinator: &mut RenderCoordinator, request: Arc<Request>) -> Stamp {
 
 fn render_result(stamp: Stamp, request: &Request) -> Reply {
     Reply {
+        request: Arc::new(request.clone()),
+        handling: None,
         stamp,
         path: request.path.clone(),
         rendition: request.rendition,

@@ -534,6 +534,7 @@ impl App {
         if !self.sidecars.ready() {
             return;
         }
+        self.publish_render_view();
         if let Some(path) = &self.selected {
             self.revision += 1;
 
@@ -608,6 +609,7 @@ impl App {
     }
 
     fn receive(&mut self, ctx: &egui::Context) {
+        self.publish_render_view();
         let _scope = foveonic::diagnostics::scope(
             foveonic::diagnostics::Category::Coordinator,
             "ui.receive",
@@ -632,10 +634,7 @@ impl App {
                     self.memory_reply_epoch = self.memory_reply_epoch.wrapping_add(1);
                     *reply
                 }
-                worker::Update::ColorPick { id, reply } => {
-                    if !self.worker.finish_pick(id) {
-                        continue;
-                    }
+                worker::Update::ColorPick { reply, .. } => {
                     if !editor::white_balance::receive(ctx, &reply)
                         && !editor::dehaze::receive(ctx, &reply)
                     {
@@ -643,10 +642,7 @@ impl App {
                     }
                     continue;
                 }
-                worker::Update::Scopes { id, key, result } => {
-                    if !self.worker.finish_scope(id) {
-                        continue;
-                    }
+                worker::Update::Scopes { key, result, .. } => {
                     if self
                         .frame
                         .as_ref()
@@ -679,7 +675,7 @@ impl App {
             if reply.exported.is_some() {
                 self.exporting = false;
             }
-            let update = self.handle_render_result(&reply);
+            let update = self.render_result_for_view(&reply);
             let current = update.current;
             self.sync_render_progress((current && reply.result.is_err()).then_some(reply.revision));
             if update.update_photo {
@@ -1934,6 +1930,7 @@ impl eframe::App for App {
             ctx,
         );
         self.update_memory();
+        self.publish_render_view();
     }
 }
 fn multi_photo_overview(paths: &[PathBuf], active: Option<&std::path::Path>) -> bool {

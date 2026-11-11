@@ -16,7 +16,8 @@ The [coordination consistency inventory](../plans/render-coordination-consistenc
 ```mermaid
 flowchart TD
     Edit[Selection, controls, tools or Smart refinement] --> UI[App and multi-edit runtime author requests]
-    UI --> Coordinator[RenderCoordinator: desired targets and generations]
+    UI --> Commands[Typed commands and immutable view context]
+    Commands --> Coordinator[Coordinator thread: desired targets and generations]
     Coordinator --> Plan[One replaceable WorkPlan]
     Plan --> Worker[Render worker: Cursor chooses work]
     Worker --> Reuse[Reuse presentation, reduced session, or native source]
@@ -26,15 +27,16 @@ flowchart TD
     View --> Reply[Bounded image reply channel]
     Reply --> Handler[Coordinator result handler: settle, classify, retain and admit]
     Handler --> Frames[UI applies active, detail or overview updates]
+    Handler --> Coordinator
     Frames --> Draw[Native drawing consumes immutable textures]
     Frames --> Aux[Browser previews, navigator and image-matched scopes]
 ```
 
 The two outgoing reuse paths are alternatives. Reframing compatible pixels can skip photographic execution. A reduced-session hit can skip source loading and reuse graph dependencies, while still executing a changed finishing operation. A decoded disk hit skips original-file access and entropy decoding but can require all native preparation before pooling.
 
-The entry points are `App::select`, `submit_with_quality`, `receive` and `update` in [main.rs](../crates/foveonic-gui/src/main.rs), and `sync_multi_edit` / `submit_multi_edit` in [multi_edit_runtime.rs](../crates/foveonic-gui/src/multi_edit_runtime.rs). The UI passes returned render results and borrowed view context to the existing coordinator's `handle_result`. It applies permitted per-photo feedback and view updates from the returned `ResultUpdate`.
+The entry points are `App::select`, `submit_with_quality`, `receive` and `update` in [main.rs](../crates/foveonic-gui/src/main.rs), and `sync_multi_edit` / `submit_multi_edit` in [multi_edit_runtime.rs](../crates/foveonic-gui/src/multi_edit_runtime.rs). The UI sends typed commands and immutable view context through [runtime.rs](../crates/foveonic-gui/src/rendering/runtime.rs). Its dedicated coordinator thread receives worker results, calls `handle_result` and publishes the next plan independently of UI paints. The UI rechecks returned `ResultUpdate` facts against its latest edits and view before application.
 
-Result handling settles the matching request, classifies reuse, retains useful pixels and checks source/revision admission as one operation before publishing the resulting plan. Allowed photo feedback survives image rejection. The UI separately applies progress/opening/export state and acknowledges Active image delivery. This first ownership slice preserves the existing UI-thread coordinator and serialized engine worker. Moving coordination off the UI is a later review unit.
+Result handling settles the matching request, classifies reuse, retains useful pixels and checks source/revision admission as one operation before publishing the resulting plan. Allowed photo feedback survives image rejection. The UI applies progress/opening/export state and acknowledges Active image delivery. Request publication is nonblocking with respect to queue capacity. The coordinator reads queued commands in batches, so per-photo replacement and coalescing happen before another plan is exposed. UI status reads use the last observed immutable snapshot if publication is in progress.
 
 [request.rs](../crates/foveonic-gui/src/rendering/request.rs) owns the immutable request data, consumer-purpose classification and preview geometry policy. The coordinator derives target identity from the request's purpose. The worker applies its preview policy after resolving camera controls and chooses the corresponding execution resources. Foreground preview resolution and idle preparation share camera-aware scale selection through processing capabilities. Reusing a framing plane can still preserve an already-rendered grid instead of applying a new preview scale.
 
@@ -45,13 +47,13 @@ Result handling settles the matching request, classifies reuse, retains useful p
 | Browser membership | `Browser` | Determines which photographs appear and the scope of file operations. It is independent of the bounded editing subset. |
 | Viewport editing subset | [viewport_selection.rs](../crates/foveonic-gui/src/viewport_selection.rs) | Pointer interaction changes the editing targets. Photograph tools use those targets without owning selection. |
 | Requested edits | `App::settings`, `Runtime::photos`, `sidecars::Session` | Mutable representations are synchronized between active controls, per-photo editing state and persistence. There is currently no single container holding all three roles. |
-| Desired render work | [RenderCoordinator](../crates/foveonic-gui/src/rendering/coordinator.rs) | Owns task identity, replacement/coalescing, settlement and admitted revision order per photo and purpose. |
+| Desired render work | [RenderCoordinator](../crates/foveonic-gui/src/rendering/coordinator.rs), run by [runtime.rs](../crates/foveonic-gui/src/rendering/runtime.rs) | Owns task identity, replacement/coalescing, settlement and admitted revision order per photo and purpose on the coordinator thread. |
 | Request purpose and preview policy | [request.rs](../crates/foveonic-gui/src/rendering/request.rs) | Describes requested work independently of worker execution. Consumer purpose, nominal scale, camera-resolved scale and actual reused grid remain distinct. |
 | Numeric editing values and reset values | [render/edits.rs](../crates/foveonic/src/render/edits.rs) | The processor derives snapshots from camera metadata and requested settings. The worker adds render-produced estimates and publishes them. Multi-edit retains/applies them without owning camera interpretation. |
 | Execution service order | `Cursor` and the [render worker](../crates/foveonic-gui/src/rendering/worker/mod.rs) | Cursor preserves service across plan replacements. The worker handles source acquisition, execution, presentation preparation and publication. |
 | Recipe and numerical validity | [recipes](../crates/foveonic/src/render/recipes/AGENTS.md), [graph](../crates/foveonic/src/graph/AGENTS.md), [interactive.rs](../crates/foveonic/src/interactive.rs) | Recipes describe operations. Effective operation keys and dependency versions determine reuse. The executor runs required missing work. |
 | Visible image | `App::frame`, `App::detail`, `Runtime` frames | UI-owned immutable completions. Their requested settings and pixel provenance remain separate from newer controls. |
-| Shared retained-memory policy | [render/memory.rs](../crates/foveonic/src/render/memory.rs) | The GUI inventories reservations. The worker invokes core accounting and trimming. Essential active inputs can exceed the target. |
+| Shared retained-memory policy | [render/memory.rs](../crates/foveonic/src/render/memory.rs) | The UI inventories its resources. The coordinator publishes retained-image handles, which the worker combines with the frontend inventory for core accounting and trimming. Essential active inputs can exceed the target. |
 | Cross-worker priority | [background.rs](../crates/foveonic/src/background.rs) | Shared demand counters and interruption epochs govern participating I/O, CPU and GPU checkpoints. It is not a hardware GPU priority queue. |
 
 `sidecars::Session` owns asynchronous recipe restoration and persistence policy. `CachedRecipes` is an immutable bounded snapshot used by idle preparation, rather than another sidecar reader. The active edit and multi-edit runtime still exchange requested values through explicit synchronization calls.
@@ -127,7 +129,7 @@ The shared gate has a separate cross-worker priority order: interactive demand, 
 | Other background GPU submissions | The GPU facade retains its per-submission completion policy. These calls do not inherit a graph-stage completion boundary automatically. |
 | Required photographic CPU readback | Waits for mapped data. The shared background readback helper polls cooperatively with foreground priority. |
 | Main display preparation | The interactive worker waits for a newly prepared display texture before publishing its frame. Reused textures skip this wait. |
-| Reply publication | The image channel holds at most two queued updates. Sending can apply backpressure. Progress uses separate shared state. |
+| Reply publication | Worker-to-coordinator and coordinator-to-UI image queues each hold at most two updates. The coordinator can hold one result between them. Crossbeam channel selection lets it keep processing commands while UI delivery is full. Status reads use immutable snapshots with a nonblocking UI read. |
 | Navigator | The UI coalesces/defer requests while busy and briefly delays enqueueing so the main image can submit first. Its separate GPU thread uses ordered texture submission without a CPU completion wait. It does not use the shared gate. |
 | Browser preview persistence | Immediate GPU thumbnails are retained separately from optional background downsampling/readback for disk persistence. Disk policy is checked before the optional handoff. |
 
@@ -142,7 +144,7 @@ These are source observations and review targets. They are not all demonstrated 
 | Decision | Current locations | Review concern |
 | --- | --- | --- |
 | Requested edit state | `App`, multi-edit `Runtime`, sidecar `Session` | Synchronization establishes precedence across three mutable representations. A new interaction must follow that precedence correctly. |
-| Result handling | Coordinator `handle_result` owns settlement, invokes [delivery classification](../crates/foveonic-gui/src/rendering/delivery.rs), retains reusable pixels and performs source/order admission. The worker handle publishes one resulting plan. `App::receive` applies photo/view updates and keeps Active acknowledgement explicit. | Thread placement and serial execution remain unchanged. Runtime retention and Smart drawing still enforce the validity of their held frames. |
+| Result handling | Coordinator `handle_result` owns settlement, invokes [delivery classification](../crates/foveonic-gui/src/rendering/delivery.rs), retains reusable pixels and performs source/order admission. The runtime publishes the resulting plan off the UI. `App::receive` checks current view compatibility, applies photo/view updates and acknowledges Active delivery. | Engine execution is serial. Runtime retention and Smart drawing enforce the validity of their held frames. |
 | Effective execution request | `App::submit_with_quality`, `submit_multi_edit` and Smart choose intent. `Request` owns purpose, preview-scale application and reduced-session selection. Presentation reuse can retain the actual existing grid. | Request policy now has one home. Camera/default resolution and actual retained representation remain separate boundaries. |
 | Cancellation | Worker foreground predicate, graph `Execution::check`, gate epochs, source/cache checkpoints and idle preparation predicate | Request obsolescence and priority interruption are distinct mechanisms. Their composition is intentional but currently implicit in nested closures and thread-local context. |
 | GPU completion policy | Executor cancellation predicate and allocation window, background stage scope, GPU submission facade and display preparation | The presence of a cancellation predicate also selects per-operation completion waits. The recent background fix relies on that contract. An explicit completion policy would make this dependency easier to reason about. |

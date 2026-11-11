@@ -28,7 +28,7 @@ use foveonic::{
 use std::{
     cell::RefCell,
     path::PathBuf,
-    sync::{mpsc, Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex},
     thread,
 };
 
@@ -138,6 +138,8 @@ pub struct Comparison {
     pub texture: Arc<ImageTexture>,
 }
 pub struct Reply {
+    pub request: Arc<Request>,
+    pub handling: Option<super::coordinator::ResultUpdate>,
     pub stamp: crate::rendering::coordinator::Stamp,
     pub path: PathBuf,
     pub rendition: crate::editor::Rendition,
@@ -203,19 +205,20 @@ pub struct ColorPickReply {
 }
 
 #[derive(Default)]
-struct Pending {
-    memory: Option<MemoryBudget>,
-    preparation: Option<Arc<PreparationConfig>>,
-    plan: Arc<crate::rendering::coordinator::WorkPlan>,
-    export: Option<Arc<crate::rendering::coordinator::Task>>,
-    activity: Option<foveonic::decode_cache::Activity>,
-    stop: bool,
-    clear: bool,
-    clear_all: bool,
+pub(super) struct Pending {
+    pub(super) memory: Option<MemoryBudget>,
+    pub(super) preparation: Option<Arc<PreparationConfig>>,
+    pub(super) plan: Arc<crate::rendering::coordinator::WorkPlan>,
+    pub(super) export: Option<Arc<crate::rendering::coordinator::Task>>,
+    pub(super) activity: Option<foveonic::decode_cache::Activity>,
+    pub(super) stop: bool,
+    pub(super) clear: bool,
+    pub(super) clear_all: bool,
+    pub(super) retained: Arc<[Arc<presentation::Snapshot>]>,
 }
-struct MemoryBudget {
-    limit: u64,
-    frontend: crate::memory::Inventory,
+pub(super) struct MemoryBudget {
+    pub(super) limit: u64,
+    pub(super) frontend: crate::memory::Inventory,
 }
 impl Default for MemoryBudget {
     fn default() -> Self {
@@ -234,13 +237,12 @@ pub struct MemoryStatus {
 pub struct Worker {
     #[cfg(test)]
     checks: Arc<Checks>,
-    pending: Arc<(Mutex<Pending>, Condvar)>,
-    pub replies: mpsc::Receiver<Update>,
+    pub replies: crossbeam_channel::Receiver<Update>,
     pub progress: crate::progress::Tracker,
     pub cache: Arc<foveonic::decode_cache::Cache>,
-    context: egui::Context,
     memory: Arc<Mutex<MemoryStatus>>,
-    coordinator: RefCell<crate::rendering::coordinator::RenderCoordinator>,
+    runtime: super::runtime::Handle,
+    observed_memory: RefCell<MemoryStatus>,
 }
 impl Worker {
     pub fn new(engine: Engine, context: egui::Context) -> Self {
@@ -254,6 +256,7 @@ impl Worker {
                 stop: false,
                 clear: false,
                 clear_all: false,
+                retained: Default::default(),
             }),
             Condvar::new(),
         ));
@@ -262,7 +265,7 @@ impl Worker {
         let cache = Arc::new(foveonic::decode_cache::Cache::new());
         let decoded_cache = cache.clone();
         let repaint = context.clone();
-        let (tx, replies) = mpsc::sync_channel(2);
+        let (tx, results) = crossbeam_channel::bounded(2);
         let slot = pending.clone();
         let memory = Arc::new(Mutex::new(MemoryStatus::default()));
         let memory_updates = memory.clone();
@@ -408,7 +411,6 @@ impl Worker {
                             {
                                 break 'worker;
                             }
-                            context.request_repaint();
                             continue 'worker;
                         }
                         let next = state
@@ -426,7 +428,7 @@ impl Worker {
                         if let Some(scopes) = cursor.scope(&state.plan) {
                             let _activity = decoded_cache.foreground();
                             drop(state);
-                            if !analyze_scopes(&engine, &slot, &tx, &context, scopes) {
+                            if !analyze_scopes(&engine, &slot, &tx, scopes) {
                                 break 'worker;
                             }
                             trim_memory(
@@ -484,7 +486,6 @@ impl Worker {
                     crate::rendering::request::Purpose::Current
                 ) && request.preview_quality == PreviewMode::Thumb;
                 previous = Some(task.stamp.clone());
-                progress_updates.begin(request.revision, queued_at);
                 let reporter =
                     crate::progress::Reporter::new(progress_updates.clone(), request.revision);
                 let started = std::time::Instant::now();
@@ -740,6 +741,8 @@ impl Worker {
                 );
                 if tx
                     .send(Update::Image(Box::new(Reply {
+                        request: task.request.clone(),
+                        handling: None,
                         stamp: task.stamp.clone(),
                         path: request.path.clone(),
                         rendition: request.rendition,
@@ -761,60 +764,35 @@ impl Worker {
                     "reply_send_returned",
                     || serde_json::json!({"mailbox":"image_replies"}),
                 );
-                context.request_repaint();
             }
         });
         spawned.expect("start render-worker thread");
+        let (runtime, replies) = super::runtime::Handle::start(
+            pending.clone(),
+            results,
+            cache.clone(),
+            progress.clone(),
+            repaint.clone(),
+        );
         Self {
             #[cfg(test)]
             checks,
-            pending,
             replies,
             progress,
             cache,
-            context: repaint,
             memory,
-            coordinator: RefCell::default(),
+            runtime,
+            observed_memory: Default::default(),
         }
     }
-    fn publish(&self) {
-        let plan = self.coordinator.borrow().plan();
-        foveonic::diagnostics::counter(
-            foveonic::diagnostics::Category::Coordinator,
-            "pending_render_targets",
-            plan.tasks.len() as f64,
-        );
-        foveonic::diagnostics::event(
-            foveonic::diagnostics::Category::Coordinator,
-            "work_plan_published",
-            |fields| {
-                fields.u64("render_targets", plan.tasks.len() as u64);
-                fields.bool("scopes", plan.scopes.is_some());
-                fields.bool("pick", plan.pick.is_some());
-            },
-        );
-        let (lock, wake) = &*self.pending;
-        let mut pending = lock.lock().unwrap();
-        pending.activity = (!plan.tasks.is_empty()
-            || plan.scopes.is_some()
-            || plan.pick.is_some()
-            || pending.export.is_some())
-        .then(|| self.cache.foreground());
-        pending.plan = plan;
-        wake.notify_one();
-        drop(pending);
-        self.context.request_repaint();
+    pub fn set_view(&self, view: super::delivery::ViewState) {
+        self.runtime.set_view(view);
     }
     pub fn activate(&self, path: &std::path::Path) {
-        self.coordinator.borrow_mut().activate(path);
-        self.publish();
+        self.runtime.activate(path.to_owned());
     }
     pub fn configure_preparation(&self, config: PreparationConfig) {
-        let mut pending = self.pending.0.lock().unwrap();
-        if pending.preparation.as_deref() != Some(&config) {
-            pending.preparation = Some(Arc::new(config));
-            self.pending.1.notify_one();
-        }
+        self.runtime.preparation(config);
     }
     pub fn pick_color(
         &self,
@@ -822,135 +800,49 @@ impl Worker {
         image_revision: u64,
         origin: Option<foveonic::source::SourceOrigin>,
     ) {
-        self.coordinator
-            .borrow_mut()
-            .pick(request, image_revision, origin);
-        self.publish();
+        self.runtime.pick(request, image_revision, origin);
     }
     pub fn set_memory_budget(&self, limit: u64, frontend: crate::memory::Inventory) {
-        let (lock, wake) = &*self.pending;
-        lock.lock().unwrap().memory = Some(MemoryBudget { limit, frontend });
-        wake.notify_one();
+        self.runtime.memory(limit, frontend);
     }
     pub fn memory_status(&self) -> MemoryStatus {
-        self.memory.lock().unwrap().clone()
+        if let Ok(status) = self.memory.try_lock() {
+            *self.observed_memory.borrow_mut() = status.clone();
+        }
+        self.observed_memory.borrow().clone()
     }
     pub fn retire_before(&self, path: &std::path::Path) {
-        self.coordinator.borrow_mut().retire_before(path);
-        self.publish();
+        self.runtime.retire_before(path.to_owned());
     }
     pub fn clear(&self) {
-        self.clear_with_cache(false);
+        self.runtime.clear(false);
     }
     pub fn clear_all(&self) {
-        self.clear_with_cache(true);
-    }
-    fn clear_with_cache(&self, all: bool) {
-        self.progress.clear();
-        self.coordinator.borrow_mut().clear();
-        self.publish();
-        let (lock, wake) = &*self.pending;
-        let mut state = lock.lock().unwrap();
-        state.clear = true;
-        state.clear_all |= all;
-        wake.notify_one();
+        self.runtime.clear(true);
     }
     pub fn submit_scopes(&self, request: ScopeRequest) {
-        self.coordinator.borrow_mut().scopes(request);
-        self.publish();
+        self.runtime.scopes(request);
     }
     pub fn submit(&self, request: Request) {
         self.submit_at(request, std::time::Instant::now());
     }
     pub fn submit_at(&self, request: Request, queued_at: std::time::Instant) {
-        let origin = self.cache.source_origin(&request.path);
-        if request.export.is_some() {
-            self.progress.begin(request.revision, queued_at);
-            let task =
-                self.coordinator
-                    .borrow_mut()
-                    .frozen_export(Arc::new(request), origin, queued_at);
-            self.pending.0.lock().unwrap().export = Some(task);
-        } else {
-            let mut coordinator = self.coordinator.borrow_mut();
-            let target = crate::rendering::coordinator::Target::of(&request);
-            let previous = coordinator.desired(&target).map(|task| task.stamp.clone());
-            let revision = request.revision;
-            coordinator.desire(Arc::new(request), origin, queued_at);
-            if coordinator.desired(&target).map(|task| &task.stamp) != previous.as_ref() {
-                self.progress.begin(revision, queued_at);
-            }
-        }
-        self.publish();
+        self.runtime.submit(request, queued_at);
     }
     pub fn set_overviews(&self, requests: Vec<Request>, retained: &[PathBuf]) {
-        let paths = requests
-            .iter()
-            .map(|request| request.path.clone())
-            .collect::<Vec<_>>();
-        let queued_at = std::time::Instant::now();
-        {
-            let mut coordinator = self.coordinator.borrow_mut();
-            coordinator.retain_overviews(&paths, retained);
-            for request in requests {
-                let origin = self.cache.source_origin(&request.path);
-                coordinator.desire(Arc::new(request), origin, queued_at);
-            }
-        }
-        self.publish();
+        self.runtime.overviews(requests, retained.to_vec());
     }
     pub fn retain_overviews(&self, paths: &[PathBuf], retained: &[PathBuf]) {
-        self.coordinator
-            .borrow_mut()
-            .retain_overviews(paths, retained);
-        self.publish();
+        self.runtime.retain(paths.to_vec(), retained.to_vec());
     }
     pub fn busy(&self) -> bool {
-        self.coordinator.borrow().busy()
+        self.runtime.busy()
     }
     pub fn is_settled_and_admitted(&self, frame: &Frame) -> bool {
-        self.coordinator.borrow().is_settled_and_admitted(
-            crate::rendering::coordinator::TaskId(frame.diagnostic_task.id),
-            frame.diagnostic_task.revision,
-        )
-    }
-    pub fn handle_result(
-        &self,
-        reply: &Reply,
-        view: &super::delivery::ViewContext<'_>,
-    ) -> super::coordinator::ResultUpdate {
-        let update = self.coordinator.borrow_mut().handle_result(reply, view);
-        if reply.exported.is_none() {
-            self.publish();
-        }
-        update
-    }
-    pub fn finish_scope(&self, id: crate::rendering::coordinator::TaskId) -> bool {
-        let current = self.coordinator.borrow_mut().finish_scope(id);
-        self.publish();
-        current
-    }
-    pub fn finish_pick(&self, id: crate::rendering::coordinator::TaskId) -> bool {
-        let current = self.coordinator.borrow_mut().finish_pick(id);
-        self.publish();
-        current
-    }
-    pub fn resource_revision(&self) -> u64 {
-        self.coordinator.borrow().resource_revision()
+        self.runtime.is_settled_and_admitted(frame)
     }
     pub fn delivered(&self, revision: u64) {
-        self.coordinator.borrow_mut().delivered(revision);
-        self.publish();
-    }
-    pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
-        self.coordinator.borrow().memory_resources(inventory);
-    }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        let (lock, wake) = &*self.pending;
-        lock.lock().unwrap().stop = true;
-        wake.notify_one();
+        self.runtime.delivered(revision);
     }
 }
 
@@ -1002,7 +894,14 @@ fn memory_inventory(
     slot: &Arc<(Mutex<Pending>, Condvar)>,
 ) -> crate::memory::Inventory {
     let mut inventory = budget.frontend.clone();
-    if let Some(scopes) = &slot.0.lock().unwrap().plan.scopes {
+    let (retained, scopes) = {
+        let pending = slot.0.lock().unwrap();
+        (pending.retained.clone(), pending.plan.scopes.clone())
+    };
+    for snapshot in retained.iter() {
+        snapshot.memory_resources(&mut inventory);
+    }
+    if let Some(scopes) = scopes {
         inventory.image(&scopes.request.image);
     }
     presented.memory_resources(&mut inventory);
@@ -1121,8 +1020,7 @@ fn pick_color(
 fn analyze_scopes(
     engine: &Engine,
     slot: &Arc<(Mutex<Pending>, Condvar)>,
-    tx: &mpsc::SyncSender<Update>,
-    context: &egui::Context,
+    tx: &crossbeam_channel::Sender<Update>,
     task: Arc<crate::rendering::coordinator::ScopeTask>,
 ) -> bool {
     let request = &task.request;
@@ -1183,90 +1081,76 @@ fn analyze_scopes(
     {
         return false;
     }
-    context.request_repaint();
     true
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn coalesced_cached_requests_do_not_restart_the_elapsed_timer() {
-        // Drive the real UI mailbox without a processing executor.
-        let (_sender, replies) = std::sync::mpsc::sync_channel(2);
-        let worker = super::Worker {
-            checks: Default::default(),
-            pending: std::sync::Arc::new((
-                std::sync::Mutex::new(super::Pending::default()),
-                std::sync::Condvar::new(),
-            )),
-            replies,
-            progress: Default::default(),
-            cache: std::sync::Arc::new(foveonic::decode_cache::Cache::new()),
-            context: Default::default(),
-            memory: Default::default(),
-            coordinator: Default::default(),
-        };
-        let request = |revision, exposure| {
-            let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-            settings.exposure = exposure;
-            super::Request {
-                framing_preview: false,
-                calibration: None,
-                rendition: Default::default(),
-                revision,
-                path: "cached.x3f".into(),
-                settings,
-                preview_quality: crate::preferences::PreviewMode::Thumb,
-                preview_policy: crate::preferences::PreviewMode::Thumb,
-                output: "final".into(),
-                comparison: false,
-                export: None,
-            }
-        };
-        worker.submit(request(1, 0.));
-        let stamp = worker.pending.0.lock().unwrap().plan.tasks[0].stamp.clone();
-        worker.coordinator.borrow_mut().finish(&stamp);
-        worker.publish();
-        worker.progress.settle(worker.busy(), None);
-        let completed = worker.progress.snapshot().unwrap();
-        assert!(!completed.running());
-
-        worker.submit(request(2, 0.));
-        assert!(!worker.busy());
-        let cached = worker.progress.snapshot().unwrap();
-        assert!(!cached.running());
-        assert_eq!(cached.revision, completed.revision);
-        assert_eq!(cached.milliseconds(), completed.milliseconds());
-
-        worker.submit(request(3, 0.2));
-        assert!(worker.busy());
-        let changed = worker.progress.snapshot().unwrap();
-        assert!(changed.running());
-        assert_eq!(changed.revision, 3);
+    pub(super) struct TestWorker {
+        worker: super::Worker,
+        requests: std::cell::RefCell<Vec<super::Request>>,
     }
-
-    pub(super) fn handle_result(
-        worker: &super::Worker,
-        reply: &super::Reply,
-    ) -> super::super::coordinator::ResultUpdate {
-        let frame = reply.result.as_ref().ok().and_then(Option::as_ref);
-        worker.handle_result(
-            reply,
-            &super::super::delivery::ViewContext {
-                active: Some(&reply.path),
-                rendition: reply.rendition,
-                output: frame.map_or("final", |frame| &frame.output),
-                comparison: frame.is_some_and(|frame| frame.comparison.is_some()),
-                framing_preview: frame.is_some_and(|frame| frame.framing_preview),
-                exporting: false,
-                calibration: frame.and_then(|frame| frame.calibration_signature.as_deref()),
-                settings: &reply.settings,
-                overview_selected: true,
-                overview_settings: Some(&reply.settings),
+    impl std::ops::Deref for TestWorker {
+        type Target = super::Worker;
+        fn deref(&self) -> &Self::Target {
+            &self.worker
+        }
+    }
+    impl TestWorker {
+        pub fn new(engine: foveonic::render::Engine, context: eframe::egui::Context) -> Self {
+            Self {
+                worker: super::Worker::new(engine, context),
+                requests: Default::default(),
+            }
+        }
+        fn publish_view(&self, active: &super::Request) {
+            self.worker.set_view(crate::rendering::delivery::ViewState {
+                active: Some(active.path.clone()),
+                rendition: active.rendition,
+                output: active.output.clone(),
+                comparison: active.comparison,
+                framing_preview: active.framing_preview,
+                exporting: active.export.is_some(),
+                calibration: active
+                    .calibration
+                    .as_ref()
+                    .map(|p| p.signature().to_owned()),
+                settings: active.settings.clone(),
+                overviews: self
+                    .requests
+                    .borrow()
+                    .iter()
+                    .map(|request| (request.path.clone(), request.settings.clone()))
+                    .collect(),
                 displayed_revision: None,
                 detail_revision: None,
-            },
-        )
+            });
+        }
+        pub fn submit(&self, request: super::Request) {
+            let mut requests = self.requests.borrow_mut();
+            requests.retain(|old| old.path != request.path);
+            requests.push(request.clone());
+            drop(requests);
+            self.publish_view(&request);
+            self.worker.submit(request);
+        }
+        pub fn set_overviews(
+            &self,
+            requests: Vec<super::Request>,
+            retained: &[std::path::PathBuf],
+        ) {
+            *self.requests.borrow_mut() = requests.clone();
+            if let Some(active) = requests.first() {
+                self.publish_view(active);
+            }
+            self.worker.set_overviews(requests, retained);
+        }
+    }
+    pub(super) fn handle_result(
+        _worker: &super::Worker,
+        reply: &super::Reply,
+    ) -> super::super::coordinator::ResultUpdate {
+        reply.handling.expect("coordinator handled the result")
     }
     pub(super) fn receive(worker: &super::Worker) -> super::Reply {
         loop {
@@ -1320,7 +1204,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir(&directory).unwrap();
-        let worker = super::Worker::new(
+        let worker = TestWorker::new(
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
         );
@@ -1386,7 +1270,7 @@ mod tests {
     fn worker_keeps_latest_image_request_and_rejects_table_inspection() {
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
-        let worker = super::Worker::new(
+        let worker = TestWorker::new(
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
         );
@@ -1475,7 +1359,7 @@ mod tests {
         use foveonic::{image::Space, render::Settings};
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
-        let worker = super::Worker::new(
+        let worker = TestWorker::new(
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
         );
@@ -1659,7 +1543,7 @@ mod tests {
                 std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
                     .join("blue-parking-sign.x3f")
             });
-        let worker = super::Worker::new(
+        let worker = TestWorker::new(
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
         );
@@ -1766,7 +1650,7 @@ mod tests {
             };
             let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
                 .join("blue-parking-sign.x3f");
-            let worker = super::Worker::new(
+            let worker = TestWorker::new(
                 foveonic::render::Engine::new().unwrap(),
                 eframe::egui::Context::default(),
             );
@@ -1828,8 +1712,7 @@ mod tests {
                                 request_scopes(&worker, &frame, None);
                             }
                         }
-                    } else if let super::Update::Scopes { id, key, result } = update {
-                        worker.finish_scope(id);
+                    } else if let super::Update::Scopes { key, result, .. } = update {
                         if key.revision == last {
                             assert!(result.is_ok());
                             scopes = true;
@@ -1869,8 +1752,7 @@ mod tests {
                             stopped.elapsed().as_secs_f64() * 1000.
                         );
                     }
-                    super::Update::Scopes { id, key, result } if key.revision == last => {
-                        worker.finish_scope(id);
+                    super::Update::Scopes { key, result, .. } if key.revision == last => {
                         assert!(result.is_ok());
                         scopes = true;
                     }
@@ -1904,7 +1786,7 @@ mod tests {
     #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
     fn viewport_scope_jobs_reuse_the_displayed_image_and_settle_on_latest_region() {
         let engine = foveonic::render::Engine::new().unwrap();
-        let worker = super::Worker::new(engine, eframe::egui::Context::default());
+        let worker = TestWorker::new(engine, eframe::egui::Context::default());
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
         worker.submit(super::Request {
@@ -1967,7 +1849,7 @@ mod tests {
             root.join("blue-parking-sign.x3f"),
             root.join("merrill-hazy-coast.x3f"),
         ];
-        let worker = super::Worker::new(
+        let worker = TestWorker::new(
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
         );
@@ -2026,7 +1908,7 @@ mod tests {
         let paths: Vec<_> =
             std::env::split_paths(&std::env::var_os("CACHED_SELECTION_FILES").unwrap()).collect();
         assert!(!paths.is_empty());
-        let worker = super::Worker::new(
+        let worker = TestWorker::new(
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
         );
@@ -2095,7 +1977,7 @@ mod tests {
             root.join("blue-parking-sign.x3f"),
             root.join("merrill-hazy-coast.x3f"),
         ];
-        let worker = super::Worker::new(
+        let worker = TestWorker::new(
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
         );
@@ -2159,73 +2041,11 @@ mod tests {
             assert!(delivered.insert(reply.path));
         }
     }
-
-    #[test]
-    fn immutable_plan_coalesces_each_photo_without_dropping_other_targets() {
-        let (_, replies) = std::sync::mpsc::channel();
-        let worker = super::Worker {
-            checks: Default::default(),
-            pending: std::sync::Arc::new((
-                std::sync::Mutex::new(super::Pending::default()),
-                std::sync::Condvar::new(),
-            )),
-            replies,
-            progress: Default::default(),
-            cache: Default::default(),
-            context: eframe::egui::Context::default(),
-            memory: Default::default(),
-            coordinator: Default::default(),
-        };
-        let requests = |generation: u64| {
-            (0_u64..8)
-                .map(|index| {
-                    let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-                    settings.exposure = generation as f32 * 0.1;
-                    super::Request {
-                        framing_preview: false,
-                        calibration: None,
-                        rendition: Default::default(),
-                        preview_quality: crate::preferences::PreviewMode::Thumb,
-                        preview_policy: crate::preferences::PreviewMode::Thumb,
-                        revision: generation * 8 + index,
-                        path: format!("photo-{index}.x3f").into(),
-                        settings,
-                        output: "final".into(),
-                        comparison: false,
-                        export: None,
-                    }
-                })
-                .collect()
-        };
-        worker.set_overviews(requests(1), &[]);
-        worker.set_overviews(requests(2), &[]);
-        {
-            let state = worker.pending.0.lock().unwrap();
-            assert_eq!(state.plan.tasks.len(), 8);
-            assert!(state
-                .plan
-                .tasks
-                .iter()
-                .all(|task| (task.request.settings.exposure - 0.2).abs() < 1e-6));
-        }
-        worker.retain_overviews(&["photo-0.x3f".into()], &[]);
-        {
-            let state = worker.pending.0.lock().unwrap();
-            assert_eq!(state.plan.tasks.len(), 1);
-            assert_eq!(
-                state.plan.tasks[0].request.path,
-                std::path::Path::new("photo-0.x3f")
-            );
-        }
-        worker.clear();
-        let state = worker.pending.0.lock().unwrap();
-        assert!(state.plan.tasks.is_empty());
-        assert!(state.clear);
-    }
 }
 
 #[cfg(test)]
 mod preview_tests {
+    use super::tests::TestWorker as Worker;
     use super::*;
     #[test]
     #[ignore = "requires GPU and QUATTRO_X3F"]
@@ -2358,6 +2178,7 @@ mod preview_tests {
 
 #[cfg(test)]
 mod color_pick_tests {
+    use super::tests::TestWorker as Worker;
     use super::*;
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
@@ -2423,12 +2244,11 @@ mod color_pick_tests {
                 None,
             );
             let reply = loop {
-                if let Update::ColorPick { id, reply } = worker
+                if let Update::ColorPick { reply, .. } = worker
                     .replies
                     .recv_timeout(std::time::Duration::from_secs(30))
                     .unwrap()
                 {
-                    assert!(worker.finish_pick(id));
                     break reply;
                 }
             };

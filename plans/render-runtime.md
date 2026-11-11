@@ -8,14 +8,14 @@ Requirements: [render orchestration](../docs/specs/render-orchestration.md), [in
 
 ## Resume here
 
-- **Current phase:** the owner accepted the first result-handler slice and asked to continue with off-UI ownership.
-- **Checkpoint:** the result-handler slice follows `fd674d0` and includes the reviewed local matching and readiness simplifications. Its engine execution and thread placement are unchanged.
-- **Current unit:** define the boundary for moving render coordination off the UI thread.
+- **Current phase:** the owner approved a checkpoint of the off-UI coordination slice. The review app was opened with the example-photograph folder.
+- **Checkpoint:** the off-UI coordination slice follows `aede4e8`, which contains result handling and the reviewed local matching and readiness simplifications.
+- **Current unit:** choose and review the next ownership boundary with the owner.
 - **Decided:** protect UI responsiveness, use one runtime for individual and multi-photo editing, isolate responsibilities and support subordinate speculative work. Keep engine execution serial throughout this migration.
 - **Separate future effort:** [wide rendering](./wide-rendering.md). Clear application/engine ownership should make that experiment easier, without building its execution machinery here.
-- **Not decided:** concrete new Rust types, full state migration or exact admission/backlog limits.
+- **Not decided:** later state ownership, shared foreground/background admission policy and backlog limits.
 - **Communication direction:** ordinary typed messages, fixed consumers and directly called handlers. Keep existing library queues across threads. Add a broadcast/watch dependency only when an actual consumer needs the full primitive.
-- **Next action:** map the current UI dependencies on the coordinator and review the proposed off-UI contract with the owner. Preserve the cached-switch baseline limitation below. Update this section after every accepted slice.
+- **Next action:** discuss the next conceptual unit, including how source acquisition and decoding become separate from the render worker. Preserve the cached-switch baseline limitation below. Update this section after every accepted slice.
 
 ## Result-handler review unit
 
@@ -49,6 +49,40 @@ Read [worker methods](../crates/foveonic-gui/src/rendering/worker/mod.rs), [UI r
 - [x] Regenerate indexes and pass documentation and diff-whitespace checks.
 
 The unchanged-build cached-switch native scenario timed out at step two, while one after-change run passed all switches and removal/re-addition. Retain both observations. One before/after pair does not establish a causal fix or performance improvement, and a pre-existing intermittent scenario issue remains possible. This unit does not diagnose or repair that baseline timeout. No latency improvement is claimed.
+
+## Off-UI ownership proposal
+
+Use **render coordinator** for the existing owner of render requests and results. Move that owner outside the UI thread, with the current serial worker consuming its work plans. Continue to use **request**, **job**, **result** and **handler** at this boundary. A **view context** describes what the viewport can show now. A **view update** is an image or status change for the UI to apply.
+
+Before this unit, the worker handle let the UI mutate the coordinator and read state immediately. The result handler borrowed view facts from the UI. Progress and retained-photo switching read settlement synchronously, and the UI inventoried the coordinator's retained images. See the current [worker handle](../crates/foveonic-gui/src/rendering/worker/mod.rs), [view context](../crates/foveonic-gui/src/rendering/delivery.rs) and [memory accounting](../crates/foveonic-gui/src/memory.rs).
+
+| Handoff | Proposed contract |
+| --- | --- |
+| UI to coordinator | Publish current requests and the relevant view context without waiting for a reply or queue capacity. Coalesce replaceable preview intent. Preserve ordered commands and acknowledgements that carry effects, including frozen exports and clearing a folder. |
+| Worker to coordinator | Deliver results directly to the coordinator so settlement, reuse and plan updates can progress between UI paints. Keep result ownership and accounting per photo, including siblings in a multi-edit group. |
+| Coordinator to UI | Deliver per-photo view updates and a small current status. Use the published context to admit images, then check current view compatibility and order when the UI applies one. Feed the actual Active display acknowledgement back to the coordinator. |
+| Memory accounting | Count coordinator-retained images at their owner and combine them with the existing frontend inventory for budget enforcement. Preserve shared-resource deduplication and count images in transit. |
+
+The risky race is between a UI action and a result already headed to the UI. Exercise it by changing exposure or selection after the coordinator admits an image and before the UI receives it. A compatible interim preview can still be displayed under the current rules. An incompatible image cannot replace the current view, and an older status cannot clear progress for newer work. A delivery acknowledgement refers to the image actually applied. Exercise the same handoff with two photo results ready together, a retained photo switch, folder clearing and a frozen export.
+
+The owner approved continuing with this boundary. The implementation uses Crossbeam channels and selection. UI commands enter one queue without waiting for capacity. The coordinator applies queued commands in batches before publishing a replacement plan. Worker results and UI image updates each use a capacity-two queue. The coordinator holds at most one result while forwarding and selects new commands while UI delivery is full. A missing initial view context postpones image handling until the UI supplies it. Status is a small immutable snapshot, read with `try_lock` and the last observed value as fallback. A local command sequence keeps a newly submitted request busy until the coordinator acknowledges it.
+
+Retained images stay with the coordinator. It supplies immutable snapshot handles to the worker, which inventories them together with frontend and in-transit images through the existing resource-accounting methods. The UI no longer reads coordinator internals or scans its retained images. Source acquisition, speculative planning and engine execution retain their current worker ownership for later review.
+
+This unit adds one coordinator thread and Crossbeam channel selection. It uses ordinary typed commands and explicit handlers. It adds no custom broadcast, wakeup or subscription primitive. The existing worker plan's `Mutex`/`Condvar` stays between background threads. The command queue is unbounded and queued intent is coalesced at the coordinator, so sustained producer backlog remains a measurable limit of this first version. Image payloads have explicit queue bounds. The new `coordinator.command` and `coordinator.result` scopes use the existing Perfetto diagnostics.
+
+### Off-UI validation
+
+- [x] Pass six controlled threaded checks for replacement, independent sibling settlement, coalesced elapsed time, full UI queue handling/shutdown, nonblocking status reads and a newer UI edit overtaking an already coordinated failure.
+- [x] Pass ordinary workspace tests and strict Clippy during implementation.
+- [x] Compare the current processor build against all 40 frozen Full/Fast/Draft/Thumb cases. Full-precision samples, resolved settings and output dimensions match across three Classic, three Merrill, three ordinary Quattro and one Tiger image.
+- [x] Pass GPU checks for latest multi-edit delivery, framing reuse, continuous dragging and scopes, viewport scope replacement, native-source clearing with reduced retention, color picking and three Full export paths.
+- [x] Pass two isolated Off trials each of cached-switch and rapid-supersession against the previous checkpoint and the first off-UI build. Both builds pass all actions, including removal/re-addition. Repeat the current build after consolidating ready-image repaint notifications at the coordinator.
+- [x] Pass an eight-photo native warm-edit scenario across Classic, Merrill and Quattro. The observed median over three warm edits is 116.44 ms for the group. Initial decoded-cache preparation is 2121.52 ms. These observations describe this build and workload rather than a demonstrated speed improvement.
+- [x] Capture and analyze a loss-free native cached-switch Wall trace. All three unchanged switches perform zero source payload reads and zero photographic dispatches. The coordinator thread handles 58 command scopes and 12 result scopes. The maximum observed durations are 0.190 ms and 0.147 ms. The maximum observed UI update scope is 6.943 ms, with processing on the render worker. Physical display latency and arbitrary UI workload are outside those measurements.
+- [x] Pass formatting, strict Clippy, documentation/index and artwork checks. Ordinary checks pass 533 processor and 432 GUI tests. Build and open the review app through `cargo xtask run` with the example-photograph folder.
+
+The final delivery pass removes the render worker's direct image/scope/pick repaint notifications. The coordinator requests a repaint after placing a ready update in the UI queue. Command acknowledgements and memory-status changes retain their own notifications. This avoids waking the UI for a raw result that is still awaiting coordinator handling.
 
 ## Conceptual pass before each unit
 

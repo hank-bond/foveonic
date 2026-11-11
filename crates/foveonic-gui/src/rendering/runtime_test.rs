@@ -1,0 +1,232 @@
+//! Exercises real coordinator handoffs with a controlled executor and bounded image queues.
+
+use super::*;
+use crate::{preferences::PreviewMode, rendering::coordinator::Task};
+use foveonic::render::Settings;
+use std::time::Duration;
+
+struct Rig {
+    handle: Handle,
+    slot: Slot,
+    results: Sender<Update>,
+    updates: Receiver<Update>,
+    progress: crate::progress::Tracker,
+}
+impl Rig {
+    fn new() -> Self {
+        let slot = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
+        let progress = crate::progress::Tracker::default();
+        let (results, input) = crossbeam_channel::bounded(2);
+        let (handle, updates) = Handle::start(
+            slot.clone(),
+            input,
+            Arc::new(Cache::new()),
+            progress.clone(),
+            Default::default(),
+        );
+        Self {
+            handle,
+            slot,
+            results,
+            updates,
+            progress,
+        }
+    }
+    fn requests(&self, requests: Vec<Request>) {
+        self.handle.set_view(view(&requests));
+        self.handle.overviews(requests, vec![]);
+        self.applied();
+    }
+    fn applied(&self) {
+        let sequence = self.handle.sequence.get();
+        wait(|| self.handle.status().processed >= sequence);
+    }
+    fn tasks(&self) -> Vec<Arc<Task>> {
+        self.slot.0.lock().unwrap().plan.tasks.clone()
+    }
+    fn receive(&self) -> worker::Reply {
+        let Update::Image(reply) = self.updates.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("expected an image result");
+        };
+        *reply
+    }
+}
+
+fn wait(mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready() {
+        assert!(
+            Instant::now() < deadline,
+            "coordinator failed to make progress"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn request(path: &str, revision: u64, exposure: f32) -> Request {
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.exposure = exposure;
+    Request {
+        path: path.into(),
+        revision,
+        settings,
+        framing_preview: false,
+        calibration: None,
+        rendition: Default::default(),
+        preview_quality: PreviewMode::Thumb,
+        preview_policy: PreviewMode::Thumb,
+        output: "final".into(),
+        comparison: false,
+        export: None,
+    }
+}
+fn view(requests: &[Request]) -> ViewState {
+    let active = &requests[0];
+    ViewState {
+        active: Some(active.path.clone()),
+        rendition: active.rendition,
+        output: active.output.clone(),
+        comparison: active.comparison,
+        framing_preview: active.framing_preview,
+        exporting: false,
+        calibration: None,
+        settings: active.settings.clone(),
+        overviews: requests
+            .iter()
+            .map(|request| (request.path.clone(), request.settings.clone()))
+            .collect(),
+        displayed_revision: None,
+        detail_revision: None,
+    }
+}
+fn result(task: &Task) -> Update {
+    Update::Image(Box::new(worker::Reply {
+        request: task.request.clone(),
+        handling: None,
+        stamp: task.stamp.clone(),
+        path: task.request.path.clone(),
+        rendition: task.request.rendition,
+        revision: task.request.revision,
+        metadata: None,
+        settings: task.request.settings.clone(),
+        numeric_settings: None,
+        reset_settings: None,
+        result: Err("test source failure".into()),
+        exported: None,
+    }))
+}
+
+#[test]
+fn coordinator_replaces_each_photo_and_keeps_siblings_without_ui_receipt() {
+    let rig = Rig::new();
+    for revision in 1..=12 {
+        rig.requests(
+            (0..8)
+                .map(|i| request(&format!("{i}.x3f"), revision * 8 + i, revision as f32))
+                .collect(),
+        );
+    }
+    let tasks = rig.tasks();
+    assert_eq!(tasks.len(), 8);
+    assert!(tasks
+        .iter()
+        .all(|task| task.request.settings.exposure == 12.));
+    rig.handle.retain(vec!["0.x3f".into()], vec![]);
+    rig.applied();
+    assert_eq!(rig.tasks().len(), 1);
+    rig.handle.clear(false);
+    rig.applied();
+    assert!(rig.tasks().is_empty());
+    assert!(!rig.handle.busy());
+}
+
+#[test]
+fn handled_results_settle_siblings_and_cannot_settle_a_newer_request() {
+    let rig = Rig::new();
+    rig.requests(vec![request("a.x3f", 1, 0.), request("b.x3f", 2, 0.)]);
+    let old = rig.tasks();
+    rig.requests(vec![request("a.x3f", 3, 1.), request("b.x3f", 4, 0.)]);
+    rig.results.send(result(&old[0])).unwrap();
+    assert!(!rig.receive().handling.unwrap().current);
+    assert_eq!(rig.tasks().len(), 2);
+    rig.results.send(result(&old[1])).unwrap();
+    assert!(rig.receive().handling.unwrap().current);
+    assert!(rig.handle.busy());
+    let latest = rig.tasks();
+    assert_eq!(latest.len(), 1);
+    assert_eq!(latest[0].request.revision, 3);
+    rig.results.send(result(&latest[0])).unwrap();
+    assert!(rig.receive().handling.unwrap().current);
+    assert!(!rig.handle.busy());
+}
+
+#[test]
+fn full_ui_queue_does_not_prevent_new_intent_or_shutdown() {
+    let rig = Rig::new();
+    rig.requests(
+        (0..8)
+            .map(|i| request(&format!("{i}.x3f"), i + 1, 0.))
+            .collect(),
+    );
+    let tasks = rig.tasks();
+    for task in &tasks[..4] {
+        rig.results.send(result(task)).unwrap();
+    }
+    wait(|| rig.updates.is_full() && rig.tasks().len() <= 5);
+    rig.handle.submit(request("0.x3f", 20, 2.), Instant::now());
+    rig.applied();
+    assert!(rig.tasks().iter().any(|task| task.request.revision == 20));
+    rig.handle.clear(true);
+    rig.applied();
+    assert!(rig.tasks().is_empty());
+    assert!(!rig.handle.busy());
+    let slot = rig.slot.clone();
+    drop(rig);
+    wait(|| slot.0.lock().unwrap().stop);
+}
+
+#[test]
+fn coalescing_a_completed_request_preserves_its_finished_elapsed_time() {
+    let rig = Rig::new();
+    rig.requests(vec![request("a.x3f", 1, 0.)]);
+    rig.results.send(result(&rig.tasks()[0])).unwrap();
+    rig.receive();
+    rig.progress.settle(rig.handle.busy(), Some(1));
+    let finished = rig.progress.snapshot().unwrap();
+    assert!(!finished.running());
+    rig.requests(vec![request("a.x3f", 2, 0.)]);
+    assert!(!rig.handle.busy());
+    let coalesced = rig.progress.snapshot().unwrap();
+    assert_eq!(finished.revision, coalesced.revision);
+    assert_eq!(finished.milliseconds(), coalesced.milliseconds());
+    rig.requests(vec![request("a.x3f", 3, 1.)]);
+    assert!(rig.handle.busy());
+    assert_eq!(rig.progress.snapshot().unwrap().revision, 3);
+}
+
+#[test]
+fn ui_uses_its_snapshot_while_the_coordinator_is_publishing() {
+    let rig = Rig::new();
+    rig.requests(vec![request("a.x3f", 1, 0.)]);
+    assert!(rig.handle.busy());
+    let locked = rig.handle.status.lock().unwrap();
+    // A blocking read here would deadlock on the lock held by this thread.
+    assert!(rig.handle.busy());
+    drop(locked);
+}
+
+#[test]
+fn a_failure_in_transit_cannot_overwrite_a_newer_ui_edit() {
+    let rig = Rig::new();
+    rig.requests(vec![request("a.x3f", 1, 0.)]);
+    rig.results.send(result(&rig.tasks()[0])).unwrap();
+    let reply = rig.receive();
+    assert!(reply.handling.unwrap().current);
+    let newer = view(&[request("a.x3f", 2, 1.)]);
+    let update =
+        super::super::delivery::recheck(&reply, &newer.context(&reply.path), Some(&newer.settings));
+    assert!(!update.current);
+    assert!(!update.update_photo);
+    assert!(update.destination.is_none());
+}

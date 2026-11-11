@@ -14,6 +14,7 @@ Advancing ready operations across several photographs may reduce multi-edit late
 
 - The current executor keeps per-photo graph/cache, live-value, scratch and progress state and waits after each executed operation when execution is cancellable. Changing the outer loop alone does not remove those waits.
 - GPU helpers submit internally. Stage interleaving does not automatically combine submissions.
+- The current work plan has one consuming cursor, which owns its served-job set. A worker pool would need one authority for claiming jobs. Independent copies of that cursor could claim the same job. Per-photo result identity and settlement already have their own coordinator owner.
 - Reduced working sets currently protect one active entry. Several in-flight sessions need explicit protection until submitted operations retire, within their existing resource ownership.
 - Recipes and cache hits differ. Advance independent ready work without aligning graph ordinals or imposing an all-photo stage barrier. Preserve per-photo source identity, cache outcomes, errors and settlement.
 

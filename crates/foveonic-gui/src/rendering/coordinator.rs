@@ -72,7 +72,7 @@ pub enum Completion {
     Superseded,
     Removed,
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResultUpdate {
     pub current: bool,
     pub update_photo: bool,
@@ -105,7 +105,6 @@ pub struct RenderCoordinator {
     scopes: Option<Arc<ScopeTask>>,
     pick: Option<Arc<PickTask>>,
     active: Option<PathBuf>,
-    resource_revision: u64,
 }
 impl RenderCoordinator {
     fn id(&mut self) -> TaskId {
@@ -233,11 +232,6 @@ impl RenderCoordinator {
         id
     }
     pub fn retain_overviews(&mut self, paths: &[PathBuf], retained: &[PathBuf]) {
-        let before = self
-            .desired
-            .iter()
-            .filter(|entry| entry.delivered.is_some())
-            .count();
         self.desired.retain(|entry| {
             let keep = entry.task.stamp.target.purpose != Purpose::Current
                 || paths.contains(&entry.task.stamp.target.path)
@@ -247,15 +241,6 @@ impl RenderCoordinator {
             }
             keep
         });
-        if self
-            .desired
-            .iter()
-            .filter(|entry| entry.delivered.is_some())
-            .count()
-            != before
-        {
-            self.resource_revision = self.resource_revision.wrapping_add(1);
-        }
     }
     pub fn activate(&mut self, path: &Path) {
         if self.active.as_deref() == Some(path) {
@@ -275,11 +260,6 @@ impl RenderCoordinator {
         self.pick = None;
     }
     pub fn retire_before(&mut self, path: &Path) {
-        let before = self
-            .desired
-            .iter()
-            .filter(|entry| entry.delivered.is_some())
-            .count();
         self.desired.retain(|entry| {
             let keep = entry.task.stamp.target.path != path
                 || !matches!(
@@ -291,15 +271,6 @@ impl RenderCoordinator {
             }
             keep
         });
-        if self
-            .desired
-            .iter()
-            .filter(|entry| entry.delivered.is_some())
-            .count()
-            != before
-        {
-            self.resource_revision = self.resource_revision.wrapping_add(1);
-        }
     }
     pub fn clear(&mut self) {
         for entry in &self.desired {
@@ -308,7 +279,6 @@ impl RenderCoordinator {
         self.desired.clear();
         self.scopes = None;
         self.pick = None;
-        self.resource_revision = self.resource_revision.wrapping_add(1);
     }
     pub fn frozen_export(
         &mut self,
@@ -349,13 +319,16 @@ impl RenderCoordinator {
     pub fn busy(&self) -> bool {
         self.desired.iter().any(|entry| !entry.settled)
     }
+    #[cfg(test)]
     pub fn is_settled_and_admitted(&self, id: TaskId, revision: u64) -> bool {
-        self.desired.iter().any(|entry| {
-            entry.task.stamp.id == id
-                && entry.task.stamp.revision == revision
-                && entry.settled
-                && entry.admitted == revision
-        })
+        self.admitted_images().contains(&(id, revision))
+    }
+    pub fn admitted_images(&self) -> Vec<(TaskId, u64)> {
+        self.desired
+            .iter()
+            .filter(|entry| entry.settled && entry.admitted == entry.task.stamp.revision)
+            .map(|entry| (entry.task.stamp.id, entry.admitted))
+            .collect()
     }
     /// Decide reuse and view updates together. Photo feedback can remain useful
     /// even when the image is rejected. UI application and acknowledgement follow.
@@ -471,7 +444,6 @@ impl RenderCoordinator {
             let mut task = (*entry.task).clone();
             task.seed = Some(snapshot);
             entry.task = Arc::new(task);
-            self.resource_revision = self.resource_revision.wrapping_add(1);
         }
     }
     pub fn bind_origin(&mut self, stamp: &Stamp, origin: &SourceOrigin) {
@@ -484,9 +456,6 @@ impl RenderCoordinator {
                 entry.task = Arc::new(task);
             }
         }
-    }
-    pub fn resource_revision(&self) -> u64 {
-        self.resource_revision
     }
     pub fn delivered(&mut self, revision: u64) {
         if self
@@ -504,12 +473,16 @@ impl RenderCoordinator {
             self.pick = None;
         }
     }
-    pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
-        for entry in &self.desired {
-            if let Some((_, snapshot)) = &entry.delivered {
-                snapshot.memory_resources(inventory);
-            }
-        }
+    pub fn retained_images(&self) -> Vec<Arc<crate::rendering::worker::presentation::Snapshot>> {
+        self.desired
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .delivered
+                    .as_ref()
+                    .map(|(_, snapshot)| snapshot.clone())
+            })
+            .collect()
     }
     pub fn desired(&self, target: &Target) -> Option<&Arc<Task>> {
         self.desired
@@ -593,7 +566,7 @@ impl RenderCoordinator {
     }
 }
 
-/// Physical service order survives replacement plans; desired lifecycle stays in the UI coordinator.
+/// Physical service order survives replacement plans while the coordinator owns request lifecycle.
 #[derive(Default)]
 pub struct Cursor {
     served: HashSet<Stamp>,

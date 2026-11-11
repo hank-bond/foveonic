@@ -24,6 +24,8 @@ Image is the ordinary term for produced pixels and their processing context. Ren
 
 The first implementation maps result handling to `RenderCoordinator::handle_result`. It consumes the current worker `Reply` and returns a small `ResultUpdate` describing permitted UI effects. Existing `Request`, `Task`, `Reply` and `Frame` representations keep their names while their boundaries are unchanged. Apply the shared vocabulary in discussion and review any representation rename with the unit that changes its contract.
 
+The render runtime now runs the coordinator on its own thread. **View context** is an immutable description of what the viewport can show. The UI publishes it when its values change. **View updates** carry result-handler decisions and image data back to the UI, which checks that they still fit the current interaction before applying them. Status is an immutable summary of processed commands and request settlement.
+
 ## Established meanings
 
 | Concept | Meaning | Current source |

@@ -9,12 +9,12 @@ The [active plan](../../plans/render-runtime.md) owns progress and evidence. Thi
 
 ## Current unit: off-UI ownership
 
-The owner approved the result handler at the existing coordinator and agreed to move coordination at both ends of the worker off the UI thread. Review the contract that replaces the UI's synchronous access to the coordinator. The [active plan](../../plans/render-runtime.md#result-handler-review-unit) records the handler's implementation, evidence and known baseline limitation.
+The owner approved moving request coordination and result handling off the UI thread. The runtime now handles typed commands, worker results and bounded UI delivery on a dedicated coordinator thread. Validation and owner review are tracked in the [active plan](../../plans/render-runtime.md#off-ui-ownership-proposal).
 
 ## Subsequent decisions
 
 - **Requested state:** which existing state becomes authoritative for per-photo edits, and what immutable input does the render runtime need? Avoid rebuilding the whole editor state to move scheduling off the UI.
-- **Communication fit:** start with typed messages, known handlers and existing cross-thread channels. Does any implemented unit actually need independent subscribers, or begin recreating library-provided synchronization? Record that evidence and review a library when it occurs. Full broadcast/watch primitives require a library, with explicit state/event and lag semantics.
+- **Communication fit:** Crossbeam selection services incoming commands while bounded image delivery is full. The UI command queue uses nonblocking publication with coordinator-side replacement before plan publication. Measure backlog under sustained editing before considering another transport. Independent broadcast/watch consumers would require a library with explicit state/event and lag semantics.
 - **Execution control:** what small shared policy separates cancellation, yielding, priority and GPU completion? Decide the bound on already-submitted speculative work from measurements. A lower-priority host thread cannot guarantee GPU preemption.
 - **Resource ownership:** which owner reports availability, decides admission and releases each representation? Clarify the existing serial lifecycle without building concurrent session admission or a second cache manager.
 - **Workflow evidence:** what representative collection and interactions define time to cull and edit 100 photos? Existing scenarios cover up to eight at once. A collection journey should advance through editing groups, not enlarge the editing limit.

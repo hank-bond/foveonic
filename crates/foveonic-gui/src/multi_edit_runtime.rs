@@ -713,6 +713,7 @@ impl crate::App {
         self.busy = true;
         self.detail = None;
         self.smart.reset();
+        self.publish_render_view();
         self.worker
             .set_overviews(requests, &self.multi_edit.retained_paths());
         self.opening = None;

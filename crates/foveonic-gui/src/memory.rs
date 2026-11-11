@@ -141,7 +141,6 @@ impl crate::App {
         let mut key = vec![
             self.preferences.memory_cache_bytes,
             self.memory_reply_epoch,
-            self.worker.resource_revision(),
             self.browser.resource_revision(),
             self.navigator.resource_revision(),
             self.previews.resource_revision(),
@@ -177,7 +176,6 @@ impl crate::App {
             inventory.metadata(metadata);
         }
         self.before.memory_resources(&mut inventory);
-        self.worker.memory_resources(&mut inventory);
         self.multi_edit.memory_resources(&mut inventory);
         self.browser.memory_resources(&mut inventory);
         self.navigator.memory_resources(&mut inventory);

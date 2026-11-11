@@ -3,7 +3,47 @@
 use super::{coordinator::Completion, matching, request::Purpose, worker};
 use crate::{editor::Rendition, App};
 use foveonic::render::Settings;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Immutable viewport facts supplied to the coordinator when their values change.
+#[derive(Clone, PartialEq)]
+pub struct ViewState {
+    pub active: Option<PathBuf>,
+    pub rendition: Rendition,
+    pub output: String,
+    pub comparison: bool,
+    pub framing_preview: bool,
+    pub exporting: bool,
+    pub calibration: Option<String>,
+    pub settings: Settings,
+    pub overviews: Vec<(PathBuf, Settings)>,
+    pub displayed_revision: Option<u64>,
+    pub detail_revision: Option<u64>,
+}
+
+impl ViewState {
+    pub fn context(&self, path: &Path) -> ViewContext<'_> {
+        let overview_settings = self
+            .overviews
+            .iter()
+            .find(|(candidate, _)| candidate == path)
+            .map(|(_, settings)| settings);
+        ViewContext {
+            active: self.active.as_deref(),
+            rendition: self.rendition,
+            output: &self.output,
+            comparison: self.comparison,
+            framing_preview: self.framing_preview,
+            exporting: self.exporting,
+            calibration: self.calibration.as_deref(),
+            settings: &self.settings,
+            overview_selected: overview_settings.is_some(),
+            overview_settings,
+            displayed_revision: self.displayed_revision,
+            detail_revision: self.detail_revision,
+        }
+    }
+}
 
 /// Only borrowed image facts are needed to decide delivery. GPU resources stay with the frame.
 pub struct ImageInfo<'a> {
@@ -190,32 +230,89 @@ fn destination(
     Ok(Destination::Active)
 }
 
+/// Confirm that a coordinated result still fits the UI's latest intent and view.
+pub fn recheck(
+    reply: &worker::Reply,
+    view: &ViewContext<'_>,
+    requested: Option<&Settings>,
+) -> super::coordinator::ResultUpdate {
+    let mut update = reply
+        .handling
+        .expect("coordinator handles results before UI delivery");
+    let authored_current = requested
+        .is_some_and(|settings| matching::same_authored_edits(&reply.request.settings, settings));
+    update.current &= authored_current || reply.exported.is_some();
+    let completion = if update.current {
+        Completion::Current
+    } else {
+        Completion::Superseded
+    };
+    let decision = classify(completion, &reply.into(), view);
+    update.update_photo &= decision.update_photo;
+    update.destination = update.destination.and_then(|_| decision.destination.ok());
+    update
+}
+
 impl App {
-    pub(crate) fn handle_render_result(
+    pub(crate) fn publish_render_view(&self) {
+        let calibration = self
+            .noise_calibration
+            .selected(self.preferences.noise_profile);
+        self.worker.set_view(ViewState {
+            active: self.selected.clone(),
+            rendition: self.before.active,
+            output: self.output.clone(),
+            comparison: self.comparison.requested(),
+            framing_preview: self.framing_preview_active(),
+            exporting: self.exporting,
+            calibration: calibration
+                .as_ref()
+                .map(|profile| profile.signature().to_owned()),
+            settings: self.settings.clone(),
+            overviews: self
+                .edit_selection
+                .paths()
+                .iter()
+                .filter_map(|path| {
+                    self.multi_edit
+                        .settings(path)
+                        .map(|settings| (path.clone(), settings.clone()))
+                })
+                .collect(),
+            displayed_revision: self.frame.as_ref().map(|frame| frame.revision),
+            detail_revision: self.detail.as_ref().map(|frame| frame.revision),
+        });
+    }
+
+    pub(crate) fn render_result_for_view(
         &self,
         reply: &worker::Reply,
     ) -> super::coordinator::ResultUpdate {
         let calibration = self
             .noise_calibration
             .selected(self.preferences.noise_profile);
-        self.worker.handle_result(
-            reply,
-            &ViewContext {
-                active: self.selected.as_deref(),
-                rendition: self.before.active,
-                output: &self.output,
-                comparison: self.comparison.requested(),
-                framing_preview: self.framing_preview_active(),
-                exporting: self.exporting,
-                calibration: calibration.as_ref().map(|profile| profile.signature()),
-                // Before changes processing settings but preserves authored framing.
-                settings: &self.settings,
-                overview_selected: self.edit_selection.contains(&reply.path),
-                overview_settings: self.multi_edit.settings(&reply.path),
-                displayed_revision: self.frame.as_ref().map(|frame| frame.revision),
-                detail_revision: self.detail.as_ref().map(|frame| frame.revision),
-            },
-        )
+        let view = ViewContext {
+            active: self.selected.as_deref(),
+            rendition: self.before.active,
+            output: &self.output,
+            comparison: self.comparison.requested(),
+            framing_preview: self.framing_preview_active(),
+            exporting: self.exporting,
+            calibration: calibration.as_ref().map(|profile| profile.signature()),
+            // Before changes processing settings but preserves authored framing.
+            settings: &self.settings,
+            overview_selected: self.edit_selection.contains(&reply.path),
+            overview_settings: self.multi_edit.settings(&reply.path),
+            displayed_revision: self.frame.as_ref().map(|frame| frame.revision),
+            detail_revision: self.detail.as_ref().map(|frame| frame.revision),
+        };
+        let active_settings = self.view_settings();
+        let requested = if self.selected.as_ref() == Some(&reply.path) {
+            Some(&active_settings)
+        } else {
+            self.multi_edit.settings(&reply.path)
+        };
+        recheck(reply, &view, requested)
     }
 }
 

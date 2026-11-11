@@ -298,7 +298,7 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rendering::worker::{Frame, Worker};
+    use crate::rendering::worker::{tests::TestWorker as Worker, Frame};
     use eframe::{egui, wgpu};
     use foveonic::{profile::Profile, render::Engine, source::Source};
     use std::sync::atomic::Ordering;
