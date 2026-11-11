@@ -3,6 +3,7 @@
 mod actions;
 mod activity;
 mod application_settings;
+mod automation;
 mod batch;
 mod browser;
 mod capture;
@@ -1659,6 +1660,7 @@ impl eframe::App for App {
             self.submit_request(None, None);
         }
         self.smoke_tick(ctx);
+        automation::begin_frame(ctx);
         let normalized = controls::normalize_with_capture(
             &mut self.settings,
             self.metadata.as_deref(),
@@ -1792,7 +1794,7 @@ impl eframe::App for App {
             multi_edit_controls::set_range(ctx, &pointer, range);
         }
         let tools_limit = (ctx.available_rect().width() - 240.).clamp(TOOLS_MIN_WIDTH, 600.);
-        egui::SidePanel::right("settings")
+        let settings_panel = egui::SidePanel::right("settings")
             .default_width(
                 screenshot
                     .as_ref()
@@ -1803,6 +1805,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 changed |= self.tools(ui);
             });
+        automation::panel(settings_panel.response.rect);
         let mut edits = multi_edit_controls::finish(ctx);
         if self.multi_edit.multiple() && self.multi_edit.editable_ready() {
             let assignments =
@@ -1969,20 +1972,37 @@ fn main() -> eframe::Result {
         }),
         ..Default::default()
     };
+    let background = std::env::var_os("FOVEONIC_GUI_SCENARIO_BACKGROUND").is_some();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_app_id(preferences::APP_ID)
+        .with_icon(icon::window_icon())
+        .with_inner_size(if smoke::screenshot_active() {
+            smoke::screenshot_recipe().window_size
+        } else {
+            [1440., 1000.]
+        })
+        .with_min_inner_size([1000., 600.]);
+    if background {
+        viewport = viewport
+            .with_active(false)
+            .with_window_level(egui::WindowLevel::AlwaysOnBottom);
+    }
+    #[cfg(target_os = "macos")]
+    let event_loop_builder = background.then(|| {
+        Box::new(|builder: &mut eframe::EventLoopBuilder<_>| {
+            use winit::platform::macos::EventLoopBuilderExtMacOS;
+            builder.with_activate_ignoring_other_apps(false);
+        }) as eframe::EventLoopBuilderHook
+    });
+    #[cfg(not(target_os = "macos"))]
+    let event_loop_builder = None;
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         persistence_path: std::env::var_os("FOVEONIC_GUI_SMOKE_DIR")
             .map(PathBuf::from)
             .map(|d| d.join("app.ron")),
-        viewport: egui::ViewportBuilder::default()
-            .with_app_id(preferences::APP_ID)
-            .with_icon(icon::window_icon())
-            .with_inner_size(if smoke::screenshot_active() {
-                smoke::screenshot_recipe().window_size
-            } else {
-                [1440., 1000.]
-            })
-            .with_min_inner_size([1000., 600.]),
+        viewport,
+        event_loop_builder,
         wgpu_options: display::configure(egui_wgpu::WgpuConfiguration {
             wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
             ..Default::default()

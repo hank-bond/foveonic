@@ -11,6 +11,8 @@ use std::path::PathBuf;
 mod capture;
 #[path = "smoke_scenarios.rs"]
 mod scenarios;
+#[path = "smoke_slider.rs"]
+mod slider;
 
 const ROTATE_TARGETS: &[&str] = &[
     "preview",

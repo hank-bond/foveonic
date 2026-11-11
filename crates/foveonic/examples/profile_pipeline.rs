@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         profile::report(
             "session",
             mode,
-            serde_json::json!({"frontend":"completed_processing","scale_divisor":working_scale.divisor(),"source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
+            serde_json::json!({"frontend":"completed_processing","scale_divisor":working_scale.divisor(),"family":source.metadata.processing_family().ok(),"source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
         )
     );
     println!(
@@ -170,7 +170,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 profile::report(
                     "validation",
                     sample_mode,
-                    serde_json::json!({"source":input,"digest":format!("{:016x}",hasher.finish()),"outside_timing":true})
+                    serde_json::json!({"source":input,"digest":format!("{:016x}",hasher.finish()),
+                        "extent":image.description().extent,"layout":format!("{:?}",image.description().layout),
+                        "view_extent":image.view().extent,"view_crop":image.view().crop,
+                        "view_rotation":image.view().rotation,"outside_timing":true})
                 )
             );
         }

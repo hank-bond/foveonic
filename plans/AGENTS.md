@@ -17,6 +17,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
 - **[archived/](./archived/AGENTS.md)** Archived plans record completed implementation slices, their checks, and historical limitations.
+- **[behavioral-testing](./behavioral-testing.md)** Extend real-app interaction checks and diagnostic feedback across camera families without binding behavior to the current render architecture.
 - **[classic-coverage](./classic-coverage.md)** Complete ordinary color rendering and editable DNG export across all pre-Merrill Sigma Classic cameras.
 - **[color-field-boundaries](./color-field-boundaries.md)** Prepare the reviewed Color Field boundary recovery with separate evidence and application masks for a scoped commit.
 - **[color-field-controls](./color-field-controls.md)** Investigate whether color agreement and boundary controls produce visible changes independently of GUI and cache behavior.

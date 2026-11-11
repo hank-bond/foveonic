@@ -33,6 +33,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[actions.rs](./actions.rs)** Applies workspace commands through browser selection and the existing per-photo editing session.
 - **[activity.rs](./activity.rs)** Retains session operations, tool messages and errors with one acknowledged toolbar status.
 - **[application_settings.rs](./application_settings.rs)** Configures display, editing targets, retained memory and background disk reuse independently of photographic edits.
+- **[automation.rs](./automation.rs)** Observes real editor controls for opt-in scripted application checks.
 - **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
 - **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
 - **[browser_chrome.rs](./browser_chrome.rs)** Draws compact browser view/sort/search menus and independent star-rating controls.
@@ -80,6 +81,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[smoke.rs](./smoke.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
 - **[smoke_capture.rs](./smoke_capture.rs)** Saves existing smoke checks through the shared capture controller without changing their actions.
 - **[smoke_scenarios.rs](./smoke_scenarios.rs)** Runs declared native diagnostic cases through the existing application and capture controller.
+- **[smoke_slider.rs](./smoke_slider.rs)** Drives and records a real multi-photo slider gesture in a native scenario.
 - **[timing.rs](./timing.rs)** Connects GUI tasks, native drawing and existing measurements to the shared Perfetto capture.
 - **[toolbar.rs](./toolbar.rs)** Shares padded processing rows and a responsive right-aligned image-tool region.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.

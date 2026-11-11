@@ -129,6 +129,7 @@ For an original X3F, `source.original` separates file opening, metadata access, 
 | `cached-switch` | Cached selection changes, removal and re-addition around a pending edit |
 | `rapid-supersession` | Repeated edits without waiting for each intermediate result |
 | `memory-pressure` | Apply the existing memory-cache preference, then repeat unique exposure edits |
+| `slider-drag` | Drive a real multi-photo slider through repeated pointer movements, inspect the painted readout and geometry, and wait for the final edited photographs |
 
 `--rapid-edits`, `--pressure-mib`, `--repeats`, `--step-timeout` and `--timeout` control these existing actions. A single active image and device are set up before capture. Input hashing warms the OS filesystem cache, so `initial` does not claim a cold storage device. Warm disk means a ready local decoded entry, not a retained GPU checkpoint. Actual payload reads establish which input path ran.
 
@@ -137,6 +138,53 @@ For an original X3F, `source.original` separates file opening, metadata access, 
 Each run uses a unique `FOVEONIC_DIAGNOSTICS_CACHE_NAMESPACE` by default, isolated from the owner's normal temporary cache. `--cache-namespace NAME` explicitly reuses a validated single-component namespace for controlled trials. The runner does not clear the global cache. A new staged source path may still require a new entry, so interpret reuse from the recorded identity and reads rather than the namespace name alone.
 
 Each trial saves the same shared capture files as manual recording, plus `evidence/scenario-result.json` and raw console output. The parent `regression.json` aggregates matched trial results. Use a separate new directory with `--mode off` for the baseline. Off results contain elapsed group measurements without a trace. Keep these results distinct from Wall/GPU attribution. Fresh numerical equality is not inferred from native frame/settings checks. Associate the same fixture/recipe manifest with a separate headless cached-versus-fresh verification outside timing.
+
+Each native trial also writes `evidence/test-result.json`. Headless render-matrix cases write the same result shape to `<case>.test-result.json`; both aggregate reports embed it as `test_result`. It identifies the driver and scenario, binary hash and GPU adapter, original source and hash, observed processing family and the scale reported by the rendered artifact, and assertion outcomes. Both paths use the same preview-scale assertion against the [preview contract](specs/small-previews.md): in particular, Classic Thumb uses divisor four and Merrill/Quattro Thumb use eight. Missing family or scale evidence is incomplete rather than a pass. An application fixture staged under another filename is mapped back to its declared original source and hash.
+
+This first shared check verifies each artifact's reported scale; it does not independently measure image dimensions. The app scenario still owns its interaction and final-state checks, and the headless matrix owns its exact float comparison. A shared scale result does not establish that an app-presented image matches a fresh render, and it does not imply physical input coverage.
+
+### Behavioral slider checks
+
+The `slider-drag` case requires at least two staged recipes. Supply different starting values by default, or set `--initial-values equal` to inspect the numeric readout while the photos move together. Select a control with its setting JSON pointer and its editing section, and select a theme with `--theme`. For example, with a two-photo case array whose exposure settings differ:
+
+```sh
+python3 scripts/profiling/scenarios.py \
+  --binary target/release/foveonic-gui --cases CASES.json \
+  --directory .local/slider-exposure --scenario slider-drag \
+  --control-pointer /exposure --editing-section Tone --quality thumb --mode off --trials 1
+```
+
+The input is dispatched through the real widget. Use `--drag-pattern scrub` for a back-and-forth gesture instead of the default forward drag. The driver moves the requested section into view and scrolls to an offscreen control before dragging; this setup is programmatic navigation, not a physical pointer test. `evidence/slider-drag.json` records the exact gesture, per-frame painted text and bounds, settings, frame times, render task identities and the controls the app drew. The check independently verifies relative changes, repeated movement, readout formatting and stable geometry before checking the delivered final settings. A missing, disabled or unreachable control fails explicitly and records the observed controls. A failure also requests a screenshot. Off timings for this case include the opt-in widget observer and scripted gesture, so compare them only to matched runs with the same observation enabled. A Wall run records the same work with Perfetto; it is not an Off latency baseline.
+
+Run a declared matrix using the maintained starter cases and an owner-supplied fixture file:
+
+```sh
+python3 scripts/profiling/behavioral.py \
+  --binary target/release/foveonic-gui --fixtures FIXTURES.json \
+  --cases scripts/profiling/slider_cases.json --directory .local/slider-matrix \
+  --family merrill --case exposure-mixed --theme dark
+```
+
+Repeat `--family`, `--fixture`, `--case` or `--theme` to select more than one value. `--list` prints the selected runs without starting the app. Use an explicit `--full` for every declared combination, such as before a release; an unfiltered run is otherwise rejected. Select relevant cases for ordinary changes. Unknown or inapplicable selections fail rather than silently passing.
+
+The fixture file is an array such as `[{"name":"merrill-pair","family":"merrill","raw_size":"high","sources":["FIRST.x3f","SECOND.x3f"]}]`. Each fixture contains two through eight distinct source paths and each case provides a recipe for each selected photo. Camera families are `classic`, `merrill`, `quattro` and `tiger`. A fixture may describe a different RAW size in `raw_size`. The case file selects pointers, sections, optional applicable families and themes, and per-photo settings. Inputs and sidecars are staged into owned trial folders. The matrix disables its decoded disk cache by default to avoid accumulating a new cache for every staged source. Use `--disk-cache-bytes` for an explicit cache budget, or the individual native scenarios for cache-specific checks. `behavioral-report.json` identifies each run, missing families and controls that were observed but not tested. Its inventory covers only the controls drawn by the declared recipes; it does not establish coverage of hidden modes, other RAW sizes or physical mouse input. A Tiger fixture made from two aliases of the same available original tests multi-photo interaction, not two independent sensor samples.
+
+Behavioral matrices request a background window by default. On macOS it stays below normal windows and does not request application activation. Pass `--foreground` to watch a run. Individual scenarios use a foreground window unless given `--background`. The selected window mode is recorded with the workload; compare latency only between runs with the same mode, since the operating system can schedule obscured windows differently.
+
+### Exact render matrix
+
+The maintained headless `profile_pipeline` example reports float-sample digests and image geometry outside its timed render. `render_matrix.py` records and checks these results against full float buffers. It refuses a comparison if a baseline buffer is missing or changed, and checks source hashes, recipe options, effective scale and image geometry as well as every output byte.
+
+```sh
+cargo build --release --offline -p foveonic --example profile_pipeline
+python3 scripts/profiling/render_matrix.py --binary target/release/examples/profile_pipeline \
+  --cases RENDER_CASES.json --directory .local/render-baseline --require-coverage
+python3 scripts/profiling/render_matrix.py --binary target/release/examples/profile_pipeline \
+  --cases RENDER_CASES.json --directory .local/render-candidate \
+  --baseline .local/render-baseline --require-coverage
+```
+
+`RENDER_CASES.json` is an array of objects with a unique `label`, a camera `family`, a `source`, and optional `raw_size`, `qualities` and `options`. The default covers Full, Fast, Draft and Thumb with Sunlight white balance and Standard color mode. The coverage gate requires three distinct source contents each for Classic, Merrill and Quattro, plus one for Tiger. A smaller matrix reports the omitted families and qualities. Family and RAW size come from the manifest and are not independently verified. Both recording and comparison use new directories and save per-case output and a manifest. Treat the first recording as a baseline only after repeating it successfully against itself. Exact output is a regression check, not a measure of visual quality; GPU or backend changes can affect bit equality.
 
 The [implementation plan](../plans/performance-diagnostics.md) records the native scenario, smoke, numerical and overhead checks. Physical manual-control verification remains pending desktop availability. Portable tests alone do not establish native behavior or latency.
 

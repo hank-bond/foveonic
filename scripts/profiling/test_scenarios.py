@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from scenarios import run, run_trial, scenario_environment, selected_cases, stage_inputs
+from scenarios import application_result, run, run_trial, scenario_environment, selected_cases, stage_inputs
 
 
 class ScenarioTests(unittest.TestCase):
@@ -43,11 +43,12 @@ class ScenarioTests(unittest.TestCase):
             self.assertFalse((root/'foveonic').exists())
 
     def test_environment_cannot_inherit_another_smoke_or_capture(self):
-        with patch.dict(os.environ,{'FOVEONIC_PROFILE':'gpu','FOVEONIC_GUI_SMOKE_MULTI':'1','FOVEONIC_GUI_SCENARIO_MANIFEST':'old','FOVEONIC_DIAGNOSTICS_DIR':'old'}):
+        with patch.dict(os.environ,{'FOVEONIC_PROFILE':'gpu','FOVEONIC_GUI_SMOKE_MULTI':'1','FOVEONIC_GUI_SCENARIO_MANIFEST':'old','FOVEONIC_GUI_SCENARIO_BACKGROUND':'old','FOVEONIC_DIAGNOSTICS_DIR':'old'}):
             env=scenario_environment(Path('/owned/home'),Path('/owned/evidence'),Path('/owned/launch.json'))
             self.assertEqual(env['FOVEONIC_PROFILE'],'off')
             self.assertEqual(env['FOVEONIC_GUI_SCENARIO_MANIFEST'],'/owned/launch.json')
             self.assertNotIn('FOVEONIC_GUI_SMOKE_MULTI',env)
+            self.assertNotIn('FOVEONIC_GUI_SCENARIO_BACKGROUND',env)
             self.assertNotIn('FOVEONIC_DIAGNOSTICS_DIR',env)
 
     def arguments(self,root):
@@ -62,17 +63,34 @@ class ScenarioTests(unittest.TestCase):
             process=MagicMock();process.wait.return_value=0;process.poll.return_value=0
             def launch(_command,**kwargs):
                 env=kwargs['env'];evidence=Path(env['FOVEONIC_GUI_SMOKE_DIR'])
-                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1024*1024*1024,'disk_cache':{'enabled':True,'max_bytes':10_000_000_000},'steps':[{'action':'initial-selection','baseline_elapsed_ms':8.,'photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'settings':{'exposure':0.},'scale_divisor':8}]}]}))
+                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1024*1024*1024,'disk_cache':{'enabled':True,'max_bytes':10_000_000_000},'steps':[{'action':'initial-selection','baseline_elapsed_ms':8.,'photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','settings':{'exposure':0.},'scale_divisor':8}]}]}))
                 return process
             with patch('scenarios.subprocess.Popen',side_effect=launch):
                 result=run_trial(args,cases,root/'run','tree-hash')
             self.assertTrue(result['passed']);self.assertEqual(result['input_kind'],'baseline')
+            self.assertEqual(result['test_result']['driver'],'application')
+            self.assertEqual(result['test_result']['outcome'],'passed')
+            self.assertEqual(result['test_result']['environment']['binary_sha256'],result['artifacts']['binary_sha256'])
+            self.assertTrue((root/'run'/'evidence'/'test-result.json').exists())
             self.assertFalse(result['timing_valid']);self.assertFalse(result['contention']['checked'])
             self.assertFalse((root/'run'/'capture'/'trace.pftrace').exists())
             manifest=json.loads((root/'run'/'launch.json').read_text())
             self.assertEqual(manifest['source_tree_sha256'],'tree-hash')
             self.assertEqual(manifest['scenario']['quality'],'thumb')
             process.terminate.assert_not_called()
+
+    def test_background_is_explicit_and_in_the_workload_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);args,cases=self.arguments(root);args.background=True
+            process=MagicMock();process.wait.return_value=0;process.poll.return_value=0
+            def launch(_command,**kwargs):
+                env=kwargs['env'];self.assertEqual(env['FOVEONIC_GUI_SCENARIO_BACKGROUND'],'1')
+                evidence=Path(env['FOVEONIC_GUI_SMOKE_DIR'])
+                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10000000000},'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','settings':{},'scale_divisor':8}]}]}))
+                return process
+            with patch('scenarios.subprocess.Popen',side_effect=launch):
+                result=run_trial(args,cases,root/'run','tree-hash')
+            self.assertEqual(result['workload_key']['descriptor']['measurement']['window_mode'],'background')
 
     def test_competing_app_blocks_launch_before_any_child_app(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -90,13 +108,45 @@ class ScenarioTests(unittest.TestCase):
             contention={'checked':True,'uncontended':False,'samples':3,'other_workloads':[{'pid':456,'executable':'rustc'}]}
             def launch(_command,**kwargs):
                 evidence=Path(kwargs['env']['FOVEONIC_GUI_SMOKE_DIR'])
-                (evidence/'scenario-result.json').write_text('{"passed":true,"memory_cache_bytes":1073741824,"disk_cache":{"enabled":true,"max_bytes":10000000000},"steps":[]}')
+                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10000000000},'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','settings':{},'scale_divisor':8}]}]}))
                 return process
             with patch('scenarios.workload_monitor',return_value=nullcontext()),patch('scenarios.concurrent_workloads',return_value=contention) as checked,patch('scenarios.subprocess.Popen',side_effect=launch):
                 result=run_trial(args,cases,root/'run','tree')
             self.assertTrue(result['passed']);self.assertFalse(result['timing_valid'])
             checked.assert_called_once_with(root/'run'/'workloads.jsonl',owned_pids=[123])
             self.assertEqual(json.loads((root/'run'/'launch.json').read_text())['contention'],contention)
+
+    def test_application_result_checks_the_same_classic_thumb_contract(self):
+        native={'passed':True,'steps':[{'action':'initial-selection','photos':[{'source':'sample.x3f','family':'Classic','scale_divisor':8}]}]}
+        result=application_result(native,'initial','thumb',[{'source':'sample.x3f','staged_source':'sample.x3f','sha256':'sample-hash'}])
+        self.assertEqual(result['outcome'],'failed')
+        self.assertEqual(result['assertions'][0]['expected'],4)
+        self.assertEqual(result['assertions'][0]['actual'],8)
+
+    def test_application_result_requires_the_declared_source_identity(self):
+        native={'passed':True,'steps':[{'action':'initial-selection','photos':[{'source':'other.x3f','family':'Merrill','scale_divisor':8}]}]}
+        result=application_result(native,'initial','thumb',[{'source':'a.x3f','staged_source':'staged.x3f','sha256':'source-hash'}])
+        self.assertEqual(result['outcome'],'failed')
+        self.assertIn('undeclared staged inputs',result['failure'])
+
+    def test_shared_assertion_can_fail_a_successful_app_scenario(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);args,cases=self.arguments(root)
+            process=MagicMock();process.wait.return_value=0;process.poll.return_value=0
+            def launch(_command,**kwargs):
+                evidence=Path(kwargs['env']['FOVEONIC_GUI_SMOKE_DIR'])
+                native={'passed':True,'memory_cache_bytes':1073741824,
+                        'disk_cache':{'enabled':True,'max_bytes':10000000000},
+                        'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),
+                            'family':'Classic','settings':{},'scale_divisor':8}]}]}
+                (evidence/'scenario-result.json').write_text(json.dumps(native))
+                return process
+            with patch('scenarios.subprocess.Popen',side_effect=launch):
+                result=run_trial(args,cases,root/'run','tree-hash')
+            self.assertFalse(result['passed'])
+            self.assertEqual(result['test_result']['outcome'],'failed')
+            self.assertEqual(result['test_result']['assertions'][0]['expected'],4)
+            self.assertEqual(json.loads((root/'run'/'evidence'/'test-result.json').read_text()),result['test_result'])
 
     def test_runner_rejects_mixed_workload_keys_and_preserves_failed_report(self):
         with tempfile.TemporaryDirectory() as temporary:

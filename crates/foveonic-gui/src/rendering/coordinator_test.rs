@@ -265,6 +265,61 @@ fn editing_a_does_not_supersede_b_and_late_a_cannot_settle_the_new_intent() {
 }
 
 #[test]
+fn every_three_photo_completion_order_settles_only_the_latest_requests() {
+    fn permutations(order: &mut [usize], index: usize, check: &mut impl FnMut(&[usize])) {
+        if index == order.len() {
+            check(order);
+            return;
+        }
+        for next in index..order.len() {
+            order.swap(index, next);
+            permutations(order, index + 1, check);
+            order.swap(index, next);
+        }
+    }
+
+    let mut checked = 0;
+    permutations(&mut [0, 1, 2, 3, 4, 5], 0, &mut |order| {
+        let mut coordinator = RenderCoordinator::default();
+        let mut stamps = Vec::new();
+        for path in ["a.x3f", "b.x3f", "c.x3f"] {
+            stamps.push(desire(&mut coordinator, request(path, 1, 0.)));
+            stamps.push(desire(&mut coordinator, request(path, 2, 0.5)));
+        }
+        let mut latest_seen = [false; 3];
+        for &index in order {
+            let photo = index / 2;
+            let latest = index % 2 == 1;
+            assert_eq!(
+                coordinator.finish(&stamps[index]),
+                if latest {
+                    Completion::Current
+                } else {
+                    Completion::Superseded
+                },
+                "completion order {order:?}"
+            );
+            assert_eq!(
+                coordinator.admit(&stamps[index], &SourceOrigin::default()),
+                latest || !latest_seen[photo],
+                "admission order {order:?}"
+            );
+            latest_seen[photo] |= latest;
+            assert_eq!(coordinator.busy(), latest_seen.iter().any(|seen| !seen));
+            for (photo, seen) in latest_seen.iter().enumerate() {
+                let latest = &stamps[photo * 2 + 1];
+                assert_eq!(
+                    coordinator.is_settled_and_admitted(latest.id, latest.revision),
+                    *seen
+                );
+            }
+        }
+        checked += 1;
+    });
+    assert_eq!(checked, 720);
+}
+
+#[test]
 fn crop_and_rotation_keep_pixel_work_but_require_latest_composition_delivery() {
     let mut coordinator = RenderCoordinator::default();
     let mut cursor = Cursor::default();

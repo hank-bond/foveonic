@@ -392,47 +392,51 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 ui.spacing_mut().slider_width =
                     (ui.available_width() - value_width - ui.spacing().item_spacing.x - auto_width)
                         .max(35.);
-                ui.add_enabled_ui(
-                    !automatic.as_ref().is_some_and(|a| *a.active && !a.editable)
-                        && crate::multi_edit_controls::numeric_ready(ui.ctx()),
-                    |ui| {
-                        // Apply to every editing slider while leaving adjacent
-                        // value fields, buttons and group backgrounds unchanged.
-                        ui.visuals_mut().widgets.inactive.bg_fill =
-                            crate::widgets::slider_track_fill(ui.visuals());
-                        let before_slider = value.to_f64();
-                        let response = if let Some(response) = crate::multi_edit_controls::slider(
-                            ui,
-                            value,
-                            range.clone(),
-                            default,
-                            step,
-                            nudge,
-                        ) {
-                            response
-                        } else {
-                            let mut slider =
-                                crate::widgets::slider(value, range.clone()).show_value(false);
-                            if let Some(step) = step.filter(|_| step_origin == 0.) {
-                                slider = slider.step_by(step);
+                let slider_response = ui
+                    .add_enabled_ui(
+                        !automatic.as_ref().is_some_and(|a| *a.active && !a.editable)
+                            && crate::multi_edit_controls::numeric_ready(ui.ctx()),
+                        |ui| {
+                            // Apply to every editing slider while leaving adjacent
+                            // value fields, buttons and group backgrounds unchanged.
+                            ui.visuals_mut().widgets.inactive.bg_fill =
+                                crate::widgets::slider_track_fill(ui.visuals());
+                            let before_slider = value.to_f64();
+                            let response = if let Some(response) =
+                                crate::multi_edit_controls::slider(
+                                    ui,
+                                    value,
+                                    range.clone(),
+                                    default,
+                                    step,
+                                    nudge,
+                                ) {
+                                response
+                            } else {
+                                let mut slider =
+                                    crate::widgets::slider(value, range.clone()).show_value(false);
+                                if let Some(step) = step.filter(|_| step_origin == 0.) {
+                                    slider = slider.step_by(step);
+                                }
+                                let response =
+                                    ui.add(slider).interact(egui::Sense::click_and_drag());
+                                if response.double_clicked() {
+                                    *value = default;
+                                }
+                                response
+                            };
+                            if response.changed()
+                                || response.double_clicked()
+                                || before_slider != value.to_f64()
+                            {
+                                if let Some(auto) = automatic.as_mut().filter(|a| a.editable) {
+                                    *auto.active = false;
+                                }
                             }
-                            let response = ui.add(slider).interact(egui::Sense::click_and_drag());
-                            if response.double_clicked() {
-                                *value = default;
-                            }
-                            response
-                        };
-                        if response.changed()
-                            || response.double_clicked()
-                            || before_slider != value.to_f64()
-                        {
-                            if let Some(auto) = automatic.as_mut().filter(|a| a.editable) {
-                                *auto.active = false;
-                            }
-                        }
-                        help::control(response, label);
-                    },
-                );
+                            help::control(response, label)
+                        },
+                    )
+                    .inner;
                 if let Some(auto) = &mut automatic {
                     let response = ui
                         .add_enabled_ui(
@@ -460,6 +464,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                     locked && automatic.as_ref().is_some_and(|a| a.calculated.is_none());
                 // DragValue handles keys while drawing. Find its stable ID first so our
                 // focused nudge can run without changing the row's layout.
+                let mixed = crate::multi_edit_controls::number_mixed(ui.ctx());
                 let response = ui
                     .add_enabled_ui(
                         !locked && crate::multi_edit_controls::numeric_ready(ui.ctx()),
@@ -473,7 +478,6 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                                     }
                                     let focused =
                                         ui.memory(|memory| memory.has_focus(ui.next_auto_id()));
-                                    let mixed = crate::multi_edit_controls::number_mixed(ui.ctx());
                                     ui.add(
                                         crate::widgets::mixed_drag_value(value, mixed && !focused)
                                             .range(range.clone())
@@ -515,6 +519,26 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                         ui.ctx(),
                         crate::multi_edit_controls::NumberChange::Set(value.to_f64()),
                         [range.start().to_f64(), range.end().to_f64()],
+                    );
+                }
+                if crate::automation::enabled() {
+                    let property = crate::multi_edit_controls::observed_property(ui.ctx());
+                    crate::automation::control(
+                        ui,
+                        crate::automation::ControlInput {
+                            label,
+                            pointer: property.as_ref().map(|(pointer, _)| pointer.clone()),
+                            mapping: property.map_or(
+                                crate::multi_edit_controls::Mapping::default(),
+                                |(_, mapping)| mapping,
+                            ),
+                            slider: &slider_response,
+                            readout: &response,
+                            value: value.to_f64(),
+                            range: [range.start().to_f64(), range.end().to_f64()],
+                            step: step.or(T::INTEGRAL.then_some(1.)),
+                            mixed,
+                        },
                     );
                 }
                 help::control(response, label);

@@ -15,8 +15,9 @@ from native import recording_environment, source_tree_hash, workload_monitor
 from trace_analysis import analyze_capture, distribution
 from watch_workloads import require_quiet, concurrent_workloads
 from file_hash import digest
+from results import PREVIEW_QUALITIES, render_result
 
-NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure')
+NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag')
 
 
 def selected_cases(cases, count, quality, scenario):
@@ -26,6 +27,8 @@ def selected_cases(cases, count, quality, scenario):
         raise ValueError('native multi-photo overviews use Thumb; use profile_editing for other multi-photo scales')
     if scenario == 'cached-switch' and count < 2:
         raise ValueError('cached switching needs at least two photographs')
+    if scenario == 'slider-drag' and count < 2:
+        raise ValueError('a mixed-value slider drag needs at least two photographs')
     selected = cases[:count]
     sources = [str(Path(case['source']).resolve(strict=True)) for case in selected]
     if len(set(sources)) != count:
@@ -97,6 +100,26 @@ def finish_trial(directory, mode, trace_processor):
             'capture':str(capture), 'result':str(result_path)}
 
 
+def application_result(native_result, scenario, quality, inputs, binary_sha256=None):
+    sources = {item['staged_source']:item for item in inputs}
+    observations = []
+    missing = []
+    for step in native_result['steps']:
+        for photo in step.get('photos', []):
+            source = sources.get(photo['source'])
+            if source is None:
+                missing.append(photo['source'])
+            observations.append({'step':step['action'], 'source':source['source'] if source else photo['source'],
+                                 'source_sha256':source['sha256'] if source else None,
+                                 'family':photo.get('family'), 'scale_divisor':photo.get('scale_divisor')})
+    failure = native_result.get('failure')
+    if missing:
+        failure = f'output references undeclared staged inputs: {missing}'
+    environment = {'binary_sha256':binary_sha256, 'adapter':native_result.get('hardware', {}).get('adapter')}
+    return render_result('application', scenario, quality, observations,
+                         native_result['passed'] and not missing, failure, environment)
+
+
 def value_hash(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
@@ -126,6 +149,8 @@ def matched_workload(manifest, native_result):
                 'cache_policy_matches':cache_policy_matches,
                 'first_current_complete':cache_policy_matches and len(current)==len(inputs) and all(row['first_current_settings_sha256'] for row in inputs),
                 'measurement':manifest['measurement']}
+    if scenario['name']=='slider-drag':
+        descriptor['scenario'].update({key:scenario[key] for key in ('control_pointer','drag_steps','drag_fraction','drag_pattern','light_theme','mixed_values','editing_section')})
     # Off and traced captures describe the same work, but only Off may be compared.
     descriptor['measurement']={key:value for key,value in descriptor['measurement'].items() if key!='input_kind'}
     return {'sha256':value_hash(descriptor),'descriptor':descriptor}
@@ -149,14 +174,20 @@ def run_trial(args, selected, directory, source_hash):
         'hardware':{'system':platform.system(),'release':platform.release(),'machine':platform.machine(),'logical_cpus':os.cpu_count()},
         'cache_namespace':getattr(args,'cache_namespace','portable-test'),
         'measurement':{'input_kind':'baseline' if args.mode=='off' else 'perfetto',
+                       'window_mode':'background' if getattr(args,'background',False) else 'foreground',
                        'coverage':'real application commands and egui input dispatch; not physical pointer injection',
                        'setup':'one active photo and GPU device before measured selection; processing reset before group; enabled disk cache primed except initial',
                        'os_file_cache':'uncontrolled; input hashing warms filesystem cache',
                        'scenario_poll_ms':20,'numerical_equality':'verified separately by maintained headless cases'},
     }
+    if args.scenario == 'slider-drag':
+        manifest['scenario'].update(control_pointer=args.control_pointer, drag_steps=args.drag_steps,
+                                    drag_fraction=args.drag_fraction, drag_pattern=args.drag_pattern, light_theme=args.theme=='light', mixed_values=args.initial_values=='mixed', editing_section=args.editing_section)
     launch = directory / 'launch.json'
     launch.write_text(json.dumps(manifest, indent=2) + '\n')
     env = scenario_environment(home, evidence, launch)
+    if getattr(args,'background',False):
+        env['FOVEONIC_GUI_SCENARIO_BACKGROUND'] = '1'
     env['FOVEONIC_DIAGNOSTICS_CACHE_NAMESPACE'] = manifest['cache_namespace']
     monitor = nullcontext() if args.no_monitor else workload_monitor(directory / 'workloads.jsonl')
     with monitor, (directory/'stdout.txt').open('x') as stdout, (directory/'stderr.txt').open('x') as stderr:
@@ -182,19 +213,32 @@ def run_trial(args, selected, directory, source_hash):
     launch.write_text(json.dumps(manifest, indent=2) + '\n')
     result = finish_trial(directory, args.mode, args.trace_processor)
     native_result=json.loads(Path(result['result']).read_text())
+    test_result = application_result(native_result, args.scenario, args.quality, inputs, manifest['binary_sha256'])
+    test_result_path = evidence/'test-result.json'
+    test_result_path.write_text(json.dumps(test_result, indent=2)+'\n')
     workload_key=matched_workload(manifest,native_result)
-    result['passed'] = result['passed'] and workload_key['descriptor']['cache_policy_matches']
+    result['passed'] = result['passed'] and test_result['outcome']=='passed' and workload_key['descriptor']['cache_policy_matches']
+    result['test_result'] = test_result
     manifest['workload_key']=workload_key
     launch.write_text(json.dumps(manifest,indent=2)+'\n')
     result.update(contention=contention, timing_valid=timing_valid, workload_key=workload_key,
                   artifacts={'launch':str(launch),'result':result['result'],'result_sha256':digest(result['result']),
                              'binary':manifest['binary'],'binary_sha256':manifest['binary_sha256'],
                              'source_tree_sha256':manifest['source_tree_sha256']})
+    for name in ('slider-drag.json', 'slider-observation.json', 'slider-failure.png'):
+        path=evidence/name
+        if path.exists():
+            result['artifacts'][name]={'path':str(path),'sha256':digest(path)}
+    result['artifacts']['test_result']={'path':str(test_result_path),'sha256':digest(test_result_path)}
     if args.mode != 'off':
         summary_path=directory/'capture'/'summary.json'
         summary=json.loads(summary_path.read_text())
-        summary.update(contention=contention, timing_valid=timing_valid)
+        summary.update(contention=contention, timing_valid=timing_valid, test_result=test_result)
         summary_path.write_text(json.dumps(summary,indent=2)+'\n')
+        capture_manifest_path=directory/'capture'/'manifest.json'
+        capture_manifest=json.loads(capture_manifest_path.read_text())
+        capture_manifest['application']['test_result']=result['artifacts']['test_result']
+        capture_manifest_path.write_text(json.dumps(capture_manifest,indent=2)+'\n')
     return result
 
 
@@ -209,6 +253,8 @@ def run(args):
         raise ValueError('prefetched-selection requires at least two photographs at Thumb quality')
     if args.memory_cache_bytes < 1:
         raise ValueError('memory cache budget must be positive')
+    if args.scenario == 'slider-drag' and (not args.control_pointer.startswith('/') or args.drag_steps < 3 or not 0 < args.drag_fraction < 0.45):
+        raise ValueError('slider drag needs a setting pointer, at least three steps, and a fraction between 0 and 0.45')
     args.cache_namespace = args.cache_namespace or 'scenario-'+uuid.uuid4().hex
     if re.fullmatch(r'[A-Za-z0-9_-]{1,64}',args.cache_namespace) is None:
         raise ValueError('cache namespace must be one ASCII alphanumeric, dash or underscore component (up to 64 characters)')
@@ -259,7 +305,7 @@ def main():
     parser.add_argument('--directory',type=Path,required=True)
     parser.add_argument('--scenario',choices=NAMES,required=True)
     parser.add_argument('--count',type=int)
-    parser.add_argument('--quality',choices=['full','fast','draft','thumb'],default='thumb')
+    parser.add_argument('--quality',choices=PREVIEW_QUALITIES,default='thumb')
     parser.add_argument('--disk-cache-bytes',type=int,default=10_000_000_000,
                         help='owned disk cache budget; zero measures retained processing after original loading')
     parser.add_argument('--memory-cache-bytes',type=int,default=1024*1024*1024,
@@ -269,6 +315,14 @@ def main():
     parser.add_argument('--trials',type=int,default=3)
     parser.add_argument('--repeats',type=int,default=5)
     parser.add_argument('--rapid-edits',type=int,default=12)
+    parser.add_argument('--control-pointer',default='/exposure',help='setting JSON pointer for slider-drag')
+    parser.add_argument('--drag-steps',type=int,default=12,help='number of pointer movements for slider-drag')
+    parser.add_argument('--drag-fraction',type=float,default=0.2,help='fraction of slider width for slider-drag')
+    parser.add_argument('--drag-pattern',choices=['forward','scrub'],default='forward',help='pointer path for slider-drag')
+    parser.add_argument('--theme',choices=['dark','light'],default='dark',help='workspace theme for slider-drag')
+    parser.add_argument('--initial-values',choices=['mixed','equal'],default='mixed',help='expected relation of staged values for slider-drag')
+    parser.add_argument('--background',action='store_true',help='run the scenario window behind normal windows without requesting foreground activation')
+    parser.add_argument('--editing-section',choices=['WhiteBalance','Mix','Tone','Saturation','ColorEditor','Noise','Detail','Sharpening','Corrections'],default='Tone',help='move this editing section into view for slider-drag')
     parser.add_argument('--pressure-mib',type=int,default=128)
     parser.add_argument('--step-timeout',type=int,default=60)
     parser.add_argument('--timeout',type=int,default=600)

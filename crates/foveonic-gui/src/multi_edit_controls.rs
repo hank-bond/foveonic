@@ -12,14 +12,14 @@ pub enum NumberChange {
     Set(f64),
     Reset(f64),
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub enum Mapping {
     #[default]
     Identity,
     Saturation,
 }
 impl Mapping {
-    fn control(self, value: f64) -> f64 {
+    pub(crate) fn control(self, value: f64) -> f64 {
         match self {
             Self::Identity => value,
             Self::Saturation => f64::from(
@@ -342,6 +342,9 @@ pub fn active(ctx: &egui::Context) -> bool {
 fn property(ctx: &egui::Context) -> Option<Property> {
     ctx.data_mut(|d| d.get_temp::<State>(id()))?.property
 }
+pub(crate) fn observed_property(ctx: &egui::Context) -> Option<(String, Mapping)> {
+    property(ctx).map(|property| (property.pointer, property.mapping))
+}
 pub fn different(ctx: &egui::Context, pointer: &str) -> bool {
     ctx.data_mut(|d| d.get_temp::<State>(id()))
         .is_some_and(|s| {
@@ -636,14 +639,17 @@ pub fn slider<T: egui::emath::Numeric>(
     if response.double_clicked() {
         change = Some(NumberChange::Reset(default.to_f64()));
     } else if response.dragged() {
-        let previous = ui.data_mut(|d| d.get_temp::<f32>(delta_id)).unwrap_or(0.);
-        let travel = response.drag_delta().x;
-        let mut delta = f64::from((travel - previous) / track.width()) * (bounds[1] - bounds[0]);
-        if let Some(step) = step.or(T::INTEGRAL.then_some(1.)) {
-            delta = (delta / step).round() * step;
-        }
+        let movement = f64::from(response.drag_delta().x / track.width()) * (bounds[1] - bounds[0]);
+        let delta = if let Some(step) = step.or(T::INTEGRAL.then_some(1.)) {
+            let pending = ui.data_mut(|d| d.get_temp::<f64>(delta_id)).unwrap_or(0.);
+            let total = pending + movement;
+            let rounded = (total / step).round() * step;
+            ui.data_mut(|d| d.insert_temp(delta_id, total - rounded));
+            rounded
+        } else {
+            movement
+        };
         if delta != 0. {
-            ui.data_mut(|d| d.insert_temp(delta_id, travel));
             change = Some(NumberChange::Relative(delta));
         }
     } else if response.clicked() {
@@ -655,7 +661,7 @@ pub fn slider<T: egui::emath::Numeric>(
         }
     }
     if response.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
-        ui.data_mut(|d| d.remove::<f32>(delta_id));
+        ui.data_mut(|d| d.remove::<f64>(delta_id));
     }
     if response.has_focus() {
         let direction = ui.input(|i| {
@@ -795,6 +801,106 @@ mod tests {
         assert_eq!(a.exposure, 4.);
         assert!(b.exposure > 1. && b.exposure < 4.);
         assert_eq!(b.saturation, 0.3);
+        let previous = b.exposure;
+        let edits = draw(
+            1.2,
+            vec![egui::Event::PointerMoved(at + egui::vec2(60., 0.))],
+            &a,
+            &b,
+        );
+        assert!(
+            matches!(edits.as_slice(),[Edit::Number {change:NumberChange::Relative(delta),..}] if *delta>0.),
+            "each frame of a sustained drag must contribute its pointer movement"
+        );
+        assert!(apply(&mut b, &edits));
+        assert!(b.exposure > previous);
+        let previous = b.exposure;
+        let edits = draw(
+            1.3,
+            vec![egui::Event::PointerMoved(at + egui::vec2(30., 0.))],
+            &a,
+            &b,
+        );
+        assert!(
+            matches!(edits.as_slice(),[Edit::Number {change:NumberChange::Relative(delta),..}] if *delta<0.),
+            "reversing the pointer must reverse the relative edit"
+        );
+        assert!(apply(&mut a, &edits));
+        assert!(apply(&mut b, &edits));
+        assert!(b.exposure < previous);
+    }
+
+    #[test]
+    fn stepped_group_drag_accumulates_small_movements_and_reverses() {
+        let ctx = egui::Context::default();
+        let mut photos = [
+            Settings::new("Sunlight", "Standard"),
+            Settings::new("Sunlight", "Standard"),
+        ];
+        photos[1].exposure = -1.;
+        let frame = |time: f64, events: Vec<egui::Event>, photos: &mut [Settings; 2]| {
+            let mut edits = Vec::new();
+            let mut value = photos[0].exposure;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(420., 90.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    begin_with_numeric(ctx, photos.to_vec(), photos.to_vec());
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.spacing_mut().slider_width = 300.;
+                        field(ui, "/exposure", |ui| {
+                            slider(ui, &mut value, -4. ..=4., 0., Some(1.), 1.).unwrap();
+                        });
+                    });
+                    edits = finish(ctx);
+                },
+            );
+            for photo in photos {
+                apply(photo, &edits);
+            }
+        };
+        frame(0., vec![], &mut photos);
+        let start = egui::pos2(160., 18.);
+        frame(
+            1.,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+            &mut photos,
+        );
+        for index in 1..=6 {
+            frame(
+                1. + f64::from(index) * 0.1,
+                vec![egui::Event::PointerMoved(
+                    start + egui::vec2(index as f32 * 4., 0.),
+                )],
+                &mut photos,
+            );
+        }
+        assert_eq!([photos[0].exposure, photos[1].exposure], [1., 0.]);
+        for index in (0..6).rev() {
+            frame(
+                2. + f64::from(6 - index) * 0.1,
+                vec![egui::Event::PointerMoved(
+                    start + egui::vec2(index as f32 * 4., 0.),
+                )],
+                &mut photos,
+            );
+        }
+        assert_eq!([photos[0].exposure, photos[1].exposure], [0., -1.]);
     }
     #[test]
     fn explicit_numeric_child_survives_optional_parent_normalization() {

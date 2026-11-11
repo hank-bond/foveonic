@@ -22,6 +22,7 @@ objc2 = "0.6.5"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CGColorSpace"] }
 raw-window-handle = "0.6"
+winit = { version = "0.30.13", default-features = false }
 
 [dev-dependencies]
 pollster = "0.4"

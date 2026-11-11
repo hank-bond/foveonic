@@ -26,6 +26,7 @@ enum Case {
     CachedSwitch,
     RapidSupersession,
     MemoryPressure,
+    SliderDrag,
 }
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -78,6 +79,35 @@ struct Config {
     disk_cache_bytes: u64,
     #[serde(default = "default_memory_cache_bytes")]
     memory_cache_bytes: u64,
+    #[serde(default = "default_control_pointer")]
+    control_pointer: String,
+    #[serde(default = "default_drag_steps")]
+    drag_steps: usize,
+    #[serde(default = "default_drag_fraction")]
+    drag_fraction: f32,
+    #[serde(default)]
+    drag_pattern: super::slider::Pattern,
+    #[serde(default)]
+    light_theme: bool,
+    #[serde(default = "default_true")]
+    mixed_values: bool,
+    #[serde(default = "default_editing_section")]
+    editing_section: crate::preferences::EditingSection,
+}
+fn default_editing_section() -> crate::preferences::EditingSection {
+    crate::preferences::EditingSection::Tone
+}
+fn default_true() -> bool {
+    true
+}
+fn default_control_pointer() -> String {
+    "/exposure".into()
+}
+fn default_drag_steps() -> usize {
+    12
+}
+fn default_drag_fraction() -> f32 {
+    0.2
 }
 fn default_memory_cache_bytes() -> u64 {
     crate::preferences::DEFAULT_MEMORY_CACHE_BYTES
@@ -99,6 +129,7 @@ enum Action {
     Readd,
     Rapid,
     Pressure,
+    SliderDrag,
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -110,11 +141,12 @@ impl Action {
             Self::Readd => "readd-pending",
             Self::Rapid => "rapid-supersession",
             Self::Pressure => "memory-pressure",
+            Self::SliderDrag => "slider-drag",
         }
     }
     fn coverage(self) -> &'static str {
         match self {
-            Self::Switch(_) | Self::Remove | Self::Readd => "input-dispatch",
+            Self::Switch(_) | Self::Remove | Self::Readd | Self::SliderDrag => "input-dispatch",
             _ => "direct-command",
         }
     }
@@ -146,6 +178,11 @@ pub(super) struct Scenario {
     rapid_left: usize,
     ready_time: Option<f64>,
     failed: Option<String>,
+    drag: Option<super::slider::Drag>,
+    drag_checked: bool,
+    drag_reveal_frames: usize,
+    failure_screenshot: Option<Instant>,
+    screenshot_finished: bool,
 }
 impl Scenario {
     pub(super) fn from_env() -> Option<Self> {
@@ -171,9 +208,20 @@ impl Scenario {
             "cached switching needs at least two photographs"
         );
         assert!(
+            config.name != Case::SliderDrag
+                || (config.photo_count >= 2
+                    && config.drag_steps >= 3
+                    && (0.0..0.45).contains(&config.drag_fraction)
+                    && config.control_pointer.starts_with('/')),
+            "slider drag requires two photos, a setting pointer and a usable gesture"
+        );
+        assert!(
             config.repeats > 0 && config.rapid_edits > 0 && config.timeout_seconds > 0,
             "scenario repetition and timeout values must be positive"
         );
+        if config.name == Case::SliderDrag {
+            crate::automation::enable();
+        }
         Some(Self {
             paths: config.sources.clone(),
             config,
@@ -192,6 +240,11 @@ impl Scenario {
             rapid_left: 0,
             ready_time: None,
             failed: None,
+            drag: None,
+            drag_checked: false,
+            drag_reveal_frames: 0,
+            failure_screenshot: None,
+            screenshot_finished: false,
         })
     }
     fn marker(&self, phase: &str, extra: serde_json::Value) {
@@ -235,6 +288,25 @@ impl Scenario {
                 app.preferences.multi_edit_limit = self.config.photo_count;
                 app.preferences.memory_cache_bytes = self.config.memory_cache_bytes;
                 app.preferences.preview_quality = self.config.quality.preview();
+                if self.config.name == Case::SliderDrag {
+                    ctx.set_theme(if self.config.light_theme {
+                        egui::Theme::Light
+                    } else {
+                        egui::Theme::Dark
+                    });
+                    app.preferences.collapsed = [
+                        crate::preferences::Section::Navigator,
+                        crate::preferences::Section::Scopes,
+                        crate::preferences::Section::Metadata,
+                    ]
+                    .into();
+                    app.preferences
+                        .editing_sections
+                        .retain(|section| *section != self.config.editing_section);
+                    app.preferences
+                        .editing_sections
+                        .insert(0, self.config.editing_section);
+                }
                 app.open(self.config.directory.clone(), FolderMode::Import);
                 self.phase = Phase::Folder;
             }
@@ -314,6 +386,7 @@ impl Scenario {
                         self.actions
                             .extend((0..self.config.repeats).map(|_| Action::Edit(0.01)));
                     }
+                    Case::SliderDrag => self.actions.push_back(Action::SliderDrag),
                 }
                 if self.config.mode == Mode::Off || self.config.name == Case::PrefetchedSelection {
                     self.next(app, ctx, smoke);
@@ -331,6 +404,38 @@ impl Scenario {
                 }
             }
             Phase::Running => {
+                if matches!(self.action, Some(Action::SliderDrag)) && self.drag.is_none() {
+                    let offscreen = crate::automation::snapshot().is_some_and(|snapshot| {
+                        snapshot.controls.iter().any(|control| {
+                            control.pointer.as_deref() == Some(self.config.control_pointer.as_str())
+                                && !control.visible
+                        })
+                    });
+                    if offscreen && self.drag_reveal_frames < 10 {
+                        self.drag_reveal_frames += 1;
+                        return;
+                    }
+                    crate::automation::reveal(None);
+                    match super::slider::Drag::start(
+                        app,
+                        &self.config.control_pointer,
+                        self.config.drag_steps,
+                        self.config.drag_fraction,
+                        self.config.mixed_values,
+                        self.config.drag_pattern,
+                        &mut smoke.direct_events,
+                    ) {
+                        Ok(drag) => self.drag = Some(drag),
+                        Err(error) => {
+                            self.failed = Some(error);
+                            self.finish(app);
+                        }
+                    }
+                    return;
+                }
+                if let Some(drag) = self.drag.as_mut() {
+                    drag.observe(app);
+                }
                 if self.rapid_left > 0 {
                     for _ in 0..self.rapid_left.min(2) {
                         self.edit(app, 0.01);
@@ -340,6 +445,19 @@ impl Scenario {
                 }
                 if !smoke.direct_events.is_empty() {
                     return;
+                }
+                if matches!(self.action, Some(Action::SliderDrag)) && !self.drag_checked {
+                    self.drag_checked = true;
+                    if let Err(error) = self.drag.as_mut().expect("slider gesture started").check()
+                    {
+                        self.failed = Some(error);
+                        self.finish(app);
+                        return;
+                    }
+                    for path in &self.targets {
+                        self.expected
+                            .insert(path.clone(), self.settings(app, path).clone());
+                    }
                 }
                 let targets_applied = app.edit_selection.paths() == self.targets;
                 if !targets_applied {
@@ -377,6 +495,14 @@ impl Scenario {
                 if self.ready_time == Some(input_time) {
                     return;
                 }
+                if matches!(self.action, Some(Action::SliderDrag)) {
+                    if let Err(error) = self.drag.as_mut().expect("slider gesture started").check()
+                    {
+                        self.failed = Some(error);
+                        self.finish(app);
+                        return;
+                    }
+                }
                 let progress = app.worker.progress.snapshot();
                 assert!(
                     progress.is_none_or(|progress| !progress.running()),
@@ -397,7 +523,14 @@ impl Scenario {
                     "settled",
                     serde_json::json!({"worker_busy":false,"progress_running":false}),
                 );
-                self.results.push(serde_json::json!({"step":self.step,"action":self.action.unwrap().name(),"coverage":self.action.unwrap().coverage(),"baseline_elapsed_ms":if self.config.mode==Mode::Off {Some(self.began.elapsed().as_secs_f64()*1000.)}else{None},"photos":self.targets.iter().map(|path|serde_json::json!({"source":path,"task":self.frame(app,path).unwrap().diagnostic_task.id,"revision":self.frame(app,path).unwrap().diagnostic_task.revision,"presentation_revision":self.frame(app,path).unwrap().revision,"scale_divisor":self.frame(app,path).unwrap().artifact.settings.working_scale.divisor(),"settings":self.settings(app,path)})).collect::<Vec<_>>(),"retained":app.worker.memory_status().resources}));
+                let photos = self.targets.iter().map(|path| {
+                    let frame = self.frame(app, path).unwrap();
+                    serde_json::json!({"source":path,"family":frame.artifact.metadata.processing_family().ok(),
+                        "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
+                        "presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),
+                        "settings":self.settings(app,path)})
+                }).collect::<Vec<_>>();
+                self.results.push(serde_json::json!({"step":self.step,"action":self.action.unwrap().name(),"coverage":self.action.unwrap().coverage(),"baseline_elapsed_ms":if self.config.mode==Mode::Off {Some(self.began.elapsed().as_secs_f64()*1000.)}else{None},"photos":photos,"retained":app.worker.memory_status().resources}));
                 if matches!(self.action, Some(Action::Initial)) {
                     for path in &self.paths {
                         self.cached.insert(
@@ -409,6 +542,50 @@ impl Scenario {
                 self.next(app, ctx, smoke);
             }
             Phase::Saving => {
+                if self.failed.is_some()
+                    && self.config.name == Case::SliderDrag
+                    && !self.screenshot_finished
+                {
+                    if self.failure_screenshot.is_none() {
+                        self.failure_screenshot = Some(Instant::now());
+                        ctx.send_viewport_cmd(
+                            egui::ViewportCommand::Screenshot(Default::default()),
+                        );
+                        return;
+                    }
+                    let screenshot = ctx.input(|input| {
+                        input.events.iter().find_map(|event| {
+                            if let egui::Event::Screenshot { image, .. } = event {
+                                Some(image.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    });
+                    if let Some(image) = screenshot {
+                        std::fs::create_dir_all(&smoke.directory).unwrap();
+                        let bytes: Vec<_> = image
+                            .pixels
+                            .iter()
+                            .flat_map(|pixel| pixel.to_array())
+                            .collect();
+                        let _ = image::save_buffer(
+                            smoke.directory.join("slider-failure.png"),
+                            &bytes,
+                            image.width() as u32,
+                            image.height() as u32,
+                            image::ColorType::Rgba8,
+                        );
+                        self.screenshot_finished = true;
+                    } else if self
+                        .failure_screenshot
+                        .is_some_and(|began| began.elapsed() > Duration::from_secs(3))
+                    {
+                        self.screenshot_finished = true;
+                    } else {
+                        return;
+                    }
+                }
                 if self.config.mode == Mode::Off
                     || app.diagnostics.last_saved().is_some()
                     || app.diagnostics.error().is_some()
@@ -419,6 +596,19 @@ impl Scenario {
                 {
                     let result = serde_json::json!({"schema_version":1,"input_kind":if self.config.mode==Mode::Off {"baseline"}else{"native-perfetto-scenario"},"scenario":self.manifest["scenario"],"hardware":app.diagnostic_hardware(),"disk_cache":app.preferences.decode_cache,"memory_cache_bytes":app.preferences.memory_cache_bytes,"passed":self.failed.is_none(),"failure":self.failed,"steps":self.results,"numerical_equality":"not measured in native scenario; associate separate headless cached-versus-fresh verification","coverage":"egui input dispatch and declared direct application commands; physical input and screen presentation not measured"});
                     std::fs::create_dir_all(&smoke.directory).unwrap();
+                    if let Some(drag) = &self.drag {
+                        std::fs::write(
+                            smoke.directory.join("slider-drag.json"),
+                            serde_json::to_vec_pretty(drag).unwrap(),
+                        )
+                        .unwrap();
+                    } else if self.config.name == Case::SliderDrag {
+                        std::fs::write(
+                            smoke.directory.join("slider-observation.json"),
+                            serde_json::to_vec_pretty(&crate::automation::snapshot()).unwrap(),
+                        )
+                        .unwrap();
+                    }
                     std::fs::write(
                         smoke.directory.join("scenario-result.json"),
                         serde_json::to_vec_pretty(&result).unwrap(),
@@ -579,6 +769,9 @@ impl Scenario {
             }
             Action::Pressure => {
                 app.preferences.memory_cache_bytes = self.config.pressure_bytes;
+            }
+            Action::SliderDrag => {
+                crate::automation::reveal(Some(&self.config.control_pointer));
             }
         }
         self.phase = Phase::Running;
