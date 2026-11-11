@@ -10,7 +10,7 @@ Requirements: [render orchestration](../docs/specs/render-orchestration.md), [in
 
 - **Current phase:** the owner approved a checkpoint of the off-UI coordination slice. The review app was opened with the example-photograph folder.
 - **Checkpoint:** the off-UI coordination slice follows `aede4e8`, which contains result handling and the reviewed local matching and readiness simplifications.
-- **Current unit:** choose and review the next ownership boundary with the owner.
+- **Current unit:** map source acquisition and decoding before reviewing the next ownership boundary.
 - **Decided:** protect UI responsiveness, use one runtime for individual and multi-photo editing, isolate responsibilities and support subordinate speculative work. Keep engine execution serial throughout this migration.
 - **Separate future effort:** [wide rendering](./wide-rendering.md). Clear application/engine ownership should make that experiment easier, without building its execution machinery here.
 - **Not decided:** later state ownership, shared foreground/background admission policy and backlog limits.
@@ -83,6 +83,34 @@ This unit adds one coordinator thread and Crossbeam channel selection. It uses o
 - [x] Pass formatting, strict Clippy, documentation/index and artwork checks. Ordinary checks pass 533 processor and 432 GUI tests. Build and open the review app through `cargo xtask run` with the example-photograph folder.
 
 The final delivery pass removes the render worker's direct image/scope/pick repaint notifications. The coordinator requests a repaint after placing a ready update in the UI queue. Command acknowledgements and memory-status changes retain their own notifications. This avoids waking the UI for a raw result that is still awaiting coordinator handling.
+
+## Source acquisition map
+
+The coordinator accepts per-photo render requests and publishes the current work plan. One render worker chooses a job. It first checks for reusable presentation pixels, then for a compatible reduced or native processing session. If the selected path needs a source, that same worker synchronously opens the decoded cache or reads and decodes the original. It cannot choose a different render job during that call. See [worker dispatch](../crates/foveonic-gui/src/rendering/worker/mod.rs), [reduced session lookup](../crates/foveonic-gui/src/rendering/worker/reduced.rs) and [cache open](../crates/foveonic/src/decode_cache/mod.rs).
+
+| Data | Current owner and readiness |
+| --- | --- |
+| Completed pixels and display textures | The render worker and coordinator retain compatible presentation snapshots. Reframing can use them without acquiring source data. |
+| Reduced and native processing sessions | The render worker owns the active native session and reduced working set. A session hit may allow a render without reopening the source. The reduced set has its own memory and eviction policy. |
+| Decoded disk entry | The decode cache tracks verified identity and disk readiness. A cache hit still reads, checksums and converts sensor codes into an in-memory `Source`. A green cache indicator describes disk readiness, not an in-memory processing session. |
+| Original file | A decoded-cache miss reads and decodes the original. CPU decode uses the shared host-sized Rayon pool. Cache population can follow asynchronously. |
+| Speculative preparation | The disk-cache worker prefetches a bounded neighborhood, admitting at most three photos concurrently to shared CPU decoding. Separately, the render worker may open a verified cached decode and prepare a reduced Thumb session while idle and within its memory budget. |
+
+For file-backed sources, identity combines canonical path, byte length and modification time. The cache exposes a previously verified identity snapshot without touching the original file. If none is known, source/session lookup can read filesystem metadata. The coordinator carries the known origin with a render task and checks source identity during admission. A source path can therefore have multiple identities over time.
+
+Superseded render requests are replaced by the coordinator. The worker checks the current plan during graph execution. The foreground `Cache::open` call has no render-request cancellation argument, so an obsolete foreground load can finish before the worker reaches that graph cancellation check. Speculative prefetch has separate generation and foreground-interruption checkpoints. These are distinct lifecycles.
+
+The next design discussion is how the coordinator can request source acquisition and receive a per-photo outcome independently of the serial renderer. A ready source, an already retained processing session and reusable presentation pixels have different readiness and ownership. The interface must preserve those reuse paths, validate source identity, bound in-flight decoded memory, handle failures and supersession per photo, and prioritize foreground work. It must also let another ready photo render while one acquisition waits. Decide the concrete interface and its first reviewable slice with the owner.
+
+### Reusable presentation ownership
+
+The owner questioned why a request for an existing display texture must pass through the render worker. The coordinator already retains eligible per-photo snapshots and the UI holds displayed frames. The worker also retains a whole-image presentation and currently owns compatibility checking, composition and texture preparation. These owners share GPU resources through reference-counted handles. A matching presentation bypasses graph construction and photographic operations. If the existing display texture matches the framing, it is shared. A different view can require a new GPU texture from the retained image.
+
+An older native Thumb crop capture, before the off-UI coordinator change, recorded one existing-texture reuse at 0.014 ms worker-queue wait, 3.07 ms worker elapsed and 7.97 ms from queued request to UI receipt. It issued no photographic or display GPU dispatches. These overlapping observations cover one interaction and do not isolate the worker handoff cost. A separate Smart framing interaction in that capture set waited about 83 ms for the worker and needed a new texture, whose GPU completion wait was about 37 ms. This shows why queue ownership and texture materialization must be measured separately. The current coordinator implementation needs a matched trace before claiming its latency or savings.
+
+Review whether the coordinator can decide that an existing texture and its presentation metadata satisfy a view request, then deliver it directly. Keep source identity, revisions, framing, memory accounting, scopes and UI acknowledgement explicit in that review. A request requiring a new texture or new photographic data still needs the corresponding execution owner. This question affects the source-readiness boundary because presentation and processing-session hits can avoid source acquisition entirely.
+
+The current decoded disk cache uses a versioned JSON header, checksums, signed or unsigned 16-bit sensor samples and retained camera metadata. It reconstructs floating-point samples in memory. An uncontended OS-cache-warm eight-sample test measured the Merrill hazy-coast entry at 98.5 MB and 19.1 ms median to open, including 17.0 ms for payload reading, checksum and conversion. An earlier in-memory conversion microbenchmark measured 4.9 ms median for allocation and conversion of that photo's 16-bit samples to floats. That isolated benchmark is not a subtraction from the streamed cache-open time. Both measurements depend on hardware, cache state and image size.
 
 ## Conceptual pass before each unit
 
