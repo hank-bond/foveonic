@@ -231,13 +231,14 @@ def scope_attribution(events, tables):
         ancestors.reverse()
         track = tracks.get(optional_int(event['track_id']), {})
         context = {key:fields[key] for key in (*IDENTITY_FIELDS,'node') if key in fields}
+        attributes = {key:value for key,value in fields.items() if key not in context}
         hierarchy.append({'slice':optional_int(event.get('id')),'parent_id':parent_id,
                           'depth':optional_int(event.get('depth')),'track':optional_int(event['track_id']),
                           'thread':{key:(optional_int(track[key]) if key in ('utid','tid') else track[key]) for key in ('utid','tid','thread_name') if track.get(key) not in (None,'[NULL]')},
                           'process':{key:(optional_int(track[key]) if key in ('upid','pid') else track[key]) for key in ('upid','pid','process_name') if track.get(key) not in (None,'[NULL]')},
                           'category':event['category'],'name':event['name'],
                           'start_ns':event['ts'],'duration_ms':event['dur']/1e6,
-                          'ancestors':ancestors,'context':context})
+                          'ancestors':ancestors,'context':context,'attributes':attributes})
         if fields.get('task') is not None:
             key=tuple(fields.get(name) for name in IDENTITY_FIELDS)
             stages[key][(event['category'],event['name'])].append(event['dur']/1e6)

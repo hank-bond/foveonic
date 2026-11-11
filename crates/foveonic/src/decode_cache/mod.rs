@@ -463,6 +463,10 @@ impl Cache {
             return None;
         }
         let lookup_started = Instant::now();
+        let identity_scope = crate::diagnostics::scope(
+            crate::diagnostics::Category::Cache,
+            "cache.decoded.identity",
+        );
         let known = self.control.lock().unwrap().identities.get(path).cloned();
         let Some(identity) = known
             .clone()
@@ -481,12 +485,19 @@ impl Cache {
         let location = self.root.join(identity.name());
         let lookup =
             crate::profile::Timing::elapsed("decoded cache identity lookup", lookup_started);
+        drop(identity_scope);
         match load(&location, &identity, &settings, &progress) {
             Ok(mut source)
-                if if known.is_some() {
-                    self.control.lock().unwrap().identities.get(path) == Some(&identity)
-                } else {
-                    Identity::read(path).ok().as_ref() == Some(&identity)
+                if {
+                    let _scope = crate::diagnostics::scope(
+                        crate::diagnostics::Category::Cache,
+                        "cache.decoded.identity.verify",
+                    );
+                    if known.is_some() {
+                        self.control.lock().unwrap().identities.get(path) == Some(&identity)
+                    } else {
+                        Identity::read(path).ok().as_ref() == Some(&identity)
+                    }
                 } =>
             {
                 crate::diagnostics::event(
@@ -588,9 +599,17 @@ fn load(
     settings: &Settings,
     progress: &impl Fn(LoadStage),
 ) -> Result<Source> {
+    use crate::diagnostics::{scope, scope_with, Category};
+
     let start = Instant::now();
-    let mut file = File::open(path)?;
-    let header = read_header(&mut file, identity, settings)?;
+    let mut file = {
+        let _scope = scope(Category::Cache, "cache.decoded.file.open");
+        File::open(path)?
+    };
+    let header = {
+        let _scope = scope(Category::Cache, "cache.decoded.header");
+        read_header(&mut file, identity, settings)?
+    };
     let header_timing = crate::profile::Timing::elapsed("decoded cache header", start);
     let location = String::from_utf8_lossy(&identity.location);
     let mut file = crate::diagnostics::io::ObservedReader::new(
@@ -599,26 +618,66 @@ fn load(
         Path::new(location.as_ref()),
     );
     let payload_started = Instant::now();
-    let mut pixels = vec![0_f32; usize::try_from(header.samples)?];
-    let mut camf = vec![0; usize::try_from(header.camf_bytes)?];
-    let mut checksum = crc32fast::Hasher::new();
-    let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(pixels.len())];
-    for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
-        crate::background::checkpoint_or_cancel()?;
-        let codes = &mut codes[..output.len()];
-        let bytes = bytemuck::cast_slice_mut::<u16, u8>(codes);
-        file.read_exact(bytes)?;
-        checksum.update(bytes);
-        header.sample_encoding.decode(codes, output);
-    }
-    for chunk in camf.chunks_mut(crate::background::IO_CHUNK_BYTES) {
-        crate::background::checkpoint_or_cancel()?;
-        file.read_exact(chunk)?;
-        checksum.update(chunk);
-    }
-    if checksum.finalize() != header.checksum {
-        return Err("decoded cache checksum mismatch".into());
-    }
+    let (pixels, camf) = {
+        let _scope = scope_with(Category::Cache, "cache.decoded.payload", |fields| {
+            fields
+                .u64("samples", header.samples)
+                .u64("camf_bytes", header.camf_bytes)
+                .u64("chunk_bytes", crate::background::IO_CHUNK_BYTES as u64);
+        });
+        let (mut pixels, mut camf, mut codes) = {
+            let _scope = scope(Category::Cache, "cache.decoded.payload.allocate");
+            let pixels = {
+                let _scope = scope(Category::Cache, "cache.decoded.samples.allocate");
+                vec![0_f32; usize::try_from(header.samples)?]
+            };
+            let camf = {
+                let _scope = scope(Category::Cache, "cache.decoded.camf.allocate");
+                vec![0; usize::try_from(header.camf_bytes)?]
+            };
+            let codes = {
+                let _scope = scope(Category::Cache, "cache.decoded.scratch.allocate");
+                vec![0_u16; SAMPLES_PER_CHUNK.min(pixels.len())]
+            };
+            (pixels, camf, codes)
+        };
+        let mut checksum = crc32fast::Hasher::new();
+        for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
+            crate::background::checkpoint_or_cancel()?;
+            let codes = &mut codes[..output.len()];
+            let bytes = bytemuck::cast_slice_mut::<u16, u8>(codes);
+            {
+                let _scope = scope(Category::Cache, "cache.decoded.samples.read");
+                file.read_exact(bytes)?;
+            }
+            {
+                let _scope = scope(Category::Cache, "cache.decoded.samples.checksum");
+                checksum.update(bytes);
+            }
+            {
+                let _scope = scope(Category::Cache, "cache.decoded.samples.convert");
+                header.sample_encoding.decode(codes, output);
+            }
+        }
+        for chunk in camf.chunks_mut(crate::background::IO_CHUNK_BYTES) {
+            crate::background::checkpoint_or_cancel()?;
+            {
+                let _scope = scope(Category::Cache, "cache.decoded.camf.read");
+                file.read_exact(chunk)?;
+            }
+            {
+                let _scope = scope(Category::Cache, "cache.decoded.camf.checksum");
+                checksum.update(chunk);
+            }
+        }
+        {
+            let _scope = scope(Category::Cache, "cache.decoded.payload.verify");
+            if checksum.finalize() != header.checksum {
+                return Err("decoded cache checksum mismatch".into());
+            }
+        }
+        (pixels, camf)
+    };
     file.complete();
     let payload_timing = crate::profile::Timing::elapsed(
         "decoded cache payload read, checksum and conversion",
@@ -626,7 +685,10 @@ fn load(
     );
     progress(LoadStage::FileRead);
     let metadata_started = Instant::now();
-    let (matrices, lists) = crate::x3f::cached_camera_metadata(&camf)?;
+    let (matrices, lists) = {
+        let _scope = scope(Category::Cache, "cache.decoded.camf.parse");
+        crate::x3f::cached_camera_metadata(&camf)?
+    };
     let source = Source {
         origin: SourceOrigin::File(identity.clone()),
         metadata: Arc::new(Metadata {
@@ -652,8 +714,14 @@ fn load(
             crate::profile::Timing::elapsed("decoded cache read", start),
         ],
     };
-    source.validate()?;
-    let _ = file.get_ref().set_modified(SystemTime::now());
+    {
+        let _scope = scope(Category::Cache, "cache.decoded.source.validate");
+        source.validate()?;
+    }
+    {
+        let _scope = scope(Category::Cache, "cache.decoded.recency");
+        let _ = file.get_ref().set_modified(SystemTime::now());
+    }
     progress(LoadStage::Decoded);
     Ok(source)
 }

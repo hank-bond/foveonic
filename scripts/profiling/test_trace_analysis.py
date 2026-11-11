@@ -159,7 +159,7 @@ class TraceAnalysisTests(unittest.TestCase):
 
     def test_scope_hierarchy_and_thread_metadata_keep_inclusive_stages_separate(self):
         context={'task':11,'revision':7,'photo':1,'purpose':'current'}
-        data=tables([(0,'render_task',context),(1,'recipe',context),(2,'gpu.pass',{**context,'node':3,'submission':4,'clock_id':5,'start_tick':10,'end_tick':30,'duration_ns':2_000_000})])
+        data=tables([(0,'render_task',context),(1,'decode.plane.top',{**context,'layer':'top','width':4928,'height':3264,'compressed_bytes':12345}),(2,'gpu.pass',{**context,'node':3,'submission':4,'clock_id':5,'start_tick':10,'end_tick':30,'duration_ns':2_000_000})])
         data['slices'][0].update(dur='10000000',depth='0',parent_id='[NULL]')
         data['slices'][1].update(dur='5000000',depth='1',parent_id='0')
         data['tracks']=[{'id':'1','utid':'8','tid':'42','thread_name':'worker','upid':'9','pid':'99','process_name':'app'}]
@@ -168,8 +168,10 @@ class TraceAnalysisTests(unittest.TestCase):
         self.assertEqual(hierarchy[1]['ancestors'],[{'slice':0,'name':'render_task'}])
         self.assertEqual(hierarchy[1]['depth'],1)
         self.assertEqual(hierarchy[1]['thread']['thread_name'],'worker')
+        self.assertEqual(hierarchy[1]['context'],context)
+        self.assertEqual(hierarchy[1]['attributes'],{'layer':'top','width':4928,'height':3264,'compressed_bytes':12345})
         stages=result['scope_attribution']['task_stage_elapsed_ms'][0]['stages']
-        self.assertEqual({row['name']:row['inclusive_total'] for row in stages},{'recipe':5.,'render_task':10.})
+        self.assertEqual({row['name']:row['inclusive_total'] for row in stages},{'decode.plane.top':5.,'render_task':10.})
         gpu=result['gpu_node_submission'][0]
         self.assertEqual((gpu['task'],gpu['node'],gpu['submission']),(11,3,4))
         self.assertEqual(gpu['pass_duration_total_ms'],2.)

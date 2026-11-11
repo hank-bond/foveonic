@@ -2,6 +2,7 @@
 
 use super::bytes::{product, Bytes};
 use super::huffman::{Table, MAXIMUM_PLANE_SAMPLES};
+use crate::diagnostics::{self, Category};
 use crate::input_error::damaged;
 use crate::source::{Result, SourceStorage};
 
@@ -13,6 +14,7 @@ pub(super) struct Decoded {
 /// Returns RGB triplets for equal planes or R, G, B00, B01, B10, B11 cells.
 /// The extra blue columns in format 35 replace selected physical sensor pixels.
 pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -> Result<Decoded> {
+    let prepare_scope = diagnostics::scope(Category::Cpu, "decode.sensor.prepare");
     if !matches!(format, 31 | 35 | 37 | 39 | 41) || width == 0 || height == 0 {
         return Err("unsupported unsigned sensor geometry or format".into());
     }
@@ -76,12 +78,21 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
             )
             .ok_or_else(|| damaged("compressed plane offset overflow"))?;
     }
-    let planes = super::decode_planes(|channel| {
-        let (input, width, height, seed) = inputs[channel];
-        table.decode_bounded(input, width, height, seed, 16383)
-    })?;
+    drop(prepare_scope);
+    let planes = {
+        let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.planes");
+        super::decode_planes(|layer| {
+            let (input, width, height, seed) = inputs[layer];
+            let _scope = super::sensor_plane_scope(layer, width, height, input.len(), format);
+            table.decode_bounded(input, width, height, seed, 16383)
+        })?
+    };
+    let assembly_scope = diagnostics::scope(Category::Cpu, "decode.sensor.assemble");
     let cells = product(low_width, low_height)?;
-    let mut output = Vec::with_capacity(product(cells, if equal { 3 } else { 6 })?);
+    let mut output = {
+        let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.output.allocate");
+        Vec::with_capacity(product(cells, if equal { 3 } else { 6 })?)
+    };
     for y in 0..low_height {
         crate::background::checkpoint_or_cancel()?;
         for x in 0..low_width {
@@ -102,6 +113,7 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
             }
         }
     }
+    drop(assembly_scope);
     Ok(Decoded {
         storage: if equal {
             SourceStorage::InterleavedRgb

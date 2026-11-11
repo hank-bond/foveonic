@@ -3,6 +3,7 @@
 //! Imported from Foveonic's X3F reader.
 
 use super::bytes::product;
+use crate::diagnostics::{self, Category};
 use crate::input_error::damaged;
 use crate::source::Result;
 
@@ -194,11 +195,18 @@ impl Table {
         if let Some(result) = lookup_tests::dispatch(self, input, width, height, seed, maximum) {
             return result;
         }
-        let lookup = self.differences();
-        let mut output = Vec::with_capacity(count);
+        let lookup = {
+            let _scope = diagnostics::scope(Category::Cpu, "decode.plane.lookup");
+            self.differences()
+        };
+        let mut output = {
+            let _scope = diagnostics::scope(Category::Cpu, "decode.plane.allocate");
+            Vec::with_capacity(count)
+        };
         let mut bits = Bits::new(input)?;
         let mut vertical = [[seed; 2]; 2];
         let mut horizontal = [seed; 2];
+        let _scope = diagnostics::scope(Category::Cpu, "decode.plane.samples");
         for y in 0..height {
             crate::background::checkpoint_or_cancel()?;
             for x in 0..width {

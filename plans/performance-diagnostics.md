@@ -110,6 +110,31 @@ A separate mixed-camera matrix measured Diagnostics Off initial selection at 5.2
 
 The deliberate 64-KiB overflow proof recorded overwritten bytes/chunks and an incremental-sequence loss. Analysis rejects that capture while accepting the loss-free proof. Auxiliary GPU work still active at stop remains explicitly incomplete by purpose. A mixed-camera recording can have all current-image queries resolved while a final scopes query is pending.
 
+## Decoded-cache read attribution
+
+The decoded-cache lookup previously exposed payload reads, checksums and integer-to-float conversion as one combined interval. Add scoped attribution around those operations and the surrounding file, allocation, metadata and validation work without changing the cache format or scheduling.
+
+- [x] Instrument the existing cache read using bounded, opt-in Perfetto scopes, retaining chunk boundaries and cancellation behavior.
+- [x] Verify the capture on real warm-disk app scenarios and compare its cost with separate Diagnostics Off runs.
+- [x] Run the ordinary cache and workspace checks and exact original-sample round trips across camera families.
+
+Three isolated, OS-warm two-photo captures show a median decoded-cache lookup of 19.87 ms for the Merrill sample and 15.80 ms for the Quattro sample. Median sample reads take 7.21 and 4.75 ms, checksum updates 4.23 and 2.85 ms, and integer-to-float conversion 3.66 and 2.39 ms. Buffer allocation takes 2.00 and 1.94 ms, and camera metadata parsing takes 2.02 and 2.77 ms. These are separately recorded host elapsed scopes; allocation can defer page costs into later work. They are instrumented observations, not physical disk or CPU-active timings.
+
+Sixteen foreground reads across five captures contain the expected cache scopes and matching per-chunk read, checksum and conversion counts. An eight-photo Thumb capture records all eight cache hits without trace loss; it contains about 8,700 scopes in a 1.6 MB trace. Three matched two-photo Off trials before and after instrumentation measured 565 and 578 ms median group completion, versus 588 ms with Wall capture. These small samples include the scenario's 20 ms observation cadence and do not establish a tracing regression or precise capture overhead. The original-sample cache round trips remain exact across Classic, Merrill, Quattro and Quattro H. Forty Full/Fast/Draft/Thumb photographic comparisons remain bit-exact against the existing goldens.
+
+## Original decode attribution
+
+Expose the existing source-reader and camera-decoder stages on the shared timeline. Plane-compressed formats must identify each physical sensor layer and its dimensions and compressed input size. Classic interleaved data keeps its existing row-group work instead of inventing independent plane operations.
+
+- [x] Add opt-in file, sensor preparation, per-layer decoding, assembly and camera-metadata scopes.
+- [x] Preserve scope attributes in the generic hierarchy report.
+- [x] Verify actual application captures across camera families, with uncontended Off comparisons and exact sample checks.
+- [x] Complete workspace and documentation checks.
+
+Four loss-free real-app captures cover twelve original decodes across Merrill, Quattro and Classic. Per-layer scopes retain stored index, physical layer, geometry, sample count, compressed bytes and format. On three OS-warm traced runs, the Merrill sample's top/middle/bottom planes take 106.66/105.71/104.72 ms median for 16.08 million samples each. The Quattro sample takes 187.84/49.19/47.33 ms; its top plane contains 23.03 million stored samples, versus 5.41 million in each other plane. The top plane includes the format's additional sensor columns. These parallel intervals are elapsed observations and must not be summed. Classic format 6 exposes its independent interleaved row groups instead of synthetic per-layer intervals.
+
+A real-original check compares every decoded sample, camera metadata and storage layout with recording Off and Wall for Classic, Merrill, Quattro and Quattro H. Forty photographic Full/Fast/Draft/Thumb outputs also remain bit-exact against the existing goldens. Five matched Off trials measured three-photo initial selection at 1120.84 ms before and 1131.08 ms after instrumentation, and 25 retained edits at 53.52 and 54.65 ms median. The scenario's 20 ms observation cadence and limited sample count prevent treating these as precise overhead measurements. All declared behavior and workload checks pass.
+
 ## Future concurrent rendering experiments
 
 The owner wants to investigate advancing N Draft/Thumb photographs across M graph nodes concurrently. Establish diagnostics, behavioral tests and serial baselines first. This plan does not add a second scheduler or a stage-major barrier.

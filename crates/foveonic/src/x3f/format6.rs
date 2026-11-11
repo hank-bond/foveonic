@@ -5,6 +5,7 @@
 //! sixteen-bit wrapping, independently of the other channels and rows.
 
 use super::bytes::{product, Bytes};
+use crate::diagnostics::{self, Category};
 use crate::input_error::damaged;
 use crate::source::Result;
 
@@ -111,6 +112,7 @@ impl Table {
 }
 
 pub(super) fn decode(section: &[u8], width: usize, height: usize) -> Result<Vec<f32>> {
+    let prepare_scope = diagnostics::scope(Category::Cpu, "decode.sensor.prepare");
     let bytes = Bytes(section);
     let rows_size = product(height, 4)?;
     let directory = section
@@ -136,7 +138,12 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize) -> Result<Vec<
         return Err(damaged("invalid format-6 row offsets"));
     }
     let row_samples = product(width, 3)?;
-    let mut output = vec![0.; product(row_samples, height)?];
+    drop(prepare_scope);
+    let mut output = {
+        let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.output.allocate");
+        vec![0.; product(row_samples, height)?]
+    };
+    let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.rows");
     #[cfg(test)]
     if parallel_tests::SERIAL.load(std::sync::atomic::Ordering::Relaxed) {
         decode_rows(&table, data, &rows, row_samples, &mut output)?;

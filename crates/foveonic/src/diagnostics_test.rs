@@ -24,6 +24,56 @@ fn off_recording_does_not_evaluate_fields_or_change_context() {
 }
 
 #[test]
+#[ignore = "requires FOVEONIC_FIXTURE_DIR with Classic, Merrill and Quattro originals"]
+fn original_decoding_preserves_samples_and_metadata_while_recording() {
+    let _serial = TEST.lock().unwrap();
+    let fixtures = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let temporary = tempfile::tempdir().unwrap();
+    let recorder = Recorder::new();
+    for (index, name) in [
+        "blue-parking-sign.x3f",
+        "dp0-quattro.x3f",
+        "sd14.x3f",
+        "sd-quattro-h.x3f",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = fixtures.join(name);
+        let baseline = crate::source::Source::open(&path).unwrap();
+        recorder
+            .start(CaptureConfig::default())
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap();
+        let recorded = crate::source::Source::open(&path).unwrap();
+        let saved = recorder
+            .stop_save(
+                temporary.path().join(index.to_string()),
+                serde_json::json!({}),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap();
+        assert!(saved.trace_bytes > 0);
+        assert_eq!(
+            bytemuck::cast_slice::<f32, u8>(baseline.samples()),
+            bytemuck::cast_slice::<f32, u8>(recorded.samples()),
+            "decoded samples changed while recording {name}"
+        );
+        assert_eq!(baseline.storage(), recorded.storage(), "{name}");
+        assert_eq!(baseline.camf, recorded.camf, "{name}");
+        assert_eq!(
+            serde_json::to_value(&*baseline.metadata).unwrap(),
+            serde_json::to_value(&*recorded.metadata).unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn sdk_capture_connects_two_threads_coalescing_counters_and_late_observations() {
     let _serial = TEST.lock().unwrap();
     let temporary = tempfile::tempdir().unwrap();

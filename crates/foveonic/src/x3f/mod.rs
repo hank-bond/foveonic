@@ -14,6 +14,7 @@ mod huffman;
 use crate::input_error::damaged;
 use crate::profile::Timing;
 use crate::source::{Metadata, Result, Source, SourceStorage};
+use crate::{diagnostics, diagnostics::Category};
 use bytes::{product, Bytes};
 use huffman::Table;
 use std::collections::BTreeMap;
@@ -98,8 +99,14 @@ fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, 
         },
     );
     let start = Instant::now();
-    let file = std::fs::File::open(path)?;
-    let length = file.metadata()?.len();
+    let file = {
+        let _scope = diagnostics::scope(Category::Io, "source.original.open");
+        std::fs::File::open(path)?
+    };
+    let length = {
+        let _scope = diagnostics::scope(Category::Io, "source.original.metadata");
+        file.metadata()?.len()
+    };
     if length < MINIMUM_FILE_BYTES {
         return Err(damaged("truncated X3F header"));
     }
@@ -107,24 +114,30 @@ fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, 
         return Err("unsupported X3F file size".into());
     }
     let mut file = crate::diagnostics::io::ObservedReader::new(file, "original", path);
-    let mut data = Vec::with_capacity(length as usize);
+    let mut data = {
+        let _scope = diagnostics::scope(Category::Io, "source.original.allocate");
+        Vec::with_capacity(length as usize)
+    };
     use std::io::Read;
     // Yield background I/O between bounded reads instead of issuing the whole
     // original at once when the next selected photo needs the storage device.
-    let mut limited = (&mut file).take(length + 1);
-    loop {
-        crate::background::checkpoint_or_cancel()?;
-        let before = data.len();
-        limited
-            .by_ref()
-            .take(crate::background::IO_CHUNK_BYTES as u64)
-            .read_to_end(&mut data)?;
-        if data.len() == before {
-            break;
+    {
+        let _scope = diagnostics::scope(Category::Io, "source.original.payload");
+        let mut limited = (&mut file).take(length + 1);
+        loop {
+            crate::background::checkpoint_or_cancel()?;
+            let before = data.len();
+            limited
+                .by_ref()
+                .take(crate::background::IO_CHUNK_BYTES as u64)
+                .read_to_end(&mut data)?;
+            if data.len() == before {
+                break;
+            }
         }
-    }
-    if data.len() as u64 != length {
-        return Err("X3F file changes during reading".into());
+        if data.len() as u64 != length {
+            return Err("X3F file changes during reading".into());
+        }
     }
     file.complete();
     let read = Timing::elapsed("file read", start);
@@ -145,6 +158,7 @@ fn decode_owned(data: Vec<u8>, read: Timing) -> Result<(Source, Vec<u8>)> {
 }
 
 fn decode(data: &[u8]) -> Result<Source> {
+    let sections_scope = diagnostics::scope(Category::Cpu, "decode.sections");
     let bytes = Bytes(data);
     if bytes.range(0, 4)? != b"FOVb" {
         return Err(damaged("invalid X3F signature"));
@@ -245,12 +259,19 @@ fn decode(data: &[u8]) -> Result<Source> {
     properties.insert("X3F_MARK_BITS".into(), mark_bits(data)?.to_string());
     record_image_extent(&mut properties, data)?;
     let raw = raw.ok_or_else(|| damaged("missing X3F sensor image"))?;
+    drop(sections_scope);
     let (width, height, storage, pixels, mut timings) = read_pixels(raw)?;
     let start = Instant::now();
-    let camf = camf::decompress(camera.ok_or_else(|| damaged("missing X3F camera metadata"))?)?;
+    let camf = {
+        let _scope = diagnostics::scope(Category::Cpu, "decode.camf.decompress");
+        camf::decompress(camera.ok_or_else(|| damaged("missing X3F camera metadata"))?)?
+    };
     timings.push(Timing::elapsed("CAMF decompress", start));
     let start = Instant::now();
-    let (matrices, lists) = camf::parse(&camf)?;
+    let (matrices, lists) = {
+        let _scope = diagnostics::scope(Category::Cpu, "decode.camf.parse");
+        camf::parse(&camf)?
+    };
     timings.push(Timing::elapsed("CAMF parse", start));
     Ok(Source {
         origin: Default::default(),
@@ -373,6 +394,31 @@ fn read_properties(section: &[u8]) -> Result<BTreeMap<String, String>> {
 
 type SensorRead = (usize, usize, SourceStorage, Vec<f32>, Vec<Timing>);
 
+fn sensor_plane_scope(
+    layer_index: usize,
+    width: usize,
+    height: usize,
+    compressed_bytes: usize,
+    format: u32,
+) -> diagnostics::Scope {
+    // Stored sensor planes run from the bottom layer to the top layer.
+    let (layer, name) = [
+        ("bottom", "decode.plane.bottom"),
+        ("middle", "decode.plane.middle"),
+        ("top", "decode.plane.top"),
+    ][layer_index];
+    diagnostics::scope_with(Category::Cpu, name, |fields| {
+        fields
+            .u64("plane", layer_index as u64)
+            .str("layer", layer)
+            .u64("width", width as u64)
+            .u64("height", height as u64)
+            .u64("samples", (width * height) as u64)
+            .u64("compressed_bytes", compressed_bytes as u64)
+            .u64("format", u64::from(format));
+    })
+}
+
 fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     let bytes = Bytes(section);
     if bytes.range(0, 4)? != b"SECi"
@@ -394,9 +440,16 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     {
         return Err("unsupported sensor geometry".into());
     }
-    if [31, 35, 37, 39, 41].contains(&bytes.u32(12)?) {
+    let format = bytes.u32(12)?;
+    let _scope = diagnostics::scope_with(Category::Cpu, "decode.sensor", |fields| {
+        fields
+            .u64("width", width as u64)
+            .u64("height", height as u64)
+            .u64("format", u64::from(format));
+    });
+    if [31, 35, 37, 39, 41].contains(&format) {
         let start = Instant::now();
-        let decoded = format31::decode(section, width, height, bytes.u32(12)?)?;
+        let decoded = format31::decode(section, width, height, format)?;
         return Ok((
             width,
             height,
@@ -405,7 +458,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
             vec![Timing::elapsed("sensor compressed planes", start)],
         ));
     }
-    if bytes.u32(12)? == 6 {
+    if format == 6 {
         let start = Instant::now();
         let pixels = format6::decode(section, width, height)?;
         return Ok((
@@ -418,6 +471,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     }
     // Format 30 stores predictor seeds at 28, thirteen packed code/length words
     // at 36..62, a terminator at 62, and three plane lengths at 64..76.
+    let prepare_scope = diagnostics::scope(Category::Cpu, "decode.sensor.prepare");
     let mut codes = Vec::with_capacity(13);
     for i in 0..13 {
         let packed = bytes.u16(36 + i * 2)?;
@@ -447,23 +501,36 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
             .checked_add(aligned)
             .ok_or_else(|| damaged("plane offset overflow"))?;
     }
+    drop(prepare_scope);
     let start_time = Instant::now();
-    let planes = decode_planes(|channel| {
-        let (input, seed) = inputs[channel];
-        let start = Instant::now();
-        let pixels = table.decode(input, width, height, seed)?;
-        Ok((
-            pixels,
-            Timing::elapsed(
-                ["sensor plane R", "sensor plane G", "sensor plane B"][channel],
-                start,
-            ),
-        ))
-    })?;
+    let planes = {
+        let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.planes");
+        decode_planes(|layer| {
+            let (input, seed) = inputs[layer];
+            let _scope = sensor_plane_scope(layer, width, height, input.len(), format);
+            let start = Instant::now();
+            let pixels = table.decode(input, width, height, seed)?;
+            Ok((
+                pixels,
+                Timing::elapsed(
+                    [
+                        "sensor plane bottom",
+                        "sensor plane middle",
+                        "sensor plane top",
+                    ][layer],
+                    start,
+                ),
+            ))
+        })?
+    };
     let mut timings = vec![Timing::elapsed("sensor planes wall", start_time)];
     timings.extend(planes.iter().map(|(_, timing)| timing.clone()));
     let start_time = Instant::now();
-    let mut pixels = vec![0.; product(count, 3)?];
+    let assembly_scope = diagnostics::scope(Category::Cpu, "decode.sensor.assemble");
+    let mut pixels = {
+        let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.output.allocate");
+        vec![0.; product(count, 3)?]
+    };
     // Disjoint contiguous triplets let the compiler vectorize this pass
     // without changing the channel-interleaving order.
     // Keep the existing contiguous triplets while bounding speculative CPU work.
@@ -486,6 +553,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
             *pixel = [*red as f32, *green as f32, *blue as f32];
         }
     }
+    drop(assembly_scope);
     timings.push(Timing::elapsed("sensor interleave", start_time));
     Ok((
         width,

@@ -123,8 +123,8 @@ impl Pool {
     pub fn threads(&self) -> usize {
         self.0.current_num_threads()
     }
-    /// Borrow the compressed planes safely. Every photo contributes R/G/B to
-    /// the same FIFO workers, without copying compressed data or creating child threads.
+    /// Borrow the compressed planes safely. Each photo contributes three layer jobs
+    /// to the same FIFO workers, without copying compressed data or creating child threads.
     pub fn planes<T: Send>(
         &self,
         turn: Option<&Turn>,
