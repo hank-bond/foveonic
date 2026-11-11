@@ -314,45 +314,13 @@ impl Runtime {
             let photo = self.photos.get_mut(path).unwrap();
             let settings = photo.settings.as_mut().unwrap();
             let before = settings.clone();
-            let applicable = edits
-                .iter()
-                .filter(|edit| match edit {
-                    multi_edit_controls::Edit::Optional {
-                        pointer,
-                        enabled: true,
-                    } => default_ready_values(
-                        settings,
-                        photo.defaults_basis.as_ref(),
-                        photo.metadata.as_deref(),
-                        pointer,
-                    ),
-                    multi_edit_controls::Edit::Number { pointer, .. }
-                        if matches!(pointer.as_str(), "/sharpen_amount" | "/color_dq_gain") =>
-                    {
-                        let missing = if pointer == "/sharpen_amount" {
-                            settings.sharpen_amount.is_none()
-                        } else {
-                            settings.color_dq_gain.is_none()
-                        };
-                        !missing
-                            || default_ready_values(
-                                settings,
-                                photo.defaults_basis.as_ref(),
-                                photo.metadata.as_deref(),
-                                pointer,
-                            )
-                    }
-                    _ => true,
-                })
-                .cloned()
-                .collect::<Vec<_>>();
             if let Some(numeric) = photo
                 .reset_settings
                 .as_ref()
                 .or(photo.numeric_settings.as_ref())
             {
-                materialize_defaults(settings, numeric, &applicable);
-                if settings.exposure_auto && applicable.iter().any(|edit| matches!(edit, multi_edit_controls::Edit::Number { pointer, .. } if pointer == "/exposure")) {
+                materialize_defaults(settings, numeric, edits);
+                if settings.exposure_auto && edits.iter().any(|edit| matches!(edit, multi_edit_controls::Edit::Number { pointer, .. } if pointer == "/exposure")) {
                     settings.exposure = photo.metadata.as_deref().map_or(numeric.exposure, |metadata| {
                         let capture = foveonic::source::CaptureExposureCompensation::from_properties(&metadata.properties);
                         settings.exposure_auto_compensation.inverse(capture).unwrap_or(0.)
@@ -366,7 +334,7 @@ impl Runtime {
                     .reset_settings
                     .as_ref()
                     .or(photo.numeric_settings.as_ref()),
-                &applicable,
+                edits,
             );
             apply_reset_defaults(&mut target_edits, photo.reset_settings.as_ref());
             if let Some(metadata) = &photo.metadata {

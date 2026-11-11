@@ -5,9 +5,9 @@ kind: explanation
 
 # Interactive rendering architecture
 
-This is a code-based map of the current implementation, including diagnostics and idle Thumb preparation. It describes who makes each decision and who retains each resource. It does not establish conformance for every combination of interactions. Required behavior lives in [interactive rendering](./specs/interactive-rendering.md), [multi-edit](./specs/multi-edit.md), [small previews](./specs/small-previews.md) and [diagnostics](./specs/performance-diagnostics.md). Findings and the review sequence belong in the [latency plan](../plans/multi-edit-latency.md).
+This is a code-based map of the current implementation, including diagnostics and idle Thumb preparation. It describes who makes each decision and who retains each resource. It does not establish conformance for every combination of interactions. Required behavior lives in [interactive rendering](./specs/interactive-rendering.md), [multi-edit](./specs/multi-edit.md), [small previews](./specs/small-previews.md) and [diagnostics](./specs/performance-diagnostics.md). The [latency investigation](../plans/multi-edit-latency.md) retains earlier measurements and stabilization evidence.
 
-The [orchestration proposal](./specs/render-orchestration.md) describes possible replacement interfaces and concurrency rules. It is a draft, separate from this implemented-code map.
+The [architecture guide](./architecture/AGENTS.md) routes shared principles, vocabulary and open questions. The [orchestration proposal](./specs/render-orchestration.md) records agreed goals and provisional boundaries, separate from this implemented-code map. The [render runtime migration](../plans/render-runtime.md) is the active plan for owner-reviewed conceptual changes.
 
 The [coordination consistency inventory](../plans/render-coordination-consistency.md) records the broader source audit and contract questions to review before selecting incremental cleanup slices. Its findings are structural observations unless runtime evidence is stated explicitly.
 
@@ -24,16 +24,17 @@ flowchart TD
     Reuse --> View[Prepare or reuse display texture]
     Numeric --> View
     View --> Reply[Bounded image reply channel]
-    Reply --> Settle[Coordinator: settle exact task]
-    Settle --> Context[Delivery policy classifies; coordinator admits]
-    Context --> Frames[Active frame, detail tile or comparison tile]
+    Reply --> Handler[Coordinator result handler: settle, classify, retain and admit]
+    Handler --> Frames[UI applies active, detail or overview updates]
     Frames --> Draw[Native drawing consumes immutable textures]
     Frames --> Aux[Browser previews, navigator and image-matched scopes]
 ```
 
 The two outgoing reuse paths are alternatives. Reframing compatible pixels can skip photographic execution. A reduced-session hit can skip source loading and reuse graph dependencies, while still executing a changed finishing operation. A decoded disk hit skips original-file access and entropy decoding but can require all native preparation before pooling.
 
-The entry points are `App::select`, `submit_with_quality`, `receive` and `update` in [main.rs](../crates/foveonic-gui/src/main.rs), and `sync_multi_edit` / `submit_multi_edit` in [multi_edit_runtime.rs](../crates/foveonic-gui/src/multi_edit_runtime.rs). These methods currently assemble the flow across separate owners.
+The entry points are `App::select`, `submit_with_quality`, `receive` and `update` in [main.rs](../crates/foveonic-gui/src/main.rs), and `sync_multi_edit` / `submit_multi_edit` in [multi_edit_runtime.rs](../crates/foveonic-gui/src/multi_edit_runtime.rs). The UI passes returned render results and borrowed view context to the existing coordinator's `handle_result`. It applies permitted per-photo feedback and view updates from the returned `ResultUpdate`.
+
+Result handling settles the matching request, classifies reuse, retains useful pixels and checks source/revision admission as one operation before publishing the resulting plan. Allowed photo feedback survives image rejection. The UI separately applies progress/opening/export state and acknowledges Active image delivery. This first ownership slice preserves the existing UI-thread coordinator and serialized engine worker. Moving coordination off the UI is a later review unit.
 
 [request.rs](../crates/foveonic-gui/src/rendering/request.rs) owns the immutable request data, consumer-purpose classification and preview geometry policy. The coordinator derives target identity from the request's purpose. The worker applies its preview policy after resolving camera controls and chooses the corresponding execution resources. Foreground preview resolution and idle preparation share camera-aware scale selection through processing capabilities. Reusing a framing plane can still preserve an already-rendered grid instead of applying a new preview scale.
 
@@ -141,7 +142,7 @@ These are source observations and review targets. They are not all demonstrated 
 | Decision | Current locations | Review concern |
 | --- | --- | --- |
 | Requested edit state | `App`, multi-edit `Runtime`, sidecar `Session` | Synchronization establishes precedence across three mutable representations. A new interaction must follow that precedence correctly. |
-| Completion disposition | [delivery.rs](../crates/foveonic-gui/src/rendering/delivery.rs) classifies reuse, photo feedback and active/overview destinations. Coordinator `finish` / `admit` owns settlement and source/order admission. `App::receive` applies the effects. | The first incremental extraction preserves current behavior and worker order. Runtime retention and Smart drawing still enforce the validity of their held frames. |
+| Result handling | Coordinator `handle_result` owns settlement, invokes [delivery classification](../crates/foveonic-gui/src/rendering/delivery.rs), retains reusable pixels and performs source/order admission. The worker handle publishes one resulting plan. `App::receive` applies photo/view updates and keeps Active acknowledgement explicit. | Thread placement and serial execution remain unchanged. Runtime retention and Smart drawing still enforce the validity of their held frames. |
 | Effective execution request | `App::submit_with_quality`, `submit_multi_edit` and Smart choose intent. `Request` owns purpose, preview-scale application and reduced-session selection. Presentation reuse can retain the actual existing grid. | Request policy now has one home. Camera/default resolution and actual retained representation remain separate boundaries. |
 | Cancellation | Worker foreground predicate, graph `Execution::check`, gate epochs, source/cache checkpoints and idle preparation predicate | Request obsolescence and priority interruption are distinct mechanisms. Their composition is intentional but currently implicit in nested closures and thread-local context. |
 | GPU completion policy | Executor cancellation predicate and allocation window, background stage scope, GPU submission facade and display preparation | The presence of a cancellation predicate also selects per-operation completion waits. The recent background fix relies on that contract. An explicit completion policy would make this dependency easier to reason about. |

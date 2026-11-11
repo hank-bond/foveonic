@@ -28,6 +28,134 @@ fn desire(coordinator: &mut RenderCoordinator, request: Arc<Request>) -> Stamp {
     coordinator.desired(&target).unwrap().stamp.clone()
 }
 
+fn render_result(stamp: Stamp, request: &Request) -> Reply {
+    Reply {
+        stamp,
+        path: request.path.clone(),
+        rendition: request.rendition,
+        revision: request.revision,
+        metadata: None,
+        settings: request.settings.clone(),
+        result: Ok(None),
+        numeric_settings: None,
+        reset_settings: None,
+        exported: request.export.clone(),
+    }
+}
+
+fn result_view(reply: &Reply) -> ViewContext<'_> {
+    ViewContext {
+        active: Some(&reply.path),
+        rendition: reply.rendition,
+        output: "final",
+        comparison: false,
+        framing_preview: false,
+        exporting: false,
+        calibration: None,
+        settings: &reply.settings,
+        overview_selected: true,
+        overview_settings: Some(&reply.settings),
+        displayed_revision: None,
+        detail_revision: None,
+    }
+}
+
+#[test]
+fn result_handler_settles_current_failures_without_settling_newer_or_sibling_requests() {
+    let mut coordinator = RenderCoordinator::default();
+    let a = request("a.x3f", 1, 0.);
+    let mut old = render_result(desire(&mut coordinator, a.clone()), &a);
+    old.result = Err("cannot decode source".into());
+    let b = request("b.x3f", 1, 0.);
+    let mut sibling = render_result(desire(&mut coordinator, b.clone()), &b);
+    sibling.result = Err("cannot load source".into());
+    let a = request("a.x3f", 2, 0.5);
+    let latest = render_result(desire(&mut coordinator, a.clone()), &a);
+
+    assert_eq!(
+        coordinator.handle_result(&old, &result_view(&old)),
+        ResultUpdate {
+            current: false,
+            update_photo: false,
+            destination: None
+        }
+    );
+    assert_eq!(coordinator.plan().tasks.len(), 2);
+    assert_eq!(
+        coordinator.handle_result(&sibling, &result_view(&sibling)),
+        ResultUpdate {
+            current: true,
+            update_photo: true,
+            destination: Some(Destination::Active)
+        }
+    );
+    assert!(coordinator.busy());
+    assert_eq!(coordinator.plan().tasks[0].stamp, latest.stamp);
+    assert!(!coordinator.is_settled_and_admitted(sibling.stamp.id, sibling.revision));
+    assert!(
+        coordinator
+            .handle_result(&latest, &result_view(&latest))
+            .current
+    );
+    assert!(!coordinator.busy());
+}
+
+#[test]
+fn result_handler_keeps_photo_feedback_when_view_rejects_but_not_when_target_is_removed() {
+    let mut coordinator = RenderCoordinator::default();
+    let request = request("a.x3f", 1, 0.);
+    let reply = render_result(desire(&mut coordinator, request.clone()), &request);
+    let mut view = result_view(&reply);
+    view.active = Some(Path::new("other.x3f"));
+    view.overview_selected = false;
+    assert_eq!(
+        coordinator.handle_result(&reply, &view),
+        ResultUpdate {
+            current: true,
+            update_photo: true,
+            destination: None
+        }
+    );
+    assert!(!coordinator.busy());
+    coordinator.clear();
+    assert_eq!(
+        coordinator.handle_result(&reply, &view),
+        ResultUpdate {
+            current: false,
+            update_photo: false,
+            destination: None
+        }
+    );
+}
+
+#[test]
+fn result_handler_routes_frozen_export_without_settling_pending_preview() {
+    let mut coordinator = RenderCoordinator::default();
+    let preview = request("a.x3f", 1, 0.);
+    let pending = desire(&mut coordinator, preview.clone());
+    let mut export = (*preview).clone();
+    export.export = Some(crate::export::Export {
+        path: "output.tiff".into(),
+        format: crate::export::ExportFormat::Tiff,
+        encoding: Default::default(),
+        tiff_color_space: None,
+        conflict: Default::default(),
+        sections: Default::default(),
+    });
+    let task = coordinator.frozen_export(Arc::new(export), None, Instant::now());
+    let reply = render_result(task.stamp.clone(), &task.request);
+    assert_eq!(
+        coordinator.handle_result(&reply, &result_view(&reply)),
+        ResultUpdate {
+            current: true,
+            update_photo: true,
+            destination: Some(Destination::Active)
+        }
+    );
+    assert!(coordinator.busy());
+    assert_eq!(coordinator.plan().tasks[0].stamp, pending);
+}
+
 #[test]
 fn removing_b_while_a_remains_active_rejects_b_from_the_same_cohort() {
     let mut coordinator = RenderCoordinator::default();

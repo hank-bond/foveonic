@@ -55,7 +55,7 @@ use foveonic::{
     source::Metadata,
 };
 use preferences::{FolderMode, Section};
-use rendering::{coordinator, delivery, matching, request, smart, worker};
+use rendering::{delivery, matching, request, smart, worker};
 use std::{path::PathBuf, sync::Arc};
 
 // Keep folder readiness responsive during prefetch without polling idle folders at frame rate.
@@ -676,26 +676,13 @@ impl App {
                 "reply_dequeued",
                 || serde_json::json!({"mailbox":"image_replies"}),
             );
-            let completion = if reply.exported.is_some() {
-                timing::task(
-                    &reply.stamp,
-                    "completed",
-                    || serde_json::json!({"frozen_export":true,"success":reply.result.is_ok()}),
-                );
+            if reply.exported.is_some() {
                 self.exporting = false;
-                coordinator::Completion::Current
-            } else {
-                self.worker.finish_image(&reply.stamp)
-            };
-            let current = completion == coordinator::Completion::Current;
-            self.sync_render_progress((current && reply.result.is_err()).then_some(reply.revision));
-            let delivery = self.image_delivery(completion, &reply);
-            if delivery.retain_pixels {
-                if let Ok(Some(frame)) = &reply.result {
-                    self.worker.retain_pixels(&reply.stamp, frame);
-                }
             }
-            if delivery.update_photo {
+            let update = self.handle_render_result(&reply);
+            let current = update.current;
+            self.sync_render_progress((current && reply.result.is_err()).then_some(reply.revision));
+            if update.update_photo {
                 self.multi_edit.complete(
                     &reply.path,
                     reply.metadata.clone(),
@@ -704,22 +691,9 @@ impl App {
                     &reply.settings,
                 );
             }
-            let destination = match delivery.destination {
-                Ok(destination) => destination,
-                Err(rejection) => {
-                    timing::task(
-                        &reply.stamp,
-                        "image_rejected",
-                        || serde_json::json!({"reason":rejection.reason()}),
-                    );
-                    continue;
-                }
+            let Some(destination) = update.destination else {
+                continue;
             };
-            if let Ok(Some(frame)) = &reply.result {
-                if !self.worker.admit_image(&reply.stamp, frame) {
-                    continue;
-                }
-            }
             if destination == delivery::Destination::Overview {
                 match reply.result {
                     Ok(Some(frame)) => {

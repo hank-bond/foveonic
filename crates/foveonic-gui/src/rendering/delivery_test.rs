@@ -277,7 +277,7 @@ fn frozen_export_completion_survives_calibration_changes() {
 
 #[test]
 fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding() {
-    use crate::{coordinator::RenderCoordinator, preferences::PreviewMode};
+    use crate::{preferences::PreviewMode, rendering::coordinator::RenderCoordinator};
     use foveonic::source::SourceOrigin;
     use std::{sync::Arc, time::Instant};
 

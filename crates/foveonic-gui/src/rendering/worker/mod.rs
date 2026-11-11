@@ -914,22 +914,16 @@ impl Worker {
             frame.diagnostic_task.revision,
         )
     }
-    pub fn finish_image(
+    pub fn handle_result(
         &self,
-        stamp: &crate::rendering::coordinator::Stamp,
-    ) -> crate::rendering::coordinator::Completion {
-        let result = self.coordinator.borrow_mut().finish(stamp);
-        self.publish();
-        result
-    }
-    pub fn admit_image(&self, stamp: &crate::rendering::coordinator::Stamp, frame: &Frame) -> bool {
-        let admitted = self.coordinator.borrow_mut().admit(stamp, &frame.origin);
-        self.publish();
-        admitted
-    }
-    pub fn retain_pixels(&self, stamp: &crate::rendering::coordinator::Stamp, frame: &Frame) {
-        self.coordinator.borrow_mut().note_pixels(stamp, frame);
-        self.publish();
+        reply: &Reply,
+        view: &super::delivery::ViewContext<'_>,
+    ) -> super::coordinator::ResultUpdate {
+        let update = self.coordinator.borrow_mut().handle_result(reply, view);
+        if reply.exported.is_none() {
+            self.publish();
+        }
+        update
     }
     pub fn finish_scope(&self, id: crate::rendering::coordinator::TaskId) -> bool {
         let current = self.coordinator.borrow_mut().finish_scope(id);
@@ -1231,7 +1225,8 @@ mod tests {
         };
         worker.submit(request(1, 0.));
         let stamp = worker.pending.0.lock().unwrap().plan.tasks[0].stamp.clone();
-        worker.finish_image(&stamp);
+        worker.coordinator.borrow_mut().finish(&stamp);
+        worker.publish();
         worker.progress.settle(worker.busy(), None);
         let completed = worker.progress.snapshot().unwrap();
         assert!(!completed.running());
@@ -1250,17 +1245,37 @@ mod tests {
         assert_eq!(changed.revision, 3);
     }
 
-    fn receive(worker: &super::Worker) -> super::Reply {
+    pub(super) fn handle_result(
+        worker: &super::Worker,
+        reply: &super::Reply,
+    ) -> super::super::coordinator::ResultUpdate {
+        let frame = reply.result.as_ref().ok().and_then(Option::as_ref);
+        worker.handle_result(
+            reply,
+            &super::super::delivery::ViewContext {
+                active: Some(&reply.path),
+                rendition: reply.rendition,
+                output: frame.map_or("final", |frame| &frame.output),
+                comparison: frame.is_some_and(|frame| frame.comparison.is_some()),
+                framing_preview: frame.is_some_and(|frame| frame.framing_preview),
+                exporting: false,
+                calibration: frame.and_then(|frame| frame.calibration_signature.as_deref()),
+                settings: &reply.settings,
+                overview_selected: true,
+                overview_settings: Some(&reply.settings),
+                displayed_revision: None,
+                detail_revision: None,
+            },
+        )
+    }
+    pub(super) fn receive(worker: &super::Worker) -> super::Reply {
         loop {
             if let super::Update::Image(reply) = worker
                 .replies
                 .recv_timeout(std::time::Duration::from_secs(20))
                 .unwrap()
             {
-                worker.finish_image(&reply.stamp);
-                if let Ok(Some(frame)) = &reply.result {
-                    worker.retain_pixels(&reply.stamp, frame);
-                }
+                handle_result(worker, &reply);
                 return *reply;
             }
         }
@@ -1799,10 +1814,7 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(8));
                 while let Ok(update) = worker.replies.try_recv() {
                     if let super::Update::Image(reply) = update {
-                        worker.finish_image(&reply.stamp);
-                        if let Ok(Some(frame)) = &reply.result {
-                            worker.retain_pixels(&reply.stamp, frame);
-                        }
+                        handle_result(&worker, &reply);
                         if let Some(frame) = reply.result.unwrap() {
                             let mut expected =
                                 foveonic::render::Settings::new("Sunlight", "Standard");
@@ -1840,10 +1852,7 @@ mod tests {
                     .unwrap()
                 {
                     super::Update::Image(reply) if reply.revision == last => {
-                        worker.finish_image(&reply.stamp);
-                        if let Ok(Some(frame)) = &reply.result {
-                            worker.retain_pixels(&reply.stamp, frame);
-                        }
+                        handle_result(&worker, &reply);
                         assert!(!settled, "unexpected extra final image");
                         let frame = reply.result.unwrap().unwrap();
                         assert_eq!(frame.artifact.settings.exposure, settings.exposure);
@@ -2140,6 +2149,7 @@ mod tests {
                 .result
                 .unwrap()
                 .expect("latest batch must finish every target");
+            assert!(worker.is_settled_and_admitted(&frame));
             if index == 0 {
                 assert_eq!(numeric.dehaze.shadow, frame.artifact.dehaze_estimate);
                 assert!(numeric.dehaze.shadow.is_some());

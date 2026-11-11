@@ -4,7 +4,7 @@ summary: "Render coordination separates request meaning, work matching, target s
 
 # Render coordination
 
-Requests describe desired photo results and preview policy. Matching compares requests and settings without scheduling work. The coordinator owns per-target demand, task identity and settlement. Delivery classifies how completed results may be used. Smart owns progressive detail requests. Keep these responsibilities distinct from the worker's processing resources and execution order.
+Requests describe desired photo results and preview policy. Matching compares requests and settings without scheduling work. The coordinator owns per-target demand, task identity and the result handler for settlement, reuse and admission. Delivery supplies classification policy to that handler. The UI applies permitted updates and acknowledges Active image delivery. Smart owns progressive detail requests. Keep these responsibilities distinct from the worker's processing resources and execution order.
 
 Authored edits remain with the application, multi-edit runtime and sidecar session. Numerical graph validity, intermediate reuse and operation implementations remain in `foveonic`. This module coordinates that engine without reproducing its processing graph.
 
@@ -18,7 +18,7 @@ Authored edits remain with the application, multi-edit runtime and sidecar sessi
 
 ### Source files
 
-- **[coordinator.rs](./coordinator.rs)** Owns desired photo renders and publishes one immutable plan to the serialized executor.
+- **[coordinator.rs](./coordinator.rs)** Owns desired photo renders, handles their results and publishes immutable execution plans.
 - **[delivery.rs](./delivery.rs)** Classifies completed images for pixel reuse, per-photo feedback and current-view delivery.
 - **[matching.rs](./matching.rs)** Defines shared settings and request comparisons without selecting work or admitting results.
 - **[mod.rs](./mod.rs)** Coordinates photo render requests, matching, refinement and delivery through the existing worker.

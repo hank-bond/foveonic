@@ -6,6 +6,8 @@ summary: "Inventory coordination, scheduling and cache inconsistencies before ch
 
 Requirements: [interactive rendering](../docs/specs/interactive-rendering.md), [multi-edit](../docs/specs/multi-edit.md), [small previews](../docs/specs/small-previews.md) and [render preparation](../docs/specs/render-preparation.md). This audit continues [latency stabilization](./multi-edit-latency.md). The [implemented architecture map](../docs/interactive-rendering-architecture.md) describes current ownership. The [orchestration proposal](../docs/specs/render-orchestration.md) remains a design direction, not authorization to replace the runtime.
 
+The local cleanup round below is finished. The owner has opened the [render runtime migration](./render-runtime.md), which now owns the active conceptual review and continuation plan. Keep this source inventory and its unselected candidates as supporting evidence rather than another implementation queue.
+
 ## Scope and status
 
 The owner requested a broad inventory before choosing implementation slices. The earlier request-policy extraction is one candidate, not the selected first step. Audit current responsibilities, duplication, names, lifecycle contracts and reuse boundaries. Keep numerical node optimization separate. Include shared pipeline intermediaries, preparation and graph reuse where they concern coordination rather than image arithmetic.
@@ -15,6 +17,44 @@ This inventory is based on source inspection at `0fa7bbe`, with no production ch
 The [coordination overhead investigation](./coordination-overhead-profile.md) separately measures data movement, preparation, waiting and delivery to help decide what can improve within the current architecture.
 
 The owner subsequently narrowed the next rounds to local improvements whose correctness follows from existing contracts. Keep the broader ownership, lifecycle and vocabulary questions for architecture design. Use read-only subagent reviews across bounded code areas to identify candidates, then review concrete findings before selecting fixes. The broader sequence below remains context rather than authorization to reshape those boundaries now.
+
+### Local-round acceptance gates
+
+Each selected round must preserve bit-exact rendering on three images per architecture. Tiger has one available sample, which is the explicit coverage exception. Freeze input identities, recipes and relevant Full/reduced preview grids before editing production code. Compare full-precision output samples and image geometry with the unchanged baseline through the maintained rendering/golden tools. Confirm the baseline itself repeats exactly. Do not replace a failed baseline or substitute numerical tolerance. Retained-result and request/delivery checks remain necessary alongside image equality when those paths change.
+
+The selected corpus uses the existing example photographs: Classic sd9, sd10 and sd14; Merrill blue-parking-sign, merrill-hazy-coast and low-light-speaker-and-desk; ordinary Quattro dp0-quattro, dp2-quattro and sd-quattro; Tiger sd-quattro-h. The Tiger sample has processing version 4.0.1.0, CAMERAID 41 and sensor extent 6656×4480. Capture all four Full, Fast, Draft and Thumb grids with CLI defaults plus explicit `--wb Sunlight --mode Standard`, independent of owner sidecars. Record input SHA-256 identities, resolved settings, output extents and full-precision sample digests in the capture manifest.
+
+Every change must simplify. Prefer removing code, branches, duplication and repeated work. A small source increase is acceptable only when it removes conceptual complexity or makes an existing invariant explicit. Do not introduce a manager, wrapper, generic worker or new cache/scheduling policy to implement a local fix. Report code/branch changes and the removed responsibility or repeated work. Keep performance claims separate from proven control-flow redundancy until measured.
+
+### First read-only local audit
+
+Three subagents inspected GUI rendering, application/auxiliary integration and processor host bookkeeping at `fd674d0`. The coordinating review checked the strongest findings against the source. No production edits, builds or GPU runs were made during the audit. The following are candidates for owner review, not selected implementation.
+
+| Candidate | Evidence and smallest change | Simplification and checks |
+| --- | --- | --- |
+| Identical-delivery matching | [matching.rs](../crates/foveonic-gui/src/rendering/matching.rs), `same_delivery_request`: exact settings and quality equality already imply the pixel/geometry/region comparisons performed by `can_share_pixel_work`. Compare context, framing flag, exact settings and quality directly. Keep source admission unchanged. | Similar source length, fewer nested decisions and two fewer settings clones. Existing matching/coalescing checks plus focused equality-boundary checks. Strong first-round candidate. |
+| Multi-edit readiness filtering | [multi_edit_runtime.rs](../crates/foveonic-gui/src/multi_edit_runtime.rs), `apply_edits`: the group-level filter requires every target to accept an edit, then the per-photo loop repeats those same predicates before modifying that target. Remove the second filter and use the already-approved edits. | About 32 deleted lines, one readiness decision, no per-photo filtered Vec or redundant camera-resolution clones. Check pending defaults, dependent controls, relative edits and mixed-camera behavior. Strong first-round candidate. |
+| Borrow presentation resources | [presentation.rs](../crates/foveonic-gui/src/rendering/worker/presentation.rs), `Snapshot::memory_resources`: a complete `Whole` is cloned only to build a temporary `Presentation` for a borrowed inventory loop. Put that loop on `Whole` and borrow it from both existing callers. | Roughly neutral source length. Removes a fabricated owner and settings/string/vector copies. Verify identical reservation identities and deduplication. This does not change snapshot ownership. |
+| Metadata pointer comparison | [preparation.rs](../crates/foveonic/src/render/preparation.rs), `same_metadata`: upgrading a Weak only to compare allocation identity can use its pointer directly against the supplied Arc. The live Arc and retained Weak preserve the required allocation identity guarantees. | Shorter helper and no temporary strong-reference traffic. Check live, distinct and expired metadata identities. Keep weak ownership and cache policy unchanged. |
+| Repeated decoded-bundle path derivation | [lru.rs](../crates/foveonic/src/decode_cache/lru.rs), `priorities`: hash/format/join the same identity once, then derive the original/metadata extensions from that path. | Removes two identity-name computations and root joins without a helper. Keep the separate preview identity lookup and source-replacement behavior. Existing complete-bundle and budget-order tests. |
+| Redundant preview metadata lookup and navigator guard | [previews.rs](../crates/foveonic/src/decode_cache/previews.rs), `save_preview`, resolves the same immutable family twice. [navigator.rs](../crates/foveonic-gui/src/navigator.rs), `update`, repeats a sent-key condition already excluded by an early return. | Delete one binding and one branch. Low-impact hygiene with existing preview/navigator checks. No material latency claim. |
+
+Two additional candidates need separate review: shortening the pending-plan lock around immutable request interpretation, and skipping unchanged/under-budget history enforcement. They can remove contention or repeated inventories but add control-flow guards and require stronger concurrency/retention reasoning. Do not bundle them into the deletion-oriented first round.
+
+The coordinating review also confirmed that some recipe/session preparation timers depend on aggregate profiling mode and therefore disappear from shared-only capture. Repairing that coverage remains useful, but is deferred behind the simpler local candidates rather than adding instrumentation plumbing to this first round.
+
+### Completed local simplifications
+
+The owner selected identical-delivery matching and multi-edit readiness filtering, then requested that this cleanup round stop. Other audit candidates remain unimplemented.
+
+- [x] Compare context, framing flag, exact settings and quality directly in `same_delivery_request`. This removes two settings clones and the nested pixel-reuse decisions. Keep source identity and admission with their existing owners. Extend existing checks to isolate framing-only and quality-only delivery differences.
+- [x] Use the group-approved edits in each photo's application loop. Readiness is decided before any target changes, so the second filter repeats the same predicates. Remove its allocation and 32 net production lines. Keep individual defaults, Auto exposure materialization, supported ranges, normalization and persistence in that loop.
+- [x] Freeze the unchanged `fd674d0` rendering tool and capture 40 cases before production edits. Repeat all 40 exactly against those full-precision goldens, including geometry, resolved settings and sample digests.
+- [x] Rebuild and compare all 40 cases after the cleanup. Full-precision pixels, geometry and resolved settings remain exact. The image gate supplements request/coalescing and multi-edit behavior checks because these changes are in the GUI.
+- [x] Pass all 533 ordinary processor tests and 425 ordinary GUI tests, including pending defaults, dependent manual controls, mixed-camera clamping, relative edits and individual resets.
+- [x] Pass the existing GPU multi-edit Thumb delivery check, all 425 GUI tests against the final source, and final formatting, Clippy, documentation/index and artwork checks.
+
+The production diff removes duplicated decisions without adding an abstraction, cache policy or scheduling owner. The redundant work is established by control flow. This round makes no measured latency claim.
 
 - [x] Trace active-photo, multi-photo, Smart, presentation-only, inspection and export routes.
 - [x] Inspect idle preparation, decoded-cache prefetch, browser previews, navigator, scopes and picks.

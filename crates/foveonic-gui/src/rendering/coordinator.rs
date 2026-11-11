@@ -1,8 +1,9 @@
-//! Owns desired photo renders and publishes one immutable plan to the serialized executor.
+//! Owns desired photo renders, handles their results and publishes immutable execution plans.
 
 use super::{
+    delivery::{self, Destination, ViewContext},
     request::{Purpose, Request},
-    worker::{ColorPickRequest, ScopeRequest},
+    worker::{ColorPickRequest, Reply, ScopeRequest},
 };
 use foveonic::source::SourceOrigin;
 use serde_json::json;
@@ -70,6 +71,12 @@ pub enum Completion {
     Current,
     Superseded,
     Removed,
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct ResultUpdate {
+    pub current: bool,
+    pub update_photo: bool,
+    pub destination: Option<Destination>,
 }
 struct Desired {
     task: Arc<Task>,
@@ -349,6 +356,49 @@ impl RenderCoordinator {
                 && entry.settled
                 && entry.admitted == revision
         })
+    }
+    /// Decide reuse and view updates together. Photo feedback can remain useful
+    /// even when the image is rejected. UI application and acknowledgement follow.
+    pub fn handle_result(&mut self, reply: &Reply, view: &ViewContext<'_>) -> ResultUpdate {
+        let completion = if reply.exported.is_some() {
+            crate::timing::task(
+                &reply.stamp,
+                "completed",
+                || json!({"frozen_export":true,"success":reply.result.is_ok()}),
+            );
+            Completion::Current
+        } else {
+            self.finish(&reply.stamp)
+        };
+        let decision = delivery::classify(completion, &reply.into(), view);
+        let image = reply.result.as_ref().ok().and_then(Option::as_ref);
+        if decision.retain_pixels {
+            if let Some(frame) = image {
+                self.note_pixels(&reply.stamp, frame);
+            }
+        }
+        let destination = match decision.destination {
+            Ok(destination) => {
+                if image.is_some_and(|frame| !self.admit(&reply.stamp, &frame.origin)) {
+                    None
+                } else {
+                    Some(destination)
+                }
+            }
+            Err(rejection) => {
+                crate::timing::task(
+                    &reply.stamp,
+                    "image_rejected",
+                    || json!({"reason":rejection.reason()}),
+                );
+                None
+            }
+        };
+        ResultUpdate {
+            current: completion == Completion::Current,
+            update_photo: decision.update_photo,
+            destination,
+        }
     }
     pub fn finish(&mut self, stamp: &Stamp) -> Completion {
         let Some(entry) = self

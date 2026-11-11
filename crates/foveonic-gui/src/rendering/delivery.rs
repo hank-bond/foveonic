@@ -106,8 +106,8 @@ pub struct Decision {
     pub destination: Result<Destination, Rejection>,
 }
 
-/// Settlement happens before classification. Source identity and revision admission
-/// remain coordinator-owned and must succeed before applying an image destination.
+/// The coordinator's result handler settles before classification, then retains
+/// useful pixels and checks source/revision admission before returning a destination.
 pub fn classify(completion: Completion, reply: &ReplyInfo<'_>, view: &ViewContext<'_>) -> Decision {
     let rejection = if completion == Completion::Removed {
         Some(Rejection::Removed)
@@ -191,13 +191,15 @@ fn destination(
 }
 
 impl App {
-    pub(crate) fn image_delivery(&self, completion: Completion, reply: &worker::Reply) -> Decision {
+    pub(crate) fn handle_render_result(
+        &self,
+        reply: &worker::Reply,
+    ) -> super::coordinator::ResultUpdate {
         let calibration = self
             .noise_calibration
             .selected(self.preferences.noise_profile);
-        classify(
-            completion,
-            &reply.into(),
+        self.worker.handle_result(
+            reply,
             &ViewContext {
                 active: self.selected.as_deref(),
                 rendition: self.before.active,

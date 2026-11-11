@@ -11,6 +11,7 @@ Give each requirement or fact one home and link to it from related documents. Re
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
 - **[advanced-color-range-research](./advanced-color-range-research.md)** _(reference)._ Color-wheel inspection separates soft range selection, overlapping adjustments and a possible selective lightness inversion.
+- **[architecture/](./architecture/AGENTS.md)** Architecture guidance connects shared concepts, design principles and unresolved decisions to the implemented application.
 - **[color-and-tone-research](./color-and-tone-research.md)** _(reference)._ Research catalog of perceptual saturation, color grading, tonal adjustment, highlight rendering and automatic exposure methods.
 - **[color-field-evaluation](./color-field-evaluation.md)** _(how-to)._ Reproduce saved-sidecar highlight comparisons, completed GPU timings, and a private toggleable browser report.
 - **[contributing](./contributing.md)** _(reference)._ Documentation uses concise requirements, evolving progress plans, frontmatter summaries, and generated directory indexes. _Read before writing documentation or source summaries._

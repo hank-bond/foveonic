@@ -298,7 +298,7 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rendering::worker::{Frame, Update, Worker};
+    use crate::rendering::worker::{Frame, Worker};
     use eframe::{egui, wgpu};
     use foveonic::{profile::Profile, render::Engine, source::Source};
     use std::sync::atomic::Ordering;
@@ -327,18 +327,9 @@ mod tests {
     }
     fn receive(worker: &Worker, revision: u64) -> Frame {
         loop {
-            if let Update::Image(reply) = worker
-                .replies
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .unwrap()
-            {
-                worker.finish_image(&reply.stamp);
-                if let Ok(Some(frame)) = &reply.result {
-                    worker.retain_pixels(&reply.stamp, frame);
-                }
-                if reply.revision == revision {
-                    return reply.result.unwrap().unwrap();
-                }
+            let reply = super::super::tests::receive(worker);
+            if reply.revision == revision {
+                return reply.result.unwrap().unwrap();
             }
         }
     }

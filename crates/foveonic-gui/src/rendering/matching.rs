@@ -82,8 +82,8 @@ pub(crate) fn can_share_pixel_work(a: &Request, b: &Request) -> bool {
 /// Coalescing an unchanged delivery also requires exact requested settings.
 /// Revisions and source identity are managed by the coordinator.
 pub(crate) fn same_delivery_request(a: &Request, b: &Request) -> bool {
-    can_share_pixel_work(a, b)
-        && !presentation_changed(a, b)
+    same_request_context(a, b)
+        && a.framing_preview == b.framing_preview
         && a.settings == b.settings
         && a.preview_quality == b.preview_quality
 }
@@ -154,9 +154,11 @@ mod tests {
     fn framing_reuses_pixels_while_output_resize_requires_processing() {
         let a = request();
         let mut b = a.clone();
+        b.framing_preview = true;
+        assert!(can_share_pixel_work(&a, &b));
+        assert!(!same_delivery_request(&a, &b));
         b.settings.crop.bounds = [0.1, 0.2, 0.9, 0.8];
         b.settings.rotation.degrees = 7.;
-        b.framing_preview = true;
         b.preview_quality = PreviewMode::Full;
         assert!(!same_authored_edits(&a.settings, &b.settings));
         assert!(!same_image_geometry(&a.settings, &b.settings));
@@ -174,6 +176,9 @@ mod tests {
         let mut b = a.clone();
         b.revision += 1;
         assert!(same_delivery_request(&a, &b));
+        b.preview_quality = PreviewMode::Full;
+        assert!(!same_delivery_request(&a, &b));
+        b.preview_quality = a.preview_quality;
         b.settings.exposure = 0.25;
         assert!(same_image_geometry(&a.settings, &b.settings));
         assert!(!same_authored_edits(&a.settings, &b.settings));

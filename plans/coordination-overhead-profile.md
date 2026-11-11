@@ -6,6 +6,8 @@ summary: "Measure data movement, preparation, scheduling, synchronization and de
 
 Requirements: [profiling](../docs/specs/profiling.md) and [shared diagnostics](../docs/specs/performance-diagnostics.md). This investigation supplies runtime evidence to the [coordination consistency inventory](./render-coordination-consistency.md). The owner requested measurement of overall shuffling and waiting, including data movement and asynchronous handoffs, before deciding whether improvements fit the current architecture or should wait for the larger redesign.
 
+The [render runtime migration](./render-runtime.md) now owns conceptual review, slice selection and next actions. This investigation retains the measured evidence and experiment limits. It is not a separate implementation queue.
+
 Keep production scheduling, cache policy and node arithmetic unchanged during attribution. Use the existing maintained headless and native scenario tools, isolated inputs and local cache namespaces. Check for competing apps/compilers before each run and retain workload observations. Compare ordinary Off latency separately from shared Wall/GPU trace attribution. GPU time and inclusive host waits overlap and must not be added as independent work.
 
 ## Questions
@@ -24,7 +26,7 @@ Keep production scheduling, cache policy and node arithmetic unchanged during at
 - [x] Attribute preparation, transfer, synchronization, scheduling and delivery with shared traces.
 - [x] Use matched focused experiments where attribution warrants them. Keep changes isolated from defaults and report confounders.
 - [x] Record practical opportunities, estimated scope and deferred work.
-- [ ] Review findings with the owner and select implementation slices alongside the wider consistency inventory.
+- [x] Carry the measured findings and wider consistency inventory into the render runtime migration for owner-reviewed slice selection.
 
 ## Interpretation
 
@@ -111,6 +113,8 @@ These are measured opportunities, not an implementation order. The owner's prior
 | Coordinate auxiliary GPU producers consistently | Browser snapshots are prepared on UI receipt while navigator/persisted previews use separate workers and deferral. They share the device queue with foreground rendering. | Matched scenarios that suppress/defer only optional work, verify main-image latency, thumbnail freshness and starvation. Existing traces do not isolate the complete interference cost. |
 | Preserve effective reduced-input prewarming | Prepared selection avoids source payload reads and native preparation. Use the existing background path and readiness distinction. The matched 2 GiB selection runs confirm a large interaction-latency difference. | Idle interruption, constrained memory budgets and no accidental promotion of speculative work into foreground use. A green decoded-cache status alone does not imply prepared processing. |
 | Reuse invariant recipe preparation | Quattro response preparation and first-use repair preparation are measurable. Identify immutable inputs or redundant construction before optimizing arithmetic. | Numerical identity, correct exposure/tone invalidation and clear preparation ownership. |
+
+The owner marked Quattro response preparation as a future optimization. Check how much curve construction can be reused across exposure and tone edits, then measure the effect on preparation time and complete edit latency. Verify output equality and invalidation when the controls change.
 
 Defer stage-grouped execution of several photos, a central CPU/GPU admission processor and cross-executor resource ownership to the orchestration unit. They may improve overlap but change execution ownership substantially. A generic async runtime, channel replacement or universal worker abstraction is not supported by the measured channel costs.
 
