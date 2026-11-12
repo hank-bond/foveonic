@@ -8,14 +8,43 @@ Requirements: [render orchestration](../docs/specs/render-orchestration.md), [in
 
 ## Resume here
 
-- **Current phase:** the owner approved a checkpoint of the off-UI coordination slice. The review app was opened with the example-photograph folder.
-- **Checkpoint:** the off-UI coordination slice follows `aede4e8`, which contains result handling and the reviewed local matching and readiness simplifications.
-- **Current unit:** map source acquisition and decoding before reviewing the next ownership boundary.
+- **Current phase:** the owner approved separating source loading from rendering after the off-UI coordination, behavioral coverage and mechanical browser organization slices.
+- **Checkpoint:** `075bbcc` contains broad behavioral coverage, focused delivery fixes and test organization. The off-UI coordinator is already implemented. See the [behavioral plan](./behavioral-testing.md) for checks and remaining coverage limits.
+- **Current unit:** source acquisition is separated from the serial renderer and validated for owner review. Reuse remains before loading, and an already-ready photo can render while another load is held.
 - **Decided:** protect UI responsiveness, use one runtime for individual and multi-photo editing, isolate responsibilities and support subordinate speculative work. Keep engine execution serial throughout this migration.
 - **Separate future effort:** [wide rendering](./wide-rendering.md). Clear application/engine ownership should make that experiment easier, without building its execution machinery here.
 - **Not decided:** later state ownership, shared foreground/background admission policy and backlog limits.
 - **Communication direction:** ordinary typed messages, fixed consumers and directly called handlers. Keep existing library queues across threads. Add a broadcast/watch dependency only when an actual consumer needs the full primitive.
-- **Next action:** discuss the next conceptual unit, including how source acquisition and decoding become separate from the render worker. Preserve the cached-switch baseline limitation below. Update this section after every accepted slice.
+- **Next action:** review the source-loading boundary with the owner before committing or selecting another architectural unit. The earlier cached-switch failure and its subsequent fix remain recorded in the behavioral plan.
+
+## Alignment for every slice
+
+The [three agreed goals](../docs/specs/render-orchestration.md#agreed-goals) are the alignment criteria throughout this migration: maintainability, latency and future execution flexibility. Each review records the ownership improvement, the work or waiting affected and its measured evidence, and the assumptions about serial execution that remain. Improvements need not advance all three equally, but must not obscure a regression in another goal.
+
+For the approved source-loading slice:
+
+- **Maintainability:** foreground source acquisition has a distinct owner. Requested disk-cache access and decoding leave render execution, including native recovery for retained reduced sessions.
+- **Latency:** a load cannot occupy the serial renderer while another photograph has ready inputs. Measure held-load behavior and ordinary warm reuse separately rather than assuming a speedup.
+- **Execution flexibility:** decoded sources and per-photo readiness are independent of the order in which the engine executes ready rendering work. Keep the current engine serial.
+
+Use existing cache and CPU decoding facilities. Keep the UI nonblocking, source identity explicit, errors per photo, and source handoff bounded. Validate cold loading, supersession, reuse, native recovery, frozen export and picking through the same loading boundary. Record progress and corrected assumptions here as the implementation proceeds.
+
+The first slice covers requested rendering, native recovery, picking and frozen export. Existing idle Thumb preparation still reads decoded bundles inside its speculative worker operation. Moving that optional acquisition requires reviewing its admission and foreground-yield policy together, so it remains an explicit next boundary rather than silently extending this slice into a background scheduler redesign. An obsolete source read may finish, but its unwanted result is discarded. The renderer can continue using already-ready inputs during that read.
+
+### Source-loading checks and lessons
+
+- [x] CPU checks cover per-source edit coalescing, removed/re-added demand, bounded handoff, sibling service and replacement jobs that can reuse retained input.
+- [x] The headed `source-loading` case holds A's native load while B's visible Exposure control remains enabled and B delivers its newly edited, settled and admitted Thumb frame. It passes with original access and with the decoded disk cache enabled. Perfetto independently records B's rendering inside the source-pause interval.
+- [x] Eight related native scenarios pass: held original load, held decoded-cache load, warm disk, eight-photo cached switching, eight-photo selection under pressure, seeded transitions, lifecycle recovery and foreground editing during batch work. Smart smoke also passes through refinement, crop and retained reopening.
+- [x] Nine focused GPU checks pass for reduced preparation/recovery, retained native state, latest multi-edit delivery, continuous edits with scopes, color picking, and Full TIFF/DNG export from reduced preview modes.
+- [x] Forty frozen Full/Fast/Draft/Thumb samples remain bit-exact across three Classic, three Merrill, three Quattro and one Tiger source. Image-capturing selection, transition and background journeys also match fresh processing.
+- [x] Ordinary workspace tests, the new focused checks, strict Clippy, formatting, portable profiling/artwork checks and documentation/index checks pass.
+
+Only a job that has actually discovered missing input waits for acquisition. Marking an entire path unavailable would incorrectly block a new request that can reuse presentation or session data. Keep per-job waiting separate from per-source load coalescing. Preserve another photo's native session until the requested source is ready, rather than discarding it while waiting.
+
+The first held-load run exposed a harness assumption: the single-photo Exposure widget has a label but no multi-edit JSON pointer. Its enabled/visible check now observes that actual control by label as well. The trace declaration also explicitly expects A's deliberate source read. Neither correction relaxes B's required delivery during the hold. Export checking encountered a full disk, then passed after duplicate generated float samples were removed while preserving the frozen baseline and reports.
+
+Two natural warm-edit Off trials pass. The comparison tool rejects the earlier baseline because recipes and workload metadata differ, so these samples do not establish a before/after latency change. The demonstrated improvement is independent progress during source loading. General throughput remains a separate matched-measurement question.
 
 ## Result-handler review unit
 
@@ -86,7 +115,7 @@ The final delivery pass removes the render worker's direct image/scope/pick repa
 
 ## Source acquisition map
 
-The coordinator accepts per-photo render requests and publishes the current work plan. One render worker chooses a job. It first checks for reusable presentation pixels, then for a compatible reduced or native processing session. If the selected path needs a source, that same worker synchronously opens the decoded cache or reads and decodes the original. It cannot choose a different render job during that call. See [worker dispatch](../crates/foveonic-gui/src/rendering/worker/mod.rs), [reduced session lookup](../crates/foveonic-gui/src/rendering/worker/reduced.rs) and [cache open](../crates/foveonic/src/decode_cache/mod.rs).
+Before the source-loading slice, the coordinator accepted per-photo render requests and published the current work plan. One render worker chose a job. It checked reusable presentation pixels, then compatible reduced or native processing sessions. A miss synchronously opened the decoded cache or read and decoded the original on that same worker, preventing it from choosing another render job. The slice preserves those reuse checks and moves requested acquisition to [source_loader.rs](../crates/foveonic-gui/src/rendering/source_loader.rs). See [worker dispatch](../crates/foveonic-gui/src/rendering/worker/mod.rs), [reduced session lookup](../crates/foveonic-gui/src/rendering/worker/reduced.rs) and [cache open](../crates/foveonic/src/decode_cache/mod.rs).
 
 | Data | Current owner and readiness |
 | --- | --- |
@@ -96,11 +125,11 @@ The coordinator accepts per-photo render requests and publishes the current work
 | Original file | A decoded-cache miss reads and decodes the original. CPU decode uses the shared host-sized Rayon pool. Cache population can follow asynchronously. |
 | Speculative preparation | The disk-cache worker prefetches a bounded neighborhood, admitting at most three photos concurrently to shared CPU decoding. Separately, the render worker may open a verified cached decode and prepare a reduced Thumb session while idle and within its memory budget. |
 
-For file-backed sources, identity combines canonical path, byte length and modification time. The cache exposes a previously verified identity snapshot without touching the original file. If none is known, source/session lookup can read filesystem metadata. The coordinator carries the known origin with a render task and checks source identity during admission. A source path can therefore have multiple identities over time.
+For file-backed sources, identity combines canonical path, byte length and modification time. The cache exposes a previously verified identity snapshot without touching the original file. A cold lookup now obtains identity from the loaded source rather than probing filesystem metadata on the render thread. The coordinator carries the known origin with a render task and checks source identity during admission. A source path can therefore have multiple identities over time.
 
-Superseded render requests are replaced by the coordinator. The worker checks the current plan during graph execution. The foreground `Cache::open` call has no render-request cancellation argument, so an obsolete foreground load can finish before the worker reaches that graph cancellation check. Speculative prefetch has separate generation and foreground-interruption checkpoints. These are distinct lifecycles.
+Superseded render requests are replaced by the coordinator. The worker checks the current plan during graph execution. The foreground `Cache::open` call has no render-request cancellation argument, so an obsolete foreground load can finish on the source thread. Coordination discards it when no longer wanted. Speculative prefetch has separate generation and foreground-interruption checkpoints. These are distinct lifecycles.
 
-The next design discussion is how the coordinator can request source acquisition and receive a per-photo outcome independently of the serial renderer. A ready source, an already retained processing session and reusable presentation pixels have different readiness and ownership. The interface must preserve those reuse paths, validate source identity, bound in-flight decoded memory, handle failures and supersession per photo, and prioritize foreground work. It must also let another ready photo render while one acquisition waits. Decide the concrete interface and its first reviewable slice with the owner.
+The approved interface distinguishes ready source data, retained processing sessions and reusable presentation pixels. The renderer asks for missing input and defers that job without emitting a completion. Coordination admits loads for currently wanted paths and publishes successful or failed handoffs. A separate source thread does cache I/O and calls existing decoding facilities. At most one decoded source waits for consumption, and the next load starts once that handoff is consumed. Existing native and reduced input retention remains with the renderer. Optional idle acquisition and cancellation of an already-started read remain follow-up decisions.
 
 ### Reusable presentation ownership
 

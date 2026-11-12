@@ -6,6 +6,7 @@ use foveonic::render::Settings;
 use std::time::Duration;
 
 struct Rig {
+    _sources: super::super::source_loader::Handle,
     handle: Handle,
     slot: Slot,
     results: Sender<Update>,
@@ -17,14 +18,19 @@ impl Rig {
         let slot = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let progress = crate::progress::Tracker::default();
         let (results, input) = crossbeam_channel::bounded(2);
+        let cache = Arc::new(Cache::new());
+        let (sources, loader, _) =
+            super::super::source_loader::start(cache.clone(), progress.clone(), slot.clone());
         let (handle, updates) = Handle::start(
             slot.clone(),
             input,
-            Arc::new(Cache::new()),
+            cache,
             progress.clone(),
             Default::default(),
+            loader,
         );
         Self {
+            _sources: sources,
             handle,
             slot,
             results,

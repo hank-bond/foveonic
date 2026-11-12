@@ -60,6 +60,7 @@ impl Handle {
         cache: Arc<Cache>,
         progress: crate::progress::Tracker,
         context: egui::Context,
+        loader: super::source_loader::Service,
     ) -> (Self, Receiver<Update>) {
         let (commands, input) = crossbeam_channel::unbounded();
         let (output, updates) = crossbeam_channel::bounded(2);
@@ -77,6 +78,8 @@ impl Handle {
                     status: published,
                     processed: 0,
                     view: None,
+                    loader,
+                    exporting: None,
                 };
                 runtime.run(input, results, output);
             })
@@ -194,6 +197,8 @@ struct Runtime {
     status: Arc<Mutex<Arc<Status>>>,
     processed: u64,
     view: Option<Arc<ViewState>>,
+    loader: super::source_loader::Service,
+    exporting: Option<PathBuf>,
 }
 
 impl Runtime {
@@ -203,6 +208,8 @@ impl Runtime {
         results: Receiver<Update>,
         output: Sender<Update>,
     ) {
+        let source_signals = self.loader.signals.clone();
+        let loaded_sources = self.loader.results.clone();
         let mut waiting = None;
         let mut handled = false;
         loop {
@@ -227,6 +234,8 @@ impl Runtime {
             }
             let mut select = Select::new();
             let command = select.recv(&commands);
+            let source_request = select.recv(&source_signals);
+            let source_result = select.recv(&loaded_sources);
             let receive = waiting.is_none().then(|| select.recv(&results));
             let send = (waiting.is_some() && self.view.is_some()).then(|| select.send(&output));
             let operation = select.select();
@@ -242,6 +251,22 @@ impl Runtime {
                         self.context.request_repaint();
                     }
                     _ => {
+                        self.stop();
+                        return;
+                    }
+                }
+            } else if index == source_request {
+                match operation.recv(&source_signals) {
+                    Ok(signal) => self.loader.signal(signal),
+                    Err(_) => {
+                        self.stop();
+                        return;
+                    }
+                }
+            } else if index == source_result {
+                match operation.recv(&loaded_sources) {
+                    Ok(source) => self.loader.completed(source),
+                    Err(_) => {
                         self.stop();
                         return;
                     }
@@ -288,6 +313,7 @@ impl Runtime {
             Command::Submit(request, queued_at) => {
                 let origin = self.cache.source_origin(&request.path);
                 if request.export.is_some() {
+                    self.exporting = Some(request.path.clone());
                     self.progress.begin(request.revision, queued_at);
                     let task =
                         self.coordinator
@@ -349,6 +375,9 @@ impl Runtime {
         );
         match &mut update {
             Update::Image(reply) if reply.handling.is_none() => {
+                if reply.exported.is_some() {
+                    self.exporting = None;
+                }
                 let view = self.view.as_ref().unwrap().context(&reply.path);
                 let handling = self.coordinator.handle_result(reply, &view);
                 reply.handling = Some(handling);
@@ -371,8 +400,17 @@ impl Runtime {
         Some(update)
     }
 
-    fn publish(&self) {
+    fn publish(&mut self) {
         let plan = self.coordinator.plan();
+        let mut wanted = plan
+            .tasks
+            .iter()
+            .map(|task| task.request.path.clone())
+            .collect::<Vec<_>>();
+        wanted.extend(plan.pick.iter().map(|task| task.request.path.clone()));
+        wanted.extend(self.exporting.iter().cloned());
+        self.loader.retain(wanted);
+        self.loader.admit();
         let retained = self.coordinator.retained_images();
         foveonic::diagnostics::counter(
             foveonic::diagnostics::Category::Coordinator,

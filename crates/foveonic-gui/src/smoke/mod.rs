@@ -20,6 +20,7 @@ mod rotate;
 mod scenarios;
 mod screenshot;
 mod selection;
+mod source_loading;
 pub use screenshot::{screenshot_active, screenshot_recipe};
 mod slider;
 mod transitions;

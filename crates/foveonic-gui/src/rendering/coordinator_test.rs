@@ -503,6 +503,66 @@ fn an_explicit_native_pass_without_composition_change_gets_new_pixel_work() {
 }
 
 #[test]
+fn loading_one_source_leaves_ready_siblings_and_replacement_jobs_serviceable() {
+    let mut coordinator = RenderCoordinator::default();
+    let mut cursor = Cursor::default();
+    let a = desire(&mut coordinator, request("a.x3f", 1, 0.));
+    let b = desire(&mut coordinator, request("b.x3f", 2, 0.));
+    assert_eq!(
+        cursor
+            .next_ready(&coordinator.plan(), |_| false)
+            .unwrap()
+            .stamp,
+        a
+    );
+    cursor.defer(&a);
+    // A job first checks presentation/session reuse. Only a job that actually
+    // needed a source waits for that source, rather than blocking its whole path.
+    assert_eq!(
+        cursor
+            .next_ready(&coordinator.plan(), |_| false)
+            .unwrap()
+            .stamp,
+        b
+    );
+    assert!(cursor.next_ready(&coordinator.plan(), |_| false).is_none());
+    let replacement = desire(&mut coordinator, request("a.x3f", 3, 0.25));
+    cursor.retain_waiting(&coordinator.plan(), None);
+    assert_eq!(
+        cursor
+            .next_ready(&coordinator.plan(), |_| false)
+            .unwrap()
+            .stamp,
+        replacement
+    );
+    cursor.defer(&replacement);
+    assert!(cursor.next_ready(&coordinator.plan(), |_| false).is_none());
+    assert_eq!(
+        cursor
+            .next_ready(&coordinator.plan(), |_| true)
+            .unwrap()
+            .stamp,
+        replacement
+    );
+}
+
+#[test]
+fn a_deferred_export_waits_for_its_source_independently_of_preview_plans() {
+    let mut coordinator = RenderCoordinator::default();
+    let mut cursor = Cursor::default();
+    let export = coordinator.frozen_export(request("export.x3f", 1, 0.), None, Instant::now());
+    cursor.defer(&export.stamp);
+    cursor.retain_waiting(&coordinator.plan(), Some(&export.stamp));
+    assert!(!cursor.ready(&export.stamp, false));
+    assert!(cursor.ready(&export.stamp, true));
+    cursor.retain_waiting(&coordinator.plan(), None);
+    assert!(
+        cursor.ready(&export.stamp, false),
+        "removed jobs must not leave source waits behind"
+    );
+}
+
+#[test]
 fn continuous_composition_followups_cannot_starve_another_pending_photo() {
     let mut coordinator = RenderCoordinator::default();
     let mut cursor = Cursor::default();

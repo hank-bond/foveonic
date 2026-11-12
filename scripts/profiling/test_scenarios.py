@@ -124,7 +124,7 @@ class ScenarioTests(unittest.TestCase):
             self.assertEqual(len(selected_cases(cases,1,'draft','initial')),1)
             self.assertEqual(len(selected_cases(cases,1,'full','initial')),1)
             self.assertEqual(len(selected_cases(cases,1,'fast','initial')),1)
-            for count,quality,name in [(2,'draft','initial'),(1,'thumb','cached-switch'),(1,'thumb','choice-journey'),(3,'thumb','initial')]:
+            for count,quality,name in [(2,'draft','initial'),(1,'thumb','cached-switch'),(1,'thumb','choice-journey'),(1,'thumb','source-loading'),(3,'thumb','initial')]:
                 with self.assertRaises(ValueError):selected_cases(cases,count,quality,name)
             with self.assertRaises(ValueError):selected_cases([cases[0],cases[0]],2,'thumb','initial')
 

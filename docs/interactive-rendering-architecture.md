@@ -21,6 +21,9 @@ flowchart TD
     Coordinator --> Plan[One replaceable WorkPlan]
     Plan --> Worker[Render worker: Cursor chooses work]
     Worker --> Reuse[Reuse presentation, reduced session, or native source]
+    Reuse -->|Missing source| Loading[Source loader: disk access and CPU decode]
+    Loading --> Ready[Coordinator publishes source readiness]
+    Ready --> Worker
     Reuse --> Numeric[Engine: author graph and execute required dependencies]
     Reuse --> View[Prepare or reuse display texture]
     Numeric --> View
@@ -32,7 +35,7 @@ flowchart TD
     Frames --> Aux[Browser previews, navigator and image-matched scopes]
 ```
 
-The two outgoing reuse paths are alternatives. Reframing compatible pixels can skip photographic execution. A reduced-session hit can skip source loading and reuse graph dependencies, while still executing a changed finishing operation. A decoded disk hit skips original-file access and entropy decoding but can require all native preparation before pooling.
+The processing and presentation paths are alternatives. Reframing compatible pixels can skip photographic execution. A reduced-session hit can skip source loading and reuse graph dependencies, while still executing a changed finishing operation. A decoded disk hit skips original-file access and entropy decoding but can require all native preparation before pooling.
 
 The entry points are `App::select`, `submit_with_quality`, `receive` and `update` in [main.rs](../crates/foveonic-gui/src/main.rs), and `sync_multi_edit` / `submit_multi_edit` in [multi_edit_runtime.rs](../crates/foveonic-gui/src/multi_edit_runtime.rs). The UI sends typed commands and immutable view context through [runtime.rs](../crates/foveonic-gui/src/rendering/runtime.rs). Its dedicated coordinator thread receives worker results, calls `handle_result` and publishes the next plan independently of UI paints. The UI rechecks returned `ResultUpdate` facts against its latest edits and view before application.
 
@@ -50,7 +53,8 @@ Result handling settles the matching request, classifies reuse, retains useful p
 | Desired render work | [RenderCoordinator](../crates/foveonic-gui/src/rendering/coordinator.rs), run by [runtime.rs](../crates/foveonic-gui/src/rendering/runtime.rs) | Owns task identity, replacement/coalescing, settlement and admitted revision order per photo and purpose on the coordinator thread. |
 | Request purpose and preview policy | [request.rs](../crates/foveonic-gui/src/rendering/request.rs) | Describes requested work independently of worker execution. Consumer purpose, nominal scale, camera-resolved scale and actual reused grid remain distinct. |
 | Numeric editing values and reset values | [render/edits.rs](../crates/foveonic/src/render/edits.rs) | The processor derives snapshots from camera metadata and requested settings. The worker adds render-produced estimates and publishes them. Multi-edit retains/applies them without owning camera interpretation. |
-| Execution service order | `Cursor` and the [render worker](../crates/foveonic-gui/src/rendering/worker/mod.rs) | Cursor preserves service across plan replacements. The worker handles source acquisition, execution, presentation preparation and publication. |
+| Execution service order | `Cursor` and the [render worker](../crates/foveonic-gui/src/rendering/worker/mod.rs) | Cursor preserves service across plan replacements. A job that needs source data defers without settling, allowing other ready jobs to execute. The worker retains processing sessions and prepares presentation resources. |
+| Requested source acquisition | [source_loader.rs](../crates/foveonic-gui/src/rendering/source_loader.rs) | The coordinator retains wanted loads and admits one active or unconsumed decoded source. A separate I/O thread opens the existing decoded cache or original. Decoding uses the existing shared CPU pool. The renderer consumes the bounded handoff, then builds its processing session. |
 | Recipe and numerical validity | [recipes](../crates/foveonic/src/render/recipes/AGENTS.md), [graph](../crates/foveonic/src/graph/AGENTS.md), [interactive.rs](../crates/foveonic/src/interactive.rs) | Recipes describe operations. Effective operation keys and dependency versions determine reuse. The executor runs required missing work. |
 | Visible image | `App::frame`, `App::detail`, `Runtime` frames | UI-owned immutable completions. Their requested settings and pixel provenance remain separate from newer controls. |
 | Shared retained-memory policy | [render/memory.rs](../crates/foveonic/src/render/memory.rs) | The UI inventories its resources. The coordinator publishes retained-image handles, which the worker combines with the frontend inventory for core accounting and trimming. Essential active inputs can exceed the target. |
@@ -89,6 +93,8 @@ Disk and memory caches retain different representations. They cannot share one r
 | Execution scratch | [gpu/scratch.rs](../crates/foveonic/src/gpu/scratch.rs) and guarded storage. | Reuse follows reader ownership and ordered submission. Retained immutable checkpoints are not available for scratch writes. |
 
 The shared memory target is an accounting and retention policy, not a hard process or driver allocation limit. `Engine::trim_memory` trims optional versions, cold preparation and inactive entries. It protects essential active inputs and reports excess. Idle preparation uses spare capacity and checks admission before inserting a cold entry. Temporary source loading and reconstruction still require peak headroom.
+
+Foreground source loads are coalesced by path independently of authored edits. Presentation and processing-session reuse are checked before requesting a source. Only the render job that actually found missing input waits for loading. A replacement request can still reuse GPU data. The coordinator receives source outcomes even when UI image delivery is full. Removed loads are discarded, and a ready source waiting for the renderer is included in retained-memory accounting. In-flight source reads can finish after their request becomes obsolete. Idle Thumb preparation still performs its cached-source access inside the existing speculative operation.
 
 ## Identities are for different decisions
 

@@ -35,6 +35,7 @@ enum Case {
     BrowserJourney,
     CollectionJourney,
     ChoiceJourney,
+    SourceLoading,
 }
 impl Case {
     fn selection_journey(self) -> bool {
@@ -50,6 +51,7 @@ impl Case {
                     | Self::BrowserJourney
                     | Self::CollectionJourney
                     | Self::ChoiceJourney
+                    | Self::SourceLoading
             )
     }
 }
@@ -190,6 +192,7 @@ enum Action {
     BackgroundWait,
     TransitionJourney,
     ChoiceJourney,
+    SourceLoading,
     LifecycleJourney,
     BrowserJourney,
     CollectionJourney,
@@ -213,6 +216,7 @@ impl Action {
             Self::BackgroundWait => "background-finish",
             Self::TransitionJourney => "transition-journey",
             Self::ChoiceJourney => "choice-journey",
+            Self::SourceLoading => "source-loading",
             Self::LifecycleJourney => "lifecycle-journey",
             Self::BrowserJourney => "browser-journey",
             Self::CollectionJourney => "collection-journey",
@@ -221,6 +225,7 @@ impl Action {
     fn coverage(self) -> &'static str {
         match self {
             Self::Remove
+            | Self::SourceLoading
             | Self::SelectionJourney
             | Self::Rebuild
             | Self::TransitionJourney
@@ -280,6 +285,7 @@ pub(super) struct Scenario {
     background_edit: Option<super::background::BackgroundEdit>,
     transitions: Option<super::transitions::TransitionJourney>,
     choices: Option<super::choices::ChoiceJourney>,
+    source_loading: Option<super::source_loading::SourceLoading>,
     lifecycle: Option<super::lifecycle::LifecycleJourney>,
     browser_journey: Option<super::browser_journey::BrowserJourney>,
     collection_journey: Option<super::collection::CollectionJourney>,
@@ -427,9 +433,15 @@ impl Scenario {
             .then(|| super::background::BackgroundEdit::new(exposures.clone()));
         let lifecycle = (config.name == Case::LifecycleJourney)
             .then(|| super::lifecycle::LifecycleJourney::new(exposures[0]));
+        let source_loading = (config.name == Case::SourceLoading)
+            .then(|| super::source_loading::SourceLoading::new(exposures.clone()));
         if matches!(
             config.name,
-            Case::SliderDrag | Case::LifecycleJourney | Case::ChoiceJourney | Case::BackgroundEdit
+            Case::SliderDrag
+                | Case::LifecycleJourney
+                | Case::ChoiceJourney
+                | Case::BackgroundEdit
+                | Case::SourceLoading
         ) {
             crate::automation::enable();
         }
@@ -439,6 +451,7 @@ impl Scenario {
         Some(Self {
             paths: config.sources.clone(),
             config,
+            source_loading,
             manifest,
             phase: Phase::Setup,
             expected: BTreeMap::new(),
@@ -682,6 +695,7 @@ impl Scenario {
                     ]),
                     Case::TransitionJourney => self.actions.push_back(Action::TransitionJourney),
                     Case::ChoiceJourney => self.actions.push_back(Action::ChoiceJourney),
+                    Case::SourceLoading => self.actions.push_back(Action::SourceLoading),
                     Case::LifecycleJourney => self.actions.push_back(Action::LifecycleJourney),
                     Case::BrowserJourney => self.actions.push_back(Action::BrowserJourney),
                     Case::CollectionJourney => self.actions.push_back(Action::CollectionJourney),
@@ -705,6 +719,23 @@ impl Scenario {
                 }
             }
             Phase::Running => {
+                if matches!(self.action, Some(Action::SourceLoading)) {
+                    let result =
+                        self.source_loading
+                            .as_mut()
+                            .unwrap()
+                            .advance(app, ctx, smoke, &self.paths);
+                    self.update_journey_expectations();
+                    match result {
+                        Ok(false) => return,
+                        Ok(true) => {}
+                        Err(error) => {
+                            self.failed = Some(error);
+                            self.finish(app);
+                            return;
+                        }
+                    }
+                }
                 if matches!(self.action, Some(Action::ChoiceJourney)) {
                     match self.choices.as_mut().unwrap().advance(
                         app,
@@ -1162,6 +1193,7 @@ impl Scenario {
                         "journey":self.journey.as_ref().map(|journey|journey.evidence()),
                         "transitions":self.transitions.as_ref().map(|journey|journey.evidence()),
                         "choices":self.choices.as_ref().map(|journey|journey.evidence()),
+                        "source_loading":self.source_loading.as_ref().map(|journey|journey.evidence()),
                         "browser_journey":self.browser_journey.as_ref().map(|journey|journey.evidence()),
                         "collection_journey":self.collection_journey.as_ref().map(|journey|journey.evidence()),
                         "lifecycle":self.lifecycle.as_ref().map(|journey| {
@@ -1229,6 +1261,7 @@ impl Scenario {
         self.journey
             .as_ref()
             .map(|journey| &journey.model)
+            .or_else(|| self.source_loading.as_ref().map(|journey| &journey.model))
             .or_else(|| self.transitions.as_ref().map(|journey| &journey.model))
             .or_else(|| self.browser_journey.as_ref().map(|journey| &journey.model))
             .or_else(|| {
@@ -1243,6 +1276,7 @@ impl Scenario {
             .journey
             .as_ref()
             .map(|journey| &journey.model)
+            .or_else(|| self.source_loading.as_ref().map(|journey| &journey.model))
             .or_else(|| self.transitions.as_ref().map(|journey| &journey.model))
             .or_else(|| self.browser_journey.as_ref().map(|journey| &journey.model))
             .or_else(|| {
@@ -1382,6 +1416,7 @@ impl Scenario {
         self.observe_ui(app, ctx);
         match action {
             Action::Initial => self.targets = self.paths.clone(),
+            Action::SourceLoading => self.targets = self.paths[1..2].to_vec(),
             Action::Switch(index) => self.targets = vec![self.paths[index].clone()],
             Action::Remove => self.targets = vec![self.paths[0].clone()],
             Action::Readd => self.targets = self.paths[..2].to_vec(),
@@ -1452,6 +1487,13 @@ impl Scenario {
                 0
             })
             .into();
+        }
+        if matches!(action, Action::SourceLoading) {
+            // A deliberately reacquires native input. B's edit must complete
+            // before that held read is released.
+            expectation["expect_original_reads"] =
+                u64::from(self.config.disk_cache_bytes == 0).into();
+            expectation["expect_local_reads"] = u64::from(self.config.disk_cache_bytes > 0).into();
         }
         if matches!(action, Action::Switch(_)) {
             if !target_reuse {
@@ -1539,6 +1581,7 @@ impl Scenario {
             | Action::LifecycleJourney
             | Action::BrowserJourney
             | Action::CollectionJourney => {}
+            Action::SourceLoading => {}
         }
         self.phase = Phase::Running;
     }
@@ -1598,6 +1641,9 @@ impl Scenario {
     }
 
     fn finish(&mut self, app: &mut App) {
+        if let Some(journey) = &mut self.source_loading {
+            journey.release();
+        }
         if let Some(journey) = &mut self.transitions {
             journey.release();
         }

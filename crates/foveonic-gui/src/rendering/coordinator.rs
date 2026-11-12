@@ -574,9 +574,52 @@ pub struct Cursor {
     scopes: Option<TaskId>,
     pick: Option<TaskId>,
     followed: Option<TaskId>,
+    waiting: HashSet<Stamp>,
+    waiting_pick: Option<TaskId>,
 }
 impl Cursor {
+    pub fn defer(&mut self, stamp: &Stamp) {
+        self.served.remove(stamp);
+        self.waiting.insert(stamp.clone());
+        self.followed = None;
+    }
+    pub fn retry_pick(&mut self) {
+        self.waiting_pick = self.pick.take();
+    }
+    pub fn ready(&self, stamp: &Stamp, source_ready: bool) -> bool {
+        // An untried job may reuse presentation or session data. Wait only
+        // after execution actually discovers that this job needs a source.
+        !self.waiting.contains(stamp) || source_ready
+    }
+    pub fn retain_waiting(&mut self, plan: &WorkPlan, export: Option<&Stamp>) {
+        self.waiting.retain(|stamp| {
+            export == Some(stamp) || plan.tasks.iter().any(|task| task.stamp == *stamp)
+        });
+    }
+    pub fn pick_ready(&mut self, plan: &WorkPlan, source_ready: bool) -> Option<Arc<PickTask>> {
+        if plan
+            .pick
+            .as_ref()
+            .is_some_and(|task| self.waiting_pick == Some(task.id))
+            && !source_ready
+        {
+            return None;
+        }
+        let task = self.pick(plan);
+        if task.is_some() {
+            self.waiting_pick = None;
+        }
+        task
+    }
+    #[cfg(test)]
     pub fn next(&mut self, plan: &WorkPlan) -> Option<Arc<Task>> {
+        self.next_ready(plan, |_| true)
+    }
+    pub fn next_ready(
+        &mut self,
+        plan: &WorkPlan,
+        ready: impl Fn(&Task) -> bool,
+    ) -> Option<Arc<Task>> {
         self.served
             .retain(|stamp| plan.tasks.iter().any(|task| task.stamp == *stamp));
         let len = plan.tasks.len();
@@ -594,7 +637,8 @@ impl Cursor {
             .map_or(0, |index| (index + 1) % len);
         for offset in 0..len {
             let task = &plan.tasks[(start + offset) % len];
-            if self.served.insert(task.stamp.clone()) {
+            if self.ready(&task.stamp, ready(task)) && self.served.insert(task.stamp.clone()) {
+                self.waiting.remove(&task.stamp);
                 self.last = Some(task.stamp.target.clone());
                 self.followed = None;
                 return Some(task.clone());

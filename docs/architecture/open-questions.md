@@ -7,9 +7,11 @@ kind: reference
 
 The [active plan](../../plans/render-runtime.md) owns progress and evidence. This page holds the unresolved choices. Close a question by updating its owning contract and vocabulary rather than retaining conflicting answers here.
 
-## Current unit: off-UI ownership
+## Current review: source acquisition
 
-The owner approved moving request coordination and result handling off the UI thread. The runtime now handles typed commands, worker results and bounded UI delivery on a dedicated coordinator thread. Validation and owner review are tracked in the [active plan](../../plans/render-runtime.md#off-ui-ownership-proposal).
+Request coordination and result handling now run on a dedicated coordinator thread. The runtime handles typed commands, worker results and bounded UI delivery independently of UI paints. Validation is recorded in the [active plan](../../plans/render-runtime.md#off-ui-ownership-proposal).
+
+Requested source acquisition now uses a separate I/O thread, the existing disk cache and CPU decoding pool, and one bounded decoded-source handoff. A renderer job defers when input is missing, and coordination publishes per-photo readiness. Presentation/session reuse remains ahead of acquisition. The [active slice](../../plans/render-runtime.md#alignment-for-every-slice) tracks validation before owner review. Subsequent source questions concern optional idle acquisition and cancellation of an already-running read, rather than creating another cache owner.
 
 ## Subsequent decisions
 

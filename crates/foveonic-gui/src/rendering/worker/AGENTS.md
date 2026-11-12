@@ -1,10 +1,10 @@
 ---
-summary: "The serialized render worker integrates source acquisition, presentation reuse, reduced sessions and idle preparation."
+summary: "The serial render worker consumes ready sources and owns presentation reuse, processing sessions and idle preparation."
 ---
 
 # Render execution
 
-`mod.rs` owns service order, request execution and reply publication. Presentation reuses immutable whole-image results. Reduced processing owns worker-local session lookup and native recovery. Idle preparation uses the existing owners under foreground priority and memory admission. Keep operations separate from the decisions that select and interrupt them.
+`mod.rs` owns service order, request execution and reply publication. Presentation reuses immutable whole-image results. Reduced processing owns worker-local session lookup and requests native recovery through the source loader. Jobs needing source data defer without settling, while other ready jobs can execute. Idle preparation uses the existing owners under foreground priority and memory admission. Keep operations separate from the decisions that select and interrupt them.
 
 Presentation snapshots are currently shared with the coordinator. Preserve that existing boundary during file organization. Changing snapshot ownership belongs to the later resource/execution cleanup.
 

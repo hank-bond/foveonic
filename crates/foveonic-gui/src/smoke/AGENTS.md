@@ -29,6 +29,7 @@ Run native checks serially on a quiet host. Keep controlled delivery pauses sepa
 - **[screenshot.rs](./screenshot.rs)** Loads the fixed README screenshot recipe and defines its capture steps.
 - **[selection.rs](./selection.rs)** Drives and observes a bounded viewport selection journey during held delivery.
 - **[slider.rs](./slider.rs)** Drives and records a real multi-photo slider gesture in a native scenario.
+- **[source_loading.rs](./source_loading.rs)** Proves a ready photo can be edited and rendered while another source load is held.
 - **[transitions.rs](./transitions.rs)** Runs replayable transitions through the existing native scenario.
 
 <!-- INDEX:END -->

@@ -287,6 +287,15 @@
       "count": 8
     },
     {
+      "id": "scenario-source-loading",
+      "domain": "cache",
+      "driver": "scenario",
+      "scenario": "source-loading",
+      "count": 2,
+      "mode": "wall",
+      "evidence": "Holds A's native source load while B's visible Exposure control stays enabled and B delivers a settled, admitted edited frame. The intentional pause is behavioral evidence, not a natural latency sample."
+    },
+    {
       "id": "scenario-rapid-supersession",
       "domain": "selection",
       "driver": "scenario",
@@ -704,9 +713,11 @@
         "scenario-warm-disk",
         "scenario-prefetched-selection",
         "scenario-memory-pressure",
-        "scenario-selection-pressure"
+        "scenario-selection-pressure",
+        "scenario-source-loading"
       ],
       "checks": [
+        "A ready photo's Exposure control stays enabled and its edited frame is admitted while another source load is deliberately held.",
         "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
         "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
         "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",

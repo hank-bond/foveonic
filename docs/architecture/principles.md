@@ -7,6 +7,10 @@ kind: reference
 
 The [render orchestration requirements](../specs/render-orchestration.md) record the workflow and execution goals. These principles guide how we reach them.
 
+## Align each slice with the three goals
+
+Review maintainability, latency and future execution flexibility together, using the [agreed goals](../specs/render-orchestration.md#agreed-goals). Explain which responsibility becomes clearer, which coordination or waiting cost is removed or made measurable, and how application contracts remain independent of the engine's serial execution order. A simpler boundary can be worthwhile before it produces a measured speedup. Wide rendering remains a later experiment rather than an assumed performance result.
+
 ## Optimize the interaction
 
 Judge progress by how quickly someone can cull and edit a collection. Avoid unnecessary work and reuse valid data before optimizing individual node arithmetic. Background preparation is useful only when its foreground latency and memory costs are acceptable. Wide execution is a separate future hypothesis to measure. This migration clarifies ownership while keeping engine execution serial.

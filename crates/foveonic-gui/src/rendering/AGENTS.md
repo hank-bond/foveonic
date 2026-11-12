@@ -14,7 +14,7 @@ Authored edits remain with the application, multi-edit runtime and sidecar sessi
 
 ### Directories
 
-- **[worker/](./worker/AGENTS.md)** The serialized render worker integrates source acquisition, presentation reuse, reduced sessions and idle preparation.
+- **[worker/](./worker/AGENTS.md)** The serial render worker consumes ready sources and owns presentation reuse, processing sessions and idle preparation.
 
 ### Source files
 
@@ -25,5 +25,6 @@ Authored edits remain with the application, multi-edit runtime and sidecar sessi
 - **[request.rs](./request.rs)** Describes photo render requests and resolves their purpose and preview geometry independently of execution.
 - **[runtime.rs](./runtime.rs)** Owns render coordination on a dedicated thread and publishes bounded UI updates.
 - **[smart.rs](./smart.rs)** Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
+- **[source_loader.rs](./source_loader.rs)** Acquires decoded sources off the renderer and hands bounded results through coordination.
 
 <!-- INDEX:END -->

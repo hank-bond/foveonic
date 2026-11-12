@@ -11,6 +11,12 @@ The owner agreed the goals below and the request/job/result/handler vocabulary. 
 
 ## Agreed goals
 
+The owner identified three reasons for this rearchitecture. Use them together when reviewing each slice:
+
+1. **Maintainability:** replace the reactive accumulation of feature-specific coordination with clear ownership and boundaries that make behavior stable and new features easier to develop.
+2. **Latency:** reduce unnecessary work, round trips, synchronization and waiting between stages. State performance benefits as hypotheses until matched measurements demonstrate them.
+3. **Future execution flexibility:** let a later experiment advance several photographs through each pipeline stage before moving to the next stage. Wide rendering may improve throughput or latency, but that benefit must be tested. This migration should make the experiment easier without implementing it now.
+
 The primary workflow is getting through 100 photographs quickly: selecting groups, culling and making useful edits. Engineering work should reduce unnecessary processing, coordination, scheduling, source access and cache latency. It should prepare likely useful data ahead of demand where foreground responsiveness and memory permit. Individual-node arithmetic optimization is not the priority for this migration.
 
 Individual editing and multi-photo editing must use the same runtime. One editing target is the one-element case of the same requested-set contract. Each photograph keeps its own source, settings, dependencies, caches and result identity. Existing [selection and relative-edit behavior](./multi-edit.md) remains authoritative.
@@ -41,6 +47,8 @@ The UI remains the writer for interaction-authored state. Requested values must 
 Publish the latest immutable requested set and context. Share unchanged recipes/data rather than copying every browser photograph on a slider event. Superseded replaceable requests need not accumulate in a queue. A group revision must not invalidate unchanged per-photo work merely because another member changed.
 
 Availability and resource owners notify runtime coordination directly. The runtime combines current requests with their summaries to plan foreground and speculative work. UI drawing is not a planning signal. Background planning must not independently reread recipes or promote cache recency merely to discover availability.
+
+Requested source loading must not occupy the serial renderer while another photo has reusable processing inputs. Check presentation and session reuse before loading. Coalesce acquisition independently of changing edits, bound decoded sources waiting for consumption, and report loading failure per photo through normal result handling. Deferring a render for input does not settle or cancel its request. An obsolete physical read may finish, but its unwanted result must not displace current work.
 
 Return immutable per-photo updates. One photo's update must not overwrite an undelivered sibling. Completion processing distinguishes exact request settlement, reusable data, metadata feedback and view admission. A late result cannot settle newer work or replace an incompatible image. The UI retains a cheap final context/order guard because user intent can change after runtime admission. Admission and UI acknowledgement remain distinct.
 

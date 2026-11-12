@@ -2,6 +2,7 @@
 
 mod diagnostics;
 mod preparation;
+pub(crate) use super::source_loader::LoadHold;
 pub(crate) use diagnostics::DeliveryHold;
 pub(crate) mod presentation;
 mod reduced;
@@ -216,6 +217,8 @@ pub struct ColorPickReply {
 
 #[derive(Default)]
 pub(super) struct Pending {
+    pub(super) source: Option<super::source_loader::Loaded>,
+    pub(super) source_requests: std::collections::HashSet<PathBuf>,
     pub(super) memory: Option<MemoryBudget>,
     pub(super) preparation: Option<Arc<PreparationConfig>>,
     pub(super) plan: Arc<crate::rendering::coordinator::WorkPlan>,
@@ -255,11 +258,18 @@ pub struct Worker {
     runtime: super::runtime::Handle,
     observed_memory: RefCell<MemoryStatus>,
     diagnostics: diagnostics::Handle,
+    source_control: super::source_loader::Control,
+}
+enum Execution {
+    Complete(Option<Box<Frame>>),
+    NeedsSource,
 }
 impl Worker {
     pub fn new(engine: Engine, context: egui::Context) -> Self {
         let pending = Arc::new((
             Mutex::new(Pending {
+                source: None,
+                source_requests: Default::default(),
                 memory: None,
                 preparation: None,
                 plan: Arc::default(),
@@ -276,6 +286,8 @@ impl Worker {
         let progress_updates = progress.clone();
         let cache = Arc::new(foveonic::decode_cache::Cache::new());
         let decoded_cache = cache.clone();
+        let (mut sources, loader, source_control) =
+            super::source_loader::start(cache.clone(), progress.clone(), pending.clone());
         let repaint = context.clone();
         let (tx, results) = crossbeam_channel::bounded(2);
         let (diagnostics, mut diagnostic_work) = diagnostics::channel(pending.clone());
@@ -350,7 +362,9 @@ impl Worker {
                             );
                             continue 'worker;
                         }
-                        if let Some(pick_task) = cursor.pick(&state.plan) {
+                        cursor.retain_waiting(&state.plan, state.export.as_ref().map(|task| &task.stamp));
+                        let pick_ready = state.plan.pick.as_ref().is_some_and(|task| sources.ready(&task.request.path, state.source.as_ref()));
+                        if let Some(pick_task) = cursor.pick_ready(&state.plan, pick_ready) {
                             let pick = &pick_task.request;
                             let _diagnostic_context = crate::timing::enabled().then(|| {
                                 foveonic::diagnostics::enter(crate::timing::context_for(
@@ -381,24 +395,30 @@ impl Worker {
                                     return Err("color selection canceled".into());
                                 }
                                 reduced.park_active(&engine, 0);
-                                load_native_source(
+                                if !load_native_source(
                                     &decoded_cache,
+                                    &mut sources,
                                     &engine,
                                     &mut source,
                                     &pick.path,
                                     0,
                                     |_| {},
-                                )?;
+                                )? { return Ok(None); }
                                 if pick_task.origin.as_ref().is_some_and(|origin| {
                                     origin != source.as_ref().unwrap().1.source().origin()
                                 }) {
                                     return Err("photo changed while selecting a color".into());
                                 }
-                                pick_color(&engine, source.as_mut(), pick, cancel)
+                                pick_color(&engine, source.as_mut(), pick, cancel).map(Some)
                             })()
                             .map_err(
                                 |error: Box<dyn std::error::Error + Send + Sync>| error.to_string(),
                             );
+                            let sample = match sample {
+                                Ok(Some(sample)) => Ok(sample),
+                                Ok(None) => { cursor.retry_pick(); continue 'worker; }
+                                Err(error) => Err(error),
+                            };
                             trim_memory(
                                 &engine,
                                 &mut source,
@@ -426,15 +446,15 @@ impl Worker {
                             }
                             continue 'worker;
                         }
-                        let next = state
-                            .export
-                            .take()
+                        let export_ready = state.export.as_ref().is_some_and(|task| cursor.ready(&task.stamp, sources.ready(&task.request.path, state.source.as_ref())));
+                        let next = export_ready.then(|| state.export.take()).flatten()
                             .or_else(|| {
                                 previous
                                     .as_ref()
+                                    .filter(|prior| cursor.ready(prior, sources.ready(&prior.target.path, state.source.as_ref())))
                                     .and_then(|prior| cursor.followup(&state.plan, prior))
                             })
-                            .or_else(|| cursor.next(&state.plan));
+                            .or_else(|| cursor.next_ready(&state.plan, |task| sources.ready(&task.request.path, state.source.as_ref())));
                         if let Some(task) = next {
                             break task;
                         }
@@ -468,6 +488,8 @@ impl Worker {
                         }
                         state.activity = None;
                         let config = state.preparation.clone();
+                        let observed_plan = state.plan.clone();
+                        let observed_source = state.source.as_ref().map(|source| source.path.clone());
                         drop(state);
                         if let Some(config) = config {
                             let inventory = memory_inventory(&presented, &budget, &mut pending_images, &slot);
@@ -486,7 +508,10 @@ impl Worker {
                         state = lock.lock().unwrap();
                         // Publication can arrive while optional work checks the cache.
                         // Recheck foreground demand before waiting for a notification.
-                        if state.stop || state.clear || state.memory.is_some() || state.activity.is_some() || diagnostic_work.pending_capture() {
+                        if state.stop || state.clear || state.memory.is_some()
+                            || !Arc::ptr_eq(&state.plan, &observed_plan)
+                            || state.source.as_ref().map(|source| &source.path) != observed_source.as_ref()
+                            || diagnostic_work.pending_capture() {
                             continue 'worker;
                         }
                         let (next, timeout) = wake.wait_timeout(state, std::time::Duration::from_millis(100)).unwrap();
@@ -524,18 +549,23 @@ impl Worker {
                 let mut metadata = None;
                 let mut settings = request.settings.clone();
                 let mut defaults_errors = Vec::new();
-                let result = (|| -> foveonic::source::Result<Option<Frame>> {
+                let result = (|| -> foveonic::source::Result<Execution> {
                     let composition_quality = presented.quality_for_view_change(request, &decoded_cache);
                     let mut composed = presented.prepare(request, &decoded_cache)?;
                     let reused_display = composed.as_ref().and_then(|composed| composed.display.clone());
                     let reusing_pixels = composed.is_some();
                     let mut reduced_loaded = if !reusing_pixels && request.uses_reduced_session()
                         && composition_quality.is_none_or(|scale| scale.is_reduced()) {
-                        Some(reduced.load(&request.path, request.revision, &decoded_cache, &engine, &mut source, &|stage| reporter.loaded(stage))?)
+                        let Some(loaded) = reduced.load(&request.path, request.revision, &decoded_cache, &engine, &mut source, &mut |path, revision| sources.open(path, revision))? else {
+                            return Ok(Execution::NeedsSource);
+                        };
+                        Some(loaded)
                     } else { None };
                     if !reusing_pixels && reduced_loaded.is_none() {
                         reduced.park_active(&engine, request.revision);
-                        load_native_source(&decoded_cache, &engine, &mut source, &request.path, request.revision, |stage| reporter.loaded(stage))?;
+                        if !load_native_source(&decoded_cache, &mut sources, &engine, &mut source, &request.path, request.revision, |stage| reporter.loaded(stage))? {
+                            return Ok(Execution::NeedsSource);
+                        }
                     }
                     // Cached inputs have already completed both loading sections.
                     reporter.loaded(foveonic::source::LoadStage::Decoded);
@@ -559,7 +589,7 @@ impl Worker {
                         export::write(&engine, &mut source.as_mut().unwrap().1, &settings, export, &mut profile, |stage| reporter.rendered(stage))?;
                         if let Some(before)=before {crate::timing::emit("export",|| serde_json::json!({"revision":request.revision,"source":request.path,"destination":export.path,"format":export.format.extension(),"settings":settings,"activity":engine.gpu_activity().since(before)}));}
                         reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
-                        return Ok(None);
+                        return Ok(Execution::Complete(None));
                     }
                     settings.dehaze_estimate = request.output == "final"
                         && request.rendition == crate::editor::Rendition::Current
@@ -611,8 +641,12 @@ impl Worker {
                             Some(composed.artifacts)
                         } else if let Some(loaded) = reduced_loaded.take() {
                             used_reduced = true;
-                            reduced.render(&engine, &decoded_cache, &mut source, loaded, &settings, &cancel, &mut profile,
-                                &|stage| reporter.loaded(stage), &|stage| reporter.rendered(stage))?
+                            match reduced.render(&engine, &mut source, loaded, &settings, &cancel, &mut profile,
+                                &mut |path, revision| sources.open(path, revision), &|stage| reporter.rendered(stage))? {
+                                reduced::RenderOutcome::Rendered(artifacts) => Some(artifacts),
+                                reduced::RenderOutcome::Superseded => None,
+                                reduced::RenderOutcome::NeedsSource => return Ok(Execution::NeedsSource),
+                            }
                         } else {
                             engine.render_session_with_progress(&mut source.as_mut().unwrap().1, &settings, &roots, cancel, &mut profile, |stage| reporter.rendered(stage))?
                         }
@@ -630,8 +664,8 @@ impl Worker {
                         });
                     }
                     let mut profile = Profile::new(crate::timing::mode());
-                    let Some(mut artifacts) = rendered else { return Ok(None); };
-                    if cancel(){return Ok(None);}
+                    let Some(mut artifacts) = rendered else { return Ok(Execution::Complete(None)); };
+                    if cancel(){return Ok(Execution::Complete(None));}
                     let retain_whole = presented.retain(request, &settings, &artifacts, &origin);
                     let view_before = crate::timing::enabled().then(||engine.gpu_activity());
                     let comparison = if let Some(input) = input {
@@ -653,7 +687,7 @@ impl Worker {
                                 .into(),
                         );
                     };
-                    if cancel(){return Ok(None);}
+                    if cancel(){return Ok(Execution::Complete(None));}
                     let native_extent=if root=="final" {foveonic::render::native_extent(&artifact.metadata)?} else {image.uncropped_view().extent};
                     let texture = {
                         let _span = crate::timing::Span::new(request.revision, "view_prepare_host");
@@ -674,7 +708,7 @@ impl Worker {
                         crate::timing::activity(fields,engine.gpu_activity().since(before));
                     });}
                     if retain_whole { presented.display(texture.clone(), comparison.clone(), request.framing_preview); }
-                    Ok(Some(Frame {
+                    Ok(Execution::Complete(Some(Box::new(Frame {
                         diagnostic_task: crate::timing::DeliveredTask::from(&task.stamp),
                         origin: origin.clone(),
                         framing_preview: request.framing_preview,
@@ -690,8 +724,19 @@ impl Worker {
                         milliseconds: started.elapsed().as_secs_f64() * 1000.,
                         revision:request.revision,
                         queued_at,
-                    }))
-                })()
+                    }))))
+                })();
+                let result = match result {
+                    Ok(Execution::NeedsSource) => {
+                        crate::timing::task(&task.stamp, "execution_deferred", || serde_json::json!({"reason":"source-loading"}));
+                        cursor.defer(&task.stamp);
+                        previous = None;
+                        if request.export.is_some() { slot.0.lock().unwrap().export = Some(task.clone()); }
+                        continue 'worker;
+                    }
+                    Ok(Execution::Complete(frame)) => Ok(frame.map(|frame| *frame)),
+                    Err(error) => Err(error),
+                }
                 .map_err(|e| {
                     if defaults_errors.is_empty() {
                         e.to_string()
@@ -795,6 +840,7 @@ impl Worker {
             cache.clone(),
             progress.clone(),
             repaint.clone(),
+            loader,
         );
         Self {
             #[cfg(test)]
@@ -806,6 +852,7 @@ impl Worker {
             runtime,
             observed_memory: Default::default(),
             diagnostics,
+            source_control,
         }
     }
 
@@ -819,6 +866,9 @@ impl Worker {
     }
     pub fn hold_delivery(&self, path: PathBuf, revision: u64) -> DeliveryHold {
         self.diagnostics.hold_delivery(path, revision)
+    }
+    pub fn hold_source(&self, path: PathBuf) -> LoadHold {
+        self.source_control.hold(path)
     }
     pub fn set_view(&self, view: super::delivery::ViewState) {
         self.runtime.set_view(view);
@@ -929,10 +979,22 @@ fn memory_inventory(
     slot: &Arc<(Mutex<Pending>, Condvar)>,
 ) -> crate::memory::Inventory {
     let mut inventory = budget.frontend.clone();
-    let (retained, scopes) = {
+    let (retained, scopes, loaded) = {
         let pending = slot.0.lock().unwrap();
-        (pending.retained.clone(), pending.plan.scopes.clone())
+        (
+            pending.retained.clone(),
+            pending.plan.scopes.clone(),
+            pending
+                .source
+                .as_ref()
+                .and_then(|loaded| loaded.result.as_ref().ok())
+                .cloned(),
+        )
     };
+    if let Some(source) = loaded {
+        inventory.cpu(source.retained_source_bytes());
+        inventory.metadata(&source.metadata);
+    }
     for snapshot in retained.iter() {
         snapshot.memory_resources(&mut inventory);
     }
@@ -946,28 +1008,31 @@ fn memory_inventory(
 
 fn load_native_source(
     cache: &foveonic::decode_cache::Cache,
+    sources: &mut super::source_loader::Handle,
     engine: &Engine,
     source: &mut Option<(PathBuf, RenderSession)>,
     path: &PathBuf,
     revision: u64,
     progress: impl Fn(foveonic::source::LoadStage),
-) -> foveonic::source::Result<()> {
+) -> foveonic::source::Result<bool> {
     if source.as_ref().is_some_and(|(loaded, session)| {
         loaded == path
             && cache
                 .source_origin(path)
                 .is_none_or(|known| known == *session.source().origin())
     }) {
-        return Ok(());
+        return Ok(true);
     }
+    let Some(loaded) = sources.open(path, revision)? else {
+        return Ok(false);
+    };
     if let Some((_, previous)) = source.take() {
         engine.release_native_preparation(previous.metadata());
     }
-    let _span = crate::timing::Span::new(revision, "source_open");
-    let loaded = cache.open(path, progress)?;
+    progress(foveonic::source::LoadStage::Decoded);
     record_source_load(revision, path, &loaded);
     *source = Some((path.clone(), RenderSession::new(loaded)));
-    Ok(())
+    Ok(true)
 }
 
 fn record_source_load(revision: u64, path: &std::path::Path, loaded: &foveonic::source::Source) {

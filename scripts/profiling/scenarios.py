@@ -21,7 +21,7 @@ from inputs import stage_inputs
 from scenario_checks import checked_scenario_images, pointer_value, same_numeric, validate_choice_recipes
 from image_replay import replay_images
 
-NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag', 'selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'collection-journey', 'choice-journey')
+NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag', 'selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'collection-journey', 'choice-journey', 'source-loading')
 
 
 def selected_cases(cases, count, quality, scenario):
@@ -29,8 +29,8 @@ def selected_cases(cases, count, quality, scenario):
         raise ValueError('supply one through eight declared photographs for the requested count')
     if quality != 'thumb' and count > 1:
         raise ValueError('native multi-photo overviews use Thumb; use profile_editing for other multi-photo scales')
-    if scenario == 'cached-switch' and count < 2:
-        raise ValueError('cached switching needs at least two photographs')
+    if scenario in ('cached-switch', 'source-loading') and count < 2:
+        raise ValueError(f'{scenario} needs at least two photographs')
     if scenario == 'slider-drag' and count < 2:
         raise ValueError('a mixed-value slider drag needs at least two photographs')
     if scenario in ('selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'choice-journey') and count < 2:
@@ -236,7 +236,7 @@ def run_trial(args, selected, directory, source_hash):
                        'scenario_poll_ms':20,'numerical_equality':'verified separately by maintained headless cases',
                        'capture_images_after_scenario':bool(getattr(args, 'compare_images', None))},
     }
-    manifest['measurement']['controlled_delivery'] = args.scenario in ('selection-journey','selection-pressure','transition-journey')
+    manifest['measurement']['controlled_delivery'] = args.scenario in ('selection-journey','selection-pressure','transition-journey','source-loading')
     manifest['scenario']['capture_images'] = bool(getattr(args, 'compare_images', None))
     manifest['scenario']['save_on_exit'] = bool(getattr(args, 'save_on_exit', False))
     manifest['scenario']['folder_mode'] = getattr(args, 'folder_mode', 'import')
@@ -372,6 +372,8 @@ def run(args):
         raise ValueError('transition seed must be uint64 and action-count must be 1 through 64')
     if args.scenario == 'collection-journey' and any(not isinstance(case.get('settings'), dict) or case['settings'].get('exposure_auto') is not False or type(case['settings'].get('exposure')) not in (int,float) for case in selected):
         raise ValueError('collection-journey needs explicit manual exposures')
+    if args.scenario == 'source-loading' and any(not isinstance(case.get('settings'), dict) or case['settings'].get('exposure_auto') is not False or type(case['settings'].get('exposure')) not in (int, float) for case in selected):
+        raise ValueError('source-loading needs explicit manual exposures')
     journeys = ('selection-journey','selection-pressure','background-edit','transition-journey','lifecycle-journey','browser-journey','choice-journey')
     if args.scenario == 'choice-journey':
         validate_choice_recipes(selected)

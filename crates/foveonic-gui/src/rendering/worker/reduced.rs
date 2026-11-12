@@ -8,7 +8,7 @@ use foveonic::{
         Engine, ReducedPreparation, ReducedRender, ReducedWorkingSet, RenderProgress,
         RenderSession, Settings,
     },
-    source::{FileIdentity, LoadStage, Metadata, Result, Source, SourceOrigin},
+    source::{Metadata, Result, Source, SourceOrigin},
 };
 use std::{
     path::{Path, PathBuf},
@@ -17,14 +17,19 @@ use std::{
 
 const BUDGET: u64 = 128 * 1024 * 1024;
 
+type AcquireSource<'a> = dyn FnMut(&Path, u64) -> Result<Option<Arc<Source>>> + 'a;
+
 fn source_identity(
-    path: &Path,
     verified: Option<SourceOrigin>,
     loaded: Option<SourceOrigin>,
-) -> Result<SourceOrigin> {
-    verified
-        .or(loaded)
-        .map_or_else(|| FileIdentity::read(path).map(SourceOrigin::File), Ok)
+) -> Option<SourceOrigin> {
+    verified.or(loaded)
+}
+
+pub(super) enum RenderOutcome {
+    Rendered(Vec<Artifact>),
+    Superseded,
+    NeedsSource,
 }
 
 struct Photo {
@@ -214,8 +219,8 @@ impl Photos {
         cache: &Cache,
         engine: &Engine,
         native: &mut Option<(PathBuf, RenderSession)>,
-        progress: &dyn Fn(LoadStage),
-    ) -> Result<Loaded> {
+        acquire: &mut AcquireSource<'_>,
+    ) -> Result<Option<Loaded>> {
         let _scope = foveonic::diagnostics::scope_with(
             foveonic::diagnostics::Category::Cache,
             "cache.processing.lookup",
@@ -234,15 +239,11 @@ impl Photos {
             .find(|photo| photo.path == path)
             .and_then(|photo| self.working.origin(photo.id))
             .cloned();
-        let mut identity = source_identity(
-            path,
-            cache.source_origin(path).or(native_origin),
-            loaded_origin,
-        )?;
+        let identity = source_identity(cache.source_origin(path).or(native_origin), loaded_origin);
         if let Some(photo) = self
             .photos
             .iter()
-            .find(|photo| photo.path == path && photo.identity == identity)
+            .find(|photo| photo.path == path && Some(&photo.identity) == identity.as_ref())
         {
             if let Some(metadata) = self.working.metadata(photo.id) {
                 foveonic::diagnostics::event(
@@ -253,14 +254,14 @@ impl Photos {
                         fields.u64("session", photo.id);
                     },
                 );
-                return Ok(Loaded {
+                return Ok(Some(Loaded {
                     metadata: metadata.clone(),
                     path: path.to_owned(),
-                    identity,
+                    identity: photo.identity.clone(),
                     id: photo.id,
                     source: None,
                     revision,
-                });
+                }));
             }
         }
         if let Some(old) = self.photos.iter().find(|photo| photo.path == path) {
@@ -284,29 +285,35 @@ impl Photos {
             },
         );
         self.prune();
-        let (metadata, source) = if let Some((_, session)) =
+        let (metadata, source, identity) = if let Some((_, session)) =
             native.as_ref().filter(|(native_path, session)| {
-                native_path == path && *session.source().origin() == identity
+                native_path == path && Some(session.source().origin()) == identity.as_ref()
             }) {
-            (session.metadata().clone(), None)
+            (
+                session.metadata().clone(),
+                None,
+                session.source().origin().clone(),
+            )
         } else {
+            let Some(source) = open_source(acquire, path, revision)? else {
+                return Ok(None);
+            };
             if let Some((_, previous)) = native.take() {
                 engine.release_native_preparation(previous.metadata());
             }
-            let source = open_source(cache, path, revision, progress)?;
-            identity = source.origin().clone();
-            (source.metadata.clone(), Some(source))
+            let identity = source.origin().clone();
+            (source.metadata.clone(), Some(source), identity)
         };
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
-        Ok(Loaded {
+        Ok(Some(Loaded {
             metadata,
             path: path.to_owned(),
             identity,
             id,
             source,
             revision,
-        })
+        }))
     }
     pub fn changed_parameters(
         &self,
@@ -333,23 +340,21 @@ impl Photos {
     pub fn render(
         &mut self,
         engine: &Engine,
-        cache: &Cache,
         native: &mut Option<(PathBuf, RenderSession)>,
         mut loaded: Loaded,
         settings: &Settings,
         cancel: &dyn Fn() -> bool,
         profile: &mut Profile,
-        loaded_progress: &dyn Fn(LoadStage),
+        acquire: &mut AcquireSource<'_>,
         render_progress: &dyn Fn(RenderProgress),
-    ) -> Result<Option<Vec<Artifact>>> {
-        // Native-only clipping evidence must leave with the native session before
-        // the shared reduced budget is enforced. Keep at most this request's Arc
-        // for resealing when the corrected sensor or analysis has changed.
-        if let Some((path, session)) = native.take() {
-            engine.release_native_preparation(session.metadata());
-            if path == loaded.path && loaded.source.is_none() {
-                loaded.source = Some(session.into_source());
-            }
+    ) -> Result<RenderOutcome> {
+        // Keep another photo's native session available while this request waits
+        // for input. Its source is released only when this photo can proceed.
+        if loaded.source.is_none() {
+            loaded.source = native
+                .as_ref()
+                .filter(|(path, _)| path == &loaded.path)
+                .map(|(_, session)| session.shared_source());
         }
         if let Some(outcome) = self.working.render_with_progress(
             engine,
@@ -361,11 +366,14 @@ impl Photos {
         )? {
             match outcome {
                 ReducedRender::Rendered(artifacts) => {
+                    if let Some((_, session)) = native.take() {
+                        engine.release_native_preparation(session.metadata());
+                    }
                     self.report_retention(engine, loaded.revision, "render");
                     self.prune();
-                    return Ok(Some(artifacts));
+                    return Ok(RenderOutcome::Rendered(artifacts));
                 }
-                ReducedRender::Superseded => return Ok(None),
+                ReducedRender::Superseded => return Ok(RenderOutcome::Superseded),
                 ReducedRender::NeedsOriginal(reason) => {
                     foveonic::diagnostics::event(
                         foveonic::diagnostics::Category::Cache,
@@ -382,15 +390,21 @@ impl Photos {
         let original = if let Some(source) = loaded.source.take() {
             source
         } else {
-            open_source(cache, &loaded.path, loaded.revision, loaded_progress)?
+            let Some(source) = open_source(acquire, &loaded.path, loaded.revision)? else {
+                return Ok(RenderOutcome::NeedsSource);
+            };
+            source
         };
+        if let Some((_, session)) = native.take() {
+            engine.release_native_preparation(session.metadata());
+        }
         if self.working.contains(loaded.id) {
             if self
                 .working
                 .refresh(engine, loaded.id, &original, settings, cancel, profile)?
                 .is_none()
             {
-                return Ok(None);
+                return Ok(RenderOutcome::Superseded);
             }
             if let Some(outcome) = self.working.render_with_progress(
                 engine,
@@ -403,8 +417,8 @@ impl Photos {
                 self.report_retention(engine, loaded.revision, "refresh");
                 self.prune();
                 return match outcome {
-                    ReducedRender::Rendered(artifacts) => Ok(Some(artifacts)),
-                    ReducedRender::Superseded => Ok(None),
+                    ReducedRender::Rendered(artifacts) => Ok(RenderOutcome::Rendered(artifacts)),
+                    ReducedRender::Superseded => Ok(RenderOutcome::Superseded),
                     ReducedRender::NeedsOriginal(reason) => {
                         Err(format!("refreshed camera input is missing: {reason:?}").into())
                     }
@@ -414,7 +428,7 @@ impl Photos {
         let preparation = engine.prepare_reduced_session(original, settings, cancel, profile)?;
         let mut session = match preparation {
             ReducedPreparation::Prepared(session) => session,
-            ReducedPreparation::Superseded => return Ok(None),
+            ReducedPreparation::Superseded => return Ok(RenderOutcome::Superseded),
         };
         let outcome = engine.render_reduced_session_with_progress(
             &mut session,
@@ -443,8 +457,8 @@ impl Photos {
         self.report_retention(engine, loaded.revision, "insert");
         self.prune();
         match outcome {
-            ReducedRender::Rendered(artifacts) => Ok(Some(artifacts)),
-            ReducedRender::Superseded => Ok(None),
+            ReducedRender::Rendered(artifacts) => Ok(RenderOutcome::Rendered(artifacts)),
+            ReducedRender::Superseded => Ok(RenderOutcome::Superseded),
             ReducedRender::NeedsOriginal(reason) => {
                 Err(format!("sealed reduced request requires original: {reason:?}").into())
             }
@@ -453,20 +467,31 @@ impl Photos {
 }
 
 fn open_source(
-    cache: &Cache,
+    acquire: &mut AcquireSource<'_>,
     path: &Path,
     revision: u64,
-    progress: &dyn Fn(LoadStage),
-) -> Result<Arc<Source>> {
-    let _span = crate::timing::Span::new(revision, "source_open");
-    let source = cache.open(path, progress)?;
+) -> Result<Option<Arc<Source>>> {
+    let Some(source) = acquire(path, revision)? else {
+        return Ok(None);
+    };
     super::record_source_load(revision, path, &source);
-    Ok(source)
+    Ok(Some(source))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use foveonic::source::FileIdentity;
+
+    impl RenderOutcome {
+        fn artifacts(self) -> Option<Vec<Artifact>> {
+            match self {
+                Self::Rendered(artifacts) => Some(artifacts),
+                Self::Superseded => None,
+                Self::NeedsSource => panic!("test supplies ready source acquisition"),
+            }
+        }
+    }
     use foveonic::{inspection::Content, render::Scale};
 
     #[test]
@@ -477,14 +502,14 @@ mod tests {
         let identity = SourceOrigin::File(FileIdentity::read(&path).unwrap());
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
-            source_identity(&path, Some(identity.clone()), None).unwrap(),
+            source_identity(Some(identity.clone()), None).unwrap(),
             identity.clone()
         );
         assert_eq!(
-            source_identity(&path, None, Some(identity.clone())).unwrap(),
+            source_identity(None, Some(identity.clone())).unwrap(),
             identity
         );
-        assert!(source_identity(&path, None, None).is_err());
+        assert!(source_identity(None, None).is_none());
     }
     #[test]
     fn newer_verified_replacement_wins_over_loaded_same_path_identity() {
@@ -496,7 +521,7 @@ mod tests {
         let current = SourceOrigin::File(FileIdentity::read(&path).unwrap());
         assert_ne!(old, current);
         assert_eq!(
-            source_identity(&path, Some(current.clone()), Some(old)).unwrap(),
+            source_identity(Some(current.clone()), Some(old)).unwrap(),
             current
         );
     }
@@ -516,21 +541,29 @@ mod tests {
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.working_scale = Scale::new(8).unwrap();
         let loaded = photos
-            .load(&paths[0], 0, &cache, &engine, &mut native, &|_| {})
-            .unwrap();
+            .load(
+                &paths[0],
+                0,
+                &cache,
+                &engine,
+                &mut native,
+                &mut |path, _| cache.open(path, |_| {}).map(Some),
+            )
+            .unwrap()
+            .expect("ready source");
         photos
             .render(
                 &engine,
-                &cache,
                 &mut native,
                 loaded,
                 &settings,
                 &|| false,
                 &mut Profile::default(),
-                &|_| {},
+                &mut |path, _| cache.open(path, |_| {}).map(Some),
                 &|_| {},
             )
             .unwrap()
+            .artifacts()
             .unwrap();
         let active_bytes = photos.working.active_bytes();
         let source = Arc::new(Source::open(&paths[1]).unwrap());
@@ -555,23 +588,24 @@ mod tests {
         assert!(photos.contains_source(&paths[1], &origin));
         let before = engine.gpu_activity();
         let loaded = photos
-            .load(&paths[1], 1, &cache, &engine, &mut native, &|_| {
+            .load(&paths[1], 1, &cache, &engine, &mut native, &mut |_, _| {
                 panic!("prefetched input must not reopen source")
             })
-            .unwrap();
+            .unwrap()
+            .expect("ready source");
         let mut artifacts = photos
             .render(
                 &engine,
-                &cache,
                 &mut native,
                 loaded,
                 &settings,
                 &|| false,
                 &mut Profile::default(),
-                &|_| panic!("no source load"),
+                &mut |_, _| panic!("no source load"),
                 &|_| {},
             )
             .unwrap()
+            .artifacts()
             .unwrap();
         assert_eq!(
             engine.gpu_activity().since(before).dispatches,
@@ -657,22 +691,25 @@ mod tests {
                 settings.reconstruction.as_mut().unwrap().chroma = 4;
             }
             let loaded = photos
-                .load(path, 0, &cache, &engine, &mut native, &|_| {})
-                .unwrap();
+                .load(path, 0, &cache, &engine, &mut native, &mut |path, _| {
+                    cache.open(path, |_| {}).map(Some)
+                })
+                .unwrap()
+                .expect("ready source");
             let weak = loaded.source.as_ref().map(Arc::downgrade);
             let Some(mut artifacts) = photos
                 .render(
                     &engine,
-                    &cache,
                     &mut native,
                     loaded,
                     &settings,
                     &|| false,
                     &mut Profile::default(),
-                    &|_| {},
+                    &mut |path, _| cache.open(path, |_| {}).map(Some),
                     &|_| {},
                 )
                 .unwrap()
+                .artifacts()
             else {
                 panic!("expected reduced photo {round}");
             };
@@ -708,8 +745,10 @@ mod tests {
         }
         assert_eq!(photos.working.len(), 2);
         photos.park_active(&engine, 0);
-        super::super::load_native_source(&cache, &engine, &mut native, &paths[0], 0, |_| {})
-            .unwrap();
+        native = Some((
+            paths[0].clone(),
+            RenderSession::new(cache.open(&paths[0], |_| {}).unwrap()),
+        ));
         let mut full = settings.clone();
         full.working_scale = Scale::NATIVE;
         engine
@@ -725,39 +764,55 @@ mod tests {
         let mut active_haze = settings.clone();
         active_haze.dehaze.amount = 10.;
         let loaded = photos
-            .load(&paths[0], 0, &cache, &engine, &mut native, &|_| {})
-            .unwrap();
+            .load(
+                &paths[0],
+                0,
+                &cache,
+                &engine,
+                &mut native,
+                &mut |path, _| cache.open(path, |_| {}).map(Some),
+            )
+            .unwrap()
+            .expect("ready source");
         assert!(photos
             .render(
                 &engine,
-                &cache,
                 &mut native,
                 loaded,
                 &active_haze,
                 &|| false,
                 &mut Profile::default(),
-                &|_| {},
+                &mut |path, _| cache.open(path, |_| {}).map(Some),
                 &|_| {}
             )
             .unwrap()
+            .artifacts()
             .is_some());
         assert!(native.is_none());
         let loaded = photos
-            .load(&paths[0], 0, &cache, &engine, &mut native, &|_| {})
-            .unwrap();
+            .load(
+                &paths[0],
+                0,
+                &cache,
+                &engine,
+                &mut native,
+                &mut |path, _| cache.open(path, |_| {}).map(Some),
+            )
+            .unwrap()
+            .expect("ready source");
         assert!(photos
             .render(
                 &engine,
-                &cache,
                 &mut native,
                 loaded,
                 &settings,
                 &|| false,
                 &mut Profile::default(),
-                &|_| {},
+                &mut |path, _| cache.open(path, |_| {}).map(Some),
                 &|_| {}
             )
             .unwrap()
+            .artifacts()
             .is_some());
         assert!(native.is_none());
         assert!(photos.working.historical_bytes() <= BUDGET);
