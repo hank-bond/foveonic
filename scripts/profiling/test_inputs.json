@@ -1,0 +1,265 @@
+{
+  "sample_hashes": {
+    "merrill-hazy-coast.x3f": "4bfba506a6d270fd433251ccfc425a710c5cd5ab2e68788faa63ef3c899debf4",
+    "blue-parking-sign.x3f": "7a650537a9986bfe348e0da117defbf80da7ceca35f76bc092f220a7cdbcffee",
+    "low-light-speaker-and-desk.x3f": "46704158239f724b97ba004b80e498a7ae0d43b059ff8667f1bb04a72f04a4ad",
+    "dp3-merrill-medium.x3f": "6ce000fe95068b515080428c858b328574a3820b6ff08beac32f705d9fe39754",
+    "dp3-merrill-low.x3f": "209f753ed5de24a2bb79e7e851c8c77255d0298ac79685963a20792bc6e9294e"
+  },
+  "aliases": {
+    "sd-quattro-h-second.x3f": "sd-quattro-h.x3f"
+  },
+  "render_cases": [
+    {
+      "label": "sd9",
+      "source": "sd9.x3f",
+      "family": "classic",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "sd10",
+      "source": "sd10.x3f",
+      "family": "classic",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "sd14",
+      "source": "sd14.x3f",
+      "family": "classic",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "blue-parking-sign",
+      "source": "blue-parking-sign.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "merrill-hazy-coast",
+      "source": "merrill-hazy-coast.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "low-light-speaker-and-desk",
+      "source": "low-light-speaker-and-desk.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "dp0-quattro",
+      "source": "dp0-quattro.x3f",
+      "family": "quattro",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "dp2-quattro",
+      "source": "dp2-quattro.x3f",
+      "family": "quattro",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "sd-quattro",
+      "source": "sd-quattro.x3f",
+      "family": "quattro",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "sd-quattro-h",
+      "source": "sd-quattro-h.x3f",
+      "family": "tiger",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    }
+  ],
+  "scenario_cases": [
+    {
+      "source": "blue-parking-sign.x3f",
+      "settings": {
+        "exposure": -0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "merrill-hazy-coast.x3f",
+      "settings": {
+        "exposure": 0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "dp0-quattro.x3f",
+      "settings": {
+        "exposure": -0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "sd-quattro.x3f",
+      "settings": {
+        "exposure": 0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "sd-quattro-h.x3f",
+      "settings": {
+        "exposure": -0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "sd9.x3f",
+      "settings": {
+        "exposure": 0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "sd10.x3f",
+      "settings": {
+        "exposure": -0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "sd14.x3f",
+      "settings": {
+        "exposure": 0.15,
+        "exposure_auto": false
+      }
+    }
+  ],
+  "choice_cases": [
+    {
+      "source": "blue-parking-sign.x3f",
+      "settings": {
+        "exposure": 0.15,
+        "exposure_auto": false,
+        "white_balance": "Sunlight",
+        "tone_enabled": true,
+        "tone": {
+          "contrast": 0.25
+        }
+      }
+    },
+    {
+      "source": "merrill-hazy-coast.x3f",
+      "settings": {
+        "exposure": -0.15,
+        "exposure_auto": false,
+        "white_balance": "Incandescent",
+        "tone_enabled": true,
+        "tone": {
+          "contrast": 0.25
+        }
+      }
+    }
+  ],
+  "fixtures": [
+    {
+      "name": "classic-high",
+      "family": "classic",
+      "raw_size": "high",
+      "sources": [
+        "sd9.x3f",
+        "sd10.x3f"
+      ]
+    },
+    {
+      "name": "merrill-high",
+      "family": "merrill",
+      "raw_size": "high",
+      "sources": [
+        "blue-parking-sign.x3f",
+        "merrill-hazy-coast.x3f"
+      ]
+    },
+    {
+      "name": "quattro-high",
+      "family": "quattro",
+      "raw_size": "high",
+      "sources": [
+        "dp0-quattro.x3f",
+        "dp2-quattro.x3f"
+      ]
+    },
+    {
+      "name": "tiger-high",
+      "family": "tiger",
+      "raw_size": "high",
+      "sources": [
+        "sd-quattro-h.x3f",
+        "sd-quattro-h-second.x3f"
+      ]
+    },
+    {
+      "name": "merrill-reduced",
+      "family": "merrill",
+      "raw_size": "medium-and-low",
+      "sources": [
+        "dp3-merrill-medium.x3f",
+        "dp3-merrill-low.x3f"
+      ]
+    }
+  ]
+}

@@ -18,7 +18,19 @@ cargo xtask examples sync
 python3 scripts/profiling/fetch_samples.py
 ```
 
-Both commands use `.local/example-photographs` by default. The external fetcher verifies every existing sample's byte length and SHA-256 before starting downloads. It leaves mismatched originals untouched and fails. Downloads are staged, verified and linked into place without overwriting another file. Use `--offline` to verify cached external samples without network access, or `--directory PATH` for a separate sample cache. Portable fixture/recipe setup remains a subsequent slice.
+Both commands use `.local/example-photographs` by default. The external fetcher verifies every existing sample's byte length and SHA-256 before starting downloads. It leaves mismatched originals untouched and fails. Downloads are staged, verified and linked into place without overwriting another file. Use `--offline` to verify cached external samples without network access, or `--directory PATH` for a separate sample cache.
+
+The [test input definitions](../scripts/profiling/test_inputs.json) track the ten-source numerical matrix, eight-photo interaction recipes, mixed-choice recipes and five slider fixtures. They name originals without personal paths. The seven external identities remain in their existing manifest. Other originals have pinned hashes in the test definitions. The Quattro H fixture explicitly aliases one original rather than claiming two independent photographs.
+
+The [input setup command](../scripts/profiling/prepare_inputs.py) syncs both collections through their existing commands, verifies all declared originals and generates runner-compatible JSON plus aliases in a new directory:
+
+```sh
+python3 scripts/profiling/prepare_inputs.py --directory .local/test-inputs
+# Use cached originals without network access:
+python3 scripts/profiling/prepare_inputs.py --offline --directory .local/test-inputs-offline
+```
+
+Use `--source-dir PATH` for another original collection. Generated `render-cases.json`, `scenario-cases.json`, `choice-cases.json` and `fixtures.json` go to the existing runners' `--render-cases`, `--cases`, `--choice-cases` and `--fixtures` arguments respectively. `provenance.json` records the verified original hashes, aliases and declarations. Existing output directories are preserved. Missing or changed originals fail before generating anything. The owner's Medium/Low Merrill originals are included in the example release, so both native RAW sizes can be rebuilt through the same setup command.
 
 For a run, supply the built GUI through `--binary`, source photographs with repeated `--source`, and scenario input recipes with `--cases`. Broad selection, cached-switch and collection cases need eight declared manual exposure recipes. Use a representative mixed-camera set, with the Merrill pair first, to exercise the pending-edit re-add regression recorded in the plan. The choice journey takes `--choice-cases`, with two recipes using Sunlight and Incandescent white balance, neutral bias, enabled Tone with contrast 0.25, and manual exposure. Multi-edit smoke requires eight source paths, and comparison and Smart neighbor-prefetch smoke require at least two. Supply a Tiger original separately with `--tiger-source` and a source that produces an automatic haze estimate with `--dehaze-source`. The slider matrix requires `--fixtures` and `--slider-cases`. Final app-image checks require `--renderer`, and the headless regression matrix also requires `--render-cases` and an approved `--baseline` directory. Capture checks need a local `--trace-processor`. Missing requirements are reported per job. Sources are hard-linked into a new owned folder with separate sidecars and home. Failed acceptance cases remain unsuccessful and are recorded in the plan. Windows default to the background. `--foreground` opts into foreground windows.
 
