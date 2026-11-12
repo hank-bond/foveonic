@@ -15,6 +15,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[acceptance.py](./acceptance.py)** Run selected acceptance evidence and report the maintained user-path inventory.
 - **[behavioral.py](./behavioral.py)** Run declared real-app slider cases across camera fixtures and report observed coverage.
 - **[compare.py](./compare.py)** Compare matched, uncontended native Off reports with explicit optional regression budgets.
+- **[fetch_samples.py](./fetch_samples.py)** Fetch pinned external RAW samples and verify cached originals without replacing them.
 - **[file_hash.py](./file_hash.py)** Hash profiling inputs and tools without retaining their complete file contents.
 - **[image_replay.py](./image_replay.py)** Validate captured image identity and compare its pixels with a fresh renderer execution.
 - **[inputs.py](./inputs.py)** Stage owned test inputs and recipes without modifying the supplied originals.
