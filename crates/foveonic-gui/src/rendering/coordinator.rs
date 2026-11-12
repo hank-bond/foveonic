@@ -586,22 +586,22 @@ impl Cursor {
     pub fn retry_pick(&mut self) {
         self.waiting_pick = self.pick.take();
     }
-    pub fn ready(&self, stamp: &Stamp, source_ready: bool) -> bool {
+    pub fn ready(&self, stamp: &Stamp, can_retry_source: bool) -> bool {
         // An untried job may reuse presentation or session data. Wait only
         // after execution actually discovers that this job needs a source.
-        !self.waiting.contains(stamp) || source_ready
+        !self.waiting.contains(stamp) || can_retry_source
     }
     pub fn retain_waiting(&mut self, plan: &WorkPlan, export: Option<&Stamp>) {
         self.waiting.retain(|stamp| {
             export == Some(stamp) || plan.tasks.iter().any(|task| task.stamp == *stamp)
         });
     }
-    pub fn pick_ready(&mut self, plan: &WorkPlan, source_ready: bool) -> Option<Arc<PickTask>> {
+    pub fn pick_ready(&mut self, plan: &WorkPlan, can_retry_source: bool) -> Option<Arc<PickTask>> {
         if plan
             .pick
             .as_ref()
             .is_some_and(|task| self.waiting_pick == Some(task.id))
-            && !source_ready
+            && !can_retry_source
         {
             return None;
         }

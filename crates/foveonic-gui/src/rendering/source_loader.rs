@@ -138,8 +138,13 @@ pub(super) fn start(
 }
 
 impl Handle {
-    pub fn ready(&self, path: &Path, source: Option<&Loaded>) -> bool {
-        source.is_some_and(|source| source.path == path)
+    /// Retry reuse once acquisition is consumed, including by another consumer.
+    pub fn can_retry(&self, path: &Path, pending: &Pending) -> bool {
+        pending
+            .source
+            .as_ref()
+            .is_some_and(|source| source.path == path)
+            || !pending.source_requests.contains(path)
     }
 
     pub fn open(
@@ -255,6 +260,130 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_load_failure_settles_both_current_and_camera_requests() {
+        use crate::{
+            editor::Rendition,
+            preferences::PreviewMode,
+            rendering::{
+                coordinator::{Cursor, RenderCoordinator},
+                request::Request as RenderRequest,
+            },
+        };
+        use std::time::Instant;
+
+        fn next(
+            handle: &Handle,
+            service: &Service,
+            cursor: &mut Cursor,
+            coordinator: &RenderCoordinator,
+        ) -> Option<Arc<super::super::coordinator::Task>> {
+            let pending = service.slot.0.lock().unwrap();
+            cursor.next_ready(&coordinator.plan(), |task| {
+                handle.can_retry(&task.request.path, &pending)
+            })
+        }
+
+        let (mut handle, mut service, control) = rig();
+        let path = PathBuf::from("shared-missing.x3f");
+        let mut coordinator = RenderCoordinator::default();
+        let mut cursor = Cursor::default();
+        for (revision, rendition) in [(1, Rendition::Current), (2, Rendition::Camera)] {
+            coordinator.desire(
+                Arc::new(RenderRequest {
+                    path: path.clone(),
+                    revision,
+                    rendition,
+                    settings: foveonic::render::Settings::new("Sunlight", "Standard"),
+                    framing_preview: false,
+                    calibration: None,
+                    preview_quality: PreviewMode::Full,
+                    preview_policy: PreviewMode::Full,
+                    output: "final".into(),
+                    comparison: false,
+                    export: None,
+                }),
+                None,
+                Instant::now(),
+            );
+        }
+        service.retain(vec![path.clone()]);
+        let hold = control.hold(path.clone());
+        for _ in 0..2 {
+            let task = next(&handle, &service, &mut cursor, &coordinator).unwrap();
+            assert!(handle.open(&path, task.stamp.revision).unwrap().is_none());
+            cursor.defer(&task.stamp);
+        }
+        service.signal(
+            service
+                .signals
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(next(&handle, &service, &mut cursor, &coordinator).is_none());
+        coordinator.pick(
+            super::super::worker::ColorPickRequest {
+                tool: super::super::worker::ColorPickTool::Basic,
+                token: 1,
+                path: path.clone(),
+                settings: Default::default(),
+                uv: [0.5, 0.5],
+            },
+            2,
+            None,
+        );
+        assert!(cursor.pick_ready(&coordinator.plan(), false).is_some());
+        cursor.retry_pick();
+        assert!(cursor
+            .pick_ready(
+                &coordinator.plan(),
+                handle.can_retry(&path, &service.slot.0.lock().unwrap())
+            )
+            .is_none());
+        drop(hold);
+        service.completed(
+            service
+                .results
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        let first = next(&handle, &service, &mut cursor, &coordinator).unwrap();
+        assert!(handle.open(&path, first.stamp.revision).is_err());
+        coordinator.finish(&first.stamp);
+        let pick = cursor
+            .pick_ready(
+                &coordinator.plan(),
+                handle.can_retry(&path, &service.slot.0.lock().unwrap()),
+            )
+            .expect("a pick must also retry after a sibling consumes the handoff");
+        coordinator.finish_pick(pick.id);
+        let sibling = next(&handle, &service, &mut cursor, &coordinator)
+            .expect("the other rendition must retry after its shared handoff was consumed");
+        assert!(handle
+            .open(&path, sibling.stamp.revision)
+            .unwrap()
+            .is_none());
+        cursor.defer(&sibling.stamp);
+        assert!(
+            next(&handle, &service, &mut cursor, &coordinator).is_none(),
+            "a fresh acquisition must restore waiting"
+        );
+        for signal in service.signals.try_iter().collect::<Vec<_>>() {
+            service.signal(signal);
+        }
+        service.completed(
+            service
+                .results
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        let sibling = next(&handle, &service, &mut cursor, &coordinator).unwrap();
+        assert!(handle.open(&path, sibling.stamp.revision).is_err());
+        coordinator.finish(&sibling.stamp);
+        assert!(!coordinator.busy());
+    }
+
+    #[test]
     fn held_loading_coalesces_edits_and_delivers_its_failure_once() {
         let (mut handle, mut service, control) = rig();
         let a = PathBuf::from("missing-a.x3f");
@@ -274,10 +403,10 @@ mod tests {
             service.signals.is_empty(),
             "an edit must reuse its pending source load"
         );
-        assert!(!handle.ready(&a, None));
+        assert!(!handle.can_retry(&a, &service.slot.0.lock().unwrap()));
         assert!(
-            !handle.ready(&b, None),
-            "B has no decoded handoff; its renderer session decides reuse"
+            handle.can_retry(&b, &service.slot.0.lock().unwrap()),
+            "B has no pending acquisition and may try session reuse"
         );
         drop(hold);
         let loaded = service
@@ -286,7 +415,7 @@ mod tests {
             .unwrap();
         assert!(loaded.result.is_err());
         service.completed(loaded);
-        assert!(handle.ready(&a, service.slot.0.lock().unwrap().source.as_ref()));
+        assert!(handle.can_retry(&a, &service.slot.0.lock().unwrap()));
         assert!(handle.open(&a, 2).is_err());
         assert!(service.slot.0.lock().unwrap().source.is_none());
     }

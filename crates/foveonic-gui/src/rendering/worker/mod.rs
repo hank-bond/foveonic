@@ -39,6 +39,7 @@ use std::{
 #[derive(Default)]
 struct Checks {
     source_loads: std::sync::atomic::AtomicU64,
+    deferred: (Mutex<Vec<super::coordinator::Stamp>>, Condvar),
     recipes: Mutex<Vec<(u64, u64)>>,
 }
 #[cfg(test)]
@@ -218,6 +219,7 @@ pub struct ColorPickReply {
 #[derive(Default)]
 pub(super) struct Pending {
     pub(super) source: Option<super::source_loader::Loaded>,
+    // Paths queued, loading or awaiting consumption of their source handoff.
     pub(super) source_requests: std::collections::HashSet<PathBuf>,
     pub(super) memory: Option<MemoryBudget>,
     pub(super) preparation: Option<Arc<PreparationConfig>>,
@@ -363,8 +365,8 @@ impl Worker {
                             continue 'worker;
                         }
                         cursor.retain_waiting(&state.plan, state.export.as_ref().map(|task| &task.stamp));
-                        let pick_ready = state.plan.pick.as_ref().is_some_and(|task| sources.ready(&task.request.path, state.source.as_ref()));
-                        if let Some(pick_task) = cursor.pick_ready(&state.plan, pick_ready) {
+                        let pick_can_retry = state.plan.pick.as_ref().is_some_and(|task| sources.can_retry(&task.request.path, &state));
+                        if let Some(pick_task) = cursor.pick_ready(&state.plan, pick_can_retry) {
                             let pick = &pick_task.request;
                             let _diagnostic_context = crate::timing::enabled().then(|| {
                                 foveonic::diagnostics::enter(crate::timing::context_for(
@@ -446,15 +448,15 @@ impl Worker {
                             }
                             continue 'worker;
                         }
-                        let export_ready = state.export.as_ref().is_some_and(|task| cursor.ready(&task.stamp, sources.ready(&task.request.path, state.source.as_ref())));
+                        let export_ready = state.export.as_ref().is_some_and(|task| cursor.ready(&task.stamp, sources.can_retry(&task.request.path, &state)));
                         let next = export_ready.then(|| state.export.take()).flatten()
                             .or_else(|| {
                                 previous
                                     .as_ref()
-                                    .filter(|prior| cursor.ready(prior, sources.ready(&prior.target.path, state.source.as_ref())))
+                                    .filter(|prior| cursor.ready(prior, sources.can_retry(&prior.target.path, &state)))
                                     .and_then(|prior| cursor.followup(&state.plan, prior))
                             })
-                            .or_else(|| cursor.next_ready(&state.plan, |task| sources.ready(&task.request.path, state.source.as_ref())));
+                            .or_else(|| cursor.next_ready(&state.plan, |task| sources.can_retry(&task.request.path, &state)));
                         if let Some(task) = next {
                             break task;
                         }
@@ -730,6 +732,10 @@ impl Worker {
                     Ok(Execution::NeedsSource) => {
                         crate::timing::task(&task.stamp, "execution_deferred", || serde_json::json!({"reason":"source-loading"}));
                         cursor.defer(&task.stamp);
+                        #[cfg(test)] {
+                            observations.deferred.0.lock().unwrap().push(task.stamp.clone());
+                            observations.deferred.1.notify_all();
+                        }
                         previous = None;
                         if request.export.is_some() { slot.0.lock().unwrap().export = Some(task.clone()); }
                         continue 'worker;
@@ -1994,6 +2000,102 @@ mod tests {
         worker.submit(request(4, 0));
         assert!(receive(&worker).result.unwrap().is_some());
         assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn shared_source_consumption_resumes_current_before_and_pick() {
+        use crate::{editor::Rendition, preferences::PreviewMode};
+        use std::sync::atomic::Ordering;
+        let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+            .join("blue-parking-sign.x3f");
+        let worker = TestWorker::new(
+            foveonic::render::Engine::new().unwrap(),
+            eframe::egui::Context::default(),
+        );
+        let settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        let request = |revision, rendition, quality| super::Request {
+            path: path.clone(),
+            revision,
+            rendition,
+            settings: settings.clone(),
+            framing_preview: false,
+            calibration: None,
+            preview_quality: quality,
+            preview_policy: quality,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        };
+        worker.submit(request(1, Rendition::Current, PreviewMode::Thumb));
+        assert!(receive(&worker).result.unwrap().is_some());
+        worker.checks.deferred.0.lock().unwrap().clear();
+        let hold = worker.hold_source(path.clone());
+        worker.submit(request(2, Rendition::Current, PreviewMode::Full));
+        hold.reached
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        worker.submit(request(3, Rendition::Camera, PreviewMode::Full));
+        let (lock, wake) = &worker.checks.deferred;
+        let (deferred, timeout) = wake
+            .wait_timeout_while(
+                lock.lock().unwrap(),
+                std::time::Duration::from_secs(20),
+                |tasks| tasks.len() < 2,
+            )
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "both renditions must defer before releasing the load: {deferred:?}"
+        );
+        drop(deferred);
+        worker.pick_color(
+            super::ColorPickRequest {
+                tool: super::ColorPickTool::Basic,
+                token: 1,
+                path: path.clone(),
+                settings,
+                uv: [0.5, 0.5],
+            },
+            3,
+            None,
+        );
+        drop(hold);
+        let mut rendered = Vec::new();
+        let mut picked = false;
+        while rendered.len() < 2 || !picked {
+            match worker
+                .replies
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap()
+            {
+                super::Update::Image(reply) => {
+                    let frame = reply
+                        .result
+                        .unwrap()
+                        .expect("requested rendition must complete");
+                    assert_eq!(
+                        frame.artifact.settings.working_scale,
+                        foveonic::render::Scale::NATIVE
+                    );
+                    assert!(!rendered.contains(&reply.rendition));
+                    rendered.push(reply.rendition);
+                }
+                super::Update::ColorPick { reply, .. } => {
+                    assert!(reply.sample.is_ok());
+                    picked = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(rendered.contains(&Rendition::Current));
+        assert!(rendered.contains(&Rendition::Camera));
+        assert!(!worker.busy());
+        assert_eq!(
+            worker.checks.source_loads.load(Ordering::Relaxed),
+            2,
+            "initial Thumb and the single shared native acquisition must suffice"
+        );
     }
 
     #[test]
