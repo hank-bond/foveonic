@@ -1,0 +1,98 @@
+{
+  "publisher": "RAW Pixls",
+  "catalog_url": "https://raw.pixls.us/json/getrepository.php",
+  "checksums_url": "https://raw.pixls.us/data/filelist.sha256",
+  "files": [
+    {
+      "file": "sd9.x3f",
+      "family": "classic",
+      "camera": "Sigma SD9",
+      "url": "https://raw.pixls.us/getfile.php/700/nice/Sigma%20-%20Sigma%20SD9.X3F",
+      "sha256": "9faed9efe3bb53f34534b487da3045f01d58935f7377450097b6063947964109",
+      "size_bytes": 7380128,
+      "license": {
+        "id": "CC-BY-NC-SA-4.0",
+        "url": "http://creativecommons.org/licenses/by-nc-sa/4.0/"
+      },
+      "source_note": "Import from rawsamples.ch"
+    },
+    {
+      "file": "sd10.x3f",
+      "family": "classic",
+      "camera": "Sigma SD10",
+      "url": "https://raw.pixls.us/getfile.php/571/nice/Sigma%20-%20Sigma%20SD10.X3F",
+      "sha256": "ea436ba459a7478d7b338428656fae905469de269f928749f3388db2b7b0d53f",
+      "size_bytes": 8103008,
+      "license": {
+        "id": "CC-BY-NC-SA-4.0",
+        "url": "http://creativecommons.org/licenses/by-nc-sa/4.0/"
+      },
+      "source_note": "Import from rawsamples.ch"
+    },
+    {
+      "file": "sd14.x3f",
+      "family": "classic",
+      "camera": "SIGMA SD14",
+      "url": "https://raw.pixls.us/getfile.php/4462/nice/Sigma%20-%20SIGMA%20SD14%20-%203:2.X3F",
+      "sha256": "c32f247eb372c3e66ad3b433518ec11f898fdc317c8432ebe025b46d4917bcf3",
+      "size_bytes": 12180112,
+      "license": {
+        "id": "CC0-1.0",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "source_note": ""
+    },
+    {
+      "file": "dp0-quattro.x3f",
+      "family": "quattro",
+      "camera": "DP0 Quattro",
+      "url": "https://raw.pixls.us/getfile.php/1111/nice/Sigma%20-%20DP0%20Quattro.X3F",
+      "sha256": "9e3095dd20237d35117faaaf1c66e22d0c271ab931f60775b3538519b49f54aa",
+      "size_bytes": 57197852,
+      "license": {
+        "id": "CC0-1.0",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "source_note": ""
+    },
+    {
+      "file": "dp2-quattro.x3f",
+      "family": "quattro",
+      "camera": "SIGMA dp2 Quattro",
+      "url": "https://raw.pixls.us/getfile.php/5540/nice/Sigma%20-%20SIGMA%20dp2%20Quattro%20-%203:2.X3F",
+      "sha256": "e89f40df6881bbf60a83e56eee92d04f71b89e9ff55d6ff5d498afd4590cfcb3",
+      "size_bytes": 54740948,
+      "license": {
+        "id": "CC0-1.0",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "source_note": ""
+    },
+    {
+      "file": "sd-quattro.x3f",
+      "family": "quattro",
+      "camera": "sd Quattro",
+      "url": "https://raw.pixls.us/getfile.php/6756/nice/Sigma%20-%20sd%20Quattro%20-%203:2.X3F",
+      "sha256": "bf26469746e5937ca4f9cfb34a022891f9c8518febd676355930b805b9307b48",
+      "size_bytes": 58232884,
+      "license": {
+        "id": "CC0-1.0",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "source_note": ""
+    },
+    {
+      "file": "sd-quattro-h.x3f",
+      "family": "tiger",
+      "camera": "sd Quattro H",
+      "url": "https://raw.pixls.us/getfile.php/2494/nice/Sigma%20-%20sd%20Quattro%20H%20-%203:2.X3F",
+      "sha256": "c6823f88e7dae554d3ec951d2366aab4b9ba2f8d64ad2d93028b2f9c50c811f2",
+      "size_bytes": 65875572,
+      "license": {
+        "id": "CC0-1.0",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "source_note": "Lens: ART 135 mm"
+    }
+  ]
+}

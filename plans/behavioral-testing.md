@@ -33,6 +33,21 @@ The first slice is the reported multi-edit slider jitter. Reproduce it through s
 
 ## Work
 
+### Reproducibility follow-up
+
+The owner requires maintained testing to be rebuildable from the repository and the example-photograph release. A storage audit found that the drivers and test catalog are tracked, but the current camera-family fixture list, ten-source numerical matrix, eight-photo interaction recipes and mixed-choice recipes still live in local manifests with personal absolute paths. The Quattro H pair also uses two hard links to one original, which must be represented as an explicit generated alias rather than a second original.
+
+The owner approved adding `merrill-hazy-coast.x3f` to the example release. It is now published with its original SHA-256, and the existing example-sync command discovers it. The other seven numerical-matrix inputs are not the owner's photographs and must not be added to that release. The owner approved a [tracked external sample manifest](../scripts/profiling/external_raw_samples.json). All seven local hashes match RAW Pixls' published checksums and catalog metadata. The manifest records download URLs, byte lengths, hashes and per-file license/source notes for direct retrieval. This preserves numerical input identities without rehosting the photographs. SD9/SD10 retain their distinct CC BY-NC-SA terms, and the other five entries retain CC0. Downloader/setup implementation remains a separate slice. Merrill Medium/Low fixture availability also needs reconciliation.
+
+- [ ] Move the maintained fixture selections and recipes into the repository, using example asset names and portable input resolution.
+- [x] Record exact external originals and their publisher metadata in the tracked seven-file manifest, verifying their local bytes against published hashes.
+- [ ] Document or provide one straightforward setup command for examples, explicit aliases and selected test manifests.
+- [ ] Reconcile missing example-release assets before claiming a clean-checkout run covers every camera family and RAW size.
+- [ ] Pin numerical baseline generation to approved code, recipes and input hashes. Preserve existing frozen samples while this provenance is completed.
+- [ ] Demonstrate rebuilding the selected tests from a new generated directory without relying on pre-existing local artifacts or personal sidecars.
+
+### Existing coverage work
+
 - [x] Inventory existing interaction, numerical and diagnostic evidence and identify coverage gaps for the first slider scenario.
 - [x] Add reusable, opt-in control observation and input driving only where the existing app harness cannot supply them.
 - [x] Reproduce and correct the sustained multi-edit slider stall, with mixed and equal values, displayed text and geometry checks.

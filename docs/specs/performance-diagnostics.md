@@ -33,6 +33,12 @@ Behavioral checks must cover applicable editing controls and user journeys acros
 
 Every explicitly started capture must save on orderly application exit, including one still starting. A configured capture directory is used when supplied. Otherwise the recording is saved under the platform temporary directory in `foveonic-captures/`. Closing during an already-requested save must finish that save rather than create a second capture. Shutdown may wait for recorder completion after interaction has ended. Ordinary unrecorded launches must not create capture output. Forced termination is outside this orderly-exit guarantee.
 
+## Reproducible test inputs
+
+Maintained tests must be easily rebuildable from the repository and declared photographic inputs. The owner's photographs come from the example release. Other camera-family originals use a tracked manifest of publisher download URLs, content hashes and source-reported license/credit metadata, without rehosting them in that release. Keep drivers, fixture manifests, recipes, expected behavior and rebuild commands in version control. Resolve inputs without personal absolute paths. Generated aliases of originals, sidecars, caches, renders and traces belong in disposable output directories. Required test behavior must not depend on ignored helper scripts or manually edited local recipes.
+
+Frozen numerical expectations must identify the approved code revision, source contents, recipes and generation procedure. Rebuilding a baseline must reproduce that approved result rather than bless the candidate implementation's output. Local cleanup must preserve unique inputs and approved expectations until their reproducible replacements are verified. Optional research requiring other inputs must report those dependencies explicitly and cannot stand in for a reproducible acceptance gate.
+
 ## Validation
 
 Correctness checks must validate causality, accepted output identity, complete task settlement, effective quality and expected work/reuse independently of timing thresholds. Performance scenarios must separately cover initial loading, warm disk with cold processing state, retained processing, editing, switching, memory pressure, rapid supersession and multi-photo delivery.
