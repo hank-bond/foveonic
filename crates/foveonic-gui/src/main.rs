@@ -80,6 +80,7 @@ struct App {
     multi_edit: multi_edit_runtime::Runtime,
     comparison_zoom: f32,
     viewport_paths: Arc<[PathBuf]>,
+    displayed_paths: Vec<PathBuf>,
     viewport_paths_key: Option<(u64, Option<PathBuf>)>,
     viewport_paths_limit: usize,
     editor_ui: editor::State,
@@ -304,6 +305,7 @@ impl App {
             multi_edit: Default::default(),
             comparison_zoom: 1.,
             viewport_paths: Arc::default(),
+            displayed_paths: Vec::new(),
             viewport_paths_key: None,
             viewport_paths_limit: 0,
             editor_ui: Default::default(),
@@ -450,6 +452,69 @@ impl App {
         self.viewport.reset();
         viewport::clear(&self.render_state);
     }
+    fn reusable_photograph(
+        &self,
+        path: &std::path::Path,
+        frame: &worker::Frame,
+        settings: &Settings,
+    ) -> bool {
+        frame.path == path
+            && frame.is_photographic()
+            && matching::same_authored_edits(&frame.requested, settings)
+            && frame.calibration_signature.as_deref()
+                == self
+                    .noise_calibration
+                    .selected(self.preferences.noise_profile)
+                    .as_ref()
+                    .map(|profile| profile.signature())
+            && self
+                .worker
+                .cache
+                .source_origin(path)
+                .is_none_or(|origin| origin == frame.origin)
+            && request::camera_preview_scale(
+                self.preview_quality_for(path, self.preferences.preview_quality),
+                &frame.artifact.metadata,
+            )
+            .is_ok_and(|scale| {
+                rendering::quality::accepts_scale(
+                    self.preferences.preview_quality,
+                    scale,
+                    frame.artifact.settings.working_scale,
+                )
+            })
+    }
+
+    pub(crate) fn restore_photograph(&mut self, presentation_revision: u64) {
+        if self.before.active != editor::Rendition::Current
+            || self.output != "final"
+            || self.comparison.requested()
+            || self.framing_preview_active()
+            || self
+                .frame
+                .as_ref()
+                .is_some_and(worker::Frame::is_photographic)
+        {
+            return;
+        }
+        let Some(path) = self.selected.clone() else {
+            return;
+        };
+        if !self
+            .multi_edit
+            .frame(&path)
+            .is_some_and(|frame| self.reusable_photograph(&path, frame, &self.view_settings()))
+        {
+            return;
+        }
+        let mut frame = self.multi_edit.take_frame(&path).unwrap();
+        frame.revision = presentation_revision;
+        self.worker.delivered(presentation_revision);
+        self.scope_key = None;
+        viewport::clear(&self.render_state);
+        self.frame = Some(frame);
+    }
+
     fn select(&mut self, path: PathBuf, preserve_viewport: bool) {
         self.multi_edit.selected(&path);
         if let Some(frame) = self.frame.take() {
@@ -461,29 +526,7 @@ impl App {
         let cached_selection = cached_frame.as_ref().is_some_and(|frame| {
             cached_settings
                 .as_ref()
-                .is_some_and(|settings| matching::same_authored_edits(&frame.requested, settings))
-                && frame.calibration_signature.as_deref()
-                    == self
-                        .noise_calibration
-                        .selected(self.preferences.noise_profile)
-                        .as_ref()
-                        .map(|profile| profile.signature())
-                && self
-                    .worker
-                    .cache
-                    .source_origin(&path)
-                    .is_none_or(|origin| origin == frame.origin)
-                && request::camera_preview_scale(
-                    self.preview_quality_for(&path, self.preferences.preview_quality),
-                    &frame.artifact.metadata,
-                )
-                .is_ok_and(|scale| {
-                    rendering::quality::accepts_scale(
-                        self.preferences.preview_quality,
-                        scale,
-                        frame.artifact.settings.working_scale,
-                    )
-                })
+                .is_some_and(|settings| self.reusable_photograph(&path, frame, settings))
         });
         let retain_current = self.selected.as_ref() == Some(&path) && cached_selection;
         if let Some(previous) = &self.selected {
@@ -568,6 +611,7 @@ impl App {
         if !self.sidecars.ready() {
             return;
         }
+        self.restore_photograph(self.revision + 1);
         self.publish_render_view();
         if let Some(path) = &self.selected {
             self.revision += 1;
@@ -710,7 +754,7 @@ impl App {
                         "coordinator_had_destination":reply.handling.is_some_and(|handling|handling.destination.is_some()),
                         "current_after_recheck":update.current,
                         "active_photo":self.selected,
-                        "overview_selected":self.edit_selection.contains(&reply.path),
+                        "overview_visible":self.multi_edit.rendering(&reply.path),
                     })
                 });
                 // A photo can leave the viewport while its completed edit is in
@@ -768,6 +812,14 @@ impl App {
                     if frame.rendition != editor::Rendition::Current {
                         self.before
                             .retain_current(&mut self.frame, &mut self.detail);
+                    }
+                    if frame.rendition == editor::Rendition::Current
+                        && frame.artifact.settings.preview_region.is_none()
+                        && !frame.is_photographic()
+                    {
+                        if let Some(previous) = self.frame.take() {
+                            self.multi_edit.retain(previous);
+                        }
                     }
                     timing::image_received(
                         &reply.stamp,
@@ -1387,10 +1439,12 @@ impl App {
                     },
                 );
                 let paths = self.viewport_paths.clone();
+                self.displayed_paths.clear();
                 if self.multi_photo_overview() {
                     changed |= self.comparison_view(ui, &paths);
                     return;
                 }
+                self.displayed_paths.extend(self.selected.iter().cloned());
                 changed |= self.show_photo(ui, mapping);
                 self.before_badge(ui, canvas);
             },
@@ -1505,7 +1559,14 @@ impl App {
                 ));
             });
         }
-        if !framing_active || self.viewport.explicit_zoom_pending() {
+        if self.output == "final"
+            && !self.comparison.requested()
+            && self
+                .frame
+                .as_ref()
+                .is_none_or(|frame| frame.output == "final")
+            && (!framing_active || self.viewport.explicit_zoom_pending())
+        {
             let density = self
                 .frame
                 .as_ref()
@@ -1895,6 +1956,7 @@ impl eframe::App for App {
         }
         self.preferences.direct_color = editor::direct_color::configuration(ctx);
         let preview_changed = std::mem::take(&mut self.preview_demand_changed);
+        let mut submit_active = false;
         if std::mem::take(&mut self.browser.clear_selection) {
             self.clear_selection();
         } else if let Some(request) = self.comparison_selection.take() {
@@ -1936,11 +1998,13 @@ impl eframe::App for App {
             if changed {
                 self.exit_before();
             }
-            if !self.submit_multi_edit() {
-                self.submit(None);
-            }
+            submit_active = true;
         }
-        self.submit_multi_edit();
+        self.sync_render_demand();
+        let active_submitted = self.submit_overviews();
+        if submit_active && !active_submitted {
+            self.submit(None);
+        }
         if let Some(paths) = self.browser.take_prefetch_order(self.selected.as_deref()) {
             self.worker
                 .cache

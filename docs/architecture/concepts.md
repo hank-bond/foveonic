@@ -46,7 +46,9 @@ Layout supplies viewport geometry. UI interaction owns zoom and pan, from which 
 | --- | --- | --- |
 | Requested edits | The photographic settings the user has asked for, independent of whichever render last completed. | `App::settings`, multi-edit `Runtime`, sidecar `Session` currently synchronize these values. |
 | Browser selection | Photographs included in the viewport and targeted by browser/file actions. It is not bounded by the editing limit. | Browser and viewport selection integration. |
-| Editing targets | The viewport-selected photographs receiving editor changes. One target is individual editing. | Viewport selection and multi-edit runtime. |
+| Editing targets | The viewport-selected photographs receiving editor changes. One target is individual editing. | Viewport selection and the photo runtime’s `editing_paths`. |
+| Displayed photographs | Actual photograph tiles in the current layout, including thumbnail-only photos. The overflow indicator is not a photograph viewport. | UI layout’s `displayed_paths`. |
+| Render demand | The bounded set of wanted photo results, independent of editing selection. It includes editing targets and displayed photos already admitted to the photo owner. Display alone does not admit a source. | The photo runtime’s `render_paths`, consumed by requests, cancellation and delivery. |
 | Processing engine | Recipes, graphs, numerical dependency reuse and execution. It does not decide browser selection or which UI view accepts a result. | Core render API, graph executor and sessions. |
 | Cache | Rebuildable retained data with a specific representation, validity rule and owner. | Decoded disk bundles, processing inputs/checkpoints and presentation resources have separate owners. |
 | Foreground work | Work needed for a current user interaction. | Current coordinator, service cursor and shared priority gate. |

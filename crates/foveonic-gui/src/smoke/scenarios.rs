@@ -1693,7 +1693,7 @@ pub(super) fn apply_exposure(app: &mut App, delta: f64) {
                 .observe_active(path, &app.settings, app.metadata.as_ref());
         }
     }
-    if !app.submit_multi_edit() {
+    if !app.submit_overviews() {
         app.submit(None);
     }
 }

@@ -55,7 +55,7 @@ fn result_view(reply: &Reply) -> ViewContext<'_> {
         exporting: false,
         calibration: None,
         settings: &reply.settings,
-        overview_selected: true,
+        overview_visible: true,
         overview_settings: Some(&reply.settings),
         displayed_revision: None,
         detail_revision: None,
@@ -109,7 +109,7 @@ fn result_handler_keeps_photo_feedback_when_view_rejects_but_not_when_target_is_
     let reply = render_result(desire(&mut coordinator, request.clone()), &request);
     let mut view = result_view(&reply);
     view.active = Some(Path::new("other.x3f"));
-    view.overview_selected = false;
+    view.overview_visible = false;
     assert_eq!(
         coordinator.handle_result(&reply, &view),
         ResultUpdate {
@@ -138,7 +138,7 @@ fn final_view_recheck_preserves_photo_update_after_target_leaves_view() {
     reply.handling = Some(coordinator.handle_result(&reply, &result_view(&reply)));
     let mut view = result_view(&reply);
     view.active = Some(Path::new("other.x3f"));
-    view.overview_selected = false;
+    view.overview_visible = false;
     let update = delivery::recheck(&reply, &view, Some(&request.settings));
     assert!(update.current && update.update_photo);
     assert_eq!(update.destination, None);

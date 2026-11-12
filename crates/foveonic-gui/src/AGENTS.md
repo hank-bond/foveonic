@@ -59,7 +59,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
 - **[mixer.rs](./mixer.rs)** Edits layer proportions inside a fixed dashed triangle on a CIE xy guide.
 - **[multi_edit_controls.rs](./multi_edit_controls.rs)** Applies explicit property edits and draws mixed-value controls for viewport-selected photographs.
-- **[multi_edit_runtime.rs](./multi_edit_runtime.rs)** Resolves bounded viewport edit targets and retains their revision-matched settings and images.
+- **[multi_edit_runtime.rs](./multi_edit_runtime.rs)** Owns bounded photo settings and images with independent editing selection and render demand.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
 - **[photo_tools.rs](./photo_tools.rs)** Owns photograph-tool selection, cancellation and pointer routing, and composes the toolbar.
 - **[preferences.rs](./preferences.rs)** Persists workspace, display, cache and per-mode processing preferences separately from image edits.

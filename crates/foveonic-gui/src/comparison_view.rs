@@ -74,6 +74,8 @@ impl App {
                 (self.comparison_zoom * ui.input(|i| i.zoom_delta())).clamp(0.5, 3.);
         }
         let layout = layout(paths.len(), available, self.comparison_zoom);
+        self.displayed_paths
+            .extend_from_slice(&paths[..layout.shown]);
         let (canvas, _) = ui.allocate_exact_size(available, egui::Sense::hover());
         let origin = canvas.min + (canvas.size() - layout.size) * 0.5;
         let mapping = self.displayed_mapping();

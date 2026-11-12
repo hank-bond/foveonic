@@ -82,6 +82,17 @@ impl SelectionJourney {
             "expected": self.model,
         }));
         self.model.check_selection(&selection)?;
+        for path in paths {
+            if app.displayed_paths.contains(path)
+                && app.multi_edit.settings(path).is_some()
+                && !app.multi_edit.rendering(path)
+            {
+                return Err(
+                    "a displayed retained photo left render demand when editing selection changed"
+                        .into(),
+                );
+            }
+        }
         self.model.check_exposures(&exposures)
     }
 

@@ -13,7 +13,7 @@ fn view(settings: &Settings) -> ViewContext<'_> {
         exporting: false,
         calibration: None,
         settings,
-        overview_selected: true,
+        overview_visible: true,
         overview_settings: Some(settings),
         displayed_revision: Some(10),
         detail_revision: None,
@@ -165,7 +165,7 @@ fn other_selected_photo_updates_its_tile_while_the_active_photo_stays_put() {
     let decision = classify(Completion::Current, &reply(&settings), &context);
     assert_eq!(decision.destination, Ok(Destination::Overview));
     assert!(decision.update_photo);
-    context.overview_selected = false;
+    context.overview_visible = false;
     let decision = classify(Completion::Current, &reply(&settings), &context);
     assert_eq!(decision.destination, Err(Rejection::NotVisible));
     assert!(

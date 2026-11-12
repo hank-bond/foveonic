@@ -37,7 +37,7 @@ impl ViewState {
             exporting: self.exporting,
             calibration: self.calibration.as_deref(),
             settings: &self.settings,
-            overview_selected: overview_settings.is_some(),
+            overview_visible: overview_settings.is_some(),
             overview_settings,
             displayed_revision: self.displayed_revision,
             detail_revision: self.detail_revision,
@@ -104,7 +104,7 @@ pub struct ViewContext<'a> {
     pub exporting: bool,
     pub calibration: Option<&'a str>,
     pub settings: &'a Settings,
-    pub overview_selected: bool,
+    pub overview_visible: bool,
     pub overview_settings: Option<&'a Settings>,
     pub displayed_revision: Option<u64>,
     pub detail_revision: Option<u64>,
@@ -187,7 +187,7 @@ fn destination(
         || (current_overview
             && (view.rendition != Rendition::Current || view.output != "final" || view.comparison))
     {
-        if !current_overview || !view.overview_selected {
+        if !current_overview || !view.overview_visible {
             return Err(Rejection::NotVisible);
         }
         if reply.image.as_ref().is_some_and(|image| {
@@ -270,8 +270,8 @@ impl App {
                 .map(|profile| profile.signature().to_owned()),
             settings: self.settings.clone(),
             overviews: self
-                .edit_selection
-                .paths()
+                .multi_edit
+                .render_paths()
                 .iter()
                 .filter_map(|path| {
                     self.multi_edit
@@ -301,7 +301,7 @@ impl App {
             calibration: calibration.as_ref().map(|profile| profile.signature()),
             // Before changes processing settings but preserves authored framing.
             settings: &self.settings,
-            overview_selected: self.edit_selection.contains(&reply.path),
+            overview_visible: self.multi_edit.rendering(&reply.path),
             overview_settings: self.multi_edit.settings(&reply.path),
             displayed_revision: self.frame.as_ref().map(|frame| frame.revision),
             detail_revision: self.detail.as_ref().map(|frame| frame.revision),

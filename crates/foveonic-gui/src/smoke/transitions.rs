@@ -20,6 +20,10 @@ enum Step {
     Compose,
     Before,
     BeforeZoom,
+    RefreshOverviews,
+    Inspection,
+    RefreshInspection,
+    Photograph,
     After,
     Restore,
 }
@@ -47,6 +51,13 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::Quality(2),
         Step::Quality(3),
         Step::Quality(4),
+        Step::Quality(2),
+        Step::Before,
+        Step::RefreshOverviews,
+        Step::After,
+        Step::Inspection,
+        Step::RefreshInspection,
+        Step::Photograph,
         Step::HandClick,
         Step::Single,
         Step::Quality(0),
@@ -85,6 +96,8 @@ pub(super) struct TransitionJourney {
     fit_image: Option<egui::Rect>,
     zoom_image: Option<egui::Rect>,
     view_request: Option<(foveonic::render::Settings, foveonic::render::Scale)>,
+    inspection_output: Option<String>,
+    photograph_task: Option<(u64, u64)>,
     hold: Option<crate::rendering::worker::DeliveryHold>,
     held_delta: f32,
     pub(super) composition: Option<(usize, foveonic::crop::Crop, foveonic::rotation::Rotation)>,
@@ -104,6 +117,8 @@ impl TransitionJourney {
             fit_image: None,
             zoom_image: None,
             view_request: None,
+            inspection_output: None,
+            photograph_task: None,
             hold: None,
             held_delta: 0.,
         }
@@ -262,6 +277,47 @@ impl TransitionJourney {
                 {
                     return Ok(false);
                 }
+                if app.multi_photo_overview() {
+                    for path in app.multi_edit.render_paths() {
+                        if app.selected.as_ref() == Some(path) {
+                            continue;
+                        }
+                        let Some(frame) = app.multi_edit_frame(path) else {
+                            return Ok(false);
+                        };
+                        let expected = match which {
+                            0 => 1,
+                            1 => 2,
+                            3 => 4,
+                            2 => crate::rendering::request::camera_preview_scale(
+                                app.preview_quality_for(path, PreviewMode::Smart),
+                                &frame.artifact.metadata,
+                            )
+                            .map_err(|e| e.to_string())?
+                            .divisor(),
+                            _ => foveonic::render::ControlCapabilities::from_metadata(
+                                &frame.artifact.metadata,
+                            )
+                            .map_err(|e| e.to_string())?
+                            .thumb_scale()
+                            .divisor(),
+                        };
+                        let actual = frame.artifact.settings.working_scale.divisor();
+                        if (if which == 2 {
+                            actual > expected
+                        } else {
+                            actual != expected
+                        }) || !app.multi_edit.settings(path).is_some_and(|settings| {
+                            crate::rendering::matching::same_authored_edits(
+                                &frame.requested,
+                                settings,
+                            )
+                        }) {
+                            return Ok(false);
+                        }
+                        self.events.push(serde_json::json!({"quality_photo":path,"expected_divisor":expected,"actual_divisor":actual}));
+                    }
+                }
             }
             if matches!(step, Step::Zoom | Step::Pan | Step::Fit) {
                 let (_, image) = app
@@ -378,6 +434,50 @@ impl TransitionJourney {
                 }
                 if frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE {
                     return Ok(false);
+                }
+            }
+            if step == Step::RefreshOverviews {
+                if app.before.active != crate::editor::Rendition::Camera
+                    || app
+                        .frame
+                        .as_ref()
+                        .is_none_or(|frame| frame.rendition != crate::editor::Rendition::Camera)
+                {
+                    return Err("overview refresh replaced the active Before view".into());
+                }
+                if app.multi_edit.render_paths().len() != paths.len() {
+                    return Err("overview refresh lost displayed retained photos".into());
+                }
+                self.events.push(serde_json::json!({"background_overviews":app.multi_edit.render_paths(),"editing_targets":app.edit_selection.paths(),"active_rendition":"Camera"}));
+            }
+            if matches!(step, Step::Inspection | Step::RefreshInspection) {
+                let Some(frame) = &app.frame else {
+                    return Ok(false);
+                };
+                if Some(frame.output.as_str()) != self.inspection_output.as_deref() {
+                    return Ok(false);
+                }
+                if !app.worker.is_settled_and_admitted(frame) {
+                    return Err("overview refresh retired the active inspection request".into());
+                }
+            }
+            if step == Step::Photograph
+                && app
+                    .frame
+                    .as_ref()
+                    .is_none_or(|frame| frame.output != "final")
+            {
+                return Ok(false);
+            }
+            if step == Step::Photograph {
+                let frame = app.frame.as_ref().unwrap();
+                if Some((frame.diagnostic_task.id, frame.diagnostic_task.revision))
+                    != self.photograph_task
+                {
+                    return Err(
+                        "returning from inspection rendered an already owned photograph again"
+                            .into(),
+                    );
                 }
             }
             if step == Step::After
@@ -536,6 +636,47 @@ impl TransitionJourney {
                 app.preferences.preview_quality = PreviewMode::Smart;
                 app.viewport.zoom_by(20.);
                 app.submit(None);
+            }
+            Step::RefreshOverviews => {
+                app.comparison_zoom = 3.;
+                app.multi_edit.invalidate();
+                if app.submit_overviews() {
+                    return Err(
+                        "overview submission claimed to cover the active Before view".into(),
+                    );
+                }
+            }
+            Step::Inspection => {
+                let frame = app
+                    .frame
+                    .as_ref()
+                    .ok_or("missing photograph before inspection")?;
+                self.photograph_task =
+                    Some((frame.diagnostic_task.id, frame.diagnostic_task.revision));
+                let output =
+                    foveonic::inspection::image_outputs(&app.settings, app.metadata.as_deref())
+                        .into_iter()
+                        .find(|output| {
+                            output.name != "final"
+                                && output.channels == foveonic::inspection::Channels::Rgb
+                        })
+                        .ok_or("no RGB inspection output for this photo")?;
+                self.inspection_output = Some(output.name.into());
+                app.output = output.name.into();
+                app.channel = -1;
+                app.submit(None);
+            }
+            Step::RefreshInspection => {
+                app.multi_edit.invalidate();
+                if app.submit_overviews() {
+                    return Err("overview submission claimed to cover inspection".into());
+                }
+            }
+            Step::Photograph => {
+                app.output = "final".into();
+                if !app.submit_overviews() {
+                    app.submit(None);
+                }
             }
             Step::Restore => {
                 app.preferences.preview_quality = PreviewMode::Thumb;
