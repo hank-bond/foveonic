@@ -22,6 +22,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 
 ### Directories
 
+- **[browser/](./browser/AGENTS.md)** Browser modules separate folder discovery, queries, selection, drawing and bounded preview loading.
 - **[controls/](./controls/AGENTS.md)** Family panels compose shared editing widgets while the processor defines supported controls.
 - **[crop_tool/](./crop_tool/AGENTS.md)** Crop interaction separates pointer geometry and aspect-ratio preferences from the shared image view.
 - **[editor/](./editor/AGENTS.md)** Editor workflow separates scoped settings, application presets and defaults from authored photos and transient comparisons.
@@ -36,14 +37,6 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[application_settings.rs](./application_settings.rs)** Configures display, editing targets, retained memory and background disk reuse independently of photographic edits.
 - **[automation.rs](./automation.rs)** Observes real controls for opt-in scripted application checks.
 - **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
-- **[browser.rs](./browser.rs)** Browses X3F paths with workspace keyboard selection and bounded embedded and rendered previews.
-- **[browser_chrome.rs](./browser_chrome.rs)** Draws compact browser view/sort/search menus and independent star-rating controls.
-- **[browser_folders.rs](./browser_folders.rs)** Discovers descendant X3Fs and lays out folder groups for virtualized browsing.
-- **[browser_items.rs](./browser_items.rs)** Paints aspect-preserving browser images and shared selectable metadata rows with star controls.
-- **[browser_loader.rs](./browser_loader.rs)** Prioritizes visible thumbnails over a greedy folder pass on a separate worker from larger previews.
-- **[browser_metadata.rs](./browser_metadata.rs)** Loads browser capture metadata and folder ratings off-thread and coalesces independent rating saves.
-- **[browser_query.rs](./browser_query.rs)** Defines browser metadata, stable folder-local sorting and shared substring/rating filtering.
-- **[browser_review.rs](./browser_review.rs)** Handles browser highlighting, import checkboxes, and shared hidden-photo visibility.
 - **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
 - **[chromaticity.rs](./chromaticity.rs)** Draws a CIE 1931 xy guide with fixed visual anchors for the layer mixer.
 - **[comparison_view.rs](./comparison_view.rs)** Fits browser-selected photographs into bounded comparison tiles with explicit viewport editing targets.

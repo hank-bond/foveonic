@@ -324,5 +324,5 @@ fn load(
 }
 
 #[cfg(test)]
-#[path = "browser_loader_test.rs"]
+#[path = "loader_test.rs"]
 mod tests;

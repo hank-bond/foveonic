@@ -357,5 +357,5 @@ impl super::Browser {
 }
 
 #[cfg(test)]
-#[path = "browser_metadata_test.rs"]
+#[path = "metadata_loader_test.rs"]
 mod tests;

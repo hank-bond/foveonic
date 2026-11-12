@@ -246,7 +246,7 @@ Sources: [frontend inventory](../crates/foveonic-gui/src/memory.rs), [shared tri
 
 ## G. Background and auxiliary worker consistency
 
-Sources: [idle preparation](../crates/foveonic-gui/src/rendering/worker/preparation.rs), [cache prefetch](../crates/foveonic/src/decode_cache/worker.rs), [browser loader](../crates/foveonic-gui/src/browser_loader.rs), [navigator](../crates/foveonic-gui/src/navigator.rs), [rendered previews](../crates/foveonic-gui/src/previews.rs), [capture metadata](../crates/foveonic-gui/src/capture.rs), [folder discovery](../crates/foveonic-gui/src/folder_loader.rs), [batch](../crates/foveonic-gui/src/batch.rs).
+Sources: [idle preparation](../crates/foveonic-gui/src/rendering/worker/preparation.rs), [cache prefetch](../crates/foveonic/src/decode_cache/worker.rs), [browser loader](../crates/foveonic-gui/src/browser/loader.rs), [navigator](../crates/foveonic-gui/src/navigator.rs), [rendered previews](../crates/foveonic-gui/src/previews.rs), [capture metadata](../crates/foveonic-gui/src/capture.rs), [folder discovery](../crates/foveonic-gui/src/folder_loader.rs), [batch](../crates/foveonic-gui/src/batch.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |

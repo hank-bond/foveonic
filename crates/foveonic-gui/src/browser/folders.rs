@@ -171,5 +171,5 @@ pub(super) fn heading(
 }
 
 #[cfg(test)]
-#[path = "browser_folders_test.rs"]
+#[path = "folders_test.rs"]
 mod tests;

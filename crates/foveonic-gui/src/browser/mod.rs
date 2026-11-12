@@ -9,19 +9,12 @@ use std::{
     sync::{mpsc, Arc},
 };
 
-#[path = "browser_chrome.rs"]
 mod chrome;
-#[path = "browser_folders.rs"]
 pub(crate) mod folders;
-#[path = "browser_items.rs"]
 mod items;
-#[path = "browser_loader.rs"]
 mod loader;
-#[path = "browser_metadata.rs"]
 mod metadata_loader;
-#[path = "browser_query.rs"]
 mod query;
-#[path = "browser_review.rs"]
 mod review;
 use loader::{Kind, Reply, Request, Worker as Loader};
 pub use query::{Field, Sort};
@@ -1070,7 +1063,7 @@ fn icon_columns(width: f32) -> usize {
     (width / GRID_REFLOW_TILE_WIDTH).floor().max(1.) as usize
 }
 #[cfg(test)]
-#[path = "browser_test.rs"]
+#[path = "interaction_test.rs"]
 mod interaction_tests;
 
 #[cfg(test)]

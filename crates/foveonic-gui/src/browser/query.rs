@@ -213,5 +213,5 @@ pub fn sort(files: &mut [PathBuf], entries: &HashMap<PathBuf, Entry>, sort: Sort
 }
 
 #[cfg(test)]
-#[path = "browser_query_test.rs"]
+#[path = "query_test.rs"]
 mod tests;
