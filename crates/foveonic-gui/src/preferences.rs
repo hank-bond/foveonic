@@ -63,7 +63,7 @@ pub enum FolderMode {
     Browse,
     Import,
 }
-/// Workspace policy. Smart starts with Fast and refines to Full when viewing detail.
+/// Workspace policy. Smart selects a processing level for the displayed pixel size.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PreviewMode {
     #[default]

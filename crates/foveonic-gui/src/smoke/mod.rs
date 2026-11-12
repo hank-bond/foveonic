@@ -614,7 +614,7 @@ impl App {
                 .settings
                 .regional_preview_available(&frame.artifact.metadata)
         });
-        let shown_detail = self.smart_detail(ctx.pixels_per_point()).map(|detail| {
+        let shown_detail = self.smart_detail().map(|detail| {
             (
                 detail.framing_preview,
                 crate::rendering::matching::same_authored_edits(&detail.requested, &self.settings),
@@ -626,10 +626,10 @@ impl App {
                 && smoke.targets[smoke.index] == "smart-edit-detail"
                 && !smoke.smart_scrub_checked
         }) && self
-            .smart_detail(ctx.pixels_per_point())
+            .smart_detail()
             .is_some_and(|detail| detail.requested.exposure == 0.5)
         {
-            let detail = self.smart_detail(ctx.pixels_per_point()).unwrap();
+            let detail = self.smart_detail().unwrap();
             let revision = detail.revision;
             let texture = detail.texture.clone();
             // Change settings after a tile is already visible. Checking only
@@ -637,13 +637,13 @@ impl App {
             for exposure in [0.625, 0.75] {
                 self.settings.exposure = exposure;
                 let retained = self
-                    .smart_detail(ctx.pixels_per_point())
+                    .smart_detail()
                     .expect("settings change hid the latest completed tile");
                 assert_eq!(retained.revision, revision);
                 assert!(std::sync::Arc::ptr_eq(&retained.texture, &texture));
                 self.submit(None);
                 let retained = self
-                    .smart_detail(ctx.pixels_per_point())
+                    .smart_detail()
                     .expect("submission hid the latest completed tile");
                 assert_eq!(retained.revision, revision);
                 assert!(std::sync::Arc::ptr_eq(&retained.texture, &texture));
@@ -1044,12 +1044,12 @@ impl App {
                     let full = matches!(
                         target,
                         "final"
+                            | "smart-100"
                             | "smart-detail"
                             | "smart-full"
                             | "smart-pan"
                             | "smart-edit-detail"
                             | "smart-edit"
-                            | "smart-zoom-pending"
                             | "smart-crop-zoom"
                             | "smart-crop-enter"
                             | "smart-crop-active-zoom"
@@ -1057,9 +1057,6 @@ impl App {
                             | "smart-adaptive-zoom"
                             | "smart-transition-full"
                             | "smart-adaptive-edit"
-                            | "smart-fit"
-                            | "cache-settings"
-                            | "cache-list"
                     );
                     if target == "cache-reopen" {
                         let retained = smoke.smart_reopen.as_ref().unwrap();
@@ -1080,14 +1077,20 @@ impl App {
                             self.browser.rendered_revision(&frame.path),
                             retained.thumbnail_revision
                         );
-                    } else {
+                    } else if full {
                         assert_eq!(
                             frame.artifact.settings.working_scale,
-                            if full {
-                                foveonic::render::Scale::NATIVE
-                            } else {
-                                foveonic::render::Scale::new(2).unwrap()
-                            }
+                            foveonic::render::Scale::NATIVE
+                        );
+                    } else {
+                        let (_, image) = self.viewport.image_rectangles().unwrap();
+                        let extent = frame.native_display_extent();
+                        let density = (image.width() / extent[0] as f32)
+                            .max(image.height() / extent[1] as f32)
+                            * ctx.pixels_per_point();
+                        assert!(
+                            density * frame.artifact.settings.working_scale.divisor() as f32
+                                <= 1.5001
                         );
                     }
                     assert_eq!(frame.artifact.settings.preview_region, None);
@@ -1877,7 +1880,7 @@ impl App {
                 "smart-zoom-pending" => {
                     self.settings.exposure = 0.6;
                     assert!(
-                        self.smart_detail(ctx.pixels_per_point()).is_none(),
+                        self.smart_detail().is_none(),
                         "a newer Full frame must supersede old detail during the next edit"
                     );
                     self.submit(None);

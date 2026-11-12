@@ -65,8 +65,8 @@ impl Request {
         }
     }
 
-    /// Smart keeps native history for refinement. Explicit reduced final views
-    /// use the reduced working set, including Camera and Defaults renditions.
+    /// Reduced final views share the reduced working set, including Smart,
+    /// Camera and Defaults. Native detail recovers its source through the loader.
     pub fn uses_reduced_session(&self) -> bool {
         matches!(
             self.preview_quality,
@@ -82,13 +82,26 @@ impl Request {
         if settings.working_scale.is_reduced() {
             settings.working_scale = camera_preview_scale(self.preview_quality, metadata)?;
         }
-        if self.preview_quality != PreviewMode::Smart
+        if self.preview_policy != PreviewMode::Smart
             || !self.photographic_preview()
             || !settings.regional_preview_available(metadata)
         {
             settings.preview_region = None;
         }
         Ok(())
+    }
+
+    /// Smart can display an already completed finer image without processing it
+    /// again. Explicit modes require their selected grid. Composition changes
+    /// separately preserve the existing photographic pixels.
+    pub fn accepts_scale(&self, scale: Scale, metadata: &Metadata) -> Result<bool> {
+        let mut settings = self.settings.clone();
+        self.apply_preview(&mut settings, metadata)?;
+        Ok(super::quality::accepts_scale(
+            self.preview_policy,
+            settings.working_scale,
+            scale,
+        ))
     }
 }
 

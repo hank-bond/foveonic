@@ -19,6 +19,7 @@ enum Step {
     HeldSupersession,
     Compose,
     Before,
+    BeforeZoom,
     After,
     Restore,
 }
@@ -41,6 +42,11 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         result.push(Step::Edit(n & 0x100 != 0));
     }
     result.extend([
+        Step::Quality(0),
+        Step::Quality(1),
+        Step::Quality(2),
+        Step::Quality(3),
+        Step::Quality(4),
         Step::HandClick,
         Step::Single,
         Step::Quality(0),
@@ -48,7 +54,11 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::Quality(2),
         Step::Quality(3),
         Step::Quality(4),
-        Step::Quality(1),
+        Step::Quality(3),
+        Step::Zoom,
+        Step::Pan,
+        Step::Fit,
+        Step::Quality(4),
         Step::Zoom,
         Step::Pan,
         Step::ViewportScopes,
@@ -57,6 +67,7 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::HeldSupersession,
         Step::Compose,
         Step::Before,
+        Step::BeforeZoom,
         Step::After,
         Step::Restore,
     ]);
@@ -210,7 +221,31 @@ impl TransitionJourney {
                 };
                 let divisor = match which {
                     0 => 1,
-                    1 | 2 => 2,
+                    1 => 2,
+                    2 => {
+                        let (_, image) = app
+                            .viewport
+                            .image_rectangles()
+                            .ok_or("missing Smart display geometry")?;
+                        let extent = frame.display_extent(false);
+                        let density = (image.width() / extent[0] as f32)
+                            .max(image.height() / extent[1] as f32)
+                            * ctx.pixels_per_point();
+                        let nominal = [8, 4, 2, 1]
+                            .into_iter()
+                            .find(|divisor| density * *divisor as f32 <= 1.5)
+                            .unwrap_or(1);
+                        if nominal == 8 {
+                            foveonic::render::ControlCapabilities::from_metadata(
+                                &frame.artifact.metadata,
+                            )
+                            .map_err(|e| e.to_string())?
+                            .thumb_scale()
+                            .divisor()
+                        } else {
+                            nominal
+                        }
+                    }
                     3 => 4,
                     _ => foveonic::render::ControlCapabilities::from_metadata(
                         &frame.artifact.metadata,
@@ -333,6 +368,17 @@ impl TransitionJourney {
                     .is_none_or(|frame| frame.rendition != crate::editor::Rendition::Camera)
             {
                 return Ok(false);
+            }
+            if step == Step::BeforeZoom {
+                let frame = app.frame.as_ref().ok_or("missing Before zoom image")?;
+                if app.before.active != crate::editor::Rendition::Camera
+                    || frame.rendition != crate::editor::Rendition::Camera
+                {
+                    return Err("Smart display demand left the Before rendition".into());
+                }
+                if frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE {
+                    return Ok(false);
+                }
             }
             if step == Step::After
                 && app
@@ -485,6 +531,11 @@ impl TransitionJourney {
                 if app.before.active != crate::editor::Rendition::Current {
                     return Err("After did not restore".into());
                 }
+            }
+            Step::BeforeZoom => {
+                app.preferences.preview_quality = PreviewMode::Smart;
+                app.viewport.zoom_by(20.);
+                app.submit(None);
             }
             Step::Restore => {
                 app.preferences.preview_quality = PreviewMode::Thumb;

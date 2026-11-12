@@ -68,7 +68,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[saturation](./saturation.md)** _(accepted, conforming, reference)._ Saturation is independent of Tone and Color Range, with Reference and gamut-aware Universal processing.
 - **[sensor-defect-calibration](./sensor-defect-calibration.md)** _(accepted, conforming, reference)._ User cap calibration must distinguish general noise distributions from camera-specific sparse pixel defects.
 - **[small-previews](./small-previews.md)** _(accepted, incomplete, reference)._ Power-of-two working grids reduce corrected sensor layers before the complete camera and photographic pipeline.
-- **[smart-preview](./smart-preview.md)** _(accepted, conforming, reference)._ Smart preview uses Fast overviews and renders compatible zoomed edits directly at Full quality, refining the visible region first where supported.
+- **[smart-preview](./smart-preview.md)** _(accepted, incomplete, reference)._ Smart preview chooses processing resolution from displayed pixel demand and refines native detail through supported visible regions.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
 - **[tonal-ranges](./tonal-ranges.md)** _(accepted, conforming, reference)._ Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG.
 - **[viewport-workflows](./viewport-workflows.md)** _(draft, incomplete, reference)._ Smart overview sizing, persistent photograph views and a native-detail loupe share explicit viewport requirements.

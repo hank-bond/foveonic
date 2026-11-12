@@ -102,7 +102,7 @@ Coordinates are illustrative. External `pointer.jsonl` records dispatch evidence
 
 ## Scripted native scenarios
 
-The runner extends the existing opt-in native smoke driver. It launches the actual app and uses existing browser commands, edit descriptors and egui pointer dispatch. Each step labels `direct-command` versus `input-dispatch` coverage. These are not physical mouse tests. Native runs support one Full, Fast, Draft or Thumb photograph, or one through eight Thumb photographs in a multi-photo overview. Use the headless editing harness for multi-photo Draft experiments.
+The runner extends the existing opt-in native smoke driver. It launches the actual app and uses existing browser commands, edit descriptors and egui pointer dispatch. Each step labels `direct-command` versus `input-dispatch` coverage. These are not physical mouse tests. Native runs support one through eight Full, Fast, Draft or Thumb photographs. The transition journey also exercises Smart through the application’s current display geometry, fixed reduced-mode zoom and Smart zoom while viewing Before.
 
 Supply an existing `profile_editing` case array containing `source` and optional serialized `settings`, or repeat `--source INPUT.x3f` for camera defaults:
 

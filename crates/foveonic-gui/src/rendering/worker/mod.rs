@@ -12,12 +12,9 @@ use super::{
     matching::{presentation_changed, same_pixel_settings, same_request_context},
     request::Request,
 };
+use crate::export::{self, resolve_camera_settings};
 #[cfg(test)]
 use crate::export::{Export, ExportFormat};
-use crate::{
-    export::{self, resolve_camera_settings},
-    preferences::PreviewMode,
-};
 use eframe::egui;
 #[cfg(test)]
 use foveonic::source::Source;
@@ -42,6 +39,8 @@ struct Checks {
     deferred: (Mutex<Vec<super::coordinator::Stamp>>, Condvar),
     recipes: Mutex<Vec<(u64, u64)>>,
 }
+#[cfg(test)]
+use crate::preferences::PreviewMode;
 #[cfg(test)]
 thread_local! { static CHECKS: std::cell::RefCell<Option<Arc<Checks>>> = const { std::cell::RefCell::new(None) }; }
 
@@ -94,6 +93,15 @@ impl Frame {
     }
     pub fn camera_extent(&self) -> [u32; 2] {
         self.native_extent
+    }
+    /// Native sampling extent before any requested final output resize.
+    pub fn native_display_extent(&self) -> [u32; 2] {
+        if self.framing_preview {
+            self.editing_extent()
+        } else {
+            let [l, t, r, b] = self.requested.crop.pixels(self.uncropped_extent());
+            [r - l, b - t]
+        }
     }
     pub fn uncropped_extent(&self) -> [u32; 2] {
         self.requested.rotation.extent(self.native_extent)
@@ -530,7 +538,7 @@ impl Worker {
                 let prepare_defaults = matches!(
                     task.stamp.target.purpose,
                     crate::rendering::request::Purpose::Current
-                ) && request.preview_quality == PreviewMode::Thumb;
+                );
                 previous = Some(task.stamp.clone());
                 let reporter =
                     crate::progress::Reporter::new(progress_updates.clone(), request.revision);

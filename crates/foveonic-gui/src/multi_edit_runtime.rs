@@ -17,6 +17,10 @@ struct Photo {
     defaults_basis: Option<Settings>,
     frame: Option<worker::Frame>,
     dirty: bool,
+    preview: Option<(
+        crate::preferences::PreviewMode,
+        crate::preferences::PreviewMode,
+    )>,
     error: Option<String>,
 }
 
@@ -133,6 +137,20 @@ impl Runtime {
     pub fn invalidate(&mut self) {
         for photo in self.photos.values_mut() {
             photo.dirty = true;
+        }
+    }
+    pub fn observe_preview(
+        &mut self,
+        path: &Path,
+        policy: crate::preferences::PreviewMode,
+        quality: crate::preferences::PreviewMode,
+    ) {
+        if let Some(photo) = self.photos.get_mut(path) {
+            let preview = Some((policy, quality));
+            if photo.preview != preview {
+                photo.preview = preview;
+                photo.dirty = true;
+            }
         }
     }
     pub fn multiple(&self) -> bool {
@@ -675,6 +693,11 @@ impl crate::App {
     }
 
     pub(crate) fn submit_multi_edit(&mut self) -> bool {
+        let policy = self.preferences.preview_quality;
+        for path in self.edit_selection.paths() {
+            self.multi_edit
+                .observe_preview(path, policy, self.preview_quality_for(path, policy));
+        }
         if !self.multi_edit.needs_render() || self.exporting {
             return false;
         }
@@ -691,6 +714,7 @@ impl crate::App {
                 settings.preview_region = None;
                 let framing_preview =
                     self.selected.as_ref() == Some(&path) && self.framing_preview_active();
+                let preview_quality = self.preview_quality_for(&path, policy);
                 request::Request {
                     framing_preview,
                     calibration: calibration.clone(),
@@ -698,8 +722,8 @@ impl crate::App {
                     revision: self.revision,
                     path,
                     settings,
-                    preview_quality: crate::preferences::PreviewMode::Thumb,
-                    preview_policy: crate::preferences::PreviewMode::Thumb,
+                    preview_quality,
+                    preview_policy: policy,
                     output: "final".into(),
                     comparison: false,
                     export: None,
@@ -818,6 +842,28 @@ mod tests {
         assert!(!runtime.needs_render());
         assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
         assert!(runtime.photos[&inactive].settings.is_none());
+    }
+
+    #[test]
+    fn quality_changes_request_work_without_photographic_edits() {
+        use crate::preferences::PreviewMode;
+        let mut runtime = runtime();
+        let path = runtime.paths[0].clone();
+        let original = runtime.settings(&path).unwrap().clone();
+        runtime.observe_preview(&path, PreviewMode::Smart, PreviewMode::Thumb);
+        assert!(runtime.needs_render());
+        runtime.request();
+        runtime.observe_preview(&path, PreviewMode::Smart, PreviewMode::Thumb);
+        assert!(!runtime.needs_render());
+        runtime.observe_preview(&path, PreviewMode::Smart, PreviewMode::Draft);
+        assert!(runtime.needs_render());
+        runtime.request();
+        runtime.observe_preview(&path, PreviewMode::Draft, PreviewMode::Draft);
+        assert!(
+            runtime.needs_render(),
+            "workspace policy also participates in reuse"
+        );
+        assert_eq!(runtime.settings(&path), Some(&original));
     }
 
     #[test]

@@ -149,8 +149,12 @@ impl Presentation {
             || whole.settings.crop != settings.crop
             || whole.settings.rotation != settings.rotation;
         if !changed
-            && request.preview_quality == PreviewMode::Full
-            && whole.images[0].image.settings().working_scale != Scale::NATIVE
+            && !request
+                .accepts_scale(
+                    whole.images[0].image.settings().working_scale,
+                    &whole.images[0].metadata,
+                )
+                .ok()?
             && same_pixel_settings(&whole.settings, &settings)
         {
             return None;
@@ -200,11 +204,13 @@ impl Presentation {
         let changed = whole.framing != request.framing_preview
             || whole.settings.crop != settings.crop
             || whole.settings.rotation != settings.rotation;
-        // A Smart refinement or explicit zoom can ask for a new pass without
-        // changing controls. Composition must retain the already rendered grid.
+        // Display demand can increase without changing photographic controls.
+        // Composition must retain the already rendered grid.
         if !changed
-            && request.preview_quality == PreviewMode::Full
-            && whole.images[0].image.settings().working_scale != Scale::NATIVE
+            && !request.accepts_scale(
+                whole.images[0].image.settings().working_scale,
+                &whole.images[0].metadata,
+            )?
         {
             return Ok(None);
         }
@@ -407,6 +413,42 @@ mod tests {
         assert_eq!(frame.texture.description(), expected.description());
         assert_eq!(pixels(engine, &frame.texture), pixels(engine, &expected));
     }
+    #[test]
+    #[ignore = "requires GPU and MERRILL_X3F"]
+    fn smart_resolution_upgrades_cannot_reuse_coarser_unchanged_pixels() {
+        let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
+        let engine = Engine::new().unwrap();
+        let verifier = engine.executor();
+        let worker = Worker::new(engine, egui::Context::default());
+        let settings = Settings::new("Sunlight", "Standard");
+        for (index, quality) in [
+            PreviewMode::Thumb,
+            PreviewMode::Draft,
+            PreviewMode::Fast,
+            PreviewMode::Full,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let revision = index as u64 + 1;
+            worker.submit(request(
+                &path,
+                revision,
+                quality,
+                PreviewMode::Smart,
+                &settings,
+                false,
+            ));
+            let frame = receive(&worker, revision);
+            assert_eq!(
+                frame.artifact.settings.working_scale,
+                quality.working_scale()
+            );
+            assert!(dispatches(&worker, revision) > 0);
+            matches_fresh(&verifier, &frame, &path, &settings);
+        }
+    }
+
     #[test]
     #[ignore = "requires GPU and MERRILL_X3F"]
     fn crop_and_rotate_reuse_thumb_smart_fit_and_smart_full_without_numerical_dispatches() {

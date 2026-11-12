@@ -5,7 +5,6 @@ use super::{
     worker,
 };
 use crate::{preferences, App};
-use eframe::egui;
 use foveonic::render::Scale;
 // Keep a small margin around the clicked viewport while the whole frame catches up.
 const DETAIL_OVERSCAN_PIXELS: u32 = 64;
@@ -43,16 +42,16 @@ pub fn contains(outer: [u32; 4], inner: [u32; 4]) -> bool {
 }
 
 impl App {
-    pub(crate) fn smart_detail(&self, pixels_per_point: f32) -> Option<&worker::Frame> {
+    pub(crate) fn smart_detail(&self) -> Option<&worker::Frame> {
         if self.multi_photo_overview()
             || self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.framing_preview_active()
             || self.output != "final"
             || self.comparison.requested()
-            || self
-                .viewport
-                .zoom_percent(pixels_per_point)
-                .is_some_and(|zoom| zoom <= 100.)
+            || !self.selected.as_ref().is_some_and(|path| {
+                self.preview_quality_for(path, preferences::PreviewMode::Smart)
+                    == preferences::PreviewMode::Full
+            })
         {
             return None;
         }
@@ -77,11 +76,11 @@ impl App {
             || self.framing_preview_active()
             || self.output != "final"
             || self.comparison.requested()
-            || !(self.viewport.explicit_zoom()
-                && self
-                    .viewport
-                    .zoom_percent(self.context.pixels_per_point())
-                    .is_some_and(|z| z > 100.))
+            || !self.viewport.explicit_zoom()
+            || !self.selected.as_ref().is_some_and(|path| {
+                self.preview_quality_for(path, preferences::PreviewMode::Smart)
+                    == preferences::PreviewMode::Full
+            })
         {
             return None;
         }
@@ -108,23 +107,23 @@ impl App {
         ];
         self.smart
             .next(rect, frame.uncropped_extent())
-            .map(|region| (preferences::PreviewMode::Smart, Some(region)))
+            .map(|region| (preferences::PreviewMode::Full, Some(region)))
     }
 
-    pub(crate) fn update_smart(&mut self, ctx: &egui::Context) {
+    pub(crate) fn update_smart(&mut self) {
         if self.framing_preview_active() {
-            if !self.busy && self.viewport.explicit_zoom_pending() {
-                self.viewport.take_explicit_zoom();
-                if self
-                    .viewport
-                    .zoom_percent(ctx.pixels_per_point())
-                    .is_some_and(|zoom| zoom > 100.)
-                    && self
-                        .frame
-                        .as_ref()
-                        .is_some_and(|frame| frame.artifact.settings.working_scale.is_reduced())
-                {
-                    self.submit_with_quality(None, None, preferences::PreviewMode::Full);
+            if !self.busy
+                && self.viewport.take_explicit_zoom()
+                && self.preferences.preview_quality == preferences::PreviewMode::Smart
+            {
+                if let Some(path) = &self.selected {
+                    let quality = self.preview_quality_for(path, preferences::PreviewMode::Smart);
+                    if self.frame.as_ref().is_some_and(|frame| {
+                        frame.artifact.settings.working_scale.divisor()
+                            > quality.working_scale().divisor()
+                    }) {
+                        self.submit_with_quality(None, None, quality);
+                    }
                 }
             }
             return;
@@ -132,31 +131,16 @@ impl App {
         if !self.busy {
             self.viewport.take_explicit_zoom();
         }
-        if !self.busy
-            && self.viewport.explicit_zoom()
-            && self
-                .viewport
-                .zoom_percent(ctx.pixels_per_point())
-                .is_some_and(|z| z > 100.)
-            && self
-                .frame
-                .as_ref()
-                .is_some_and(|f| f.artifact.settings.working_scale.divisor() >= 4)
-        {
-            self.submit_with_quality(None, None, preferences::PreviewMode::Full);
-            return;
-        }
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.framing_preview_active()
             || self.exporting
             || self.output != "final"
             || self.comparison.requested()
-            || (self.detail.is_none()
-                && !(self.viewport.explicit_zoom()
-                    && self
-                        .viewport
-                        .zoom_percent(ctx.pixels_per_point())
-                        .is_some_and(|zoom| zoom > 100.)))
+            || !self.selected.as_ref().is_some_and(|path| {
+                self.preview_quality_for(path, preferences::PreviewMode::Smart)
+                    == preferences::PreviewMode::Full
+            })
+            || (self.detail.is_none() && !self.viewport.explicit_zoom())
         {
             return;
         }

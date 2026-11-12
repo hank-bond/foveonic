@@ -322,7 +322,6 @@ impl Scenario {
             config.photo_count,
             "scenario inputs must match its photo count"
         );
-        assert!(config.photo_count==1 || matches!(config.quality,Quality::Thumb),"native multi-photo overviews support Thumb; use the headless runner for multi-photo Draft");
         assert!(
             config.name != Case::CachedSwitch || config.photo_count >= 2,
             "cached switching needs at least two photographs"

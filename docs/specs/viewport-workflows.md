@@ -11,7 +11,7 @@ This records the owner's next requested workflows for architectural review. It d
 
 ## Preview quality
 
-Smart should select a Fast overview for one displayed photograph, Draft for two through four, and Thumb for five through eight. Count all displayed photographs, independently of which are selected for editing. Camera-specific working scales remain governed by [small previews](./small-previews.md).
+The owner refined the initial count-based proposal: Smart should choose by physical display-pixel demand, independently for every displayed photograph. Its concrete policy now belongs to [Smart preview](./smart-preview.md). Photo count is not a quality input. Camera-specific working scales remain governed by [small previews](./small-previews.md).
 
 Explicit Full, Fast, Draft and Thumb modes must retain their selected processing resolution through viewport zoom and selection changes. Smart alone changes the main preview's requested resolution automatically. Presentation-only framing continues to reuse compatible pixels.
 

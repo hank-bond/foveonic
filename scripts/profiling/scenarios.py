@@ -27,8 +27,6 @@ NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-sw
 def selected_cases(cases, count, quality, scenario):
     if not 1 <= count <= 8 or len(cases) < count:
         raise ValueError('supply one through eight declared photographs for the requested count')
-    if quality != 'thumb' and count > 1:
-        raise ValueError('native multi-photo overviews use Thumb; use profile_editing for other multi-photo scales')
     if scenario in ('cached-switch', 'source-loading') and count < 2:
         raise ValueError(f'{scenario} needs at least two photographs')
     if scenario == 'slider-drag' and count < 2:

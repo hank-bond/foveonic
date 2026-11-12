@@ -104,6 +104,8 @@ struct App {
     frame: Option<worker::Frame>,
     detail: Option<worker::Frame>,
     smart: smart::Controller,
+    smart_qualities: std::collections::BTreeMap<PathBuf, preferences::PreviewMode>,
+    preview_demand_changed: bool,
     scope_images: Option<scopes::Images>,
     scope_snapshot: Option<worker::ScopeSnapshot>,
     scope_key: Option<worker::ScopeKey>,
@@ -194,6 +196,8 @@ impl App {
                 .processing_selection(self.selected.as_deref())
                 .into();
             self.viewport_paths_key = Some(key);
+            self.smart_qualities
+                .retain(|path, _| self.viewport_paths.contains(path));
         }
         if changed || self.viewport_paths_limit != self.preferences.multi_edit_limit {
             self.edit_selection
@@ -330,6 +334,8 @@ impl App {
             frame: None,
             detail: None,
             smart: Default::default(),
+            smart_qualities: Default::default(),
+            preview_demand_changed: false,
             scope_images: None,
             scope_snapshot: None,
             scope_key: None,
@@ -467,6 +473,17 @@ impl App {
                     .cache
                     .source_origin(&path)
                     .is_none_or(|origin| origin == frame.origin)
+                && request::camera_preview_scale(
+                    self.preview_quality_for(&path, self.preferences.preview_quality),
+                    &frame.artifact.metadata,
+                )
+                .is_ok_and(|scale| {
+                    rendering::quality::accepts_scale(
+                        self.preferences.preview_quality,
+                        scale,
+                        frame.artifact.settings.working_scale,
+                    )
+                })
         });
         let retain_current = self.selected.as_ref() == Some(&path) && cached_selection;
         if let Some(previous) = &self.selected {
@@ -546,7 +563,7 @@ impl App {
         &mut self,
         export: Option<export::Export>,
         region: Option<[u32; 4]>,
-        mut quality: preferences::PreviewMode,
+        quality: preferences::PreviewMode,
     ) {
         if !self.sidecars.ready() {
             return;
@@ -561,21 +578,11 @@ impl App {
             let mut requested = self.view_settings();
             requested.working_scale = foveonic::render::Scale::NATIVE;
             requested.preview_region = region;
-            let small_preview = matches!(
-                quality,
-                preferences::PreviewMode::Draft | preferences::PreviewMode::Thumb
-            );
-            let zoomed = self.viewport.explicit_zoom()
-                && self
-                    .viewport
-                    .zoom_percent(self.context.pixels_per_point())
-                    .is_some_and(|z| z > 100.);
-            if self.multi_photo_overview() && export.is_none() && self.output == "final" {
-                quality = preferences::PreviewMode::Thumb;
-                requested.preview_region = None;
-            } else if small_preview && zoomed {
-                quality = preferences::PreviewMode::Full;
-            }
+            let quality = if region.is_some() {
+                preferences::PreviewMode::Full
+            } else {
+                self.preview_quality_for(path, quality)
+            };
             let request = request::Request {
                 framing_preview: export.is_none() && self.framing_preview_active(),
                 calibration: self
@@ -586,14 +593,7 @@ impl App {
                 path: path.clone(),
                 settings: requested,
                 preview_quality: quality,
-                preview_policy: if self.multi_photo_overview()
-                    && export.is_none()
-                    && self.output == "final"
-                {
-                    preferences::PreviewMode::Thumb
-                } else {
-                    self.preferences.preview_quality
-                },
+                preview_policy: self.preferences.preview_quality,
                 output: if self.before.active == editor::Rendition::Current {
                     self.output.clone()
                 } else {
@@ -822,7 +822,7 @@ impl App {
             }
         }
     }
-    fn update_scopes(&mut self, ctx: &egui::Context) {
+    fn update_scopes(&mut self) {
         let window = self
             .frame
             .as_ref()
@@ -835,7 +835,7 @@ impl App {
                 p.bottom_right[1] + 1 + window[1],
             ]
         });
-        let detail = self.smart_detail(ctx.pixels_per_point()).filter(|detail| {
+        let detail = self.smart_detail().filter(|detail| {
             self.preferences.scope_viewport
                 && visible.is_some_and(|visible| {
                     smart::contains(detail.artifact.settings.preview_region.unwrap(), visible)
@@ -1243,7 +1243,6 @@ impl App {
         let _scope =
             foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.viewport");
         let mut changed = false;
-        let overview = self.multi_photo_overview();
         let background_width = 2. * widgets::ControlSize::Medium.side()
             + widgets::MEDIUM_CONTROL_GAP
             + 2. * f32::from(widgets::BUTTON_GROUP_MARGIN);
@@ -1251,20 +1250,11 @@ impl App {
             ui,
             background_width,
             |ui| {
-                if overview {
-                    let mut quality = preferences::PreviewMode::Thumb;
-                    ui.scope(|ui| {
-                        inspect::preview_quality(ui, false, &mut quality);
-                    })
-                    .response
-                    .on_disabled_hover_text("Multi-photo overviews use Thumb.");
-                } else {
-                    changed |= inspect::preview_quality(
-                        ui,
-                        !self.exporting,
-                        &mut self.preferences.preview_quality,
-                    );
-                }
+                changed |= inspect::preview_quality(
+                    ui,
+                    !self.exporting,
+                    &mut self.preferences.preview_quality,
+                );
                 widgets::button_group(ui, |ui| {
                     widgets::centered_control_row(ui, |ui| {
                         ui.weak("Inspect");
@@ -1475,7 +1465,7 @@ impl App {
                 self.srgb_target,
                 frame.diagnostic_identity(mapping.input),
             );
-            if let Some(detail) = self.smart_detail(ui.ctx().pixels_per_point()) {
+            if let Some(detail) = self.smart_detail() {
                 self.viewport.show_region(
                     ui,
                     detail.texture.clone(),
@@ -1514,6 +1504,28 @@ impl App {
                     },
                 ));
             });
+        }
+        if !framing_active || self.viewport.explicit_zoom_pending() {
+            let density = self
+                .frame
+                .as_ref()
+                .filter(|frame| frame.output == "final")
+                .and_then(|frame| {
+                    self.viewport.image_rectangles().map(|(_, image)| {
+                        let extent = frame.native_display_extent();
+                        (image.width() / extent[0].max(1) as f32)
+                            .max(image.height() / extent[1].max(1) as f32)
+                            * ui.ctx().pixels_per_point()
+                    })
+                })
+                .or_else(|| {
+                    self.viewport
+                        .zoom_percent(ui.ctx().pixels_per_point())
+                        .map(|percent| percent / 100.)
+                });
+            if let Some((path, density)) = self.selected.clone().zip(density) {
+                self.observe_preview_density(&path, density);
+            }
         }
         if let (Some(path), Some((response, uv))) = (
             &self.selected,
@@ -1882,6 +1894,7 @@ impl eframe::App for App {
             self.sidecars.edited(&self.settings);
         }
         self.preferences.direct_color = editor::direct_color::configuration(ctx);
+        let preview_changed = std::mem::take(&mut self.preview_demand_changed);
         if std::mem::take(&mut self.browser.clear_selection) {
             self.clear_selection();
         } else if let Some(request) = self.comparison_selection.take() {
@@ -1919,8 +1932,10 @@ impl eframe::App for App {
                     .unwrap_or(selection.path)
             };
             self.select(path, selection.preserve_viewport);
-        } else if changed && !self.exporting {
-            self.exit_before();
+        } else if (changed || preview_changed) && !self.exporting {
+            if changed {
+                self.exit_before();
+            }
             if !self.submit_multi_edit() {
                 self.submit(None);
             }
@@ -1943,9 +1958,9 @@ impl eframe::App for App {
         self.editor_ui.dialog(ctx, &mut self.preferences.editor);
         self.activity.show(ctx);
         if !self.multi_photo_overview() {
-            self.update_smart(ctx);
+            self.update_smart();
         }
-        self.update_scopes(ctx);
+        self.update_scopes();
         self.smoke_check_scope_retention();
         self.sync_render_progress(None);
         self.previews.update(self.frame.as_ref(), self.busy, ctx);

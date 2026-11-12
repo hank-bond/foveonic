@@ -22,6 +22,7 @@ Authored edits remain with the application, multi-edit runtime and sidecar sessi
 - **[delivery.rs](./delivery.rs)** Classifies completed images for pixel reuse, per-photo feedback and current-view delivery.
 - **[matching.rs](./matching.rs)** Defines shared settings and request comparisons without selecting work or admitting results.
 - **[mod.rs](./mod.rs)** Coordinates photo render requests, matching, refinement and delivery through the existing worker.
+- **[quality.rs](./quality.rs)** Selects a preview's processing level from workspace policy and physical display sampling.
 - **[request.rs](./request.rs)** Describes photo render requests and resolves their purpose and preview geometry independently of execution.
 - **[runtime.rs](./runtime.rs)** Owns render coordination on a dedicated thread and publishes bounded UI updates.
 - **[smart.rs](./smart.rs)** Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.

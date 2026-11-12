@@ -116,6 +116,11 @@ impl App {
                 changed |= self.show_photo(&mut child, mapping);
                 self.before_badge(&child, image_rect);
             } else if let Some(frame) = self.multi_edit_frame(path) {
+                let density = crate::rendering::quality::fit_density(
+                    image_rect.size().into(),
+                    frame.native_display_extent(),
+                    ui.ctx().pixels_per_point(),
+                );
                 crate::viewport::paint_comparison(
                     &mut child,
                     frame.view(false).clone(),
@@ -124,6 +129,7 @@ impl App {
                     index,
                     frame.diagnostic_identity(false),
                 );
+                self.observe_preview_density(path, density);
             } else {
                 // Larger display previews belong only to the bounded editing set.
                 let preview = if target {
@@ -133,6 +139,12 @@ impl App {
                 };
                 if let Some(preview) = preview {
                     preview.paint(&child, image_rect);
+                    let density = crate::rendering::quality::fit_density(
+                        image_rect.size().into(),
+                        preview.native_extent,
+                        ui.ctx().pixels_per_point(),
+                    );
+                    self.observe_preview_density(path, density);
                 }
             }
             let response = ui.interact(

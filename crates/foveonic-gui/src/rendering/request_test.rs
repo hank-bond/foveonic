@@ -54,7 +54,7 @@ fn merrill_smart_uses_fast_overview_and_regional_full_without_changing_edits() {
         revision: 1,
         path: "merrill.x3f".into(),
         settings: Settings::new("Sunlight", "Standard"),
-        preview_quality: PreviewMode::Smart,
+        preview_quality: PreviewMode::Fast,
         preview_policy: PreviewMode::Smart,
         output: "final".into(),
         comparison: false,
@@ -218,6 +218,31 @@ fn request() -> Request {
         comparison: false,
         export: None,
     }
+}
+
+#[test]
+fn smart_concrete_levels_share_reduced_sessions_but_require_sufficient_pixels() {
+    let mut request = request();
+    request.preview_policy = PreviewMode::Smart;
+    for quality in [PreviewMode::Thumb, PreviewMode::Draft, PreviewMode::Fast] {
+        request.preview_quality = quality;
+        assert!(request.uses_reduced_session());
+        assert!(request.accepts_scale(Scale::NATIVE, &metadata()).unwrap());
+        assert!(request
+            .accepts_scale(quality.working_scale(), &metadata())
+            .unwrap());
+        let coarser = Scale::new(quality.working_scale().divisor() * 2).unwrap();
+        assert!(!request.accepts_scale(coarser, &metadata()).unwrap());
+    }
+    request.preview_policy = PreviewMode::Fast;
+    assert!(!request.accepts_scale(Scale::NATIVE, &metadata()).unwrap());
+    request.settings.preview_region = Some([100, 100, 400, 300]);
+    request.preview_policy = PreviewMode::Smart;
+    assert!(!request.uses_reduced_session());
+    let mut settings = request.settings.clone();
+    request.apply_preview(&mut settings, &metadata()).unwrap();
+    assert_eq!(settings.working_scale, Scale::NATIVE);
+    assert_eq!(settings.preview_region, request.settings.preview_region);
 }
 
 #[test]
