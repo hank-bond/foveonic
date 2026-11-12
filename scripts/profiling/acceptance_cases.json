@@ -1,0 +1,794 @@
+{
+  "jobs": [
+    {
+      "id": "smoke-workspace",
+      "domain": "startup",
+      "driver": "smoke",
+      "terminal": "calibration.layers",
+      "minimum": 1,
+      "evidence": "Exercises the base workspace, list view, scopes, zoom, panel reordering/collapse and sensor/calibration inspection through existing assertions and screenshots."
+    },
+    {
+      "id": "smoke-browser",
+      "domain": "browser",
+      "driver": "smoke",
+      "flag": "BROWSER",
+      "terminal": "browser-large",
+      "minimum": 1,
+      "evidence": "Asserts browser layout changes retain the current image revision; screenshots capture layouts."
+    },
+    {
+      "id": "smoke-multi",
+      "domain": "selection",
+      "driver": "smoke",
+      "flag": "MULTI",
+      "terminal": "multi-choice",
+      "minimum": 8,
+      "evidence": "Asserts selection, relative edits, retained textures and completion; also saves screenshots and JSON."
+    },
+    {
+      "id": "smoke-fast",
+      "domain": "viewport",
+      "driver": "smoke",
+      "flag": "FAST",
+      "terminal": "fast-again",
+      "minimum": 1,
+      "evidence": "Asserts requested preview quality, frame identity and region behavior through zoom and editing."
+    },
+    {
+      "id": "smoke-smart",
+      "domain": "viewport",
+      "driver": "smoke",
+      "flag": "SMART",
+      "terminal": "cache-reopen",
+      "minimum": 2,
+      "evidence": "Asserts current regional output, retained texture reuse, crop transitions, neighbor-prefetch readiness and delivered settings. Requires a second source for the neighbor-prefetch check.",
+      "disk_cache_bytes": 1073741824
+    },
+    {
+      "id": "smoke-crop",
+      "domain": "viewport",
+      "driver": "smoke",
+      "flag": "CROP",
+      "terminal": "crop-detail",
+      "minimum": 1,
+      "evidence": "Asserts crop settings, framing and regional geometry."
+    },
+    {
+      "id": "smoke-rotate",
+      "domain": "viewport",
+      "driver": "smoke",
+      "flag": "ROTATE",
+      "terminal": "rotate-done",
+      "minimum": 1,
+      "evidence": "Asserts rotation settings, framing, quality transitions and retained image behavior."
+    },
+    {
+      "id": "smoke-workflow",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "WORKFLOW",
+      "terminal": "workflow-camera-reset",
+      "minimum": 1,
+      "evidence": "Asserts Before/Current preserve edits and viewport geometry and restore retained texture."
+    },
+    {
+      "id": "smoke-base-response",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "BASE_RESPONSE",
+      "terminal": "base-monochrome",
+      "minimum": 1,
+      "evidence": "Captures base response modes and transitions after readiness checks."
+    },
+    {
+      "id": "smoke-advanced-color",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "ADVANCED_COLOR",
+      "terminal": "advanced-monochrome",
+      "minimum": 1,
+      "evidence": "Captures color selection, ranges, naming and monochrome transitions with input/readiness checks."
+    },
+    {
+      "id": "smoke-dehaze",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "DEHAZE",
+      "terminal": "dehaze-reset",
+      "minimum": 1,
+      "evidence": "Asserts rendered dehaze settings, automatic estimate, freeze and reset; requires a source producing an automatic haze estimate.",
+      "source_requirement": "dehaze"
+    },
+    {
+      "id": "smoke-white-balance",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "WHITE_BALANCE",
+      "terminal": "white-balance-reset",
+      "minimum": 1,
+      "evidence": "Captures white balance picker and reset with input/readiness checks."
+    },
+    {
+      "id": "smoke-direct-color",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "DIRECT_COLOR",
+      "terminal": "direct-color-exit",
+      "minimum": 1,
+      "evidence": "Captures direct color edits, settings and exit with input/readiness checks."
+    },
+    {
+      "id": "smoke-perceptual",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "PERCEPTUAL",
+      "terminal": "perceptual-mono",
+      "minimum": 1,
+      "evidence": "Captures grading modes, mask, editor and monochrome after readiness checks."
+    },
+    {
+      "id": "smoke-exposure-auto",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "EXPOSURE_AUTO",
+      "terminal": "exposure-auto-manual",
+      "minimum": 1,
+      "evidence": "Captures auto exposure modes, bracket and manual transition after readiness checks."
+    },
+    {
+      "id": "smoke-editor",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "EDITOR",
+      "terminal": "final-neutral",
+      "minimum": 1,
+      "evidence": "Captures detail, RGB, layers and repair editor states after readiness checks."
+    },
+    {
+      "id": "smoke-noise",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "NOISE",
+      "terminal": "final-neutral",
+      "minimum": 1,
+      "evidence": "Captures noise and color processing states, scopes and zoom after readiness checks."
+    },
+    {
+      "id": "smoke-detail",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "DETAIL",
+      "terminal": "slide-detail-1.8",
+      "minimum": 1,
+      "evidence": "Captures a sequence of detail levels after readiness checks."
+    },
+    {
+      "id": "smoke-despeckle",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "DESPECKLE",
+      "terminal": "final-default",
+      "minimum": 1,
+      "evidence": "Captures despeckle before/after and disabled/default states after readiness checks."
+    },
+    {
+      "id": "smoke-repair",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "REPAIR",
+      "terminal": "final-default",
+      "minimum": 1,
+      "evidence": "Captures repair before/after and default states after readiness checks."
+    },
+    {
+      "id": "smoke-tiger",
+      "domain": "editor",
+      "driver": "smoke",
+      "flag": "TIGER",
+      "terminal": "reconstruction.rgb",
+      "minimum": 1,
+      "evidence": "Captures Tiger recovery and reconstruction layers after readiness checks. Requires a Tiger source.",
+      "source_requirement": "tiger"
+    },
+    {
+      "id": "smoke-scopes",
+      "domain": "inspect",
+      "driver": "smoke",
+      "flag": "SCOPES",
+      "terminal": "viewport-fit-again",
+      "minimum": 1,
+      "evidence": "Asserts scope identity, revision, region and settled progress."
+    },
+    {
+      "id": "smoke-inspection",
+      "domain": "inspect",
+      "driver": "smoke",
+      "flag": "INSPECTION",
+      "terminal": "diff-final",
+      "minimum": 1,
+      "evidence": "Captures difference and input/output comparison layers after readiness checks."
+    },
+    {
+      "id": "smoke-display",
+      "domain": "inspect",
+      "driver": "smoke",
+      "flag": "DISPLAY",
+      "terminal": "gamut-settings",
+      "minimum": 1,
+      "evidence": "Asserts display-gamut changes retain image revision and settle; writes gamut reports."
+    },
+    {
+      "id": "smoke-comparison",
+      "domain": "inspect",
+      "driver": "smoke",
+      "flag": "COMPARISON",
+      "terminal": "comparison-switch",
+      "minimum": 2,
+      "evidence": "Asserts selection changes to the second photograph."
+    },
+    {
+      "id": "smoke-import",
+      "domain": "lifecycle",
+      "driver": "smoke",
+      "flag": "IMPORT",
+      "terminal": "import-copied",
+      "minimum": 1,
+      "evidence": "Runs Browse processing and Import review, render options and copy stages with readiness checks and screenshots."
+    },
+    {
+      "id": "smoke-status",
+      "domain": "errors",
+      "driver": "smoke",
+      "flag": "STATUS",
+      "terminal": "status-new-error",
+      "minimum": 1,
+      "evidence": "Asserts error activity and unread-state transitions."
+    },
+    {
+      "id": "scenario-initial",
+      "domain": "startup",
+      "driver": "scenario",
+      "scenario": "initial",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions."
+    },
+    {
+      "id": "scenario-warm-disk",
+      "domain": "cache",
+      "driver": "scenario",
+      "scenario": "warm-disk",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+      "disk_cache_bytes": 1073741824,
+      "mode": "wall"
+    },
+    {
+      "id": "scenario-prefetched-selection",
+      "domain": "cache",
+      "driver": "scenario",
+      "scenario": "prefetched-selection",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+      "disk_cache_bytes": 1073741824,
+      "mode": "wall"
+    },
+    {
+      "id": "scenario-warm-edit",
+      "domain": "editor",
+      "driver": "scenario",
+      "scenario": "warm-edit",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions."
+    },
+    {
+      "id": "scenario-cached-switch",
+      "domain": "selection",
+      "driver": "scenario",
+      "scenario": "cached-switch",
+      "evidence": "Checks retained switching, an edit followed by removal, and re-adding the pending photo across an eight-photo overview. Preserves the mixed-camera result-retention regression case.",
+      "mode": "wall",
+      "count": 8
+    },
+    {
+      "id": "scenario-rapid-supersession",
+      "domain": "selection",
+      "driver": "scenario",
+      "scenario": "rapid-supersession",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+      "mode": "wall"
+    },
+    {
+      "id": "scenario-memory-pressure",
+      "domain": "cache",
+      "driver": "scenario",
+      "scenario": "memory-pressure",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+      "mode": "wall"
+    },
+    {
+      "id": "scenario-selection-journey",
+      "domain": "selection",
+      "driver": "scenario",
+      "scenario": "selection-journey",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+      "mode": "wall"
+    },
+    {
+      "id": "scenario-selection-pressure",
+      "domain": "cache",
+      "driver": "scenario",
+      "scenario": "selection-pressure",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+      "count": 8,
+      "mode": "wall"
+    },
+    {
+      "id": "scenario-background-edit",
+      "domain": "processing",
+      "driver": "scenario",
+      "scenario": "background-edit",
+      "evidence": "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+      "mode": "wall"
+    },
+    {
+      "id": "slider-matrix",
+      "domain": "editor",
+      "driver": "behavioral",
+      "evidence": "Actual egui slider input and structured checks for explicitly declared fixtures and controls."
+    },
+    {
+      "id": "render-baseline",
+      "domain": "processing",
+      "driver": "matrix",
+      "evidence": "Headless complete floating samples and geometry compared with the supplied approved baseline."
+    },
+    {
+      "id": "scenario-transition-journey",
+      "domain": "viewport",
+      "driver": "scenario",
+      "evidence": "Native journey result and declared checks; integration requires a build and scenario runner supporting this name.",
+      "scenario": "transition-journey",
+      "mode": "wall"
+    },
+    {
+      "id": "scenario-lifecycle-journey",
+      "domain": "lifecycle",
+      "driver": "scenario",
+      "evidence": "Native journey result and declared checks; integration requires a build and scenario runner supporting this name.",
+      "scenario": "lifecycle-journey"
+    },
+    {
+      "id": "latency-warm-edit",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "warm-edit",
+      "evidence": "Three or more natural Off trials compared with an explicit matched Off baseline. A budget is optional."
+    },
+    {
+      "id": "scenario-browser-journey",
+      "domain": "browser",
+      "driver": "scenario",
+      "scenario": "browser-journey",
+      "count": 8,
+      "evidence": "Checks typed search/clear, name sorting, ratings/picks, navigation, browser vs viewport selection limit and retained per-photo edits; verifies final images."
+    },
+    {
+      "id": "capture-save-exit",
+      "domain": "diagnostics",
+      "driver": "scenario",
+      "scenario": "initial",
+      "mode": "wall",
+      "save_on_exit": true,
+      "count": 1,
+      "evidence": "Closes the actual app with an active capture, checks the application_exit action, saved trace integrity and settled initial image."
+    },
+    {
+      "id": "latency-initial-1",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "initial",
+      "count": 1,
+      "evidence": "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline."
+    },
+    {
+      "id": "latency-warm-disk-8",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "warm-disk",
+      "count": 8,
+      "evidence": "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline.",
+      "disk_cache_bytes": 1073741824
+    },
+    {
+      "id": "latency-warm-edit-8",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "warm-edit",
+      "count": 8,
+      "evidence": "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline."
+    },
+    {
+      "id": "latency-cached-switch-8",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "cached-switch",
+      "count": 8,
+      "evidence": "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline."
+    },
+    {
+      "id": "latency-rapid-supersession-8",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "rapid-supersession",
+      "count": 8,
+      "evidence": "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline."
+    },
+    {
+      "id": "latency-memory-pressure-8",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "memory-pressure",
+      "count": 8,
+      "evidence": "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline."
+    },
+    {
+      "id": "scenario-collection-journey",
+      "domain": "selection",
+      "driver": "scenario",
+      "scenario": "collection-journey",
+      "count": 8,
+      "evidence": "Stages 100 labeled aliases from eight originals, checks browser selection100 vs bounded edit targets8, applies edits and verifies retention and original-folder restoration."
+    },
+    {
+      "id": "shutdown-pending",
+      "domain": "lifecycle",
+      "driver": "scenario",
+      "scenario": "initial",
+      "count": 8,
+      "mode": "wall",
+      "folder_mode": "browse",
+      "save_on_exit": true,
+      "exit_with_pending": true,
+      "evidence": "Submits the latest eight-photo edit, observes the prior frame at submission, immediately requests close, and checks latest Browse sidecars and saved capture integrity after process exit."
+    },
+    {
+      "id": "latency-browse-warm-edit-8",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "warm-edit",
+      "count": 8,
+      "folder_mode": "browse",
+      "evidence": "Repeated natural eight-photo Browse edit timings including the asynchronous sidecar owner, compared to a matching explicit baseline."
+    },
+    {
+      "id": "scenario-choice-journey",
+      "domain": "editor",
+      "driver": "scenario",
+      "scenario": "choice-journey",
+      "count": 2,
+      "evidence": "Exercises mixed dropdown and checkbox edits across two declared recipes and compares final app images with fresh renders."
+    },
+    {
+      "id": "latency-warm-edit-full-1",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "warm-edit",
+      "quality": "full",
+      "count": 1,
+      "evidence": "Repeated natural single-photo Full editing timings, compared only with the same quality and workload."
+    },
+    {
+      "id": "latency-warm-edit-fast-1",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "warm-edit",
+      "quality": "fast",
+      "count": 1,
+      "evidence": "Repeated natural single-photo Fast editing timings, compared only with the same quality and workload."
+    },
+    {
+      "id": "latency-warm-edit-draft-1",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "warm-edit",
+      "quality": "draft",
+      "count": 1,
+      "evidence": "Repeated natural single-photo Draft editing timings, compared only with the same quality and workload."
+    },
+    {
+      "id": "latency-initial-8",
+      "domain": "latency",
+      "driver": "latency",
+      "scenario": "initial",
+      "count": 8,
+      "evidence": "Repeated natural group selection with decoded disk caching disabled, after application setup; compares the same eight sources and workload."
+    }
+  ],
+  "paths": [
+    {
+      "domain": "startup",
+      "path": "Startup and initial load",
+      "jobs": [
+        "scenario-initial"
+      ],
+      "checks": [
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions."
+      ]
+    },
+    {
+      "domain": "startup",
+      "path": "Workspace layout and panel state",
+      "jobs": [
+        "smoke-workspace"
+      ],
+      "checks": [
+        "Exercises the base workspace, list view, scopes, zoom, panel reordering/collapse and sensor/calibration inspection through existing assertions and screenshots."
+      ]
+    },
+    {
+      "domain": "browser",
+      "path": "Grid, list and thumbnail sizes",
+      "jobs": [
+        "smoke-browser"
+      ],
+      "checks": [
+        "Asserts browser layout changes retain the current image revision; screenshots capture layouts."
+      ]
+    },
+    {
+      "domain": "browser",
+      "path": "Search, filter, sort and picks",
+      "jobs": [
+        "scenario-browser-journey"
+      ],
+      "gaps": [
+        "Rating-filter dropdown and rating persistence across restart."
+      ],
+      "checks": [
+        "Checks typed search/clear, name sorting, ratings/picks, navigation, browser vs viewport selection limit and retained per-photo edits; verifies final images."
+      ]
+    },
+    {
+      "domain": "selection",
+      "path": "Selection and multi-photo relative edits",
+      "jobs": [
+        "smoke-multi",
+        "scenario-selection-journey",
+        "scenario-collection-journey"
+      ],
+      "checks": [
+        "Asserts selection, relative edits, retained textures and completion; also saves screenshots and JSON.",
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+        "Stages 100 labeled aliases from eight originals, checks browser selection100 vs bounded edit targets8, applies edits and verifies retention and original-folder restoration."
+      ]
+    },
+    {
+      "domain": "selection",
+      "path": "Rapid supersession and retained switching",
+      "jobs": [
+        "scenario-rapid-supersession",
+        "scenario-cached-switch"
+      ],
+      "checks": [
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions."
+      ]
+    },
+    {
+      "domain": "viewport",
+      "path": "Quality, zoom, pan, crop and rotate",
+      "jobs": [
+        "smoke-fast",
+        "smoke-smart",
+        "smoke-crop",
+        "smoke-rotate",
+        "scenario-transition-journey"
+      ],
+      "checks": [
+        "Asserts requested preview quality, frame identity and region behavior through zoom and editing.",
+        "Asserts current regional output, retained texture reuse, crop transitions, neighbor-prefetch readiness and delivered settings.",
+        "Asserts crop settings, framing and regional geometry.",
+        "Asserts rotation settings, framing, quality transitions and retained image behavior.",
+        "Native journey result and declared checks; integration requires a build and scenario runner supporting this name."
+      ]
+    },
+    {
+      "domain": "editor",
+      "path": "Declared editor controls, modes, defaults and resets",
+      "jobs": [
+        "smoke-workflow",
+        "smoke-base-response",
+        "smoke-advanced-color",
+        "smoke-dehaze",
+        "smoke-white-balance",
+        "smoke-direct-color",
+        "smoke-perceptual",
+        "smoke-exposure-auto",
+        "smoke-editor",
+        "smoke-noise",
+        "smoke-detail",
+        "smoke-despeckle",
+        "smoke-repair",
+        "smoke-tiger",
+        "slider-matrix"
+      ],
+      "checks": [
+        "Asserts Before/Current preserve edits and viewport geometry and restore retained texture.",
+        "Captures base response modes and transitions after readiness checks.",
+        "Captures color selection, ranges, naming and monochrome transitions with input/readiness checks.",
+        "Asserts rendered dehaze settings, automatic estimate, freeze and reset; requires a source producing an automatic haze estimate.",
+        "Captures white balance picker and reset with input/readiness checks.",
+        "Captures direct color edits, settings and exit with input/readiness checks.",
+        "Captures grading modes, mask, editor and monochrome after readiness checks.",
+        "Captures auto exposure modes, bracket and manual transition after readiness checks.",
+        "Captures detail, RGB, layers and repair editor states after readiness checks.",
+        "Captures noise and color processing states, scopes and zoom after readiness checks.",
+        "Captures a sequence of detail levels after readiness checks.",
+        "Captures despeckle before/after and disabled/default states after readiness checks.",
+        "Captures repair before/after and default states after readiness checks.",
+        "Captures Tiger recovery and reconstruction layers after readiness checks. Requires a Tiger source.",
+        "Actual egui slider input and structured checks cover declared fixtures and configured recipes, not all conditional states."
+      ]
+    },
+    {
+      "domain": "editor",
+      "path": "Copy and paste settings",
+      "jobs": [
+        "scenario-lifecycle-journey"
+      ],
+      "gaps": [
+        "Native OS clipboard round-trip is not exercised."
+      ],
+      "checks": [
+        "Native journey result and declared checks; integration requires a build and scenario runner supporting this name."
+      ]
+    },
+    {
+      "domain": "inspect",
+      "path": "Inspection, scopes and display",
+      "jobs": [
+        "smoke-inspection",
+        "smoke-scopes",
+        "smoke-display",
+        "smoke-comparison"
+      ],
+      "checks": [
+        "Captures difference and input/output comparison layers after readiness checks.",
+        "Asserts scope identity, revision, region and settled progress.",
+        "Asserts display-gamut changes retain image revision and settle; writes gamut reports.",
+        "Asserts selection changes to the second photograph."
+      ]
+    },
+    {
+      "domain": "lifecycle",
+      "path": "Sidecars, reopen, Browse and Import",
+      "jobs": [
+        "smoke-import",
+        "scenario-lifecycle-journey",
+        "shutdown-pending"
+      ],
+      "checks": [
+        "Runs Browse processing and Import review, render options and copy stages with readiness checks and screenshots.",
+        "Native journey result and declared checks; integration requires a build and scenario runner supporting this name.",
+        "Submits the latest eight-photo edit, observes the prior frame at submission, immediately requests close, and checks latest Browse sidecars and saved capture integrity after process exit."
+      ]
+    },
+    {
+      "domain": "processing",
+      "path": "Processing, export and exact render output",
+      "jobs": [
+        "scenario-background-edit",
+        "render-baseline"
+      ],
+      "checks": [
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+        "Headless complete floating samples and geometry compared with the supplied approved baseline."
+      ]
+    },
+    {
+      "domain": "errors",
+      "path": "Errors and status",
+      "jobs": [
+        "smoke-status",
+        "scenario-lifecycle-journey"
+      ],
+      "gaps": [
+        "Destination disconnect during an active export is not exercised."
+      ],
+      "checks": [
+        "Asserts error activity and unread-state transitions.",
+        "Native journey result and declared checks; integration requires a build and scenario runner supporting this name."
+      ]
+    },
+    {
+      "domain": "cache",
+      "path": "Disk and memory cache, pressure and eviction",
+      "jobs": [
+        "scenario-warm-disk",
+        "scenario-prefetched-selection",
+        "scenario-memory-pressure",
+        "scenario-selection-pressure"
+      ],
+      "checks": [
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions."
+      ]
+    },
+    {
+      "domain": "diagnostics",
+      "path": "Capture, save and orderly shutdown",
+      "jobs": [
+        "capture-save-exit",
+        "shutdown-pending"
+      ],
+      "gaps": [
+        "Closing during recorder startup or an already-pending save is covered at the controller boundary, not by this headed journey."
+      ],
+      "checks": [
+        "Closes the actual app with an active capture, checks the application_exit action, saved trace integrity and settled initial image.",
+        "Submits the latest eight-photo edit, observes the prior frame at submission, immediately requests close, and checks latest Browse sidecars and saved capture integrity after process exit."
+      ]
+    },
+    {
+      "domain": "latency",
+      "path": "Matched natural selection and editing latency comparisons",
+      "jobs": [
+        "latency-warm-edit",
+        "latency-initial-1",
+        "latency-warm-disk-8",
+        "latency-warm-edit-8",
+        "latency-cached-switch-8",
+        "latency-rapid-supersession-8",
+        "latency-memory-pressure-8",
+        "latency-browse-warm-edit-8",
+        "latency-warm-edit-full-1",
+        "latency-warm-edit-fast-1",
+        "latency-warm-edit-draft-1",
+        "latency-initial-8"
+      ],
+      "checks": [
+        "Three or more natural Off trials compared with an explicit matched Off baseline. A budget is optional.",
+        "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline.",
+        "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline.",
+        "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline.",
+        "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline.",
+        "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline.",
+        "Repeated natural Off application timings with matched inputs, cache policy, geometry and hardware; compares against an explicit baseline.",
+        "Repeated natural eight-photo Browse edit timings including the asynchronous sidecar owner, compared to a matching explicit baseline.",
+        "Single-photo editing at all four preview qualities, and eight-photo initial selection with decoded disk caching disabled."
+      ]
+    },
+    {
+      "domain": "editor",
+      "path": "Mixed dropdowns and checkbox state",
+      "jobs": [
+        "scenario-choice-journey"
+      ],
+      "checks": [
+        "Exercises mixed white balance selection and tone checkbox state with independent expected settings and final image comparisons."
+      ]
+    },
+    {
+      "domain": "startup",
+      "path": "Native file-dialog selection",
+      "jobs": [],
+      "checks": [],
+      "gaps": [
+        "Staged command-line inputs bypass the native macOS file dialogs."
+      ]
+    },
+    {
+      "domain": "startup",
+      "path": "Application preferences UI and restart",
+      "jobs": [
+        "smoke-display",
+        "smoke-smart"
+      ],
+      "checks": [
+        "The display and cache settings windows render during existing suites."
+      ],
+      "gaps": [
+        "Cache/edit-limit preference inputs and their restoration across process restart are not covered by these headed checks."
+      ]
+    }
+  ]
+}

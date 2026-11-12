@@ -1,4 +1,4 @@
-//! Collects host/GPU timings and engine-owned transfer, submission, and allocation counts.
+//! Collects render timings, activity counts and replayable diagnostic settings.
 
 use std::time::Instant;
 
@@ -83,6 +83,46 @@ impl std::str::FromStr for Mode {
 pub fn report(event: &str, mode: Mode, data: impl serde::Serialize) -> serde_json::Value {
     serde_json::json!({"foveonic_profile": 1, "event": event, "mode": mode,
                       "synchronized": mode.gpu(), "data": data})
+}
+
+/// A diagnostic render request, including transient settings omitted from photo sidecars.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct RenderSettingsSnapshot {
+    settings: crate::render::Settings,
+    working_scale: crate::render::Scale,
+    preview_region: Option<[u32; 4]>,
+    color_range_preview: Option<usize>,
+    dehaze_estimate: bool,
+    processing_sections: crate::render::ProcessingSections,
+    adaptive_tone_tuning: crate::render::AdaptiveToneTuning,
+}
+
+impl From<&crate::render::Settings> for RenderSettingsSnapshot {
+    fn from(settings: &crate::render::Settings) -> Self {
+        Self {
+            settings: settings.clone(),
+            working_scale: settings.working_scale,
+            preview_region: settings.preview_region,
+            color_range_preview: settings.color_range_preview,
+            dehaze_estimate: settings.dehaze_estimate,
+            processing_sections: settings.processing_sections,
+            adaptive_tone_tuning: settings.adaptive_tone_tuning,
+        }
+    }
+}
+
+impl RenderSettingsSnapshot {
+    pub fn into_settings(self) -> crate::render::Settings {
+        crate::render::Settings {
+            working_scale: self.working_scale,
+            preview_region: self.preview_region,
+            color_range_preview: self.color_range_preview,
+            dehaze_estimate: self.dehaze_estimate,
+            processing_sections: self.processing_sections,
+            adaptive_tone_tuning: self.adaptive_tone_tuning,
+            ..self.settings
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

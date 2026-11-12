@@ -186,6 +186,10 @@ impl Review {
             browser.refresh_filter();
         }
     }
+    /// Observe the actual batch for opt-in native scenarios.
+    pub fn smoke_batch_progress(&self) -> batch::Progress {
+        self.worker.progress()
+    }
     pub fn ready(&self, browser: &Browser) -> bool {
         self.process_blocker(browser).is_none()
     }

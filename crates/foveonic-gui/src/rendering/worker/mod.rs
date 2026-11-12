@@ -1,6 +1,8 @@
 //! Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 
+mod diagnostics;
 mod preparation;
+pub(crate) use diagnostics::DeliveryHold;
 pub(crate) mod presentation;
 mod reduced;
 pub(crate) use preparation::Config as PreparationConfig;
@@ -59,6 +61,14 @@ pub struct Frame {
     pub queued_at: std::time::Instant,
 }
 impl Frame {
+    /// Whole edited photographs can outlive their viewport and seed browser previews.
+    pub fn is_photographic(&self) -> bool {
+        self.rendition == crate::editor::Rendition::Current
+            && self.output == "final"
+            && !self.framing_preview
+            && self.artifact.settings.color_range_preview.is_none()
+            && self.artifact.settings.preview_region.is_none()
+    }
     pub fn diagnostic_identity(&self, input: bool) -> Option<crate::timing::ImageIdentity> {
         crate::timing::enabled().then(|| {
             self.diagnostic_task.image(
@@ -234,6 +244,7 @@ pub struct MemoryStatus {
     pub over_budget_bytes: u64,
     pub reduced_sources: Vec<(PathBuf, foveonic::source::SourceOrigin)>,
 }
+
 pub struct Worker {
     #[cfg(test)]
     checks: Arc<Checks>,
@@ -243,6 +254,7 @@ pub struct Worker {
     memory: Arc<Mutex<MemoryStatus>>,
     runtime: super::runtime::Handle,
     observed_memory: RefCell<MemoryStatus>,
+    diagnostics: diagnostics::Handle,
 }
 impl Worker {
     pub fn new(engine: Engine, context: egui::Context) -> Self {
@@ -266,6 +278,7 @@ impl Worker {
         let decoded_cache = cache.clone();
         let repaint = context.clone();
         let (tx, results) = crossbeam_channel::bounded(2);
+        let (diagnostics, mut diagnostic_work) = diagnostics::channel(pending.clone());
         let slot = pending.clone();
         let memory = Arc::new(Mutex::new(MemoryStatus::default()));
         let memory_updates = memory.clone();
@@ -444,6 +457,12 @@ impl Worker {
                             );
                             continue 'worker;
                         }
+                        if diagnostic_work.pending_capture() {
+                            drop(state);
+                            diagnostic_work.capture_one(&engine);
+                            context.request_repaint();
+                            continue 'worker;
+                        }
                         if state.memory.is_some() {
                             continue 'worker;
                         }
@@ -467,7 +486,7 @@ impl Worker {
                         state = lock.lock().unwrap();
                         // Publication can arrive while optional work checks the cache.
                         // Recheck foreground demand before waiting for a notification.
-                        if state.stop || state.clear || state.memory.is_some() || state.activity.is_some() {
+                        if state.stop || state.clear || state.memory.is_some() || state.activity.is_some() || diagnostic_work.pending_capture() {
                             continue 'worker;
                         }
                         let (next, timeout) = wake.wait_timeout(state, std::time::Duration::from_millis(100)).unwrap();
@@ -739,6 +758,9 @@ impl Worker {
                     "reply_ready",
                     || serde_json::json!({"mailbox":"image_replies","capacity":2}),
                 );
+                if matches!(&result, Ok(Some(_))) {
+                    diagnostic_work.before_delivery(&request.path, request.revision);
+                }
                 if tx
                     .send(Update::Image(Box::new(Reply {
                         request: task.request.clone(),
@@ -783,7 +805,20 @@ impl Worker {
             memory,
             runtime,
             observed_memory: Default::default(),
+            diagnostics,
         }
+    }
+
+    /// Diagnostic readback of an immutable frame after the measured interaction.
+    pub fn capture_image(
+        &self,
+        image: RenderedImage,
+        destination: PathBuf,
+    ) -> crossbeam_channel::Receiver<Result<(), String>> {
+        self.diagnostics.capture(image, destination)
+    }
+    pub fn hold_delivery(&self, path: PathBuf, revision: u64) -> DeliveryHold {
+        self.diagnostics.hold_delivery(path, revision)
     }
     pub fn set_view(&self, view: super::delivery::ViewState) {
         self.runtime.set_view(view);

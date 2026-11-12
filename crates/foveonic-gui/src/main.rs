@@ -496,6 +496,11 @@ impl App {
         self.metadata = cached_metadata;
         self.output = "final".into();
         self.channel = -1;
+        if cached_selection {
+            if let Some(frame) = &cached_frame {
+                self.update_browser_preview(frame);
+            }
+        }
         self.frame = cached_frame;
         if cached_selection {
             if let Some(frame) = &mut self.frame {
@@ -509,6 +514,17 @@ impl App {
         self.scope_key = None;
         self.viewport.begin_image(preserve_viewport);
         viewport::clear(&self.render_state);
+    }
+    fn update_browser_preview(&mut self, frame: &worker::Frame) {
+        // Selection can change presentation revision without changing pixels.
+        let revision = frame.diagnostic_task.revision;
+        if self.browser.has_rendered_preview(&frame.path, revision) {
+            return;
+        }
+        if let Some((thumbnail, preview)) = self.previews.snapshot(frame) {
+            self.browser
+                .rendered_texture(frame.path.clone(), revision, thumbnail, preview);
+        }
     }
     fn submit(&mut self, export: Option<export::Export>) {
         if export.is_some() {
@@ -689,6 +705,22 @@ impl App {
                 );
             }
             let Some(destination) = update.destination else {
+                timing::task(&reply.stamp, "result_view_skipped", || {
+                    serde_json::json!({
+                        "coordinator_had_destination":reply.handling.is_some_and(|handling|handling.destination.is_some()),
+                        "current_after_recheck":update.current,
+                        "active_photo":self.selected,
+                        "overview_selected":self.edit_selection.contains(&reply.path),
+                    })
+                });
+                // A photo can leave the viewport while its completed edit is in
+                // transit. Keep the valid result for an unchanged re-add.
+                if update.update_photo {
+                    if let Ok(Some(frame)) = reply.result {
+                        self.update_browser_preview(&frame);
+                        self.multi_edit.retain(frame);
+                    }
+                }
                 continue;
             };
             if destination == delivery::Destination::Overview {
@@ -705,14 +737,7 @@ impl App {
                             "destination":"overview","scale":frame.artifact.settings.working_scale.divisor(),
                             "artifact":frame.artifact.name,"extent":frame.texture.description().extent})
                         });
-                        if let Some((thumbnail, preview)) = self.previews.snapshot(&frame) {
-                            self.browser.rendered_texture(
-                                frame.path.clone(),
-                                frame.revision,
-                                thumbnail,
-                                preview,
-                            );
-                        }
+                        self.update_browser_preview(&frame);
                         self.multi_edit.retain(frame);
                     }
                     Err(error) if current => {
@@ -755,14 +780,7 @@ impl App {
                         "scale":frame.artifact.settings.working_scale.divisor(),"artifact":frame.artifact.name,
                         "extent":frame.texture.description().extent})
                     });
-                    if let Some((thumbnail, preview)) = self.previews.snapshot(&frame) {
-                        self.browser.rendered_texture(
-                            frame.path.clone(),
-                            frame.revision,
-                            thumbnail,
-                            preview,
-                        );
-                    }
+                    self.update_browser_preview(&frame);
                     // Keep the last completed scopes until this frame has replacements.
                     self.scope_key = None;
                     if frame.artifact.settings.preview_region.is_some() {
@@ -793,7 +811,12 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    assert!(self.smoke.is_none(), "native smoke processing failed: {e}");
+                    assert!(
+                        self.smoke
+                            .as_ref()
+                            .is_none_or(|smoke| smoke.expects_failure(&reply.path)),
+                        "native smoke processing failed: {e}"
+                    );
                     self.fail(e);
                 }
             }

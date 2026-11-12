@@ -3,15 +3,15 @@
 from contextlib import redirect_stdout
 import io
 import json
+import signal
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from behavioral import report_coverage, run, select, validate
+from behavioral import report_coverage, run, run_scenario, select, validate
 
 
 class BehavioralTests(unittest.TestCase):
@@ -48,18 +48,45 @@ class BehavioralTests(unittest.TestCase):
             for path in sources:path.write_bytes(b'raw')
             fixtures=[{'name':'merrill-pair','family':'merrill','sources':list(map(str,sources))}]
             cases=[{'name':'exposure','pointer':'/exposure','section':'Tone','recipes':[{'exposure':1},{'exposure':-1}]}]
-            def fake_run(cmd,**_):
+            renderer=root/'renderer';renderer.write_bytes(b'renderer')
+            commands=[]
+            def fake_run(cmd, log):
+                commands.append(cmd)
                 out=Path(cmd[cmd.index('--directory')+1]); evidence=out/'trial-00/evidence';evidence.mkdir(parents=True)
                 (evidence/'scenario-result.json').write_text('{"passed":true}')
                 (evidence/'slider-drag.json').write_text(json.dumps({'inventory':[{'pointer':'/exposure','label':'Exposure','enabled':True,'visible':True}]}))
-                return SimpleNamespace(returncode=0)
-            with patch('behavioral.subprocess.run',side_effect=fake_run), redirect_stdout(io.StringIO()):
-                report=run(binary,fixtures,cases,root/'result')
+                return 0
+            with patch('behavioral.run_scenario',side_effect=fake_run), redirect_stdout(io.StringIO()):
+                report=run(binary,fixtures,cases,root/'result',compare_images=renderer)
             self.assertTrue(report['passed']);self.assertEqual(len(report['results']),2)
+            self.assertTrue(all(cmd[cmd.index('--compare-images')+1] == str(renderer.resolve()) for cmd in commands))
             self.assertEqual({row['theme'] for row in report['results']},{'dark','light'})
             stored=json.loads((root/'result'/'merrill-pair--exposure--dark-inputs.json').read_text())
             self.assertEqual([item['settings']['exposure'] for item in stored],[1,-1])
             self.assertFalse(report['coverage']['complete_for_observed_controls'])
+
+    def test_interrupt_is_forwarded_and_child_is_reaped(self):
+        child = unittest.mock.Mock()
+        child.wait.side_effect = [KeyboardInterrupt(), 130]
+        child.poll.return_value = None
+        with patch('behavioral.subprocess.Popen', return_value=child):
+            with self.assertRaises(KeyboardInterrupt):
+                run_scenario(['scenario'], io.StringIO())
+        child.send_signal.assert_called_once_with(signal.SIGINT)
+        self.assertEqual(child.wait.call_count, 2)
+        child.wait.assert_called_with(timeout=20)
+        child.kill.assert_not_called()
+
+    def test_unresponsive_scenario_is_killed_and_reaped(self):
+        child = unittest.mock.Mock()
+        child.wait.side_effect = [KeyboardInterrupt(), subprocess.TimeoutExpired('scenario', 20), -9]
+        child.poll.return_value = None
+        with patch('behavioral.subprocess.Popen', return_value=child):
+            with self.assertRaises(KeyboardInterrupt):
+                run_scenario(['scenario'], io.StringIO())
+        child.send_signal.assert_called_once_with(signal.SIGINT)
+        child.kill.assert_called_once_with()
+        self.assertEqual(child.wait.call_count, 3)
 
     def test_fixture_and_recipe_problems_are_rejected_before_launch(self):
         with tempfile.TemporaryDirectory() as tmp:

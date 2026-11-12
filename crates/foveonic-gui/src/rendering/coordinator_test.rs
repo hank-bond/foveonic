@@ -131,6 +131,25 @@ fn result_handler_keeps_photo_feedback_when_view_rejects_but_not_when_target_is_
 }
 
 #[test]
+fn final_view_recheck_preserves_photo_update_after_target_leaves_view() {
+    let mut coordinator = RenderCoordinator::default();
+    let request = request("a.x3f", 1, 0.25);
+    let mut reply = render_result(desire(&mut coordinator, request.clone()), &request);
+    reply.handling = Some(coordinator.handle_result(&reply, &result_view(&reply)));
+    let mut view = result_view(&reply);
+    view.active = Some(Path::new("other.x3f"));
+    view.overview_selected = false;
+    let update = delivery::recheck(&reply, &view, Some(&request.settings));
+    assert!(update.current && update.update_photo);
+    assert_eq!(update.destination, None);
+
+    let mut newer = request.settings.clone();
+    newer.exposure = 0.5;
+    let update = delivery::recheck(&reply, &view, Some(&newer));
+    assert!(!update.current && !update.update_photo);
+}
+
+#[test]
 fn result_handler_routes_frozen_export_without_settling_pending_preview() {
     let mut coordinator = RenderCoordinator::default();
     let preview = request("a.x3f", 1, 0.);

@@ -258,7 +258,7 @@ Sources: [idle preparation](../crates/foveonic-gui/src/rendering/worker/preparat
 
 ## H. Evidence, naming and source organization
 
-Sources: [GUI timing adapter](../crates/foveonic-gui/src/timing.rs), [aggregate profiles](../crates/foveonic/src/profile.rs), [native scenarios](../crates/foveonic-gui/src/smoke_scenarios.rs), [trace analysis](../scripts/profiling/trace_analysis.py), [coordinator tests](../crates/foveonic-gui/src/rendering/coordinator_test.rs), [delivery tests](../crates/foveonic-gui/src/rendering/delivery_test.rs), [architecture map](../docs/interactive-rendering-architecture.md).
+Sources: [GUI timing adapter](../crates/foveonic-gui/src/timing.rs), [aggregate profiles](../crates/foveonic/src/profile.rs), [native scenarios](../crates/foveonic-gui/src/smoke/scenarios.rs), [trace analysis](../scripts/profiling/trace_analysis.py), [coordinator tests](../crates/foveonic-gui/src/rendering/coordinator_test.rs), [delivery tests](../crates/foveonic-gui/src/rendering/delivery_test.rs), [architecture map](../docs/interactive-rendering-architecture.md).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |

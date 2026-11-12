@@ -7,20 +7,21 @@ import re
 import subprocess
 
 from file_hash import digest
-from results import PREVIEW_QUALITIES, render_result
+from image_replay import events
+from results import IMAGE_GEOMETRY_FIELDS, PREVIEW_QUALITIES, compare_images, include_assertions, render_result
 from watch_workloads import require_quiet
 
-FAMILIES = {'classic': 3, 'merrill': 3, 'quattro': 3, 'tiger': 1}
+REQUIRED_SOURCES_BY_FAMILY = {'classic': 3, 'merrill': 3, 'quattro': 3, 'tiger': 1}
 QUALITIES = PREVIEW_QUALITIES
 RESERVED = {'--goldens', '--capture-float', '--preview-quality', '--working-scale', '--profile', '--warm'}
 
 
 def expand_cases(cases):
     """Resolve declared inputs and make missing family/quality coverage visible."""
-    expanded, seen, families = [], set(), {family: set() for family in FAMILIES}
+    expanded, seen, families = [], set(), {family: set() for family in REQUIRED_SOURCES_BY_FAMILY}
     for case in cases:
         label, family = case['label'], case['family']
-        if re.fullmatch(r'[A-Za-z0-9_-]+', label) is None or family not in FAMILIES:
+        if re.fullmatch(r'[A-Za-z0-9_-]+', label) is None or family not in REQUIRED_SOURCES_BY_FAMILY:
             raise ValueError('case labels must be simple filenames and families must be known')
         source = Path(case['source']).resolve(strict=True)
         if not source.is_file():
@@ -44,10 +45,10 @@ def expand_cases(cases):
                              'source_sha256': source_hash, 'quality': quality, 'options': options})
     coverage = {family: {'provided': len(families[family]), 'required': needed,
                           'missing': max(0, needed-len(families[family]))}
-                for family, needed in FAMILIES.items()}
+                for family, needed in REQUIRED_SOURCES_BY_FAMILY.items()}
     missing_qualities = [{'label': case['label'], 'quality': q} for case in cases
                          for q in QUALITIES if q not in case.get('qualities', QUALITIES)]
-    raw_sizes = {family: sorted({row['raw_size'] for row in expanded if row['family'] == family}) for family in FAMILIES}
+    raw_sizes = {family: sorted({row['raw_size'] for row in expanded if row['family'] == family}) for family in REQUIRED_SOURCES_BY_FAMILY}
     return expanded, {'families': coverage, 'raw_sizes': raw_sizes, 'missing_qualities': missing_qualities,
                       'complete': bool(expanded) and not missing_qualities and all(row['missing']==0 for row in coverage.values())}
 
@@ -55,18 +56,6 @@ def expand_cases(cases):
 def same_input(left, right):
     return all(left[key] == right[key] for key in ('id', 'family', 'raw_size', 'source_stem', 'source_sha256', 'quality', 'options'))
 
-
-def events(stdout):
-    found = {}
-    for line in stdout.splitlines():
-        row = json.loads(line)
-        if row['event'] in ('session', 'processing', 'validation'):
-            if row['event'] in found:
-                raise ValueError(f"duplicate {row['event']} event")
-            found[row['event']] = row['data']
-    if set(found) != {'session', 'processing', 'validation'}:
-        raise ValueError('render did not report its settings, image scale and validation')
-    return found
 
 
 def run(binary, cases, directory, baseline=None, require_coverage=False):
@@ -96,7 +85,7 @@ def run(binary, cases, directory, baseline=None, require_coverage=False):
         for case in matrix:
             name = case['id']
             out = directory/name
-            golden_dir = (baseline if baseline else directory)/'goldens'/name
+            golden_dir = directory/'goldens'/name
             golden = golden_dir/(Path(case['source']).stem+'.f32')
             row = {**case, 'passed': False}
             report['cases'].append(row)
@@ -104,7 +93,8 @@ def run(binary, cases, directory, baseline=None, require_coverage=False):
             try:
                 if baseline:
                     expected = previous[name]
-                    if not golden.is_file() or digest(golden) != expected['pixels_sha256']:
+                    baseline_image = baseline/'goldens'/name/golden.name
+                    if not baseline_image.is_file() or digest(baseline_image) != expected['pixels_sha256']:
                         raise ValueError('baseline samples are missing or modified')
                 require_quiet()
                 command = [str(binary), case['source'], str(out), '--warm', '0', '--preview-quality', case['quality'],
@@ -124,12 +114,17 @@ def run(binary, cases, directory, baseline=None, require_coverage=False):
                 if row['test_result']['outcome'] != 'passed':
                     raise ValueError('preview-scale assertion failed or could not be evaluated')
                 row.update(settings=data['session']['settings'], scale=data['session']['scale_divisor'],
-                           geometry={key: validation[key] for key in ('extent', 'layout', 'view_extent', 'view_crop', 'view_rotation')},
+                           geometry={key: validation[key] for key in IMAGE_GEOMETRY_FIELDS},
                            digest=validation['digest'], pixels_sha256=digest(golden))
                 if baseline:
-                    for key in ('settings', 'scale', 'geometry', 'digest', 'pixels_sha256'):
+                    for key in ('settings', 'scale'):
                         if row[key] != expected[key]:
                             raise ValueError(f'{key} differs from baseline')
+                    comparison = compare_images(case['source'], 'render', baseline_image, expected['geometry'],
+                                                golden, row['geometry'])
+                    include_assertions(row['test_result'], [comparison])
+                    if comparison['outcome'] != 'passed':
+                        raise ValueError('image samples or geometry differ from baseline')
                 row['passed'] = True
                 tiff = out/(Path(case['source']).stem+'-0.tiff')
                 tiff.unlink()

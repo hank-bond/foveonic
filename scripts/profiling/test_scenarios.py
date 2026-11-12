@@ -10,13 +10,111 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from scenarios import application_result, run, run_trial, scenario_environment, selected_cases, stage_inputs
+from scenarios import application_result, check_export, finish_trial, run, run_trial, scenario_environment, selected_cases, shutdown_assertions, validate_shutdown
+from results import include_assertions
 
 
 class ScenarioTests(unittest.TestCase):
     def setUp(self):
         quiet=patch('scenarios.require_quiet',return_value={'monotonic_ns':1,'potential_workloads':[]})
         self.quiet=quiet.start();self.addCleanup(quiet.stop)
+
+    def test_pending_shutdown_options_and_manual_recipe_validation(self):
+        args=SimpleNamespace(scenario='initial', folder_mode='browse', save_on_exit=True,
+                             exit_with_pending=True, mode='wall', compare_images=None)
+        cases=[{'settings':{'exposure_auto':False,'exposure':value}} for value in (0.1,3.75)]
+        validate_shutdown(args,cases)
+        for field,value in [('folder_mode','import'),('save_on_exit',False),('mode','off'),
+                            ('scenario','selection-journey'),('compare_images',Path('renderer'))]:
+            old=getattr(args,field);setattr(args,field,value)
+            with self.assertRaises(ValueError):validate_shutdown(args,cases)
+            setattr(args,field,old)
+        for exposure,automatic in [(3.76,False),(-4.1,False),(0,True),(float('nan'),False)]:
+            bad=[cases[0],{'settings':{'exposure':exposure,'exposure_auto':automatic}}]
+            with self.assertRaises(ValueError):validate_shutdown(args,bad)
+        with self.assertRaises(ValueError):validate_shutdown(args,cases[:1])
+        args.scenario='background-edit';args.exit_with_pending=False
+        with self.assertRaises(ValueError):validate_shutdown(args,cases)
+
+    def test_pending_shutdown_requires_proof_and_latest_saved_sidecars(self):
+        import struct
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); inputs=[]; photos=[]
+            for index,value in enumerate((0.1,-0.75)):
+                source=root/f'{index}.x3f'; source.write_bytes(b'raw')
+                initial=struct.unpack('f',struct.pack('f',value))[0]
+                expected=struct.unpack('f',struct.pack('f',initial+0.25))[0]
+                inputs.append({'source':str(source),'staged_source':str(source),'settings':{'exposure_auto':False,'exposure':value}})
+                photos.append({'source':str(source),'initial_exposure':initial,'expected_exposure':expected,
+                               'old_presented_revision':4,'old_task_revision':4})
+                sidecar=root/'foveonic'/(source.name+'.foveonic.json');sidecar.parent.mkdir(exist_ok=True)
+                sidecar.write_text(json.dumps({'format':'foveonic-editing','version':1,'settings':{'exposure_auto':False,'exposure':expected}}))
+            pending={'delta':0.25,'requested_revision_before':4,'requested_revision_after':5,'photos':photos}
+            native={'shutdown_pending':pending}
+            self.assertTrue(all(row['outcome']=='passed' for row in shutdown_assertions(native,inputs)))
+            pending['requested_revision_after']=4
+            self.assertEqual(shutdown_assertions(native,inputs)[0]['outcome'],'failed')
+            pending['requested_revision_after']=5;photos[0]['expected_exposure']=99
+            self.assertEqual(shutdown_assertions(native,inputs)[0]['outcome'],'failed')
+            photos[0]['expected_exposure']=0.35
+            (root/'foveonic'/'0.x3f.foveonic.json').unlink()
+            self.assertEqual(shutdown_assertions(native,inputs)[1]['outcome'],'failed')
+
+    def test_export_is_decoded_and_its_extent_checked(self):
+        import struct
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);image=root/'export.tiff';image.write_bytes(b'encoded image')
+            decoded=root/'decoded.png'
+            def decode(*_args, **_kwargs):
+                decoded.write_bytes(b'\x89PNG\r\n\x1a\n'+struct.pack('>I',13)+b'IHDR'+struct.pack('>II',640,480))
+                return SimpleNamespace(returncode=0,stderr='')
+            with patch('scenarios.platform.system',return_value='Darwin'), patch('scenarios.subprocess.run',side_effect=decode):
+                self.assertEqual(check_export(image,[640,480],decoded)['outcome'],'passed')
+                self.assertEqual(check_export(image,[640,481],decoded)['outcome'],'failed')
+            with patch('scenarios.platform.system',return_value='Darwin'), patch('scenarios.subprocess.run',return_value=SimpleNamespace(returncode=1,stderr='damaged TIFF')):
+                self.assertEqual(check_export(image,[640,480],decoded)['outcome'],'failed')
+            self.assertEqual(check_export(root/'missing',[640,480],decoded)['outcome'],'failed')
+
+    def test_trace_behavior_and_missing_evidence_reach_the_shared_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);(root/'evidence').mkdir();(root/'capture').mkdir()
+            native={'passed':True,'steps':[{'step':1,'action':'cached-switch','photos':[
+                {'source':'staged.x3f','family':'Merrill','scale_divisor':8}]}]}
+            (root/'evidence/scenario-result.json').write_text(json.dumps(native))
+            inputs=[{'staged_source':'staged.x3f','source':'original.x3f','sha256':'raw-hash'}]
+            for complete,behavior,expected in ((True,True,'passed'),(True,False,'failed'),(False,False,'incomplete')):
+                (root/'capture/summary.json').write_text('{}')
+                (root/'capture/manifest.json').write_text('{"application":{}}')
+                analysis={'validity':{'valid':complete},'behavior_valid':behavior,
+                          'steps':[{'step':1,'action':'cached-switch','photo_count':1}],
+                          'behavior_failures':[] if behavior else ['unexpected photographic dispatch']}
+                with patch('scenarios.analyze_capture',return_value=analysis):
+                    trial=finish_trial(root,'wall',None)
+                result=application_result(native,'cached-switch','thumb',inputs)
+                include_assertions(result,trial['trace_assertions'])
+                self.assertEqual(result['outcome'],expected)
+                if complete and not behavior:
+                    self.assertIn('unexpected photographic dispatch',result['failure'])
+
+    def test_trace_must_include_every_completed_step_in_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);(root/'evidence').mkdir();(root/'capture').mkdir()
+            native={'passed':True,'steps':[
+                {'step':1,'action':'initial-selection','photos':[{'source':'staged.x3f'}]},
+                {'step':2,'action':'warm-edit','photos':[{'source':'staged.x3f'}]}]}
+            (root/'evidence/scenario-result.json').write_text(json.dumps(native))
+            steps=[{'step':step['step'],'action':step['action'],'photo_count':1} for step in native['steps']]
+            for traced,expected in ((steps,True),(steps[:1],False),(steps[::-1],False),
+                                    ([steps[0],{**steps[1],'photo_count':2}],False),
+                                    ([steps[0],{**steps[1],'action':'cached-switch'}],False)):
+                (root/'capture/summary.json').write_text('{}')
+                (root/'capture/manifest.json').write_text('{"application":{}}')
+                analysis={'validity':{'valid':True},'behavior_valid':True,'steps':traced,'behavior_failures':[]}
+                with patch('scenarios.analyze_capture',return_value=analysis):
+                    trial=finish_trial(root,'wall',None)
+                self.assertEqual(trial['passed'],expected)
+                assertion=next(row for row in trial['trace_assertions'] if row['name']=='trace_steps')
+                self.assertEqual(assertion['outcome'],'passed' if expected else 'failed')
 
     def test_native_quality_contract_and_distinct_inputs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -26,21 +124,10 @@ class ScenarioTests(unittest.TestCase):
             self.assertEqual(len(selected_cases(cases,1,'draft','initial')),1)
             self.assertEqual(len(selected_cases(cases,1,'full','initial')),1)
             self.assertEqual(len(selected_cases(cases,1,'fast','initial')),1)
-            for count,quality,name in [(2,'draft','initial'),(1,'thumb','cached-switch'),(3,'thumb','initial')]:
+            for count,quality,name in [(2,'draft','initial'),(1,'thumb','cached-switch'),(1,'thumb','choice-journey'),(3,'thumb','initial')]:
                 with self.assertRaises(ValueError):selected_cases(cases,count,quality,name)
             with self.assertRaises(ValueError):selected_cases([cases[0],cases[0]],2,'thumb','initial')
 
-    def test_inputs_are_hardlinked_and_recipe_writes_are_owned(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);source=root/'source.x3f';source.write_bytes(b'RAW sample bytes')
-            cases=[{'source':str(source),'settings':{'exposure':.25}}]
-            records=stage_inputs(cases,root/'inputs')
-            staged=Path(records[0]['staged_source'])
-            self.assertEqual(source.stat().st_ino,staged.stat().st_ino)
-            self.assertEqual(source.read_bytes(),b'RAW sample bytes')
-            recipe=json.loads((staged.parent/'foveonic'/(staged.name+'.foveonic.json')).read_text())
-            self.assertEqual(recipe,{'format':'foveonic-editing','version':1,'settings':{'exposure':.25}})
-            self.assertFalse((root/'foveonic').exists())
 
     def test_environment_cannot_inherit_another_smoke_or_capture(self):
         with patch.dict(os.environ,{'FOVEONIC_PROFILE':'gpu','FOVEONIC_GUI_SMOKE_MULTI':'1','FOVEONIC_GUI_SCENARIO_MANIFEST':'old','FOVEONIC_GUI_SCENARIO_BACKGROUND':'old','FOVEONIC_DIAGNOSTICS_DIR':'old'}):
@@ -147,6 +234,27 @@ class ScenarioTests(unittest.TestCase):
             self.assertEqual(result['test_result']['outcome'],'failed')
             self.assertEqual(result['test_result']['assertions'][0]['expected'],4)
             self.assertEqual(json.loads((root/'run'/'evidence'/'test-result.json').read_text()),result['test_result'])
+
+
+    def test_image_comparison_failure_fails_successful_app_trial(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);args,cases=self.arguments(root)
+            args.compare_images=root/'fresh-renderer';args.compare_images.write_bytes(b'renderer')
+            process=MagicMock();process.wait.return_value=0;process.poll.return_value=0
+            def launch(_command,**kwargs):
+                evidence=Path(kwargs['env']['FOVEONIC_GUI_SMOKE_DIR'])
+                native={'passed':True,'memory_cache_bytes':1073741824,
+                        'disk_cache':{'enabled':True,'max_bytes':10000000000},
+                        'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),
+                            'family':'Merrill','settings':{},'scale_divisor':8}]}]}
+                (evidence/'scenario-result.json').write_text(json.dumps(native))
+                return process
+            failure={'name':'image_samples','outcome':'failed'}
+            with patch('scenarios.subprocess.Popen',side_effect=launch),patch('scenarios.compare_scenario_images',return_value=[failure]):
+                result=run_trial(args,cases,root/'run','tree-hash')
+            self.assertFalse(result['passed'])
+            self.assertEqual(result['test_result']['failure'],'image_samples assertion failed')
+            self.assertTrue(json.loads((root/'run'/'launch.json').read_text())['scenario']['capture_images'])
 
     def test_runner_rejects_mixed_workload_keys_and_preserves_failed_report(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -250,7 +250,7 @@ impl Previews {
         &mut self,
         frame: &Frame,
     ) -> Option<(crate::browser::Thumbnail, crate::browser::Thumbnail)> {
-        if !photographic(frame) {
+        if !frame.is_photographic() {
             return None;
         }
         self.invalid_paths.remove(&frame.path);
@@ -272,7 +272,7 @@ impl Previews {
     /// photographic thumbnails, even when they are displayed in the navigator.
     pub fn update(&mut self, frame: Option<&Frame>, busy: bool, context: &egui::Context) {
         let Some(frame) = frame.filter(|f| {
-            photographic(f)
+            f.is_photographic()
                 && self
                     .cache
                     .permits_preview_storage(&f.artifact.settings, &f.artifact.metadata)
@@ -333,14 +333,6 @@ impl Drop for Previews {
         state.job = None;
         self.pending.1.notify_one();
     }
-}
-
-fn photographic(frame: &Frame) -> bool {
-    frame.rendition == crate::editor::Rendition::Current
-        && !frame.framing_preview
-        && frame.output == "final"
-        && frame.artifact.settings.color_range_preview.is_none()
-        && frame.artifact.settings.preview_region.is_none()
 }
 
 fn scaled_texture(

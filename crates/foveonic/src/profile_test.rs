@@ -48,6 +48,21 @@ fn wall_collects_current_host_stages_and_serializable_settings() {
     assert_eq!(value["data"]["settings"]["white_balance"], "Sunlight");
     assert_eq!(value["data"]["profile"]["mode"], "wall");
 }
+
+#[test]
+fn render_settings_snapshot_preserves_transient_render_inputs() {
+    let mut settings = crate::render::Settings::new("Sunlight", "Standard");
+    settings.exposure = -0.75;
+    settings.working_scale = crate::render::Scale::new(8).unwrap();
+    settings.preview_region = Some([1, 2, 3, 4]);
+    settings.color_range_preview = Some(2);
+    settings.dehaze_estimate = true;
+    settings.processing_sections.noise = false;
+    settings.adaptive_tone_tuning.natural.blacks = 0.2;
+    let json = serde_json::to_vec(&RenderSettingsSnapshot::from(&settings)).unwrap();
+    let restored: RenderSettingsSnapshot = serde_json::from_slice(&json).unwrap();
+    assert_eq!(restored.into_settings(), settings);
+}
 #[test]
 fn activity_deltas_are_per_engine_not_memory_residency() {
     let before = GpuActivity {

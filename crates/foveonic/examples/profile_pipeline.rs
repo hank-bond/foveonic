@@ -24,11 +24,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut warm = 2usize;
     let mut goldens = None;
     let mut capture = None;
+    let mut settings_snapshot = None;
     let mut working_scale = foveonic::render::Scale::NATIVE;
+    let mut scale_selected = false;
     let mut thumb = false;
     let mut controls = Vec::<OsString>::new();
     while let Some(arg) = args.next() {
         if arg == "--preview-quality" {
+            scale_selected = true;
             let quality = args.next().and_then(|v| v.into_string().ok());
             thumb = quality.as_deref() == Some("thumb");
             working_scale = match quality.as_deref() {
@@ -39,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 _ => return Err("preview quality requires full, fast, draft or thumb".into()),
             };
         } else if arg == "--working-scale" {
+            scale_selected = true;
             thumb = false;
             let divisor = args
                 .next()
@@ -54,6 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .into_string()
                 .map_err(|_| "warm count must be UTF-8")?
                 .parse()?;
+        } else if arg == "--settings-snapshot" {
+            settings_snapshot = Some(PathBuf::from(
+                args.next().ok_or("missing settings snapshot")?,
+            ));
         } else if arg == "--capture-float" {
             let name = args
                 .next()
@@ -74,16 +82,28 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err("capture destination must be new".into());
     }
     let source = Source::open(&input)?;
-    let (mut settings, paths, mode) =
-        options::parse_settings_for_camera(controls.into_iter(), &source.metadata)?;
-    if thumb {
-        working_scale =
-            foveonic::render::ControlCapabilities::from_metadata(&source.metadata)?.thumb_scale();
-    }
-    settings.working_scale = working_scale;
-    if !paths.is_empty() {
-        return Err("unexpected extra input paths".into());
-    }
+    let (settings, mode) = if let Some(path) = settings_snapshot {
+        if scale_selected || !controls.is_empty() {
+            return Err("a settings snapshot cannot be combined with render options".into());
+        }
+        let snapshot: profile::RenderSettingsSnapshot =
+            serde_json::from_slice(&std::fs::read(path)?)?;
+        let settings = snapshot.into_settings();
+        working_scale = settings.working_scale;
+        (settings, Mode::Off)
+    } else {
+        let (mut settings, paths, mode) =
+            options::parse_settings_for_camera(controls.into_iter(), &source.metadata)?;
+        if thumb {
+            working_scale = foveonic::render::ControlCapabilities::from_metadata(&source.metadata)?
+                .thumb_scale();
+        }
+        settings.working_scale = working_scale;
+        if !paths.is_empty() {
+            return Err("unexpected extra input paths".into());
+        }
+        (settings, mode)
+    };
     let engine = Engine::new()?;
     mode.check_gpu_features(engine.device().features())?;
     std::fs::create_dir(&output)?;
@@ -172,6 +192,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     sample_mode,
                     serde_json::json!({"source":input,"digest":format!("{:016x}",hasher.finish()),
                         "extent":image.description().extent,"layout":format!("{:?}",image.description().layout),
+                        "space":format!("{:?}",image.description().space),"linear_white":image.description().linear_white,
+                        "view_baked":image.description().view_baked,
+                        "endianness":if cfg!(target_endian="little") {"little"} else {"big"},
                         "view_extent":image.view().extent,"view_crop":image.view().crop,
                         "view_rotation":image.view().rotation,"outside_timing":true})
                 )

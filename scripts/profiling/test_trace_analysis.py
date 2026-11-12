@@ -80,6 +80,61 @@ class TraceAnalysisTests(unittest.TestCase):
         self.assertEqual(result['steps'][0]['payload_read_counts'],{'original':1})
         self.assertEqual(result['steps'][0]['payload_read_bytes'],100)
 
+    def test_explicit_reuse_checks_target_work_and_retains_identities(self):
+        for event in [('source.read.complete', {'photo': 1, 'task': 77, 'storage': 'decoded-cache', 'bytes': 20, 'complete': True}),
+                      ('gpu.encode.dispatch', {'photo': 1, 'task': 77, 'purpose': 'current'})]:
+            rows = scenario()
+            rows[0][2].pop('expect_original_reads')
+            rows[0][2].pop('expect_local_reads')
+            rows[0][2]['expected_work'] = 'reuse'
+            result = analyze_tables(tables(rows + [(1, *event)]), {'complete': True})
+            self.assertFalse(result['behavior_valid'])
+            work = result['steps'][0]
+            observed = work['target_payload_reads'] or work['target_photographic_dispatches']
+            self.assertEqual(observed[0]['photo'], 1)
+            self.assertEqual(observed[0]['task'], 77)
+        rows = scenario()
+        rows[0][2].pop('expect_original_reads')
+        rows[0][2].pop('expect_local_reads')
+        rows[0][2]['expected_work'] = 'reuse'
+        rows += [(1, 'gpu.encode.dispatch', {'photo': 999, 'task': 9, 'purpose': 'current'}),
+                 (1, 'source.read.complete', {'photo': 999, 'task': 0, 'storage': 'original', 'bytes': 10})]
+        self.assertTrue(analyze_tables(tables(rows), {'complete': True})['behavior_valid'])
+        rows.append((1, 'gpu.encode.dispatch', {'task': 88, 'purpose': 'current'}))
+        self.assertFalse(analyze_tables(tables(rows), {'complete': True})['behavior_valid'])
+
+    def test_background_edit_requires_a_real_overlapping_batch_scope(self):
+        rows=scenario()
+        rows[0][2]['action']='background-edit'
+        rows.append((1,'scenario.background_edit',{'batch_started':True}))
+        self.assertFalse(analyze_tables(tables(rows),{'complete':True})['behavior_valid'])
+        rows.append((0,'batch.photo',{'purpose':'batch_import'}))
+        data=tables(rows)
+        data['slices'][-1]['dur']='2000000'
+        result=analyze_tables(data,{'complete':True})
+        self.assertTrue(result['behavior_valid'])
+        self.assertEqual(result['steps'][0]['background_overlap']['active_batch_photos'],1)
+
+    def test_rebuild_needs_proof_and_target_dispatch(self):
+        rows = scenario()
+        rows[0][2]['expected_work'] = 'rebuild'
+        dispatch = (1, 'gpu.encode.dispatch', {'photo': 1, 'task': 11, 'purpose': 'current'})
+        self.assertFalse(analyze_tables(tables(rows + [dispatch]), {'complete': True})['behavior_valid'])
+        rows[0][2].update(evicted_source='A.x3f', retained_before='[\"A.x3f\"]', retained_after='[]')
+        self.assertFalse(analyze_tables(tables(rows), {'complete': True})['behavior_valid'])
+        result = analyze_tables(tables(rows + [dispatch]), {'complete': True})
+        self.assertTrue(result['behavior_valid'])
+        self.assertEqual(result['steps'][0]['target_photographic_dispatch_count'], 1)
+        for changes in ({'retained_before': '[]'}, {'retained_after': '["A.x3f"]'},
+                        {'retained_before': 'invalid'}, {'evicted_source': 'other.x3f'}):
+            broken = scenario()
+            broken[0][2].update(rows[0][2], **changes)
+            self.assertFalse(analyze_tables(tables(broken + [dispatch]), {'complete': True})['behavior_valid'])
+        unrelated = (1, 'gpu.encode.dispatch', {'photo': 2, 'purpose': 'current'})
+        self.assertFalse(analyze_tables(tables(rows + [unrelated]), {'complete': True})['behavior_valid'])
+        rows[0][2]['expected_work'] = 'unexpected'
+        self.assertFalse(analyze_tables(tables(rows), {'complete': True})['behavior_valid'])
+
     def test_cached_observation_does_not_invent_a_new_receipt(self):
         rows=[row for row in scenario() if row[1]!='image_accepted']
         result=analyze_tables(tables(rows),{'complete':True})

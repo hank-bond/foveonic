@@ -13,6 +13,28 @@ pub(super) enum Pattern {
     Scrub,
 }
 
+#[cfg(test)]
+#[test]
+fn maintained_slider_recipes_use_the_application_sidecar_contract() {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../scripts/profiling/slider_cases.json"
+    ))
+    .unwrap();
+    for case in cases.as_array().unwrap() {
+        for recipe in case["recipes"].as_array().unwrap() {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "format":"foveonic-editing", "version":1, "settings":recipe
+            }))
+            .unwrap();
+            assert!(
+                foveonic::sidecar::decode(&bytes).is_ok(),
+                "invalid slider fixture: {}",
+                case["name"]
+            );
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct Frame {
     time_seconds: f64,

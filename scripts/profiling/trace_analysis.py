@@ -113,7 +113,7 @@ def loss_status(stats, complete):
             'valid': complete is True and checked and not problems}
 
 
-def expected_work(window, expectations, photos):
+def expected_work(window, expectations, photos, sources=None):
     """Check actual work independently of accepted result identity or latency."""
     payloads = [event for event in window if event['name'] == 'source.read.complete' and
                 event['args'].get('storage') in ('original', 'decoded-cache')]
@@ -144,7 +144,48 @@ def expected_work(window, expectations, photos):
     expected = expectations.get('expect_photographic_dispatches')
     if expected is not None and len(dispatches) != expected:
         issues.append(f'photographic dispatches: expected {expected}, observed {len(dispatches)}')
-    return {'payload_read_counts': dict(counts),
+    # Explicit behavioral expectations are target-scoped. Keep unknown identities
+    # in the target set so missing provenance cannot hide work.
+    target_reads = [event for event in reads if event['args'].get('photo') is None
+                    or event['args']['photo'] in photos]
+    target_dispatches = [event for event in dispatches if event['args'].get('photo') is None
+                         or event['args']['photo'] in photos]
+    declared = expectations.get('expected_work')
+    if declared is not None and declared not in ('reuse', 'rebuild'):
+        issues.append(f'unknown expected_work: {declared}')
+    if declared == 'reuse':
+        if target_reads:
+            issues.append(f'target payload reads during reuse: {len(target_reads)}')
+        if target_dispatches:
+            issues.append(f'target photographic dispatches during reuse: {len(target_dispatches)}')
+    proof = None
+    if declared == 'rebuild':
+        source = expectations.get('evicted_source')
+        def snapshot(name):
+            value = expectations.get(name)
+            try:
+                value = json.loads(value) if isinstance(value, str) else value
+            except (ValueError, TypeError):
+                return None
+            return value if isinstance(value, list) and all(isinstance(path, str) for path in value) else None
+        before, after = snapshot('retained_before'), snapshot('retained_after')
+        proof = {'source': source, 'retained_before': before, 'retained_after': after}
+        target_photo = (sources or {}).get(source)
+        if (not isinstance(source, str) or before is None or after is None or
+                source not in before or source in after or target_photo is None):
+            issues.append('rebuild requires runtime snapshots proving eviction of a current source')
+        if target_photo is None or not any(event['args'].get('photo') == target_photo for event in dispatches):
+            issues.append('rebuild had no photographic dispatch for the evicted target')
+    def work_identity(event):
+        return {key: event['args'].get(key) for key in
+                ('photo', 'task', 'revision', 'purpose', 'storage') if key in event['args']}
+    return {'expected_work': declared,
+            'eviction_evidence': proof,
+            'target_payload_read_counts': dict(Counter(event['args']['storage'] for event in target_reads)),
+            'target_payload_reads': [work_identity(event) for event in target_reads],
+            'target_photographic_dispatch_count': len(target_dispatches),
+            'target_photographic_dispatches': [work_identity(event) for event in target_dispatches],
+            'payload_read_counts': dict(counts),
             'payload_attempts_without_io': len(not_started),
             'payload_read_bytes': sum(event['args'].get('bytes', 0) for event in reads),
             'background_payload_read_counts': dict(Counter(event['args']['storage'] for event in background)),
@@ -424,8 +465,16 @@ def analyze_tables(tables, capture_summary):
             issues.append('an effective scale differs from its photo-specific requested scale')
         if end['args'].get('worker_busy') is not False or end['args'].get('progress_running') is not False:
             issues.append('desired work or progress did not settle')
-        work, work_issues = expected_work(window, begin['args'], {event['args'].get('photo') for event in current})
+        work, work_issues = expected_work(window, begin['args'], {event['args'].get('photo') for event in current},
+                                          {source: event['args'].get('photo') for source, event in by_source.items()})
         issues.extend(work_issues)
+        if begin['args'].get('action') == 'background-edit':
+            edits = [event for event in window if event['name'] == 'scenario.background_edit']
+            overlapping = [event for event in events if event['name'] == 'batch.photo' and event['dur'] > 0
+                           and any(event['ts'] <= edit['ts'] < event['ts'] + event['dur'] for edit in edits)]
+            work['background_overlap'] = {'edit_markers':len(edits), 'active_batch_photos':len(overlapping)}
+            if len(edits) != 1 or not overlapping:
+                issues.append('foreground edit did not overlap an actual batch photo operation')
         latencies = [(event['ts'] - begin['ts']) / 1e6 for event in by_source.values()]
         expected_scales = {identity(event): event['args'].get('expected_scale_divisor')
                            for event in by_source.values()}

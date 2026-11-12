@@ -102,7 +102,7 @@ Coordinates are illustrative. External `pointer.jsonl` records dispatch evidence
 
 ## Scripted native scenarios
 
-The runner extends the existing opt-in native smoke driver. It launches the actual app and uses existing browser commands, edit descriptors and egui pointer dispatch. Each step labels `direct-command` versus `input-dispatch` coverage. These are not physical mouse tests. Native runs support one Draft photograph or one through eight Thumb photographs, matching the product's multi-photo overview policy. Use the headless editing harness for multi-photo Draft experiments.
+The runner extends the existing opt-in native smoke driver. It launches the actual app and uses existing browser commands, edit descriptors and egui pointer dispatch. Each step labels `direct-command` versus `input-dispatch` coverage. These are not physical mouse tests. Native runs support one Full, Fast, Draft or Thumb photograph, or one through eight Thumb photographs in a multi-photo overview. Use the headless editing harness for multi-photo Draft experiments.
 
 Supply an existing `profile_editing` case array containing `source` and optional serialized `settings`, or repeat `--source INPUT.x3f` for camera defaults:
 
@@ -130,6 +130,9 @@ For an original X3F, `source.original` separates file opening, metadata access, 
 | `rapid-supersession` | Repeated edits without waiting for each intermediate result |
 | `memory-pressure` | Apply the existing memory-cache preference, then repeat unique exposure edits |
 | `slider-drag` | Drive a real multi-photo slider through repeated pointer movements, inspect the painted readout and geometry, and wait for the final edited photographs |
+| `selection-journey` | Edit, retarget, remove and re-add viewport targets while a computed image is held at delivery, then check unchanged selection reuse |
+| `selection-pressure` | Run the selection journey, lower the memory budget, prove an inactive processing entry was evicted, then edit it and check rebuilding |
+| `background-edit` | Start a frozen TIFF import through the actual batch worker, edit while it is active, settle foreground results, then separately await batch completion |
 
 `--rapid-edits`, `--pressure-mib`, `--repeats`, `--step-timeout` and `--timeout` control these existing actions. A single active image and device are set up before capture. Input hashing warms the OS filesystem cache, so `initial` does not claim a cold storage device. Warm disk means a ready local decoded entry, not a retained GPU checkpoint. Actual payload reads establish which input path ran.
 
@@ -141,7 +144,43 @@ Each trial saves the same shared capture files as manual recording, plus `eviden
 
 Each native trial also writes `evidence/test-result.json`. Headless render-matrix cases write the same result shape to `<case>.test-result.json`; both aggregate reports embed it as `test_result`. It identifies the driver and scenario, binary hash and GPU adapter, original source and hash, observed processing family and the scale reported by the rendered artifact, and assertion outcomes. Both paths use the same preview-scale assertion against the [preview contract](specs/small-previews.md): in particular, Classic Thumb uses divisor four and Merrill/Quattro Thumb use eight. Missing family or scale evidence is incomplete rather than a pass. An application fixture staged under another filename is mapped back to its declared original source and hash.
 
-This first shared check verifies each artifact's reported scale; it does not independently measure image dimensions. The app scenario still owns its interaction and final-state checks, and the headless matrix owns its exact float comparison. A shared scale result does not establish that an app-presented image matches a fresh render, and it does not imply physical input coverage.
+The scale assertion verifies each artifact's reported scale; it does not independently measure image dimensions. The optional image assertion below compares complete floating storage and its geometry. The app scenario still owns its interaction and final-state checks. Neither assertion establishes physical input or screen-presentation coverage.
+
+For a two-through-eight-photo slider gesture, add `--compare-images PATH_TO_PROFILE_PIPELINE` to `slider-drag`:
+
+```sh
+python3 scripts/profiling/scenarios.py \
+  --binary target/release/foveonic-gui --cases CASES.json \
+  --directory .local/slider-images --scenario slider-drag \
+  --quality thumb --mode off --trials 1 --background \
+  --compare-images target/release/examples/profile_pipeline
+```
+
+Supply an explicit value for the selected numeric control in every starting recipe. Exposure also requires `exposure_auto: false`. The check verifies those initial values and checks the gesture's edit from pointer movement, separately from the rendered output. After all measured actions and any trace save, the existing image worker reads each settled frame's floating samples to `evidence/image-NN.f32`; the UI polls completion. After the app exits, the runner independently processes those sources with the exact verified settings. Diagnostic settings snapshots retain working scale, analysis tuning and other transient fields omitted from photo sidecars. The headless example accepts these through `--settings-snapshot FILE`, which cannot be combined with photographic or scale overrides.
+
+The shared `image_samples` assertion checks every byte, complete buffer length, storage layout, color space, nominal white and view geometry. Results preserve both image paths and hashes, geometry differences and the first differing byte. A stale frame identity, missing capture or effective value that differs from the checked edit fails the trial. The runner checks GPU adapter names and records both binary hashes. Use binaries built from the same sources; exact floating results are not portable across GPU backends. Readback and fresh verification are outside interaction timing. Image comparison also supports the declared editing journeys.
+
+### Coordination journeys
+
+Supply two through eight photographs with explicit manual starting exposures. `selection-journey` uses a small independent Rust model to check each photo's exposure after edits to changing subsets. It holds one computed image at the delivery boundary while real egui clicks change the editing selection, then releases it and waits for all latest results. The hold is released on scenario failure. Once a preview matches the current exposure, it must not revert to a prior exposure unless another edit changes the desired value. Final image verification uses the same fresh-processing path as `slider-drag`.
+
+The hold is intentional harness work, recorded as `scenario.delivery_pause`. These step durations can compare the same controlled journey across builds but do not measure natural rendering throughput. The simpler `warm-edit` scenario remains the appropriate ordinary editing baseline.
+
+For pressure coverage, select a budget small enough to evict inactive processing state for the supplied fixture set. The driver records actual retained-source snapshots before and after changing the budget. `evicted-edit` requires its target to be present before, absent after, and to execute photographic work when edited. Failure to observe eviction fails the case rather than claiming pressure coverage. A decoded disk-cache hit is valid rebuilding input. Reuse checks independently require zero target RAW payload reads and zero photographic dispatches. Unrelated background work is reported separately.
+
+```sh
+python3 scripts/profiling/scenarios.py \
+  --binary target/release/foveonic-gui --cases MULTI_CASES.json \
+  --directory .local/selection-pressure --scenario selection-pressure \
+  --quality thumb --mode wall --trials 1 --background \
+  --disk-cache-bytes 0 --pressure-mib 64 \
+  --trace-processor PATH_TO_LOCAL_TRACE_PROCESSOR \
+  --compare-images target/release/examples/profile_pipeline
+```
+
+`background-edit` uses the existing Import worker to copy and render the first selected photograph into the trial's owned `background-output` directory. It observes a running batch that has begun executing before submitting the foreground exposure edit. UI samples record overlap with pending foreground work. A traced run additionally requires the edit marker to fall inside an actual `batch.photo` scope. The `background-finish` step waits for successful export completion after foreground settlement. This tests active background work independently of the `--background` option, which controls window placement.
+
+Native results retain UI update timestamps during measured actions. `ui_latency` reports the maximum and nearest-rank p95 update gaps, including action transitions. `--max-ui-gap-ms N` optionally checks a caller-selected maximum. Missing samples remain incomplete. These gaps describe UI update cadence under the scenario's 20 ms repaint request, not physical input response or screen scanout. They exclude initial setup and image readback. Window size, viewport size, pixel density and per-step geometry are part of the matched workload key. Reports without complete geometry cannot establish valid latency comparisons.
 
 ### Behavioral slider checks
 
@@ -156,7 +195,7 @@ python3 scripts/profiling/scenarios.py \
 
 The input is dispatched through the real widget. Use `--drag-pattern scrub` for a back-and-forth gesture instead of the default forward drag. The driver moves the requested section into view and scrolls to an offscreen control before dragging; this setup is programmatic navigation, not a physical pointer test. `evidence/slider-drag.json` records the exact gesture, per-frame painted text and bounds, settings, frame times, render task identities and the controls the app drew. The check independently verifies relative changes, repeated movement, readout formatting and stable geometry before checking the delivered final settings. A missing, disabled or unreachable control fails explicitly and records the observed controls. A failure also requests a screenshot. Off timings for this case include the opt-in widget observer and scripted gesture, so compare them only to matched runs with the same observation enabled. A Wall run records the same work with Perfetto; it is not an Off latency baseline.
 
-Run a declared matrix using the maintained starter cases and an owner-supplied fixture file:
+Run a declared matrix using the maintained 90 numeric control cases and an owner-supplied fixture file:
 
 ```sh
 python3 scripts/profiling/behavioral.py \
@@ -167,13 +206,13 @@ python3 scripts/profiling/behavioral.py \
 
 Repeat `--family`, `--fixture`, `--case` or `--theme` to select more than one value. `--list` prints the selected runs without starting the app. Use an explicit `--full` for every declared combination, such as before a release; an unfiltered run is otherwise rejected. Select relevant cases for ordinary changes. Unknown or inapplicable selections fail rather than silently passing.
 
-The fixture file is an array such as `[{"name":"merrill-pair","family":"merrill","raw_size":"high","sources":["FIRST.x3f","SECOND.x3f"]}]`. Each fixture contains two through eight distinct source paths and each case provides a recipe for each selected photo. Camera families are `classic`, `merrill`, `quattro` and `tiger`. A fixture may describe a different RAW size in `raw_size`. The case file selects pointers, sections, optional applicable families and themes, and per-photo settings. Inputs and sidecars are staged into owned trial folders. The matrix disables its decoded disk cache by default to avoid accumulating a new cache for every staged source. Use `--disk-cache-bytes` for an explicit cache budget, or the individual native scenarios for cache-specific checks. `behavioral-report.json` identifies each run, missing families and controls that were observed but not tested. Its inventory covers only the controls drawn by the declared recipes; it does not establish coverage of hidden modes, other RAW sizes or physical mouse input. A Tiger fixture made from two aliases of the same available original tests multi-photo interaction, not two independent sensor samples.
+The fixture file is an array such as `[{"name":"merrill-pair","family":"merrill","raw_size":"high","sources":["FIRST.x3f","SECOND.x3f"]}]`. Each fixture contains two through eight distinct source paths and each case provides a recipe for each selected photo. Camera families are `classic`, `merrill`, `quattro` and `tiger`. A fixture may describe a different RAW size in `raw_size`. The case file selects pointers, sections, optional applicable families and themes, and per-photo settings. Inputs and sidecars are staged into owned trial folders. Add `--compare-images PATH_TO_PROFILE_PIPELINE` to compare settled slider results with fresh processing. The matrix disables its decoded disk cache by default to avoid accumulating a new cache for every staged source. Use `--disk-cache-bytes` for an explicit cache budget, or the individual native scenarios for cache-specific checks. `behavioral-report.json` identifies each run, missing families and controls that were observed but not tested. Its inventory covers only the controls drawn by the declared recipes; it does not establish coverage of hidden modes, other RAW sizes or physical mouse input. A Tiger fixture made from two aliases of the same available original tests multi-photo interaction, not two independent sensor samples.
 
 Behavioral matrices request a background window by default. On macOS it stays below normal windows and does not request application activation. Pass `--foreground` to watch a run. Individual scenarios use a foreground window unless given `--background`. The selected window mode is recorded with the workload; compare latency only between runs with the same mode, since the operating system can schedule obscured windows differently.
 
 ### Exact render matrix
 
-The maintained headless `profile_pipeline` example reports float-sample digests and image geometry outside its timed render. `render_matrix.py` records and checks these results against full float buffers. It refuses a comparison if a baseline buffer is missing or changed, and checks source hashes, recipe options, effective scale and image geometry as well as every output byte.
+The maintained headless `profile_pipeline` example reports float-sample digests and image geometry outside its timed render. `render_matrix.py` records and checks these results against full float buffers. It refuses a comparison if a baseline buffer is missing or changed, and checks source hashes, recipe options, effective scale and image geometry as well as every output byte. Candidate samples stay in the new run directory; the baseline is read-only. Baseline and app comparisons use the same image assertion.
 
 ```sh
 cargo build --release --offline -p foveonic --example profile_pipeline
@@ -204,7 +243,7 @@ The command requires complete behavioral success, checked/uncontended timing for
 
 Without a budget it reports deltas without a regression verdict. An explicit `--max-regression-percent 10` checks both median and p95 against a caller-selected 10% maximum increase. `--budget warm-edit=5` overrides the limit for that action. Limits are examples, not recommended thresholds. A budget violation returns a nonzero status after emitting the comparison. Choose budgets from controlled repeated variability and review the raw trials. These samples do not establish statistical significance.
 
-Hardware matching includes the recorded host descriptor and actual application adapter, backend, vendor, device and related hardware fields from the native result. Window and viewport geometry are not yet recorded in this key. Match those and other operating conditions separately when making a performance claim. No additional app geometry or capture work is introduced by this comparison command.
+Hardware matching includes the recorded host descriptor and actual application adapter, backend, vendor, device and related hardware fields from the native result. Window size, viewport size, pixel density and per-step geometry are recorded in the workload key. Match other operating conditions separately when making a performance claim. The comparison command does not add app capture work.
 
 ## Capture an existing smoke suite
 

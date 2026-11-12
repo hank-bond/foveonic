@@ -519,6 +519,12 @@ impl Browser {
     pub fn rendered_revision(&self, path: &Path) -> Option<u64> {
         self.rendered_revisions.get(path).copied()
     }
+    pub fn has_rendered_preview(&self, path: &Path, revision: u64) -> bool {
+        self.rendered_revision(path)
+            .is_some_and(|old| old >= revision)
+            && self.cache.get(path).is_some_and(Option::is_some)
+            && self.previews.contains_key(path)
+    }
     pub fn preview(&mut self, path: &Path) -> Option<Thumbnail> {
         self.preview_demand.insert(path.to_owned());
         if let Some(preview) = self.previews.get(path) {
@@ -1170,6 +1176,26 @@ mod tests {
         browser.finish_previews();
         assert_eq!(browser.cache.len(), 1);
         assert!(browser.cache.contains_key(&paths[0]));
+    }
+    #[test]
+    fn rendered_preview_presence_checks_both_memory_pools_after_eviction() {
+        let context = eframe::egui::Context::default();
+        let mut browser = super::Browser::new(context.clone());
+        let path = std::path::PathBuf::from("photo.x3f");
+        browser.files.push(path.clone());
+        browser.rendered(&context, path.clone(), 4, prepared([128; 3], [1024, 512]));
+        assert!(browser.has_rendered_preview(&path, 4));
+        assert!(!browser.has_rendered_preview(&path, 5));
+
+        browser.set_thumbnail_budget(0);
+        browser.finish_previews();
+        assert_eq!(browser.rendered_revision(&path), Some(4));
+        assert!(!browser.has_rendered_preview(&path, 4));
+
+        browser.rendered(&context, path.clone(), 4, prepared([128; 3], [1024, 512]));
+        assert!(browser.has_rendered_preview(&path, 4));
+        browser.previews.clear();
+        assert!(!browser.has_rendered_preview(&path, 4));
     }
     #[test]
     fn rendered_thumbnails_replace_embedded_images_and_reject_late_replies() {

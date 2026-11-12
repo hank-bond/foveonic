@@ -7,34 +7,23 @@ use crate::{
 use eframe::egui;
 use std::path::PathBuf;
 
-#[path = "smoke_capture.rs"]
+mod background;
+mod browser_journey;
 mod capture;
-#[path = "smoke_scenarios.rs"]
+mod choices;
+mod collection;
+mod damaged;
+mod journey;
+mod lifecycle;
+mod multi_edit;
+mod rotate;
 mod scenarios;
-#[path = "smoke_slider.rs"]
+mod screenshot;
+mod selection;
+pub use screenshot::{screenshot_active, screenshot_recipe};
 mod slider;
+mod transitions;
 
-const ROTATE_TARGETS: &[&str] = &[
-    "preview",
-    "final",
-    "rotate-ready",
-    "rotate-draft",
-    "rotate-straight",
-    "rotate-first-click",
-    "rotate-click-line",
-    "rotate-click-applied",
-    "rotate-quarter",
-    "rotate-freehand-draft",
-    "rotate-freehand",
-    "rotate-hand",
-    "rotate-reopen",
-    "rotate-fast",
-    "rotate-smart",
-    "rotate-shared-zoom",
-    "rotate-crop",
-    "rotate-return",
-    "rotate-done",
-];
 const CROP_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -100,7 +89,6 @@ const DISPLAY_COLOR_TARGETS: &[&str] = &[
     "gamut-settings",
 ];
 
-const SCREENSHOT_TARGETS: &[&str] = &["preview", "readme"];
 const WORKFLOW_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -121,25 +109,7 @@ const BROWSER_TARGETS: &[&str] = &[
     "browser-large",
 ];
 const COMPARISON_TARGETS: &[&str] = &["preview", "final", "comparison", "comparison-switch"];
-const MULTI_EDIT_TARGETS: &[&str] = &[
-    "preview",
-    "final",
-    "multi-open",
-    "multi-eight",
-    "multi-replace",
-    "multi-option",
-    "multi-switch-a",
-    "multi-switch-b",
-    "multi-option-a",
-    "multi-relative",
-    "multi-remove",
-    "multi-before",
-    "multi-current",
-    "multi-option-return",
-    "multi-shift",
-    "multi-hand",
-    "multi-choice",
-];
+
 const BASE_RESPONSE_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -221,28 +191,6 @@ const IMPORT_TARGETS: &[&str] = &[
     "import-render-options",
     "import-copied",
 ];
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ScreenshotRecipe {
-    pub source: String,
-    pub window_size: [f32; 2],
-    pub organizer_width: f32,
-    pub tools_width: f32,
-    zoom: f32,
-    pan: [f32; 2],
-    settings: foveonic::render::Settings,
-}
-
-pub fn screenshot_active() -> bool {
-    std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_some()
-        && std::env::var_os("FOVEONIC_GUI_SMOKE_SCREENSHOT").is_some()
-}
-
-pub fn screenshot_recipe() -> ScreenshotRecipe {
-    serde_json::from_str(include_str!("../assets/gui-screenshot.json"))
-        .expect("Invalid screenshot recipe")
-}
 
 const TARGETS: [&str; 10] = [
     "preview",
@@ -378,12 +326,20 @@ pub fn editor_review_active() -> bool {
         && std::env::var_os("FOVEONIC_GUI_SMOKE_EDITOR").is_some()
 }
 
+struct SmartReopen {
+    texture: std::sync::Weak<foveonic::image::ImageTexture>,
+    task: crate::timing::DeliveredTask,
+    scale: foveonic::render::Scale,
+    thumbnail_revision: Option<u64>,
+}
+
 pub struct Smoke {
     scenario: Option<scenarios::Scenario>,
     capture: capture::Capture,
     directory: PathBuf,
     targets: &'static [&'static str],
     index: usize,
+    step_started: Option<(usize, std::time::Instant)>,
     awaiting: bool,
     direct_events: std::collections::VecDeque<Vec<egui::Event>>,
     close_at: Option<std::time::Instant>,
@@ -391,11 +347,7 @@ pub struct Smoke {
     fast_region: Option<crate::viewport::PixelRegion>,
     smart_full_revision: Option<u64>,
     smart_scrub_checked: bool,
-    smart_reopen: Option<(
-        std::sync::Weak<foveonic::image::ImageTexture>,
-        crate::timing::DeliveredTask,
-        foveonic::render::Scale,
-    )>,
+    smart_reopen: Option<SmartReopen>,
     display_revision: Option<u64>,
     authored: Option<foveonic::render::Settings>,
     name_revision: Option<u64>,
@@ -408,22 +360,27 @@ pub struct Smoke {
     multi_sweep_ms: Vec<f64>,
 }
 impl Smoke {
+    pub(crate) fn expects_failure(&self, path: &std::path::Path) -> bool {
+        self.scenario
+            .as_ref()
+            .is_some_and(|scenario| scenario.expects_failure(path))
+    }
     pub fn inject_direct_color(&mut self, input: &mut egui::RawInput, ctx: &egui::Context) {
         if self.targets == WHITE_BALANCE_TARGETS
             || self.targets == DIRECT_COLOR_TARGETS
             || self.targets == DEHAZE_TARGETS
             || self.targets == ADVANCED_COLOR_TARGETS
             || self.targets == CROP_TARGETS
-            || self.targets == ROTATE_TARGETS
+            || self.targets == rotate::TARGETS
             || self.targets == STATUS_TARGETS
-            || self.targets == MULTI_EDIT_TARGETS
+            || self.targets == multi_edit::TARGETS
             || self.scenario.is_some()
         {
             // Inject focused input without moving the owner's system pointer or focus.
             input.focused = true;
         }
         if let Some(events) = self.direct_events.pop_front() {
-            if self.targets == MULTI_EDIT_TARGETS || self.scenario.is_some() {
+            if self.targets == multi_edit::TARGETS || self.scenario.is_some() {
                 input.modifiers = events
                     .iter()
                     .find_map(|event| {
@@ -450,7 +407,7 @@ impl Smoke {
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_STATUS").is_some() {
                 STATUS_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_ROTATE").is_some() {
-                ROTATE_TARGETS
+                rotate::TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_CROP").is_some() {
                 CROP_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_EXPOSURE_AUTO").is_some() {
@@ -468,7 +425,7 @@ impl Smoke {
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_COMPARISON").is_some() {
                 COMPARISON_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_MULTI").is_some() {
-                MULTI_EDIT_TARGETS
+                multi_edit::TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_WORKFLOW").is_some() {
                 WORKFLOW_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DISPLAY").is_some() {
@@ -484,7 +441,7 @@ impl Smoke {
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_TIGER").is_some() {
                 TIGER_TARGETS
             } else if screenshot_active() {
-                SCREENSHOT_TARGETS
+                screenshot::TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_SCOPES").is_some() {
                 VIEWPORT_SCOPE_TARGETS
             } else if std::env::var_os("FOVEONIC_GUI_SMOKE_INSPECTION").is_some() {
@@ -503,6 +460,7 @@ impl Smoke {
                 &TARGETS
             },
             index: 0,
+            step_started: None,
             awaiting: false,
             direct_events: Default::default(),
             close_at: None,
@@ -533,6 +491,13 @@ impl Smoke {
     pub(super) fn configure_cache(&self, settings: &mut foveonic::decode_cache::Settings) {
         if let Some(scenario) = &self.scenario {
             scenario.configure_cache(settings);
+        } else if let Some(bytes) = std::env::var_os("FOVEONIC_GUI_SMOKE_DISK_CACHE_BYTES") {
+            let bytes = bytes
+                .to_str()
+                .and_then(|value| value.parse::<u64>().ok())
+                .expect("smoke disk cache budget must be an unsigned byte count");
+            settings.enabled = bytes > 0;
+            settings.max_bytes = bytes;
         }
     }
     /// Hold processing replies until the embedded preview has been captured.
@@ -542,6 +507,42 @@ impl Smoke {
 }
 
 impl App {
+    fn smoke_check_deadline(&mut self) {
+        let Some(smoke) = &mut self.smoke else {
+            return;
+        };
+        if smoke.scenario.is_some()
+            || smoke.close_at.is_some()
+            || smoke.index >= smoke.targets.len()
+        {
+            return;
+        }
+        let started = smoke
+            .step_started
+            .get_or_insert((smoke.index, std::time::Instant::now()));
+        if started.0 != smoke.index {
+            *started = (smoke.index, std::time::Instant::now());
+        }
+        if started.1.elapsed() < std::time::Duration::from_secs(60) {
+            return;
+        }
+        let target = smoke.targets[smoke.index];
+        let mut state = self.diagnostic_state();
+        state["smoke_readiness"] = serde_json::json!({
+            "target":target,"app_busy":self.busy,"opening":self.opening.is_some(),
+            "sidecars_ready":self.sidecars.ready(),
+            "scope_key":self.scope_key.map(|key|(key.revision,key.region)),
+            "scope_snapshot":self.scope_snapshot.as_ref().map(|snapshot|(snapshot.key.revision,snapshot.key.region)),
+            "frame":self.frame.as_ref().map(|frame|serde_json::json!({
+                "matches_settings":crate::rendering::matching::same_authored_edits(&frame.requested,&self.settings),
+                "admitted":self.worker.is_settled_and_admitted(frame),
+                "navigator_ready":self.navigator.ready(frame,self.displayed_mapping()),
+                "thumbnail_revision":self.browser.rendered_revision(&frame.path),
+            })),
+        });
+        panic!("smoke step {target} did not finish within 60 seconds: {state}");
+    }
+
     pub(super) fn smoke_check_scope_retention(&self) {
         let Some(smoke) = &self.smoke else {
             return;
@@ -564,6 +565,16 @@ impl App {
     }
 
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
+        self.smoke_check_deadline();
+        if self
+            .smoke
+            .as_ref()
+            .is_some_and(|smoke| smoke.scenario.is_none())
+        {
+            // Direct scripted actions also need another tick when no worker
+            // or physical pointer event will wake an otherwise idle window.
+            ctx.request_repaint_after(std::time::Duration::from_millis(20));
+        }
         if self.smoke.is_none() || self.smoke_capture_tick(ctx) {
             return;
         }
@@ -586,7 +597,7 @@ impl App {
         if self
             .smoke
             .as_ref()
-            .is_some_and(|smoke| smoke.targets == MULTI_EDIT_TARGETS)
+            .is_some_and(|smoke| smoke.targets == multi_edit::TARGETS)
         {
             self.smoke_multi_tick(ctx);
             return;
@@ -718,103 +729,15 @@ impl App {
                     _ => {}
                 }
             }
-            if smoke.targets == ROTATE_TARGETS && smoke.targets[smoke.index].starts_with("rotate-")
+            if smoke.targets == rotate::TARGETS && smoke.targets[smoke.index].starts_with("rotate-")
             {
-                let target = smoke.targets[smoke.index];
-                let frame = self.frame.as_ref().unwrap();
-                assert_eq!(frame.requested.rotation, self.settings.rotation);
-                match target {
-                    "rotate-draft" => {
-                        assert!(
-                            self.settings.rotation.is_neutral(),
-                            "draft must not render or save"
-                        );
-                        assert_eq!(
-                            crate::rotate_tool::displayed(ctx, self.settings.rotation),
-                            self.settings.rotation
-                        );
-                    }
-                    "rotate-straight" => {
-                        assert!(self.settings.rotation.degrees < -1.);
-                        smoke.authored = Some(self.settings.clone());
-                    }
-                    "rotate-first-click" | "rotate-click-line" => {
-                        assert_eq!(
-                            self.settings.rotation,
-                            smoke.authored.as_ref().unwrap().rotation
-                        );
-                        assert_eq!(
-                            crate::rotate_tool::displayed(ctx, self.settings.rotation),
-                            self.settings.rotation
-                        );
-                    }
-                    "rotate-click-applied" => {
-                        assert!(
-                            self.settings.rotation.degrees
-                                < smoke.authored.as_ref().unwrap().rotation.degrees - 1.
-                        );
-                        smoke.authored = Some(self.settings.clone());
-                    }
-                    "rotate-quarter" | "rotate-freehand-draft" => {
-                        assert_eq!(self.settings.rotation.turns, 1);
-                        assert_eq!(
-                            self.settings.rotation.degrees,
-                            smoke.authored.as_ref().unwrap().rotation.degrees
-                        );
-                    }
-                    "rotate-freehand" => {
-                        assert_eq!(self.settings.rotation.turns, 1);
-                        assert!(
-                            self.settings.rotation.degrees
-                                > smoke.authored.as_ref().unwrap().rotation.degrees
-                        );
-                        smoke.authored = Some(self.settings.clone());
-                    }
-                    "rotate-hand" | "rotate-reopen" | "rotate-fast" | "rotate-smart"
-                    | "rotate-crop" | "rotate-done" => {
-                        assert_eq!(
-                            self.settings.rotation,
-                            smoke.authored.as_ref().unwrap().rotation
-                        );
-                    }
-                    _ => {}
-                }
-                if target == "rotate-fast" {
-                    assert!(frame.artifact.settings.working_scale.is_reduced());
-                }
-                if target == "rotate-smart" {
-                    assert_eq!(
-                        frame.artifact.settings.working_scale,
-                        foveonic::render::Scale::new(2).unwrap()
-                    );
-                    assert!(frame.artifact.settings.preview_region.is_none());
-                }
-                if target == "rotate-shared-zoom" {
-                    smoke.name_revision = Some(frame.revision);
-                    smoke.current_texture = Some(frame.texture.clone());
-                    smoke.fast_region = self.viewport.visible_pixels();
-                }
-                if matches!(target, "rotate-crop" | "rotate-return") {
-                    assert_eq!(
-                        Some(frame.revision),
-                        smoke.name_revision,
-                        "switching tools submitted a render"
-                    );
-                    assert!(std::sync::Arc::ptr_eq(
-                        smoke.current_texture.as_ref().unwrap(),
-                        &frame.texture
-                    ));
-                    assert_eq!(
-                        self.viewport.visible_pixels(),
-                        smoke.fast_region,
-                        "switching tools reset pan or zoom"
-                    );
-                }
-                std::fs::write(
-                    smoke.directory.join(format!("{target}.json")),
-                    serde_json::to_vec_pretty(&self.settings.rotation).unwrap(),
-                )
-                .unwrap();
+                rotate::check(
+                    ctx,
+                    smoke,
+                    self.frame.as_ref().unwrap(),
+                    &self.settings,
+                    &self.viewport,
+                );
             }
             if smoke.targets == CROP_TARGETS && !smoke.preview_pending() {
                 let frame = self.frame.as_ref().unwrap();
@@ -1138,8 +1061,9 @@ impl App {
                             | "cache-list"
                     );
                     if target == "cache-reopen" {
-                        let (texture, task, scale) = smoke.smart_reopen.as_ref().unwrap();
-                        let texture = texture
+                        let retained = smoke.smart_reopen.as_ref().unwrap();
+                        let texture = retained
+                            .texture
                             .upgrade()
                             .expect("reopening discarded retained pixels");
                         assert!(
@@ -1147,10 +1071,14 @@ impl App {
                             "same-photo selection replaced retained pixels"
                         );
                         assert_eq!(
-                            frame.diagnostic_task, *task,
+                            frame.diagnostic_task, retained.task,
                             "same-photo selection replaced the delivered task"
                         );
-                        assert_eq!(frame.artifact.settings.working_scale, *scale);
+                        assert_eq!(frame.artifact.settings.working_scale, retained.scale);
+                        assert_eq!(
+                            self.browser.rendered_revision(&frame.path),
+                            retained.thumbnail_revision
+                        );
                     } else {
                         assert_eq!(
                             frame.artifact.settings.working_scale,
@@ -1195,7 +1123,10 @@ impl App {
                     smoke.smart_full_revision = Some(frame.revision);
                 }
                 if target == "cache-reopen" {
-                    assert!(self.worker.cache.status().hits > 0);
+                    assert!(
+                        self.worker.is_settled_and_admitted(frame),
+                        "retained image was not admitted for the reopened photo"
+                    );
                 }
                 let report = serde_json::json!({"target":target,"quality":frame.quality_label(),"region":region,"regional_supported":regional_smart,"native_extent":self.frame.as_ref().unwrap().display_extent(false),"rendered_extent":frame.texture.description().extent,
                     "zoom_percent":self.viewport.zoom_percent(ctx.pixels_per_point()),"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds,"scope_revision":self.scope_key.map(|k|k.revision),"image_revision":frame.revision,"cache_hits":self.worker.cache.status().hits,"cache_ready":self.worker.cache.status().ready.len(),"continuation_running":self.busy});
@@ -1250,6 +1181,7 @@ impl App {
                 if target == "dehaze-reset" {
                     assert!(self.settings.dehaze.shadow.is_some());
                     assert!(!self.settings.dehaze_auto());
+                    assert_eq!(self.settings.dehaze.amount, 35.);
                 }
                 let report = serde_json::json!({"target":target,"dehaze":self.settings.dehaze,"automatic_color":estimated,"shown_color":self.settings.dehaze.shadow.or(estimated),"rendering":self.settings.rendering,"quality":frame.quality_label(),"processing_ms":frame.milliseconds});
                 std::fs::write(
@@ -1262,7 +1194,7 @@ impl App {
             smoke.index += 1;
             smoke.awaiting = false;
             if smoke.index == smoke.targets.len() {
-                if smoke.targets == SCREENSHOT_TARGETS {
+                if smoke.targets == screenshot::TARGETS {
                     smoke.capture.request_close(ctx);
                     return;
                 }
@@ -1304,123 +1236,7 @@ impl App {
                             .into(),
                     );
                 }
-                "rotate-ready" | "rotate-reopen" | "rotate-hand" | "rotate-crop"
-                | "rotate-return" | "rotate-done" => {
-                    let key = match smoke.targets[smoke.index] {
-                        "rotate-hand" | "rotate-done" => egui::Key::H,
-                        "rotate-crop" => egui::Key::C,
-                        _ => egui::Key::R,
-                    };
-                    smoke.direct_events.push_back(
-                        [true, false]
-                            .map(|pressed| egui::Event::Key {
-                                key,
-                                physical_key: None,
-                                pressed,
-                                repeat: false,
-                                modifiers: Default::default(),
-                            })
-                            .into(),
-                    );
-                }
-                "rotate-shared-zoom" => {
-                    self.viewport.zoom_by(1.3);
-                    self.viewport.pan_to(egui::vec2(0.57, 0.45));
-                }
-                "rotate-fast" | "rotate-smart" => {
-                    self.preferences.preview_quality =
-                        if smoke.targets[smoke.index] == "rotate-fast" {
-                            crate::preferences::PreviewMode::Fast
-                        } else {
-                            crate::preferences::PreviewMode::Smart
-                        };
-                    self.submit(None);
-                }
-                "rotate-first-click" | "rotate-click-applied" => {
-                    let point = self
-                        .viewport
-                        .position_at_uv(if smoke.targets[smoke.index] == "rotate-first-click" {
-                            [0.25, 0.4]
-                        } else {
-                            [0.75, 0.5]
-                        })
-                        .unwrap();
-                    for pressed in [true, false] {
-                        smoke.direct_events.push_back(vec![
-                            egui::Event::PointerMoved(point),
-                            egui::Event::PointerButton {
-                                pos: point,
-                                button: egui::PointerButton::Primary,
-                                pressed,
-                                modifiers: Default::default(),
-                            },
-                        ]);
-                    }
-                }
-                "rotate-click-line" => {
-                    let point = self.viewport.position_at_uv([0.75, 0.5]).unwrap();
-                    smoke
-                        .direct_events
-                        .push_back(vec![egui::Event::PointerMoved(point)]);
-                }
-                "rotate-quarter" => {
-                    self.settings.rotation.turn(true, &mut self.settings.crop);
-                    self.submit(None);
-                }
-                "rotate-draft" | "rotate-freehand-draft" => {
-                    let freehand = smoke.targets[smoke.index] == "rotate-freehand-draft";
-                    if freehand {
-                        smoke.direct_events.push_back(
-                            [true, false]
-                                .map(|pressed| egui::Event::Key {
-                                    key: egui::Key::R,
-                                    physical_key: None,
-                                    pressed,
-                                    repeat: false,
-                                    modifiers: egui::Modifiers::SHIFT,
-                                })
-                                .into(),
-                        );
-                    }
-                    let start = self
-                        .viewport
-                        .position_at_uv(if freehand { [0.75, 0.5] } else { [0.25, 0.4] })
-                        .unwrap();
-                    let end = self
-                        .viewport
-                        .position_at_uv(if freehand { [0.74, 0.6] } else { [0.75, 0.5] })
-                        .unwrap();
-                    smoke.direct_events.push_back(vec![
-                        egui::Event::PointerMoved(start),
-                        egui::Event::PointerButton {
-                            pos: start,
-                            button: egui::PointerButton::Primary,
-                            pressed: true,
-                            modifiers: Default::default(),
-                        },
-                    ]);
-                    smoke
-                        .direct_events
-                        .push_back(vec![egui::Event::PointerMoved(end)]);
-                }
-                "rotate-straight" | "rotate-freehand" => {
-                    let point = self
-                        .viewport
-                        .position_at_uv(if smoke.targets[smoke.index] == "rotate-freehand" {
-                            [0.74, 0.6]
-                        } else {
-                            [0.75, 0.5]
-                        })
-                        .unwrap();
-                    smoke
-                        .direct_events
-                        .push_back(vec![egui::Event::PointerButton {
-                            pos: point,
-                            button: egui::PointerButton::Primary,
-                            pressed: false,
-                            modifiers: Default::default(),
-                        }]);
-                }
+                target if target.starts_with("rotate-") => self.smoke_rotate_enter(),
                 "crop-fast" => {
                     crate::crop_tool::exit(ctx);
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;
@@ -1506,11 +1322,13 @@ impl App {
                 "dehaze-reset" => {
                     let family = self.metadata.as_ref().unwrap().processing_family().unwrap();
                     let scope = crate::editor::Scope::Tool(crate::editor::Section::Corrections);
-                    // Reset uses the configured manual color without enabling background estimation.
+                    // Restore a distinct saved amount, so this reset must render an actual change.
+                    let mut defaults = self.settings.clone();
+                    defaults.dehaze.amount = 35.;
                     self.preferences
                         .editor
                         .defaults
-                        .set(family, scope, &self.settings);
+                        .set(family, scope, &defaults);
                     self.settings.dehaze.shadow = None;
                     self.editor_ui
                         .actions
@@ -2109,15 +1927,22 @@ impl App {
                     self.settings_open = false;
                     // Compatible same-photo selection retains the exact current image.
                     let frame = self.frame.as_ref().unwrap();
-                    smoke.smart_reopen = Some((
-                        std::sync::Arc::downgrade(&frame.texture),
-                        frame.diagnostic_task,
-                        frame.artifact.settings.working_scale,
-                    ));
+                    let thumbnail_revision = self.browser.rendered_revision(&frame.path);
+                    assert!(
+                        thumbnail_revision.is_some(),
+                        "reopen needs a retained browser preview"
+                    );
+                    smoke.smart_reopen = Some(SmartReopen {
+                        texture: std::sync::Arc::downgrade(&frame.texture),
+                        task: frame.diagnostic_task,
+                        scale: frame.artifact.settings.working_scale,
+                        thumbnail_revision,
+                    });
                     let path = self.selected.clone().unwrap();
                     // This fixture authors edits directly, so seed its nonpersistent recipe.
                     self.sidecars.set_memory_only(true);
                     self.sidecars.apply(path.clone(), self.settings.clone());
+                    self.multi_edit.observe_requested(&path, &self.settings);
                     self.select(path, false);
                 }
                 "fast" | "fast-again" => {
@@ -2385,11 +2210,13 @@ impl App {
                                 || frame.artifact.settings.color_range_preview.is_some()
                                 || frame.framing_preview
                                 || self.browser.rendered_revision(&frame.path)
-                                    == Some(frame.revision))
+                                    // Thumbnails identify the delivered image, even when
+                                    // selection or Before/After starts a new presentation.
+                                    == Some(frame.diagnostic_task.revision))
                     })
             };
             let ready =
-                ready && (smoke.targets != SCREENSHOT_TARGETS || self.browser.thumbnails_ready());
+                ready && (smoke.targets != screenshot::TARGETS || self.browser.thumbnails_ready());
             let ready = ready
                 && (smoke.targets != BROWSER_TARGETS
                     || (self.browser.thumbnails_ready() && self.browser.metadata_ready()));
@@ -2553,54 +2380,14 @@ impl App {
                             _ => true,
                         }));
             let ready = ready
-                && (smoke.targets != ROTATE_TARGETS
-                    || smoke.preview_pending()
-                    || (smoke.direct_events.is_empty()
-                        && match smoke.targets[smoke.index] {
-                            "rotate-draft" => ctx.input(|i| i.pointer.primary_down()),
-                            "rotate-freehand-draft" => {
-                                crate::rotate_tool::displayed(ctx, self.settings.rotation)
-                                    != self.settings.rotation
-                            }
-                            "rotate-straight" => self.settings.rotation.degrees < -1.,
-                            "rotate-click-applied" => {
-                                self.settings.rotation.degrees
-                                    < smoke.authored.as_ref().unwrap().rotation.degrees - 1.
-                            }
-                            "rotate-crop" => crate::crop_tool::active(ctx),
-                            "rotate-return" => crate::rotate_tool::editing(ctx),
-                            "rotate-freehand" => {
-                                self.settings.rotation.degrees
-                                    > smoke.authored.as_ref().unwrap().rotation.degrees
-                            }
-                            _ => true,
-                        }
-                        && self.frame.as_ref().is_some_and(|f| {
-                            f.revision == self.revision
-                                && crate::rendering::matching::same_authored_edits(
-                                    &f.requested,
-                                    &self.settings,
-                                )
-                                && f.framing_preview
-                                    == matches!(
-                                        smoke.targets[smoke.index],
-                                        "rotate-ready"
-                                            | "rotate-draft"
-                                            | "rotate-straight"
-                                            | "rotate-first-click"
-                                            | "rotate-click-line"
-                                            | "rotate-click-applied"
-                                            | "rotate-quarter"
-                                            | "rotate-freehand-draft"
-                                            | "rotate-freehand"
-                                            | "rotate-reopen"
-                                            | "rotate-fast"
-                                            | "rotate-smart"
-                                            | "rotate-crop"
-                                            | "rotate-shared-zoom"
-                                            | "rotate-return"
-                                    )
-                        })));
+                && (smoke.targets != rotate::TARGETS
+                    || rotate::ready(
+                        ctx,
+                        smoke,
+                        &self.settings,
+                        self.frame.as_ref(),
+                        self.revision,
+                    ));
             let ready =
                 ready && (smoke.targets != STATUS_TARGETS || smoke.direct_events.is_empty());
             if ready {
@@ -2621,7 +2408,7 @@ impl App {
                         return;
                     }
                 }
-                if smoke.targets == SCREENSHOT_TARGETS && !smoke.preview_pending() {
+                if smoke.targets == screenshot::TARGETS && !smoke.preview_pending() {
                     // Let the selected organizer row and its newly visible thumbnails settle.
                     smoke.settled_frames += 1;
                     if smoke.settled_frames < 3 {
@@ -2635,532 +2422,5 @@ impl App {
                 smoke.settled_frames = 0;
             }
         }
-    }
-}
-
-impl App {
-    /// The existing screenshot driver also exercises bounded multi-photo delivery.
-    fn smoke_multi_tick(&mut self, ctx: &egui::Context) {
-        let mut smoke = self.smoke.take().unwrap();
-        if let Some(close_at) = smoke.close_at {
-            if std::time::Instant::now() >= close_at {
-                smoke.capture.request_close(ctx);
-            } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(200));
-            }
-            self.smoke = Some(smoke);
-            return;
-        }
-        if smoke.index >= smoke.targets.len() {
-            smoke.capture.request_close(ctx);
-            self.smoke = Some(smoke);
-            return;
-        }
-        let target = smoke.targets[smoke.index];
-        let unchanged_selection_count = match target {
-            "multi-replace" | "multi-switch-a" | "multi-switch-b" => Some(1),
-            "multi-option" | "multi-option-a" => Some(2),
-            _ => None,
-        };
-        let unchanged_active = match target {
-            "multi-replace" | "multi-switch-a" | "multi-option-a" => smoke.multi_paths.first(),
-            "multi-option" | "multi-switch-b" => smoke.multi_paths.get(1),
-            _ => None,
-        };
-        if unchanged_selection_count == Some(self.edit_selection.paths().len())
-            && self.selected.as_ref() == unchanged_active
-            && smoke.direct_events.is_empty()
-        {
-            // Check while work may still be pending, as well as at the settled screenshot.
-            self.smoke_multi_assert(&smoke, target);
-        }
-        let screenshot = ctx.input(|input| {
-            input.events.iter().find_map(|event| {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    Some(image.clone())
-                } else {
-                    None
-                }
-            })
-        });
-        if let Some(image) = screenshot {
-            let progress = self.worker.progress.snapshot();
-            if target != "preview" {
-                assert!(
-                    !self.worker.busy(),
-                    "settled multi-edit capture still has pending renders"
-                );
-                assert!(
-                    progress.is_none_or(|progress| !progress.running()),
-                    "multi-edit progress is still running after all renders settled"
-                );
-            }
-            if target == "multi-eight" {
-                smoke.multi_cached_textures = smoke
-                    .multi_paths
-                    .iter()
-                    .take(2)
-                    .map(|path| {
-                        let frame = self
-                            .frame
-                            .as_ref()
-                            .filter(|frame| frame.path == *path)
-                            .or_else(|| self.multi_edit_frame(path))
-                            .unwrap();
-                        std::sync::Arc::downgrade(&frame.texture)
-                    })
-                    .collect();
-            }
-            self.smoke_multi_assert(&smoke, target);
-            {
-                let _artifact = foveonic::diagnostics::scope(
-                    foveonic::diagnostics::Category::Scenario,
-                    "smoke.artifact.png",
-                );
-                std::fs::create_dir_all(&smoke.directory).unwrap();
-                let bytes: Vec<_> = image
-                    .pixels
-                    .iter()
-                    .flat_map(|pixel| pixel.to_array())
-                    .collect();
-                image::save_buffer(
-                    smoke.directory.join(format!("{target}.png")),
-                    &bytes,
-                    image.width() as u32,
-                    image.height() as u32,
-                    image::ColorType::Rgba8,
-                )
-                .unwrap();
-            }
-            let photos: Vec<_> = self
-                .edit_selection
-                .paths()
-                .iter()
-                .map(|path| {
-                    let frame = self
-                        .frame
-                        .as_ref()
-                        .filter(|frame| frame.path == *path)
-                        .or_else(|| self.multi_edit_frame(path));
-                    let cached = smoke.multi_paths.iter().position(|candidate| candidate == path)
-                        .and_then(|index| smoke.multi_cached_textures.get(index))
-                        .and_then(std::sync::Weak::upgrade);
-                    serde_json::json!({"path":path,"requested":self.multi_edit.settings(path),
-                    "delivered":frame.map(|frame| &frame.requested),
-                    "revision":frame.map(|frame| frame.revision),
-                    "scale":frame.map(|frame| frame.artifact.settings.working_scale.divisor()),
-                    "extent":frame.map(|frame| frame.texture.description().extent),
-                    "same_cached_texture":frame.zip(cached.as_ref()).map(|(frame,cached)| std::sync::Arc::ptr_eq(&frame.texture,cached))})
-                })
-                .collect();
-            let memory = self.worker.memory_status();
-            std::fs::write(smoke.directory.join(format!("{target}.json")),
-                serde_json::to_vec_pretty(&serde_json::json!({"target":target,
-                    "process_id":std::process::id(),"browser_count":self.browser.processing_selection(self.selected.as_deref()).len(),
-                    "active":self.selected,"request_revision":self.revision,"worker_busy":self.worker.busy(),
-                    "progress_running":progress.map(|progress| progress.running()),"progress_fraction":progress.map(|progress| progress.fraction),
-                    "photos":photos,"retained":memory.resources,
-                    "over_budget_bytes":memory.over_budget_bytes,"sweep_group_ms":smoke.multi_sweep_ms})).unwrap()).unwrap();
-            smoke.diagnostic_checked(self.frame.as_ref(), self.worker.busy());
-            smoke.index += 1;
-            smoke.awaiting = false;
-            smoke.settled_frames = 0;
-            if smoke.index < smoke.targets.len() {
-                smoke.diagnostic_begin();
-                self.smoke_multi_enter(ctx, &mut smoke);
-            } else if let Some(seconds) = std::env::var_os("FOVEONIC_GUI_SMOKE_HOLD_SECONDS")
-                .and_then(|value| value.to_str().and_then(|value| value.parse::<u64>().ok()))
-            {
-                smoke.close_at =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(seconds));
-            } else {
-                smoke.capture.request_close(ctx);
-            }
-        } else if !smoke.awaiting && self.smoke_multi_ready(&smoke, target) {
-            if target == "multi-choice" && self.smoke_multi_sweep(&mut smoke) {
-                smoke.settled_frames = 0;
-            } else if target == "multi-eight" && smoke.multi_expected.is_empty() {
-                smoke.multi_paths = self.edit_selection.paths().to_vec();
-                assert_eq!(
-                    smoke.multi_paths.len(),
-                    8,
-                    "multi-edit smoke needs at least eight photographs"
-                );
-                for (index, path) in smoke.multi_paths.iter().enumerate() {
-                    let mut settings = self.multi_edit.settings(path).unwrap().clone();
-                    settings.exposure = index as f32 * 0.1;
-                    settings.exposure_auto = false;
-                    settings.tone_enabled = true;
-                    settings.photographic.tone_method =
-                        foveonic::render::PhotographicMethod::Universal;
-                    settings.photographic.base_response = if index % 2 == 0 {
-                        foveonic::render::BaseResponse::Camera
-                    } else {
-                        foveonic::render::BaseResponse::Natural
-                    };
-                    self.sidecars.apply(path.clone(), settings.clone());
-                    self.multi_edit.observe_requested(path, &settings);
-                    smoke.multi_expected.push(settings);
-                }
-                self.settings = self
-                    .multi_edit
-                    .settings(self.selected.as_ref().unwrap())
-                    .unwrap()
-                    .clone();
-                assert!(self.submit_multi_edit());
-            } else {
-                // Let injected input, layout and the last accepted image reach the screen.
-                smoke.settled_frames += 1;
-                if smoke.settled_frames >= 3 {
-                    smoke.awaiting = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
-                }
-            }
-        } else {
-            smoke.settled_frames = 0;
-        }
-        ctx.request_repaint_after(std::time::Duration::from_millis(25));
-        self.smoke = Some(smoke);
-    }
-
-    fn smoke_multi_ready(&mut self, smoke: &Smoke, target: &str) -> bool {
-        if target == "preview" {
-            return self
-                .selected
-                .as_ref()
-                .is_some_and(|path| self.browser.thumbnail(path).is_some());
-        }
-        if target == "multi-open" {
-            return !self.folder_loader.loading()
-                && self.browser.import_mode
-                && self.sidecars.ready()
-                && !self.worker.busy();
-        }
-        if !smoke.direct_events.is_empty() || self.worker.busy() {
-            return false;
-        }
-        if target == "final" {
-            return self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| self.selected.as_ref() == Some(&frame.path));
-        }
-        let count = match target {
-            "multi-replace" | "multi-switch-a" | "multi-switch-b" | "multi-remove"
-            | "multi-before" | "multi-current" => 1,
-            "multi-option" | "multi-option-a" | "multi-relative" | "multi-option-return" => 2,
-            _ => 8,
-        };
-        if self.edit_selection.paths().len() != count {
-            return false;
-        }
-        if target == "multi-before" {
-            return self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| frame.rendition == crate::editor::Rendition::Camera);
-        }
-        if count > 1 && !self.multi_edit.editable_ready() {
-            return false;
-        }
-        self.edit_selection.paths().iter().all(|path| {
-            let frame = self
-                .frame
-                .as_ref()
-                .filter(|frame| {
-                    frame.path == *path && frame.rendition == crate::editor::Rendition::Current
-                })
-                .or_else(|| self.multi_edit_frame(path));
-            let expected = smoke
-                .multi_paths
-                .iter()
-                .position(|candidate| candidate == path)
-                .map(|index| &smoke.multi_expected[index]);
-            frame.is_some_and(|frame| {
-                expected.is_none_or(|expected| {
-                    crate::rendering::matching::same_authored_edits(&frame.requested, expected)
-                }) && frame.artifact.settings.working_scale.divisor() == 8
-            })
-        })
-    }
-
-    fn smoke_multi_assert(&self, smoke: &Smoke, target: &str) {
-        if target.starts_with("multi-") && target != "multi-open" {
-            assert!(
-                self.browser.import_mode,
-                "multi-edit smoke must keep Import's memory-only policy"
-            );
-        }
-        if matches!(
-            target,
-            "multi-replace" | "multi-switch-a" | "multi-remove" | "multi-before" | "multi-current"
-        ) {
-            assert_eq!(self.edit_selection.paths(), &smoke.multi_paths[..1]);
-            assert_eq!(self.selected.as_ref(), smoke.multi_paths.first());
-        }
-        if target == "multi-switch-b" {
-            assert_eq!(self.edit_selection.paths(), &smoke.multi_paths[1..2]);
-            assert_eq!(self.selected.as_ref(), smoke.multi_paths.get(1));
-        }
-        if matches!(
-            target,
-            "multi-option" | "multi-option-a" | "multi-relative" | "multi-option-return"
-        ) {
-            assert_eq!(self.edit_selection.paths(), &smoke.multi_paths[..2]);
-        }
-        if matches!(
-            target,
-            "multi-replace"
-                | "multi-option"
-                | "multi-switch-a"
-                | "multi-switch-b"
-                | "multi-option-a"
-        ) {
-            for path in self.edit_selection.paths() {
-                let index = smoke
-                    .multi_paths
-                    .iter()
-                    .position(|candidate| candidate == path)
-                    .unwrap();
-                let cached = &smoke.multi_cached_textures[index];
-                let cached = cached
-                    .upgrade()
-                    .expect("unchanged overview texture was discarded");
-                let frame = self
-                    .frame
-                    .as_ref()
-                    .filter(|frame| frame.path == *path)
-                    .or_else(|| self.multi_edit_frame(path))
-                    .unwrap();
-                assert_eq!(
-                    frame.artifact.settings.working_scale.divisor(),
-                    8,
-                    "selecting an unchanged overview photo changed its working scale"
-                );
-                assert!(
-                    std::sync::Arc::ptr_eq(&cached, &frame.texture),
-                    "selecting an unchanged overview photo replaced its cached image"
-                );
-            }
-        }
-        if matches!(target, "multi-shift" | "multi-hand" | "multi-choice") {
-            assert_eq!(self.edit_selection.paths(), smoke.multi_paths);
-        }
-        if matches!(target, "multi-remove" | "multi-before" | "multi-current") {
-            assert_eq!(
-                self.sidecars.requested_settings(&smoke.multi_paths[1]),
-                Some(&smoke.multi_expected[1]),
-                "removing another target or showing Before lost its latest edits"
-            );
-        }
-        if target == "multi-hand" {
-            assert_eq!(
-                crate::photo_tools::selected(&self.context),
-                crate::photo_tools::Tool::Hand
-            );
-        }
-    }
-
-    fn smoke_multi_enter(&mut self, ctx: &egui::Context, smoke: &mut Smoke) {
-        use crate::multi_edit_controls::{Edit, Mapping, NumberChange};
-        let target = smoke.targets[smoke.index];
-        match target {
-            "final" => {}
-            "multi-open" => {
-                let folder = self.selected.as_ref().unwrap().parent().unwrap().to_owned();
-                self.open(folder, crate::preferences::FolderMode::Import);
-            }
-            "multi-eight" => {
-                self.preferences.multi_edit_limit = 8;
-                self.preferences.collapsed =
-                    [Section::Navigator, Section::Scopes, Section::Metadata].into();
-                self.preferences
-                    .editing_sections
-                    .retain(|section| *section != crate::preferences::EditingSection::Tone);
-                self.preferences
-                    .editing_sections
-                    .insert(0, crate::preferences::EditingSection::Tone);
-                crate::photo_tools::pointer(ctx);
-                self.browser.set_actions(vec![(
-                    crate::shortcuts::BrowserAction::SelectAll,
-                    egui::Modifiers::COMMAND,
-                )]);
-            }
-            "multi-replace" | "multi-switch-a" => {
-                self.smoke_multi_click(ctx, smoke, 0, egui::Modifiers::NONE)
-            }
-            "multi-switch-b" => self.smoke_multi_click(ctx, smoke, 1, egui::Modifiers::NONE),
-            "multi-option-a" => self.smoke_multi_click(ctx, smoke, 0, egui::Modifiers::ALT),
-            "multi-option" | "multi-option-return" => {
-                self.smoke_multi_click(ctx, smoke, 1, egui::Modifiers::ALT)
-            }
-            "multi-relative" | "multi-remove" => {
-                let delta = if target == "multi-relative" {
-                    0.25
-                } else {
-                    -0.125
-                };
-                let edit = Edit::Number {
-                    pointer: "/exposure".into(),
-                    change: NumberChange::Relative(delta),
-                    range: [-4., 4.],
-                    mapping: Mapping::Identity,
-                };
-                assert!(self.multi_edit.apply_edits(&[edit], &mut self.sidecars));
-                for path in self.edit_selection.paths() {
-                    let index = smoke
-                        .multi_paths
-                        .iter()
-                        .position(|candidate| candidate == path)
-                        .unwrap();
-                    smoke.multi_expected[index] = self.multi_edit.settings(path).unwrap().clone();
-                }
-                self.settings = self
-                    .multi_edit
-                    .settings(self.selected.as_ref().unwrap())
-                    .unwrap()
-                    .clone();
-                assert!(self.submit_multi_edit());
-                if target == "multi-relative" {
-                    // Viewing A preserves the two-target subset before removing B.
-                    if self.selected.as_ref() != smoke.multi_paths.first() {
-                        self.select(smoke.multi_paths[0].clone(), true);
-                    }
-                } else {
-                    self.smoke_multi_click(ctx, smoke, 1, egui::Modifiers::ALT);
-                }
-            }
-            "multi-before" => self.toggle_before(crate::editor::Rendition::Camera),
-            "multi-current" => self.toggle_before(crate::editor::Rendition::Camera),
-            "multi-shift" => {
-                // A normal click supplies the range anchor without changing its active context.
-                self.comparison_selection = Some(crate::viewport_selection::Request {
-                    path: smoke.multi_paths[0].clone(),
-                    gesture: crate::viewport_selection::Gesture::Replace,
-                });
-                self.smoke_multi_click(ctx, smoke, 7, egui::Modifiers::SHIFT);
-            }
-            "multi-hand" => {
-                crate::photo_tools::hand(ctx);
-                self.smoke_multi_click(ctx, smoke, 1, egui::Modifiers::NONE);
-            }
-            "multi-choice" => {
-                crate::photo_tools::pointer(ctx);
-                let edit = Edit::Assign {
-                    pointer: "/photographic/base_response".into(),
-                    value: serde_json::to_value(foveonic::render::BaseResponse::Natural).unwrap(),
-                };
-                assert!(self.multi_edit.apply_edits(&[edit], &mut self.sidecars));
-                for (index, path) in smoke.multi_paths.iter().enumerate() {
-                    smoke.multi_expected[index] = self.multi_edit.settings(path).unwrap().clone();
-                    assert_eq!(
-                        smoke.multi_expected[index].photographic.base_response,
-                        foveonic::render::BaseResponse::Natural
-                    );
-                }
-                self.settings = self
-                    .multi_edit
-                    .settings(self.selected.as_ref().unwrap())
-                    .unwrap()
-                    .clone();
-                assert!(self.submit_multi_edit());
-            }
-            _ => unreachable!("unknown multi-edit smoke step"),
-        }
-    }
-
-    fn smoke_multi_click(
-        &self,
-        ctx: &egui::Context,
-        smoke: &mut Smoke,
-        index: usize,
-        modifiers: egui::Modifiers,
-    ) {
-        let path = &smoke.multi_paths[index];
-        let response = ctx
-            .read_response(egui::Id::new(("comparison photo", path)))
-            .unwrap_or_else(|| panic!("comparison tile is not visible: {}", path.display()));
-        let pos = response.rect.center();
-        foveonic::diagnostics::event(
-            foveonic::diagnostics::Category::Scenario,
-            "scenario.pointer_click",
-            |fields| {
-                fields
-                    .str("source", &path.to_string_lossy())
-                    .u64("photo", foveonic::diagnostics::photo_id(path))
-                    .f64("x", pos.x as f64)
-                    .f64("y", pos.y as f64)
-                    .bool("alt", modifiers.alt)
-                    .bool("shift", modifiers.shift);
-            },
-        );
-        smoke.direct_events.extend([true, false].map(|pressed| {
-            vec![
-                egui::Event::PointerMoved(pos),
-                egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers,
-                },
-            ]
-        }));
-    }
-
-    fn smoke_multi_sweep(&mut self, smoke: &mut Smoke) -> bool {
-        if let Some(started) = smoke.multi_sweep_started.take() {
-            smoke
-                .multi_sweep_ms
-                .push(started.elapsed().as_secs_f64() * 1000.);
-        }
-        if smoke.multi_sweep_ms.len() >= smoke.multi_sweep_groups {
-            return false;
-        }
-        use crate::multi_edit_controls::{Edit, Mapping, NumberChange};
-        let started = std::time::Instant::now();
-        let edit = Edit::Number {
-            pointer: "/exposure".into(),
-            change: NumberChange::Relative(0.01),
-            range: [-4., 4.],
-            mapping: Mapping::Identity,
-        };
-        assert!(
-            self.multi_edit.apply_edits(&[edit], &mut self.sidecars),
-            "multi-edit sweep reached the exposure limit"
-        );
-        for (index, path) in smoke.multi_paths.iter().enumerate() {
-            smoke.multi_expected[index] = self.multi_edit.settings(path).unwrap().clone();
-        }
-        self.settings = self
-            .multi_edit
-            .settings(self.selected.as_ref().unwrap())
-            .unwrap()
-            .clone();
-        assert!(self.submit_multi_edit());
-        smoke.multi_sweep_started = Some(started);
-        true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn readme_recipe_has_fixed_valid_source_view_and_photographic_settings() {
-        let recipe = screenshot_recipe();
-        assert_eq!(recipe.source, "yellow-flowers-and-stroller.x3f");
-        assert_eq!(recipe.window_size, [1325., 1097.]);
-        assert_eq!(recipe.organizer_width, 264.);
-        assert_eq!(recipe.tools_width, 330.);
-        assert!(recipe.zoom.is_finite() && recipe.zoom >= 1.);
-        assert!(recipe.pan.iter().all(|value| (0. ..=1.).contains(value)));
-        recipe.settings.validate().unwrap();
-        assert_eq!(recipe.settings.white_balance, "Sunlight");
-        assert_eq!(recipe.settings.color_mode, "Standard");
-        assert!(recipe.settings.reconstruction.is_some());
-        assert_eq!(recipe.settings.highlight_threshold_ev, Some(0.71));
-        assert_eq!(recipe.settings.tone.highlights, 0.);
-        assert_eq!(SCREENSHOT_TARGETS, ["preview", "readme"]);
     }
 }

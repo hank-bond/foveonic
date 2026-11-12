@@ -260,6 +260,12 @@ pub fn disclosure<R>(
     header: egui::CollapsingHeader,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::CollapsingResponse<R> {
+    // Scripted navigation opens option groups before locating the requested slider.
+    let header = if crate::automation::revealing() {
+        header.open(Some(true))
+    } else {
+        header
+    };
     header.show_unindented(ui, |ui| {
         let start = ui.next_widget_position();
         let body = ui
@@ -540,6 +546,7 @@ pub fn dropdown<R>(
         ui.set_width((outer_width - margin).max(1.));
         menu_contents(ui)
     });
+    crate::automation::choice(ui, "dropdown", "", None, None, &response.response);
     ui.data_mut(|d| d.insert_temp(width_key, response.response.rect.width()));
     ui.spacing_mut().button_padding = previous.button_padding;
     ui.spacing_mut().interact_size = previous.interact_size;
@@ -564,6 +571,7 @@ pub fn button(ui: &mut egui::Ui, label: &str, on: bool, minimum: egui::Vec2) -> 
         .inner;
     ui.painter()
         .set(background, frame(ui, &response, on, response.rect));
+    crate::automation::button(label, &response);
     response
 }
 
@@ -586,6 +594,7 @@ pub fn button_sized(ui: &mut egui::Ui, label: &str, on: bool, size: ControlSize)
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
     });
+    crate::automation::button(label, &response);
     response
 }
 
@@ -834,6 +843,12 @@ pub fn checkbox_sized(
     size: ControlSize,
 ) -> egui::Response {
     let side = size.side();
+    let label = label.into();
+    let observed_label = if crate::automation::enabled() {
+        label.text().to_owned()
+    } else {
+        String::new()
+    };
     let background = ui.painter().add(egui::Shape::Noop);
     let (response, icon) = ui
         .scope(|ui| {
@@ -857,6 +872,14 @@ pub fn checkbox_sized(
         .inner;
     ui.painter()
         .set(background, frame(ui, &response, false, icon));
+    crate::automation::choice(
+        ui,
+        "checkbox",
+        &observed_label,
+        Some(*value),
+        Some(icon),
+        &response,
+    );
     response
 }
 
@@ -1015,6 +1038,7 @@ pub fn menu_value<T: PartialEq>(
     label: &str,
 ) -> egui::Response {
     let mut response = menu_row(ui, label, *value == choice);
+    crate::automation::choice(ui, "menu", label, Some(*value == choice), None, &response);
     if response.clicked() {
         crate::multi_edit_controls::choice_clicked(ui.ctx());
         if *value != choice || crate::multi_edit_controls::mixed(ui.ctx()) {

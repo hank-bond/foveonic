@@ -392,11 +392,7 @@ impl Runtime {
         }
     }
     pub fn retain(&mut self, frame: worker::Frame) {
-        if frame.rendition != crate::editor::Rendition::Current
-            || frame.output != "final"
-            || frame.framing_preview
-            || frame.artifact.settings.preview_region.is_some()
-        {
+        if !frame.is_photographic() {
             return;
         }
         if let Some(photo) = self.photos.get_mut(&frame.path) {

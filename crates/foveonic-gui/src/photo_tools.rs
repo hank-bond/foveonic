@@ -118,8 +118,10 @@ pub fn set_viewport_rect(ctx: &egui::Context, rect: egui::Rect) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::new("photograph viewport"), rect));
 }
 pub fn viewport_contains(ctx: &egui::Context, pos: egui::Pos2) -> bool {
+    viewport_rect(ctx).is_some_and(|rect| rect.contains(pos))
+}
+pub fn viewport_rect(ctx: &egui::Context) -> Option<egui::Rect> {
     ctx.data_mut(|data| data.get_temp::<egui::Rect>(egui::Id::new("photograph viewport")))
-        .is_some_and(|rect| rect.contains(pos))
 }
 pub fn menu_open(ctx: &egui::Context) -> bool {
     crop_tool::menu_open(ctx) || rotate_tool::menu_open(ctx) || editor::direct_color::menu_open(ctx)

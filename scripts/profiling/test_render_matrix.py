@@ -13,18 +13,18 @@ from scenarios import application_result
 
 
 FAKE_RENDERER = '''#!/usr/bin/env python3
-import json, pathlib, sys
+import hashlib, json, pathlib, sys
 source=pathlib.Path(sys.argv[1]); output=pathlib.Path(sys.argv[2]); output.mkdir()
 quality=sys.argv[sys.argv.index('--preview-quality')+1]
 goldens=pathlib.Path(sys.argv[sys.argv.index('--goldens')+1]); goldens.mkdir(parents=True, exist_ok=True)
 golden=goldens/(source.stem+'.f32')
-samples=source.read_bytes()+quality.encode()
+samples=hashlib.sha256(source.read_bytes()+quality.encode()).digest()[:24]
 if golden.exists() and golden.read_bytes()!=samples:
     sys.exit('non-equivalent output')
 if not golden.exists():golden.write_bytes(samples)
 (output/(source.stem+'-0.tiff')).write_bytes(b'tiff')
 scale={'full':1,'fast':2,'draft':4,'thumb':8}[quality]
-for event,data in [('session',{'settings':{'mode':'test'},'scale_divisor':scale,'family':'Merrill'}),('processing',{'effective_scale_divisor':scale}),('validation',{'digest':'abc','extent':[1,2],'layout':'Rgb32Float','view_extent':[1,2],'view_crop':[0,0,1,2],'view_rotation':0})]:
+for event,data in [('session',{'settings':{'mode':'test'},'scale_divisor':scale,'family':'Merrill'}),('processing',{'effective_scale_divisor':scale}),('validation',{'digest':'abc','extent':[1,2],'layout':'Rgb32Float','space':'test','linear_white':1,'view_baked':False,'endianness':'little','view_extent':[1,2],'view_crop':[0,0,1,2],'view_rotation':0})]:
     print(json.dumps({'event':event,'data':data}))
 '''
 
@@ -62,7 +62,14 @@ class MatrixTests(unittest.TestCase):
                 self.assertEqual(headless['assertions'][0][key],application['assertions'][0][key])
             golden=root/'baseline/goldens/sample-thumb/sample.f32'
             original=golden.read_bytes()
-            self.assertTrue(run(binary,cases,root/'repeat',root/'baseline')['passed'])
+            repeated=run(binary,cases,root/'repeat',root/'baseline')
+            self.assertTrue(repeated['passed'])
+            self.assertEqual(repeated['cases'][0]['test_result']['assertions'][-1]['name'],'image_samples')
+            binary.write_text(FAKE_RENDERER.replace(".digest()[:24]", ".digest()[-24:]"))
+            changed_output=run(binary,cases,root/'different-output',root/'baseline')
+            self.assertFalse(changed_output['passed'])
+            self.assertEqual(changed_output['cases'][0]['test_result']['assertions'][-1]['outcome'],'failed')
+            self.assertEqual(golden.read_bytes(),original)
             source.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'different source identities'):
                 run(binary,cases,root/'changed',root/'baseline')

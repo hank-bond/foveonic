@@ -4,7 +4,7 @@ from copy import deepcopy
 import unittest
 
 from compare import compare_reports
-from scenarios import matched_workload, value_hash
+from interaction_latency import matched_workload, value_hash
 
 
 def workload():
@@ -12,7 +12,8 @@ def workload():
               'inputs':[{'sha256':'raw-sha','settings':'camera-defaults','staged_source':'/one/photo'}],
               'hardware':{'system':'test','machine':'test-cpu','logical_cpus':8},
               'measurement':{'input_kind':'baseline','scenario_poll_ms':20}}
-    result={'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10_000_000_000},'hardware':{'adapter':'Test GPU','backend':'Test','vendor':1,'device':2},'steps':[{'action':'initial-selection','photos':[{'source':'/one/photo','settings':{'exposure':0.},'scale_divisor':8}]}]}
+    geometry={'window_points':[1200,800],'viewport_points':[800,600],'pixels_per_point':2.}
+    result={'geometry':geometry,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10_000_000_000},'hardware':{'adapter':'Test GPU','backend':'Test','vendor':1,'device':2},'steps':[{'geometry':geometry,'action':'initial-selection','photos':[{'source':'/one/photo','settings':{'exposure':0.},'scale_divisor':8}]}]}
     return manifest,result
 
 
@@ -48,9 +49,17 @@ class CompareTests(unittest.TestCase):
                      lambda m,n:n['steps'][0]['photos'][0].update(settings={'exposure':1.}),
                      lambda m,n:m['hardware'].update(logical_cpus=16),
                      lambda m,n:n['hardware'].update(adapter='Different GPU'),
+                     lambda m,n:n['geometry'].update(pixels_per_point=1.),
                      lambda m,n:m['scenario'].update(repeats=4)):
             changed=deepcopy(manifest);actual=deepcopy(native);edit(changed,actual)
             self.assertNotEqual(key,matched_workload(changed,actual))
+
+    def test_missing_geometry_cannot_be_used_for_latency_comparison(self):
+        candidate=report([10])
+        candidate['workload_key']['descriptor']['geometry']=None
+        candidate['workload_key']['sha256']=value_hash(candidate['workload_key']['descriptor'])
+        with self.assertRaisesRegex(ValueError,'complete, consistent'):
+            compare_reports(report([10]),candidate)
 
     def test_mismatched_input_keys_are_rejected(self):
         before=report([10]);after=report([10])

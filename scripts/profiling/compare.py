@@ -7,8 +7,8 @@ import json
 import math
 from pathlib import Path
 
-from scenarios import value_hash
 from trace_analysis import distribution
+from interaction_latency import geometry_identity, value_hash
 
 
 def baseline_samples(report):
@@ -22,6 +22,8 @@ def baseline_samples(report):
     if (not key or report.get('workload_consistent') is not True or
             value_hash(key['descriptor'])!=key['sha256'] or
             key['descriptor'].get('first_current_complete') is not True or
+            geometry_identity(key['descriptor'].get('geometry',{})) is None or
+            not key['descriptor'].get('geometry_complete') or
             not key['descriptor'].get('hardware',{}).get('application')):
         raise ValueError('report lacks a complete, consistent matched workload key')
     samples=defaultdict(list)
@@ -78,7 +80,8 @@ def compare_reports(before, after, default_budget=None, action_budgets=None):
                          'after':[trial['artifacts'] for trial in after['trials']]},
             'limits':['Budgets are caller-supplied. Without a budget this command reports deltas without a pass/fail threshold.',
                       'Median and nearest-rank p95 describe these samples, not statistical significance.',
-                      'Hardware matching includes recorded host and actual application adapter/device descriptors. Window/viewport geometry is not recorded and must be matched separately.']}
+                      'Workload matching includes recorded host, application GPU, window/viewport geometry and pixel density.',
+                      'Controlled-delivery journeys include intentional harness waiting and are not natural rendering throughput measurements.']}
 
 
 def report_identity(path):

@@ -51,7 +51,7 @@ Removed view-only exposure, GUI table plotting, and the superseded RGB-gain/link
 
 A pointer fixture reproduced a slider rerender regression caused by replacing the slider response to add double-click sensing. Controls now compare actual before/after samples. Focused numeric fields nudge by 0.1 for floats or 1 for integers, with per-parameter overrides, bounds enforcement, preserved precision/focus, and unchanged mouse-drag sensitivity.
 
-The cleanup pass shares viewport/navigator mapping, isolates native smoke orchestration in `smoke.rs` with named state, exercises actual worker submit/clear methods in its pending-request test, and consolidates historical progress notes. Processing defaults and scheduling policy are unchanged.
+The cleanup pass shares viewport/navigator mapping, isolates native smoke orchestration in the [smoke modules](../crates/foveonic-gui/src/smoke/AGENTS.md) with named state, exercises actual worker submit/clear methods in its pending-request test, and consolidates historical progress notes. Processing defaults and scheduling policy are unchanged.
 
 ## Resize correction
 

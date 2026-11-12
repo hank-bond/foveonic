@@ -190,6 +190,8 @@ After each unit, update this plan with its source checkpoint, accepted name/owne
 
 ## Progress
 
+The expanded [behavioral acceptance checks](./behavioral-testing.md#pending-edit-re-add-failure) exposed a pending edit that was admitted but skipped at the final UI view check, then coalesced without re-delivery when its photo was re-added. The owner approved focused result-retention and cache-off browser-preview fixes. Both now pass their original cases and related selection, Smart, Before/After and lifecycle checks. These changes retain the current coordinator and execution boundaries. See the behavioral plan for validation before choosing the next ownership slice.
+
 - [x] Record the owner's six goals and incremental review/delegation requirements.
 - [x] Review current source seams and existing profiling evidence with three read-only agents.
 - [x] Establish the architecture documentation starting structure and replace the earlier speculative type catalog with a smaller provisional model.

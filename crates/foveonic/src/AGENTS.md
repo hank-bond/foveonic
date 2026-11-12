@@ -47,7 +47,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[preview.rs](./preview.rs)** Decodes embedded bitmap and JPEG previews while retaining their declared colors at RGB16 precision.
 - **[preview_color.rs](./preview_color.rs)** Preserves embedded display colors from camera metadata and JPEG profiles in declared RGB16 spaces.
 - **[preview_pixels.rs](./preview_pixels.rs)** Resizes bounded preview samples in linear light while retaining their declared RGB primaries.
-- **[profile.rs](./profile.rs)** Collects host/GPU timings and engine-owned transfer, submission, and allocation counts.
+- **[profile.rs](./profile.rs)** Collects render timings, activity counts and replayable diagnostic settings.
 - **[recipe.rs](./recipe.rs)** Keeps compact parameter fingerprints with shared immutable payloads and exact collision checks.
 - **[render.rs](./render.rs)** Shares GPU engine entry points for photographic rendering, inspection, display, and export.
 - **[review.rs](./review.rs)** Persists independent star ratings in a bounded per-folder review file without touching editing recipes.

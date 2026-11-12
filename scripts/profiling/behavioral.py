@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 
@@ -114,7 +115,27 @@ def report_coverage(fixtures, results):
                        'Other camera RAW sizes, modes and conditional controls require declared fixtures and cases.']}
 
 
-def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, disk_cache_bytes=0, background=True, selection=None, provenance=None):
+def run_scenario(command, log):
+    """Let the scenario runner release its owned app before returning an interrupt."""
+    process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        return process.wait()
+    except BaseException:
+        if process.poll() is None:
+            try:
+                process.send_signal(signal.SIGINT)
+            except ProcessLookupError:
+                pass
+            try:
+                # The scenario runner allows ten seconds for its app to exit.
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
+
+
+def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, disk_cache_bytes=0, background=True, selection=None, provenance=None, compare_images=None):
     binary = binary.resolve(strict=True)
     validate(fixtures, cases)
     if not fixtures or not cases:
@@ -123,6 +144,8 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
         raise ValueError('traced behavioral runs need a trace processor')
     if disk_cache_bytes < 0:
         raise ValueError('disk cache budget must be nonnegative')
+    if compare_images is not None:
+        compare_images = compare_images.resolve(strict=True)
     directory.mkdir(parents=True, exist_ok=False)
     report = {'schema_version':1, 'kind':'slider-behavior-matrix', 'mode':mode,
               'binary':str(binary), 'disk_cache_bytes':disk_cache_bytes, 'background':background,
@@ -145,12 +168,14 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
                            '--initial-values',case.get('initial_values','mixed'), '--theme',theme,
                            '--drag-pattern',case.get('pattern','forward'),
                            '--quality','thumb', '--mode',mode, '--trials','1', '--disk-cache-bytes',str(disk_cache_bytes)]
+                    if compare_images:
+                        cmd += ['--compare-images',str(compare_images)]
                     if trace_processor:
                         cmd += ['--trace-processor',str(trace_processor)]
                     if background:
                         cmd += ['--background']
                     with (directory/(name+'.log')).open('w') as log:
-                        process = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
+                        returncode = run_scenario(cmd, log)
                     result_path = out/'trial-00/evidence/scenario-result.json'
                     native = json.loads(result_path.read_text()) if result_path.exists() else {}
                     failure = native.get('failure')
@@ -159,11 +184,11 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
                         failure = json.loads(shared_path.read_text()).get('failure')
                     if not native:
                         failure = 'scenario did not produce a result; inspect the log'
-                    elif process.returncode and not failure:
+                    elif returncode and not failure:
                         failure = 'scenario runner failed; inspect the log'
                     report['results'].append({'fixture':fixture['name'], 'family':fixture['family'],
                         'raw_size':fixture.get('raw_size','unspecified'), 'case':case['name'], 'theme':theme,
-                        'pointer':case['pointer'], 'directory':str(out), 'passed':process.returncode==0 and native.get('passed') is True,
+                        'pointer':case['pointer'], 'directory':str(out), 'passed':returncode==0 and native.get('passed') is True,
                         'failure':failure})
                     print(name+': '+('passed' if report['results'][-1]['passed'] else 'FAILED'),flush=True)
                     report['coverage'] = report_coverage(fixtures, report['results'])
@@ -189,6 +214,7 @@ def main():
     parser.add_argument('--list',action='store_true',help='show the selected runs without opening the app')
     parser.add_argument('--mode',choices=['off','wall'],default='off')
     parser.add_argument('--trace-processor',type=Path)
+    parser.add_argument('--compare-images',type=Path,metavar='RENDERER',help='compare settled app frames with fresh renders')
     parser.add_argument('--disk-cache-bytes',type=int,default=0,help='optional owned decoded-cache budget; disabled by default')
     parser.add_argument('--foreground',action='store_true',help='show scenario windows in the foreground')
     args=parser.parse_args()
@@ -208,7 +234,7 @@ def main():
         selection={'full':args.full, **filters}
         provenance={name:{'path':str(path.resolve()),'sha256':digest(path)} for name,path in
                     (('fixtures',args.fixtures),('cases',args.cases),('runner',Path(__file__)),('scenario_runner',Path(__file__).with_name('scenarios.py')))}
-        result=run(args.binary,fixtures,cases,args.directory,args.mode,args.trace_processor,args.disk_cache_bytes,not args.foreground,selection,provenance)
+        result=run(args.binary,fixtures,cases,args.directory,args.mode,args.trace_processor,args.disk_cache_bytes,not args.foreground,selection,provenance,args.compare_images)
     except (OSError,ValueError,KeyError,json.JSONDecodeError) as error:
         parser.exit(1,str(error)+'\n')
     if not result['passed']:

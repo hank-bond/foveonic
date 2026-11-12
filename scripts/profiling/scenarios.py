@@ -2,12 +2,12 @@
 
 import argparse
 from contextlib import nullcontext
-import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import subprocess
+import struct
 import re
 import uuid
 
@@ -15,9 +15,13 @@ from native import recording_environment, source_tree_hash, workload_monitor
 from trace_analysis import analyze_capture, distribution
 from watch_workloads import require_quiet, concurrent_workloads
 from file_hash import digest
-from results import PREVIEW_QUALITIES, render_result
+from results import PREVIEW_QUALITIES, include_assertions, render_result
+from interaction_latency import matched_workload, summarize_ui_ticks
+from inputs import stage_inputs
+from scenario_checks import checked_scenario_images, pointer_value, same_numeric, validate_choice_recipes
+from image_replay import replay_images
 
-NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag')
+NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag', 'selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'collection-journey', 'choice-journey')
 
 
 def selected_cases(cases, count, quality, scenario):
@@ -29,6 +33,10 @@ def selected_cases(cases, count, quality, scenario):
         raise ValueError('cached switching needs at least two photographs')
     if scenario == 'slider-drag' and count < 2:
         raise ValueError('a mixed-value slider drag needs at least two photographs')
+    if scenario in ('selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'choice-journey') and count < 2:
+        raise ValueError('a selection journey needs at least two photographs')
+    if scenario == 'collection-journey' and count != 8:
+        raise ValueError('collection-journey needs eight originals for its 100-photo folder')
     selected = cases[:count]
     sources = [str(Path(case['source']).resolve(strict=True)) for case in selected]
     if len(set(sources)) != count:
@@ -36,36 +44,6 @@ def selected_cases(cases, count, quality, scenario):
     if any(not Path(source).is_file() for source in sources):
         raise ValueError('scenario sources must be files')
     return [{**case, 'source': source} for case, source in zip(selected, sources)]
-
-
-def stage_inputs(cases, directory):
-    """Hard links isolate sidecars without copying RAW bytes or modifying caller files."""
-    directory.mkdir(parents=True, exist_ok=False)
-    inputs = []
-    for index, case in enumerate(cases):
-        source = Path(case['source'])
-        staged = directory / f'{index:02}-{source.name}'
-        try:
-            os.link(source, staged)
-        except OSError as error:
-            raise ValueError('scenario inputs must support hard links into the owned run directory') from error
-        record = {'source': str(source), 'staged_source': str(staged),
-                  'sha256': digest(source), 'length': source.stat().st_size,
-                  'modified_ns': source.stat().st_mtime_ns, 'label': case.get('label', source.name)}
-        if 'settings' in case:
-            # This is the maintained v1 sidecar format, validated by the actual app.
-            sidecar = directory / 'foveonic' / (staged.name + '.foveonic.json')
-            sidecar.parent.mkdir(exist_ok=True)
-            payload = json.dumps({'format':'foveonic-editing','version':1,'settings':case['settings']}, indent=2).encode()
-            if len(payload) > 64 * 1024:
-                raise ValueError('declared scenario recipe exceeds the application sidecar limit')
-            sidecar.write_bytes(payload)
-            record['settings'] = case['settings']
-            record['sidecar_sha256'] = hashlib.sha256(payload).hexdigest()
-        else:
-            record['settings'] = 'camera-defaults'
-        inputs.append(record)
-    return inputs
 
 
 def scenario_environment(home, evidence, manifest):
@@ -77,7 +55,7 @@ def scenario_environment(home, evidence, manifest):
     return env
 
 
-def finish_trial(directory, mode, trace_processor):
+def finish_trial(directory, mode, trace_processor, capture_directory=None):
     result_path = directory / 'evidence' / 'scenario-result.json'
     if not result_path.exists():
         raise RuntimeError('application exited without a scenario result; inspect owned stdout/stderr')
@@ -85,7 +63,7 @@ def finish_trial(directory, mode, trace_processor):
     if mode == 'off':
         return {'passed': result['passed'], 'mode':'off', 'input_kind':'baseline',
                 'steps':result['steps'], 'result':str(result_path)}
-    capture = directory / 'capture'
+    capture = capture_directory or directory / 'capture'
     analysis = analyze_capture(capture, trace_processor)
     summary_path = capture / 'summary.json'
     summary = json.loads(summary_path.read_text())
@@ -95,9 +73,24 @@ def finish_trial(directory, mode, trace_processor):
     manifest = json.loads(manifest_path.read_text())
     manifest['application']['scenario_result'] = {'path':str(result_path),'sha256':digest(result_path)}
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
-    return {'passed':result['passed'] and analysis['validity']['valid'] and analysis['behavior_valid'] is True,
+    complete = analysis['validity']['valid']
+    behavior = analysis['behavior_valid']
+    expected_steps = [(step['step'], step['action'], len(step['photos'])) for step in result['steps']]
+    traced_steps = [(step['step'], step['action'], step['photo_count']) for step in analysis['steps']]
+    steps_match = bool(expected_steps) and expected_steps == traced_steps
+    trace_assertions = [
+        {'name':'trace_integrity','expected':True,'actual':analysis['validity'],
+         'outcome':'passed' if complete else 'unverified'},
+        {'name':'trace_behavior','expected':True,'actual':behavior,
+         'outcome':('passed' if behavior is True else 'failed' if behavior is False else 'unverified') if complete else 'unverified',
+         'failure':'; '.join(analysis.get('behavior_failures', [])) or None},
+        {'name':'trace_steps','expected':expected_steps,'actual':traced_steps,
+         'outcome':('passed' if steps_match else 'failed') if complete else 'unverified',
+         'failure':None if steps_match else 'trace steps do not match the completed application steps'},
+    ]
+    return {'passed':result['passed'] and complete and behavior is True and steps_match,
             'mode':mode, 'input_kind':'perfetto', 'steps':analysis['steps'],
-            'capture':str(capture), 'result':str(result_path)}
+            'capture':str(capture), 'result':str(result_path), 'trace_assertions':trace_assertions}
 
 
 def application_result(native_result, scenario, quality, inputs, binary_sha256=None):
@@ -120,46 +113,108 @@ def application_result(native_result, scenario, quality, inputs, binary_sha256=N
                          native_result['passed'] and not missing, failure, environment)
 
 
-def value_hash(value):
-    return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+def check_export(image, expected_extent, decoded):
+    """Decode an actual exported image with macOS's image reader after the app exits."""
+    assertion = {'name':'export_decode', 'expected':expected_extent, 'actual':None, 'outcome':'failed'}
+    if (not isinstance(expected_extent, list) or len(expected_extent) != 2
+            or any(type(value) is not int or value <= 0 for value in expected_extent)):
+        assertion.update(outcome='unverified', failure='missing expected export dimensions')
+        return assertion
+    if not image.is_file():
+        assertion['failure'] = 'the batch did not produce its expected TIFF'
+        return assertion
+    if platform.system() != 'Darwin':
+        assertion.update(outcome='unverified', failure='export decoding needs the macOS image reader')
+        return assertion
+    result = subprocess.run(['/usr/bin/sips', '-s', 'format', 'png', str(image), '--out', str(decoded)],
+                            capture_output=True, text=True)
+    if result.returncode:
+        assertion['failure'] = 'export could not be decoded: ' + result.stderr
+        return assertion
+    try:
+        with decoded.open('rb') as stream:
+            header = stream.read(24)
+        if len(header) != 24 or header[:8] != b'\x89PNG\r\n\x1a\n' or header[12:16] != b'IHDR':
+            raise ValueError('decoder did not produce a PNG image')
+        assertion['actual'] = list(struct.unpack('>II', header[16:24]))
+        assertion['outcome'] = 'passed' if assertion['actual'] == expected_extent else 'failed'
+    except (OSError, ValueError) as error:
+        assertion['failure'] = str(error)
+    return assertion
 
 
-def matched_workload(manifest, native_result):
-    """Fingerprint stable work, excluding staged paths, revisions and build identity."""
-    initial=next((step for step in native_result['steps'] if step['action']=='initial-selection'),{})
-    current={photo['source']:photo for photo in initial.get('photos',[])}
-    inputs=[]
-    for record in manifest['inputs']:
-        photo=current.get(record['staged_source'])
-        inputs.append({'sha256':record['sha256'],'declared_settings_sha256':value_hash(record['settings']),
-                       'first_current_settings_sha256':None if photo is None else value_hash(photo['settings']),
-                       'first_current_scale':None if photo is None else photo['scale_divisor']})
-    scenario=manifest['scenario']
-    disk=native_result.get('disk_cache')
-    expected=scenario['disk_cache_bytes']
-    expected_memory=scenario['pressure_bytes'] if scenario['name']=='memory-pressure' else scenario['memory_cache_bytes']
-    cache_policy_matches=(isinstance(disk,dict) and disk.get('max_bytes')==expected
-                          and disk.get('enabled') is (expected>0)
-                          and native_result.get('memory_cache_bytes')==expected_memory)
-    descriptor={'scenario':{key:scenario[key] for key in
-                           ('name','photo_count','quality','repeats','rapid_edits','pressure_bytes','disk_cache_bytes','memory_cache_bytes')},
-                'inputs':inputs,'hardware':{'host':manifest['hardware'],'application':native_result.get('hardware')},
-                'application_disk_cache':disk,
-                'application_memory_cache_bytes':native_result.get('memory_cache_bytes'),
-                'cache_policy_matches':cache_policy_matches,
-                'first_current_complete':cache_policy_matches and len(current)==len(inputs) and all(row['first_current_settings_sha256'] for row in inputs),
-                'measurement':manifest['measurement']}
-    if scenario['name']=='slider-drag':
-        descriptor['scenario'].update({key:scenario[key] for key in ('control_pointer','drag_steps','drag_fraction','drag_pattern','light_theme','mixed_values','editing_section')})
-    # Off and traced captures describe the same work, but only Off may be compared.
-    descriptor['measurement']={key:value for key,value in descriptor['measurement'].items() if key!='input_kind'}
-    return {'sha256':value_hash(descriptor),'descriptor':descriptor}
+def validate_shutdown(args, selected):
+    folder_mode = getattr(args, 'folder_mode', 'import')
+    if args.scenario == 'background-edit' and folder_mode != 'import':
+        raise ValueError('background-edit requires import mode')
+    if not getattr(args, 'exit_with_pending', False):
+        return
+    if (folder_mode != 'browse' or not getattr(args, 'save_on_exit', False)
+            or args.mode == 'off' or getattr(args, 'compare_images', None)
+            or args.scenario not in ('initial', 'warm-disk') or not 2 <= len(selected) <= 8):
+        raise ValueError('exit-with-pending requires browse, save-on-exit, two to eight photos and initial or warm-disk')
+    for case in selected:
+        settings = case.get('settings')
+        value = settings.get('exposure') if isinstance(settings, dict) else None
+        if (not isinstance(settings, dict) or settings.get('exposure_auto') is not False
+                or type(value) not in (int, float) or not -4 <= value <= 3.75):
+            raise ValueError('exit-with-pending requires manual exposures between -4 and 3.75')
+
+
+def shutdown_assertions(native_result, inputs):
+    """Check queued edit evidence and independently read saved owned recipes after exit."""
+    pending = native_result.get('shutdown_pending') or {}
+    before, after = pending.get('requested_revision_before'), pending.get('requested_revision_after')
+    photos = pending.get('photos')
+    expected_paths = {item['staged_source'] for item in inputs}
+    proof = (type(before) is int and type(after) is int and after > before
+             and pending.get('delta') == 0.25 and isinstance(photos, list)
+             and len(photos) == len(inputs)
+             and {row.get('source') for row in photos if isinstance(row, dict)} == expected_paths)
+    rows = {row['source']:row for row in photos if isinstance(row, dict) and 'source' in row} if isinstance(photos, list) else {}
+    assertions = []
+    for item in inputs:
+        initial = struct.unpack('f', struct.pack('f', item['settings']['exposure']))[0]
+        expected = struct.unpack('f', struct.pack('f', initial + 0.25))[0]
+        row = rows.get(item['staged_source'], {})
+        proof = bool(proof and same_numeric(row.get('initial_exposure'), initial)
+                     and same_numeric(row.get('expected_exposure'), expected)
+                     and type(row.get('old_presented_revision')) is int
+                     and row['old_presented_revision'] < after
+                     and type(row.get('old_task_revision')) is int
+                     and row['old_task_revision'] < after)
+        source = Path(item['staged_source'])
+        sidecar = source.parent/'foveonic'/(source.name+'.foveonic.json')
+        actual, failure = None, None
+        try:
+            envelope = json.loads(sidecar.read_text())
+            settings = envelope['settings']
+            if envelope.get('format') != 'foveonic-editing' or envelope.get('version') != 1 or settings.get('exposure_auto') is not False:
+                raise ValueError('invalid sidecar envelope or automatic exposure')
+            actual = settings.get('exposure')
+            passed = same_numeric(actual, expected)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, OverflowError) as error:
+            passed = False
+            failure = str(error)
+        assertions.append({'name':'shutdown_saved_exposure','source':item['source'],
+                           'expected':expected,'actual':actual,'outcome':'passed' if passed else 'failed','failure':failure})
+    assertions.insert(0, {'name':'shutdown_pending_proof','expected':'all requested edits advanced beyond the presented frames',
+                          'actual':pending,'outcome':'passed' if proof else 'failed'})
+    return assertions
+
+
+def compare_scenario_images(native_result, inputs, binary, directory, control_pointer='/exposure'):
+    """Check the scenario's intended edits, then replay its captured final images."""
+    action, photos = checked_scenario_images(native_result, inputs, directory, control_pointer)
+    return replay_images(native_result, inputs, photos, action, binary, directory)
 
 
 def run_trial(args, selected, directory, source_hash):
     directory.mkdir(parents=True, exist_ok=False)
     home, evidence = directory / 'home', directory / 'evidence'
     home.mkdir(); evidence.mkdir()
+    if args.scenario == 'background-edit':
+        (directory/'background-output').mkdir()
     inputs = stage_inputs(selected, directory / 'inputs')
     manifest = {
         'scenario': {'name':args.scenario,'photo_count':args.count,'quality':args.quality,
@@ -178,14 +233,24 @@ def run_trial(args, selected, directory, source_hash):
                        'coverage':'real application commands and egui input dispatch; not physical pointer injection',
                        'setup':'one active photo and GPU device before measured selection; processing reset before group; enabled disk cache primed except initial',
                        'os_file_cache':'uncontrolled; input hashing warms filesystem cache',
-                       'scenario_poll_ms':20,'numerical_equality':'verified separately by maintained headless cases'},
+                       'scenario_poll_ms':20,'numerical_equality':'verified separately by maintained headless cases',
+                       'capture_images_after_scenario':bool(getattr(args, 'compare_images', None))},
     }
+    manifest['measurement']['controlled_delivery'] = args.scenario in ('selection-journey','selection-pressure','transition-journey')
+    manifest['scenario']['capture_images'] = bool(getattr(args, 'compare_images', None))
+    manifest['scenario']['save_on_exit'] = bool(getattr(args, 'save_on_exit', False))
+    manifest['scenario']['folder_mode'] = getattr(args, 'folder_mode', 'import')
+    manifest['scenario']['exit_with_pending'] = bool(getattr(args, 'exit_with_pending', False))
+    if args.scenario == 'transition-journey':
+        manifest['scenario'].update(seed=args.seed, action_count=args.action_count)
     if args.scenario == 'slider-drag':
         manifest['scenario'].update(control_pointer=args.control_pointer, drag_steps=args.drag_steps,
                                     drag_fraction=args.drag_fraction, drag_pattern=args.drag_pattern, light_theme=args.theme=='light', mixed_values=args.initial_values=='mixed', editing_section=args.editing_section)
     launch = directory / 'launch.json'
     launch.write_text(json.dumps(manifest, indent=2) + '\n')
     env = scenario_environment(home, evidence, launch)
+    if manifest['scenario']['save_on_exit']:
+        env['FOVEONIC_DIAGNOSTICS_DIR'] = str(directory/'capture')
     if getattr(args,'background',False):
         env['FOVEONIC_GUI_SCENARIO_BACKGROUND'] = '1'
     env['FOVEONIC_DIAGNOSTICS_CACHE_NAMESPACE'] = manifest['cache_namespace']
@@ -211,31 +276,76 @@ def run_trial(args, selected, directory, source_hash):
     timing_valid = contention['checked'] and contention['uncontended']
     manifest.update(contention=contention, timing_valid=timing_valid)
     launch.write_text(json.dumps(manifest, indent=2) + '\n')
-    result = finish_trial(directory, args.mode, args.trace_processor)
+    capture_directory = directory/'capture'
+    if manifest['scenario']['save_on_exit']:
+        children = list(capture_directory.iterdir()) if capture_directory.is_dir() else []
+        if len(children) != 1 or not children[0].is_dir():
+            raise ValueError('orderly exit did not save exactly one owned capture')
+        capture_directory = children[0]
+    result = finish_trial(directory, args.mode, args.trace_processor, capture_directory)
     native_result=json.loads(Path(result['result']).read_text())
     test_result = application_result(native_result, args.scenario, args.quality, inputs, manifest['binary_sha256'])
+    include_assertions(test_result, result.pop('trace_assertions', []))
+    if manifest['scenario']['save_on_exit']:
+        saved_manifest = json.loads((capture_directory/'manifest.json').read_text())
+        actions = saved_manifest.get('application', {}).get('capture_actions', [])
+        include_assertions(test_result, [{'name':'capture_saved_on_exit',
+            'outcome':'passed' if any(action.get('action') == 'application_exit' for action in actions) else 'failed',
+            'expected':'application_exit', 'actual':actions}])
+    if manifest['scenario']['exit_with_pending']:
+        include_assertions(test_result, shutdown_assertions(native_result, inputs))
+    ui_latency = summarize_ui_ticks(native_result.get('ui_samples', []), getattr(args, 'max_ui_gap_ms', None))
+    if ui_latency['assertion'] is not None:
+        include_assertions(test_result, [ui_latency['assertion']])
+    if args.scenario == 'background-edit':
+        at_edit = (native_result.get('background') or {}).get('background_at_edit') or {}
+        overlaps = sum(sample.get('action') == 'background-edit' and sample.get('worker_busy') is True
+                       and sample.get('background_running') is True for sample in native_result.get('ui_samples', []))
+        complete = (at_edit.get('running') is True and at_edit.get('decisions_saved') is True
+                    and (at_edit.get('exposure_control') or {}).get('enabled') is True and overlaps > 0)
+        include_assertions(test_result, [{'name':'background_overlap','step':'background-edit','source':None,
+            'expected':'a started batch active during foreground work','actual':{'at_edit':at_edit,'ui_samples':overlaps},
+            'outcome':'passed' if complete else 'unverified'}])
+        include_assertions(test_result, [check_export(
+            directory/'background-output'/(Path(inputs[0]['staged_source']).stem+'.tiff'),
+            at_edit.get('expected_export_extent'), directory/'export-decoded.png')])
+    fresh_binary = getattr(args, 'compare_images', None)
+    if fresh_binary and native_result['passed']:
+        manifest['fresh_renderer'] = {'path':str(fresh_binary), 'sha256':digest(fresh_binary)}
+        test_result['environment']['fresh_binary_sha256'] = manifest['fresh_renderer']['sha256']
+        try:
+            comparisons = compare_scenario_images(native_result, inputs, fresh_binary, directory, getattr(args, 'control_pointer', '/exposure'))
+        except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as error:
+            comparisons = [{'name':'image_samples', 'step':'slider-drag', 'source':None,
+                            'outcome':'failed', 'failure':str(error)}]
+        include_assertions(test_result, comparisons)
     test_result_path = evidence/'test-result.json'
     test_result_path.write_text(json.dumps(test_result, indent=2)+'\n')
     workload_key=matched_workload(manifest,native_result)
+    timing_valid = timing_valid and workload_key['descriptor']['geometry_complete']
+    manifest['timing_valid'] = timing_valid
     result['passed'] = result['passed'] and test_result['outcome']=='passed' and workload_key['descriptor']['cache_policy_matches']
     result['test_result'] = test_result
+    result['ui_latency'] = ui_latency
     manifest['workload_key']=workload_key
     launch.write_text(json.dumps(manifest,indent=2)+'\n')
     result.update(contention=contention, timing_valid=timing_valid, workload_key=workload_key,
                   artifacts={'launch':str(launch),'result':result['result'],'result_sha256':digest(result['result']),
                              'binary':manifest['binary'],'binary_sha256':manifest['binary_sha256'],
                              'source_tree_sha256':manifest['source_tree_sha256']})
+    if 'fresh_renderer' in manifest:
+        result['artifacts']['fresh_renderer'] = manifest['fresh_renderer']
     for name in ('slider-drag.json', 'slider-observation.json', 'slider-failure.png'):
         path=evidence/name
         if path.exists():
             result['artifacts'][name]={'path':str(path),'sha256':digest(path)}
     result['artifacts']['test_result']={'path':str(test_result_path),'sha256':digest(test_result_path)}
     if args.mode != 'off':
-        summary_path=directory/'capture'/'summary.json'
+        summary_path=capture_directory/'summary.json'
         summary=json.loads(summary_path.read_text())
-        summary.update(contention=contention, timing_valid=timing_valid, test_result=test_result)
+        summary.update(contention=contention, timing_valid=timing_valid, test_result=test_result, ui_latency=ui_latency)
         summary_path.write_text(json.dumps(summary,indent=2)+'\n')
-        capture_manifest_path=directory/'capture'/'manifest.json'
+        capture_manifest_path=capture_directory/'manifest.json'
         capture_manifest=json.loads(capture_manifest_path.read_text())
         capture_manifest['application']['test_result']=result['artifacts']['test_result']
         capture_manifest_path.write_text(json.dumps(capture_manifest,indent=2)+'\n')
@@ -247,6 +357,9 @@ def run(args):
     cases = json.loads(args.cases.read_text()) if args.cases else [{'source':str(path)} for path in args.source]
     args.count = len(cases) if args.count is None else args.count
     selected = selected_cases(cases, args.count, args.quality, args.scenario)
+    validate_shutdown(args, selected)
+    if getattr(args, 'save_on_exit', False) and (args.mode == 'off' or getattr(args, 'compare_images', None)):
+        raise ValueError('save-on-exit needs an enabled capture and no post-scenario image readback')
     if args.disk_cache_bytes < 0 or (args.scenario in ('warm-disk', 'prefetched-selection') and args.disk_cache_bytes == 0):
         raise ValueError('disk cache budget must be nonnegative and the requested cache scenario requires an enabled disk cache')
     if args.scenario == 'prefetched-selection' and (args.count < 2 or args.quality != 'thumb'):
@@ -255,6 +368,27 @@ def run(args):
         raise ValueError('memory cache budget must be positive')
     if args.scenario == 'slider-drag' and (not args.control_pointer.startswith('/') or args.drag_steps < 3 or not 0 < args.drag_fraction < 0.45):
         raise ValueError('slider drag needs a setting pointer, at least three steps, and a fraction between 0 and 0.45')
+    if args.scenario == 'transition-journey' and (not 0 <= args.seed < 2**64 or not 1 <= args.action_count <= 64):
+        raise ValueError('transition seed must be uint64 and action-count must be 1 through 64')
+    if args.scenario == 'collection-journey' and any(not isinstance(case.get('settings'), dict) or case['settings'].get('exposure_auto') is not False or type(case['settings'].get('exposure')) not in (int,float) for case in selected):
+        raise ValueError('collection-journey needs explicit manual exposures')
+    journeys = ('selection-journey','selection-pressure','background-edit','transition-journey','lifecycle-journey','browser-journey','choice-journey')
+    if args.scenario == 'choice-journey':
+        validate_choice_recipes(selected)
+    if getattr(args, 'compare_images', None) and args.scenario not in ('slider-drag', *journeys):
+        raise ValueError('image comparison requires a slider or editing journey')
+    if args.scenario in journeys or (getattr(args, 'compare_images', None) and args.control_pointer == '/exposure'):
+        if any(not isinstance(case.get('settings'), dict)
+               or type(case['settings'].get('exposure')) not in (int, float)
+               or case['settings'].get('exposure_auto') is not False for case in selected):
+            raise ValueError('image comparison needs an explicit manual exposure recipe for every photo')
+    if getattr(args, 'compare_images', None):
+        for case in selected:
+            if type(pointer_value(case['settings'], args.control_pointer)) not in (int, float):
+                raise ValueError('image comparison needs a declared numeric slider value for every photo')
+        args.compare_images = args.compare_images.resolve(strict=True)
+    if getattr(args, 'max_ui_gap_ms', None) is not None:
+        summarize_ui_ticks([], args.max_ui_gap_ms)
     args.cache_namespace = args.cache_namespace or 'scenario-'+uuid.uuid4().hex
     if re.fullmatch(r'[A-Za-z0-9_-]{1,64}',args.cache_namespace) is None:
         raise ValueError('cache namespace must be one ASCII alphanumeric, dash or underscore component (up to 64 characters)')
@@ -291,7 +425,8 @@ def run(args):
                   'timing_valid':len(results)==args.trials and all(result['timing_valid'] for result in results),
                   'trials':results,'group_elapsed_ms':[{'mode':mode,'action':action,**distribution(values)} for (mode,action),values in metrics.items()],
                   'limits':['Off baseline elapsed values and detailed trace attribution remain separate datasets.',
-                            'Native scenarios do not measure physical screen presentation or fresh numerical equality.']}
+                            'Native scenarios do not measure physical screen presentation.',
+                            'Fresh numerical equality is checked only when image comparison is requested.']}
         (directory/'regression.json').write_text(json.dumps(report, indent=2)+'\n')
     return report
 
@@ -315,6 +450,11 @@ def main():
     parser.add_argument('--trials',type=int,default=3)
     parser.add_argument('--repeats',type=int,default=5)
     parser.add_argument('--rapid-edits',type=int,default=12)
+    parser.add_argument('--seed',type=int,default=0,help='replay seed for transition-journey')
+    parser.add_argument('--action-count',type=int,default=8,help='bounded selection/edit pairs for transition-journey')
+    parser.add_argument('--save-on-exit',action='store_true',help='leave the capture active and verify the app saves it during orderly shutdown')
+    parser.add_argument('--folder-mode',choices=['browse','import'],default='import',help='open the isolated folder in Browse or Import mode')
+    parser.add_argument('--exit-with-pending',action='store_true',help='queue a final edit and close immediately; verify the saved recipes after exit')
     parser.add_argument('--control-pointer',default='/exposure',help='setting JSON pointer for slider-drag')
     parser.add_argument('--drag-steps',type=int,default=12,help='number of pointer movements for slider-drag')
     parser.add_argument('--drag-fraction',type=float,default=0.2,help='fraction of slider width for slider-drag')
@@ -323,6 +463,8 @@ def main():
     parser.add_argument('--initial-values',choices=['mixed','equal'],default='mixed',help='expected relation of staged values for slider-drag')
     parser.add_argument('--background',action='store_true',help='run the scenario window behind normal windows without requesting foreground activation')
     parser.add_argument('--editing-section',choices=['WhiteBalance','Mix','Tone','Saturation','ColorEditor','Noise','Detail','Sharpening','Corrections'],default='Tone',help='move this editing section into view for slider-drag')
+    parser.add_argument('--compare-images',type=Path,metavar='RENDERER',help='compare final slider or journey frames with fresh renders from this profile_pipeline binary')
+    parser.add_argument('--max-ui-gap-ms',type=float,help='optional caller-selected maximum UI update gap during measured scenario actions')
     parser.add_argument('--pressure-mib',type=int,default=128)
     parser.add_argument('--step-timeout',type=int,default=60)
     parser.add_argument('--timeout',type=int,default=600)

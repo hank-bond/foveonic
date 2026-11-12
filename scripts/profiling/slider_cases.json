@@ -523,12 +523,12 @@
     "recipes": [
       {
         "reconstruction": {
-          "detail": 0.2
+          "detail": 0.16666666666666666
         }
       },
       {
         "reconstruction": {
-          "detail": 0.4
+          "detail": 0.5
         }
       }
     ],
@@ -902,6 +902,1801 @@
           }
         }
       }
+    ]
+  },
+  {
+    "name": "neutralize-shadow_ev",
+    "pointer": "/neutralize_shadows/shadow_ev",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "neutralize_shadows": {
+          "shadow_ev": -5.0
+        }
+      },
+      {
+        "reconstruction": {},
+        "neutralize_shadows": {
+          "shadow_ev": -4.0
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "neutralize-color_tolerance",
+    "pointer": "/neutralize_shadows/color_tolerance",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "neutralize_shadows": {
+          "color_tolerance": 0.1
+        }
+      },
+      {
+        "reconstruction": {},
+        "neutralize_shadows": {
+          "color_tolerance": 0.2
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "neutralize-hue_width",
+    "pointer": "/neutralize_shadows/hue_width",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "neutralize_shadows": {
+          "hue_width": 20.0
+        }
+      },
+      {
+        "reconstruction": {},
+        "neutralize_shadows": {
+          "hue_width": 30.0
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "color-dq-gain",
+    "pointer": "/color_dq_gain",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "color_dq_gain": 0.5
+      },
+      {
+        "reconstruction": {},
+        "color_dq_gain": 0.7
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "universal-sharpen-threshold",
+    "pointer": "/photographic/sharpening/threshold",
+    "section": "Sharpening",
+    "recipes": [
+      {
+        "photographic": {
+          "sharpening": {
+            "method": "universal",
+            "threshold": 0.01
+          }
+        }
+      },
+      {
+        "photographic": {
+          "sharpening": {
+            "method": "universal",
+            "threshold": 0.02
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "universal-sharpen-halo_suppression",
+    "pointer": "/photographic/sharpening/halo_suppression",
+    "section": "Sharpening",
+    "recipes": [
+      {
+        "photographic": {
+          "sharpening": {
+            "method": "universal",
+            "halo_suppression": 0.2
+          }
+        }
+      },
+      {
+        "photographic": {
+          "sharpening": {
+            "method": "universal",
+            "halo_suppression": 0.4
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-field-selectivity",
+    "pointer": "/color_field/selectivity",
+    "section": "Corrections",
+    "recipes": [
+      {
+        "highlight_mode": "color_field",
+        "color_field": {
+          "selectivity": 0.2
+        }
+      },
+      {
+        "highlight_mode": "color_field",
+        "color_field": {
+          "selectivity": 0.4
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "color-range-1-hue",
+    "pointer": "/photographic/color_editor/bands/1/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {
+                "hue": -0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {
+                "hue": 0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-1-saturation",
+    "pointer": "/photographic/color_editor/bands/1/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {
+                "saturation": -0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {
+                "saturation": 0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-1-lightness",
+    "pointer": "/photographic/color_editor/bands/1/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {
+                "lightness": -0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {
+                "lightness": 0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-2-hue",
+    "pointer": "/photographic/color_editor/bands/2/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {
+                "hue": -0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {
+                "hue": 0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-2-saturation",
+    "pointer": "/photographic/color_editor/bands/2/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {
+                "saturation": -0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {
+                "saturation": 0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-2-lightness",
+    "pointer": "/photographic/color_editor/bands/2/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {
+                "lightness": -0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {
+                "lightness": 0.1
+              },
+              {},
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-3-hue",
+    "pointer": "/photographic/color_editor/bands/3/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {
+                "hue": -0.1
+              },
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {
+                "hue": 0.1
+              },
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-3-saturation",
+    "pointer": "/photographic/color_editor/bands/3/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {
+                "saturation": -0.1
+              },
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {
+                "saturation": 0.1
+              },
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-3-lightness",
+    "pointer": "/photographic/color_editor/bands/3/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {
+                "lightness": -0.1
+              },
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {
+                "lightness": 0.1
+              },
+              {},
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-4-hue",
+    "pointer": "/photographic/color_editor/bands/4/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {
+                "hue": -0.1
+              },
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {
+                "hue": 0.1
+              },
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-4-saturation",
+    "pointer": "/photographic/color_editor/bands/4/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {
+                "saturation": -0.1
+              },
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {
+                "saturation": 0.1
+              },
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-4-lightness",
+    "pointer": "/photographic/color_editor/bands/4/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {
+                "lightness": -0.1
+              },
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {
+                "lightness": 0.1
+              },
+              {},
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-5-hue",
+    "pointer": "/photographic/color_editor/bands/5/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "hue": -0.1
+              },
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "hue": 0.1
+              },
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-5-saturation",
+    "pointer": "/photographic/color_editor/bands/5/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "saturation": -0.1
+              },
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "saturation": 0.1
+              },
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-5-lightness",
+    "pointer": "/photographic/color_editor/bands/5/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "lightness": -0.1
+              },
+              {},
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "lightness": 0.1
+              },
+              {},
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-6-hue",
+    "pointer": "/photographic/color_editor/bands/6/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "hue": -0.1
+              },
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "hue": 0.1
+              },
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-6-saturation",
+    "pointer": "/photographic/color_editor/bands/6/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "saturation": -0.1
+              },
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "saturation": 0.1
+              },
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-6-lightness",
+    "pointer": "/photographic/color_editor/bands/6/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "lightness": -0.1
+              },
+              {}
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "lightness": 0.1
+              },
+              {}
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-7-hue",
+    "pointer": "/photographic/color_editor/bands/7/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "hue": -0.1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "hue": 0.1
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-7-saturation",
+    "pointer": "/photographic/color_editor/bands/7/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "saturation": -0.1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "saturation": 0.1
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-range-7-lightness",
+    "pointer": "/photographic/color_editor/bands/7/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "lightness": -0.1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "bands": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "lightness": 0.1
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-master-hue",
+    "pointer": "/photographic/color_editor/master/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "master": {
+              "hue": -0.1
+            }
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "master": {
+              "hue": 0.1
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-master-saturation",
+    "pointer": "/photographic/color_editor/master/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "master": {
+              "saturation": -0.1
+            }
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "master": {
+              "saturation": 0.1
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "color-master-lightness",
+    "pointer": "/photographic/color_editor/master/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "master": {
+              "lightness": -0.1
+            }
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "master": {
+              "lightness": 0.1
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "advanced-color-smoothness",
+    "pointer": "/photographic/color_editor/advanced/0/smoothness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "advanced": [
+              {
+                "smoothness": 0.1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "advanced": [
+              {
+                "smoothness": 0.2
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "advanced-color-adjustment-hue",
+    "pointer": "/photographic/color_editor/advanced/0/adjustment/hue",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "advanced": [
+              {
+                "adjustment": {
+                  "hue": -0.1
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "advanced": [
+              {
+                "adjustment": {
+                  "hue": 0.1
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "advanced-color-adjustment-saturation",
+    "pointer": "/photographic/color_editor/advanced/0/adjustment/saturation",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "advanced": [
+              {
+                "adjustment": {
+                  "saturation": -0.1
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "advanced": [
+              {
+                "adjustment": {
+                  "saturation": 0.1
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "advanced-color-adjustment-lightness",
+    "pointer": "/photographic/color_editor/advanced/0/adjustment/lightness",
+    "section": "ColorEditor",
+    "recipes": [
+      {
+        "photographic": {
+          "color_editor": {
+            "advanced": [
+              {
+                "adjustment": {
+                  "lightness": -0.1
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "photographic": {
+          "color_editor": {
+            "advanced": [
+              {
+                "adjustment": {
+                  "lightness": 0.1
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "banding-rows-0-strength",
+    "pointer": "/merrill_banding/rows/bands/0/strength",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "rows": {
+            "bands": [
+              {
+                "strength": 0.2,
+                "size": 27
+              },
+              {
+                "size": 119,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "rows": {
+            "bands": [
+              {
+                "strength": 0.4,
+                "size": 27
+              },
+              {
+                "size": 119,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "banding-rows-0-size",
+    "pointer": "/merrill_banding/rows/bands/0/size",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "rows": {
+            "bands": [
+              {
+                "size": 11,
+                "strength": 1.0
+              },
+              {
+                "size": 119,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "rows": {
+            "bands": [
+              {
+                "size": 13,
+                "strength": 1.0
+              },
+              {
+                "size": 119,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "banding-rows-1-strength",
+    "pointer": "/merrill_banding/rows/bands/1/strength",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "rows": {
+            "bands": [
+              {
+                "size": 27,
+                "strength": 1.0
+              },
+              {
+                "strength": 0.2,
+                "size": 119
+              }
+            ]
+          }
+        }
+      },
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "rows": {
+            "bands": [
+              {
+                "size": 27,
+                "strength": 1.0
+              },
+              {
+                "strength": 0.4,
+                "size": 119
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "banding-rows-1-size",
+    "pointer": "/merrill_banding/rows/bands/1/size",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "rows": {
+            "bands": [
+              {
+                "size": 27,
+                "strength": 1.0
+              },
+              {
+                "size": 61,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "rows": {
+            "bands": [
+              {
+                "size": 27,
+                "strength": 1.0
+              },
+              {
+                "size": 63,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "banding-columns-0-strength",
+    "pointer": "/merrill_banding/columns/bands/0/strength",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "columns": {
+            "bands": [
+              {
+                "strength": 0.2,
+                "size": 27
+              },
+              {
+                "size": 119,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "columns": {
+            "bands": [
+              {
+                "strength": 0.4,
+                "size": 27
+              },
+              {
+                "size": 119,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "banding-columns-0-size",
+    "pointer": "/merrill_banding/columns/bands/0/size",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "columns": {
+            "bands": [
+              {
+                "size": 11,
+                "strength": 1.0
+              },
+              {
+                "size": 119,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "columns": {
+            "bands": [
+              {
+                "size": 13,
+                "strength": 1.0
+              },
+              {
+                "size": 119,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "banding-columns-1-strength",
+    "pointer": "/merrill_banding/columns/bands/1/strength",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "columns": {
+            "bands": [
+              {
+                "size": 27,
+                "strength": 1.0
+              },
+              {
+                "strength": 0.2,
+                "size": 119
+              }
+            ]
+          }
+        }
+      },
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "columns": {
+            "bands": [
+              {
+                "size": 27,
+                "strength": 1.0
+              },
+              {
+                "strength": 0.4,
+                "size": 119
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "banding-columns-1-size",
+    "pointer": "/merrill_banding/columns/bands/1/size",
+    "section": "Noise",
+    "recipes": [
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "columns": {
+            "bands": [
+              {
+                "size": 27,
+                "strength": 1.0
+              },
+              {
+                "size": 61,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "reconstruction": {},
+        "merrill_banding": {
+          "method": "directional",
+          "columns": {
+            "bands": [
+              {
+                "size": 27,
+                "strength": 1.0
+              },
+              {
+                "size": 63,
+                "strength": 0.0
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "monochrome-noise",
+    "pointer": "/monochrome/noise",
+    "section": "Noise",
+    "recipes": [
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "noise": 1
+        }
+      },
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "noise": 2
+        }
+      }
+    ],
+    "families": [
+      "merrill",
+      "quattro",
+      "tiger"
+    ]
+  },
+  {
+    "name": "monochrome-banding",
+    "pointer": "/monochrome/banding",
+    "section": "Noise",
+    "recipes": [
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "banding": 1
+        }
+      },
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "banding": 2
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "monochrome-smoothness",
+    "pointer": "/monochrome_smoothness",
+    "section": "Noise",
+    "recipes": [
+      {
+        "rendering": "monochrome",
+        "monochrome_smoothness": 0.0
+      },
+      {
+        "rendering": "monochrome",
+        "monochrome_smoothness": 0.5
+      }
+    ],
+    "families": [
+      "quattro",
+      "tiger"
+    ]
+  },
+  {
+    "name": "monochrome-texture-fine",
+    "pointer": "/monochrome/texture/fine",
+    "section": "Detail",
+    "recipes": [
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "texture": {
+            "fine": 0.7
+          }
+        }
+      },
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "texture": {
+            "fine": 0.9
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "monochrome-texture-fine_size",
+    "pointer": "/monochrome/texture/fine_size",
+    "section": "Detail",
+    "recipes": [
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "texture": {
+            "fine_size": 0.7
+          }
+        }
+      },
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "texture": {
+            "fine_size": 0.9
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "monochrome-texture-coarse",
+    "pointer": "/monochrome/texture/coarse",
+    "section": "Detail",
+    "recipes": [
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "texture": {
+            "coarse": 0.7
+          }
+        }
+      },
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "texture": {
+            "coarse": 0.9
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
+    ]
+  },
+  {
+    "name": "monochrome-texture-coarse_size",
+    "pointer": "/monochrome/texture/coarse_size",
+    "section": "Detail",
+    "recipes": [
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "texture": {
+            "coarse_size": 0.7
+          }
+        }
+      },
+      {
+        "rendering": "monochrome",
+        "monochrome": {
+          "texture": {
+            "coarse_size": 0.9
+          }
+        }
+      }
+    ],
+    "families": [
+      "merrill"
     ]
   }
 ]
