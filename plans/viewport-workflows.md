@@ -12,7 +12,7 @@ Requirements under review: [viewport workflows](../docs/specs/viewport-workflows
 
 The existing coordinator, source loader, processing sessions and immutable presentation resources are useful boundaries. This roadmap does not require a new scheduler framework, a universal cache manager or stage-wide engine execution. Wide rendering remains a [separate future experiment](./wide-rendering.md).
 
-The owner approved separating [viewport, visible region and requested render region](../docs/architecture/concepts.md#viewport-and-image-coordinates). Use those meanings consistently. Zoom and pan derive an image-space visible region from UI-space viewport geometry. The owner also requires Astra's code review at the end of each implementation slice and an opportunity to test each functional difference, following the [working instructions](../AGENTS.md#work-with-the-owner).
+The owner approved separating [viewport, visible region and requested render region](../docs/architecture/concepts.md#viewport-and-image-coordinates). Use those meanings consistently. Zoom and pan derive an image-space visible region from UI-space viewport geometry. Follow the [working instructions](../AGENTS.md#work-with-the-owner) for the required review subagent and owner testing at each functional change.
 
 ## Findings grounded in current code
 

@@ -48,7 +48,7 @@ Two natural warm-edit Off trials pass. The comparison tool rejects the earlier b
 
 ### Shared-source readiness review
 
-The owner subsequently required Astra's code-design, cleanliness and Rust-practice review for each completed implementation slice. Reviewing `33453b3` exposed a liveness gap that the independent-photo checks had missed. Current and Camera renders can coexist for one photograph. If both deferred on one acquisition, its first consumer emptied the handoff and left the other waiting, even when a native session was now reusable. Picks could encounter the same readiness condition.
+The owner subsequently required a code-design, cleanliness and Rust-practice review subagent for each completed implementation slice. Reviewing `33453b3` exposed a liveness gap that the independent-photo checks had missed. Current and Camera renders can coexist for one photograph. If both deferred on one acquisition, its first consumer emptied the handoff and left the other waiting, even when a native session was now reusable. Picks could encounter the same readiness condition.
 
 The focused correction uses the existing acquisition membership rather than adding a notification protocol or availability registry. `can_retry` permits a deferred consumer when its handoff exists or no acquisition remains outstanding for that path. Consumption by a sibling therefore allows session reuse to be reconsidered. A new miss synchronously registers acquisition again and restores waiting. A shared load failure may require sequential reacquisition to report each consumer's error, but cannot leave the second request permanently pending.
 
