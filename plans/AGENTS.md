@@ -50,6 +50,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
 - **[tonal-ranges](./tonal-ranges.md)** Implement and evaluate coordinated Merrill HDR controls after researching spatial tone mapping.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.
+- **[viewport-workflows](./viewport-workflows.md)** Review small ownership and quality-policy changes supporting Smart comparisons, persistent zoom and a Full-detail loupe.
 - **[wide-rendering](./wide-rendering.md)** Preserve deferred wide-rendering hypotheses and evidence for a separate engine investigation after application ownership is clearer.
 
 <!-- INDEX:END -->

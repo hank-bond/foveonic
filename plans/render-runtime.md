@@ -8,14 +8,14 @@ Requirements: [render orchestration](../docs/specs/render-orchestration.md), [in
 
 ## Resume here
 
-- **Current phase:** the owner approved separating source loading from rendering after the off-UI coordination, behavioral coverage and mechanical browser organization slices.
-- **Checkpoint:** `075bbcc` contains broad behavioral coverage, focused delivery fixes and test organization. The off-UI coordinator is already implemented. See the [behavioral plan](./behavioral-testing.md) for checks and remaining coverage limits.
-- **Current unit:** source acquisition is separated from the serial renderer and validated for owner review. Reuse remains before loading, and an already-ready photo can render while another load is held.
+- **Current phase:** requested source loading is separated from rendering and committed. The owner requested an architecture review of the next Smart, layout, persistent zoom and loupe workflows.
+- **Checkpoint:** `33453b3` separates requested source loading, `ab317e5` corrects shared-source retry readiness, and `02104b4` groups browser sources. `075bbcc` contains the earlier behavioral coverage and focused delivery fixes. See the [behavioral plan](./behavioral-testing.md) for checks and remaining coverage limits.
+- **Completed unit:** source acquisition is independent of the serial renderer. Reuse remains before loading, and an already-ready photo can render while another load is held.
 - **Decided:** protect UI responsiveness, use one runtime for individual and multi-photo editing, isolate responsibilities and support subordinate speculative work. Keep engine execution serial throughout this migration.
 - **Separate future effort:** [wide rendering](./wide-rendering.md). Clear application/engine ownership should make that experiment easier, without building its execution machinery here.
 - **Not decided:** later state ownership, shared foreground/background admission policy and backlog limits.
 - **Communication direction:** ordinary typed messages, fixed consumers and directly called handlers. Keep existing library queues across threads. Add a broadcast/watch dependency only when an actual consumer needs the full primitive.
-- **Next action:** review the source-loading boundary with the owner before committing or selecting another architectural unit. The earlier cached-switch failure and its subsequent fix remain recorded in the behavioral plan.
+- **Next action:** finish the [portable test-input setup](./behavioral-testing.md#reproducibility-follow-up), then discuss the [viewport architecture review](./viewport-workflows.md), starting with one preview-quality policy. Implementation requires agreement on the next small slice. The earlier cached-switch failure and its subsequent fix remain recorded in the behavioral plan.
 
 ## Alignment for every slice
 
@@ -45,6 +45,14 @@ Only a job that has actually discovered missing input waits for acquisition. Mar
 The first held-load run exposed a harness assumption: the single-photo Exposure widget has a label but no multi-edit JSON pointer. Its enabled/visible check now observes that actual control by label as well. The trace declaration also explicitly expects A's deliberate source read. Neither correction relaxes B's required delivery during the hold. Export checking encountered a full disk, then passed after duplicate generated float samples were removed while preserving the frozen baseline and reports.
 
 Two natural warm-edit Off trials pass. The comparison tool rejects the earlier baseline because recipes and workload metadata differ, so these samples do not establish a before/after latency change. The demonstrated improvement is independent progress during source loading. General throughput remains a separate matched-measurement question.
+
+### Shared-source readiness review
+
+The owner subsequently required Astra's code-design, cleanliness and Rust-practice review for each completed implementation slice. Reviewing `33453b3` exposed a liveness gap that the independent-photo checks had missed. Current and Camera renders can coexist for one photograph. If both deferred on one acquisition, its first consumer emptied the handoff and left the other waiting, even when a native session was now reusable. Picks could encounter the same readiness condition.
+
+The focused correction uses the existing acquisition membership rather than adding a notification protocol or availability registry. `can_retry` permits a deferred consumer when its handoff exists or no acquisition remains outstanding for that path. Consumption by a sibling therefore allows session reuse to be reconsidered. A new miss synchronously registers acquisition again and restores waiting. A shared load failure may require sequential reacquisition to report each consumer's error, but cannot leave the second request permanently pending.
+
+The CPU regression failed on the original predicate, then passed with the correction. It exercises shared Current/Camera failure, pick readiness and a second miss returning to waiting. A real-GPU regression holds native loading until both renders have deferred, then requires both native frames and a successful color pick with only one shared native acquisition. Sixty-four focused CPU tests and strict GUI Clippy pass. Astra's focused implementation review found no remaining substantive design, correctness or idiomatic-Rust issue. Headed Before/After workflow and held-load application checks also pass. The rebuilt application was opened for owner review. It changes neither processing arithmetic nor cache-retention policy.
 
 ## Result-handler review unit
 

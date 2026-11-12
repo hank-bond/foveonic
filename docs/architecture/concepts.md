@@ -26,6 +26,20 @@ The first implementation maps result handling to `RenderCoordinator::handle_resu
 
 The render runtime now runs the coordinator on its own thread. **View context** is an immutable description of what the viewport can show. The UI publishes it when its values change. **View updates** carry result-handler decisions and image data back to the UI, which checks that they still fit the current interaction before applying them. Status is an immutable summary of processed commands and request settlement.
 
+## Viewport and image coordinates
+
+The owner agreed these distinct meanings:
+
+| Term | Meaning |
+| --- | --- |
+| Viewport | The screen area where a photograph is displayed, expressed in UI coordinates. |
+| Visible region | The portion of the photograph currently shown through that viewport, expressed in native-resolution image coordinates. |
+| Requested render region | The image area requested for processing. It may extend beyond the visible region for overscan or processing support. |
+
+Zoom and pan define the transform between a viewport and its visible region. A single-photo view has one photograph viewport. A multi-photo comparison has one per photograph within the comparison area. A loupe follows the same distinction between its display area and the image region it shows.
+
+Layout supplies viewport geometry. UI interaction owns zoom and pan, from which the visible region is derived. The coordinator requests useful rendering, while the engine owns numerical alignment and required neighboring samples. These distinctions do not prescribe additional managers or one Rust type per term. Saved Crop remains a separate photographic composition setting.
+
 ## Established meanings
 
 | Concept | Meaning | Current source |
