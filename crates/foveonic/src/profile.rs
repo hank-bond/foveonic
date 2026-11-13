@@ -1,6 +1,13 @@
 //! Collects render timings, activity counts and replayable diagnostic settings.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+
+static NEXT_GRAPH: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn next_graph_id() -> u64 {
+    NEXT_GRAPH.fetch_add(1, Ordering::Relaxed)
+}
 
 #[cfg(test)]
 #[path = "profile_gpu_test.rs"]
@@ -143,6 +150,7 @@ impl Timing {
 /// Output reachability and cache availability observed at graph execution start.
 #[derive(Debug, serde::Serialize)]
 pub struct NodeOutput {
+    pub id: usize,
     pub name: String,
     pub required: bool,
     pub cached_available: bool,
@@ -150,6 +158,99 @@ pub struct NodeOutput {
     pub requested_for_execution: bool,
     /// A new value was published into the executor for this output.
     pub published: bool,
+    pub resource: Option<ResourceObservation>,
+}
+
+/// Scalar identities and logical sizes. These records never own GPU storage.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ResourceObservation {
+    pub allocation_id: u64,
+    pub generation: u64,
+    pub byte_len: u64,
+    pub working_scale: u32,
+    pub description: Option<ImageDescription>,
+    pub view: Option<ImageView>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ImageDescription {
+    pub extent: [u32; 2],
+    pub layout: String,
+    pub space: String,
+    pub view_baked: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ImageView {
+    pub crop: [u32; 4],
+    pub rotation: u32,
+    pub extent: [u32; 2],
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GraphOutput {
+    pub id: usize,
+    pub name: String,
+    pub producer: usize,
+    pub dependencies: Vec<usize>,
+    pub data_type: String,
+    pub session_hint: bool,
+    pub sealed_cut: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GraphObservation {
+    pub id: u64,
+    pub requested_roots: Vec<usize>,
+    pub outputs: Vec<GraphOutput>,
+    pub boundary_memory_scope: &'static str,
+}
+
+/// Unique logical bytes held at a node boundary; excludes in-node peaks and driver residency.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub struct BoundaryMemory {
+    pub graph_bytes: u64,
+    pub scratch_bytes: u64,
+    pub cache_bytes: u64,
+    pub union_bytes: u64,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CheckpointEntry {
+    pub names: Vec<String>,
+    pub role: &'static str,
+    pub version: u64,
+    pub parents: Vec<u64>,
+    pub allocation_id: u64,
+    pub generation: u64,
+    pub byte_len: u64,
+    pub working_scale: u32,
+    pub selected: bool,
+    pub primary: bool,
+    pub restart: bool,
+    pub pinned: bool,
+    pub required_cut: bool,
+    pub priority: Option<(u8, usize)>,
+    pub used_frame: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CacheSnapshot {
+    pub entries: Vec<CheckpointEntry>,
+    pub versions: Vec<CheckpointVersion>,
+    pub cache_structure_bytes: u64,
+    pub parameter_payload_bytes: u64,
+    pub preparation_bytes: u64,
+    pub output_parameters: Vec<crate::render::ParameterResources>,
+}
+
+/// Exact retained ancestry without parameter payloads or GPU ownership.
+#[derive(Debug, serde::Serialize)]
+pub struct CheckpointVersion {
+    pub version: u64,
+    pub role: &'static str,
+    pub names: Vec<String>,
+    pub parents: Vec<u64>,
 }
 
 /// Diagnostic observations for one graph node. GPU indices cover only nested
@@ -157,6 +258,7 @@ pub struct NodeOutput {
 /// resolved at graph completion. Both ranges are end-exclusive indices into gpu.
 #[derive(Debug, serde::Serialize)]
 pub struct NodeObservation {
+    pub graph_id: u64,
     pub ordinal: usize,
     pub operation: &'static str,
     pub outputs: Vec<NodeOutput>,
@@ -176,6 +278,12 @@ pub struct NodeObservation {
     pub nested_gpu_end: usize,
     pub shared_gpu_start: Option<usize>,
     pub shared_gpu_end: Option<usize>,
+    pub memory_before: BoundaryMemory,
+    pub memory_after_publication: BoundaryMemory,
+    pub memory_after_retirement: BoundaryMemory,
+    /// Host time collecting resource and boundary observations, including the pre-node scan.
+    /// Excludes trace emission and graph metadata collection.
+    pub diagnostic_overhead_ms: f64,
 }
 
 #[derive(Default, Debug, serde::Serialize)]
@@ -187,6 +295,8 @@ pub struct Profile {
     pub gpu: Vec<Timing>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<NodeObservation>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub graphs: Vec<GraphObservation>,
     pub scratch_allocations: u32,
     pub scratch_reuses: u32,
 }

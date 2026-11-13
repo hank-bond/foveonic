@@ -22,6 +22,91 @@ use crate::{
 };
 use std::time::Instant;
 
+fn resource_observation(value: &Value) -> crate::profile::ResourceObservation {
+    let (allocation_id, generation) = value.buffer.identity();
+    crate::profile::ResourceObservation {
+        allocation_id,
+        generation,
+        byte_len: value.buffer.size(),
+        working_scale: value.working_scale.divisor(),
+        description: value.description.map(|d| crate::profile::ImageDescription {
+            extent: d.extent,
+            layout: format!("{:?}", d.layout),
+            space: format!("{:?}", d.space),
+            view_baked: d.view_baked,
+        }),
+        view: value.view.map(|v| crate::profile::ImageView {
+            crop: v.crop,
+            rotation: v.rotation,
+            extent: v.extent,
+        }),
+    }
+}
+
+fn boundary_memory(
+    values: &[Option<Value>],
+    scratch: &Scratch,
+    execution: &Execution<'_>,
+) -> crate::profile::BoundaryMemory {
+    fn total<'a>(buffers: impl Iterator<Item = &'a crate::gpu::ReadGuard>) -> u64 {
+        let mut seen = std::collections::HashSet::new();
+        buffers
+            .filter_map(|buffer| seen.insert(buffer.identity().0).then_some(buffer.size()))
+            .sum()
+    }
+    let graph = || values.iter().flatten().map(|value| &value.buffer);
+    let cache = || {
+        execution
+            .cache
+            .as_deref()
+            .into_iter()
+            .flat_map(|cache| cache.buffers())
+    };
+    crate::profile::BoundaryMemory {
+        graph_bytes: total(graph()),
+        scratch_bytes: total(scratch.buffers()),
+        cache_bytes: total(cache()),
+        union_bytes: total(graph().chain(scratch.buffers()).chain(cache())),
+    }
+}
+
+fn trace_graph_outputs(
+    graph_id: Option<u64>,
+    graph: &Graph,
+    ids: &[usize],
+    values: &[Option<Value>],
+    cached: &[bool],
+) {
+    if !crate::diagnostics::enabled() {
+        return;
+    }
+    for &id in ids {
+        crate::diagnostics::event(
+            crate::diagnostics::Category::Graph,
+            "graph.output",
+            |fields| {
+                if let Some(graph_id) = graph_id {
+                    fields.u64("graph_id", graph_id);
+                }
+                fields
+                    .u64("output_id", id as u64)
+                    .str("name", &graph.outputs[id].cache_name())
+                    .str("data_type", &format!("{:?}", graph.outputs[id].data))
+                    .bool("seeded", cached[id])
+                    .bool("present", values[id].is_some());
+                if let Some(value) = &values[id] {
+                    let (allocation_id, generation) = value.buffer.identity();
+                    fields
+                        .u64("allocation_id", allocation_id)
+                        .u64("allocation_generation", generation)
+                        .u64("byte_len", value.buffer.size())
+                        .u64("working_scale", u64::from(value.working_scale.divisor()));
+                }
+            },
+        );
+    }
+}
+
 // Allocation traffic bounds how far stateless work can queue ahead. This is
 // not a residency limit. A single node and retained outputs can exceed it.
 const SUBMISSION_ALLOCATION_WINDOW_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -91,12 +176,17 @@ impl Engine {
         profile: &mut Profile,
         execution: &mut Execution<'_>,
     ) -> Result<Vec<Value>> {
+        let graph_id = (profile.mode.enabled() || crate::diagnostics::enabled())
+            .then(crate::profile::next_graph_id);
         let _execution_scope = crate::diagnostics::scope_with(
             crate::diagnostics::Category::Graph,
             "graph.execute",
             |fields| {
                 fields.u64("nodes", graph.nodes.len() as u64);
                 fields.u64("targets", targets.len() as u64);
+                if let Some(id) = graph_id {
+                    fields.u64("graph_id", id);
+                }
             },
         );
         let preparation =
@@ -111,6 +201,27 @@ impl Engine {
             .map(|output| execution.seed(&output.cache_name()))
             .collect();
         let cached: Vec<bool> = values.iter().map(Option::is_some).collect();
+        if profile.mode.enabled() {
+            profile.graphs.push(crate::profile::GraphObservation {
+                id: graph_id.expect("enabled graph has an identity"),
+                requested_roots: targets.to_vec(),
+                boundary_memory_scope: "Logical unique buffer bytes at node boundaries; excludes node-internal temporaries, driver and frontend allocations, and decoded CPU memory",
+                outputs: graph
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .map(|(id, output)| crate::profile::GraphOutput {
+                        id,
+                        name: output.cache_name(),
+                        producer: output.producer,
+                        dependencies: output.dependencies.clone(),
+                        data_type: format!("{:?}", output.data),
+                        session_hint: graph.session_outputs.contains(&id),
+                        sealed_cut: graph.sealed_outputs.contains(&id),
+                    })
+                    .collect(),
+            });
+        }
         let required = if cached.iter().any(|cached| *cached) {
             graph.required_until(targets, &cached)?
         } else {
@@ -185,6 +296,9 @@ impl Engine {
                 node.operation.label(),
                 |fields| {
                     fields.u64("node", node_index as u64);
+                    if let Some(id) = graph_id {
+                        fields.u64("graph_id", id);
+                    }
                     fields.str("operation", node.operation.kind());
                     fields.bool("executed", run);
                     fields.u64("outputs", node.outputs.len() as u64);
@@ -201,34 +315,46 @@ impl Engine {
                 },
             );
             let diagnostic = if let Some(reachable) = &reachable {
+                let diagnostic_started = Instant::now();
+                let mut observation = crate::profile::NodeObservation {
+                    graph_id: graph_id.expect("profiled graph has an identity"),
+                    ordinal: node_index,
+                    operation: node.operation.kind(),
+                    outputs: node
+                        .outputs
+                        .iter()
+                        .map(|&id| crate::profile::NodeOutput {
+                            id,
+                            name: graph.outputs[id].cache_name(),
+                            required: reachable[id],
+                            cached_available: cached[id],
+                            requested_for_execution: run && required[id],
+                            published: false,
+                            resource: values[id].as_ref().map(resource_observation),
+                        })
+                        .collect(),
+                    executed: run,
+                    host_milliseconds: None,
+                    started_ms: 0.,
+                    publication_ms: None,
+                    completion_wait_ms: None,
+                    retirement_ms: None,
+                    total_ms: None,
+                    activity: None,
+                    nested_gpu_start: profile.gpu.len(),
+                    nested_gpu_end: profile.gpu.len(),
+                    shared_gpu_start: None,
+                    shared_gpu_end: None,
+                    memory_before: boundary_memory(&values, &scratch, execution),
+                    memory_after_publication: Default::default(),
+                    memory_after_retirement: Default::default(),
+                    diagnostic_overhead_ms: 0.,
+                };
+                observation.diagnostic_overhead_ms =
+                    diagnostic_started.elapsed().as_secs_f64() * 1000.;
+                observation.started_ms = profile.elapsed_ms();
                 Some((
-                    crate::profile::NodeObservation {
-                        ordinal: node_index,
-                        operation: node.operation.kind(),
-                        outputs: node
-                            .outputs
-                            .iter()
-                            .map(|&id| crate::profile::NodeOutput {
-                                name: graph.outputs[id].cache_name(),
-                                required: reachable[id],
-                                cached_available: cached[id],
-                                requested_for_execution: run && required[id],
-                                published: false,
-                            })
-                            .collect(),
-                        executed: run,
-                        host_milliseconds: None,
-                        started_ms: profile.elapsed_ms(),
-                        publication_ms: None,
-                        completion_wait_ms: None,
-                        retirement_ms: None,
-                        total_ms: None,
-                        activity: None,
-                        nested_gpu_start: profile.gpu.len(),
-                        nested_gpu_end: profile.gpu.len(),
-                        shared_gpu_start: None,
-                        shared_gpu_end: None,
-                    },
+                    observation,
                     Instant::now(),
                     gpu.activity(),
                     profile.mode.gpu().then(|| trace.len()),
@@ -237,7 +363,10 @@ impl Engine {
                 None
             };
             if !run {
-                if let Some((observation, _, _, _)) = diagnostic {
+                trace_graph_outputs(graph_id, graph, &node.outputs, &values, &cached);
+                if let Some((mut observation, _, _, _)) = diagnostic {
+                    observation.memory_after_publication = observation.memory_before;
+                    observation.memory_after_retirement = observation.memory_before;
                     profile.nodes.push(observation);
                 }
                 continue;
@@ -2069,10 +2198,17 @@ impl Engine {
             if let Some((observation, _, _)) = &mut diagnostic {
                 observation.publication_ms =
                     publication.map(|start| start.elapsed().as_secs_f64() * 1000.);
+                let diagnostic_started = Instant::now();
                 for (output, &id) in observation.outputs.iter_mut().zip(&node.outputs) {
                     output.published = !cached[id] && values[id].is_some();
+                    output.resource = values[id].as_ref().map(resource_observation);
                 }
+                observation.memory_after_publication =
+                    boundary_memory(&values, &scratch, execution);
+                observation.diagnostic_overhead_ms +=
+                    diagnostic_started.elapsed().as_secs_f64() * 1000.;
             }
+            trace_graph_outputs(graph_id, graph, &node.outputs, &values, &cached);
             // Queuing a whole outdated render would delay both drawing and newer edits.
             // Finish submitted work off-thread, then check for newer work between stages.
             // Background graph work uses this same completed-operation boundary.
@@ -2123,6 +2259,10 @@ impl Engine {
             if let Some((mut observation, started, shared_range)) = diagnostic {
                 observation.retirement_ms =
                     retirement.map(|start| start.elapsed().as_secs_f64() * 1000.);
+                let diagnostic_started = Instant::now();
+                observation.memory_after_retirement = boundary_memory(&values, &scratch, execution);
+                observation.diagnostic_overhead_ms +=
+                    diagnostic_started.elapsed().as_secs_f64() * 1000.;
                 observation.total_ms = Some(started.elapsed().as_secs_f64() * 1000.);
                 if let (Some(ranges), Some((start, end))) = (&mut shared_ranges, shared_range) {
                     ranges.push((profile.nodes.len(), start, end));

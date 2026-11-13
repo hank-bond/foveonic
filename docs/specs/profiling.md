@@ -34,3 +34,9 @@ The optimization harness must retain a distinct render session for each original
 Compare sequential whole-photo rendering with bounded host concurrency on the same ordered device queue. Keep production scheduling unchanged during this measurement slice. Concurrent whole-photo work must not be described as batching the same graph stage across photographs. Record logical retained buffer totals and enforce an explicit measurement budget. These totals exclude originals, display textures, scratch and driver allocations.
 
 Node diagnostics should distinguish operation work, cache publication, existing completion waits and buffer retirement. Preserve node/output cache observations and host timeline placement. Timeline exports may show host overlap, but must not place GPU passes on a host clock without a measured shared origin. Separate profiling Off acceptance runs from Wall attribution and synchronized GPU diagnostics. Collect verification readbacks outside timed edits.
+
+## Checkpoint diagnostics
+
+Optional graph diagnostics should connect stage timings with output dependencies, buffer identities and logical byte sizes. Retained-checkpoint snapshots should describe exact version ancestry and cache roles. Diagnostic records must own metadata only and must not extend processing-buffer or parameter-payload lifetimes. Memory scans and verification belong outside ordinary node timings. Boundary ownership counts must identify their scope and must not be described as transient GPU peaks or process footprint.
+
+Checkpoint investigations should distinguish the first changed edit from later same-control edits. Use separate ordinary latency and diagnostic runs, and validate reused output against fresh processing. Graph ancestry timing estimates must remain distinguishable from measured cache-policy benefits.

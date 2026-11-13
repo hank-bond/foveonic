@@ -23,6 +23,7 @@ Setup reports complete file-read, in-memory decode and total source-open wall ti
 - **[compare_merrill_preview.rs](./compare_merrill_preview.rs)** Compares completed Merrill reduced-preview variants and writes a color-managed local review.
 - **[export_dng.rs](./export_dng.rs)** Exports one supported original with explicit WB/mode for DNG reader validation, without selecting sidecars.
 - **[measure_color_field_controls.rs](./measure_color_field_controls.rs)** Measures highlight selectivity in fresh/cached float outputs and RGB16, with matched preview regions.
+- **[profile_checkpoints.rs](./profile_checkpoints.rs)** Measures independent checkpoint edit sequences with optional exact replay.
 - **[profile_editing.rs](./profile_editing.rs)** Measures warm multi-photo edits with separate sessions, bounded host concurrency and node diagnostics.
 - **[profile_noise_resources.rs](./profile_noise_resources.rs)** Compares completed Merrill fresh and staged processing, with optional settled-memory sampling boundaries.
 - **[profile_pipeline.rs](./profile_pipeline.rs)** Measures completed fresh processing with normal photographic controls, separate GPU diagnostics and optional exact goldens.

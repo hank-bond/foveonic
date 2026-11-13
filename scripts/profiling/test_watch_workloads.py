@@ -14,6 +14,9 @@ class WorkloadTests(unittest.TestCase):
                         '/toolchain/bin/rustc --crate-name foveonic src/lib.rs',
                         '/other-worktree/Foveonic.app/Contents/MacOS/foveonic-gui',
                         '/tmp/target/release/examples/profile_pipeline photo.x3f result',
+                        '/tmp/target/release/examples/profile_checkpoints cases.json report.jsonl',
+                        '/tmp/target/release/examples/profile_noise_resources cases.json',
+                        '/tmp/target/release/examples/profile_smart_preview photo.x3f',
                         '/tmp/target/release/deps/foveonic-abc --ignored']:
             self.assertTrue(is_workload(command), command)
 

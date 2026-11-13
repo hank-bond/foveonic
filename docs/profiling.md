@@ -366,3 +366,26 @@ The ignored `decode_cache::tests::parallel_prefetch_throughput_preserves_exact_s
 Every photo reports its host start/end relative to its edit group. Whole-group completion and first-photo completion measure throughput and initial feedback separately. Existing device-wide completion waits may include other executors' work, so individual concurrent durations are not isolated GPU costs. Host concurrency does not implement stage-major scheduling across photographs. Use this baseline to justify any later executor/submission changes.
 
 Use the shared native trace for a causal application timeline. Aggregate headless report timestamps retain their own group origins. They are not exported with synthetic placement between groups. GPU pass durations in aggregate reports remain isolated diagnostic measurements with their declared synchronization cost.
+
+## Graph checkpoints
+
+Use `profile_checkpoints` to connect processing costs with retained numerical checkpoints. It opens each decoded source once, warms compiled kernels, then gives each control/trial a fresh executor and session. Each independent sequence runs base, unchanged, edit A, distinct edit B and return A. The retained source, compiled kernels and device queue are shared. Per-photo preparation starts fresh.
+
+Prepare the checked-in recipes using the [reproducible input procedure](./specs/performance-diagnostics.md#reproducible-test-inputs), then run a focused cell:
+
+```sh
+cargo build --release --offline -p foveonic --example profile_checkpoints
+target/release/examples/profile_checkpoints \
+  .local/test-inputs/checkpoint-cases.json .local/checkpoints-off.jsonl \
+  --case sign-natural --control exposure --mode off --repeats 3
+python3 scripts/profiling/checkpoints.py .local/checkpoints-off.jsonl \
+  --output .local/checkpoints-off-report.json
+```
+
+Use new paths for each capture and report. `--scale-divisor 2`, `4` or `8` selects smaller sensor grids. `--regional` instead uses each recipe's declared native visible region. Omit the case/control filters to cover all declared recipes and edit axes. Each capture records the effective settings, source identity and adapter. The maintained recipes include Merrill color/Natural, monochrome/Natural and both noise approaches. They measure rendering directly through a source-retaining `RenderSession`, including at reduced divisors. These cells do not measure the app's source-free reduced-session owner, GUI texture creation or group scheduling.
+
+Run separate `--mode wall` and `--mode gpu` captures for attribution. The example explicitly waits after each render in every mode to measure completed processing. GPU mode also requests timestamp diagnostics. Only unverified Off runs are ordinary latency evidence. `--verify` compares every phase's actual pixels and geometry with fresh processing after timing and marks the entire capture unsuitable for latency comparison. Readbacks are released immediately. Neither the diagnostic records nor the report retain processing buffers.
+
+The report preserves graph topology, output allocation/generation identities, cache version ancestry, overlapping retention flags, node host/GPU timing and graph/scratch/cache boundary ownership. It deduplicates physical storage by allocation identity. CPU source, metadata, preparation and parameter resources remain separate. Boundary bytes exclude node-internal transient peaks, frontend allocations and driver residency. Optional node observation overhead is reported separately, but it does not include every trace or graph-metadata cost. Node total spans include some diagnostic work, and the observation counter includes scans before those spans. Do not subtract the entire observation counter from node totals. Compare separate Off and Wall captures to assess the broader diagnostic effect.
+
+The analyzer reports missing controls, trials, phases and required verification. Unequal verification fails the command. Its ancestry rankings describe measured contributing GPU work per byte and must not be interpreted as marginal latency saved by a new cache policy. Shared producers and preparation outside graph execution require subsequent targeted experiments. The [checkpoint plan](../plans/archived/checkpoint-profiling.md) records those findings and follow-ups.

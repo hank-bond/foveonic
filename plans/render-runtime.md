@@ -169,6 +169,19 @@ The rows describe likely boundaries, not authorization to implement several at o
 
 The engine keeps its current serial execution contract. Execution cursors, stage interleaving, grouped submissions/completion waits and multi-image shader dispatches belong to the separate wide-rendering investigation. A future step may revisit any high-level ownership boundary, but numerical node optimization, loupe and focus detection are outside this plan.
 
+## Architecture-specific options follow-up
+
+The owner requested a focused design pass on camera-architecture option support. Known unsupported option combinations should produce an error before execution. Shared nodes should receive coherent option groups rather than individually checking unrelated fields from every architecture. Evaluate architecture-typed option objects, with mutually exclusive camera groups represented together, while retaining shared controls where their meanings actually match.
+
+- [ ] Map authored settings, capability validation and resolved node parameters across direct, retained-session and reduced-session entry points.
+- [ ] Agree on one validation/resolution boundary and names for common versus architecture-specific control groups.
+- [ ] Evaluate typed architecture variants that prevent invalid combinations without distributing per-parameter architecture checks through nodes.
+- [ ] Cover supported and rejected combinations across entry points, including shared nodes and transient scale/region requests.
+
+Distinguish stored authored choices from resolved active node options. Inactive values can legitimately remain saved when switching rendering modes or methods. They must not be mistaken for supported active edits in tests. The profiling fixtures now separate color reconstruction from monochrome controls and omit Universal HDR/local-contrast edits from Reference-tone recipes.
+
+The checkpoint investigation exposed a concrete inconsistency: a Quattro highlight-amount setting was ignored by Merrill session execution but rejected by direct rendering. Its fixture now uses Merrill's threshold control and validates authored choices before adding transient execution geometry. Keep this production consistency issue on the docket rather than extending the profiling slice into an option-model rewrite. Preserve the separate alpha-sidecar policy for unknown JSON fields and missing defaults. That policy does not authorize silently ignoring known controls unsupported by the selected architecture.
+
 ## Evidence per slice
 
 1. Complete the conceptual vocabulary pass, then record the approved concept/name, old and new owners, affected callers, behavior preserved and expected benefit. State what is deliberately unchanged.

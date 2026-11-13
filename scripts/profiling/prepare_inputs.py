@@ -13,7 +13,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 DEFINITIONS = HERE / 'test_inputs.json'
 CASE_FILES = {'render_cases': 'render-cases.json', 'scenario_cases': 'scenario-cases.json',
-              'choice_cases': 'choice-cases.json', 'regional_cases': 'regional-cases.json'}
+              'choice_cases': 'choice-cases.json', 'regional_cases': 'regional-cases.json',
+              'checkpoint_cases': 'checkpoint-cases.json'}
 
 
 def prepare(source_dir, directory, definitions, external_samples):

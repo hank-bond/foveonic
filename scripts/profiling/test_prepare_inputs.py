@@ -24,6 +24,7 @@ class PrepareInputTests(unittest.TestCase):
                        'aliases': {'second.x3f': 'camera.x3f'},
                        'render_cases': [{'label': 'camera', 'source': 'camera.x3f', 'family': 'tiger'}],
                        'scenario_cases': [{'source': 'camera.x3f', 'settings': {'exposure': 0.15}}],
+                       'checkpoint_cases': [{'source': 'camera.x3f', 'edits': [{'label': 'exposure', 'a': {'exposure': 0.1}, 'b': {'exposure': 0.2}}]}],
                        'regional_cases': [{'source': 'camera.x3f', 'settings': {'rotation': {'degrees': 17.}}}],
                        'choice_cases': [{'source': 'second.x3f', 'settings': {'white_balance': 'Sunlight'}}],
                        'fixtures': [{'name': 'tiger', 'family': 'tiger', 'sources': ['camera.x3f', 'second.x3f']}]}
@@ -44,6 +45,9 @@ class PrepareInputTests(unittest.TestCase):
             scenarios = json.loads(outputs['scenario-cases.json'].read_text())
             self.assertEqual(scenarios[0]['settings'], {'exposure': 0.15})
             self.assertEqual(scenarios[0]['source'], str(source / 'camera.x3f'))
+            checkpoints = json.loads(outputs['checkpoint-cases.json'].read_text())
+            self.assertEqual(checkpoints[0]['edits'], definitions['checkpoint_cases'][0]['edits'])
+            self.assertEqual(checkpoints[0]['source'], str(source / 'camera.x3f'))
             regional = json.loads(outputs['regional-cases.json'].read_text())
             self.assertEqual(regional[0]['settings']['rotation'], {'degrees': 17.})
             fixture = json.loads(outputs['fixtures.json'].read_text())[0]

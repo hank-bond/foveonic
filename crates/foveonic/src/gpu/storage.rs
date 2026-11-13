@@ -61,8 +61,7 @@ impl ReadGuard {
     pub fn size(&self) -> u64 {
         self.0.buffer.size()
     }
-    #[cfg(test)]
-    pub fn identity(&self) -> (u64, u64) {
+    pub(crate) fn identity(&self) -> (u64, u64) {
         (self.0.id, self.0.generation)
     }
     /// Aliases retain one allocation and consume the cache budget only once.

@@ -11,6 +11,9 @@ pub(crate) struct Scratch {
 }
 
 impl Scratch {
+    pub(crate) fn buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
+        self.buffers.iter()
+    }
     pub fn take(&mut self, gpu: &Gpu, size: u64) -> Result<crate::gpu::ReadGuard> {
         if let Some(index) = self.buffers.iter().position(|buffer| buffer.size() == size) {
             self.reuses += 1;

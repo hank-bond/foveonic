@@ -21,6 +21,18 @@ pub struct RenderSession {
     pub(crate) last_settings: Option<Settings>,
 }
 impl RenderSession {
+    /// Read-only scalar checkpoint inventory, intended for use outside timed rendering.
+    pub fn checkpoints(&self) -> crate::profile::CacheSnapshot {
+        let resources = self.resources();
+        crate::profile::CacheSnapshot {
+            entries: self.cache.checkpoints(),
+            versions: self.cache.checkpoint_versions(),
+            cache_structure_bytes: resources.cache_structure_bytes,
+            parameter_payload_bytes: resources.parameter_payload_bytes,
+            preparation_bytes: resources.preparation_bytes,
+            output_parameters: resources.output_parameters,
+        }
+    }
     /// Inspect all retained processing owners outside timed interactions.
     pub fn resources(&self) -> crate::render::SessionResources {
         let mut retained = crate::recipe::RetainedBytes::default();
@@ -328,6 +340,78 @@ pub(crate) struct Cache {
 }
 impl Cache {
     pub(crate) const LIMIT: u64 = 1024 * 1024 * 1024;
+
+    fn checkpoint_versions(&self) -> Vec<crate::profile::CheckpointVersion> {
+        self.retained_versions()
+            .into_iter()
+            .map(|version| {
+                let mut names: Vec<_> = self
+                    .working
+                    .versions
+                    .iter()
+                    .filter(|(_, known)| known.generation == version.generation)
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                names.sort();
+                crate::profile::CheckpointVersion {
+                    version: version.generation,
+                    role: version.recipe.role,
+                    names,
+                    parents: version
+                        .parents
+                        .iter()
+                        .map(|parent| parent.generation)
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    fn checkpoints(&self) -> Vec<crate::profile::CheckpointEntry> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                let generation = entry.version.generation;
+                let mut names: Vec<_> = self
+                    .working
+                    .versions
+                    .iter()
+                    .filter(|(_, version)| version.generation == generation)
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                names.sort();
+                let selected = names
+                    .iter()
+                    .any(|name| self.working.selected.contains(name));
+                let primary = names.iter().any(|name| self.working.primary.contains(name));
+                let (allocation_id, buffer_generation) = entry.value.buffer.identity();
+                crate::profile::CheckpointEntry {
+                    names,
+                    role: entry.version.recipe.role,
+                    version: generation,
+                    parents: entry
+                        .version
+                        .parents
+                        .iter()
+                        .map(|parent| parent.generation)
+                        .collect(),
+                    allocation_id,
+                    generation: buffer_generation,
+                    byte_len: entry.value.buffer.size(),
+                    working_scale: entry.value.working_scale.divisor(),
+                    selected,
+                    primary,
+                    restart: self.active_restart.contains(&generation)
+                        || self.working.restart.contains(&generation),
+                    pinned: entry.pinned,
+                    required_cut: self.required_cuts.contains(&generation)
+                        || self.working.cuts.contains(&generation),
+                    priority: self.current_priority(generation),
+                    used_frame: entry.used,
+                }
+            })
+            .collect()
+    }
     const REPAIR_LIMIT: usize = 4 * 1024 * 1024;
 
     fn retain_repair(
@@ -416,6 +500,7 @@ impl Cache {
         reason: &'static str,
         version: &Version,
         bytes: u64,
+        allocation: (u64, u64),
     ) {
         diagnostics::event(Category::Cache, event, |fields| {
             self.diagnostic_source(fields);
@@ -424,6 +509,8 @@ impl Cache {
                 .str("role", version.recipe.role)
                 .u64("generation", version.generation)
                 .u64("buffer_reference_bytes", bytes)
+                .u64("allocation_id", allocation.0)
+                .u64("allocation_generation", allocation.1)
                 .bool(
                     "selected",
                     self.current_priority(version.generation).is_some(),
@@ -448,6 +535,7 @@ impl Cache {
             reason,
             &entry.version,
             entry.value.buffer.size(),
+            entry.value.buffer.identity(),
         );
     }
     pub(crate) fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
@@ -824,6 +912,7 @@ impl Cache {
                     "value-capacity",
                     &self.working.versions[name],
                     value.buffer.size(),
+                    value.buffer.identity(),
                 );
             }
             return;
@@ -844,11 +933,14 @@ impl Cache {
         {
             entry.used = self.frame;
             entry.pinned |= self.working.cuts.contains(&version.generation);
+            let allocation = entry.value.buffer.identity();
+            let bytes = entry.value.buffer.size();
             self.observe_checkpoint(
                 "cache.checkpoint.admitted",
                 "existing-version",
                 &version,
-                value.buffer.size(),
+                bytes,
+                allocation,
             );
             return;
         }
@@ -883,6 +975,7 @@ impl Cache {
                     "local-priority",
                     &version,
                     value.buffer.size(),
+                    value.buffer.identity(),
                 );
                 return;
             };
@@ -900,6 +993,7 @@ impl Cache {
             "new-version",
             &entry.version,
             entry.value.buffer.size(),
+            entry.value.buffer.identity(),
         );
     }
     fn current_priority(&self, generation: u64) -> Option<(u8, usize)> {

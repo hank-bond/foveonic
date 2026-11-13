@@ -71,6 +71,36 @@ fn node_observations_distinguish_executed_cached_and_pruned_outputs() {
         .unwrap()
         .unwrap();
     assert!(off.nodes.is_empty());
+    assert!(off.graphs.is_empty());
+    let readers: Vec<_> = session
+        .cache
+        .buffers()
+        .map(|buffer| (buffer.identity(), buffer.readers()))
+        .collect();
+    let checkpoint = session.checkpoints();
+    assert!(!checkpoint.entries.is_empty());
+    let versions: std::collections::HashSet<_> = checkpoint
+        .versions
+        .iter()
+        .map(|version| version.version)
+        .collect();
+    assert!(checkpoint
+        .entries
+        .iter()
+        .all(|entry| versions.contains(&entry.version)));
+    assert!(checkpoint.versions.iter().all(|version| version
+        .parents
+        .iter()
+        .all(|parent| versions.contains(parent))));
+    assert_eq!(
+        readers,
+        session
+            .cache
+            .buffers()
+            .map(|buffer| (buffer.identity(), buffer.readers()))
+            .collect::<Vec<_>>(),
+        "checkpoint snapshots must not retain GPU readers"
+    );
     let mut wall = Profile::new(Mode::Wall);
     engine
         .render_session(&mut session, &settings, &["final"], || false, &mut wall)
@@ -83,6 +113,39 @@ fn node_observations_distinguish_executed_cached_and_pruned_outputs() {
         .any(|output| output.required
             && output.cached_available
             && !output.requested_for_execution));
+    assert!(wall
+        .nodes
+        .iter()
+        .flat_map(|node| &node.outputs)
+        .any(|output| output.cached_available && output.resource.is_some()));
+    assert!(!wall.graphs.is_empty());
+    for node in &wall.nodes {
+        let graph = wall
+            .graphs
+            .iter()
+            .find(|graph| graph.id == node.graph_id)
+            .unwrap();
+        for output in &node.outputs {
+            assert_eq!(graph.outputs[output.id].name, output.name);
+        }
+        for memory in [
+            node.memory_before,
+            node.memory_after_publication,
+            node.memory_after_retirement,
+        ] {
+            assert!(
+                memory.union_bytes
+                    >= memory
+                        .graph_bytes
+                        .max(memory.scratch_bytes)
+                        .max(memory.cache_bytes)
+            );
+            assert!(
+                memory.union_bytes
+                    <= memory.graph_bytes + memory.scratch_bytes + memory.cache_bytes
+            );
+        }
+    }
     assert!(wall
         .nodes
         .iter()
