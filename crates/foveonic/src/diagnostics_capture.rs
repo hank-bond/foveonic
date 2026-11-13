@@ -23,7 +23,7 @@ use perfetto_sdk::{
 use std::{
     fs::{self, File},
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::AtomicBool,
         mpsc::{self, Receiver, SyncSender},
@@ -40,7 +40,7 @@ impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
             mode: Mode::Wall,
-            buffer_kib: 32 * 1024,
+            buffer_kib: 128 * 1024,
         }
     }
 }
@@ -55,7 +55,12 @@ pub struct SavedCapture {
 type Reply<T> = mpsc::Sender<Result<T>>;
 enum Command {
     Start(CaptureConfig, Reply<()>),
-    Save(PathBuf, serde_json::Value, Reply<SavedCapture>),
+    Save(
+        PathBuf,
+        serde_json::Value,
+        Option<usize>,
+        Reply<SavedCapture>,
+    ),
 }
 /// Clones share one bounded control mailbox. SDK waits and file output happen
 /// only on this controller's thread. Callers poll the returned reply channels.
@@ -87,15 +92,21 @@ impl Recorder {
                             };
                             let _ = reply.send(result);
                         }
-                        Command::Save(directory, manifest, reply) => {
+                        Command::Save(directory, manifest, keep, reply) => {
                             let result = active
                                 .take()
                                 .ok_or_else(|| "no diagnostic capture is active".into())
                                 .and_then(|(mut session, config)| {
                                     event(Category::Scenario, "capture.stop", |_| {});
                                     stop(&mut session);
-                                    let result = save(&mut session, config, directory, manifest);
+                                    let producer = manifest.get("application").and_then(|value| value.as_str()).map(str::to_owned);
+                                    let result = save(&mut session, config, directory, manifest, keep);
                                     CLAIMED.store(false, Ordering::Release);
+                                    if let (Ok(saved), Some(keep), Some(producer)) = (&result, keep, producer) {
+                                        if let Err(error) = prune_captures(&saved.directory, &producer, keep) {
+                                            eprintln!("Capture saved, but older captures could not be removed: {error}");
+                                        }
+                                    }
                                     result
                                 });
                             let _ = reply.send(result);
@@ -122,12 +133,78 @@ impl Recorder {
         directory: PathBuf,
         manifest: serde_json::Value,
     ) -> Result<Receiver<Result<SavedCapture>>> {
+        self.request_save(directory, manifest, None)
+    }
+    /// Save and retain the newest completed captures from this producer in the same parent.
+    /// Cleanup runs after successful saving, on the recorder's existing control thread.
+    pub fn stop_save_retaining(
+        &self,
+        directory: PathBuf,
+        manifest: serde_json::Value,
+        keep: usize,
+    ) -> Result<Receiver<Result<SavedCapture>>> {
+        if keep == 0 {
+            return Err("capture retention must keep at least one capture".into());
+        }
+        if manifest
+            .get("application")
+            .and_then(|value| value.as_str())
+            .is_none()
+        {
+            return Err("retained captures require an application identity".into());
+        }
+        self.request_save(directory, manifest, Some(keep))
+    }
+    fn request_save(
+        &self,
+        directory: PathBuf,
+        manifest: serde_json::Value,
+        keep: Option<usize>,
+    ) -> Result<Receiver<Result<SavedCapture>>> {
         let (send, receive) = mpsc::channel();
         self.0
-            .try_send(Command::Save(directory, manifest, send))
+            .try_send(Command::Save(directory, manifest, keep, send))
             .map_err(|_| "diagnostics control is busy or closed")?;
         Ok(receive)
     }
+}
+
+fn prune_captures(current: &Path, producer: &str, keep: usize) -> Result<()> {
+    let parent = current.parent().ok_or("capture directory has no parent")?;
+    let mut completed = Vec::new();
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() || entry.path() == current {
+            continue;
+        }
+        let path = entry.path();
+        // Recognize our completed bundles before removing any directory or derived reports.
+        let owned = (|| -> Result<bool> {
+            let manifest: serde_json::Value =
+                serde_json::from_reader(File::open(path.join("manifest.json"))?)?;
+            let summary: serde_json::Value =
+                serde_json::from_reader(File::open(path.join("summary.json"))?)?;
+            Ok(manifest["backend"] == "perfetto-sdk"
+                && manifest["application"]["application"] == producer
+                && manifest["retention"]["keep_latest"]
+                    .as_u64()
+                    .is_some_and(|keep| keep > 0)
+                && summary["complete"] == true)
+        })()
+        .unwrap_or(false);
+        if owned {
+            if let Ok(trace) = fs::symlink_metadata(path.join("trace.pftrace")) {
+                if trace.is_file() {
+                    completed.push((trace.modified()?, path));
+                }
+            }
+        }
+    }
+    completed.sort_by(|left, right| right.cmp(left));
+    for (_, path) in completed.into_iter().skip(keep - 1) {
+        fs::remove_dir_all(path)?;
+    }
+    Ok(())
 }
 
 fn initialize() -> Result<()> {
@@ -221,6 +298,7 @@ fn save(
     config: CaptureConfig,
     directory: PathBuf,
     manifest: serde_json::Value,
+    keep: Option<usize>,
 ) -> Result<SavedCapture> {
     fs::create_dir_all(&directory)?;
     let trace = directory.join("trace.pftrace");
@@ -247,7 +325,8 @@ fn save(
     let summary = directory.join("summary.json");
     let metadata = serde_json::json!({"schema_version":1,"backend":"perfetto-sdk","backend_version":"1.2.1",
         "mode":config.mode,"buffer_kib":config.buffer_kib,"cpu_clock":"perfetto","gpu_clock":"uncalibrated",
-        "executable":executable_fingerprint(),"application":manifest});
+        "executable":executable_fingerprint(),"application":manifest,
+        "retention":keep.map(|keep| serde_json::json!({"keep_latest":keep}))});
     let results = serde_json::json!({"schema_version":1,"trace_bytes":trace_bytes,"mode":config.mode,
         "buffer_kib":config.buffer_kib,"complete":true,"loss_checked":false,
         "emission_transition_drops":TRANSITION_DROPS.load(Ordering::Relaxed),
@@ -313,4 +392,77 @@ fn executable_fingerprint() -> serde_json::Value {
         "fingerprint_scope":"on-disk-executable-at-save","loaded_image_attested":false,
         "error":error.to_string()})
     })
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    fn bundle(parent: &Path, name: &str, owner: &str, complete: bool, order: u64) -> PathBuf {
+        let path = parent.join(name);
+        fs::create_dir(&path).unwrap();
+        fs::write(
+            path.join("manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "backend":"perfetto-sdk", "application":{"application":owner},
+                "retention":{"keep_latest":4}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            path.join("summary.json"),
+            serde_json::to_vec(&serde_json::json!({"complete":complete})).unwrap(),
+        )
+        .unwrap();
+        let trace = File::create(path.join("trace.pftrace")).unwrap();
+        trace
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(order))
+            .unwrap();
+        fs::create_dir(path.join("analysis")).unwrap();
+        fs::write(path.join("analysis/report.json"), "derived").unwrap();
+        path
+    }
+
+    #[test]
+    fn keeps_current_and_three_newest_owned_bundles_without_touching_other_data() {
+        let temp = tempfile::tempdir().unwrap();
+        let old: Vec<_> = (1..=5)
+            .map(|order| bundle(temp.path(), &format!("run-{order}"), "app", true, order))
+            .collect();
+        let current = bundle(temp.path(), "current", "app", true, 0);
+        let foreign = bundle(temp.path(), "foreign", "other-app", true, 0);
+        let partial = bundle(temp.path(), "partial", "app", false, 0);
+        let missing = bundle(temp.path(), "missing-trace", "app", true, 0);
+        fs::remove_file(missing.join("trace.pftrace")).unwrap();
+        let scripted = bundle(temp.path(), "scripted", "app", true, 0);
+        let mut manifest: serde_json::Value =
+            serde_json::from_reader(File::open(scripted.join("manifest.json")).unwrap()).unwrap();
+        manifest["retention"] = serde_json::Value::Null;
+        fs::write(
+            scripted.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(temp.path().join("notes.txt"), "keep").unwrap();
+        prune_captures(&current, "app", 4).unwrap();
+        assert!(!old[0].exists() && !old[1].exists());
+        assert!(old[2..]
+            .iter()
+            .all(|path| path.join("analysis/report.json").is_file()));
+        assert!([current, foreign, partial, missing, scripted]
+            .iter()
+            .all(|path| path.is_dir()));
+        assert!(temp.path().join("notes.txt").is_file());
+    }
+
+    #[test]
+    fn keeping_one_protects_new_capture_even_if_its_clock_is_older() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = bundle(temp.path(), "old", "app", true, 10);
+        let current = bundle(temp.path(), "current", "app", true, 1);
+        prune_captures(&current, "app", 1).unwrap();
+        assert!(current.is_dir());
+        assert!(!old.exists());
+    }
 }

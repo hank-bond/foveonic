@@ -1874,7 +1874,7 @@ impl eframe::App for App {
                 diagnostics::Action::StopSave(directory) => {
                     let state = self.diagnostic_state();
                     self.diagnostics.set_end_state(state);
-                    self.diagnostics.stop_to(directory)
+                    self.diagnostics.stop_manual_to(directory)
                 }
             };
             if let Err(error) = result {

@@ -22,6 +22,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[cache-prefetch-window](./cache-prefetch-window.md)** _(archived)._ Bound background decoding around the selected photograph and retain nearby results under the disk budget.
 - **[cache-status-dots](./cache-status-dots.md)** _(archived)._ Replace the provisional cache checkmark with muted caption dots backed by explicit queue and disk states.
 - **[camera-repair-default](./camera-repair-default.md)** _(archived)._ Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
+- **[capture-storage](./capture-storage.md)** _(archived)._ Increase manual recording capacity and bound completed capture bundles without pruning automated evidence.
 - **[cargo-releases](./cargo-releases.md)** _(archived)._ Replace Python app packaging with Cargo tasks and prepare an unsigned v0.1.0 draft-release workflow.
 - **[checkpoint-profiling](./checkpoint-profiling.md)** _(archived)._ Measure graph stage costs and retained checkpoint ownership before changing numerical cache policy.
 - **[checkpoint-trace](./checkpoint-trace.md)** _(archived)._ Explain repeated work in ordinary app captures through bounded graph demand and checkpoint metadata.

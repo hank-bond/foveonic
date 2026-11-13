@@ -86,35 +86,46 @@ impl Controller {
         }
     }
     pub fn stop_to(&mut self, directory: PathBuf) -> Result<(), String> {
+        self.stop_to_with_retention(directory, false)
+    }
+    pub fn stop_manual_to(&mut self, directory: PathBuf) -> Result<(), String> {
+        self.stop_to_with_retention(directory, true)
+    }
+    fn stop_to_with_retention(&mut self, directory: PathBuf, retain: bool) -> Result<(), String> {
         if !self.active() || self.starting() || self.saving() {
             return Err("No completed diagnostic capture is ready to save".into());
         }
         self.action("stop_save_requested", json!({"directory":directory}));
-        self.saving = Some(
+        let reply = if retain {
+            self.recorder
+                .stop_save_retaining(directory.clone(), self.manifest.clone(), 4)
+        } else {
             self.recorder
                 .stop_save(directory.clone(), self.manifest.clone())
-                .map_err(|error| error.to_string())?,
-        );
+        };
+        self.saving = Some(reply.map_err(|error| error.to_string())?);
         self.saved_directory = Some(directory);
         Ok(())
     }
     pub fn save_on_exit_enabled(&self) -> bool {
         self.saving() || self.starting() || self.active()
     }
+    fn capture_parent(&self) -> PathBuf {
+        self.default_directory
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("foveonic-captures"))
+    }
     /// Shutdown may wait for the recorder after interaction has ended. Recordings
     /// use temporary storage when no save directory was supplied.
     pub fn save_on_exit(&mut self) -> Result<(), String> {
         if self.saving.is_none() {
-            let parent = self
-                .default_directory
-                .clone()
-                .unwrap_or_else(|| std::env::temp_dir().join("foveonic-captures"));
+            let parent = self.capture_parent();
             self.wait_for_start()?;
             if !self.active() {
                 return Ok(());
             }
             self.action("application_exit", json!({}));
-            self.stop_to(unique_directory(parent))?;
+            self.stop_manual_to(unique_directory(parent))?;
         }
         self.wait_for_save()
     }
@@ -376,11 +387,33 @@ fn ordinary_exit_does_not_start_a_capture_or_create_output() {
 #[cfg(test)]
 #[test]
 #[ignore = "owns global SDK capture state; run alone with --exact"]
-fn manual_exit_preserves_a_recording_without_a_configured_directory() {
+fn manual_exit_preserves_a_recording_in_its_owned_parent() {
+    let temporary = tempfile::tempdir().unwrap();
     let mut controller = Controller {
         default_directory: None,
         ..Default::default()
     };
+    assert_eq!(
+        controller.capture_parent(),
+        std::env::temp_dir().join("foveonic-captures")
+    );
+    // Actual saving and retention stay inside this test's own directory.
+    controller.default_directory = Some(temporary.path().to_owned());
+    for index in 0..5 {
+        let directory = temporary.path().join(format!("older-{index}"));
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("trace.pftrace"), "older").unwrap();
+        std::fs::write(
+            directory.join("manifest.json"),
+            serde_json::to_vec(&json!({
+                "backend":"perfetto-sdk", "application":{"application":"foveonic-gui"},
+                "retention":{"keep_latest":4}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(directory.join("summary.json"), "{\"complete\":true}").unwrap();
+    }
     controller
         .start(Mode::Wall, json!({"entry":"manual"}))
         .unwrap();
@@ -388,12 +421,13 @@ fn manual_exit_preserves_a_recording_without_a_configured_directory() {
     assert!(controller.save_on_exit_enabled());
     controller.save_on_exit().unwrap();
     let saved = controller.last_saved().unwrap();
-    assert_eq!(
-        saved.directory.parent().unwrap(),
-        std::env::temp_dir().join("foveonic-captures")
-    );
+    assert_eq!(saved.directory.parent().unwrap(), temporary.path());
     assert!(saved.trace_bytes > 0);
     assert!(saved.trace.is_file());
+    let manifest: Value = serde_json::from_slice(&std::fs::read(&saved.manifest).unwrap()).unwrap();
+    assert_eq!(manifest["buffer_kib"], 128 * 1024);
+    assert_eq!(manifest["retention"]["keep_latest"], 4);
+    assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 4);
     std::fs::remove_dir_all(&saved.directory).unwrap();
 }
 

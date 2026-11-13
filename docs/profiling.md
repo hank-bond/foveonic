@@ -416,3 +416,17 @@ python3 -m unittest discover -s scripts/profiling -p 'test_checkpoint_trace.py'
 ```
 
 Choose a new capture directory. The Rust check compares activity and exact pixels with ordinary execution. The Python integration check reads the actual native metadata and validates graph completeness, version links and retained dependency tables. Portable tests separately cover partial producer reuse, allocation aliases, distinct/replaced caches, exact eviction matching and missing history.
+
+## Capture storage
+
+The live Perfetto ring buffer uses up to 128 MB in RAM while recording. Saving writes a capture bundle containing `trace.pftrace`, `manifest.json` and `summary.json`. Analysis adds files within that bundle.
+
+Manual Stop/Save and orderly-exit saving retain the four most recent completed manual bundles in the same destination parent. These saves carry an explicit retention marker. Explicit scripted saves stay unmarked and are excluded, along with unmarked older bundles, unrelated folders and incomplete saves. Saving and cleanup use the recorder's existing background thread. Cleanup runs only after a successful save and always preserves that new capture.
+
+`FOVEONIC_DIAGNOSTICS_DIR` selects a stable parent for manual saves across app launches. Without it, orderly-exit saves use the platform temporary directory's `foveonic-captures` folder. The explicit Stop/Save button otherwise lets you choose a destination. Keep using the same parent for the four-run limit to apply across launches. Copy a bundle outside that managed parent when it needs longer preservation.
+
+For local owner reviews, use a stable project folder:
+
+```sh
+FOVEONIC_DIAGNOSTICS_DIR="$PWD/.local/foveonic-captures" FOVEONIC_PROFILE=wall target/release/Foveonic.app/Contents/MacOS/foveonic-gui
+```
