@@ -81,3 +81,18 @@ At 2 GB, edit-boundary snapshots reached roughly 2.15 GiB before trimming and ab
 The native region's backing allocation was about 86 MiB with an 8 MiB display texture; the Whole result referenced about 184 MiB backing and 225 MiB display texture. Regional backing includes processing support beyond the requested visible rectangle. These references can overlap other retained owners and must not be summed into a separate memory total. The next measurements remain Full/Full, Before/After and eight-photo/loupe workflows, followed by shared-budget native retention.
 
 The first slice passed largest-model design/code review, 518 ordinary GUI tests, 134 portable profiling-tool tests, strict release Clippy, formatting and documentation checks. Four diagnostic cells saved complete, loss-free traces with matching action/resource attribution. Final Off and Wall integration runs exercised the maintained runner after report/comparison integration; Off milestone comparison accepts the resulting report. This completes the first measurement slice, not the wider workflow matrix or retention change.
+
+## Shared processing retention slice
+
+- [x] Extend the same workflow to two native viewports, with independent count/coverage/settlement checks.
+- [x] Capture an unchanged one-slot baseline before changing processing retention.
+- [ ] Replace split native/reduced retention with one processing working set and common actual-use recency.
+- [ ] Include pending decoded-source references in the deduplicated inventory.
+- [ ] Validate ample-budget native reuse, mixed-resolution edits, low-budget eviction and speculative recency.
+- [ ] Compare exact final images and matched app latency against the one-slot baseline.
+
+The two-native baseline uses the same two recipes and four shared edits with primed decoded disk and a 4 GB memory budget. Three uncontended Off trials passed independent behavior and six final-image comparisons. Visible-group completion ranged from 938 to 1080 ms; background Whole settlement ranged from 1463 to 1649 ms. Preserve this workload unchanged for the retention comparison.
+
+The selected design uses one `ProcessingWorkingSet` for native and reduced sessions, with photo/source mapping owned by the GUI worker's processing module. The coordinator and source loader retain their responsibilities. Native and reduced variants delegate numerical cache operations while sharing recency, required-session protection and global budget trimming. Speculative work must not promote or replace the foreground's required session. One native and one reduced variant per verified photo suffice for this slice; region/Whole versions remain in each existing numerical cache.
+
+Keep the numerical cache's local 1 GiB limit, restart-frontier behavior and bounded engine preparation helpers unchanged. A Whole continuation can still replace a regional restart frontier or cause local eviction even when the photo session survives. Report that separately rather than promising that session retention preserves every regional checkpoint. Shared source reservations must deduplicate actual `Arc<Source>` allocations, not merely equal origins.

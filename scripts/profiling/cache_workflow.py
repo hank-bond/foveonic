@@ -13,14 +13,18 @@ def same_numeric(left, right):
 CACHE_WORKFLOW_DELTAS = (0.125, 0.125, -0.125, 0.25)
 
 
-def check_cache_workflow(native_result, inputs):
+def check_cache_workflow(native_result, inputs, native_photo_count=1):
     """Check declared actions and authored results; keep observation and admission timings distinct."""
     workflow = native_result.get('cache_workflow')
+    if type(native_photo_count) is not int or native_photo_count not in (1, 2):
+        raise ValueError('cache workflow native photo count must be 1 or 2')
     steps = native_result.get('steps', [])
     initial = [step for step in steps if step.get('action') == 'initial-selection']
     final = [step for step in steps if step.get('action') == 'cache-workflow']
     if not native_result.get('passed') or not isinstance(workflow, dict) or len(inputs) != 2 or len(initial) != 1 or len(final) != 1:
         raise ValueError('cache workflow lacks two-photo initial and final evidence')
+    if type(workflow.get('native_photo_count')) is not int or workflow['native_photo_count'] != native_photo_count:
+        raise ValueError('cache workflow native photo count differs from the declared count')
     declared = {item['staged_source']: item for item in inputs}
     starts = {photo['source']: photo['settings'] for photo in initial[0]['photos']}
     photos = {photo['source']: photo for photo in final[0]['photos']}
@@ -40,7 +44,8 @@ def check_cache_workflow(native_result, inputs):
     if not isinstance(rows, list):
         raise ValueError('cache workflow lacks action evidence')
     actions = [row for row in rows if row.get('event') == 'action']
-    names = ['fit-smart', 'zoom-a-200', *[f'exposure-{i}' for i in range(4)], 'return-fit']
+    zoom = 'zoom-a-200' if native_photo_count == 1 else 'zoom-both-200'
+    names = ['fit-smart', zoom, *[f'exposure-{i}' for i in range(4)], 'return-fit']
     if [row.get('action') for row in actions] != names:
         raise ValueError('cache workflow action sequence differs from the declared actions')
     # Each row belongs to the most recent action and uses the same monotonic clock.
@@ -101,9 +106,9 @@ def check_cache_workflow(native_result, inputs):
                     or not same_numeric(row.get('exposure'), target[photo])):
                 raise ValueError('cache workflow current observation has the wrong photo or exposure')
             scale = row.get('effective_scale')
-            if type(scale) is not int or scale < 1 or scale > (1 if photo == 0 else demanded[photo]):
+            if type(scale) is not int or scale < 1 or scale > (1 if photo < native_photo_count else demanded[photo]):
                 raise ValueError('cache workflow current observation has insufficient scale')
-            if photo == 0:
+            if photo < native_photo_count:
                 visible, available = row.get('visible_region'), row.get('available_region')
                 if (not isinstance(visible, list) or len(visible) != 4
                         or not isinstance(available, list) or len(available) != 4
@@ -116,18 +121,19 @@ def check_cache_workflow(native_result, inputs):
         if len(current) != 2 or {row.get('photo') for row in current} != {0, 1}:
             raise ValueError('cache workflow lacks a current observation for each photo')
         whole = [row for row in events if row.get('event') == 'whole-settled']
-        if len(whole) != 1:
-            raise ValueError('cache workflow lacks whole settlement')
+        if len(whole) != native_photo_count or {row.get('photo') for row in whole} != set(range(native_photo_count)):
+            raise ValueError('cache workflow lacks whole settlement for every native photo')
         target = initial_exposures if index == 0 else cumulative[index - 1]
-        settled = whole[0]
-        if (settled.get('photo') != 0 or settled.get('source') != inputs[0]['staged_source']
-                or settled.get('rendition') != 'Current' or settled.get('actual_region') is not None
-                or settled.get('effective_scale') != 1 or not same_numeric(settled.get('exposure'), target[0])
-                or settled['action_elapsed_ms'] < max(row['action_elapsed_ms'] for row in current)):
-            raise ValueError('cache workflow Whole settlement is stale or incomplete')
+        for settled in whole:
+            photo = settled['photo']
+            if (settled.get('source') != inputs[photo]['staged_source']
+                    or settled.get('rendition') != 'Current' or 'actual_region' not in settled or settled['actual_region'] is not None
+                    or settled.get('effective_scale') != 1 or not same_numeric(settled.get('exposure'), target[photo])
+                    or settled['action_elapsed_ms'] < max(row['action_elapsed_ms'] for row in current)):
+                raise ValueError('cache workflow Whole settlement is stale or incomplete')
         foreground = [row for row in events if row.get('event') in ('all-foreground-ready', 'all-foreground-observed')]
         if index and (len(foreground) != 1 or foreground[0]['action_elapsed_ms'] < max(row['action_elapsed_ms'] for row in current)
-                      or foreground[0]['action_elapsed_ms'] > settled['action_elapsed_ms']):
+                      or foreground[0]['action_elapsed_ms'] > min(row['action_elapsed_ms'] for row in whole)):
             raise ValueError('cache workflow lacks foreground completion')
         def values(event):
             return [row.get('action_elapsed_ms') for row in events if row.get('event') == event]
@@ -137,10 +143,11 @@ def check_cache_workflow(native_result, inputs):
             'foreground_on_admission_ms': values('all-foreground-ready'),
             'foreground_by_observation_ms': values('all-foreground-observed'),
             'whole_current_admissions': [row for row in events if row.get('event') == 'whole-current-accepted'],
-            'whole_settled_observed_ms': whole[0].get('action_elapsed_ms'),
+            'whole_settled_observed_ms': max(row['action_elapsed_ms'] for row in whole),
+            'whole_settled_by_photo': [{'photo':row['photo'], 'action_elapsed_ms':row['action_elapsed_ms']} for row in whole],
             'regional_admitted_ms': values('regional-accepted'),
             'regional_observed_ms': values('regional-observed')})
-    return {'expected_final_exposures': expected, 'actions': timings,
+    return {'native_photo_count':native_photo_count, 'expected_final_exposures': expected, 'actions': timings,
             'limits': ['Observations may describe retained frames; admissions are separate.',
                        'A group completion on admission can include an earlier retained-frame observation.',
                        'Whole settlement is an application observation, not physical screen presentation.']}
@@ -203,7 +210,11 @@ def associate_trace(workflow, analysis):
 def latency_samples(workflow):
     """Extract finite per-photo and group milestones from an already checked report."""
     actions = workflow.get('actions') if isinstance(workflow, dict) else None
-    expected = ['zoom-a-200', *(f'exposure-{index}' for index in range(4))]
+    count = workflow.get('native_photo_count', 1) if isinstance(workflow, dict) else None
+    if type(count) is not int or count not in (1, 2):
+        raise ValueError('cache workflow native photo count must be 1 or 2')
+    zoom = 'zoom-a-200' if count == 1 else 'zoom-both-200'
+    expected = [zoom, *(f'exposure-{index}' for index in range(4))]
     if not isinstance(actions, list) or [row.get('action') for row in actions] != expected:
         raise ValueError('cache workflow requires all five latency actions')
 
@@ -231,7 +242,7 @@ def latency_samples(workflow):
         if not isinstance(ready, list) or not isinstance(polled, list):
             raise ValueError('cache workflow lacks foreground milestone evidence')
         group = ready + polled
-        if name == 'zoom-a-200' and not group:
+        if name == zoom and not group:
             foreground = max(photo_times)
         elif len(group) == 1:
             foreground = elapsed(group[0])

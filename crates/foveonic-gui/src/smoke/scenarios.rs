@@ -106,6 +106,8 @@ impl Quality {
 struct Config {
     name: Case,
     photo_count: usize,
+    #[serde(default = "default_native_photo_count")]
+    native_photo_count: usize,
     quality: Quality,
     #[serde(deserialize_with = "read_mode")]
     mode: Mode,
@@ -146,6 +148,9 @@ struct Config {
     seed: u64,
     #[serde(default = "default_action_count")]
     action_count: usize,
+}
+fn default_native_photo_count() -> usize {
+    1
 }
 fn default_action_count() -> usize {
     8
@@ -351,6 +356,10 @@ impl Scenario {
             "cache workflow requires exactly two photographs"
         );
         assert!(
+            config.name != Case::CacheWorkflow || (1..=2).contains(&config.native_photo_count),
+            "cache workflow native photo count must be one or two"
+        );
+        assert!(
             config.name != Case::SliderDrag
                 || (config.photo_count >= 2
                     && config.drag_steps >= 3
@@ -466,8 +475,9 @@ impl Scenario {
             .then(|| super::lifecycle::LifecycleJourney::new(exposures[0]));
         let source_loading = (config.name == Case::SourceLoading)
             .then(|| super::source_loading::SourceLoading::new(exposures.clone()));
-        let cache_workflow = (config.name == Case::CacheWorkflow)
-            .then(|| super::cache_workflow::Driver::new(exposures.clone()));
+        let cache_workflow = (config.name == Case::CacheWorkflow).then(|| {
+            super::cache_workflow::Driver::new(exposures.clone(), config.native_photo_count)
+        });
         if matches!(
             config.name,
             Case::SliderDrag

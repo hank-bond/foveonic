@@ -16,7 +16,7 @@ Run native checks serially on a quiet host. Keep controlled delivery pauses sepa
 
 - **[background.rs](./background.rs)** Drives a foreground exposure edit after a real import batch starts.
 - **[browser_journey.rs](./browser_journey.rs)** Exercises browser commands and search against independently declared staged paths.
-- **[cache_workflow.rs](./cache_workflow.rs)** Measures one Smart detail viewport while two photos receive shared exposure edits.
+- **[cache_workflow.rs](./cache_workflow.rs)** Measures Smart detail viewports while two photos receive shared exposure edits.
 - **[capture.rs](./capture.rs)** Saves existing smoke checks through the shared capture controller without changing their actions.
 - **[choices.rs](./choices.rs)** Drives the shared white-balance menu and Tone bypass through egui input.
 - **[collection.rs](./collection.rs)** Exercises bounded editing in a large folder of explicit source aliases.

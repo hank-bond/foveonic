@@ -197,7 +197,43 @@ class ScenarioCheckTests(unittest.TestCase):
         rows.append({'event':'fit-current', 'action':'return-fit', 'elapsed_ms':61, 'action_elapsed_ms':1})
         native={'passed':True, 'steps':[{'action':'initial-selection', 'photos':initial},
                                         {'action':'cache-workflow', 'photos':final}],
-                'cache_workflow':{'rows':rows, 'expected_exposures':[99, 99]}}
+                'cache_workflow':{'rows':rows, 'native_photo_count':1, 'expected_exposures':[99, 99]}}
+        both = json.loads(json.dumps(native))
+        both['cache_workflow']['native_photo_count'] = 2
+        both_rows = both['cache_workflow']['rows']
+        for row in both_rows:
+            if row.get('action') == 'zoom-a-200': row['action'] = 'zoom-both-200'
+        for row in list(reversed(both_rows)):
+            if row.get('event') == 'whole-settled':
+                other = dict(row, photo=1, source='b', exposure=row['exposure'] + 0.5)
+                both_rows.insert(both_rows.index(row) + 1, other)
+        zoom_b = next(row for row in both_rows if row.get('event') == 'whole-settled' and row.get('photo') == 1)
+        zoom_b['elapsed_ms'] += 0.1
+        zoom_b['action_elapsed_ms'] += 0.1
+        result = check_cache_workflow(both, inputs, 2)
+        self.assertEqual(result['native_photo_count'], 2)
+        both['image_captures'] = [{'source':photo['source'], 'settings':{'settings':dict(photo['settings'])}}
+                                  for photo in both['steps'][1]['photos']]
+        self.assertEqual(checked_scenario_images(both, inputs, Path('.'), native_photo_count=2)[0], 'cache-workflow')
+        with self.assertRaisesRegex(ValueError, 'declared count'):
+            checked_scenario_images(both, inputs, Path('.'), native_photo_count=1)
+        self.assertEqual(len(result['actions'][0]['whole_settled_by_photo']), 2)
+        self.assertAlmostEqual(result['actions'][0]['whole_settled_observed_ms'], 4.1)
+        with self.assertRaisesRegex(ValueError, 'declared count'):
+            check_cache_workflow(both, inputs, 1)
+        extra = next(row for row in both_rows if row.get('event') == 'whole-settled' and row.get('photo') == 1)
+        both_rows.remove(extra)
+        with self.assertRaisesRegex(ValueError, 'every native photo'):
+            check_cache_workflow(both, inputs, 2)
+        both_rows.insert(both_rows.index(next(row for row in both_rows if row.get('event') == 'whole-settled')) + 1, extra)
+        second = next(row for row in both_rows if row.get('event') == 'reuse-observed' and row.get('photo') == 1)
+        second['effective_scale'] = 4
+        with self.assertRaisesRegex(ValueError, 'insufficient scale'):
+            check_cache_workflow(both, inputs, 2)
+        second['effective_scale'] = 1
+        second['available_region'] = [11, 0, 30, 30]
+        with self.assertRaisesRegex(ValueError, 'cover the viewport'):
+            check_cache_workflow(both, inputs, 2)
         report=check_cache_workflow(native, inputs)
         self.assertEqual(report['expected_final_exposures'], [0.375, 0.875])
         edit=report['actions'][1]

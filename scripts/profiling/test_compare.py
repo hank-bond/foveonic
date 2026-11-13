@@ -73,6 +73,23 @@ class CompareTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 compare_reports(before, broken)
 
+    def test_two_native_workflow_uses_distinct_zoom_and_workload_key(self):
+        both = cache_report()
+        key = both['workload_key']
+        key['descriptor']['scenario']['native_photo_count'] = 2
+        key['sha256'] = value_hash(key['descriptor'])
+        workflow = both['trials'][0]['cache_workflow']
+        workflow['native_photo_count'] = 2
+        workflow['actions'][0]['action'] = 'zoom-both-200'
+        actions = {row['action'] for row in compare_reports(both, both)['actions']}
+        self.assertIn('zoom-both-200/whole-observed', actions)
+        self.assertEqual(len(actions), 21)
+        with self.assertRaisesRegex(ValueError, 'different workload'):
+            compare_reports(cache_report(), both)
+        workflow['actions'][0]['action'] = 'zoom-a-200'
+        with self.assertRaisesRegex(ValueError, 'five latency actions'):
+            compare_reports(both, both)
+
     def test_cache_protocol_is_matched_without_runtime_paths_or_revisions(self):
         manifest, native = workload()
         manifest['scenario']['name'] = 'cache-workflow'
@@ -81,6 +98,9 @@ class CompareTests(unittest.TestCase):
         key = matched_workload(manifest, native)
         changed = deepcopy(native)
         changed['cache_workflow']['rows'][1]['minimum_revision'] = 99
+        manifest2 = deepcopy(manifest)
+        manifest2['scenario']['native_photo_count'] = 2
+        self.assertNotEqual(key, matched_workload(manifest2, native))
         self.assertEqual(key, matched_workload(manifest, changed))
         changed['cache_workflow']['rows'][1]['delta'] = -0.125
         self.assertNotEqual(key, matched_workload(manifest, changed))

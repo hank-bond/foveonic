@@ -204,9 +204,9 @@ def shutdown_assertions(native_result, inputs):
     return assertions
 
 
-def compare_scenario_images(native_result, inputs, binary, directory, control_pointer='/exposure'):
+def compare_scenario_images(native_result, inputs, binary, directory, control_pointer='/exposure', native_photo_count=1):
     """Check the scenario's intended edits, then replay its captured final images."""
-    action, photos = checked_scenario_images(native_result, inputs, directory, control_pointer)
+    action, photos = checked_scenario_images(native_result, inputs, directory, control_pointer, native_photo_count)
     return replay_images(native_result, inputs, photos, action, binary, directory)
 
 
@@ -239,8 +239,10 @@ def run_trial(args, selected, directory, source_hash):
     }
     if args.scenario == 'cache-workflow':
         manifest['measurement']['setup'] = (f'initial explicit {args.quality} selection starts with cold processing; disk may be primed. '
-            'Smart Fit follows that selection, then one native-detail viewport and warm edits')
+            f"Smart Fit follows that selection, then {getattr(args, 'native_photo_count', None) or 1} native-detail viewport(s) and warm edits")
     manifest['measurement']['controlled_delivery'] = args.scenario in ('selection-journey','selection-pressure','transition-journey','source-loading')
+    if args.scenario == 'cache-workflow':
+        manifest['scenario']['native_photo_count'] = getattr(args, 'native_photo_count', None) or 1
     manifest['scenario']['capture_images'] = bool(getattr(args, 'compare_images', None))
     manifest['scenario']['save_on_exit'] = bool(getattr(args, 'save_on_exit', False))
     manifest['scenario']['folder_mode'] = getattr(args, 'folder_mode', 'import')
@@ -303,7 +305,7 @@ def run_trial(args, selected, directory, source_hash):
         include_assertions(test_result, [ui_latency['assertion']])
     if args.scenario == 'cache-workflow':
         try:
-            result['cache_workflow'] = check_cache_workflow(native_result, inputs)
+            result['cache_workflow'] = check_cache_workflow(native_result, inputs, manifest['scenario']['native_photo_count'])
             if args.mode != 'off':
                 analysis = json.loads((capture_directory/'summary.json').read_text())['analysis']
                 result['cache_workflow']['trace'] = associate_trace(native_result['cache_workflow'], analysis)
@@ -331,7 +333,8 @@ def run_trial(args, selected, directory, source_hash):
         manifest['fresh_renderer'] = {'path':str(fresh_binary), 'sha256':digest(fresh_binary)}
         test_result['environment']['fresh_binary_sha256'] = manifest['fresh_renderer']['sha256']
         try:
-            comparisons = compare_scenario_images(native_result, inputs, fresh_binary, directory, getattr(args, 'control_pointer', '/exposure'))
+            comparisons = compare_scenario_images(native_result, inputs, fresh_binary, directory, getattr(args, 'control_pointer', '/exposure'),
+                                                  manifest['scenario'].get('native_photo_count', 1))
         except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as error:
             comparisons = [{'name':'image_samples', 'step':'slider-drag', 'source':None,
                             'outcome':'failed', 'failure':str(error)}]
@@ -373,6 +376,12 @@ def run(args):
     args.binary = args.binary.resolve(strict=True)
     cases = json.loads(args.cases.read_text()) if args.cases else [{'source':str(path)} for path in args.source]
     args.count = len(cases) if args.count is None else args.count
+    if getattr(args, 'native_photo_count', None) is not None and args.scenario != 'cache-workflow':
+        raise ValueError('--native-photo-count is only available for cache-workflow')
+    if args.scenario == 'cache-workflow' and getattr(args, 'native_photo_count', None) is None:
+        args.native_photo_count = 1
+    if args.scenario == 'cache-workflow' and args.native_photo_count not in (1, 2):
+        raise ValueError('cache-workflow native photo count must be 1 or 2')
     selected = selected_cases(cases, args.count, args.quality, args.scenario)
     validate_shutdown(args, selected)
     if getattr(args, 'save_on_exit', False) and (args.mode == 'off' or getattr(args, 'compare_images', None)):
@@ -459,6 +468,7 @@ def main():
     parser.add_argument('--directory',type=Path,required=True)
     parser.add_argument('--scenario',choices=NAMES,required=True)
     parser.add_argument('--count',type=int)
+    parser.add_argument('--native-photo-count',type=int,choices=[1,2],help='cache-workflow photos zoomed to native detail (default: 1)')
     parser.add_argument('--quality',choices=PREVIEW_QUALITIES,default='thumb')
     parser.add_argument('--disk-cache-bytes',type=int,default=10_000_000_000,
                         help='owned disk cache budget; zero measures retained processing after original loading')

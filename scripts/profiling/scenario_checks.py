@@ -115,7 +115,7 @@ def check_captured_settings(photo, effective, pointer, choices):
             raise ValueError(f'captured image {field} differs from the checked authored setting')
 
 
-def checked_scenario_images(native_result, inputs, directory, control_pointer='/exposure'):
+def checked_scenario_images(native_result, inputs, directory, control_pointer='/exposure', native_photo_count=1):
     """Return the checked final action and photos before replaying their captured pixels."""
     journey = native_result.get('journey')
     background = native_result.get('background')
@@ -151,7 +151,7 @@ def checked_scenario_images(native_result, inputs, directory, control_pointer='/
     if journey or background or transitions or lifecycle or browser:
         check_exposures(journey or background or transitions or lifecycle or browser, inputs, photos)
     if cache_workflow:
-        check_cache_workflow(native_result, inputs)
+        check_cache_workflow(native_result, inputs, native_photo_count)
     if choices:
         check_choices(choices, inputs, initial, photos, declared)
     if transitions:

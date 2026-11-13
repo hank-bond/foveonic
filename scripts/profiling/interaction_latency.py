@@ -113,6 +113,7 @@ def matched_workload(manifest, native_result):
                 'first_current_complete':geometry_complete and cache_policy_matches and len(current)==len(inputs) and all(row['first_current_settings_sha256'] for row in inputs),
                 'measurement':manifest['measurement']}
     if scenario['name'] == 'cache-workflow':
+        descriptor['scenario']['native_photo_count'] = scenario.get('native_photo_count', 1)
         workflow = native_result.get('cache_workflow') or {}
         descriptor['cache_workflow_protocol'] = [
             {key:row[key] for key in ('action', 'delta') if key in row}

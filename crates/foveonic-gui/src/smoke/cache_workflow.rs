@@ -1,4 +1,4 @@
-//! Measures one Smart detail viewport while two photos receive shared exposure edits.
+//! Measures Smart detail viewports while two photos receive shared exposure edits.
 
 use crate::{preferences::PreviewMode, rendering::worker::Frame, App};
 use eframe::egui;
@@ -44,6 +44,10 @@ fn covers_demand(
                 && visible.is_some_and(|rect| crate::rendering::smart::contains(coverage, rect))))
 }
 
+fn native_demand(count: usize, index: usize, step: Step) -> bool {
+    index < count && matches!(step, Step::Zoom | Step::Edit(_))
+}
+
 fn referenced_resources(frame: &Frame) -> serde_json::Value {
     let backing = match &frame.artifact.content {
         foveonic::inspection::Content::Image(image) => {
@@ -66,8 +70,9 @@ pub(super) struct Driver {
     trace_origin_ns: Option<u64>,
     action_started: Instant,
     minimum_revision: u64,
+    native_photo_count: usize,
     first: [bool; 2],
-    regional: bool,
+    regional: [bool; 2],
     foreground_ready: bool,
     fit_scales: Option<[u32; 2]>,
     initial_quality: Option<PreviewMode>,
@@ -75,7 +80,7 @@ pub(super) struct Driver {
 }
 
 impl Driver {
-    pub fn new(exposures: Vec<f32>) -> Self {
+    pub fn new(exposures: Vec<f32>, native_photo_count: usize) -> Self {
         let now = Instant::now();
         Self {
             model: super::journey::ExposureJourney::new(exposures),
@@ -84,8 +89,9 @@ impl Driver {
             trace_origin_ns: None,
             action_started: now,
             minimum_revision: 0,
+            native_photo_count,
             first: [false; 2],
-            regional: false,
+            regional: [false; 2],
             foreground_ready: false,
             fit_scales: None,
             initial_quality: None,
@@ -94,7 +100,7 @@ impl Driver {
     }
 
     pub fn evidence(&self) -> serde_json::Value {
-        serde_json::json!({"schema":1,"clock":"monotonic","trace_origin_ns":self.trace_origin_ns,"rows":self.rows,"expected_exposures":self.model.exposures(),
+        serde_json::json!({"schema":1,"clock":"monotonic","native_photo_count":self.native_photo_count,"trace_origin_ns":self.trace_origin_ns,"rows":self.rows,"expected_exposures":self.model.exposures(),
             "draw_milestone":"trace-only native command encoding; not physical presentation"})
     }
 
@@ -102,7 +108,7 @@ impl Driver {
         self.action_started = Instant::now();
         self.minimum_revision = app.revision + 1;
         self.first = [false; 2];
-        self.regional = false;
+        self.regional = [false; 2];
         self.foreground_ready = false;
         self.rows
             .push(serde_json::json!({"event":"action","action":name,
@@ -113,9 +119,17 @@ impl Driver {
     fn action(&self) -> String {
         match self.step {
             Step::Start | Step::Fit => "fit-smart".into(),
-            Step::Zoom => "zoom-a-200".into(),
+            Step::Zoom => self.zoom_action().into(),
             Step::Edit(index) => format!("exposure-{index}"),
             Step::ReturnFit | Step::Cleanup | Step::Done => "return-fit".into(),
+        }
+    }
+
+    fn zoom_action(&self) -> &'static str {
+        if self.native_photo_count == 2 {
+            "zoom-both-200"
+        } else {
+            "zoom-a-200"
         }
     }
 
@@ -163,11 +177,14 @@ impl Driver {
             self.rows.push(milestone);
             self.first[index] = true;
         }
-        if index == 0 && !self.regional && frame.artifact.settings.preview_region.is_some() {
+        if index < self.native_photo_count
+            && !self.regional[index]
+            && frame.artifact.settings.preview_region.is_some()
+        {
             let mut milestone = row.clone();
             milestone["event"] = "regional-accepted".into();
             self.rows.push(milestone);
-            self.regional = true;
+            self.regional[index] = true;
         }
         if frame.artifact.settings.preview_region.is_none() {
             let mut milestone = row;
@@ -187,7 +204,7 @@ impl Driver {
     }
 
     fn frame_covers(&self, index: usize, frame: &Frame, visible: Option<[u32; 4]>) -> bool {
-        let native = index == 0 && matches!(self.step, Step::Zoom | Step::Edit(_));
+        let native = native_demand(self.native_photo_count, index, self.step);
         let maximum = if native {
             1
         } else {
@@ -265,9 +282,12 @@ impl Driver {
                 );
                 self.first[index] = true;
             }
-            if index == 0 && !self.regional && frame.artifact.settings.preview_region.is_some() {
+            if index < self.native_photo_count
+                && !self.regional[index]
+                && frame.artifact.settings.preview_region.is_some()
+            {
                 self.observation("regional-observed", index, frame, Self::visible(app, path));
-                self.regional = true;
+                self.regional[index] = true;
             }
         }
         if matches!(self.step, Step::Edit(_))
@@ -295,6 +315,22 @@ impl Driver {
                     && self.frame_covers(index, frame, Self::visible(app, path))
             })
         })
+    }
+
+    fn observe_whole_settlement(&mut self, app: &App, paths: &[PathBuf]) {
+        for (index, path) in paths.iter().take(self.native_photo_count).enumerate() {
+            let frame = app.current_photo_frame(path).expect("checked native Whole");
+            if frame.diagnostic_task.revision < self.minimum_revision {
+                self.observation(
+                    "whole-reused-observed",
+                    index,
+                    frame,
+                    Self::visible(app, path),
+                );
+            }
+            self.observation("whole-settled", index, frame, Self::visible(app, path));
+            self.rows.last_mut().unwrap()["regional_observed"] = self.regional[index].into();
+        }
     }
 
     pub fn advance(
@@ -342,44 +378,35 @@ impl Driver {
                         ));
                     }
                 }
-                let Some(percent) = app
-                    .viewports
-                    .view(Some(&paths[0]))
-                    .zoom_percent(ctx.pixels_per_point())
-                else {
-                    return Ok(false);
-                };
+                let mut percentages = [0.; 2];
+                for (index, path) in paths.iter().take(self.native_photo_count).enumerate() {
+                    let Some(percent) = app
+                        .viewports
+                        .view(Some(path))
+                        .zoom_percent(ctx.pixels_per_point())
+                    else {
+                        return Ok(false);
+                    };
+                    percentages[index] = percent;
+                }
                 self.fit_scales = Some(demanded_scales);
                 for (index, path) in paths.iter().enumerate() {
                     let frame = app.current_photo_frame(path).expect("checked Fit frame");
                     self.observation("fit-overview", index, frame, Self::visible(app, path));
                     self.rows.last_mut().unwrap()["demanded_scale"] = demanded_scales[index].into();
                 }
-                self.begin("zoom-a-200", app);
-                let view = app.viewports.view_mut(Some(&paths[0]));
-                view.zoom_by(200. / percent);
+                self.begin(self.zoom_action(), app);
+                for (index, path) in paths.iter().take(self.native_photo_count).enumerate() {
+                    app.viewports
+                        .view_mut(Some(path))
+                        .zoom_by(200. / percentages[index]);
+                }
                 self.step = Step::Zoom;
             }
             Step::Zoom => {
                 self.observe(app, paths);
                 if !app.worker.busy() && self.whole_ready(app, paths) {
-                    if let Some(frame) = app.current_photo_frame(&paths[0]) {
-                        if frame.diagnostic_task.revision < self.minimum_revision {
-                            self.observation(
-                                "whole-reused-observed",
-                                0,
-                                frame,
-                                Self::visible(app, &paths[0]),
-                            );
-                        }
-                    }
-                    self.observation(
-                        "whole-settled",
-                        0,
-                        app.current_photo_frame(&paths[0]).unwrap(),
-                        Self::visible(app, &paths[0]),
-                    );
-                    self.rows.last_mut().unwrap()["regional_observed"] = self.regional.into();
+                    self.observe_whole_settlement(app, paths);
                     self.start_edit(app, 0);
                 }
             }
@@ -389,18 +416,14 @@ impl Driver {
                     && !app.worker.busy()
                     && self.whole_ready(app, paths)
                 {
-                    self.observation(
-                        "whole-settled",
-                        0,
-                        app.current_photo_frame(&paths[0]).unwrap(),
-                        Self::visible(app, &paths[0]),
-                    );
-                    self.rows.last_mut().unwrap()["regional_observed"] = self.regional.into();
+                    self.observe_whole_settlement(app, paths);
                     if index + 1 < EDITS.len() {
                         self.start_edit(app, index + 1);
                     } else {
                         self.begin("return-fit", app);
-                        app.viewports.view_mut(Some(&paths[0])).reset();
+                        for path in paths.iter().take(self.native_photo_count) {
+                            app.viewports.view_mut(Some(path)).reset();
+                        }
                         app.submit(None);
                         self.step = Step::ReturnFit;
                     }
@@ -462,6 +485,15 @@ impl Driver {
 mod tests {
     use super::*;
     use crate::editor::Rendition;
+
+    #[test]
+    fn native_demand_tracks_both_zoomed_photos_and_ends_at_fit() {
+        assert!(native_demand(1, 0, Step::Zoom));
+        assert!(!native_demand(1, 1, Step::Zoom));
+        assert!(native_demand(2, 0, Step::Edit(0)));
+        assert!(native_demand(2, 1, Step::Edit(0)));
+        assert!(!native_demand(2, 1, Step::ReturnFit));
+    }
 
     #[test]
     fn current_content_does_not_require_a_new_task_revision() {

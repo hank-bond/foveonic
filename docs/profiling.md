@@ -165,6 +165,8 @@ The shared `image_samples` assertion checks every byte, complete buffer length, 
 
 `cache-workflow` requires exactly two declared manual exposures. It starts after the ordinary initial selection at the configured explicit quality. Smart Fit inherits that processing state. Shared edits apply offsets of +0.125, +0.25, +0.125 and +0.375 from each starting exposure. The test independently checks those edits, per-photo identity, rendition, demanded scale and native visible coverage. It uses direct application commands without delivery holds or timed image readbacks.
 
+The default `--native-photo-count 1` zooms the first photo. Set `--native-photo-count 2` to zoom both to 200% and test two native processing working sets. The declared count is checked independently against app evidence and included in workload matching. Per-photo Whole observations in this workflow occur at group settlement; use Whole admission rows for individual delivery timing.
+
 ```sh
 python3 scripts/profiling/scenarios.py \
   --binary target/release/foveonic-gui --cases REGIONAL_CASES.json \
