@@ -23,18 +23,18 @@ The owner approved completing the remaining functional workflow in chunks with t
 
 ## Detail retention measurements
 
-- [ ] Measure warm/cold source recovery, native preparation, region completion, optional whole continuation, delivery and memory under repeated detail switching.
-- [ ] Include default 2 GB and low 1 GB retained-memory settings, one and multiple zoomed photos, and representative camera families.
-- [ ] Use evidence to identify whether another source/checkpoint retention policy would help. Keep new cache concepts separate from the functional work unless a demonstrated correctness issue requires a small existing-owner fix.
+- [x] Measure warm/cold source recovery, native preparation, region completion, optional whole continuation, delivery and memory under repeated detail switching.
+- [x] Include default 2 GB and low 1 GB retained-memory settings, one and multiple zoomed photos, and representative camera families.
+- [x] Use evidence to identify whether another source/checkpoint retention policy would help. Keep new cache concepts separate from the functional work unless a demonstrated correctness issue requires a small existing-owner fix.
 
 ## Wide-execution investigation
 
 Only start this after the functional slices are complete. The owner authorized research and experimental probing, rather than making an unproven engine approach the application's default.
 
 - [x] Ask the largest available research/review agent to inspect the existing engine and primary sources for stage interleaving, submission grouping and completion-wait grouping. Update [wide rendering](./wide-rendering.md) with the concrete proposed experiments.
-- [ ] Build the smallest isolated harness/prototype needed to compare widths 1/2/4/8. Keep per-photo recipes, cache identity, output equality and independent settlement. Distinguish scheduling changes from node arithmetic and shader batching.
-- [ ] Measure first useful result, complete-group latency, CPU coordination, submissions/waits, memory and foreground interruption. Compare mixed cameras/options only after the simplest warm Thumb case works.
-- [ ] Record what works, what fails and why. Retain useful profiling additions when clean. Keep unproven execution changes isolated and document a recommendation instead of forcing adoption.
+- [x] Build the smallest isolated harness/prototype needed to compare widths 1/2/4/8. Keep per-photo recipes, cache identity, output equality and independent settlement. Distinguish scheduling changes from node arithmetic and shader batching.
+- [x] Measure first useful result, complete-group latency, CPU coordination, submissions/waits, sampled memory and submitted-work cancellation/recovery. Compare mixed cameras/options only after the simplest warm Thumb case works. Actual foreground/background priority remains unmeasured and deferred.
+- [x] Record what works, what fails and why. Retain useful profiling additions when clean. Keep unproven execution changes isolated and document a recommendation instead of forcing adoption.
 
 ## Per-slice procedure
 
@@ -47,3 +47,7 @@ The layout, Pointer and multi-photo detail slices are integrated as `d8644e4`, `
 Loupe implementation is complete. Review caught and corrected stale-detail selection, thumbnail dimensions being mistaken for camera geometry, and native Detail inheriting an ordinary reduced composition grid. Requests and frames now identify Detail explicitly, independently of regional versus Whole coverage. A cold thumbnail-only inspection first obtains Whole Detail for trustworthy camera geometry. Detail remains in the bounded photograph owner and is excluded from ordinary Whole presentation snapshots. Ordinary Full pixels may still satisfy native inspection. The reviewed native driver covers independent lens coverage, held cancellation, transient cropped/rotated photos and single-photo inspection. Integrated native execution and numerical checks passed as recorded below.
 
 Final functional validation passes 513 GUI unit tests and the complete release workspace suite, strict release workspace Clippy, 129 profiling tests and five artwork tests. All 40 frozen camera/quality outputs are exact. The new real-worker Detail/Whole ordering test, the native-detail composition-grid regression and existing coordinator-continuation regression pass. Smart and Crop smoke checks pass after correcting retained-Full expectations. Default and low-memory native journeys pass with all loupe phases and eight exact final app-image comparisons. Captured multi-photo and single-photo lenses are available for visual review. A native cancellation failure led to press-owned selection: switching tools or releasing Space while holding the mouse cannot turn a tool gesture into a selection click. Independent review accepted the corrected code and tests. The stage-wide probe is isolated from this functional application on its own branch.
+
+The resource measurements are recorded in the viewport plan. A 4 GB control removes one-native-view checkpoint churn, while two native views still replace the single native processing slot. No cache-policy change is included. The isolated wide-execution branch is `experiment/wide-render-probe` at `e38448f`. Matched float/geometry/settings gates, five-trial timing matrices, operation-boundary resource measurements, independent supersession/failure recovery and separately verified threaded controls are complete. Application integration, actual background priority and memory admission remain later architecture work. Final frozen checks of the mechanically extracted serial operation runtime and restoration of the stock application build complete the handoff.
+
+Final restoration rebuilt the stock processor and profiling examples from the application checkout after clearing shared release artifacts for that package, then rebuilt the normal app bundle. This prevents the shared worktree build cache from leaving an experimental processor in the review build. Completed feature and stock-control worktrees were removed after preserving executable hashes/copies and integrating their work. Only the reviewed experiment worktree remains for inspection. Both the functional processor and the isolated serial cursor pass the complete 40-case frozen matrix.

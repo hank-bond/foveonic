@@ -4,7 +4,7 @@ summary: "Review small ownership and quality-policy changes supporting Smart com
 
 # Viewport workflow architecture
 
-The owner approved the remaining functional queue and subsequent isolated wide-execution investigation in the [overnight run](./viewport-overnight.md).
+The owner approved the remaining functional queue and subsequent isolated wide-execution investigation in the [overnight run](./viewport-overnight.md). The functional slices are complete. The isolated execution findings belong to the [wide-rendering investigation](./wide-rendering.md).
 
 Requirements under review: [viewport workflows](../docs/specs/viewport-workflows.md), [Smart preview](../docs/specs/smart-preview.md), [multi-edit](../docs/specs/multi-edit.md), [small previews](../docs/specs/small-previews.md) and [render orchestration](../docs/specs/render-orchestration.md). Apply the [three architecture goals](../docs/specs/render-orchestration.md#agreed-goals) to each slice. The owner approved the functional slices through the overnight queue. Their implementation and acceptance are recorded below.
 
@@ -202,3 +202,20 @@ The approved slice extends the existing refinement pair to displayed Current pho
 The shared photo pass derives each supported region from that photo's viewport and compatible base. It publishes the optional Full continuation through the existing coordinator and leaves Fit siblings at their independently resolved Smart levels. Complete demand is passed separately from the ordinary-request subset, so a sibling refresh cannot retire a refined photo's continuation or publish competing ordinary Full work. Current Detail survives active selection and Before/inspection changes until demand is removed. Unsupported normal Smart recipes request ordinary Whole directly. Requested Detail retains its storage purpose even when the engine returns whole-image coverage.
 
 Focused coordinator and delivery tests cover active selection, independent geometry/content order, complete-demand retention, removal/re-add and whole continuation. The native transition segment now zooms a second inactive tile and repeats group edits. An opt-in real-worker test covers two photographic detail requests, per-photo destinations, held delivery during selection, detail memory inventory, Before base restoration, presentation rebasing, newer Whole during another pending edit, bounded retention and explicit-quality whole-coverage fallback. Validation passed all 490 ordinary GUI tests, with 47 opt-in tests ignored, strict GUI Clippy for all targets, formatting and generated documentation checks. The largest available independent reviewer accepted the design after fixes for absent-Current Before restoration, request-intent fallback routing and detached-layout deferral. The new GPU test, extended native transition journey and frozen numerical comparisons remain acceptance gates for the integrated application.
+
+## Native detail retention findings
+
+The final four-photo transition journey was traced at 1 GB, the existing 2 GB default, and a 4 GB diagnostic budget. The 2 GB and 4 GB runs used the same inputs, settings, action sequence and disabled decoded disk cache. These are three edits per phase from individual Wall captures, not stable benchmark distributions. Whole-group settlement includes optional Whole continuation. Earlier regional feedback can already be visible.
+
+| Diagnostic memory budget | Four Fit photos, group ms | One native view, group ms | Two native views, group ms | One native editing target, group ms |
+| --- | --- | --- | --- | --- |
+| 2 GB | 66–71 | 136–625 | 1404–1949 | 86–99 |
+| 4 GB | 67–71 | 117–120 | 458–1528 | 46–69 |
+
+The one-native-view edits needed no source loads at either budget. At 2 GB they produced 5–12 checkpoint eviction events per edit and later operation waits grew to 456–470 ms. At 4 GB both checkpoint and reduced-working-set evictions disappeared. Native feedback arrived in 57–66 ms and the group settled in 117–120 ms. This points to retained-checkpoint pressure rather than source loading. The current default remains unchanged. A later memory policy should consider the desired editing working sets and temporary presentation replacement overlap before treating them as expendable history.
+
+Two native views still required one source acquisition per edit at 4 GB, despite having no eviction events. The worker owns one native session, so multiple native photographs replace its processing state. Increasing the byte budget alone cannot provide multiple native working sets. At 2 GB, additional working-set evictions and one to three source loads appeared. Source loading, prepared native processing and retained photograph textures therefore need separate accounting before selecting a retention policy. This pass introduces no decoded-RAM cache or additional native-session cache.
+
+Loupe task traces separate warm processing from source recovery. Two warm Merrill regions reached UI admission in approximately 25 and 36 ms. A thumbnail-only photo whose native processing was already warm obtained Whole Detail in 57 ms. A changed Adaptive Tone Whole fallback took 282 ms. A single Quattro native acquisition with disk reuse disabled took 1047 ms, including 306 ms of source loading and 741 ms in render attempts. At the 1 GB budget its cached source load took 46 ms, but rendering took 1473 ms. A disk-cache hit alone does not promise warm native processing. These are task-level diagnostic samples, not physical presentation latency or general camera performance claims.
+
+The next resource-design discussion can use these findings independently of stage-wide execution. Preserve fast reduced working sets, decide how transient old/new presentation overlap uses the steady versus peak budget, and decide how many native working sets to retain. Preparation and prewarming can then use those same owners and admission rules rather than introducing another cache authority.
