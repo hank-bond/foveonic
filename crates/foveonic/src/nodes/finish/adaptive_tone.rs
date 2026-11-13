@@ -108,6 +108,29 @@ impl Params {
         self.toe[3] = (8. * scale).round().max(1.);
         Ok(self)
     }
+    pub(crate) fn extent(self) -> [u32; 2] {
+        [self.shape[0], self.shape[1]]
+    }
+
+    pub(crate) fn aligned_output(self, bounds: [u32; 4]) -> Result<[u32; 4]> {
+        let alignment = tone_equalizer::GUIDE_ALIGNMENT;
+        if bounds[0] >= bounds[2] || bounds[1] >= bounds[3] {
+            return Err("invalid adaptive output bounds".into());
+        }
+        Ok([
+            bounds[0] / alignment * alignment,
+            bounds[1] / alignment * alignment,
+            bounds[2]
+                .div_ceil(alignment)
+                .saturating_mul(alignment)
+                .min(self.shape[0]),
+            bounds[3]
+                .div_ceil(alignment)
+                .saturating_mul(alignment)
+                .min(self.shape[1]),
+        ])
+    }
+
     pub(crate) fn key(self) -> Key {
         Key::pod(&self)
     }

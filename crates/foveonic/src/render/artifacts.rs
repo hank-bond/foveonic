@@ -61,7 +61,18 @@ impl Engine {
         profile.measure("resolve graph regions", || {
             let demands: Vec<_> = roots
                 .iter()
-                .map(|&id| (id, crate::graph::Demand::Whole))
+                .map(|&id| {
+                    let demand = if id == final_id && settings.preview_region.is_some() {
+                        graph.outputs[id]
+                            .view
+                            .map_or(crate::graph::Demand::Whole, |view| {
+                                crate::graph::Demand::Region(view.crop)
+                            })
+                    } else {
+                        crate::graph::Demand::Whole
+                    };
+                    (id, demand)
+                })
                 .collect();
             graph.resolve_regions(&demands, |graph, id| execution.can_reuse(graph, id))
         })?;

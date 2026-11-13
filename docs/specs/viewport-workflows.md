@@ -35,6 +35,8 @@ Use the agreed [viewport and image-coordinate vocabulary](../architecture/concep
 
 Render the currently needed native-detail region first where the processing recipe supports it. Keep compatible existing pixels visible while replacement work runs. Unsupported recipes may use whole-image processing without changing authored settings or displaying incorrect regional output. Whether reduced-resolution regional processing is worthwhile remains a measured experiment.
 
+The native loupe latency target is 400 ms from the user's request to usable native-detail pixels when the decoded source is cached. Measurements must distinguish first native processing from reuse of an already rendered region, and include source acquisition, queuing and delivery when reporting application latency. Engine-only measurements with an already resident source are useful attribution, but do not establish this application target. Record the source, settings, region, memory budget and competing workload with latency results.
+
 The coordinator must own sequencing between region and whole-image requests. The engine executes requested processing and owns numerical reuse, alignment and required support. Completion of a region is not itself a request to render the whole image. Region-only rendering is a complete useful outcome. A whole-image continuation is chosen only when current view needs or useful preparation justify it, and must remain subordinate to immediate interaction. Loupe movement must not unconditionally start a whole-image render.
 
 UI interaction owns persistent zoom, pan and loupe position. Processing caches do not own viewing state. Layout reordering must not move one photograph's view state onto another photograph.

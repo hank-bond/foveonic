@@ -303,6 +303,83 @@ fn view_pixel(image: &crate::image::RenderedImage, bytes: &[u8], x: u32, y: u32)
         .try_into()
         .unwrap()
 }
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a regional-capable X3F"]
+fn gpu_adaptive_hdr_cold_regions_pan_and_continue_to_whole() {
+    let source =
+        Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
+    let engine = Engine::new().unwrap();
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut settings = caps
+        .editing_defaults(&source.metadata, Rendering::Color)
+        .unwrap();
+    settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+    settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    settings.photographic.tone_method = PhotographicMethod::Universal;
+    settings.photographic.base_response = crate::render::BaseResponse::Natural;
+    settings.tonal_ranges.blacks = 0.23;
+    settings.tonal_ranges.whites = -1.;
+    settings.exposure = -0.15;
+    assert!(settings.regional_preview_available(&source.metadata));
+
+    let whole = engine
+        .render(&source, &settings, &mut Profile::default())
+        .unwrap();
+    let whole_bytes = engine.readback_image(&whole).unwrap();
+    let [width, height] = whole.view().extent;
+    let check_region = |region: &crate::image::RenderedImage, rect: [u32; 4]| {
+        assert_eq!(
+            region.settings().preview_region,
+            Some(rect),
+            "Whole fallback"
+        );
+        assert_eq!(region.view().extent, [321, 239]);
+        let bytes = engine.readback_image(region).unwrap();
+        let mut maximum = 0_f32;
+        for y in 0..239 {
+            for x in 0..321 {
+                for (actual, expected) in view_pixel(region, &bytes, x, y)
+                    .into_iter()
+                    .zip(view_pixel(&whole, &whole_bytes, x + rect[0], y + rect[1]))
+                {
+                    assert!(actual.is_finite() && expected.is_finite());
+                    maximum = maximum.max((actual - expected).abs());
+                }
+            }
+        }
+        assert!(maximum < 0.0001, "Adaptive/HDR region {rect:?}: {maximum}");
+        bytes
+    };
+
+    // This session has no Whole checkpoint. A broader cached result must not
+    // conceal missing support on the first regional request.
+    let mut session = RenderSession::new(source);
+    let first_rect = [
+        width / 2 + 3,
+        height / 2 + 5,
+        width / 2 + 324,
+        height / 2 + 244,
+    ];
+    settings.preview_region = Some(first_rect);
+    let first = session_image(&engine, &mut session, &settings, &mut Profile::default());
+    let first_bytes = check_region(&first, first_rect);
+    for [x, y] in [[0, 0], [width - 321, height - 239]] {
+        let rect = [x, y, x + 321, y + 239];
+        settings.preview_region = Some(rect);
+        let region = session_image(&engine, &mut session, &settings, &mut Profile::default());
+        check_region(&region, rect);
+    }
+    settings.preview_region = None;
+    let continuation = session_image(&engine, &mut session, &settings, &mut Profile::default());
+    assert_eq!(continuation.view(), whole.view());
+    assert!(engine.readback_image(&continuation).unwrap() == whole_bytes);
+    settings.preview_region = Some(first_rect);
+    let revisited = session_image(&engine, &mut session, &settings, &mut Profile::default());
+    check_region(&revisited, first_rect);
+    assert!(engine.readback_image(&first).unwrap() == first_bytes);
+}
+
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a regional-capable X3F"]
 fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {

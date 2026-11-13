@@ -69,6 +69,29 @@ impl Graph {
         Ok(demands)
     }
 
+    /// Views participate in cache identity, so each storage candidate must be
+    /// probed with its own concrete framing rather than the authored crop.
+    fn resolve_output_views(
+        &mut self,
+        index: usize,
+        storage: &[Option<[u32; 4]>],
+        views: &[Option<crate::image::View>],
+    ) {
+        let node = &self.nodes[index];
+        for (&id, &view) in node.outputs.iter().zip(views) {
+            let bounds = node
+                .operation
+                .output_storage(self.outputs[id].name)
+                .or_else(|| node.operation.inherited_storage(storage));
+            self.outputs[id].view = match (view, bounds) {
+                (Some(view), Some(bounds)) => {
+                    Some(crate::nodes::finish::image_region::map_view(view, bounds))
+                }
+                _ => view,
+            };
+        }
+    }
+
     /// Demand is independent of storage: a retained broader result can satisfy it.
     /// Resolve a freshly assembled graph once, before normal cache identity and
     /// frontier planning. The resulting concrete graph is consumed by execution.
@@ -78,21 +101,18 @@ impl Graph {
         reusable: impl Fn(&Self, usize) -> bool,
     ) -> Result<Vec<Demand>> {
         let demands = self.demands(roots)?;
+        let mut output_storage = vec![None; self.outputs.len()];
         for index in 0..self.nodes.len() {
             let node = &self.nodes[index];
             if node.outputs.iter().all(|&id| demands[id] == Demand::Unused) {
                 continue;
             }
-            let storage: Vec<_> = node
-                .inputs
+            let views: Vec<_> = node
+                .outputs
                 .iter()
-                .map(|&id| {
-                    let output = &self.outputs[id];
-                    self.nodes[output.producer]
-                        .operation
-                        .output_storage(output.name)
-                })
+                .map(|&id| self.outputs[id].view)
                 .collect();
+            let storage: Vec<_> = node.inputs.iter().map(|&id| output_storage[id]).collect();
             self.nodes[index]
                 .operation
                 .resolve_input_storage(&storage)?;
@@ -107,12 +127,22 @@ impl Graph {
             {
                 let original = std::mem::replace(&mut self.nodes[index].operation, candidate);
                 let main = self.nodes[index].outputs[0];
+                self.resolve_output_views(index, &storage, &views);
                 if !reusable(self, main) {
                     let candidate = std::mem::replace(&mut self.nodes[index].operation, original);
+                    self.resolve_output_views(index, &storage, &views);
                     if !reusable(self, main) {
                         self.nodes[index].operation = candidate;
                     }
                 }
+            }
+            self.resolve_output_views(index, &storage, &views);
+            let operation = &self.nodes[index].operation;
+            for &id in &self.nodes[index].outputs {
+                let bounds = operation
+                    .output_storage(self.outputs[id].name)
+                    .or_else(|| operation.inherited_storage(&storage));
+                output_storage[id] = bounds;
             }
             let main = self.nodes[index].outputs[0];
             if !self.sealed_outputs.contains(&main) {

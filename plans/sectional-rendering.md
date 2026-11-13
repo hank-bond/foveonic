@@ -30,8 +30,8 @@ The first converted chain is Merrill row Banding into NoiseBase and Column. Reco
 - [x] Obtain independent largest-model architecture and code review and address findings.
 - [x] Finish ordinary checks and package the native review build.
 - [x] Record the reviewed prototype checkpoint.
-- [ ] Obtain owner review before another functional slice.
-- [ ] Use owner feedback and the remaining cost breakdown to choose the next operation for migration.
+- [x] Obtain owner review before another functional slice.
+- [x] Use owner feedback and the remaining cost breakdown to choose the next operation for migration.
 
 ## Results and boundaries
 
@@ -58,3 +58,59 @@ Prefer exact sectional samples where arithmetic and sample order are unchanged. 
 The prototype passes 547 ordinary library tests, eight focused GPU tests, the forty-case frozen rendering matrix, strict release workspace/all-target Clippy, formatting and generated-index checks. The native release app is packaged for owner testing. No scheduling, disk-cache policy or processing outside the converted chain changed.
 
 Owner review found slow first native loupe requests across Quattro inputs. The initial demand prototype converts a Merrill chain, so Quattro remains the next profiling target. Review also exposed a separate [Pointer context-lock deadlock](./archived/selection-context-lock.md), now repaired with a failing-before/passing-after regression. Continue sectional performance measurements after the owner can review the responsive build.
+
+## Node rollout
+
+The owner approved investigating all processing nodes for sectional work using the operation-owned demand mechanism. The target is 400 ms request-to-usable native loupe output with a warm decoded cache. Preserve selected algorithms and effects. Keep independent Whole comparisons, serial GPU measurements and a largest-model design/code review for each functional slice. Research and isolated candidate patches may proceed in parallel, but integrate one owner-testable slice at a time.
+
+The most recent review launch did not enable recording, so its exact interaction timings are unavailable. A controlled replay uses the four saved recipes, the same 480 by 480 output region, a retained decoded source and compiled shaders. Wall attribution measures first native processing, not application delivery or the owner's exact loupe position:
+
+| Photograph | Completed engine time, ms | RGB backing extent |
+| --- | --- | --- |
+| Sunlit metal latch | 1001 | 3816 by 3264 |
+| Sunlit red flower | 1456 | 3952 by 3264 |
+| Turquoise still life | 287 | 488 by 488 |
+| Yellow flowers and stroller | 368 | 488 by 488 |
+
+All four originals have the same native dimensions and ISO 100. The saved latch and red-flower settings enable Adaptive Tone and nonneutral HDR. Their combined spatial support expands the requested region by roughly 2000 pixels per side. The pre-change implementation processes every subsequent finishing operation on that largest backing. The flower also enables Color Field, Dehaze, local contrast, Color Editor and universal sharpening. These measurements explain substantial variation, but diagnostic timings are not a latency acceptance result.
+
+The first finishing slice retains the established camera backing and numerical guide filtering. It uses final framing to propagate per-input demand, then shrinks finishing outputs toward the requested region. Keep RGB pixels, compact guide cells, active bounds and physical storage distinct. Preserve guide phase and broader cached inputs. Existing recipe margins provide outer availability during this slice. Do not add their summed support a second time. Splitting Adaptive fitting into a reusable global output is a separate follow-up.
+
+| Area | Current dependency | Next candidate |
+| --- | --- | --- |
+| Shared finishing | Largest backing survives every stage | Progressive compact RGB outputs with independent guide/classifier addressing |
+| Merrill Reference Despeckle | Ordered repaired-neighbor chains | Full-width prefix through the demanded bottom, retaining one immutable lower donor row |
+| Merrill Highlights | Global donor statistics and local restoration share one operation | Preserve original donor order in a reusable table, then regional restoration with clipping support |
+| Color Field highlights | Whole-domain connected components and iterative solves precede local application | Retain the existing global solve as reusable evidence, then bound final application without cropping the solve domain |
+| Quattro color preparation | Pointwise and radius-three operations precede extraction | Regional SectorColor and RawColorBlend, preserving blue/color geometry |
+| Quattro noise | Nonadaptive neighborhoods or adaptive row/column recurrences | Derive finite support for the nonadaptive branch; retain complete evidence for recurrences |
+| Classic | Whole processing at smaller native dimensions | Inventory and measure before selecting a migration |
+
+- [x] Complete independent sensor, finishing and Quattro inventories.
+- [x] Review the next finishing design independently.
+- [x] Capture Off baselines separately from Wall attribution.
+- [x] Implement and review the first finishing window slice.
+- [ ] Implement and review exact Despeckle prefix storage and its Banding handoff.
+- [x] Extend cold regional, pan, Whole continuation and immutable-artifact comparisons for the first finishing slice.
+- [x] Recheck the frozen Whole matrix for the first finishing slice.
+- [ ] Measure real-app loupe delivery with recording explicitly enabled, including mixed-photo editing and constrained cache budgets.
+- [ ] Choose further node migrations from the remaining measured cost, retaining explicit global evidence requirements.
+
+### First finishing slice
+
+Final camera framing now seeds regional delivery demand. Adaptive and HDR expose compact RGB outputs through the existing resolver. Image aliases and pointwise finishing preserve that storage, with explicit framing rebased before cache probing. HDR guide construction uses aligned compact Adaptive RGB. Adaptive fitting, guide construction and numerical application still run on their original available backing, followed by a bit-preserving output extraction. Unconverted spatial or classifier consumers conservatively require the broad input. This establishes the storage handoff without changing their numerical algorithms.
+
+Three uncontended Off trials on Apple M1 Pro use the saved recipes and 480 by 480 request described above. The resident decoded source and compiled shaders are held constant. Separate independent sessions measure first native processing, unchanged requests and Exposure edits. Values are median completed engine milliseconds:
+
+| Photograph | First native before / after | Unchanged before / after | Exposure before / after |
+| --- | --- | --- | --- |
+| Sunlit metal latch | 1021 / 955 | 29 / 7 | 176 / 69 |
+| Sunlit red flower | 1460 / 1488 | 441 / 455 | 427 / 433 |
+| Turquoise still life | 290 / 286 | 4 / 4 | 2 / 3 |
+| Yellow flowers and stroller | 377 / 380 | 6 / 6 | 4 / 5 |
+
+Latch's final RGB backing falls from 3816 by 3264 to 480 by 480. Its upstream camera work remains broad, so first native delivery improves modestly while warm editing improves substantially. The flower's unconverted classifier and spatial stages still require broad input. Its numerical work is unchanged by this slice. The 400 ms application target remains unmet for these expensive first-native cases. These engine measurements exclude decoded-cache acquisition, scheduling and UI delivery.
+
+The first slice passes 556 ordinary processor tests, independent cold-region/edge-pan/Whole-continuation/revisit/immutability checks on Merrill, Quattro and Tiger, and existing HDR, Adaptive Natural/Strong, shared spatial finishing and authored-rotation comparisons. The older HDR test now compares corresponding displayed samples rather than assuming a particular regional backing origin. Its 0.00001 tolerance is unchanged. All forty frozen Whole outputs remain bit-exact. Independent largest-model review found no remaining code blocker. Sensor-prefix work remains an isolated candidate with execution checks pending.
+
+The native two-photo transition journey also completes its single/multi loupe gestures, cancellation and restoration phases, with nine shared assertions and fresh-render image comparisons. Its Wall capture is complete, loss-free and uncontended. Strict workspace/all-target release Clippy, formatting, documentation indexes and 155 Python profiling tests pass, with one platform-dependent Python check skipped. This is behavioral validation, not a 400 ms application-latency acceptance run. The packaged app is ready for owner review before integrating another functional slice.

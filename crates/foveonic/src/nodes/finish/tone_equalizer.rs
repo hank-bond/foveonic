@@ -161,6 +161,47 @@ impl Guide {
         self.luma = self.luma.map(|v| v * NOMINAL_WHITE / white);
         self
     }
+    /// Keep the established guide lattice when its RGB backing becomes compact.
+    pub(crate) fn with_input_bounds(self, bounds: [u32; 4]) -> Result<Self> {
+        if !bounds[0].is_multiple_of(GUIDE_ALIGNMENT)
+            || !bounds[1].is_multiple_of(GUIDE_ALIGNMENT)
+            || bounds[0] >= bounds[2]
+            || bounds[1] >= bounds[3]
+            || bounds[2] > self.shape[0]
+            || bounds[3] > self.shape[1]
+        {
+            return Err("compact HDR backing does not preserve the guide lattice".into());
+        }
+        let extent = [bounds[2] - bounds[0], bounds[3] - bounds[1]];
+        let half = extent.map(|v| v.div_ceil(GUIDE_SCALE));
+        Ok(Self {
+            shape: [extent[0], extent[1], half[0], half[1]],
+            sampling: [half[0], half[1], GUIDE_SCALE, 0],
+            ..self
+        })
+    }
+
+    pub(crate) fn required_input_bounds(self, bounds: [u32; 4]) -> Result<[u32; 4]> {
+        if bounds[0] >= bounds[2] || bounds[1] >= bounds[3] {
+            return Err("invalid requested HDR bounds".into());
+        }
+        let margin = support();
+        Ok([
+            bounds[0].saturating_sub(margin) / GUIDE_ALIGNMENT * GUIDE_ALIGNMENT,
+            bounds[1].saturating_sub(margin) / GUIDE_ALIGNMENT * GUIDE_ALIGNMENT,
+            bounds[2]
+                .saturating_add(margin)
+                .div_ceil(GUIDE_ALIGNMENT)
+                .saturating_mul(GUIDE_ALIGNMENT)
+                .min(self.shape[0]),
+            bounds[3]
+                .saturating_add(margin)
+                .div_ceil(GUIDE_ALIGNMENT)
+                .saturating_mul(GUIDE_ALIGNMENT)
+                .min(self.shape[1]),
+        ])
+    }
+
     pub(crate) fn storage_extent(self) -> [u32; 2] {
         [self.shape[2], self.shape[3]]
     }

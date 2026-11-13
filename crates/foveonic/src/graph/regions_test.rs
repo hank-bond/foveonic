@@ -211,3 +211,288 @@ fn repeated_bindings_union_each_input_slots_requirements() {
         .unwrap();
     assert_eq!(demands[input], Demand::Region([1, 2, 23, 25]));
 }
+
+fn finishing_graph() -> (Graph, usize, usize, usize, usize) {
+    use crate::{
+        color_space::ColorSpace,
+        graph::DataType,
+        nodes::finish::{adaptive_tone, tone_equalizer},
+        render::BaseResponse,
+    };
+    let space = ColorSpace::Srgb;
+    let extent = [4096, 3072];
+    let mut graph = Graph::default();
+    let rgb = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::LinearRgb(space),
+            },
+            &[],
+        )
+        .unwrap();
+    let mask = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::BrightnessGuide,
+            },
+            &[],
+        )
+        .unwrap();
+    let curve = vec![0., 0.25, 1.];
+    let params = adaptive_tone::Params::new(
+        extent,
+        [0, 0, extent[0], extent[1]],
+        4095.,
+        space,
+        BaseResponse::Natural,
+        Default::default(),
+        &curve,
+    )
+    .unwrap();
+    let adaptive = graph
+        .add(
+            Operation::AdaptiveTone {
+                window: Default::default(),
+                params,
+                analysis: params,
+                curve: curve.into(),
+                space,
+            },
+            &[rgb, mask, rgb, mask],
+        )
+        .unwrap();
+    let guide = tone_equalizer::Guide::new(extent, 192, space).unwrap();
+    let mask = graph
+        .add(Operation::ToneMask { guide, space }, &[adaptive])
+        .unwrap();
+    let hdr = graph
+        .add(
+            Operation::TonalRanges {
+                window: Default::default(),
+                white: 4095.,
+                controls: tone_equalizer::Controls {
+                    whites: -1.,
+                    ..Default::default()
+                },
+                pivot: -2.,
+                space,
+            },
+            &[adaptive, mask],
+        )
+        .unwrap();
+    let alias = graph
+        .add(
+            Operation::ImageAlias {
+                dehaze_basis: None,
+                data: DataType::LinearRgb(space),
+                output: "regional.finishing",
+            },
+            &[hdr],
+        )
+        .unwrap();
+    let tone = graph
+        .add(
+            Operation::Tone {
+                curve: vec![0., 1.].into(),
+                exposure: 1.,
+                space,
+            },
+            &[alias],
+        )
+        .unwrap();
+    (graph, adaptive, mask, hdr, tone)
+}
+
+#[test]
+fn finishing_windows_shrink_after_adaptive_and_hdr_without_replanning_camera_support() {
+    let (mut graph, adaptive, mask, hdr, tone) = finishing_graph();
+    let requested = [1800, 1200, 2280, 1680];
+    graph.set_view(
+        tone,
+        crate::image::View {
+            crop: requested,
+            rotation: 0,
+            extent: [480, 480],
+        },
+    );
+    let demands = graph
+        .resolve_regions(&[(tone, Demand::Region(requested))], |_, _| false)
+        .unwrap();
+    // The HDR guide's existing 976-pixel support plus interpolation belongs on
+    // its Adaptive input. Adaptive's own evidence remains unchanged and Whole.
+    let adaptive_bounds = [816, 216, 3264, 2664];
+    assert_eq!(demands[adaptive], Demand::Region(adaptive_bounds));
+    assert_eq!(demands[0], Demand::Whole);
+    let operation = |id: usize| &graph.nodes[graph.outputs[id].producer].operation;
+    assert_eq!(
+        operation(adaptive).output_storage("base-response.rgb"),
+        Some(adaptive_bounds)
+    );
+    let Operation::ToneMask { guide, .. } = operation(mask) else {
+        panic!("guide")
+    };
+    assert_eq!(guide.extent(), [2448, 2448]);
+    let Operation::TonalRanges { window, .. } = operation(hdr) else {
+        panic!("HDR")
+    };
+    assert_eq!(window.input, Some(adaptive_bounds));
+    assert_eq!(window.output, Some(requested));
+    let copy = window.crop([2448, 2448]).unwrap().unwrap();
+    assert_eq!(copy.extent(), [480, 480]);
+    assert_eq!(copy.input_bounds(None).unwrap(), [984, 984, 1464, 1464]);
+    assert_eq!(graph.outputs[tone].view.unwrap().crop, [0, 0, 480, 480]);
+}
+
+#[test]
+fn whole_finishing_inspection_keeps_the_original_storage_and_keys() {
+    let (mut graph, adaptive, mask, hdr, tone) = finishing_graph();
+    let keys: Vec<_> = graph
+        .nodes
+        .iter()
+        .map(|node| node.operation.key(graph.outputs[node.outputs[0]].name))
+        .collect();
+    graph
+        .resolve_regions(&[(tone, Demand::Whole)], |_, _| false)
+        .unwrap();
+    for (node, key) in graph.nodes.iter().zip(keys) {
+        assert!(node.operation.key(graph.outputs[node.outputs[0]].name) == key);
+    }
+    assert!(graph.nodes[graph.outputs[adaptive].producer]
+        .operation
+        .output_storage("base-response.rgb")
+        .is_none());
+    assert!(graph.nodes[graph.outputs[hdr].producer]
+        .operation
+        .output_storage("tonal-ranges.rgb")
+        .is_none());
+    let Operation::ToneMask { guide, .. } = graph.nodes[graph.outputs[mask].producer].operation
+    else {
+        panic!("guide")
+    };
+    assert_eq!(guide.extent(), [4096, 3072]);
+}
+
+#[test]
+fn retained_broad_adaptive_storage_remains_usable_by_a_compact_hdr_output() {
+    let (mut graph, adaptive, mask, hdr, tone) = finishing_graph();
+    let requested = [1800, 1200, 2280, 1680];
+    graph
+        .resolve_regions(&[(tone, Demand::Region(requested))], |graph, id| {
+            id == adaptive
+                && graph.nodes[graph.outputs[id].producer]
+                    .operation
+                    .output_storage("base-response.rgb")
+                    .is_none()
+        })
+        .unwrap();
+    let operation = |id: usize| &graph.nodes[graph.outputs[id].producer].operation;
+    assert!(operation(adaptive)
+        .output_storage("base-response.rgb")
+        .is_none());
+    let Operation::ToneMask { guide, .. } = operation(mask) else {
+        panic!("guide")
+    };
+    assert_eq!(guide.extent(), [4096, 3072]);
+    let Operation::TonalRanges { window, .. } = operation(hdr) else {
+        panic!("HDR")
+    };
+    assert!(window.input.is_none());
+    assert_eq!(window.output, Some(requested));
+    assert_eq!(
+        window
+            .crop([4096, 3072])
+            .unwrap()
+            .unwrap()
+            .input_bounds(None)
+            .unwrap(),
+        requested
+    );
+}
+
+#[test]
+fn unconverted_finishing_filter_keeps_its_preceding_adaptive_and_hdr_work_whole() {
+    use crate::{color_space::ColorSpace, nodes::finish::photographic};
+    let (mut graph, adaptive, _, hdr, _) = finishing_graph();
+    let filter = graph
+        .add(
+            Operation::LinearLocalContrast {
+                params: photographic::Params::new([4096, 3072], ColorSpace::Srgb),
+                space: ColorSpace::Srgb,
+            },
+            &[hdr],
+        )
+        .unwrap();
+    graph
+        .resolve_regions(
+            &[(filter, Demand::Region([1800, 1200, 2280, 1680]))],
+            |_, _| false,
+        )
+        .unwrap();
+    for id in [adaptive, hdr] {
+        let node = &graph.nodes[graph.outputs[id].producer];
+        assert!(node
+            .operation
+            .output_storage(graph.outputs[id].name)
+            .is_none());
+    }
+}
+
+#[test]
+fn compact_finishing_cache_probe_uses_its_rebased_explicit_view() {
+    let (mut graph, adaptive, _, _, tone) = finishing_graph();
+    let requested = [1800, 1200, 2280, 1680];
+    graph.set_view(
+        adaptive,
+        crate::image::View {
+            crop: requested,
+            rotation: 0,
+            extent: [480, 480],
+        },
+    );
+    let probes = std::cell::Cell::new(0);
+    graph
+        .resolve_regions(&[(tone, Demand::Region(requested))], |graph, id| {
+            if id != adaptive {
+                return false;
+            }
+            let bounds = graph.nodes[graph.outputs[id].producer]
+                .operation
+                .output_storage("base-response.rgb");
+            assert_eq!(bounds, Some([816, 216, 3264, 2664]));
+            assert_eq!(graph.outputs[id].view.unwrap().crop, [984, 984, 1464, 1464]);
+            probes.set(probes.get() + 1);
+            true
+        })
+        .unwrap();
+    assert_eq!(probes.get(), 1);
+}
+
+#[test]
+fn extraction_requests_its_complete_authored_rect_until_it_can_materialize_a_subregion() {
+    use crate::{color_space::ColorSpace, graph::DataType, nodes::finish::image_region};
+    let (mut graph, adaptive, _, _, _) = finishing_graph();
+    let extract = graph
+        .add(
+            Operation::ImageRegion {
+                prepared: image_region::Prepared::new([4096, 3072], [1200, 800, 2600, 2200], 3)
+                    .unwrap(),
+                data: DataType::LinearRgb(ColorSpace::Srgb),
+                output: "regional.extraction",
+            },
+            &[adaptive],
+        )
+        .unwrap();
+    let demands = graph
+        .resolve_regions(&[(extract, Demand::Region([20, 30, 100, 110]))], |_, _| {
+            false
+        })
+        .unwrap();
+    assert_eq!(demands[adaptive], Demand::Region([1200, 800, 2600, 2200]));
+    let Operation::ImageRegion { prepared, .. } =
+        graph.nodes[graph.outputs[extract].producer].operation
+    else {
+        panic!("extract")
+    };
+    assert_eq!(prepared.extent(), [1400, 1400]);
+    assert_eq!(prepared.input_bounds(None).unwrap(), [0, 0, 1400, 1400]);
+}

@@ -295,6 +295,7 @@ pub(super) fn build(
             };
         recipe.final_id = recipe.graph.add(
             Operation::AdaptiveTone {
+                window: Default::default(),
                 params,
                 analysis,
                 curve,
@@ -440,6 +441,7 @@ pub(super) fn build(
         }
         recipe.final_id = recipe.graph.add(
             Operation::TonalRanges {
+                window: Default::default(),
                 controls: settings.tonal_ranges,
                 pivot: tonal_pivot,
                 white,

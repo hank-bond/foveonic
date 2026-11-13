@@ -258,6 +258,7 @@ pub enum Operation {
         space: ColorSpace,
     },
     AdaptiveTone {
+        window: crate::nodes::finish::image_region::Window,
         params: crate::nodes::finish::adaptive_tone::Params,
         analysis: crate::nodes::finish::adaptive_tone::Params,
         curve: crate::recipe::Shared<f32>,
@@ -272,6 +273,7 @@ pub enum Operation {
         space: ColorSpace,
     },
     TonalRanges {
+        window: crate::nodes::finish::image_region::Window,
         white: f32,
         controls: crate::render::TonalRanges,
         pivot: f32,
@@ -296,6 +298,21 @@ pub enum Operation {
     },
 }
 
+/// Native encoding reads only its crop. Resizing and affine sampling retain
+/// their complete input until their numerical support is declared separately.
+fn native_encoding(params: &EncodeParams) -> bool {
+    let [l, t, r, b] = params.crop;
+    if l >= r || t >= b || params.mapping[0][3] != 0. {
+        return false;
+    }
+    let extent = if params.source[2].is_multiple_of(180) {
+        [r - l, b - t]
+    } else {
+        [b - t, r - l]
+    };
+    params.output[..2] == extent
+}
+
 impl Operation {
     /// Each operation owns the coordinate mapping and support of its inputs.
     /// Unconverted operations conservatively require their complete input domain.
@@ -303,10 +320,41 @@ impl Operation {
         &self,
         output: &str,
         demand: super::Demand,
-        _slot: usize,
+        slot: usize,
     ) -> crate::source::Result<super::Demand> {
         use super::Demand;
         match self {
+            Self::ImageAlias { .. }
+            | Self::Tone { .. }
+            | Self::Saturation { .. }
+            | Self::PhotographicTone { .. }
+            | Self::LinearBrightness { .. }
+            | Self::LinearWhiteBalance { .. }
+            | Self::PerceptualGrade { .. } => Ok(demand),
+            Self::Encode { params, .. } if native_encoding(params) => {
+                Ok(Demand::Region(params.crop))
+            }
+            // Extraction still materializes its complete authored rectangle.
+            Self::ImageRegion { prepared, .. } => match demand {
+                Demand::Region(_) | Demand::Whole => {
+                    Ok(Demand::Region(prepared.input_bounds(None)?))
+                }
+                Demand::Unused => Ok(Demand::Unused),
+            },
+            Self::TonalRanges { .. } if slot == 1 => match demand {
+                Demand::Region(bounds) => Ok(Demand::Region([
+                    bounds[0].saturating_sub(2),
+                    bounds[1].saturating_sub(2),
+                    bounds[2].saturating_add(2),
+                    bounds[3].saturating_add(2),
+                ])),
+                other => Ok(other),
+            },
+            Self::TonalRanges { .. } => Ok(demand),
+            Self::ToneMask { guide, .. } => match demand {
+                Demand::Region(bounds) => Ok(Demand::Region(guide.required_input_bounds(bounds)?)),
+                other => Ok(other),
+            },
             Self::NoiseBase(p) if !p.uses_global_context() => {
                 Ok(Demand::Region(p.required_sensor_bounds()))
             }
@@ -326,6 +374,52 @@ impl Operation {
     ) -> crate::source::Result<Option<Self>> {
         use super::Demand;
         match self {
+            Self::AdaptiveTone {
+                params,
+                analysis,
+                curve,
+                space,
+                window,
+            } => {
+                if let Some((_, Demand::Region(bounds))) = demands.first() {
+                    let bounds = params.aligned_output(*bounds)?;
+                    if bounds != [0, 0, params.extent()[0], params.extent()[1]] {
+                        return Ok(Some(Self::AdaptiveTone {
+                            params: *params,
+                            analysis: *analysis,
+                            curve: curve.clone(),
+                            space: *space,
+                            window: crate::nodes::finish::image_region::Window {
+                                output: Some(bounds),
+                                ..*window
+                            },
+                        }));
+                    }
+                }
+                Ok(None)
+            }
+            Self::TonalRanges {
+                white,
+                controls,
+                pivot,
+                space,
+                window,
+            } => {
+                if let Some((_, Demand::Region(bounds))) = demands.first() {
+                    Ok(Some(Self::TonalRanges {
+                        white: *white,
+                        controls: *controls,
+                        pivot: *pivot,
+                        space: *space,
+                        window: crate::nodes::finish::image_region::Window {
+                            output: Some(*bounds),
+                            ..*window
+                        },
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
             Self::Banding(p) => {
                 if demands
                     .iter()
@@ -360,6 +454,25 @@ impl Operation {
     pub(crate) fn output_storage(&self, output: &str) -> Option<[u32; 4]> {
         match self {
             Self::Banding(p) if output == "banding.layers" => p.compact_bounds(),
+            Self::AdaptiveTone { window, .. } | Self::TonalRanges { window, .. } => {
+                window.storage()
+            }
+            _ => None,
+        }
+    }
+
+    /// Only operations whose sampling preserves image coordinates inherit a
+    /// compact input domain. Extraction and encoding start a new output domain.
+    pub(crate) fn inherited_storage(&self, storage: &[Option<[u32; 4]>]) -> Option<[u32; 4]> {
+        match self {
+            Self::ImageAlias { .. }
+            | Self::Tone { .. }
+            | Self::Saturation { .. }
+            | Self::PhotographicTone { .. }
+            | Self::LinearBrightness { .. }
+            | Self::LinearWhiteBalance { .. }
+            | Self::PerceptualGrade { .. }
+            | Self::ToneMask { .. } => storage.first().copied().flatten(),
             _ => None,
         }
     }
@@ -368,8 +481,38 @@ impl Operation {
         &mut self,
         storage: &[Option<[u32; 4]>],
     ) -> crate::source::Result<()> {
+        if let Self::TonalRanges { window, .. } = self {
+            if storage.first() != storage.get(1) {
+                return Err("HDR RGB and guide require matching available bounds".into());
+            }
+            window.input = storage.first().copied().flatten();
+            return Ok(());
+        }
         if let Some(bounds) = storage.first().copied().flatten() {
             match self {
+                Self::ImageAlias { .. }
+                | Self::Tone { .. }
+                | Self::Saturation { .. }
+                | Self::PhotographicTone { .. }
+                | Self::LinearBrightness { .. }
+                | Self::LinearWhiteBalance { .. }
+                | Self::PerceptualGrade { .. } => {}
+                Self::ToneMask { guide, .. } => *guide = guide.with_input_bounds(bounds)?,
+                Self::ImageRegion { prepared, .. } => {
+                    *prepared = prepared.with_input_bounds(bounds)?
+                }
+                Self::Encode { params, .. } if native_encoding(params) => {
+                    if params.crop[0] < bounds[0]
+                        || params.crop[1] < bounds[1]
+                        || params.crop[2] > bounds[2]
+                        || params.crop[3] > bounds[3]
+                    {
+                        return Err("encoding crop exceeds its available RGB input".into());
+                    }
+                    params.source[..2]
+                        .copy_from_slice(&[bounds[2] - bounds[0], bounds[3] - bounds[1]]);
+                    params.crop = std::array::from_fn(|i| params.crop[i] - bounds[i % 2]);
+                }
                 Self::NoiseBase(p) if !p.uses_global_context() => {
                     *p = p.with_input_bounds(bounds)?
                 }
@@ -520,17 +663,19 @@ impl Operation {
             | Self::ToneMask { guide, .. }
             | Self::ExpandBrightnessGuide { guide, .. } => guide.key(),
             Self::AdaptiveTone {
+                window,
                 params,
                 analysis,
                 curve,
                 ..
-            } => params.key().join(analysis.key()).join(curve.key()),
+            } => window.key(params.key().join(analysis.key()).join(curve.key())),
             Self::TonalRanges {
+                window,
                 controls,
                 pivot,
                 white,
                 ..
-            } => Key::pod(&controls.amounts()).with(pivot).with(white),
+            } => window.key(Key::pod(&controls.amounts()).with(pivot).with(white)),
             Self::Tone {
                 curve, exposure, ..
             } => Key::pod(exposure).join(curve.key()),

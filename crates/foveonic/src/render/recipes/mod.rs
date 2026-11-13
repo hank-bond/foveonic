@@ -193,6 +193,11 @@ impl Engine {
                 execution,
             )?,
         };
+        if settings.preview_region.is_some() {
+            built
+                .graph
+                .set_view(built.final_id, camera_view(built.params));
+        }
         linear_edits::prioritize_cache(&mut built.graph);
         if let Some(start) = preparation {
             profile.record("prepare render recipe", start);

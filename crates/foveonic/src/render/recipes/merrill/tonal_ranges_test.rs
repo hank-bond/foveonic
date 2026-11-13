@@ -101,25 +101,31 @@ fn gpu_tonal_ranges_match_cached_reduced_and_regional_rendering() {
         let regional = engine
             .render(&source, &settings, &mut Profile::default())
             .unwrap();
-        let encode = calibration::encode(
-            &source.metadata,
-            crate::color_space::ColorSpace::from_metadata(&source.metadata).unwrap(),
-        )
-        .unwrap();
-        let geometry = super::region::Prepared::with_tonal_support(encode, rect).unwrap();
         let bytes = engine.readback_image(&regional).unwrap();
         let local: &[f32] = bytemuck::cast_slice(&bytes);
         let full: &[f32] = bytemuck::cast_slice(&full_bytes);
-        let [x0, y0, x1, y1] = regional.view().crop;
+        let pixel = |image: &RenderedImage, x, y| {
+            let view = image.view();
+            let [x, y] = view
+                .pixel_at_uv([
+                    (x as f32 + 0.5) / view.extent[0] as f32,
+                    (y as f32 + 0.5) / view.extent[1] as f32,
+                ])
+                .unwrap();
+            ((y * image.description().extent[0] + x) * 3) as usize
+        };
+        assert_eq!(
+            regional.view().extent,
+            [rect[2] - rect[0], rect[3] - rect[1]]
+        );
         let mut maximum = 0_f32;
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let dst = ((y * regional.description().extent[0] + x) * 3) as usize;
-                let src = (((y + geometry.physical[1]) * fresh.description().extent[0]
-                    + x
-                    + geometry.physical[0])
-                    * 3) as usize;
+        // Compare displayed samples independently of the chosen backing origin.
+        for y in 0..rect[3] - rect[1] {
+            for x in 0..rect[2] - rect[0] {
+                let dst = pixel(&regional, x, y);
+                let src = pixel(&fresh, x + rect[0], y + rect[1]);
                 for c in 0..3 {
+                    assert!(local[dst + c].is_finite() && full[src + c].is_finite());
                     maximum = maximum.max((local[dst + c] - full[src + c]).abs());
                 }
             }

@@ -477,6 +477,12 @@ impl Engine {
                 | Operation::AdaptiveToneGuide { guide, .. }
                 | Operation::ExpandBrightnessGuide { guide, .. } => guide.extent(),
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
+                Operation::AdaptiveTone { window, .. } | Operation::TonalRanges { window, .. }
+                    if window.output.is_some() =>
+                {
+                    let bounds = window.output.expect("regional output bounds");
+                    [bounds[2] - bounds[0], bounds[3] - bounds[1]]
+                }
                 Operation::ProjectColorTiles { params, .. } => params.output_extent(),
                 Operation::NoiseContext(p) => reconstruction::context_extent(*p),
                 Operation::Banding(p) => {
@@ -519,6 +525,20 @@ impl Engine {
                     if p.output_bounds() != [0, 0, inherited[0], inherited[1]] =>
                 {
                     None
+                }
+                Operation::AdaptiveTone { window, .. } | Operation::TonalRanges { window, .. } => {
+                    if let Some(prepared) = window.crop(inherited)? {
+                        inherited_view.map(|view| {
+                            crate::nodes::finish::image_region::map_view(
+                                view,
+                                prepared
+                                    .input_bounds(None)
+                                    .expect("validated regional crop"),
+                            )
+                        })
+                    } else {
+                        inherited_view
+                    }
                 }
                 Operation::HighlightEvidence(prepared) => {
                     inherited_view.map(|view| prepared.grid().map_view(view))
@@ -2047,6 +2067,7 @@ impl Engine {
                     )?)
                 }
                 Operation::AdaptiveTone {
+                    window,
                     params,
                     analysis,
                     curve,
@@ -2068,26 +2089,38 @@ impl Engine {
                         *analysis,
                         profile,
                     )?;
-                    Some(result.rgb)
+                    Some(if let Some(prepared) = window.crop(inherited)? {
+                        crate::nodes::finish::image_region::apply(gpu, &result.rgb, &prepared)?
+                    } else {
+                        result.rgb
+                    })
                 }
                 Operation::TonalRanges {
+                    window,
                     white,
                     controls,
                     pivot,
                     space,
-                } => Some(crate::nodes::finish::tone_equalizer::apply_with_white(
-                    gpu,
-                    &input(0).buffer,
-                    &input(1).buffer,
-                    inherited,
-                    crate::nodes::finish::tone_equalizer::Response {
-                        controls: *controls,
-                        pivot: *pivot,
-                        space: *space,
-                    },
-                    *white,
-                    profile,
-                )?),
+                } => {
+                    let result = crate::nodes::finish::tone_equalizer::apply_with_white(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        inherited,
+                        crate::nodes::finish::tone_equalizer::Response {
+                            controls: *controls,
+                            pivot: *pivot,
+                            space: *space,
+                        },
+                        *white,
+                        profile,
+                    )?;
+                    Some(if let Some(prepared) = window.crop(inherited)? {
+                        crate::nodes::finish::image_region::apply(gpu, &result, &prepared)?
+                    } else {
+                        result
+                    })
+                }
                 Operation::Tone {
                     curve, exposure, ..
                 } => {
