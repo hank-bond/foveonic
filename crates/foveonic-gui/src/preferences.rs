@@ -165,6 +165,7 @@ pub struct Preferences {
     pub scope: Scope,
     pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
+    pub loupe: crate::loupe_tool::Options,
     pub preview_quality: PreviewMode,
     pub white_viewport_background: bool,
     pub decode_cache: foveonic::decode_cache::Settings,
@@ -194,6 +195,7 @@ impl Default for Preferences {
             scope: Scope::Histogram,
             scope_viewport: true,
             zoom_snap: ZoomPreset::default(),
+            loupe: Default::default(),
             preview_quality: PreviewMode::Full,
             white_viewport_background: false,
             decode_cache: Default::default(),
@@ -426,6 +428,32 @@ mod tests {
         assert_eq!(restored, prefs);
         assert_eq!(restored.import_processing.format, ExportFormat::Dng);
         assert_eq!(restored.import_processing.tiff_color_space, None);
+    }
+
+    #[test]
+    fn loupe_options_default_and_persist_without_a_transient_gesture() {
+        use crate::loupe_tool::{Options, Size, Zoom};
+        let mut store = Storage::default();
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(scope:Histogram)".into());
+        assert_eq!(Preferences::load(Some(&store)).loupe, Options::default());
+        for size in Size::ALL {
+            for zoom in Zoom::ALL {
+                let options = Options {
+                    size,
+                    zoom,
+                    centered: true,
+                };
+                let prefs = Preferences {
+                    loupe: options,
+                    ..Default::default()
+                };
+                prefs.save(&mut store);
+                assert_eq!(Preferences::load(Some(&store)).loupe, options);
+            }
+        }
+        assert!(serde_json::from_str::<Options>(r#"{"zoom":"percent300"}"#).is_err());
     }
 
     #[test]

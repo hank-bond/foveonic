@@ -62,7 +62,8 @@ struct Whole {
 pub(crate) struct Snapshot(Whole);
 impl Snapshot {
     pub fn from_frame(frame: &super::Frame, request: &Request) -> Option<Self> {
-        if request.comparison
+        if request.detail
+            || request.comparison
             || frame.artifact.settings.preview_region.is_some()
             || frame.artifact.settings.output_size.is_some()
         {
@@ -136,6 +137,9 @@ impl Presentation {
     /// Pixel edits can be pending when composition changes. They still need a
     /// render, using the existing working grid rather than a new framing policy.
     pub fn quality_for_view_change(&self, request: &Request, cache: &DecodeCache) -> Option<Scale> {
+        if request.detail {
+            return None;
+        }
         let whole = self.whole.as_ref()?;
         if cache
             .source_origin(&request.path)
@@ -206,7 +210,7 @@ impl Presentation {
             || whole.settings.rotation != settings.rotation;
         // Display demand can increase without changing photographic controls.
         // Composition must retain the already rendered grid.
-        if !changed
+        if (request.detail || !changed)
             && !request.accepts_scale(
                 whole.images[0].image.settings().working_scale,
                 &whole.images[0].metadata,
@@ -245,7 +249,8 @@ impl Presentation {
         artifacts: &[Artifact],
         origin: &SourceOrigin,
     ) -> bool {
-        if request.export.is_some()
+        if request.detail
+            || request.export.is_some()
             || artifacts.is_empty()
             || artifacts.len() > 2
             || artifacts.iter().any(|artifact| {
@@ -323,6 +328,7 @@ mod tests {
             settings: settings.clone(),
             preview_quality: pass,
             preview_policy: policy,
+            detail: settings.preview_region.is_some(),
             framing_preview: framing,
             calibration: None,
             rendition: Default::default(),
@@ -447,6 +453,59 @@ mod tests {
             assert!(dispatches(&worker, revision) > 0);
             matches_fresh(&verifier, &frame, &path, &settings);
         }
+    }
+    #[test]
+    #[ignore = "requires GPU and MERRILL_X3F"]
+    fn whole_detail_stays_native_after_reduced_composition_changes() {
+        let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
+        let engine = Engine::new().unwrap();
+        let verifier = engine.executor();
+        let worker = Worker::new(engine, egui::Context::default());
+        let mut settings = Settings::new("Sunlight", "Standard");
+        worker.submit(request(
+            &path,
+            1,
+            PreviewMode::Thumb,
+            PreviewMode::Thumb,
+            &settings,
+            false,
+        ));
+        let base = receive(&worker, 1);
+        assert!(base.artifact.settings.working_scale.is_reduced());
+        settings.crop.bounds = [0.1, 0.1, 0.9, 0.9];
+        settings.rotation.turns = 1;
+        let mut detail = request(
+            &path,
+            2,
+            PreviewMode::Full,
+            PreviewMode::Thumb,
+            &settings,
+            false,
+        );
+        detail.detail = true;
+        worker.submit(detail);
+        let frame = receive(&worker, 2);
+        assert!(frame.detail);
+        assert!(!frame.is_photographic());
+        assert_eq!(frame.artifact.settings.working_scale, Scale::NATIVE);
+        assert_eq!(frame.artifact.settings.preview_region, None);
+        assert!(dispatches(&worker, 2) > 0);
+        matches_fresh(&verifier, &frame, &path, &settings);
+        worker.submit(request(
+            &path,
+            3,
+            PreviewMode::Thumb,
+            PreviewMode::Thumb,
+            &settings,
+            false,
+        ));
+        let main = receive(&worker, 3);
+        assert!(!main.detail);
+        assert_eq!(
+            main.artifact.settings.working_scale,
+            PreviewMode::Thumb.working_scale()
+        );
+        matches_fresh(&verifier, &main, &path, &settings);
     }
 
     #[test]

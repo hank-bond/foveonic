@@ -60,7 +60,7 @@ pub struct ImageInfo<'a> {
     pub calibration: Option<&'a str>,
     pub framing_preview: bool,
     pub comparison: bool,
-    pub regional: bool,
+    pub detail: bool,
     pub revision: u64,
 }
 impl<'a> From<&'a worker::Frame> for ImageInfo<'a> {
@@ -72,7 +72,7 @@ impl<'a> From<&'a worker::Frame> for ImageInfo<'a> {
             calibration: frame.calibration_signature.as_deref(),
             framing_preview: frame.framing_preview,
             comparison: frame.comparison.is_some(),
-            regional: frame.artifact.settings.preview_region.is_some(),
+            detail: frame.detail,
             revision: frame.content_revision(),
         }
     }
@@ -245,7 +245,7 @@ fn destination(
                 && view
                     .displayed_revision
                     .is_none_or(|revision| image.revision > revision)
-                && (!(image.regional || *reply.purpose == Purpose::Detail)
+                && (!image.detail
                     || view
                         .detail_revision
                         .is_none_or(|revision| image.revision > revision))
@@ -323,7 +323,7 @@ impl App {
             settings: self.settings.clone(),
             overviews: self
                 .multi_edit
-                .render_paths()
+                .demanded_paths()
                 .iter()
                 .filter_map(|path| {
                     self.multi_edit
@@ -353,7 +353,7 @@ impl App {
             calibration: calibration.as_ref().map(|profile| profile.signature()),
             // Before changes processing settings but preserves authored framing.
             settings: &self.settings,
-            overview_visible: self.multi_edit.rendering(&reply.path),
+            overview_visible: self.multi_edit.demanded(&reply.path),
             overview_settings: self.multi_edit.settings(&reply.path),
             overview_displayed_revision: self
                 .current_photo_frame(&reply.path)

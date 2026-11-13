@@ -184,6 +184,7 @@ mod tests {
         revision: u64,
     ) -> crate::rendering::coordinator::Stamp {
         let request = Arc::new(crate::rendering::request::Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: crate::editor::Rendition::Current,

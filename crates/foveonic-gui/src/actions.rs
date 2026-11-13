@@ -86,6 +86,7 @@ impl App {
                     self.comparison = Default::default();
                     crate::crop_tool::toggle(ctx);
                 }
+                Action::Loupe => crate::loupe_tool::activate(ctx),
                 Action::Pointer | Action::FinishTool => crate::photo_tools::pointer(ctx),
                 Action::CopySettings => self.actions.push(Edit::CopySettings),
                 Action::PasteSettings => {

@@ -21,6 +21,7 @@ enum Step {
     TilePan,
     TileSelect,
     TileFit,
+    Loupe,
     Single,
     Quality(u8),
     Zoom,
@@ -96,6 +97,7 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::TilePointerZoom,
         Step::TileFit,
         Step::SpaceClick,
+        Step::Loupe,
         Step::Single,
         Step::Quality(0),
         Step::Quality(1),
@@ -152,6 +154,7 @@ pub(super) struct TransitionJourney {
     photograph_task: Option<(u64, u64)>,
     hold: Option<crate::rendering::worker::DeliveryHold>,
     held_delta: f32,
+    loupe: Option<super::loupe::Driver>,
     pub(super) composition: Option<(usize, foveonic::crop::Crop, foveonic::rotation::Rotation)>,
 }
 impl TransitionJourney {
@@ -181,10 +184,11 @@ impl TransitionJourney {
             photograph_task: None,
             hold: None,
             held_delta: 0.,
+            loupe: None,
         }
     }
     pub(super) fn evidence(&self) -> serde_json::Value {
-        serde_json::json!({"seed":self.seed,"sequence":self.steps,"events":self.events,"expected":self.model,"composition":self.composition})
+        serde_json::json!({"seed":self.seed,"sequence":self.steps,"events":self.events,"expected":self.model,"composition":self.composition,"loupe":self.loupe.as_ref().map(super::loupe::Driver::evidence)})
     }
     fn check(&self, app: &App, paths: &[PathBuf]) -> Result<(), String> {
         let selection: Result<Vec<_>, _> = app
@@ -219,6 +223,9 @@ impl TransitionJourney {
     }
     pub(super) fn release(&mut self) {
         self.hold.take();
+        if let Some(loupe) = &mut self.loupe {
+            loupe.release();
+        }
     }
     pub(super) fn advance(
         &mut self,
@@ -356,6 +363,16 @@ impl TransitionJourney {
         smoke: &mut super::Smoke,
         paths: &[PathBuf],
     ) -> Result<bool, String> {
+        if self.pending
+            && self.steps[self.index] == Step::Loupe
+            && !self
+                .loupe
+                .as_mut()
+                .unwrap()
+                .advance(app, ctx, smoke, paths)?
+        {
+            return Ok(false);
+        }
         if self.pending
             && matches!(
                 self.steps[self.index],
@@ -993,6 +1010,9 @@ impl TransitionJourney {
                 smoke.direct_events.push_back(vec![space_key(false)]);
                 smoke.direct_events.push_back(vec![]);
             }
+            Step::Loupe => {
+                self.loupe = Some(super::loupe::Driver::new());
+            }
             Step::Single => {
                 let active = app
                     .selected
@@ -1183,6 +1203,22 @@ mod tests {
                     .filter(|step| **step == Step::SmartGroupEdit)
                     .count(),
                 12
+            );
+            assert_eq!(
+                sequence.iter().filter(|step| **step == Step::Loupe).count(),
+                1
+            );
+            let loupe = sequence
+                .iter()
+                .position(|step| *step == Step::Loupe)
+                .unwrap();
+            let single = sequence
+                .iter()
+                .position(|step| *step == Step::Single)
+                .unwrap();
+            assert!(
+                loupe < single,
+                "loupe must run while inactive tiles are displayed"
             );
             assert_eq!(sequence.last(), Some(&Step::Restore));
             assert!(sequence

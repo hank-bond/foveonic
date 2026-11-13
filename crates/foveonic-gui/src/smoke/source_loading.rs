@@ -64,6 +64,7 @@ impl SourceLoading {
                 // from ordinary Current snapshots. This is not a Before UI test.
                 // B keeps its reduced session and active controls.
                 app.worker.submit(Request {
+                    detail: false,
                     path: paths[0].clone(),
                     revision: app.revision,
                     settings: app

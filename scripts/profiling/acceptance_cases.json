@@ -827,6 +827,18 @@
         "Four displayed editing targets retain independent Smart processing scales after one photo is zoomed.",
         "Fit, mixed-resolution and single-target edit phases record per-photo delivery and group completion at explicit 2 GiB and 1 GiB budgets."
       ]
+    },
+    {
+      "domain": "viewport",
+      "path": "Native loupe inspection without changing the main preview or editing targets",
+      "jobs": ["scenario-transition-journey", "scenario-smart-low-memory"],
+      "checks": [
+        "Single and inactive multi-photo gestures receive Full detail while the main preview remains Thumb.",
+        "Dragging replaces uncovered regions and reuses Whole fallback with complete lens coverage.",
+        "Release, tool changes and source removal retire held work without selecting a photo.",
+        "Cropped and rotated thumbnail-only photos use transient ownership and restore authored settings.",
+        "Native screenshots retain the lens for visual review at normal and low memory budgets."
+      ]
     }
   ]
 }

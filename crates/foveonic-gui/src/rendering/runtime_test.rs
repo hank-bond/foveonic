@@ -79,6 +79,7 @@ fn request(path: &str, revision: u64, exposure: f32) -> Request {
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.exposure = exposure;
     Request {
+        detail: false,
         path: path.into(),
         revision,
         settings,
@@ -281,6 +282,7 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
     let mut first = request("a.x3f", 1, 0.);
     first.preview_policy = PreviewMode::Smart;
     first.preview_quality = PreviewMode::Full;
+    first.detail = true;
     first.settings.preview_region = Some([0, 0, 128, 128]);
     rig.handle.set_view(view(&[first.clone()]));
     let initial = super::super::request::Refinement { first, whole: None };
@@ -289,6 +291,7 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
     assert_eq!(rig.progress.snapshot().unwrap().revision, 1);
     let mut pan = initial;
     pan.first.revision = 3;
+    pan.first.detail = true;
     pan.first.settings.preview_region = Some([100, 100, 228, 228]);
     assert!(!rig
         .handle
@@ -299,6 +302,7 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
     let mut replacement = request("a.x3f", 5, 0.);
     replacement.preview_policy = PreviewMode::Smart;
     replacement.preview_quality = PreviewMode::Full;
+    replacement.detail = true;
     replacement.settings.preview_region = Some([0, 0, 128, 128]);
     assert!(rig.handle.refine(
         super::super::request::Refinement {
@@ -318,9 +322,11 @@ fn complete_demand_retains_current_detail_but_removal_forgets_its_suppressed_int
     let mut first = request("a.x3f", 1, 0.);
     first.preview_policy = PreviewMode::Smart;
     first.preview_quality = PreviewMode::Full;
+    first.detail = true;
     first.settings.preview_region = Some([32, 32, 160, 160]);
     let mut whole = first.clone();
     whole.revision = 2;
+    whole.detail = false;
     whole.settings.preview_region = None;
     let intent = Refinement {
         first: first.clone(),

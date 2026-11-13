@@ -24,6 +24,7 @@ enum Command {
     View(Arc<ViewState>),
     Activate(PathBuf),
     RetireBefore(PathBuf),
+    RetireDetail(PathBuf),
     Clear(bool),
     Submit(Box<Request>, Instant),
     Refine(Box<Refinement>, Option<SourceOrigin>, Instant),
@@ -159,6 +160,12 @@ impl Handle {
     pub fn clear(&self, all: bool) {
         self.refinements.borrow_mut().clear();
         self.send(Command::Clear(all), true);
+    }
+    pub fn retire_detail(&self, path: PathBuf) {
+        self.refinements.borrow_mut().retain(|(old, _)| {
+            old.first.path != path || old.first.rendition != crate::editor::Rendition::Current
+        });
+        self.send(Command::RetireDetail(path), true);
     }
     pub fn submit(&self, request: Request, queued_at: Instant) {
         self.refinements.borrow_mut().retain(|(old, _)| {
@@ -379,6 +386,7 @@ impl Runtime {
             Command::View(view) => self.view = Some(view),
             Command::Activate(path) => self.coordinator.activate(&path),
             Command::RetireBefore(path) => self.coordinator.retire_before(&path),
+            Command::RetireDetail(path) => self.coordinator.retire_detail(&path),
             Command::Clear(all) => {
                 self.coordinator.clear();
                 self.progress.clear();

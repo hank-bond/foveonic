@@ -42,9 +42,6 @@ impl State {
     ) -> &Layout {
         let same_photos =
             paths.get(..self.paths.len()) == Some(self.paths.as_slice()) && self.count == count;
-        if freeze && same_photos && self.layout.is_some() {
-            return self.layout.as_ref().unwrap();
-        }
         if self.layout.is_none()
             || !same_photos
             || (!freeze && (self.available != available || self.aspects != aspects))

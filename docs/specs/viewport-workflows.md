@@ -1,13 +1,13 @@
 ---
 summary: "Smart overview sizing, persistent photograph views and a native-detail loupe share explicit viewport requirements."
 kind: reference
-status: draft
-implementation: incomplete
+status: accepted
+implementation: conforming
 ---
 
 # Viewport workflows
 
-This records the owner's next requested workflows for architectural review. It does not authorize their implementation. The [viewport plan](../../plans/viewport-workflows.md) separates the existing implementation from proposed changes. Existing [Smart](./smart-preview.md) and [multi-edit](./multi-edit.md) specifications describe the baseline. Their affected requirements must migrate to this direction as each slice is agreed, rather than leaving contradictory contracts in place.
+The [viewport plan](../../plans/viewport-workflows.md) records the reviewed implementation slices. [Smart](./smart-preview.md) specifies automatic preview quality and [multi-edit](./multi-edit.md) specifies selection and persistent per-photo viewing.
 
 ## Preview quality
 
@@ -29,7 +29,7 @@ The owner approved combining Pointer selection and panning. Its click, drag, mod
 
 The owner approved per-photo persistent viewing in both single and multi-photo views. Its implemented contract belongs to [multi-edit](./multi-edit.md#per-photo-viewing) and the [workspace navigation requirements](./gui-workspace.md). A circular loupe must work in both single- and multi-photo views without leaving the current comparison layout or changing its editing targets.
 
-Use the agreed [viewport and image-coordinate vocabulary](../architecture/concepts.md#viewport-and-image-coordinates). A viewport describes the UI area, while its visible region describes image coordinates. Saved Crop remains separate from transient viewing. **Detail view** is the proposed name for persistent zoom, and **loupe** names the magnifier.
+Use the agreed [viewport and image-coordinate vocabulary](../architecture/concepts.md#viewport-and-image-coordinates). A viewport describes the UI area, while its visible region describes image coordinates. Saved Crop remains separate from transient viewing. **Detail view** names persistent zoom, and **loupe** names the magnifier.
 
 ## Detail rendering and ownership
 
@@ -49,12 +49,16 @@ The toolbar menu provides Small, Medium and Large sizes, 25%, 50%, 100% and 200%
 
 The lens requests native detail independently of the main preview mode. Compatible existing pixels remain useful while replacement detail renders. Moving the lens replaces obsolete detail demand and must not request whole-image continuation or cancel useful whole-image work. Unsupported regional processing may return whole-image detail, but that image remains a detail resource and must not promote the main preview. A thumbnail-only displayed photograph may temporarily join the bounded photo owner for inspection without joining the editing selection.
 
+Detail identifies the consumer independently of regional or whole-image coverage. Native geometry must come from processing metadata, not composed browser-thumbnail dimensions. If no compatible processed image supplies it, the first inspection may request whole-image Detail. Its native result then supplies reliable geometry for subsequent regions. Final output resizing does not reduce native inspection resolution. Transiently admitted photographs leave the photo owner on release unless they have become editing targets. Existing retained photographs keep their ordinary lifetime and memory accounting.
+
 The [Capture One Loupe documentation](https://support.captureone.com/hc/en-us/articles/360002472897-The-Loupe-tool) informs the shortcut, hold-and-drag interaction, size, magnification and placement options. Release-to-hide is the chosen first-version interaction here. Separate zoom and focus-point tools from that menu are outside this slice.
 
-## Open decisions
+## Future decisions
+
+These are outside the accepted first-version scope.
 
 - Smart behavior beyond eight displayed photographs and the relationship to overflow tiles.
 - Optional synchronized pan or zoom between photographs. Independent session viewing and restoration are specified in multi-edit.
-- When persistent Smart zoom merits whole-image continuation, compared with a transient loupe's region-only demand.
-- Whether the first version needs more than one independently refreshed detail region for the same photograph. One replaceable detail request per photograph is the proposed starting point.
+- Further heuristics for persistent Smart whole-image continuation. The current behavior requests it, while loupe movement does not.
+- More than one independently refreshed detail region for the same photograph. The first version uses one replaceable detail request per photograph.
 - Source/output retention and admission under repeated detail switching and several simultaneously zoomed photographs.

@@ -125,7 +125,16 @@ impl RenderCoordinator {
         queued_at: Instant,
     ) -> TaskId {
         let target = Target::of(&request);
-        if !matches!(target.purpose, Purpose::Inspection(_, _) | Purpose::Export) {
+        if target.purpose == Purpose::Detail {
+            // A moving lens replaces its detail, not a useful Whole continuation.
+            if let Some(entry) = self
+                .desired
+                .iter_mut()
+                .find(|entry| entry.task.stamp.target == target)
+            {
+                entry.refinement = None;
+            }
+        } else if !matches!(target.purpose, Purpose::Inspection(_, _) | Purpose::Export) {
             self.cancel_refinement_for(&request.path, Some(request.rendition));
         }
         self.desired.retain(|entry| {
@@ -310,6 +319,17 @@ impl RenderCoordinator {
         self.cancel_refinement_for(path, Some(rendition));
     }
 
+    pub fn retire_detail(&mut self, path: &Path) {
+        self.desired.retain(|entry| {
+            let keep = entry.task.stamp.target.path != path
+                || entry.task.stamp.target.purpose != Purpose::Detail;
+            if !keep {
+                retired(entry, "detail_retired");
+            }
+            keep
+        });
+    }
+
     fn cancel_refinement_for(&mut self, path: &Path, rendition: Option<crate::editor::Rendition>) {
         self.desired.retain_mut(|entry| {
             if entry.task.stamp.target.path != path
@@ -320,7 +340,7 @@ impl RenderCoordinator {
                 return true;
             }
             entry.refinement = None;
-            let keep = entry.task.request.settings.preview_region.is_none() || entry.settled;
+            let keep = !entry.task.request.detail || entry.settled;
             if !keep {
                 retired(entry, "refinement_cancelled");
             }

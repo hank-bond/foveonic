@@ -13,11 +13,12 @@ fn available() -> Availability {
     }
 }
 #[test]
-fn pointer_shortcut_leaves_h_and_plain_clipboard_with_widgets() {
+fn pointer_and_loupe_shortcuts_leave_h_and_plain_clipboard_with_widgets() {
     let ctx = egui::Context::default();
     let mut input = egui::RawInput {
         events: vec![
             key(Key::V, Modifiers::NONE),
+            key(Key::P, Modifiers::NONE),
             key(Key::H, Modifiers::NONE),
             egui::Event::Paste("text".into()),
             egui::Event::Copy,
@@ -30,7 +31,7 @@ fn pointer_shortcut_leaves_h_and_plain_clipboard_with_widgets() {
             .iter()
             .map(|invocation| invocation.action)
             .collect::<Vec<_>>(),
-        [Action::Pointer]
+        [Action::Pointer, Action::Loupe]
     );
     assert_eq!(input.events.len(), 3);
     assert!(matches!(

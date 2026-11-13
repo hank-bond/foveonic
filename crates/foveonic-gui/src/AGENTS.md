@@ -55,6 +55,8 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[import_review.rs](./import_review.rs)** Prepares frozen processing selections and tracks destination-scoped import review and batch status.
 - **[information.rs](./information.rs)** Shows selectable capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
 - **[inspect.rs](./inspect.rs)** Groups viewport background, preview quality, pipeline views, and display-only comparisons.
+- **[loupe_tool.rs](./loupe_tool.rs)** Owns transient source-anchored loupe gestures, persisted options and independent lens geometry.
+- **[loupe_view.rs](./loupe_view.rs)** Presents transient native-detail inspection through the existing photo owner and render coordinator.
 - **[main.rs](./main.rs)** Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 - **[memory.rs](./memory.rs)** Counts shared photographic samples and distinct frontend display pools for the worker budget.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.

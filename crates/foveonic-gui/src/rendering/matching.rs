@@ -53,6 +53,7 @@ pub(crate) fn same_calibration_snapshot(
 
 pub(crate) fn same_request_context(a: &Request, b: &Request) -> bool {
     a.path == b.path
+        && a.detail == b.detail
         && a.output == b.output
         && a.rendition == b.rendition
         && a.comparison == b.comparison
@@ -95,6 +96,7 @@ mod tests {
 
     fn request() -> Request {
         Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Rendition::Current,
@@ -138,6 +140,7 @@ mod tests {
         let a = request();
         let mut b = a.clone();
         b.settings.working_scale = Scale::new(8).unwrap();
+        b.detail = true;
         b.settings.preview_region = Some([100, 100, 400, 300]);
         b.settings.dehaze_estimate = true;
         assert!(same_authored_edits(&a.settings, &b.settings));
@@ -145,6 +148,7 @@ mod tests {
         assert!(same_image_geometry(&a.settings, &b.settings));
         assert!(!can_share_pixel_work(&a, &b));
         assert!(!same_delivery_request(&a, &b));
+        b.detail = false;
         b.settings.preview_region = None;
         assert!(can_share_pixel_work(&a, &b));
         assert!(!same_delivery_request(&a, &b));

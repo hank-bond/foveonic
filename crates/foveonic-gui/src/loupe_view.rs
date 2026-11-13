@@ -1,0 +1,347 @@
+//! Presents transient native-detail inspection through the existing photo owner and render coordinator.
+
+use crate::{
+    editor::Rendition,
+    loupe_tool::{self, Geometry},
+    preferences::PreviewMode,
+    rendering::{matching, request::Request, smart, worker::Frame},
+    viewport, App,
+};
+use eframe::egui;
+use foveonic::{
+    render::{Scale, Settings},
+    source::SourceOrigin,
+};
+use std::path::{Path, PathBuf};
+
+#[derive(Default)]
+pub(crate) struct Loupe {
+    path: Option<PathBuf>,
+    geometry: Option<Geometry>,
+    submitted: Option<(Request, Option<SourceOrigin>)>,
+}
+
+impl Loupe {
+    fn covers_request(
+        &self,
+        request: &Request,
+        origin: &Option<SourceOrigin>,
+        visible: Option<[u32; 4]>,
+    ) -> bool {
+        self.submitted
+            .as_ref()
+            .is_some_and(|(old, previous_origin)| {
+                previous_origin == origin
+                    && matching::same_request_context(old, request)
+                    && matching::same_authored_edits(&old.settings, &request.settings)
+                    && old.settings.preview_region.is_none_or(|region| {
+                        visible.is_some_and(|visible| smart::contains(region, visible))
+                    })
+            })
+    }
+}
+
+fn coverage(frame: &Frame) -> [u32; 4] {
+    frame
+        .artifact
+        .settings
+        .preview_region
+        .unwrap_or_else(|| frame.requested.crop.pixels(frame.uncropped_extent()))
+}
+
+impl App {
+    pub(crate) fn loupe_inspecting(&self, path: &Path) -> bool {
+        self.loupe.path.as_deref() == Some(path)
+    }
+
+    fn loupe_settings(&self, path: &Path) -> Option<Settings> {
+        let settings = if self.selected.as_deref() == Some(path) && self.sidecars.ready() {
+            &self.settings
+        } else {
+            self.multi_edit.settings(path)?
+        };
+        Some(self.preferences.render_settings(settings))
+    }
+
+    fn loupe_frame_matches(&self, frame: &Frame, path: &Path, settings: &Settings) -> bool {
+        let calibration = self
+            .noise_calibration
+            .selected(self.preferences.noise_profile);
+        frame.path == path
+            && frame.rendition == Rendition::Current
+            && frame.output == "final"
+            && !frame.framing_preview
+            && frame.comparison.is_none()
+            && matching::same_image_geometry(&frame.requested, settings)
+            && frame.calibration_signature.as_deref()
+                == calibration.as_ref().map(|profile| profile.signature())
+            && self
+                .worker
+                .cache
+                .source_origin(path)
+                .is_none_or(|origin| origin == frame.origin)
+    }
+
+    pub(crate) fn loupe_image(
+        &self,
+        path: &Path,
+        settings: &Settings,
+        visible: [u32; 4],
+    ) -> Option<&Frame> {
+        [self.current_photo_frame(path), self.multi_edit.detail(path)]
+            .into_iter()
+            .flatten()
+            .filter(|frame| self.loupe_frame_matches(frame, path, settings))
+            .max_by_key(|frame| {
+                (
+                    smart::contains(coverage(frame), visible),
+                    matching::same_authored_edits(&frame.requested, settings),
+                    !frame.artifact.settings.working_scale.is_reduced(),
+                    frame.content_revision(),
+                )
+            })
+    }
+
+    /// Run after every tile has drawn, so neither the lens nor its pointer is owned by selection.
+    pub(crate) fn show_loupe(&mut self, ui: &egui::Ui, mapping: viewport::Mapping) {
+        if self.exporting
+            || self.before.active != Rendition::Current
+            || self.output != "final"
+            || mapping.input
+            || mapping.difference_gain != 0.
+        {
+            loupe_tool::cancel(ui.ctx());
+        } else if loupe_tool::active(ui.ctx()) {
+            for path in &self.displayed_paths {
+                let view = self.viewports.view(Some(path));
+                if let (Some((response, _)), Some((_, image))) = (
+                    view.pointer(ui.input(|input| input.pointer.latest_pos())),
+                    view.image_rectangles(),
+                ) {
+                    loupe_tool::update(ui.ctx(), &response, path, image);
+                }
+            }
+        }
+        let mut gesture = loupe_tool::gesture(ui.ctx());
+        if gesture.as_ref().is_some_and(|gesture| {
+            !loupe_tool::active(ui.ctx())
+                || !self.displayed_paths.contains(&gesture.path)
+                || !ui.input(|input| input.pointer.primary_down())
+        }) {
+            loupe_tool::cancel(ui.ctx());
+            gesture = None;
+        }
+        let path = gesture.as_ref().map(|gesture| gesture.path.as_path());
+        if self.loupe.path.as_deref() != path {
+            if let Some(previous) = &self.loupe.path {
+                self.worker.retire_detail(previous);
+            }
+            self.multi_edit.view_detail(path, &mut self.sidecars);
+            self.loupe = Loupe {
+                path: path.map(Path::to_owned),
+                ..Default::default()
+            };
+        }
+        self.loupe.geometry = None;
+        let Some(gesture) = gesture else { return };
+        let Some(canvas) = crate::photo_tools::viewport_rect(ui.ctx()) else {
+            return;
+        };
+        let painter = ui
+            .painter()
+            .with_clip_rect(canvas.intersect(ui.clip_rect()));
+        if let Some(placement) = loupe_tool::geometry(
+            gesture.pointer,
+            [0.5, 0.5],
+            [0, 0, 1, 1],
+            self.preferences.loupe,
+            ui.ctx().pixels_per_point(),
+            canvas,
+        ) {
+            painter.circle_filled(
+                placement.lens.center(),
+                placement.lens.width() * 0.5,
+                egui::Color32::from_gray(18),
+            );
+            painter.circle_stroke(
+                placement.lens.center(),
+                placement.lens.width() * 0.5,
+                egui::Stroke::new(1_f32, egui::Color32::GRAY),
+            );
+        }
+        let Some(settings) = self.loupe_settings(&gesture.path) else {
+            return;
+        };
+        let base = self.current_photo_frame(&gesture.path);
+        let detail = self.multi_edit.detail(&gesture.path);
+        let candidates = [base, detail].map(|frame| {
+            frame.filter(|frame| self.loupe_frame_matches(frame, &gesture.path, &settings))
+        });
+        let extent = candidates
+            .into_iter()
+            .flatten()
+            .next()
+            .map(Frame::camera_extent);
+        let Some(extent) = extent else { return };
+        let window = settings.crop.pixels(settings.rotation.extent(extent));
+        let focus = [
+            window[0] as f32 + gesture.focus_uv[0] * (window[2] - window[0]) as f32,
+            window[1] as f32 + gesture.focus_uv[1] * (window[3] - window[1]) as f32,
+        ];
+        let Some(geometry) = loupe_tool::geometry(
+            gesture.pointer,
+            focus,
+            window,
+            self.preferences.loupe,
+            ui.ctx().pixels_per_point(),
+            canvas,
+        ) else {
+            return;
+        };
+        let frame = self.loupe_image(&gesture.path, &settings, geometry.visible);
+        if let Some(frame) = frame {
+            viewport::show_loupe(
+                &painter,
+                self.viewports.view(Some(&gesture.path)).id(),
+                frame.texture.clone(),
+                coverage(frame),
+                geometry.lens,
+                geometry.focus_native,
+                geometry.points_per_native_pixel,
+                mapping,
+                self.srgb_target,
+                frame.diagnostic_identity(false),
+            );
+        } else {
+            painter.circle_filled(
+                geometry.lens.center(),
+                geometry.lens.width() * 0.5,
+                egui::Color32::from_gray(18),
+            );
+            painter.circle_stroke(
+                geometry.lens.center(),
+                geometry.lens.width() * 0.5,
+                egui::Stroke::new(1_f32, egui::Color32::GRAY),
+            );
+        }
+        self.loupe.geometry = Some(geometry);
+    }
+
+    /// Publish one replaceable Detail, independently of the ordinary preview's resolution.
+    pub(crate) fn update_loupe(&mut self) {
+        let Some(path) = self.loupe.path.clone() else {
+            return;
+        };
+        let geometry = self.loupe.geometry;
+        let Some(mut settings) = self.loupe_settings(&path) else {
+            return;
+        };
+        let covered = geometry.is_some_and(|geometry| {
+            self.loupe_image(&path, &settings, geometry.visible)
+                .is_some_and(|frame| {
+                    frame.artifact.settings.working_scale == Scale::NATIVE
+                        && frame.artifact.settings.output_size.is_none()
+                        && matching::same_authored_edits(&frame.requested, &settings)
+                        && smart::contains(coverage(frame), geometry.visible)
+                })
+        });
+        if covered {
+            return;
+        }
+        settings.working_scale = Scale::NATIVE;
+        settings.preview_region = geometry.map(|geometry| geometry.region);
+        let request = Request {
+            detail: true,
+            framing_preview: false,
+            calibration: self
+                .noise_calibration
+                .selected(self.preferences.noise_profile),
+            rendition: Rendition::Current,
+            revision: self.revision + 1,
+            path: path.clone(),
+            settings,
+            preview_quality: PreviewMode::Full,
+            preview_policy: self.preferences.preview_quality,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        };
+        let origin = self.worker.cache.source_origin(&path);
+        if self
+            .loupe
+            .covers_request(&request, &origin, geometry.map(|geometry| geometry.visible))
+        {
+            return;
+        }
+        self.revision = request.revision;
+        self.publish_render_view();
+        self.worker.submit(request.clone());
+        self.loupe.submitted = Some((request, origin));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(region: [u32; 4], exposure: f32) -> Request {
+        let settings = Settings {
+            preview_region: Some(region),
+            exposure,
+            ..Default::default()
+        };
+        Request {
+            detail: true,
+            framing_preview: false,
+            calibration: None,
+            rendition: Rendition::Current,
+            revision: 1,
+            path: "photo.x3f".into(),
+            settings,
+            preview_quality: PreviewMode::Full,
+            preview_policy: PreviewMode::Thumb,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        }
+    }
+
+    #[test]
+    fn lens_reuses_overscan_but_replaces_uncovered_or_changed_requests() {
+        let loupe = Loupe {
+            submitted: Some((request([100, 100, 500, 500], 0.), None)),
+            ..Default::default()
+        };
+        assert!(loupe.covers_request(
+            &request([120, 120, 520, 520], 0.),
+            &None,
+            Some([150, 150, 480, 480])
+        ));
+        assert!(!loupe.covers_request(
+            &request([120, 120, 520, 520], 0.),
+            &None,
+            Some([150, 150, 510, 480])
+        ));
+        assert!(!loupe.covers_request(
+            &request([100, 100, 500, 500], 0.5),
+            &None,
+            Some([150, 150, 480, 480])
+        ));
+    }
+
+    #[test]
+    fn initial_whole_detail_supplies_geometry_without_becoming_main_demand() {
+        let mut request = request([100, 100, 500, 500], 0.);
+        request.settings.preview_region = None;
+        assert_eq!(
+            request.purpose(),
+            crate::rendering::request::Purpose::Detail
+        );
+        let loupe = Loupe {
+            submitted: Some((request.clone(), None)),
+            ..Default::default()
+        };
+        assert!(loupe.covers_request(&request, &None, None));
+        assert!(loupe.covers_request(&request, &None, Some([500, 500, 800, 800])));
+    }
+}

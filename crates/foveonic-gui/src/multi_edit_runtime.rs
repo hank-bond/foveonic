@@ -32,6 +32,12 @@ pub struct Runtime {
     photos: BTreeMap<PathBuf, Photo>,
     recent: Vec<PathBuf>,
     retention_changed: bool,
+    viewed: Option<Viewed>,
+}
+struct Viewed {
+    path: PathBuf,
+    /// A thumbnail-only inspection must not silently become ordinary render demand.
+    transient: bool,
 }
 impl Runtime {
     fn targets(&self) -> impl Iterator<Item = &Photo> {
@@ -46,13 +52,61 @@ impl Runtime {
     pub fn retained_paths(&self) -> Vec<PathBuf> {
         self.photos.keys().cloned().collect()
     }
+    /// Inspect one displayed photograph without changing the editing selection.
+    pub fn view_detail(&mut self, path: Option<&Path>, sidecars: &mut sidecars::Session) {
+        if self.viewed.as_ref().map(|view| view.path.as_path()) == path {
+            return;
+        }
+        if let Some(previous) = self.viewed.take() {
+            if previous.transient && !self.editing_paths.contains(&previous.path) {
+                self.photos.remove(&previous.path);
+                self.recent.retain(|path| path != &previous.path);
+            }
+        }
+        if let Some(path) = path {
+            let transient = !self.photos.contains_key(path);
+            let photo = self.photos.entry(path.to_owned()).or_default();
+            if photo.settings.is_none() {
+                sidecars.resolve_settings(&[path.to_owned()]);
+            }
+            self.viewed = Some(Viewed {
+                path: path.to_owned(),
+                transient,
+            });
+            self.selected(path);
+        }
+        self.retention_changed = true;
+    }
+    /// Detail-only demand shares retention and delivery, but never ordinary submission.
+    pub fn demanded_paths(&self) -> Vec<PathBuf> {
+        let mut paths = self.render_paths.clone();
+        if let Some(view) = &self.viewed {
+            if !paths.contains(&view.path) {
+                paths.push(view.path.clone());
+            }
+        }
+        paths
+    }
+    pub fn demanded(&self, path: &Path) -> bool {
+        self.rendering(path) || self.viewed.as_ref().is_some_and(|view| view.path == path)
+    }
     pub fn sync(
         &mut self,
         paths: &[PathBuf],
         limit: usize,
         sidecars: &mut sidecars::Session,
     ) -> bool {
-        let limit = limit.max(paths.len());
+        if let Some(view) = &mut self.viewed {
+            if paths.contains(&view.path) {
+                view.transient = false;
+            }
+        }
+        let limit = limit.max(paths.len())
+            + usize::from(
+                self.viewed
+                    .as_ref()
+                    .is_some_and(|view| !paths.contains(&view.path)),
+            );
         if self.editing_paths == paths && self.photos.len() <= limit {
             return false;
         }
@@ -74,7 +128,9 @@ impl Runtime {
             }
         }
         while self.photos.len() > limit {
-            let Some(index) = self.recent.iter().position(|path| !paths.contains(path)) else {
+            let Some(index) = self.recent.iter().position(|path| {
+                !paths.contains(path) && self.viewed.as_ref().is_none_or(|view| &view.path != path)
+            }) else {
                 break;
             };
             let path = self.recent.remove(index);
@@ -393,7 +449,13 @@ impl Runtime {
     pub fn sync_render_paths(&mut self, displayed: &[PathBuf]) -> bool {
         let mut paths = self.editing_paths.clone();
         for path in displayed {
-            if self.photos.contains_key(path) && !paths.contains(path) {
+            if self.photos.contains_key(path)
+                && !self
+                    .viewed
+                    .as_ref()
+                    .is_some_and(|view| view.transient && &view.path == path)
+                && !paths.contains(path)
+            {
                 paths.push(path.clone());
             }
         }
@@ -779,7 +841,7 @@ impl crate::App {
         // Retention also changes when the bounded photo owner evicts history.
         if self.multi_edit.sync_render_paths(&displayed) {
             self.worker.retain_overviews(
-                self.multi_edit.render_paths(),
+                &self.multi_edit.demanded_paths(),
                 &self.multi_edit.retained_paths(),
             );
             self.sync_render_progress(None);
@@ -865,6 +927,7 @@ impl crate::App {
                     self.selected.as_ref() == Some(&path) && self.framing_preview_active();
                 let preview_quality = self.preview_quality_for(&path, policy);
                 request::Request {
+                    detail: false,
                     framing_preview,
                     calibration: calibration.clone(),
                     rendition: crate::editor::Rendition::Current,
@@ -892,7 +955,7 @@ impl crate::App {
         self.publish_render_view();
         self.worker.set_overviews(
             requests,
-            self.multi_edit.render_paths(),
+            &self.multi_edit.demanded_paths(),
             &self.multi_edit.retained_paths(),
             queued_at,
         );
@@ -920,6 +983,46 @@ mod tests {
             range,
             mapping: Mapping::Identity,
         }
+    }
+    #[test]
+    fn thumbnail_inspection_is_bounded_detail_demand_without_ordinary_or_edit_admission() {
+        let mut runtime = runtime();
+        let original = runtime.editing_paths.clone();
+        let mut sidecars = session();
+        let inspected = PathBuf::from("thumbnail.x3f");
+        runtime.view_detail(Some(&inspected), &mut sidecars);
+        runtime.sync(&original, 2, &mut sidecars);
+        let mut displayed = original.clone();
+        displayed.push(inspected.clone());
+        runtime.sync_render_paths(&displayed);
+        assert_eq!(runtime.editing_paths, original);
+        assert_eq!(runtime.render_paths(), original);
+        assert_eq!(runtime.demanded_paths(), displayed);
+        assert_eq!(runtime.retained_paths().len(), 3);
+        runtime.view_detail(None, &mut sidecars);
+        runtime.sync_render_paths(&displayed);
+        assert!(!runtime.retained_paths().contains(&inspected));
+        assert_eq!(runtime.demanded_paths(), original);
+    }
+
+    #[test]
+    fn inspection_retains_existing_history_and_can_become_an_editing_target() {
+        let mut runtime = runtime();
+        let mut sidecars = session();
+        let a = PathBuf::from("a.x3f");
+        let b = PathBuf::from("b.x3f");
+        runtime.view_detail(Some(&b), &mut sidecars);
+        runtime.sync(std::slice::from_ref(&a), 1, &mut sidecars);
+        assert!(runtime.retained_paths().contains(&b));
+        runtime.view_detail(None, &mut sidecars);
+        assert!(runtime.retained_paths().contains(&b));
+        runtime.sync(std::slice::from_ref(&a), 1, &mut sidecars);
+        assert!(!runtime.retained_paths().contains(&b));
+        runtime.view_detail(Some(&b), &mut sidecars);
+        runtime.sync(std::slice::from_ref(&b), 1, &mut sidecars);
+        runtime.view_detail(None, &mut sidecars);
+        assert!(runtime.retained_paths().contains(&b));
+        assert_eq!(runtime.editing_paths, vec![b]);
     }
     fn runtime() -> Runtime {
         let paths = vec![PathBuf::from("a.x3f"), PathBuf::from("b.x3f")];

@@ -41,6 +41,7 @@ impl Mapping {
 struct Params {
     rotation: [[f32; 4]; 2],
     rect: [f32; 4],
+    circle: [f32; 4],
     options: [f32; 4],
     primaries: [[f32; 4]; 3],
     color_transform: egui_wgpu::ColorTransform,
@@ -64,6 +65,12 @@ impl Params {
                 Self::new(visible, image, space, channel, srgb_target),
             )
         })
+    }
+
+    fn clip_circle(&mut self, lens: egui::Rect, visible: egui::Rect) {
+        let center = (lens.center() - visible.min) / visible.size();
+        let radius = lens.size() * 0.5 / visible.size();
+        self.circle = [center.x, center.y, radius.x, radius.y];
     }
 
     fn rotate(&mut self, degrees: f32, input: [u32; 2], output: [u32; 2]) {
@@ -109,6 +116,7 @@ impl Params {
                 image.width() / canvas.width(),
                 image.height() / canvas.height(),
             ],
+            circle: [0.; 4],
             primaries: foveonic::color_space::TiffColorSpace::Srgb.transform(match space {
                 Space::LinearRgb(space) | Space::ToneMappedRgb(space) => space,
                 _ => foveonic::image::ColorSpace::Srgb,
@@ -155,6 +163,7 @@ impl Params {
 enum DrawSlot {
     Main(egui::Id),
     Detail(egui::Id),
+    Loupe(egui::Id),
 }
 
 struct Resources {
@@ -397,6 +406,76 @@ fn render_preview(
         pass.draw(0..6, 0..1);
     }
     rs.queue.submit(Some(encoder.finish()));
+}
+
+/// Draw the lens after all photograph tiles, using a painter clipped to the whole viewport.
+/// Coverage is the texture's actual cropped and oriented native-coordinate rectangle.
+#[allow(clippy::too_many_arguments)]
+pub fn show_loupe(
+    painter: &egui::Painter,
+    photo: egui::Id,
+    texture: Arc<ImageTexture>,
+    coverage: [u32; 4],
+    lens: egui::Rect,
+    focus_native: [f32; 2],
+    points_per_native_pixel: f32,
+    mapping: Mapping,
+    srgb_target: bool,
+    identity: Option<crate::timing::ImageIdentity>,
+) {
+    if !lens.is_positive()
+        || !lens.min.is_finite()
+        || !lens.max.is_finite()
+        || !points_per_native_pixel.is_finite()
+        || points_per_native_pixel <= 0.
+        || focus_native.iter().any(|v| !v.is_finite())
+    {
+        return;
+    }
+    let radius = lens.width().min(lens.height()) * 0.5;
+    painter.circle_filled(lens.center(), radius, egui::Color32::from_gray(18));
+    if coverage[2] > coverage[0] && coverage[3] > coverage[1] {
+        let position = |x, y| {
+            lens.center()
+                + egui::vec2(x as f32 - focus_native[0], y as f32 - focus_native[1])
+                    * points_per_native_pixel
+        };
+        let tile = egui::Rect::from_min_max(
+            position(coverage[0], coverage[1]),
+            position(coverage[2], coverage[3]),
+        );
+        if let Some((visible, mut params)) = Params::clipped(
+            lens.intersect(tile),
+            tile,
+            painter.clip_rect().intersect(painter.ctx().screen_rect()),
+            texture.description().space,
+            mapping.channel,
+            srgb_target,
+        ) {
+            params.clip_circle(lens, visible);
+            painter.add(egui_wgpu::Callback::new_paint_callback(
+                visible,
+                Draw {
+                    key: DrawSlot::Loupe(photo),
+                    frame: painter.ctx().cumulative_pass_nr(),
+                    texture,
+                    input: None,
+                    params: mapping.apply(params),
+                    probe: crate::timing::DrawProbe::new(identity),
+                },
+            ));
+        }
+    }
+    painter.circle_stroke(
+        lens.center(),
+        radius,
+        egui::Stroke::new(2_f32, egui::Color32::BLACK),
+    );
+    painter.circle_stroke(
+        lens.center(),
+        (radius - 1.).max(0.),
+        egui::Stroke::new(1_f32, egui::Color32::from_gray(135)),
+    );
 }
 
 struct Draw {
@@ -747,14 +826,15 @@ impl Viewport {
             self.scale.get_or_insert(fit);
             self.pan += ui.input(|i| i.pointer.delta());
         }
-        if response.double_clicked() && (!self.editing || temporary_pan) {
+        let viewing = !crate::loupe_tool::active(ui.ctx()) || temporary_pan;
+        if response.double_clicked() && (!self.editing || temporary_pan) && viewing {
             let anchor = response
                 .interact_pointer_pos()
                 .map(|mouse| mouse - rect.center())
                 .unwrap_or(egui::Vec2::ZERO);
             self.toggle_fit_snap(ui.ctx().pixels_per_point(), anchor);
         }
-        if response.hovered() {
+        if response.hovered() && viewing {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
             let factor = if pinch != 1. {
                 pinch
@@ -2040,6 +2120,7 @@ mod tests {
         use crate::photo_tools::{self, Tool};
         for tool in [
             Tool::Pointer,
+            Tool::Loupe,
             Tool::Crop,
             Tool::Rotate,
             Tool::ColorRange,
@@ -2314,5 +2395,180 @@ mod composition_zoom_tests {
         viewport.reset();
         assert!(!viewport.explicit_zoom_pending());
         assert!(!viewport.explicit_zoom());
+    }
+}
+
+#[cfg(test)]
+mod loupe_tests {
+    use super::*;
+
+    #[test]
+    fn circular_shader_parameters_match_rust_and_normal_draws_disable_clipping() {
+        use std::mem::{offset_of, size_of};
+        let module = wgpu::naga::front::wgsl::parse_str(&shader_source()).unwrap();
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some("Params"))
+            .unwrap();
+        let wgpu::naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("Params must be a structure")
+        };
+        assert_eq!(*span as usize, size_of::<Params>());
+        for (name, offset) in [
+            ("rotation", offset_of!(Params, rotation)),
+            ("rect", offset_of!(Params, rect)),
+            ("circle", offset_of!(Params, circle)),
+            ("options", offset_of!(Params, options)),
+            ("primaries", offset_of!(Params, primaries)),
+            ("color_transform", offset_of!(Params, color_transform)),
+        ] {
+            assert_eq!(
+                members
+                    .iter()
+                    .find(|member| member.name.as_deref() == Some(name))
+                    .unwrap()
+                    .offset as usize,
+                offset,
+                "{name}"
+            );
+        }
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100., 100.));
+        let params = Params::new(rect, rect, Space::ToneMappedRgb(ColorSpace::Srgb), -1, true);
+        assert_eq!(params.circle, [0.; 4]);
+    }
+
+    #[test]
+    fn clipping_the_callback_keeps_the_original_lens_circle() {
+        let lens = egui::Rect::from_min_max(egui::pos2(100., 80.), egui::pos2(340., 320.));
+        let visible = egui::Rect::from_min_max(egui::pos2(150., 100.), egui::pos2(340., 270.));
+        let mut params = Params::new(
+            visible,
+            lens,
+            Space::ToneMappedRgb(ColorSpace::Srgb),
+            -1,
+            true,
+        );
+        params.clip_circle(lens, visible);
+        let ellipse = |point: egui::Pos2| {
+            let uv = (point - visible.min) / visible.size();
+            ((uv - egui::vec2(params.circle[0], params.circle[1]))
+                / egui::vec2(params.circle[2], params.circle[3]))
+            .length_sq()
+        };
+        assert!(ellipse(lens.center()) < 1e-10);
+        assert!((ellipse(lens.right_center()) - 1.).abs() < 1e-6);
+        assert!(ellipse(lens.min) > 1.9);
+    }
+
+    #[test]
+    fn loupe_blocks_inactive_thumbnail_double_click_zoom_unless_space_is_held() {
+        for space in [false, true] {
+            let ctx = egui::Context::default();
+            crate::loupe_tool::activate(&ctx);
+            // Thumbnail-only tiles can leave editing false. Tool selection still owns their clicks.
+            let mut viewport = Viewport::default();
+            let mut draw = |time, events| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(400., 300.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            viewport.layout(ui, [1000, 800]);
+                        });
+                    },
+                );
+            };
+            draw(0., vec![]);
+            if space {
+                draw(
+                    0.05,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Space,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            for (time, pressed) in [(0.1, true), (0.15, false), (0.2, true), (0.25, false)] {
+                let pos = egui::pos2(200., 150.);
+                draw(
+                    time,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(viewport.explicit_zoom(), space);
+            assert_eq!(viewport.pan, egui::Vec2::ZERO);
+        }
+    }
+
+    #[test]
+    fn loupe_reserves_viewport_scroll_until_space_temporarily_pans() {
+        for space in [false, true] {
+            let ctx = egui::Context::default();
+            crate::loupe_tool::activate(&ctx);
+            let mut viewport = Viewport::default();
+            let mut draw = |time, events| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(400., 300.),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            viewport.layout(ui, [1000, 800]);
+                        });
+                    },
+                );
+            };
+            draw(0., vec![]);
+            let mut events = vec![
+                egui::Event::PointerMoved(egui::pos2(200., 150.)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0., 40.),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ];
+            if space {
+                events.push(egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            draw(0.1, events);
+            assert_eq!(viewport.explicit_zoom(), space);
+        }
     }
 }

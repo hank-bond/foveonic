@@ -35,7 +35,7 @@ fn reply(settings: &Settings) -> ReplyInfo<'_> {
             calibration: None,
             framing_preview: false,
             comparison: false,
-            regional: false,
+            detail: false,
             revision: 11,
         }),
     }
@@ -110,12 +110,12 @@ fn progressive_feedback_never_rewinds_a_whole_image_or_detail_tile() {
     }
     context.displayed_revision = Some(10);
     context.detail_revision = Some(12);
-    incoming.image.as_mut().unwrap().regional = true;
+    incoming.image.as_mut().unwrap().detail = true;
     assert_eq!(
         classify(Completion::Superseded, &incoming, &context).destination,
         Err(Rejection::Superseded)
     );
-    incoming.image.as_mut().unwrap().regional = false;
+    incoming.image.as_mut().unwrap().detail = false;
     assert_eq!(
         classify(Completion::Superseded, &incoming, &context).destination,
         Ok(Destination::Active),
@@ -288,6 +288,7 @@ fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding(
         let mut requested = settings.clone();
         requested.exposure = exposure;
         Arc::new(request::Request {
+            detail: false,
             path: path.into(),
             revision,
             settings: requested,
@@ -366,7 +367,7 @@ fn inactive_detail_uses_its_own_geometry_and_content_order() {
     context.overview_detail_revision = Some(12);
     let mut incoming = reply(&settings);
     incoming.purpose = &Purpose::Detail;
-    incoming.image.as_mut().unwrap().regional = true;
+    incoming.image.as_mut().unwrap().detail = true;
     assert_eq!(
         classify(Completion::Superseded, &incoming, &context).destination,
         Err(Rejection::Superseded)
@@ -377,7 +378,7 @@ fn inactive_detail_uses_its_own_geometry_and_content_order() {
         Ok(Destination::Overview)
     );
     // Detail identity survives a worker fallback to a whole-image artifact.
-    incoming.image.as_mut().unwrap().regional = false;
+    incoming.image.as_mut().unwrap().detail = false;
     incoming.image.as_mut().unwrap().revision = 11;
     assert_eq!(
         classify(Completion::Superseded, &incoming, &context).destination,
@@ -419,7 +420,7 @@ fn view_snapshot_keeps_each_photos_content_order_separate() {
     };
     let mut incoming = reply(&settings);
     incoming.purpose = &Purpose::Detail;
-    incoming.image.as_mut().unwrap().regional = true;
+    incoming.image.as_mut().unwrap().detail = true;
     incoming.image.as_mut().unwrap().revision = 13;
     assert_eq!(
         classify(

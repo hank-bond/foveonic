@@ -15,6 +15,7 @@ mod collection;
 mod damaged;
 mod journey;
 mod lifecycle;
+mod loupe;
 mod multi_edit;
 mod rotate;
 mod scenarios;

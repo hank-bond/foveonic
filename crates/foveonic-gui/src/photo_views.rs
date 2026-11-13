@@ -236,7 +236,13 @@ mod tests {
     #[test]
     fn tool_clicks_and_temporary_space_never_request_viewport_selection() {
         use crate::photo_tools::{self, Tool};
-        for tool in [Tool::Pointer, Tool::Crop, Tool::Rotate, Tool::WhiteBalance] {
+        for tool in [
+            Tool::Pointer,
+            Tool::Loupe,
+            Tool::Crop,
+            Tool::Rotate,
+            Tool::WhiteBalance,
+        ] {
             for space in [false, true] {
                 if tool == Tool::Pointer && !space {
                     continue;

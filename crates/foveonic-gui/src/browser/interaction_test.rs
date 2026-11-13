@@ -1604,6 +1604,7 @@ fn viewport_tools_leave_browser_selection_and_pointer_behavior_ordinary() {
             crate::photo_tools::Tool::Rotate,
             crate::photo_tools::Tool::Crop,
             crate::photo_tools::Tool::Pointer,
+            crate::photo_tools::Tool::Loupe,
             crate::photo_tools::Tool::WhiteBalance,
         ] {
             let mut fixture = Fixture::new(mode);

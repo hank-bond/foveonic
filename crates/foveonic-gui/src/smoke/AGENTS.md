@@ -22,6 +22,7 @@ Run native checks serially on a quiet host. Keep controlled delivery pauses sepa
 - **[damaged.rs](./damaged.rs)** Checks recovery after the running app attempts to load an isolated truncated RAW.
 - **[journey.rs](./journey.rs)** Tracks independent per-photo Exposure expectations for native journeys.
 - **[lifecycle.rs](./lifecycle.rs)** Exercises recipe persistence and import review in the running application.
+- **[loupe.rs](./loupe.rs)** Exercises held native-detail gestures, cancellation and transient photo ownership in the real app.
 - **[mod.rs](./mod.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
 - **[multi_edit.rs](./multi_edit.rs)** Exercises bounded multi-photo selection, edits and retained image delivery.
 - **[rotate.rs](./rotate.rs)** Keeps rotation smoke gestures, readiness and assertions with their capture steps.

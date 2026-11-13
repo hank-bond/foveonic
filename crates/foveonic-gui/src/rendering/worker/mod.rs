@@ -45,6 +45,7 @@ use crate::preferences::PreviewMode;
 thread_local! { static CHECKS: std::cell::RefCell<Option<Arc<Checks>>> = const { std::cell::RefCell::new(None) }; }
 
 pub struct Frame {
+    pub detail: bool,
     pub diagnostic_task: crate::timing::DeliveredTask,
     pub origin: foveonic::source::SourceOrigin,
     pub framing_preview: bool,
@@ -69,7 +70,7 @@ impl Frame {
             && !self.framing_preview
             && self.artifact.settings.color_range_preview.is_none()
             && self.artifact.settings.preview_region.is_none()
-            && self.requested.preview_region.is_none()
+            && !self.detail
     }
     /// Request order stays stable when selection rebases presentation revisions.
     pub fn content_revision(&self) -> u64 {
@@ -81,7 +82,7 @@ impl Frame {
             && !self.framing_preview
             && self.comparison.is_none()
             && self.artifact.settings.color_range_preview.is_none()
-            && self.requested.preview_region.is_some()
+            && self.detail
     }
     pub fn detail_region(&self) -> [u32; 4] {
         self.artifact
@@ -740,6 +741,7 @@ impl Worker {
                     Ok(Execution::Complete(Some(Box::new(Frame {
                         diagnostic_task: crate::timing::DeliveredTask::from(&task.stamp),
                         origin: origin.clone(),
+                        detail: request.detail,
                         framing_preview: request.framing_preview,
                         native_extent,
                         calibration_signature: request.calibration.as_ref().map(|p| p.signature().to_owned()),
@@ -957,6 +959,9 @@ impl Worker {
     }
     pub fn cancel_refinement(&self, path: &std::path::Path, rendition: crate::editor::Rendition) {
         self.runtime.cancel_refinement(path.to_owned(), rendition);
+    }
+    pub fn retire_detail(&self, path: &std::path::Path) {
+        self.runtime.retire_detail(path.to_owned());
     }
     pub fn set_overviews(
         &self,
@@ -1372,6 +1377,7 @@ mod tests {
         for (index, settings) in selections.into_iter().enumerate() {
             let destination = directory.join(format!("{index}.dng"));
             worker.submit(super::Request {
+                detail: false,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
@@ -1437,6 +1443,7 @@ mod tests {
         );
         for revision in 1..=20 {
             worker.submit(super::Request {
+                detail: false,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
@@ -1469,6 +1476,7 @@ mod tests {
             break;
         }
         worker.submit(super::Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
@@ -1492,6 +1500,7 @@ mod tests {
         assert_eq!(frame.artifact.settings.white_balance, "Sunlight");
         assert_eq!(frame.artifact.settings.color_mode, "Standard");
         worker.submit(super::Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
@@ -1542,6 +1551,7 @@ mod tests {
         {
             let revision = index as u64 + 1;
             worker.submit(super::Request {
+                detail: false,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
@@ -1578,6 +1588,7 @@ mod tests {
             );
         }
         worker.submit(super::Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
@@ -1598,6 +1609,7 @@ mod tests {
         assert_eq!(frame.texture.description().space, Space::CalibratedLayers);
         drop(frame);
         worker.submit(super::Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
@@ -1724,6 +1736,7 @@ mod tests {
             };
             let start = std::time::Instant::now();
             worker.submit(super::Request {
+                detail: false,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
@@ -1820,6 +1833,7 @@ mod tests {
             settings.sharpen_amount = Some(0.75);
             let submit = |revision, settings: foveonic::render::Settings| {
                 worker.submit(super::Request {
+                    detail: false,
                     framing_preview: false,
                     calibration: None,
                     rendition: Default::default(),
@@ -1951,6 +1965,7 @@ mod tests {
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
         worker.submit(super::Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
@@ -2021,6 +2036,7 @@ mod tests {
         thumb.reconstruction = Some(Default::default());
         let render = |revision, index: usize, quality: PreviewMode, settings: &Settings| {
             worker.submit(super::Request {
+                detail: false,
                 path: paths[index].clone(),
                 revision,
                 settings: settings.clone(),
@@ -2124,6 +2140,7 @@ mod tests {
         let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
         settings.reconstruction = Some(Default::default());
         let request = |revision: u64, index: usize| super::Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
@@ -2177,6 +2194,7 @@ mod tests {
         );
         let settings = foveonic::render::Settings::new("Sunlight", "Standard");
         let request = |revision, rendition, quality| super::Request {
+            detail: false,
             path: path.clone(),
             revision,
             rendition,
@@ -2290,6 +2308,7 @@ mod tests {
             settings.reconstruction = Some(Default::default());
             settings.preview_region = Some([100, 100, 512, 512]);
             let first = super::Request {
+                detail: true,
                 path: path.clone(),
                 revision: index as u64 * 10 + 1,
                 settings,
@@ -2305,6 +2324,7 @@ mod tests {
             let whole = continuation.then(|| {
                 let mut whole = first.clone();
                 whole.revision += 1;
+                whole.detail = false;
                 whole.settings.preview_region = None;
                 whole
             });
@@ -2401,6 +2421,7 @@ mod tests {
                         settings.exposure = 0.1;
                     }
                     super::Request {
+                        detail: false,
                         framing_preview: false,
                         calibration: None,
                         rendition: Default::default(),
@@ -2472,6 +2493,7 @@ mod tests {
                 settings.exposure = index as f32 * 0.25;
                 photos.observe_active(path, &settings, None);
                 super::Request {
+                    detail: false,
                     path: path.clone(),
                     revision: index as u64 + 1,
                     settings,
@@ -2498,10 +2520,12 @@ mod tests {
                 first.revision = 10 + index as u64 * 10;
                 first.preview_quality = PreviewMode::Full;
                 first.settings.exposure += 0.125;
+                first.detail = true;
                 first.settings.preview_region = Some([100, 100, 512, 512]);
                 photos.observe_requested(&first.path, &first.settings);
                 let mut whole = first.clone();
                 whole.revision += 1;
+                whole.detail = false;
                 whole.settings.preview_region = None;
                 Refinement {
                     first,
@@ -2594,6 +2618,9 @@ mod tests {
         let mut fallback = intents[1].first.clone();
         fallback.revision = 40;
         fallback.preview_policy = PreviewMode::Thumb;
+        fallback.settings.photographic.tone_method =
+            foveonic::render::PhotographicMethod::Universal;
+        fallback.settings.photographic.base_response = foveonic::render::BaseResponse::Natural;
         worker.submit(fallback);
         let frame = receive(&worker).result.unwrap().unwrap();
         assert!(frame.artifact.settings.preview_region.is_none());
@@ -2640,6 +2667,7 @@ mod tests {
                         settings.dehaze.amount = 0.;
                     }
                     super::Request {
+                        detail: false,
                         framing_preview: false,
                         calibration: None,
                         rendition: Default::default(),
@@ -2763,6 +2791,7 @@ mod preview_tests {
             export_settings.preview_region = Some([100, 100, 400, 300]);
             export_settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::ProPhotoRgb);
             worker.submit(Request {
+                detail: false,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
@@ -2796,6 +2825,7 @@ mod preview_tests {
             );
         }
         worker.submit(Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
@@ -2840,6 +2870,7 @@ mod color_pick_tests {
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         let worker = Worker::new(Engine::new().unwrap(), egui::Context::default());
         worker.submit(Request {
+            detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),

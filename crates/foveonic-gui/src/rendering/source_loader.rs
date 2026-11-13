@@ -290,6 +290,7 @@ mod tests {
         for (revision, rendition) in [(1, Rendition::Current), (2, Rendition::Camera)] {
             coordinator.desire(
                 Arc::new(RenderRequest {
+                    detail: false,
                     path: path.clone(),
                     revision,
                     rendition,

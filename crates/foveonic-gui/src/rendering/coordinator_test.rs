@@ -9,6 +9,7 @@ fn request(path: &str, revision: u64, exposure: f32) -> Arc<Request> {
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.exposure = exposure;
     Arc::new(Request {
+        detail: false,
         framing_preview: false,
         calibration: None,
         rendition: Rendition::Current,
@@ -676,10 +677,12 @@ fn refinement(rendition: Rendition, revision: u64, continue_whole: bool) -> Refi
     first.rendition = rendition;
     first.preview_policy = PreviewMode::Smart;
     first.preview_quality = PreviewMode::Full;
+    first.detail = true;
     first.settings.preview_region = Some([32, 32, 160, 160]);
     let whole = continue_whole.then(|| {
         let mut whole = first.clone();
         whole.revision += 1;
+        whole.detail = false;
         whole.settings.preview_region = None;
         whole
     });
@@ -739,6 +742,65 @@ fn refinement_advances_after_regional_admission_without_ui_ack_or_sibling_settle
 }
 
 #[test]
+fn moving_loupe_replaces_detail_and_preserves_pending_whole_continuation() {
+    let mut coordinator = RenderCoordinator::default();
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement(Rendition::Current, 1, true),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let initial = coordinator.plan().tasks[0].stamp.clone();
+    regional_completion(&mut coordinator, &initial, &origin);
+    let whole = coordinator.plan().tasks[0].stamp.clone();
+    let mut lens = refinement(Rendition::Current, 3, false).first;
+    lens.detail = true;
+    lens.settings.preview_region = Some([500, 500, 700, 700]);
+    let first_lens = desire(&mut coordinator, Arc::new(lens.clone()));
+    assert!(coordinator
+        .plan()
+        .tasks
+        .iter()
+        .any(|task| task.stamp == whole));
+    lens.revision = 4;
+    lens.detail = true;
+    lens.settings.preview_region = Some([900, 900, 1100, 1100]);
+    let moved = desire(&mut coordinator, Arc::new(lens));
+    assert_ne!(first_lens.id, moved.id);
+    assert_eq!(coordinator.plan().tasks.len(), 2);
+    coordinator.retire_detail(Path::new("a.x3f"));
+    assert_eq!(coordinator.plan().tasks.len(), 1);
+    assert_eq!(coordinator.plan().tasks[0].stamp, whole);
+    assert!(coordinator
+        .refine(
+            refinement(Rendition::Current, 10, true),
+            Some(origin),
+            Instant::now()
+        )
+        .is_none());
+    assert_eq!(coordinator.plan().tasks[0].stamp, whole);
+}
+
+#[test]
+fn loupe_replacing_pending_smart_region_cannot_inherit_its_whole_continuation() {
+    let mut coordinator = RenderCoordinator::default();
+    coordinator.refine(
+        refinement(Rendition::Current, 1, true),
+        None,
+        Instant::now(),
+    );
+    let mut lens = refinement(Rendition::Current, 3, false).first;
+    lens.detail = true;
+    lens.settings.preview_region = Some([500, 500, 700, 700]);
+    let stamp = desire(&mut coordinator, Arc::new(lens));
+    regional_completion(&mut coordinator, &stamp, &SourceOrigin::default());
+    assert!(
+        !coordinator.busy(),
+        "loupe must not inherit Smart's Whole work"
+    );
+}
+
+#[test]
 fn region_only_and_native_fallback_settle_without_whole_work() {
     for (continuation, regional) in [(false, true), (true, false)] {
         let mut coordinator = RenderCoordinator::default();
@@ -763,6 +825,7 @@ fn region_only_and_native_fallback_settle_without_whole_work() {
         assert!(!coordinator.busy());
         assert!(coordinator.plan().tasks.is_empty());
         let mut pan = refinement(Rendition::Current, 10, continuation);
+        pan.first.detail = true;
         pan.first.settings.preview_region = Some([400, 400, 600, 600]);
         let _ = coordinator.refine(pan, None, Instant::now());
         assert!(

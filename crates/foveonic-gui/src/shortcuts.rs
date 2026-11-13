@@ -25,6 +25,7 @@ pub enum Action {
     RotateLeft,
     RotateRight,
     Pointer,
+    Loupe,
     FinishTool,
     ExitTool,
 }
@@ -81,6 +82,7 @@ const BINDINGS: &[Binding] = &[
     Binding::new(Key::ArrowLeft, Modifiers::COMMAND, Action::RotateLeft),
     Binding::new(Key::ArrowRight, Modifiers::COMMAND, Action::RotateRight),
     Binding::new(Key::V, Modifiers::NONE, Action::Pointer),
+    Binding::new(Key::P, Modifiers::NONE, Action::Loupe),
     Binding::new(Key::Enter, Modifiers::NONE, Action::FinishTool),
     Binding::new(Key::D, Modifiers::NONE, Action::DirectColor),
     Binding::new(Key::Escape, Modifiers::NONE, Action::ExitTool),
@@ -177,6 +179,7 @@ impl Availability {
                 | Action::RotateRight
                 | Action::CycleRotate
                 | Action::Pointer
+                | Action::Loupe
                 | Action::ExitTool
                 | Action::CopySettings
                 | Action::PasteSettings

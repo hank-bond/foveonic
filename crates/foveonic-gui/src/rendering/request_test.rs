@@ -48,6 +48,7 @@ fn merrill_smart_uses_fast_overview_and_regional_full_without_changing_edits() {
         },
     );
     let mut request = Request {
+        detail: false,
         framing_preview: false,
         calibration: None,
         rendition: Default::default(),
@@ -86,6 +87,7 @@ fn merrill_smart_uses_fast_overview_and_regional_full_without_changing_edits() {
     request.apply_preview(&mut resolved, &metadata).unwrap();
     assert_eq!(resolved.working_scale, Scale::NATIVE);
     request.preview_quality = PreviewMode::Smart;
+    request.detail = true;
     request.settings.preview_region = Some([100, 100, 400, 300]);
     resolved = request.settings.clone();
     request.apply_preview(&mut resolved, &metadata).unwrap();
@@ -94,6 +96,29 @@ fn merrill_smart_uses_fast_overview_and_regional_full_without_changing_edits() {
         resolved.preview_region, request.settings.preview_region,
         "Merrill must preserve the requested native detail region"
     );
+    // A loupe requests Full detail without changing the workspace's fixed preview policy.
+    for mode in [
+        PreviewMode::Full,
+        PreviewMode::Fast,
+        PreviewMode::Draft,
+        PreviewMode::Thumb,
+    ] {
+        request.preview_policy = mode;
+        request.preview_quality = PreviewMode::Full;
+        resolved = request.settings.clone();
+        request.apply_preview(&mut resolved, &metadata).unwrap();
+        assert_eq!(request.purpose(), Purpose::Detail);
+        assert_eq!(resolved.working_scale, Scale::NATIVE);
+        assert_eq!(resolved.preview_region, request.settings.preview_region);
+    }
+    request.settings.output_size = Some([640, 480]);
+    resolved = request.settings.clone();
+    request.apply_preview(&mut resolved, &metadata).unwrap();
+    assert_eq!(
+        resolved.output_size, None,
+        "native detail must bypass final output sizing"
+    );
+    request.settings.output_size = None;
     for format in [ExportFormat::Tiff, ExportFormat::Dng] {
         request.export = Some(Export {
             path: "export.output".into(),
@@ -111,6 +136,7 @@ fn merrill_smart_uses_fast_overview_and_regional_full_without_changing_edits() {
 #[test]
 fn classic_thumb_resolves_the_entire_preview_to_draft_resolution() {
     let mut request = Request {
+        detail: false,
         framing_preview: false,
         calibration: None,
         rendition: Default::default(),
@@ -154,6 +180,7 @@ fn classic_thumb_resolves_the_entire_preview_to_draft_resolution() {
 #[test]
 fn numeric_modes_preserve_controls_and_native_purposes_are_explicit() {
     let mut r = Request {
+        detail: false,
         framing_preview: false,
         calibration: None,
         rendition: Default::default(),
@@ -188,8 +215,10 @@ fn numeric_modes_preserve_controls_and_native_purposes_are_explicit() {
     r.comparison = true;
     assert_eq!(r.nominal_working_scale(), Scale::NATIVE);
     r.comparison = false;
+    r.detail = true;
     r.settings.preview_region = Some([100, 100, 400, 300]);
     assert_eq!(r.nominal_working_scale(), Scale::NATIVE);
+    r.detail = false;
     r.settings.preview_region = None;
     for format in [ExportFormat::Tiff, ExportFormat::Dng] {
         r.export = Some(Export {
@@ -206,6 +235,7 @@ fn numeric_modes_preserve_controls_and_native_purposes_are_explicit() {
 
 fn request() -> Request {
     Request {
+        detail: false,
         framing_preview: false,
         calibration: None,
         rendition: Default::default(),
@@ -236,6 +266,7 @@ fn smart_concrete_levels_share_reduced_sessions_but_require_sufficient_pixels() 
     }
     request.preview_policy = PreviewMode::Fast;
     assert!(!request.accepts_scale(Scale::NATIVE, &metadata()).unwrap());
+    request.detail = true;
     request.settings.preview_region = Some([100, 100, 400, 300]);
     request.preview_policy = PreviewMode::Smart;
     assert!(!request.uses_reduced_session());
@@ -249,6 +280,7 @@ fn smart_concrete_levels_share_reduced_sessions_but_require_sufficient_pixels() 
 fn consumer_purpose_preserves_export_before_inspection_and_detail_precedence() {
     let mut r = request();
     assert_eq!(r.purpose(), Purpose::Current);
+    r.detail = true;
     r.settings.preview_region = Some([100, 100, 400, 300]);
     assert_eq!(r.purpose(), Purpose::Detail);
     r.comparison = true;

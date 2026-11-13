@@ -1,7 +1,7 @@
 //! Owns photograph-tool selection, cancellation and pointer routing, and composes the toolbar.
 
 use crate::{
-    crop_tool, editor, rotate_tool, toolbar,
+    crop_tool, editor, loupe_tool, rotate_tool, toolbar,
     widgets::{self, ControlSize},
 };
 use eframe::egui;
@@ -11,6 +11,7 @@ use foveonic::crop::Crop;
 pub enum Tool {
     #[default]
     Pointer,
+    Loupe,
     Crop,
     Rotate,
     ColorRange,
@@ -18,24 +19,26 @@ pub enum Tool {
     WhiteBalance,
 }
 impl Tool {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Pointer,
+        Self::Loupe,
         Self::Crop,
         Self::Rotate,
         Self::ColorRange,
         Self::Dehaze,
         Self::WhiteBalance,
     ];
-    const TOOLBAR: [Self; 3] = [Self::Pointer, Self::Crop, Self::Rotate];
+    const TOOLBAR: [Self; 4] = [Self::Pointer, Self::Loupe, Self::Crop, Self::Rotate];
     fn width(self) -> f32 {
         match self {
-            Self::Crop | Self::Rotate => ControlSize::Large.split_width(),
+            Self::Loupe | Self::Crop | Self::Rotate => ControlSize::Large.split_width(),
             _ => ControlSize::Large.side(),
         }
     }
     fn cancel(self, ctx: &egui::Context) {
         match self {
             Self::Pointer => {}
+            Self::Loupe => loupe_tool::cancel(ctx),
             Self::Crop => crop_tool::cancel(ctx),
             Self::Rotate => rotate_tool::cancel(ctx),
             Self::ColorRange => editor::direct_color::cancel(ctx),
@@ -72,7 +75,7 @@ pub fn source(ctx: &egui::Context, path: Option<&std::path::Path>) {
 pub fn takes_pointer(ctx: &egui::Context) -> bool {
     match selected(ctx) {
         Tool::Pointer => false,
-        Tool::Rotate => true,
+        Tool::Loupe | Tool::Rotate => true,
         Tool::Crop | Tool::ColorRange | Tool::Dehaze | Tool::WhiteBalance => true,
     }
 }
@@ -115,7 +118,30 @@ pub fn selection_gesture(
     eligible_before_tools: bool,
 ) -> Option<crate::viewport_selection::Gesture> {
     use crate::viewport_selection::Gesture;
-    if !eligible_before_tools || !response.clicked() || !selects_photos(&response.ctx) {
+    let (pressed, released, space) = response.ctx.input(|input| {
+        (
+            input.pointer.primary_pressed(),
+            input.pointer.primary_released(),
+            input.key_down(egui::Key::Space),
+        )
+    });
+    let id = response.id.with("selection press");
+    let owned = response.ctx.data_mut(|data| {
+        if pressed {
+            data.insert_temp(
+                id,
+                eligible_before_tools
+                    && !space
+                    && (response.is_pointer_button_down_on() || response.clicked()),
+            );
+        }
+        let owned = data.get_temp::<bool>(id).unwrap_or(false);
+        if released {
+            data.remove::<bool>(id);
+        }
+        owned
+    });
+    if !owned || !eligible_before_tools || !response.clicked() || !selects_photos(&response.ctx) {
         return None;
     }
     response.ctx.input(|input| {
@@ -140,7 +166,10 @@ pub fn viewport_rect(ctx: &egui::Context) -> Option<egui::Rect> {
     ctx.data_mut(|data| data.get_temp::<egui::Rect>(egui::Id::new("photograph viewport")))
 }
 pub fn menu_open(ctx: &egui::Context) -> bool {
-    crop_tool::menu_open(ctx) || rotate_tool::menu_open(ctx) || editor::direct_color::menu_open(ctx)
+    crop_tool::menu_open(ctx)
+        || rotate_tool::menu_open(ctx)
+        || editor::direct_color::menu_open(ctx)
+        || loupe_tool::menu_open(ctx)
 }
 pub fn pointer(ctx: &egui::Context) {
     select(ctx, Tool::Pointer);
@@ -160,6 +189,7 @@ pub fn show(
     rotation: &mut foveonic::rotation::Rotation,
     extent: Option<[u32; 2]>,
     custom: &mut Vec<crop_tool::NamedRatio>,
+    loupe: &mut loupe_tool::Options,
 ) -> bool {
     let before = (*crop, *rotation);
     toolbar::tool_group(ui, &Tool::TOOLBAR.map(Tool::width), |ui| {
@@ -178,6 +208,7 @@ pub fn show(
                             pointer(ui.ctx());
                         }
                     }
+                    Tool::Loupe => loupe_tool::button(ui, loupe),
                     Tool::Crop => crop_tool::button(ui, crop, extent, custom),
                     Tool::Rotate => {
                         ui.add_enabled_ui(extent.is_some(), |ui| {
@@ -215,9 +246,66 @@ fn pointer_icon(ui: &egui::Ui, response: &egui::Response, on: bool) {
 mod tests {
     use super::*;
     #[test]
+    fn switching_to_pointer_during_a_held_tool_gesture_does_not_select_on_release() {
+        let ctx = egui::Context::default();
+        let pos = egui::pos2(40., 40.);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let run = |time, events| {
+            let mut gesture = None;
+            let _ = ctx.run(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(200., 200.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let response = ui.interact(
+                            ui.max_rect(),
+                            egui::Id::new("photo"),
+                            egui::Sense::click_and_drag(),
+                        );
+                        gesture = selection_gesture(&response, selects_photos(ctx));
+                    });
+                },
+            );
+            gesture
+        };
+        select(&ctx, Tool::Loupe);
+        run(0., vec![]);
+        run(0.1, vec![egui::Event::PointerMoved(pos), button(true)]);
+        pointer(&ctx);
+        assert_eq!(run(0.2, vec![button(false)]), None);
+        run(0.5, vec![button(true)]);
+        assert_eq!(
+            run(0.6, vec![button(false)]),
+            Some(crate::viewport_selection::Gesture::Replace)
+        );
+        let space = |pressed| egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        run(1., vec![space(true), button(true)]);
+        run(1.1, vec![space(false)]);
+        assert_eq!(run(1.2, vec![button(false)]), None);
+    }
+    #[test]
     fn every_activation_path_selects_only_its_own_tool() {
         type Activate = fn(&egui::Context);
-        let entries: [(Tool, Activate); 5] = [
+        let entries: [(Tool, Activate); 6] = [
+            (Tool::Loupe, loupe_tool::activate),
             (Tool::Crop, crop_tool::toggle),
             (Tool::Rotate, |ctx| {
                 rotate_tool::activate(ctx, rotate_tool::Mode::Straighten)
@@ -231,13 +319,15 @@ mod tests {
                 let ctx = egui::Context::default();
                 select(&ctx, previous);
                 activate(&ctx);
-                let expected = if previous == target && target != Tool::Rotate {
-                    Tool::Pointer
-                } else {
-                    target
-                };
+                let expected =
+                    if previous == target && !matches!(target, Tool::Rotate | Tool::Loupe) {
+                        Tool::Pointer
+                    } else {
+                        target
+                    };
                 assert_eq!(selected(&ctx), expected, "{previous:?} -> {target:?}");
                 let active_flags = [
+                    loupe_tool::active(&ctx),
                     crop_tool::active(&ctx),
                     rotate_tool::active(&ctx),
                     editor::direct_color::active(&ctx),

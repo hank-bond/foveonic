@@ -29,7 +29,7 @@ pub fn contains(outer: [u32; 4], inner: [u32; 4]) -> bool {
 }
 
 pub(crate) enum PhotoRefinement {
-    WaitingForLayout,
+    Deferred,
     Ready(Box<super::request::Refinement>),
 }
 
@@ -70,7 +70,9 @@ impl App {
         requested: &Settings,
         rendition: crate::editor::Rendition,
     ) -> Option<&worker::Frame> {
-        if self.preferences.preview_quality != preferences::PreviewMode::Smart {
+        if self.preferences.preview_quality != preferences::PreviewMode::Smart
+            || self.loupe_inspecting(path)
+        {
             return None;
         }
         let detail = if rendition == crate::editor::Rendition::Current {
@@ -170,6 +172,11 @@ impl App {
         path: &Path,
         mut settings: Settings,
     ) -> Option<PhotoRefinement> {
+        if self.preferences.preview_quality == preferences::PreviewMode::Smart
+            && self.loupe_inspecting(path)
+        {
+            return Some(PhotoRefinement::Deferred);
+        }
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
             || !self
                 .displayed_paths
@@ -194,12 +201,13 @@ impl App {
         if base.is_some() && self.viewports.view(Some(path)).visible_pixels().is_none() {
             // Selection discards old screen bounds. Wait for this photo to be
             // drawn instead of replacing its pending region with fallback Whole.
-            return Some(PhotoRefinement::WaitingForLayout);
+            return Some(PhotoRefinement::Deferred);
         }
         settings.working_scale = Scale::NATIVE;
         settings.preview_region =
             self.photo_edit_region(path, base, &settings, crate::editor::Rendition::Current);
         let first = super::request::Request {
+            detail: settings.preview_region.is_some(),
             framing_preview: false,
             calibration: self
                 .noise_calibration
@@ -217,6 +225,7 @@ impl App {
         let whole = first.settings.preview_region.map(|_| {
             let mut whole = first.clone();
             whole.revision += 1;
+            whole.detail = false;
             whole.settings.preview_region = None;
             whole
         });
@@ -254,6 +263,7 @@ impl App {
         let whole = region.map(|_| {
             let mut whole = first.clone();
             whole.revision += 1;
+            whole.detail = false;
             whole.settings.preview_region = None;
             whole
         });

@@ -6,7 +6,7 @@ summary: "Review small ownership and quality-policy changes supporting Smart com
 
 The owner approved the remaining functional queue and subsequent isolated wide-execution investigation in the [overnight run](./viewport-overnight.md).
 
-Requirements under review: [viewport workflows](../docs/specs/viewport-workflows.md), [Smart preview](../docs/specs/smart-preview.md), [multi-edit](../docs/specs/multi-edit.md), [small previews](../docs/specs/small-previews.md) and [render orchestration](../docs/specs/render-orchestration.md). Apply the [three architecture goals](../docs/specs/render-orchestration.md#agreed-goals) to each slice. The owner approved the preview-quality slice. Later slices remain discussion until individually agreed.
+Requirements under review: [viewport workflows](../docs/specs/viewport-workflows.md), [Smart preview](../docs/specs/smart-preview.md), [multi-edit](../docs/specs/multi-edit.md), [small previews](../docs/specs/small-previews.md) and [render orchestration](../docs/specs/render-orchestration.md). Apply the [three architecture goals](../docs/specs/render-orchestration.md#agreed-goals) to each slice. The owner approved the functional slices through the overnight queue. Their implementation and acceptance are recorded below.
 
 ## Checkpoint and review
 
@@ -16,7 +16,7 @@ The existing coordinator, source loader, processing sessions and immutable prese
 
 The owner approved separating [viewport, visible region and requested render region](../docs/architecture/concepts.md#viewport-and-image-coordinates). Use those meanings consistently. Zoom and pan derive an image-space visible region from UI-space viewport geometry. Follow the [working instructions](../AGENTS.md#work-with-the-owner) for the required review subagent and owner testing at each functional change.
 
-## Findings grounded in current code
+## Initial review findings
 
 | Area | Existing behavior and consequence |
 | --- | --- |

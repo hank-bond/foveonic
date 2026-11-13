@@ -9,6 +9,8 @@ use std::{path::PathBuf, sync::Arc};
 
 #[derive(Clone)]
 pub struct Request {
+    /// Native inspection pixels are independent of the main preview, including Whole fallback.
+    pub detail: bool,
     pub framing_preview: bool,
     pub calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
     pub rendition: Rendition,
@@ -61,7 +63,7 @@ impl Request {
                 Rendition::Current if self.output != "final" || self.comparison => {
                     Purpose::Inspection(self.output.clone(), self.comparison)
                 }
-                Rendition::Current if self.settings.preview_region.is_some() => Purpose::Detail,
+                Rendition::Current if self.detail => Purpose::Detail,
                 Rendition::Current => Purpose::Current,
             }
         }
@@ -75,7 +77,7 @@ impl Request {
     /// of an existing framing plane. Inspection, comparison, export and detail
     /// require native samples, independently of the workspace preview choice.
     pub fn nominal_working_scale(&self) -> Scale {
-        if !self.photographic_preview() || self.settings.preview_region.is_some() {
+        if !self.photographic_preview() || self.detail {
             Scale::NATIVE
         } else {
             self.preview_quality.working_scale()
@@ -89,7 +91,7 @@ impl Request {
             self.preview_quality,
             PreviewMode::Fast | PreviewMode::Draft | PreviewMode::Thumb
         ) && self.photographic_preview()
-            && self.settings.preview_region.is_none()
+            && !self.detail
     }
 
     /// Apply processing geometry to camera-resolved settings without changing
@@ -99,10 +101,11 @@ impl Request {
         if settings.working_scale.is_reduced() {
             settings.working_scale = camera_preview_scale(self.preview_quality, metadata)?;
         }
-        if self.preview_policy != PreviewMode::Smart
-            || !self.photographic_preview()
-            || !settings.regional_preview_available(metadata)
-        {
+        if self.photographic_preview() && self.detail {
+            // Detail is sampled in native image coordinates, independently of final output sizing.
+            settings.output_size = None;
+        }
+        if !self.photographic_preview() || !settings.regional_preview_available(metadata) {
             settings.preview_region = None;
         }
         Ok(())

@@ -24,6 +24,8 @@ mod icon;
 mod import_review;
 mod information;
 mod inspect;
+mod loupe_tool;
+mod loupe_view;
 mod memory;
 mod metadata;
 mod mixer;
@@ -79,6 +81,7 @@ struct App {
     comparison_selection: Option<viewport_selection::Request>,
     edit_selection: viewport_selection::Selection,
     multi_edit: multi_edit_runtime::Runtime,
+    loupe: loupe_view::Loupe,
     comparison_layout: comparison_view::State,
     viewport_paths: Arc<[PathBuf]>,
     displayed_paths: Vec<PathBuf>,
@@ -309,6 +312,7 @@ impl App {
             comparison_selection: None,
             edit_selection: Default::default(),
             multi_edit: Default::default(),
+            loupe: Default::default(),
             comparison_layout: Default::default(),
             viewport_paths: Arc::default(),
             displayed_paths: Vec::new(),
@@ -664,6 +668,7 @@ impl App {
             self.preview_quality_for(path, quality)
         };
         Some(request::Request {
+            detail: region.is_some(),
             framing_preview: export.is_none() && self.framing_preview_active(),
             calibration: self
                 .noise_calibration
@@ -841,7 +846,7 @@ impl App {
                         self.before.retain_current(&mut self.frame);
                     }
                     if frame.rendition == editor::Rendition::Current
-                        && frame.requested.preview_region.is_none()
+                        && !frame.detail
                         && !frame.is_photographic()
                     {
                         if let Some(previous) = self.frame.take() {
@@ -861,8 +866,10 @@ impl App {
                     });
                     self.update_browser_preview(&frame);
                     // Keep the last completed scopes until this frame has replacements.
-                    self.scope_key = None;
-                    if frame.requested.preview_region.is_some() {
+                    if !self.loupe_inspecting(&frame.path) {
+                        self.scope_key = None;
+                    }
+                    if frame.detail {
                         if frame.rendition == editor::Rendition::Current {
                             self.multi_edit.retain(frame);
                         } else {
@@ -1159,6 +1166,7 @@ impl App {
             &mut self.settings.rotation,
             extent,
             &mut self.preferences.crop_ratios,
+            &mut self.preferences.loupe,
         )
     }
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
@@ -1473,11 +1481,12 @@ impl App {
                 self.displayed_paths.clear();
                 if self.multi_photo_overview() {
                     changed |= self.comparison_view(ui, &paths);
-                    return;
+                } else {
+                    self.displayed_paths.extend(self.selected.iter().cloned());
+                    changed |= self.show_photo(ui, mapping);
+                    self.before_badge(ui, canvas);
                 }
-                self.displayed_paths.extend(self.selected.iter().cloned());
-                changed |= self.show_photo(ui, mapping);
-                self.before_badge(ui, canvas);
+                self.show_loupe(ui, mapping);
             },
         );
         let path = self
@@ -2054,6 +2063,7 @@ impl eframe::App for App {
             self.submit(None);
         }
         self.submit_photos();
+        self.update_loupe();
         if let Some(paths) = self.browser.take_prefetch_order(self.selected.as_deref()) {
             self.worker
                 .cache
