@@ -21,7 +21,7 @@ The owner approved separating [viewport, visible region and requested render reg
 | Area | Existing behavior and consequence |
 | --- | --- |
 | Quality policy before this slice | [Multi-edit submission](../crates/foveonic-gui/src/multi_edit_runtime.rs) and [main submission](../crates/foveonic-gui/src/main.rs) forced Thumb for overviews. [Smart](../crates/foveonic-gui/src/rendering/smart.rs) is skipped in multi-photo views. Draft/Thumb promotion also occurred before the Smart-mode check and separately in main submission. Adding count thresholds alone would leave inconsistent policy. |
-| View state | [Comparison layout](../crates/foveonic-gui/src/comparison_view.rs) caps preferred equal-size tiles and optimizes tile area rather than photograph area. Only the active photograph uses the full viewport interaction path. Layout order currently follows supplied paths. Per-photo identity must survive layout changes. |
+| View state | [Comparison layout](../crates/foveonic-gui/src/comparison_view.rs) uses a bounded aspect-aware packing search over rows and columns. Displayed visual order drives viewport ranges. Per-photo viewing remains keyed by identity. |
 | Refinement | Smart is UI-driven and retains one initial region per source/edit sequence. The UI requests whole-image continuation after delivery. Panning intentionally does not request another region. A moving loupe needs a reviewed replacement policy rather than inheriting these rules. |
 | Regional processing | [Recipe settings](../crates/foveonic/src/render/recipes/mod.rs) clear regions on reduced working grids. [Capabilities](../crates/foveonic/src/render/settings.rs) restrict native regions by camera, geometry and selected processing. Adaptive Tone, rotation and monochrome can require whole-image work. Regional correctness remains an engine concern. |
 | Source readiness | The loader removes requested I/O from render execution but retains only one active or unconsumed source handoff. It is not a decoded-RAM cache. [Reduced sessions](../crates/foveonic/src/render/reduced.rs) retain no decoded samples. The worker holds one native session, not eight. Disk-ready and reduced-ready do not establish native-detail latency. |
@@ -166,3 +166,16 @@ Validation passed the full workspace tests, including 485 GUI cases, strict work
 The low-memory application's behavioral assertions passed, but its initial trace analysis classified an interrupted 12 MB speculative decoded-cache read as an incomplete read failure. No I/O error occurred. The analyzer now correlates the read with its exact lookup and prefetch scope and requires the explicit interruption cause. Physical read counts and reuse assertions remain strict, while cancelled counts/bytes are reported separately. Regression cases retain failures for missing/wrong scope or source, checksum mismatch, I/O errors and missing interruption evidence. The same raw trace passes the maintained reanalysis tool after that correction, without rerunning or changing the application. The original runner report preserves the prior analyzer outcome.
 
 The largest available independent review accepted the production design and the narrow diagnostic correction. The owner reviewed the build and approved committing this checkpoint before extending regional rendering to multi-photo views.
+
+
+## Aspect-aware layout
+
+The owner approved this slice as part of the overnight viewport batch. Layout evaluates justified rows and columns in browser order and stable aspect order. A fixed bisection with greedy contiguous partitioning balances shelves. Candidates score actual fitted photograph area, including caption and gap costs. A readable equal-cell grid remains the fallback for extreme aspect ratios. Existing readable capacity determines overflow. There is no preferred tile cap, factorial search or new rendering owner.
+
+The chosen geometry is cached by the shown photograph identities, saved-composition aspects and viewport size. Pointer presses, drags and releases hold its rectangles, including changes to readable capacity during a resize. Membership changes invalidate immediately. Displayed paths are published in top-to-bottom, left-to-right order. Shift ranges use this order, while editing-target storage remains in browser order. Photo-keyed view state retains zoom, pan and widget identity.
+
+- [x] Implement bounded aspect-aware packing and displayed selection ranges.
+- [x] Run focused geometry, range-selection and retained-view checks, regenerate documentation indexes and obtain independent review.
+- [ ] Integrate and run related native comparison scenarios.
+
+Focused validation passes five layout/composition tests, six selection tests and three retained-view tests, plus formatting, whitespace and documentation/index checks. Independent review found that a Before rendition could lose the Current frame's authored aspect. Layout now takes camera dimensions from any same-photo frame and always applies the photograph's authored crop and rotation. The reviewer accepted the corrected implementation. Native checks remain an integration gate.

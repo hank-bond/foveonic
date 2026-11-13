@@ -7,85 +7,61 @@ use crate::{
 use eframe::egui;
 use std::path::PathBuf;
 
-const GAP: f32 = 8.;
-const MIN_TILE: egui::Vec2 = egui::vec2(120., 112.);
-const PREFERRED_TILE: egui::Vec2 = egui::vec2(320., 260.);
-const CAPTION: f32 = 22.;
-
-#[derive(Clone, Copy, Debug)]
-struct Layout {
-    columns: usize,
-    shown: usize,
-    overflow: usize,
-    tile: egui::Vec2,
-    size: egui::Vec2,
-}
-fn layout(count: usize, available: egui::Vec2, zoom: f32) -> Layout {
-    let available = available.max(egui::Vec2::splat(1.));
-    let max_columns = (((available.x + GAP) / (MIN_TILE.x + GAP)).floor() as usize).max(1);
-    let max_rows = (((available.y + GAP) / (MIN_TILE.y + GAP)).floor() as usize).max(1);
-    let capacity = max_columns.saturating_mul(max_rows);
-    let slots = count.min(capacity);
-    let overflow = if count > capacity {
-        count - capacity + 1
-    } else {
-        0
-    };
-    let shown = slots.saturating_sub(usize::from(overflow > 0));
-    let preferred = (PREFERRED_TILE * zoom.clamp(0.5, 3.)).max(MIN_TILE);
-    let mut best = Layout {
-        columns: 1,
-        shown,
-        overflow,
-        tile: egui::Vec2::ZERO,
-        size: egui::Vec2::ZERO,
-    };
-    for columns in 1..=slots.min(max_columns).max(1) {
-        let rows = slots.max(1).div_ceil(columns);
-        if rows > max_rows {
-            continue;
-        }
-        let tile = egui::vec2(
-            ((available.x - GAP * (columns - 1) as f32) / columns as f32).min(preferred.x),
-            ((available.y - GAP * (rows - 1) as f32) / rows as f32).min(preferred.y),
-        );
-        if tile.x * tile.y >= best.tile.x * best.tile.y {
-            best = Layout {
-                columns,
-                shown,
-                overflow,
-                tile,
-                size: egui::vec2(
-                    tile.x * columns as f32 + GAP * (columns - 1) as f32,
-                    tile.y * rows as f32 + GAP * (rows - 1) as f32,
-                ),
-            };
-        }
-    }
-    best
-}
+mod layout;
+pub(crate) use layout::State;
+use layout::CAPTION;
 
 impl App {
     pub(crate) fn comparison_view(&mut self, ui: &mut egui::Ui, paths: &[PathBuf]) -> bool {
         let mut changed = false;
         let available = ui.available_size();
-        let layout = layout(paths.len(), available, self.comparison_zoom);
-        self.displayed_paths
-            .extend_from_slice(&paths[..layout.shown]);
+        let (shown, _) = layout::capacity(paths.len(), available);
+        let aspects: Vec<_> = paths[..shown]
+            .iter()
+            .map(|path| {
+                let frame = self
+                    .frame
+                    .as_ref()
+                    .filter(|frame| frame.path == *path)
+                    .or_else(|| self.multi_edit.frame(path));
+                frame
+                    .map(|frame| {
+                        let settings = if self.selected.as_ref() == Some(path) {
+                            &self.settings
+                        } else {
+                            self.multi_edit.settings(path).unwrap_or(&frame.requested)
+                        };
+                        // Camera/Defaults and framing previews share the camera's
+                        // dimensions but must use this photo's authored composition.
+                        composition_aspect(frame.camera_extent(), settings)
+                    })
+                    .unwrap_or_else(|| {
+                        let extent = self.browser.known_extent(path).unwrap_or([3, 2]);
+                        extent[0] as f32 / extent[1].max(1) as f32
+                    })
+            })
+            .collect();
+        // Keep the release frame on the gesture's geometry so its click cannot
+        // land on another photograph when dimensions arrive during a drag.
+        let freeze = ui.input(|input| input.pointer.any_down() || input.pointer.any_released());
+        let layout = self
+            .comparison_layout
+            .get(paths, &aspects, paths.len(), available, freeze)
+            .clone();
+        self.displayed_paths.extend(
+            layout
+                .tiles
+                .iter()
+                .filter(|tile| tile.index < layout.shown)
+                .map(|tile| paths[tile.index].clone()),
+        );
         let (canvas, _) = ui.allocate_exact_size(available, egui::Sense::hover());
-        let origin = canvas.min + (canvas.size() - layout.size) * 0.5;
         let mapping = self.displayed_mapping();
         let selecting = crate::photo_tools::selects_photos(ui.ctx())
             && !ui.input(|input| input.key_down(egui::Key::Space));
-        for (index, path) in paths.iter().take(layout.shown).enumerate() {
-            let rect = egui::Rect::from_min_size(
-                origin
-                    + egui::vec2(
-                        (index % layout.columns) as f32 * (layout.tile.x + GAP),
-                        (index / layout.columns) as f32 * (layout.tile.y + GAP),
-                    ),
-                layout.tile,
-            );
+        for tile in layout.tiles.iter().filter(|tile| tile.index < layout.shown) {
+            let path = &paths[tile.index];
+            let rect = tile.rect.translate(canvas.min.to_vec2());
             let active = self.selected.as_ref() == Some(path);
             let target = self.edit_selection.contains(path);
             let image_rect = egui::Rect::from_min_max(
@@ -236,22 +212,20 @@ impl App {
             );
         }
         if layout.overflow > 0 {
-            let index = layout.shown;
-            let rect = egui::Rect::from_min_size(
-                origin
-                    + egui::vec2(
-                        (index % layout.columns) as f32 * (layout.tile.x + GAP),
-                        (index / layout.columns) as f32 * (layout.tile.y + GAP),
-                    ),
-                layout.tile,
-            );
+            let rect = layout
+                .tiles
+                .iter()
+                .find(|tile| tile.index == layout.shown)
+                .unwrap()
+                .rect
+                .translate(canvas.min.to_vec2());
             ui.painter()
                 .rect_filled(rect, 2., egui::Color32::from_gray(24));
             let hidden_targets = self
                 .edit_selection
                 .paths()
                 .iter()
-                .filter(|path| !paths[..layout.shown].contains(path))
+                .filter(|path| !self.displayed_paths.contains(path))
                 .count();
             ui.painter().text(
                 rect.center() - egui::vec2(0., 10.),
@@ -287,36 +261,23 @@ impl App {
     }
 }
 
+fn composition_aspect(camera_extent: [u32; 2], settings: &foveonic::render::Settings) -> f32 {
+    let extent = settings.rotation.extent(camera_extent);
+    let [left, top, right, bottom] = settings.crop.pixels(extent);
+    (right - left) as f32 / (bottom - top).max(1) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn tiles_shrink_to_readable_minimum_before_showing_overflow() {
-        let available = egui::vec2(800., 600.);
-        let small = layout(2, available, 1.);
-        let medium = layout(12, available, 1.);
-        let large = layout(100_000, available, 1.);
-        assert_eq!(small.overflow, 0);
-        assert_eq!(medium.overflow, 0);
-        assert!(small.tile.x * small.tile.y >= medium.tile.x * medium.tile.y);
-        assert!(large.tile.x >= MIN_TILE.x && large.tile.y >= MIN_TILE.y);
-        assert_eq!(large.shown + large.overflow, 100_000);
-        assert!(large.shown < 40);
-        for plan in [small, medium, large] {
-            assert!(plan.size.x <= available.x && plan.size.y <= available.y);
-        }
-    }
-    #[test]
-    fn narrow_viewports_stay_finite_and_include_an_overflow_slot() {
-        for available in [
-            egui::vec2(1., 1.),
-            egui::vec2(100., 90.),
-            egui::vec2(1280., 120.),
-        ] {
-            let plan = layout(usize::MAX, available, 1.);
-            assert!(plan.tile.x.is_finite() && plan.tile.y.is_finite());
-            assert_eq!(plan.shown + plan.overflow, usize::MAX);
-            assert!(plan.size.x <= available.x && plan.size.y <= available.y);
-        }
+    fn saved_composition_aspect_uses_camera_dimensions_crop_and_rotation() {
+        let mut authored = foveonic::render::Settings::default();
+        authored.rotation.turns = 1;
+        authored.crop.bounds = [0., 0., 0.5, 1.];
+        let current = composition_aspect([6000, 4000], &authored);
+        assert!((current - 1. / 3.).abs() < 1e-6);
+        assert_eq!(composition_aspect([6000, 4000], &Default::default()), 1.5);
     }
 }

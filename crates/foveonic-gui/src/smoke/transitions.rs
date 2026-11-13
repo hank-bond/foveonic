@@ -1012,7 +1012,6 @@ impl TransitionJourney {
                 app.submit(None);
             }
             Step::RefreshOverviews => {
-                app.comparison_zoom = 3.;
                 app.multi_edit.invalidate();
                 app.submit_photos();
             }

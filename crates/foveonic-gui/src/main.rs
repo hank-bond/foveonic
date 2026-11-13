@@ -79,7 +79,7 @@ struct App {
     comparison_selection: Option<viewport_selection::Request>,
     edit_selection: viewport_selection::Selection,
     multi_edit: multi_edit_runtime::Runtime,
-    comparison_zoom: f32,
+    comparison_layout: comparison_view::State,
     viewport_paths: Arc<[PathBuf]>,
     displayed_paths: Vec<PathBuf>,
     viewport_paths_key: Option<(u64, Option<PathBuf>)>,
@@ -310,7 +310,7 @@ impl App {
             comparison_selection: None,
             edit_selection: Default::default(),
             multi_edit: Default::default(),
-            comparison_zoom: 1.,
+            comparison_layout: Default::default(),
             viewport_paths: Arc::default(),
             displayed_paths: Vec::new(),
             viewport_paths_key: None,
@@ -2011,9 +2011,11 @@ impl eframe::App for App {
             self.clear_selection();
         } else if let Some(request) = self.comparison_selection.take() {
             let clicked = request.path.clone();
-            let selection_changed = self
-                .edit_selection
-                .apply(request, self.preferences.multi_edit_limit);
+            let selection_changed = self.edit_selection.apply_displayed(
+                request,
+                self.preferences.multi_edit_limit,
+                &self.displayed_paths,
+            );
             timing::emit("viewport.selection.applied", || {
                 serde_json::json!({"source":clicked,"photo":foveonic::diagnostics::photo_id(&clicked),
                     "changed":selection_changed,"targets":self.edit_selection.paths()})

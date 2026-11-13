@@ -654,6 +654,11 @@ impl Browser {
     pub fn thumbnails_ready(&self) -> bool {
         self.pending.is_empty() && self.cache.values().all(Option::is_some)
     }
+    /// Read dimensions already supplied by background preview loading.
+    pub fn known_extent(&self, path: &Path) -> Option<[u32; 2]> {
+        self.records.get(path)?.extent
+    }
+
     pub fn thumbnail(&mut self, path: &Path) -> Option<Thumbnail> {
         if let Some(texture) = self.cache.get(path) {
             let texture = texture.clone();

@@ -45,10 +45,26 @@ impl Selection {
         changed
     }
     pub fn apply(&mut self, request: Request, limit: usize) -> bool {
+        self.apply_order(request, limit, None)
+    }
+    pub fn apply_displayed(
+        &mut self,
+        request: Request,
+        limit: usize,
+        displayed: &[PathBuf],
+    ) -> bool {
+        self.apply_order(request, limit, Some(displayed))
+    }
+    fn apply_order(
+        &mut self,
+        request: Request,
+        limit: usize,
+        displayed: Option<&[PathBuf]>,
+    ) -> bool {
         let limit = limit.max(1);
-        let Some(clicked) = self.browser.iter().position(|path| path == &request.path) else {
+        if !self.browser.contains(&request.path) {
             return false;
-        };
+        }
         let previous = self.targets.clone();
         self.targets.truncate(limit);
         match request.gesture {
@@ -66,19 +82,27 @@ impl Selection {
                 }
             }
             Gesture::Range => {
+                let order = displayed.unwrap_or(&self.browser);
+                let Some(clicked) = order.iter().position(|path| path == &request.path) else {
+                    return false;
+                };
                 let anchor = self
                     .anchor
                     .as_ref()
-                    .and_then(|anchor| self.browser.iter().position(|path| path == anchor))
+                    .and_then(|anchor| order.iter().position(|path| path == anchor))
                     .unwrap_or(clicked);
                 // Preserve the anchor and take the nearest range members first.
-                // Storage remains in browser order even for backwards ranges.
+                // Storage remains in browser order after choosing the visual range.
                 let (first, last) = if clicked >= anchor {
                     (anchor, clicked.min(anchor.saturating_add(limit - 1)))
                 } else {
                     (clicked.max(anchor.saturating_sub(limit - 1)), anchor)
                 };
-                self.targets = self.browser[first..=last].to_vec();
+                self.targets = order[first..=last]
+                    .iter()
+                    .filter(|path| self.browser.contains(path))
+                    .cloned()
+                    .collect();
             }
         }
         let browser = &self.browser;
@@ -173,5 +197,30 @@ mod tests {
         assert_eq!(selection.paths(), &paths[..3]);
         selection.sync_browser(&[], 8);
         assert!(selection.paths().is_empty());
+    }
+    #[test]
+    fn displayed_ranges_follow_visual_order_but_store_browser_order() {
+        let paths = photos();
+        let displayed = vec![
+            paths[4].clone(),
+            paths[1].clone(),
+            paths[7].clone(),
+            paths[2].clone(),
+        ];
+        let mut selection = Selection::default();
+        selection.sync_browser(&paths, 8);
+        selection.apply(request(&paths, 4, Gesture::Replace), 8);
+        selection.apply_displayed(request(&paths, 2, Gesture::Range), 3, &displayed);
+        assert_eq!(
+            selection.paths(),
+            &[paths[1].clone(), paths[4].clone(), paths[7].clone()]
+        );
+        selection.apply_displayed(request(&paths, 2, Gesture::Replace), 8, &displayed);
+        selection.apply_displayed(request(&paths, 4, Gesture::Range), 2, &displayed);
+        assert_eq!(selection.paths(), &[paths[2].clone(), paths[7].clone()]);
+        // An anchor hidden by overflow has no position in the displayed range.
+        selection.apply(request(&paths, 15, Gesture::Replace), 8);
+        selection.apply_displayed(request(&paths, 7, Gesture::Range), 8, &displayed);
+        assert_eq!(selection.paths(), &paths[7..8]);
     }
 }

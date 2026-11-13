@@ -23,6 +23,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 ### Directories
 
 - **[browser/](./browser/AGENTS.md)** Browser modules separate folder discovery, queries, selection, drawing and bounded preview loading.
+- **[comparison_view/](./comparison_view/AGENTS.md)** Comparison layout packs saved photograph aspects while keeping viewport gestures and identity stable.
 - **[controls/](./controls/AGENTS.md)** Family panels compose shared editing widgets while the processor defines supported controls.
 - **[crop_tool/](./crop_tool/AGENTS.md)** Crop interaction separates pointer geometry and aspect-ratio preferences from the shared image view.
 - **[editor/](./editor/AGENTS.md)** Editor workflow separates scoped settings, application presets and defaults from authored photos and transient comparisons.

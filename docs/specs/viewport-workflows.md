@@ -19,7 +19,11 @@ The loupe must request Full detail independently of the selected main preview mo
 
 ## Layout and interaction
 
-Automatic layout should maximize useful photograph area in the available viewport. It may reorder photographs independently of browser order. Layout must preserve photograph identity, authored edits, selection and persistent view state. Shift-range selection and layout stability during gestures need a concrete reviewed contract.
+Automatic layout should maximize useful photograph area in the available viewport, using each photograph's saved composition aspect ratio. It may reorder photographs independently of browser order. Layout must preserve photograph identity, authored edits, selection and persistent view state. It must retain the readable minimum tile and overflow policy. Layout search must stay bounded by visible capacity and must not enumerate photograph permutations on each frame.
+
+Viewport Shift ranges must follow displayed visual order from top to bottom and then left to right, with the existing editing limit and nearest-to-anchor behavior. If the anchor is outside the displayed set, the clicked photograph becomes the whole range. Browser order still initializes editing targets and orders their storage. Captions remain attached to their photograph.
+
+An ongoing pointer gesture must retain its layout through the release frame. New dimensions and viewport resizing may reflow on the following frame. Changing displayed photograph membership may replace the layout immediately. Before renditions and temporary framing presentations must not change the saved-composition aspect ratio used for layout.
 
 Combine Pointer and Hand interaction so selecting a photograph does not require changing tools before panning it. Photograph tools must preserve the existing separation between viewport gestures and ordinary browser/editor interaction. Exact click, drag and modifier behavior remains to be reviewed.
 
@@ -41,7 +45,6 @@ Native decoded data, reduced processing inputs, regional/full photographic outpu
 
 - Smart behavior beyond eight displayed photographs and the relationship to overflow tiles.
 - Optional synchronized pan or zoom between photographs. Independent session viewing and restoration are specified in multi-edit.
-- Layout stability, captions and viewport Shift-range order after aspect-aware reordering.
 - When persistent Smart zoom merits whole-image continuation, compared with a transient loupe's region-only demand.
 - Whether the first version needs more than one independently refreshed detail region for the same photograph. One replaceable detail request per photograph is the proposed starting point.
 - Source/output retention and admission under repeated detail switching and several simultaneously zoomed photographs.
