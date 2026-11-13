@@ -48,6 +48,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[regional-preview-completion](./regional-preview-completion.md)** Complete native visible-region rendering for adaptive tone, monochrome and authored rotation, with whole-image comparisons and measured app latency.
 - **[render-coordination-consistency](./render-coordination-consistency.md)** Inventory coordination, scheduling and cache inconsistencies before choosing small current-architecture cleanup slices.
 - **[render-runtime](./render-runtime.md)** Clarify render ownership and responsibilities through one owner-reviewed concept at a time while preserving serial engine execution.
+- **[sectional-rendering](./sectional-rendering.md)** Reduce native sectional rendering work through explicit input support and measured Whole comparisons.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.
 - **[shared-photographic-finishing](./shared-photographic-finishing.md)** Integrate shared photographic tone, monochrome sensitivity, local contrast and sharpening with camera recipes and bounded interactive reuse.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.

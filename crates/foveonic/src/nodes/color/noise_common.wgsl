@@ -16,6 +16,7 @@ struct NoiseParams {
     window:vec4<u32>,
     region:vec4<u32>,
     sampling:vec4<u32>,
+    input_bounds:vec4<u32>,
 }
 fn tile_count(params: NoiseParams) -> u32 { return params.window.z * params.window.w; }
 fn native_tile(tile: u32, params: NoiseParams) -> vec2<u32> {

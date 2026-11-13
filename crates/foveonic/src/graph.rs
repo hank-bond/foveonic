@@ -2,7 +2,9 @@
 
 use crate::{color_space::ColorSpace, source::Result};
 mod operation;
+mod regions;
 pub use operation::Operation;
+pub(crate) use regions::Demand;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DataType {

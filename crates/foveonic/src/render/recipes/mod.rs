@@ -203,7 +203,7 @@ impl Engine {
         let mut artifacts = self.collect_artifacts(
             source,
             settings,
-            &built.graph,
+            &mut built.graph,
             built.final_id,
             names,
             profile,

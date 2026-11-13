@@ -26,6 +26,7 @@ fn parameters() -> Parameters {
         window: [0, 0, 1, 1],
         region: [0, 0, 80, 72],
         sampling: [1, 32, 0, 0],
+        input_bounds: [0, 0, 80, 72],
     }
 }
 #[test]
@@ -173,6 +174,7 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
     // Four context tiles must extend the first source edge (not the local second edge).
     let mut p = parameters();
     p.source = [80, 72, 2, 2];
+    p.input_bounds = [0, 0, p.source[0], p.source[1]];
     p = p.full_frame();
     p.tile = [56, 52, 8, 11];
     let copied = global_tiles(&gpu, &input, p, 3, &mut Profile::default()).unwrap();
@@ -206,6 +208,7 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
         .upload("Different following reduced tile", &wide)
         .unwrap();
     p.source = [160, 72, 2, 1];
+    p.input_bounds = [0, 0, p.source[0], p.source[1]];
     p = p.full_frame();
     p.area[2] = 160;
     let two = base(&gpu, &wide, p, false, true, false, &mut Profile::default()).unwrap();
@@ -238,6 +241,7 @@ fn all_column_banding_presets_match_native_windows_and_coefficients() {
     for row in fixture["positions"].as_array().unwrap() {
         let mut p = parameters();
         p.source = [80, 112, 1, 1];
+        p.input_bounds = [0, 0, p.source[0], p.source[1]];
         p = p.full_frame();
         p.tile = [80, 112, 0, 11];
         p.area = [0, 0, 80, 112];
@@ -304,6 +308,7 @@ fn column_conditioning_matches_native_blocks_borders_gain_and_clamps() {
     for gain in [0., 1., 1.3] {
         let mut p = parameters();
         p.source = [80, 112, 1, 1];
+        p.input_bounds = [0, 0, p.source[0], p.source[1]];
         p = p.full_frame();
         p.tile = [80, 112, 0, 11];
         p.area = [0, 0, 80, 112];
@@ -497,6 +502,7 @@ fn processing_tile_projection_matches_reference_overlap_ramps() {
     let gpu = Gpu::new().unwrap();
     let mut p = parameters();
     p.source = [32, 24, 2, 2];
+    p.input_bounds = [0, 0, p.source[0], p.source[1]];
     p = p.full_frame();
     p.tile = [32, 28, 8, 11];
     let mut values = Vec::new();
@@ -529,6 +535,7 @@ fn compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams() {
     let gpu = Gpu::new().unwrap();
     let mut p = parameters();
     p.source = [256, 256, 4, 4];
+    p.input_bounds = [0, 0, p.source[0], p.source[1]];
     p.tile = [192, 192, 64, 11];
     p.area = [0, 0, 256, 256];
     p.column_area = [0, 8, 256, 248];
@@ -649,6 +656,7 @@ fn edge_map_covers_recursive_mean_outer_column() {
     let mut p = parameters();
     let (width, height) = (32u32, 720u32);
     p.source = [width, height, 1, 1];
+    p.input_bounds = [0, 0, p.source[0], p.source[1]];
     p.tile = [width, height, 0, 11];
     p.area = [0, 0, width, height];
     p.region = p.area;
@@ -713,4 +721,62 @@ fn edge_map_covers_recursive_mean_outer_column() {
     assert!(actual
         .iter()
         .all(|v| v.is_finite() && (*v - 20.).abs() < 0.001));
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn compact_sensor_storage_preserves_tile_sampling_and_column_correction() {
+    let gpu = Gpu::new().unwrap();
+    let mut p = parameters();
+    p.source = [512, 384, 4, 4];
+    p.tile = [144, 112, 8, 11];
+    p.area = [0, 0, 512, 384];
+    p.region = p.area;
+    p.input_bounds = p.area;
+    p.window = [0, 0, 4, 4];
+    p.column_area = [0, 4, 512, 380];
+    let samples: Vec<f32> = (0..512 * 384 * 3)
+        .map(|i| 1000. + (i % 71) as f32)
+        .collect();
+    let whole = gpu.upload("Whole sensor storage", &samples).unwrap();
+    for region in [
+        [0, 0, 47, 61],
+        [133, 107, 181, 157],
+        [479, 347, 512, 384],
+        [251, 185, 262, 198],
+    ] {
+        let params = p.for_region(region).unwrap();
+        let bounds = params.required_sensor_bounds();
+        let [l, t, r, b] = bounds;
+        let mut compact = Vec::new();
+        for y in t..b {
+            compact.extend_from_slice(
+                &samples[((y * 512 + l) * 3) as usize..((y * 512 + r) * 3) as usize],
+            );
+        }
+        let local = gpu.upload("Compact sensor storage", &compact).unwrap();
+        let compact_params = params.with_input_bounds(bounds).unwrap();
+        for filter in [false, true] {
+            let apply = |input, params| {
+                if filter {
+                    column(&gpu, input, params, &mut Profile::default())
+                } else {
+                    raw_tiles(&gpu, input, params, &mut Profile::default())
+                }
+            };
+            let a = apply(&whole, params).unwrap();
+            let b = apply(&local, compact_params).unwrap();
+            assert_eq!(
+                gpu.readback(&a).unwrap(),
+                gpu.readback(&b).unwrap(),
+                "region {region:?}, filter {filter}"
+            );
+        }
+        assert!(compact_params.validate_input(local.size() + 12).is_err());
+        assert!(params.with_input_bounds([l + 1, t, r, b]).is_err());
+        let mut global = compact_params;
+        global.reduction[0] = 0.5;
+        assert_eq!(global.required_sensor_bounds(), p.area);
+        assert_eq!(global.full_frame().input_bounds, p.area);
+    }
 }

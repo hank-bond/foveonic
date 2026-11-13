@@ -299,6 +299,28 @@ struct Recipe {
     view: Option<crate::image::View>,
     inputs: Vec<u64>,
 }
+impl Recipe {
+    fn for_output(graph: &Graph, id: usize, parents: &[Arc<Version>]) -> Self {
+        let output = &graph.outputs[id];
+        Self {
+            operation: std::mem::discriminant(&graph.nodes[output.producer].operation),
+            parameters: graph.nodes[output.producer].operation.key(output.name),
+            data: output.data,
+            role: output.name,
+            view: output.view,
+            inputs: parents.iter().map(|parent| parent.generation).collect(),
+        }
+    }
+    fn bucket(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.operation.hash(&mut hasher);
+        std::mem::discriminant(&self.data).hash(&mut hasher);
+        self.role.hash(&mut hasher);
+        self.view.hash(&mut hasher);
+        self.inputs.hash(&mut hasher);
+        hasher.finish()
+    }
+}
 struct Version {
     recipe: Recipe,
     generation: u64,
@@ -661,13 +683,7 @@ impl Cache {
             || self.bytes() + value.buffer.size() <= Self::LIMIT
     }
     fn intern(&mut self, recipe: Recipe, parents: Vec<Arc<Version>>) -> Arc<Version> {
-        let mut hasher = DefaultHasher::new();
-        recipe.operation.hash(&mut hasher);
-        std::mem::discriminant(&recipe.data).hash(&mut hasher);
-        recipe.role.hash(&mut hasher);
-        recipe.view.hash(&mut hasher);
-        recipe.inputs.hash(&mut hasher);
-        let bucket = self.identities.entry(hasher.finish()).or_default();
+        let bucket = self.identities.entry(recipe.bucket()).or_default();
         bucket.retain(|identity| identity.strong_count() != 0);
         if let Some(existing) = bucket
             .iter()
@@ -694,14 +710,7 @@ impl Cache {
                 .iter()
                 .map(|input| self.working.versions[&graph.outputs[*input].cache_name()].clone())
                 .collect();
-            let recipe = Recipe {
-                operation: std::mem::discriminant(&graph.nodes[output.producer].operation),
-                parameters: graph.nodes[output.producer].operation.key(output.name),
-                data: output.data,
-                role: output.name,
-                view: output.view,
-                inputs: parents.iter().map(|parent| parent.generation).collect(),
-            };
+            let recipe = Recipe::for_output(graph, id, &parents);
             dirty[id] = previous
                 .get(&output.cache_name())
                 .is_none_or(|old| old.recipe != recipe);
@@ -710,6 +719,32 @@ impl Cache {
         }
         dirty
     }
+    /// Probe an exact retained output without changing planning state or use order.
+    fn contains_output(&self, graph: &Graph, target: usize) -> bool {
+        let mut versions: Vec<Option<Arc<Version>>> = Vec::with_capacity(target + 1);
+        for (id, output) in graph.outputs[..=target].iter().enumerate() {
+            let parents: Option<Vec<_>> = output
+                .dependencies
+                .iter()
+                .map(|&input| versions[input].clone())
+                .collect();
+            let version = parents.and_then(|parents| {
+                let recipe = Recipe::for_output(graph, id, &parents);
+                self.identities
+                    .get(&recipe.bucket())?
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .find(|known| known.recipe == recipe)
+            });
+            versions.push(version);
+        }
+        versions[target].as_ref().is_some_and(|version| {
+            self.entries
+                .iter()
+                .any(|entry| entry.version.generation == version.generation)
+        })
+    }
+
     /// Build frontiers from exact changed dependencies. Retained results from another
     /// root, scale or scope may satisfy them only when their complete identity matches.
     fn plan(&mut self, graph: &Graph, targets: &[usize]) -> crate::source::Result<Vec<usize>> {
@@ -1223,6 +1258,11 @@ impl Execution<'_> {
         }
         Ok(())
     }
+    pub fn can_reuse(&self, graph: &Graph, output: usize) -> bool {
+        self.cache
+            .as_ref()
+            .is_some_and(|cache| cache.contains_output(graph, output))
+    }
     pub fn seed(&self, name: &str) -> Option<Value> {
         self.cache.as_ref()?.get(name)
     }
@@ -1248,6 +1288,88 @@ mod tests {
         assert!(first.diagnostic_id.get().is_none());
         assert_ne!(first.diagnostic_id(), id);
     }
+    #[test]
+    #[ignore = "requires a working GPU adapter"]
+    fn exact_output_probe_preserves_planning_and_rejects_missing_or_changed_ancestry() {
+        let gpu = crate::gpu::Gpu::new().unwrap();
+        let (graph, root) = graph_for_detail(1.);
+        let mut cache = Cache::default();
+        cache.bind_source(&crate::source::SourceOrigin::default());
+        cache.plan(&graph, &[root]).unwrap();
+        assert!(
+            !cache.contains_output(&graph, root),
+            "identity alone is not a cached result"
+        );
+        let name = graph.outputs[root].cache_name();
+        cache.entries.push(Entry {
+            version: cache.working.versions[&name].clone(),
+            value: Value {
+                working_scale: crate::render::Scale::NATIVE,
+                view: None,
+                view_baked: false,
+                buffer: gpu.upload("Cache probe fixture", &[1_f32; 3]).unwrap(),
+                description: None,
+            },
+            pinned: false,
+            used: 17,
+        });
+        let state = (
+            cache.frame,
+            cache.counter,
+            cache.entries[0].used,
+            cache.entries[0].value.buffer.readers(),
+        );
+        let versions: Vec<_> = cache
+            .working
+            .versions
+            .iter()
+            .map(|(k, v)| (k.clone(), v.generation))
+            .collect();
+        assert!(cache.contains_output(&graph, root));
+        assert_eq!(
+            state,
+            (
+                cache.frame,
+                cache.counter,
+                cache.entries[0].used,
+                cache.entries[0].value.buffer.readers()
+            )
+        );
+        for (name, generation) in versions {
+            assert_eq!(cache.working.versions[&name].generation, generation);
+        }
+        let (changed, changed_root) = graph_for_detail(0.5);
+        assert!(!cache.contains_output(&changed, changed_root));
+        cache.plan(&changed, &[changed_root]).unwrap();
+        assert!(
+            cache.contains_output(&graph, root),
+            "historical entries remain discoverable"
+        );
+        let (mut changed_view, view_root) = graph_for_detail(1.);
+        assert!(cache.contains_output(&changed_view, view_root));
+        changed_view.set_view(
+            view_root,
+            crate::image::View {
+                crop: [1, 0, 64, 64],
+                rotation: 0,
+                extent: [63, 64],
+            },
+        );
+        assert!(!cache.contains_output(&changed_view, view_root));
+        let (mut changed_parent, root) = graph_for_detail(1.);
+        let crate::graph::Operation::NoiseBase(ref mut params) = changed_parent.nodes[1].operation
+        else {
+            panic!("base node")
+        };
+        params.filter[0] += 0.1;
+        assert!(!cache.contains_output(&changed_parent, root));
+        cache.bind_source(&crate::source::SourceOrigin::default());
+        assert!(
+            !cache.contains_output(&graph, root),
+            "another source cannot reuse the entry"
+        );
+    }
+
     #[test]
     fn framing_metadata_is_part_of_the_exact_output_identity() {
         let mut cache = Cache::default();

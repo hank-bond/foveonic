@@ -297,6 +297,92 @@ pub enum Operation {
 }
 
 impl Operation {
+    /// Each operation owns the coordinate mapping and support of its inputs.
+    /// Unconverted operations conservatively require their complete input domain.
+    pub(crate) fn input_demand(
+        &self,
+        output: &str,
+        demand: super::Demand,
+        _slot: usize,
+    ) -> crate::source::Result<super::Demand> {
+        use super::Demand;
+        match self {
+            Self::NoiseBase(p) if !p.uses_global_context() => {
+                Ok(Demand::Region(p.required_sensor_bounds()))
+            }
+            Self::Column { params, .. } => Ok(Demand::Region(params.required_sensor_bounds())),
+            Self::Banding(p) if output == "banding.layers" => match demand {
+                Demand::Region(bounds) => Ok(Demand::Region(p.required_input_bounds(bounds)?)),
+                other => Ok(other),
+            },
+            _ => Ok(Demand::Whole),
+        }
+    }
+
+    /// A candidate changes numerical storage, not the requested semantic domain.
+    pub(crate) fn regional_output(
+        &self,
+        demands: &[(&str, super::Demand)],
+    ) -> crate::source::Result<Option<Self>> {
+        use super::Demand;
+        match self {
+            Self::Banding(p) => {
+                if demands
+                    .iter()
+                    .any(|(name, demand)| *name == "banding.rows" && *demand != Demand::Unused)
+                {
+                    return Ok(None);
+                }
+                if let Some((_, Demand::Region(bounds))) =
+                    demands.iter().find(|(name, _)| *name == "banding.layers")
+                {
+                    if *bounds != p.output_bounds() {
+                        return Ok(Some(Self::Banding(p.clone().for_region(*bounds)?)));
+                    }
+                }
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// A compact row correction cannot feed a later Whole correction. Preserve
+    /// its unchanged broad prerequisite instead of retaining both large layers.
+    pub(crate) fn regional_restart_input(&self) -> Option<usize> {
+        match self {
+            Self::Banding(p) if p.compact_bounds().is_some() => Some(0),
+            _ => None,
+        }
+    }
+
+    /// Only compact producers need an addressing handoff. Whole storage keeps
+    /// the existing operation parameters and requires no extra conversion.
+    pub(crate) fn output_storage(&self, output: &str) -> Option<[u32; 4]> {
+        match self {
+            Self::Banding(p) if output == "banding.layers" => p.compact_bounds(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn resolve_input_storage(
+        &mut self,
+        storage: &[Option<[u32; 4]>],
+    ) -> crate::source::Result<()> {
+        if let Some(bounds) = storage.first().copied().flatten() {
+            match self {
+                Self::NoiseBase(p) if !p.uses_global_context() => {
+                    *p = p.with_input_bounds(bounds)?
+                }
+                Self::Column { params, .. } => *params = params.with_input_bounds(bounds)?,
+                _ => return Err("operation requires whole input storage".into()),
+            }
+        }
+        if storage.iter().skip(1).any(Option::is_some) {
+            return Err("operation requires whole auxiliary input storage".into());
+        }
+        Ok(())
+    }
+
     /// Let each processing stage decide which settings affect its result.
     /// Track inputs separately for each output so side outputs can be reused safely.
     pub(crate) fn key(&self, output: &str) -> crate::recipe::Key {

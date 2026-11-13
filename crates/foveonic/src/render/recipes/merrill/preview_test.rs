@@ -468,7 +468,7 @@ fn regional_views_keep_native_crop_and_all_four_rotations() {
 
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
-fn regional_detail_matches_full_and_continues_without_repeating_sensor_corrections() {
+fn regional_detail_matches_full_and_continues_without_repeating_whole_sensor_inputs() {
     use crate::{
         inspection::Content,
         profile::{Mode, Profile},
@@ -605,7 +605,6 @@ fn regional_detail_matches_full_and_continues_without_repeating_sensor_correctio
                             | "submit repair"
                             | "submit highlight restoration"
                             | "submit despeckle"
-                            | "submit row banding correction"
                             | "prepare reduced whole-image noise context"
                     )),
                     "continuation repeated prerequisites: {:?}",

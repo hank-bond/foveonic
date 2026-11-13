@@ -17,5 +17,6 @@ Preserve named output identities and exact parameter keys during organizational 
 ### Source files
 
 - **[operation.rs](./operation.rs)** Defines supported operations, parameter keys, typed ports, and named side outputs.
+- **[regions.rs](./regions.rs)** Resolves output demands backward, then selects supported regional storage before cache planning.
 
 <!-- INDEX:END -->

@@ -106,13 +106,13 @@ fn compare_portable_tiger_methods_on_ordinary_quattro() {
             &mut execution,
         )
         .unwrap();
-        let built = experiment(built, normalization, recovery, adaptive);
+        let mut built = experiment(built, normalization, recovery, adaptive);
         let mut profile = Profile::new(Mode::Gpu);
         let artifacts = engine
             .collect_artifacts(
                 crate::render::recipes::RecipeInput::Original(&source),
                 &settings,
-                &built.graph,
+                &mut built.graph,
                 built.final_id,
                 &["final"],
                 &mut profile,

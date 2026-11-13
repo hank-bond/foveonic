@@ -27,6 +27,16 @@ implementation: incomplete
 
 The engine constructs and runs both output recipes using shared operations. It rejects an unsupported data-space connection. Selecting a supported algorithm or changing its settings selects the corresponding processing behavior.
 
+## Regional demand
+
+Each converted operation **must** declare the input region needed for its requested output region. Coordinate conversion, filter support, alignment and global measurements belong to the operation. The graph **must** propagate requirements backward and combine all consumers' requirements before execution. The initial representation is Unused, one bounding rectangle, or the whole output domain. Combining rectangles **may** include samples between them.
+
+Demand describes required samples independently of storage. A whole table does not imply a whole photographic image. Operations without a regional contract **must** conservatively request their complete input domain. Shared global analysis **must** retain its established photographic domain independently of viewport position.
+
+The resolver **must** select concrete execution geometry before normal numerical cache planning. A valid retained Whole buffer **may** satisfy regional demand. A compact buffer **must** retain its physical origin and stride at its consumers, and its numerical identity **must** distinguish incompatible coverage. Resolving requirements **must not** load sensor samples, allocate GPU resources or run image processing.
+
+Native sectional results **should** match samples from the same region of a Whole render exactly when arithmetic and sample order are preserved. Any numerical tolerance **must** be justified and measured separately from performance. The [sectional rendering plan](../../plans/sectional-rendering.md) tracks the initial Banding and reconstruction prototype and remaining unconverted operations.
+
 ## Implementation latitude
 
 Execution may begin with straightforward dependency-order scheduling. Add caching and scheduling machinery when concrete responsiveness needs justify it.

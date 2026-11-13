@@ -25,6 +25,7 @@ fn params() -> Parameters {
         window: [0, 0, 1, 1],
         region: [0, 0, 64, 64],
         sampling: [1, 32, 0, 0],
+        input_bounds: [0, 0, 64, 64],
     }
 }
 #[test]

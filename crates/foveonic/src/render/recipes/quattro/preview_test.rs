@@ -162,7 +162,7 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
         settings.working_scale = quality;
         let mut profile = Profile::default();
         let mut execution = Execution::default();
-        let recipe = build(
+        let mut recipe = build(
             &engine,
             super::super::RecipeInput::Original(&source),
             &settings,
@@ -202,7 +202,7 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
             .collect_artifacts(
                 crate::render::recipes::RecipeInput::Original(&source),
                 &settings,
-                &recipe.graph,
+                &mut recipe.graph,
                 recipe.final_id,
                 &["phase-detection.blue", "extraction.blue"],
                 &mut profile,

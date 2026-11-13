@@ -299,6 +299,7 @@ fn parallel_patch_statistics_keep_bright_dark_and_correlated_rejection_decisions
                     area: [0; 4],
                     values: [0.; 4],
                     gains: [1.; 4],
+                    output: [0, 0, side, side],
                 });
                 let batch = gpu.uniform(&[0_u32, 1, side, 6]);
                 let mut accepted = gpu.storage("Patch rejection result", 4).unwrap();
@@ -322,6 +323,102 @@ fn parallel_patch_statistics_keep_bright_dark_and_correlated_rejection_decisions
                     expected,
                     "side={side} level={level} correlation={correlation}"
                 );
+            }
+        }
+    }
+}
+
+#[test]
+fn regional_patch_selection_keeps_physical_phase_and_rejects_invalid_storage() {
+    let description = describe(&metadata(1600, 640), [4.6, 2.2, 1.6]).unwrap();
+    let whole = description.materialize().unwrap();
+    let region = [347, 211, 903, 329];
+    let selected = description.for_region(region).unwrap();
+    assert_ne!(
+        selected.key(),
+        describe(&metadata(1600, 640), [4.6, 2.2, 1.6])
+            .unwrap()
+            .key()
+    );
+    let local = selected.materialize().unwrap();
+    assert!(local.patches.len() < whole.patches.len());
+    for patch in local.patches.iter() {
+        assert!(whole.patches.iter().any(|p| p.geometry == patch.geometry));
+        let [_, y, side, _] = patch.geometry;
+        assert!(y < region[3] && y + side > region[1]);
+    }
+    for bad in [[1, 1, 1, 5], [0, 0, 1601, 640], [0, 0, 5, 641]] {
+        assert!(describe(&metadata(1600, 640), [4.6, 2.2, 1.6])
+            .unwrap()
+            .for_region(bad)
+            .is_err());
+    }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn regional_row_correction_matches_whole_at_edges_banks_and_reduced_grids() {
+    use crate::render::{Scale, WorkingGrid};
+    let gpu = Gpu::new().unwrap();
+    let metadata = metadata(1600, 640);
+    for divisor in [1, 2, 8] {
+        let grid = WorkingGrid::new([1600, 640], Scale::new(divisor).unwrap(), 8)
+            .unwrap()
+            .with_halo(16)
+            .unwrap();
+        let [w, h] = grid.extent;
+        let values: Vec<_> = (0..w * h * 3)
+            .map(|i| {
+                let y = i / (w * 3);
+                800. + (i % 3) as f32 * 100. + (i % 53) as f32 / 64. + ((y * 3) % 7) as f32 / 16.
+            })
+            .collect();
+        let input = gpu.upload("Regional row input", &values).unwrap();
+        let description = describe(&metadata, [4.6, 2.2, 1.6])
+            .unwrap()
+            .on_grid(Some(grid));
+        let whole = apply(
+            &gpu,
+            &input,
+            &description.materialize().unwrap(),
+            true,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let whole_pixels = gpu.readback(whole.image.as_ref().unwrap()).unwrap();
+        let whole_rows = gpu.readback(&whole.rows).unwrap();
+        for bounds in [
+            [0, 0, w / 3, h / 3],
+            [w / 3, h / 3, w * 2 / 3, h * 2 / 3],
+            [w * 2 / 3, h * 2 / 3, w, h],
+            [0, 0, w, h],
+        ] {
+            let prepared = describe(&metadata, [4.6, 2.2, 1.6])
+                .unwrap()
+                .on_grid(Some(grid))
+                .for_region(bounds)
+                .unwrap()
+                .materialize()
+                .unwrap();
+            let local = apply(&gpu, &input, &prepared, true, &mut Profile::default()).unwrap();
+            let pixels = gpu.readback(local.image.as_ref().unwrap()).unwrap();
+            let rows = gpu.readback(&local.rows).unwrap();
+            let [l, t, r, b] = bounds;
+            assert_eq!(pixels.len(), ((r - l) * (b - t) * 12) as usize);
+            for y in t..b {
+                let start = ((y * w + l) * 12) as usize;
+                let local_start = ((y - t) * (r - l) * 12) as usize;
+                assert_eq!(
+                    &pixels[local_start..local_start + ((r - l) * 12) as usize],
+                    &whole_pixels[start..start + ((r - l) * 12) as usize],
+                    "scale {divisor}, bounds {bounds:?}, row {y}"
+                );
+                if y + 1 < h {
+                    assert_eq!(
+                        &rows[((y + 1) * 16) as usize..((y + 2) * 16) as usize],
+                        &whole_rows[((y + 1) * 16) as usize..((y + 2) * 16) as usize]
+                    );
+                }
             }
         }
     }

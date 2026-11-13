@@ -17,6 +17,7 @@ pub(crate) struct Params {
     pub area: [u32; 4],
     pub values: [f32; 4],
     pub gains: [f32; 4],
+    pub output: [u32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -35,6 +36,7 @@ pub(crate) struct Prepared {
 }
 
 /// Cheap graph identity. Fitting tables are materialized only for executed work.
+#[derive(Clone)]
 pub(crate) struct Description {
     params: Params,
     native_height: u32,
@@ -50,10 +52,38 @@ impl Description {
             self.origin[1],
         ]))
     }
+    /// Preserve physical patch-bank phase while restricting corrected output storage.
+    pub(crate) fn for_region(mut self, bounds: [u32; 4]) -> Result<Self> {
+        if (0..2).any(|a| bounds[a] >= bounds[a + 2] || bounds[a + 2] > self.params.source[a]) {
+            return Err("invalid row-correction output bounds".into());
+        }
+        self.params.output = bounds;
+        Ok(self)
+    }
+    /// Patch evidence spans the active width. Keep a conservative vertical halo
+    /// for the largest complete patch contributing to any requested row.
+    pub(crate) fn required_input_bounds(&self, bounds: [u32; 4]) -> Result<[u32; 4]> {
+        self.clone().for_region(bounds)?;
+        let side = (151_u32.div_ceil(self.scale.divisor()) | 1).max(3);
+        Ok([
+            0,
+            bounds[1].saturating_sub(side),
+            self.params.source[0],
+            bounds[3].saturating_add(side).min(self.params.source[1]),
+        ])
+    }
+    pub(crate) fn compact_bounds(&self) -> Option<[u32; 4]> {
+        (self.params.output != [0, 0, self.params.source[0], self.params.source[1]])
+            .then_some(self.params.output)
+    }
+    pub(crate) fn output_bounds(&self) -> [u32; 4] {
+        self.params.output
+    }
     pub(crate) fn on_grid(mut self, grid: Option<crate::render::WorkingGrid>) -> Self {
         if let Some(grid) = grid {
             self.params.source[..2].copy_from_slice(&grid.extent);
             self.params.area = grid.bounds(self.params.area);
+            self.params.output = [0, 0, grid.extent[0], grid.extent[1]];
             self.scale = grid.scale;
             self.origin = grid.origin;
         }
@@ -164,6 +194,7 @@ pub(crate) fn describe(metadata: &Metadata, calibration_gains: [f32; 3]) -> Resu
             0.,
             0.,
         ],
+        output: [0, 0, metadata.width as u32, metadata.height as u32],
         gains: [
             calibration_gains[0],
             calibration_gains[1],
@@ -231,6 +262,12 @@ fn materialize(description: &Description) -> Result<Prepared> {
                 for column in 0..columns {
                     let origin_y = base + row * side;
                     let origin_x = area[0] + column * side;
+                    // Output y consumes row y+1. Each patch contributes rows
+                    // origin_y+1 through origin_y+side, across the full active width.
+                    // Keep complete patches so fitting, rejection and ordered sums stay exact.
+                    if origin_y >= params.output[3] || origin_y + side <= params.output[1] {
+                        continue;
+                    }
                     patches.push(Patch {
                         geometry: [origin_x, origin_y, side, n],
                         storage: [table, samples, contributions, 0],
@@ -285,14 +322,18 @@ pub(crate) fn apply(
         "Applied row biases and sample counts",
         u64::from(p.params.source[1]) * 16,
     )?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 3 + 3 * p.batches.len() as u32);
     if p.patches.is_empty() {
-        let image = if want_image {
+        let image = if !want_image {
+            None
+        } else if p.params.output == [0, 0, p.params.source[0], p.params.source[1]] {
             let mut output = gpu.storage("Unchanged row-correction layers", input.size())?;
             gpu.copy(input, output.write(), input.size());
             Some(output)
         } else {
-            None
+            Some(apply_rows(gpu, input, &offsets, &p.params, &mut trace)?)
         };
+        gpu.finish_trace(&trace, profile)?;
         return Ok(Output {
             image,
             rows: offsets,
@@ -322,7 +363,6 @@ pub(crate) fn apply(
     )?;
     let ranges = gpu.upload("Row contribution ranges", &p.rows)?;
     let links = gpu.upload("Stable row contribution links", &p.links)?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 3 + 3 * p.batches.len() as u32);
     gpu.dispatch(
         Kernel::BandingFit,
         &mut [
@@ -390,22 +430,7 @@ pub(crate) fn apply(
         &mut trace,
     );
     let image = if want_image {
-        let mut output = gpu.storage("Row conditioned layers", input.size())?;
-        gpu.dispatch(
-            Kernel::BandingApply,
-            &mut [
-                (0, Read(input)),
-                (2, Read(&uniform)),
-                (11, Read(&offsets)),
-                (12, Write(output.write())),
-            ],
-            [
-                p.params.source[0].div_ceil(8),
-                p.params.source[1].div_ceil(8),
-            ],
-            &mut trace,
-        );
-        Some(output)
+        Some(apply_rows(gpu, input, &offsets, &p.params, &mut trace)?)
     } else {
         None
     };
@@ -414,6 +439,37 @@ pub(crate) fn apply(
         image,
         rows: offsets,
     })
+}
+
+fn apply_rows(
+    gpu: &crate::gpu::Gpu,
+    input: &crate::gpu::ReadGuard,
+    offsets: &crate::gpu::ReadGuard,
+    params: &Params,
+    trace: &mut crate::gpu::GpuTrace,
+) -> Result<crate::gpu::ReadGuard> {
+    use crate::gpu::Kernel;
+    let extent = [
+        params.output[2] - params.output[0],
+        params.output[3] - params.output[1],
+    ];
+    let mut output = gpu.storage(
+        "Row conditioned layers",
+        u64::from(extent[0]) * u64::from(extent[1]) * 12,
+    )?;
+    let uniform = gpu.uniform(params);
+    gpu.dispatch(
+        Kernel::BandingApply,
+        &mut [
+            (0, Read(input)),
+            (2, Read(&uniform)),
+            (11, Read(offsets)),
+            (12, Write(output.write())),
+        ],
+        extent.map(|v| v.div_ceil(8)),
+        trace,
+    );
+    Ok(output)
 }
 #[cfg(test)]
 #[path = "banding_test.rs"]

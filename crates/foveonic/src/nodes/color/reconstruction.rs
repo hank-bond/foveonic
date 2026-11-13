@@ -83,6 +83,7 @@ pub(crate) fn raw_tiles(
     p: Parameters,
     profile: &mut Profile,
 ) -> Result<crate::gpu::ReadGuard> {
+    p.validate_input(input.size())?;
     let mut raw = gpu.storage("Noise input tiles", p.atlas_pixels() * 12)?;
     let uniform = gpu.uniform(&p);
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
@@ -469,6 +470,7 @@ pub(crate) fn column(
     params: Parameters,
     profile: &mut Profile,
 ) -> Result<crate::gpu::ReadGuard> {
+    params.validate_input(input.size())?;
     let n = params.atlas_pixels();
     let mut raw = gpu.storage("Immutable column input tiles", n * 12)?;
     let mut smoothed = gpu.storage("Column directional workspace", n * 12)?;

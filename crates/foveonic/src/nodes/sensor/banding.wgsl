@@ -1,7 +1,7 @@
 // Native transposed smooth-surface fits, correlation rejection, row+1
 // contribution traversal and WB-limited correction. Adapted with permission
 // from Foveonic banding/patches.rs at e47af35. All image estimation is on GPU.
-struct Params{source:vec4<u32>,area:vec4<u32>,values:vec4<f32>,gains:vec4<f32>};
+struct Params{source:vec4<u32>,area:vec4<u32>,values:vec4<f32>,gains:vec4<f32>,output_bounds:vec4<u32>};
 struct Patch{geometry:vec4<u32>,storage:vec4<u32>};
 struct Batch{value:vec4<u32>};
 // Largest geometric polynomial basis. Match host coefficient allocation.
@@ -119,10 +119,11 @@ fn reduce_rows(@builtin(global_invocation_id)id:vec3<u32>){
 }
 @compute @workgroup_size(8,8)
 fn apply(@builtin(global_invocation_id)id:vec3<u32>){
-    let xy=id.xy;if xy.x>=params.source.x || xy.y>=params.source.y{return;}let p=xy.y*params.source.x+xy.x;var bias=vec3(0.0);
+    let extent=params.output_bounds.zw-params.output_bounds.xy;
+    if any(id.xy>=extent){return;}let xy=id.xy+params.output_bounds.xy;let p=xy.y*params.source.x+xy.x;let q=id.y*extent.x+id.x;var bias=vec3(0.0);
     // These bounds are asymmetric in the native algorithm. Row y reads y+1,
     // and columns stop at active width rather than right. Making them look like
     // ordinary crop bounds would change which rows receive correction.
     if xy.y<params.area.w-params.area.y && xy.x>=params.area.x && xy.x<params.area.z-params.area.x{bias=offsets[xy.y+1u].xyz;}
-    output[p*3u]=pixels[p*3u]-bias.x;output[p*3u+1u]=pixels[p*3u+1u]-bias.y;output[p*3u+2u]=pixels[p*3u+2u]-bias.z;
+    output[q*3u]=pixels[p*3u]-bias.x;output[q*3u+1u]=pixels[p*3u+1u]-bias.y;output[q*3u+2u]=pixels[p*3u+2u]-bias.z;
 }

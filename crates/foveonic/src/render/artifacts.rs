@@ -15,7 +15,7 @@ impl Engine {
         &self,
         source: RecipeInput<'_>,
         settings: &Settings,
-        graph: &Graph,
+        graph: &mut Graph,
         final_id: usize,
         names: &[&str],
         profile: &mut Profile,
@@ -58,6 +58,13 @@ impl Engine {
                 roots.push(id);
             }
         }
+        profile.measure("resolve graph regions", || {
+            let demands: Vec<_> = roots
+                .iter()
+                .map(|&id| (id, crate::graph::Demand::Whole))
+                .collect();
+            graph.resolve_regions(&demands, |graph, id| execution.can_reuse(graph, id))
+        })?;
         profile.measure("plan interactive checkpoints", || {
             execution.plan(graph, &roots)
         })?;

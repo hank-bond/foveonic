@@ -479,6 +479,10 @@ impl Engine {
                 Operation::ImageRegion { prepared, .. } => prepared.extent(),
                 Operation::ProjectColorTiles { params, .. } => params.output_extent(),
                 Operation::NoiseContext(p) => reconstruction::context_extent(*p),
+                Operation::Banding(p) => {
+                    let [l, t, r, b] = p.output_bounds();
+                    [r - l, b - t]
+                }
                 Operation::PackedLab(p) => p.extent(),
                 Operation::CodeCrop(p) => p.extent(),
                 Operation::WaveletContrast(p) => p.extent(),
@@ -511,6 +515,11 @@ impl Engine {
                 },
             );
             let view = match &node.operation {
+                Operation::Banding(p)
+                    if p.output_bounds() != [0, 0, inherited[0], inherited[1]] =>
+                {
+                    None
+                }
                 Operation::HighlightEvidence(prepared) => {
                     inherited_view.map(|view| prepared.grid().map_view(view))
                 }

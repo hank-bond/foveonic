@@ -42,8 +42,51 @@ pub(crate) struct Parameters {
     pub window: [u32; 4],   // First native tile column/row and compact atlas columns/rows.
     pub region: [u32; 4],   // Half-open physical rectangle projected from the compact atlas.
     pub sampling: [u32; 4], // Native pixels per sample, adaptive intensity block span, reserved.
+    pub input_bounds: [u32; 4], // Physical sensor rectangle stored in the input buffer.
 }
 impl Parameters {
+    /// Sensor samples read by the selected native tiles, including their halos.
+    /// Global-context filtering reads the complete sensor before selecting tiles.
+    pub fn required_sensor_bounds(self) -> [u32; 4] {
+        if self.uses_global_context() {
+            return [0, 0, self.source[0], self.source[1]];
+        }
+        std::array::from_fn(|i| {
+            let axis = i % 2;
+            let core = self.source[axis] / self.source[axis + 2];
+            if i < 2 {
+                (self.window[axis] * core).saturating_sub(self.tile[2])
+            } else {
+                ((self.window[axis] + self.window[axis + 2] - 1) * core + self.tile[axis])
+                    .saturating_sub(self.tile[2])
+                    .min(self.source[axis])
+            }
+        })
+    }
+
+    pub fn with_input_bounds(mut self, bounds: [u32; 4]) -> Result<Self> {
+        let required = self.required_sensor_bounds();
+        if (0..2).any(|a| {
+            bounds[a] >= bounds[a + 2]
+                || bounds[a + 2] > self.source[a]
+                || bounds[a] > required[a]
+                || bounds[a + 2] < required[a + 2]
+        }) {
+            return Err("sensor input storage does not cover reconstruction support".into());
+        }
+        self.input_bounds = bounds;
+        Ok(self)
+    }
+
+    pub fn validate_input(self, bytes: u64) -> Result<()> {
+        self.with_input_bounds(self.input_bounds)?;
+        let [l, t, r, b] = self.input_bounds;
+        if u64::from(r - l) * u64::from(b - t) * 12 != bytes {
+            return Err("sensor input allocation does not match its declared storage".into());
+        }
+        Ok(())
+    }
+
     pub fn atlas_extent(self) -> [u32; 2] {
         [self.tile[0], self.tile[1] * self.tile_count()]
     }
@@ -79,6 +122,7 @@ impl Parameters {
     pub fn full_frame(mut self) -> Self {
         self.window = [0, 0, self.source[2], self.source[3]];
         self.region = [0, 0, self.source[0], self.source[1]];
+        self.input_bounds = self.region;
         self
     }
     /// Keep native tile phases and include both contributors to eight-pixel seams.
@@ -134,6 +178,7 @@ impl Parameters {
             .with(&self.window);
         match stage {
             RecipeStage::Base => key
+                .with(&self.input_bounds)
                 .with(&self.tile[3])
                 .with(&self.area)
                 .with(&self.filter)
@@ -143,6 +188,7 @@ impl Parameters {
                 .with(&self.geometry)
                 .slice(&self.sampling[..2]),
             RecipeStage::Column => key
+                .with(&self.input_bounds)
                 .with(&self.area)
                 .with(&self.model)
                 .with(&self.column_area)
@@ -623,6 +669,7 @@ pub(crate) fn prepare(metadata: &Metadata, wb: &str, controls: Controls) -> Resu
         window: [0, 0, 4, 4],
         region: [0, 0, w, h],
         sampling: [1, 32, 0, 0],
+        input_bounds: [0, 0, w, h],
         column_area: [0; 4], // Prepared only when the column stage is required.
         column: [
             [0.625, 0.5, 0.375, 0.25, 0.125][controls.banding as usize]

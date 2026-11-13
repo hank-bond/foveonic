@@ -109,7 +109,7 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
         settings.preview_region = region;
         let mut profile = Profile::default();
         let mut execution = Execution::default();
-        let built = super::super::build_camera(
+        let mut built = super::super::build_camera(
             &engine,
             crate::render::recipes::RecipeInput::Original(&source),
             &settings,
@@ -122,7 +122,7 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
             .collect_artifacts(
                 crate::render::recipes::RecipeInput::Original(&source),
                 &settings,
-                &built.graph,
+                &mut built.graph,
                 built.final_id,
                 &["dehaze.analysis", "final"],
                 &mut profile,
@@ -1283,7 +1283,7 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                 settings.preview_region = region;
                 let mut profile = Profile::default();
                 let mut execution = Execution::default();
-                let built = super::super::build_camera(
+                let mut built = super::super::build_camera(
                     &engine,
                     crate::render::recipes::RecipeInput::Original(&source),
                     &settings,
@@ -1310,7 +1310,7 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                     .collect_artifacts(
                         crate::render::recipes::RecipeInput::Original(&source),
                         &settings,
-                        &built.graph,
+                        &mut built.graph,
                         built.final_id,
                         &[
                             "linear.edits-input",

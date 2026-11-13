@@ -86,6 +86,7 @@ impl Grid {
             params.tile[axis] = length / tiles + 2 * params.tile[2];
         }
         params.region = [0, 0, extent[0], extent[1]];
+        params.input_bounds = params.region;
         if let Err(error) = params.reduced_tile_extent() {
             return Err(format!(
                 "{error}: preview source {:?}, tile {:?}, scale {:?}",

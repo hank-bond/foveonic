@@ -20,6 +20,7 @@ fn parameters() -> Parameters {
         window: [0, 0, 1, 1],
         region: [0, 0, 128, 96],
         sampling: [1, 32, 0, 0],
+        input_bounds: [0, 0, 128, 96],
     }
 }
 fn controls() -> MerrillBandingControls {
@@ -336,6 +337,7 @@ fn reduced_bands_preserve_flat_fields_at_small_and_padded_extents() {
             .unwrap();
         let mut p = parameters();
         p.source[..2].copy_from_slice(&grid.extent);
+        p.input_bounds = [0, 0, grid.extent[0], grid.extent[1]];
         p.tile[2] = (64_u32.div_ceil(divisor) + 5).max(8).div_ceil(8) * 8;
         let halo = p.tile[2];
         p.tile[..2].copy_from_slice(&grid.extent.map(|v| v + 2 * halo));
@@ -472,6 +474,7 @@ fn row_and_column_estimators_transpose_without_blending_a_real_edge() {
     );
     let mut transposed = p;
     transposed.source = [96, 128, 1, 1];
+    transposed.input_bounds = [0, 0, transposed.source[0], transposed.source[1]];
     transposed.tile = [224, 256, 64, 11];
     transposed.area = [0, 0, 96, 128];
     transposed.column_area = [0, 0, 96, 128];
@@ -532,6 +535,7 @@ fn compact_regions_retain_native_tile_phase_and_reflection() {
     let gpu = Gpu::new().unwrap();
     let mut p = parameters();
     p.source = [256, 192, 2, 2];
+    p.input_bounds = [0, 0, p.source[0], p.source[1]];
     p.window = [0, 0, 2, 2];
     p.area = [0, 0, 256, 192];
     p.region = p.area;

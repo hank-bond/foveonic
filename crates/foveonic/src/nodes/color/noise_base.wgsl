@@ -23,7 +23,8 @@ fn tile_input(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     let xy = full_position(p, params);
-    var value = rgb(xy.y * params.source.x + xy.x);
+    let local = xy - params.input_bounds.xy;
+    var value = rgb(local.y * (params.input_bounds.z - params.input_bounds.x) + local.x);
     if any(xy < params.area.xy) || any(xy >= params.area.zw) { value = vec3(1000.); }
     put(tile_pixel(p, params), value);
 }
