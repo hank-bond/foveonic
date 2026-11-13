@@ -9,7 +9,7 @@ pub(super) struct SourceLoading {
     pub model: ExposureJourney,
     stage: usize,
     hold: Option<crate::rendering::worker::LoadHold>,
-    revision: u64,
+    previous_revision: u64,
     events: Vec<serde_json::Value>,
 }
 
@@ -19,7 +19,7 @@ impl SourceLoading {
             model: ExposureJourney::new(exposures),
             stage: 0,
             hold: None,
-            revision: 0,
+            previous_revision: 0,
             events: Vec::new(),
         }
     }
@@ -60,8 +60,9 @@ impl SourceLoading {
                 }
                 self.hold = Some(app.worker.hold_source(paths[0].clone()));
                 app.revision += 1;
-                // A native request needs source data after the initial source-free
-                // Thumb renders. B keeps its reduced session and active controls.
+                // Native Camera demand isolates this diagnostic source request
+                // from ordinary Current snapshots. This is not a Before UI test.
+                // B keeps its reduced session and active controls.
                 app.worker.submit(Request {
                     path: paths[0].clone(),
                     revision: app.revision,
@@ -70,7 +71,7 @@ impl SourceLoading {
                         .settings(&paths[0])
                         .ok_or("missing photo A recipe")?
                         .clone(),
-                    rendition: Rendition::Current,
+                    rendition: Rendition::Camera,
                     output: "final".into(),
                     comparison: false,
                     framing_preview: false,
@@ -103,10 +104,17 @@ impl SourceLoading {
                         "ready photo's Exposure control is unavailable during loading".into(),
                     );
                 }
+                self.previous_revision = app
+                    .frame
+                    .as_ref()
+                    .filter(|frame| frame.path == paths[1])
+                    .or_else(|| app.multi_edit_frame(&paths[1]))
+                    .ok_or("missing ready photo before edit")?
+                    .diagnostic_task
+                    .revision;
                 self.model.adjust_exposure(0.25);
                 apply_exposure(app, 0.25);
-                self.revision = app.revision;
-                self.events.push(serde_json::json!({"observation":"source_held","exposure_control_enabled":control.enabled,"edit_photo":1,"revision":self.revision}));
+                self.events.push(serde_json::json!({"observation":"source_held","exposure_control_enabled":control.enabled,"edit_photo":1,"previous_revision":self.previous_revision}));
             }
             3 => {
                 let frame = app
@@ -117,7 +125,7 @@ impl SourceLoading {
                 let Some(frame) = frame else {
                     return Ok(false);
                 };
-                if frame.diagnostic_task.revision < self.revision
+                if frame.diagnostic_task.revision <= self.previous_revision
                     || frame.requested.exposure != self.model.exposures()[1]
                     || !app.worker.is_settled_and_admitted(frame)
                 {

@@ -115,7 +115,7 @@ impl App {
         crate::viewport::clear(&self.render_state);
     }
     pub(crate) fn view_settings(&self) -> foveonic::render::Settings {
-        let mut settings = self
+        let settings = self
             .before
             .settings(
                 &self.settings,
@@ -123,8 +123,7 @@ impl App {
                 &self.preferences.editor.defaults,
             )
             .unwrap_or_else(|_| self.settings.clone());
-        settings.adaptive_tone_tuning = self.preferences.adaptive_tone_tuning;
-        settings
+        self.preferences.render_settings(&settings)
     }
     pub(crate) fn before_badge(&self, ui: &egui::Ui, rect: egui::Rect) {
         if self

@@ -466,9 +466,10 @@ impl App {
         frame: &worker::Frame,
         settings: &Settings,
     ) -> bool {
+        let settings = self.preferences.render_settings(settings);
         frame.path == path
             && frame.is_photographic()
-            && matching::same_authored_edits(&frame.requested, settings)
+            && matching::same_authored_edits(&frame.requested, &settings)
             && frame.calibration_signature.as_deref()
                 == self
                     .noise_calibration
@@ -600,6 +601,18 @@ impl App {
     fn submit(&mut self, export: Option<export::Export>) {
         if export.is_some() {
             self.exit_before();
+        }
+        if export.is_none()
+            && self.before.active == editor::Rendition::Current
+            && self.output == "final"
+            && !self.comparison.requested()
+            && !self.smart_refinement_active()
+        {
+            if let Some(path) = &self.selected {
+                self.multi_edit.invalidate_photo(path);
+            }
+            self.submit_photos();
+            return;
         }
         self.smart.reset();
         let request = if export.is_none() {
@@ -1750,7 +1763,7 @@ impl eframe::App for App {
                             .is_none_or(|origin| origin == frame.origin)
                         && self.worker.is_settled_and_admitted(frame)
                 });
-                if !self.multi_edit.multiple() && !retained_current {
+                if !retained_current {
                     self.submit(None);
                 }
             }
@@ -1888,6 +1901,7 @@ impl eframe::App for App {
         let actions_changed = self.dispatch_actions(ctx);
         let tuning_changed = previous_limits != self.preferences.adaptive_tone_tuning;
         if tuning_changed {
+            self.multi_edit.invalidate();
             self.detail = None;
             self.browser.invalidate_previews();
             self.previews.invalidate();
@@ -2028,11 +2042,10 @@ impl eframe::App for App {
             }
             submit_active = true;
         }
-        self.sync_render_demand();
-        let active_submitted = self.submit_overviews();
-        if submit_active && !active_submitted {
+        if submit_active {
             self.submit(None);
         }
+        self.submit_photos();
         if let Some(paths) = self.browser.take_prefetch_order(self.selected.as_deref()) {
             self.worker
                 .cache

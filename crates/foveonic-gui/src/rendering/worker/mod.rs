@@ -928,8 +928,14 @@ impl Worker {
     pub fn submit_at(&self, request: Request, queued_at: std::time::Instant) {
         self.runtime.submit(request, queued_at);
     }
-    pub fn set_overviews(&self, requests: Vec<Request>, retained: &[PathBuf]) {
-        self.runtime.overviews(requests, retained.to_vec());
+    pub fn set_overviews(
+        &self,
+        requests: Vec<Request>,
+        retained: &[PathBuf],
+        queued_at: std::time::Instant,
+    ) {
+        self.runtime
+            .overviews(requests, retained.to_vec(), queued_at);
     }
     pub fn retain_overviews(&self, paths: &[PathBuf], retained: &[PathBuf]) {
         self.runtime.retain(paths.to_vec(), retained.to_vec());
@@ -1257,7 +1263,8 @@ mod tests {
             if let Some(active) = requests.first() {
                 self.publish_view(active);
             }
-            self.worker.set_overviews(requests, retained);
+            self.worker
+                .set_overviews(requests, retained, std::time::Instant::now());
         }
     }
     pub(super) fn handle_result(

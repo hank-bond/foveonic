@@ -150,8 +150,8 @@ impl Handle {
     pub fn submit(&self, request: Request, queued_at: Instant) {
         self.send(Command::Submit(Box::new(request), queued_at), true);
     }
-    pub fn overviews(&self, requests: Vec<Request>, retained: Vec<PathBuf>) {
-        self.send(Command::Overviews(requests, retained, Instant::now()), true);
+    pub fn overviews(&self, requests: Vec<Request>, retained: Vec<PathBuf>, queued_at: Instant) {
+        self.send(Command::Overviews(requests, retained, queued_at), true);
     }
     pub fn retain(&self, paths: Vec<PathBuf>, retained: Vec<PathBuf>) {
         self.send(Command::Retain(paths, retained), true);

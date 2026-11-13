@@ -40,7 +40,7 @@ impl Rig {
     }
     fn requests(&self, requests: Vec<Request>) {
         self.handle.set_view(view(&requests));
-        self.handle.overviews(requests, vec![]);
+        self.handle.overviews(requests, vec![], Instant::now());
         self.applied();
     }
     fn applied(&self) {
@@ -121,6 +121,34 @@ fn result(task: &Task) -> Update {
         result: Err("test source failure".into()),
         exported: None,
     }))
+}
+
+#[test]
+fn inactive_photo_delivery_uses_workspace_processing_preferences() {
+    let rig = Rig::new();
+    let mut preferences = crate::preferences::Preferences::default();
+    preferences.adaptive_tone_tuning.natural.shadows = 0.4;
+    let mut inactive = request("b.x3f", 2, 0.);
+    let authored = inactive.settings.clone();
+    inactive.settings = preferences.render_settings(&authored);
+    rig.requests(vec![request("a.x3f", 1, 0.), inactive]);
+    let task = rig
+        .tasks()
+        .into_iter()
+        .find(|task| task.request.path == std::path::Path::new("b.x3f"))
+        .unwrap();
+    rig.results.send(result(&task)).unwrap();
+    let delivered = rig.receive();
+    let snapshot = view(&[request("a.x3f", 1, 0.), (*task.request).clone()]);
+    let context = snapshot.context(&delivered.path);
+    assert!(!super::super::delivery::recheck(&delivered, &context, Some(&authored)).current);
+    let effective = preferences.render_settings(&authored);
+    let update = super::super::delivery::recheck(&delivered, &context, Some(&effective));
+    assert!(update.current && update.update_photo);
+    assert_ne!(
+        authored.adaptive_tone_tuning,
+        effective.adaptive_tone_tuning
+    );
 }
 
 #[test]

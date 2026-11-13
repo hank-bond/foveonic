@@ -209,6 +209,16 @@ impl Default for Preferences {
     }
 }
 impl Preferences {
+    /// Apply workspace processing preferences without changing the authored recipe.
+    pub fn render_settings(
+        &self,
+        authored: &foveonic::render::Settings,
+    ) -> foveonic::render::Settings {
+        let mut settings = authored.clone();
+        settings.adaptive_tone_tuning = self.adaptive_tone_tuning;
+        settings
+    }
+
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         let mut result: Self = storage
             .and_then(|s| eframe::get_value(s, STORAGE_KEY))

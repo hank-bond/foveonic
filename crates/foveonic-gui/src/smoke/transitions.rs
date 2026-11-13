@@ -1014,11 +1014,7 @@ impl TransitionJourney {
             Step::RefreshOverviews => {
                 app.comparison_zoom = 3.;
                 app.multi_edit.invalidate();
-                if app.submit_overviews() {
-                    return Err(
-                        "overview submission claimed to cover the active Before view".into(),
-                    );
-                }
+                app.submit_photos();
             }
             Step::Inspection => {
                 let frame = app
@@ -1042,15 +1038,11 @@ impl TransitionJourney {
             }
             Step::RefreshInspection => {
                 app.multi_edit.invalidate();
-                if app.submit_overviews() {
-                    return Err("overview submission claimed to cover inspection".into());
-                }
+                app.submit_photos();
             }
             Step::Photograph => {
                 app.output = "final".into();
-                if !app.submit_overviews() {
-                    app.submit(None);
-                }
+                app.submit(None);
             }
             Step::Restore => {
                 app.preferences.preview_quality = PreviewMode::Thumb;

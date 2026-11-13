@@ -1941,6 +1941,12 @@ impl App {
                     self.submit(None);
                     self.settings.exposure = 0.5;
                     self.submit(None);
+                    let regional_revision = self.revision;
+                    self.submit_photos();
+                    assert_eq!(
+                        self.revision, regional_revision,
+                        "ordinary demand started Full before regional delivery"
+                    );
                 }
                 "smart-edit" => {}
                 "smart-zoom-pending" => {
@@ -2015,7 +2021,15 @@ impl App {
                     self.sidecars.set_memory_only(true);
                     self.sidecars.apply(path.clone(), self.settings.clone());
                     self.multi_edit.observe_requested(&path, &self.settings);
-                    self.select(path, false);
+                    self.select(path.clone(), false);
+                    assert!(!self.sidecars.ready());
+                    self.multi_edit.invalidate_photo(&path);
+                    let selection_revision = self.revision;
+                    self.submit_photos();
+                    assert_eq!(
+                        self.revision, selection_revision,
+                        "cached photo submitted before its selected recipe was ready"
+                    );
                 }
                 "fast" | "fast-again" => {
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;

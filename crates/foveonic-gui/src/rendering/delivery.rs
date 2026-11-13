@@ -307,10 +307,14 @@ impl App {
             detail_revision: self.detail.as_ref().map(|frame| frame.revision),
         };
         let active_settings = self.view_settings();
+        let inactive_settings = self
+            .multi_edit
+            .settings(&reply.path)
+            .map(|settings| self.preferences.render_settings(settings));
         let requested = if self.selected.as_ref() == Some(&reply.path) {
             Some(&active_settings)
         } else {
-            self.multi_edit.settings(&reply.path)
+            inactive_settings.as_ref()
         };
         recheck(reply, &view, requested)
     }

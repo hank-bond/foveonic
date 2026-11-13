@@ -122,8 +122,11 @@ impl Runtime {
     ) {
         if let Some(photo) = self.photos.get_mut(path) {
             if photo.settings.as_ref() != Some(settings) {
-                photo.dirty |= photo.settings.is_none();
+                photo.dirty = true;
                 photo.settings = Some(settings.clone());
+            }
+            if photo.error.take().is_some() {
+                photo.dirty = true;
             }
             if let Some(metadata) = metadata {
                 photo.metadata = Some(metadata.clone());
@@ -136,6 +139,11 @@ impl Runtime {
                 photo.settings = Some(settings.clone());
                 photo.dirty = true;
             }
+        }
+    }
+    pub fn invalidate_photo(&mut self, path: &Path) {
+        if let Some(photo) = self.photos.get_mut(path) {
+            photo.dirty = true;
         }
     }
     pub fn invalidate(&mut self) {
@@ -744,21 +752,29 @@ impl crate::App {
         }
     }
 
-    /// Return whether these requests cover the active photographic view too.
-    pub(crate) fn submit_overviews(&mut self) -> bool {
-        if !self.multi_photo_overview() || self.exporting {
-            return false;
+    /// Publish ordinary photo demand together, with independent readiness and delivery.
+    pub(crate) fn submit_photos(&mut self) {
+        if self.exporting {
+            return;
         }
+        self.sync_multi_edit();
+        self.sync_render_demand();
         let policy = self.preferences.preview_quality;
         for path in self.multi_edit.render_paths().to_vec() {
             self.multi_edit
                 .observe_preview(&path, policy, self.preview_quality_for(&path, policy));
         }
-        let excluded = (self.output != "final" || self.comparison.requested())
-            .then(|| self.selected.clone())
-            .flatten();
+        // Smart's regional request and whole-image continuation retain their
+        // existing active lifecycle. A set refresh must not start a competing Full.
+        let excluded = (!self.sidecars.ready()
+            || self.output != "final"
+            || self.comparison.requested()
+            || (self.before.active == crate::editor::Rendition::Current
+                && self.smart_refinement_active()))
+        .then(|| self.selected.clone())
+        .flatten();
         if !self.multi_edit.needs_render(excluded.as_deref()) {
-            return false;
+            return;
         }
         let mut targets = self.multi_edit.request(excluded.as_deref());
         targets.sort_by_key(|(path, _)| self.selected.as_ref() != Some(path));
@@ -775,6 +791,10 @@ impl crate::App {
             .into_iter()
             .map(|(path, mut settings)| {
                 self.revision += 1;
+                if covers_active && self.selected.as_ref() == Some(&path) {
+                    crate::timing::requested(self.revision, &path, "final", &settings);
+                }
+                settings = self.preferences.render_settings(&settings);
                 settings.working_scale = foveonic::render::Scale::NATIVE;
                 settings.preview_region = None;
                 let framing_preview =
@@ -800,12 +820,17 @@ impl crate::App {
             self.restore_photograph(self.revision);
             self.detail = None;
             self.smart.reset();
-            self.opening = None;
         }
+        let queued_at = if covers_active {
+            self.opening.take().map(|opening| opening.began)
+        } else {
+            None
+        }
+        .unwrap_or_else(std::time::Instant::now);
         self.publish_render_view();
         self.worker
-            .set_overviews(requests, &self.multi_edit.retained_paths());
-        covers_active
+            .set_overviews(requests, &self.multi_edit.retained_paths(), queued_at);
+        self.busy = self.worker.busy();
     }
 }
 
@@ -861,6 +886,80 @@ mod tests {
             );
         }
         runtime
+    }
+
+    #[test]
+    fn ordinary_active_changes_publish_complete_demand_for_one_or_many_photos() {
+        for count in 1..=2 {
+            let mut runtime = runtime();
+            let mut sidecars = session();
+            let paths = runtime.editing_paths[..count].to_vec();
+            runtime.sync(&paths, 2, &mut sidecars);
+            runtime.sync_render_paths(&paths);
+            runtime.request(None);
+            let mut edited = runtime.settings(&paths[0]).unwrap().clone();
+            edited.exposure = 0.75;
+            runtime.observe_active(&paths[0], &edited, None);
+            assert!(runtime.needs_render(None));
+            let requests = runtime.request(None);
+            assert_eq!(
+                requests.len(),
+                count,
+                "unchanged pending siblings stay desired"
+            );
+            assert_eq!(requests[0], (paths[0].clone(), edited.clone()));
+            runtime.observe_active(&paths[0], &edited, None);
+            assert!(
+                !runtime.needs_render(None),
+                "observation alone does not resubmit"
+            );
+            runtime.invalidate_photo(&paths[0]);
+            assert!(
+                runtime.needs_render(None),
+                "explicit view changes can request the same edits"
+            );
+        }
+    }
+
+    #[test]
+    fn ready_active_does_not_wait_for_sibling_recipe_or_numeric_defaults() {
+        let mut runtime = runtime();
+        let paths = runtime.editing_paths.clone();
+        for photo in runtime.photos.values_mut() {
+            photo.settings = None;
+            photo.numeric_settings = None;
+        }
+        let settings = Settings::new("", "");
+        runtime.observe_active(&paths[0], &settings, None);
+        assert!(!runtime.ready());
+        assert!(runtime.needs_render(None));
+        assert_eq!(
+            runtime.request(None),
+            vec![(paths[0].clone(), settings.clone())]
+        );
+        runtime.observe_requested(&paths[1], &settings);
+        assert_eq!(runtime.request(None).len(), 2);
+        assert!(!runtime.editable_ready());
+    }
+
+    #[test]
+    fn authoritative_active_recipe_recovers_a_failed_background_resolution() {
+        let mut runtime = runtime();
+        let path = runtime.editing_paths[0].clone();
+        runtime.photos.get_mut(&path).unwrap().settings = None;
+        runtime.resolve(
+            vec![sidecars::Resolved {
+                path: path.clone(),
+                settings: Err("old recipe failure".into()),
+            }],
+            &[String::new(), String::new()],
+        );
+        assert!(!runtime.needs_render(None));
+        let restored = Settings::new("", "");
+        runtime.observe_active(&path, &restored, None);
+        assert!(runtime.photos[&path].error.is_none());
+        assert!(runtime.needs_render(None));
+        assert!(runtime.request(None).contains(&(path, restored)));
     }
 
     #[test]

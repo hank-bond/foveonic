@@ -42,17 +42,22 @@ pub fn contains(outer: [u32; 4], inner: [u32; 4]) -> bool {
 }
 
 impl App {
-    pub(crate) fn smart_detail(&self) -> Option<&worker::Frame> {
-        if self.multi_photo_overview()
-            || self.preferences.preview_quality != preferences::PreviewMode::Smart
-            || self.framing_preview_active()
-            || self.output != "final"
-            || self.comparison.requested()
-            || !self.selected.as_ref().is_some_and(|path| {
+    /// The active single-photo detail sequence is separate from ordinary set demand.
+    pub(crate) fn smart_refinement_active(&self) -> bool {
+        !self.multi_photo_overview()
+            && self.preferences.preview_quality == preferences::PreviewMode::Smart
+            && !self.framing_preview_active()
+            && self.output == "final"
+            && !self.comparison.requested()
+            && (self.viewport().explicit_zoom() || self.detail.is_some())
+            && self.selected.as_ref().is_some_and(|path| {
                 self.preview_quality_for(path, preferences::PreviewMode::Smart)
                     == preferences::PreviewMode::Full
             })
-        {
+    }
+
+    pub(crate) fn smart_detail(&self) -> Option<&worker::Frame> {
+        if !self.smart_refinement_active() {
             return None;
         }
         self.detail.as_ref().filter(|detail| {
@@ -71,17 +76,7 @@ impl App {
     pub(crate) fn smart_edit_request(
         &mut self,
     ) -> Option<(preferences::PreviewMode, Option<[u32; 4]>)> {
-        if self.multi_photo_overview()
-            || self.preferences.preview_quality != preferences::PreviewMode::Smart
-            || self.framing_preview_active()
-            || self.output != "final"
-            || self.comparison.requested()
-            || !self.viewport().explicit_zoom()
-            || !self.selected.as_ref().is_some_and(|path| {
-                self.preview_quality_for(path, preferences::PreviewMode::Smart)
-                    == preferences::PreviewMode::Full
-            })
-        {
+        if !self.smart_refinement_active() || !self.viewport().explicit_zoom() {
             return None;
         }
         let requested = self.view_settings();
@@ -131,17 +126,7 @@ impl App {
         if !self.busy {
             self.viewport_mut().take_explicit_zoom();
         }
-        if self.preferences.preview_quality != preferences::PreviewMode::Smart
-            || self.framing_preview_active()
-            || self.exporting
-            || self.output != "final"
-            || self.comparison.requested()
-            || !self.selected.as_ref().is_some_and(|path| {
-                self.preview_quality_for(path, preferences::PreviewMode::Smart)
-                    == preferences::PreviewMode::Full
-            })
-            || (self.detail.is_none() && !self.viewport().explicit_zoom())
-        {
+        if !self.smart_refinement_active() || self.exporting {
             return;
         }
         if !self.busy

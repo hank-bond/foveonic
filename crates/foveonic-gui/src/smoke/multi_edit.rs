@@ -193,7 +193,7 @@ impl App {
                     .settings(self.selected.as_ref().unwrap())
                     .unwrap()
                     .clone();
-                assert!(self.submit_overviews());
+                self.submit_photos();
             } else {
                 // Let injected input, layout and the last accepted image reach the screen.
                 smoke.settled_frames += 1;
@@ -407,7 +407,7 @@ impl App {
                     .settings(self.selected.as_ref().unwrap())
                     .unwrap()
                     .clone();
-                assert!(self.submit_overviews());
+                self.submit_photos();
                 if target == "multi-relative" {
                     // Viewing A preserves the two-target subset before removing B.
                     if self.selected.as_ref() != smoke.multi_paths.first() {
@@ -450,7 +450,7 @@ impl App {
                     .settings(self.selected.as_ref().unwrap())
                     .unwrap()
                     .clone();
-                assert!(self.submit_overviews());
+                self.submit_photos();
             }
             _ => unreachable!("unknown multi-edit smoke step"),
         }
@@ -523,7 +523,7 @@ impl App {
             .settings(self.selected.as_ref().unwrap())
             .unwrap()
             .clone();
-        assert!(self.submit_overviews());
+        self.submit_photos();
         smoke.multi_sweep_started = Some(started);
         true
     }
