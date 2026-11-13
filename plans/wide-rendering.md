@@ -15,10 +15,10 @@ Advancing ready operations across several photographs may reduce multi-edit late
 - The executor keeps per-photo graph/cache, live-value, scratch and progress state. Every executed operation waits when a cancellation callback exists, including one that always returns false. Changing the outer loop alone does not remove those waits.
 - GPU helpers submit internally. Stage interleaving does not automatically combine submissions.
 - The current work plan has one consuming cursor, which owns its served-job set. A worker pool would need one authority for claiming jobs. Independent copies of that cursor could claim the same job. Per-photo result identity and settlement already have their own coordinator owner.
-- Reduced working sets currently protect one active entry. Several in-flight sessions need explicit protection until submitted operations retire, within their existing resource ownership.
+- The processing working set protects one active entry. Several in-flight sessions need explicit protection until submitted operations retire, within their existing resource ownership.
 - Recipes and cache hits differ. Advance independent ready work without aligning graph ordinals or imposing an all-photo stage barrier. Preserve per-photo source identity, cache outcomes, errors and settlement.
 
-Sources: [executor](../crates/foveonic/src/render/execute.rs), [GPU facade](../crates/foveonic/src/gpu.rs), [interactive sessions](../crates/foveonic/src/interactive.rs), [reduced working sets](../crates/foveonic/src/render/reduced.rs) and the [overhead investigation](./coordination-overhead-profile.md).
+Sources: [executor](../crates/foveonic/src/render/execute.rs), [GPU facade](../crates/foveonic/src/gpu.rs), [interactive sessions](../crates/foveonic/src/interactive.rs), [processing working set](../crates/foveonic/src/render/working_set.rs) and the [overhead investigation](./coordination-overhead-profile.md).
 
 ## Selected implementation slice
 
@@ -26,7 +26,7 @@ Extract a private `GraphExecution` from `execute_controlled`. It owns the next-n
 
 Separate existing [recipe preparation](../crates/foveonic/src/render/recipes/mod.rs) and [artifact planning/packaging](../crates/foveonic/src/render/artifacts.rs) around that cursor. Each probe photo owns its prepared recipe, session, cursor, profile and result identity. Plan checkpoints once, retain each output through existing cache rules, and commit/finish each photo independently on success, cancellation or failure. Avoid self-referential job types and duplicate recipe builders.
 
-Use a single-thread round-robin loop over admitted photos. Advance each photo's next executable operation, regardless of its ordinal or operation name. Settle a completed photo and admit another without waiting for the entire group. Start with individually owned `ReducedSession`s prepared through existing APIs. Preserve each session's engine/source identity and hold admitted owners through submitted-work completion. Do not widen `ReducedWorkingSet` for this probe.
+Use a single-thread round-robin loop over admitted photos. Advance each photo's next executable operation, regardless of its ordinal or operation name. Settle a completed photo and admit another without waiting for the entire group. Start with individually owned `ReducedSession`s prepared through existing APIs. Preserve each session's engine/source identity and hold admitted owners through submitted-work completion. The probe did not widen the then-existing `ReducedWorkingSet`.
 
 | Control | Traversal | Completion policy |
 | --- | --- | --- |

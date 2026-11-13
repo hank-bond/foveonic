@@ -1,4 +1,4 @@
-//! Owns source-free camera dependency cuts and bounds multi-photo editing resources.
+//! Prepares source-free camera dependency cuts and renders reduced sessions.
 
 use super::{recipes, Engine, Scale, Settings};
 use crate::{
@@ -29,14 +29,14 @@ pub enum ReducedRender {
 /// Retains immutable recipe-declared camera inputs, never decoded source samples.
 /// The complete camera and photographic recipes still author every render.
 pub struct ReducedSession {
-    metadata: Arc<Metadata>,
-    origin: SourceOrigin,
-    owner: Arc<()>,
+    pub(super) metadata: Arc<Metadata>,
+    pub(super) origin: SourceOrigin,
+    pub(super) owner: Arc<()>,
     scale: Scale,
-    cache: Cache,
+    pub(super) cache: Cache,
     preparation: super::source_preparation::SourcePreparation,
     metadata_bytes: u64,
-    last_settings: Option<Box<Settings>>,
+    pub(super) last_settings: Option<Box<Settings>>,
 }
 
 /// Parameter allocations attributed once to their earliest retained output version.
@@ -95,10 +95,10 @@ impl ReducedSession {
         let containers = self.account_keys(&mut retained);
         self.owned_cpu_bytes() + containers as u64 + retained.bytes() as u64
     }
-    fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
+    pub(super) fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
         self.cache.account_keys(retained) + self.preparation.account(retained)
     }
-    fn owned_cpu_bytes(&self) -> u64 {
+    pub(super) fn owned_cpu_bytes(&self) -> u64 {
         self.metadata_bytes
             + self.origin.allocated_bytes() as u64
             + std::mem::size_of::<Self>() as u64
@@ -108,12 +108,14 @@ impl ReducedSession {
                     + settings.color_mode.capacity()
             }) as u64
     }
-    fn buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
+    pub(super) fn buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
         self.cache.buffers()
     }
 }
 
-fn unique_buffer_bytes<'a>(buffers: impl Iterator<Item = &'a crate::gpu::ReadGuard>) -> u64 {
+pub(super) fn unique_buffer_bytes<'a>(
+    buffers: impl Iterator<Item = &'a crate::gpu::ReadGuard>,
+) -> u64 {
     let mut unique: Vec<&crate::gpu::ReadGuard> = Vec::new();
     for buffer in buffers {
         if !unique.iter().any(|prior| prior.shares_storage(buffer)) {
@@ -288,7 +290,7 @@ impl Engine {
         )
     }
     #[allow(clippy::too_many_arguments)]
-    fn render_reduced_session_observed(
+    pub(super) fn render_reduced_session_observed(
         &self,
         session: &mut ReducedSession,
         settings: &Settings,
@@ -342,344 +344,6 @@ impl Engine {
             }
             Err(error) => Err(error),
         }
-    }
-}
-
-struct Entry {
-    id: u64,
-    session: Box<ReducedSession>,
-}
-/// One active source-free owner and a byte-bounded history of inactive photos.
-/// Activating a photo transfers ownership rather than copying its camera inputs.
-pub struct ReducedWorkingSet {
-    limit: u64,
-    active: Option<Entry>,
-    entries: Vec<Entry>,
-}
-impl ReducedWorkingSet {
-    pub fn new(limit: u64) -> Self {
-        Self {
-            limit,
-            active: None,
-            entries: Vec::new(),
-        }
-    }
-    pub fn limit_bytes(&self) -> u64 {
-        self.limit
-    }
-    /// Apply a changed historical budget through the ordinary trimming policy.
-    /// The active photograph remains independently bounded by its graph cache.
-    pub fn set_limit(&mut self, limit: u64) -> Vec<u64> {
-        self.limit = limit;
-        self.enforce()
-    }
-    fn all(&self) -> impl Iterator<Item = &Entry> {
-        self.active.iter().chain(self.entries.iter())
-    }
-    pub fn contains(&self, id: u64) -> bool {
-        self.all().any(|entry| entry.id == id)
-    }
-    pub fn metadata(&self, id: u64) -> Option<&Arc<Metadata>> {
-        self.all()
-            .find(|entry| entry.id == id)
-            .map(|entry| entry.session.metadata())
-    }
-    pub fn origin(&self, id: u64) -> Option<&SourceOrigin> {
-        self.all()
-            .find(|entry| entry.id == id)
-            .map(|entry| &entry.session.origin)
-    }
-    pub fn last_settings(&self, id: u64) -> Option<&Settings> {
-        self.all()
-            .find(|entry| entry.id == id)
-            .and_then(|entry| entry.session.last_settings.as_deref())
-    }
-    pub fn session_bytes(&self, id: u64) -> Option<(u64, u64)> {
-        self.all().find(|entry| entry.id == id).map(|entry| {
-            (
-                entry.session.cached_bytes(),
-                entry.session.retained_cpu_bytes(),
-            )
-        })
-    }
-    pub fn session_resources(&self, id: u64) -> Option<SessionResources> {
-        self.all()
-            .find(|entry| entry.id == id)
-            .map(|entry| entry.session.resources())
-    }
-    pub fn len(&self) -> usize {
-        self.entries.len() + usize::from(self.active.is_some())
-    }
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.active.is_none()
-    }
-    pub fn active_bytes(&self) -> u64 {
-        self.active.as_ref().map_or(0, |entry| {
-            entry.session.cached_bytes() + entry.session.retained_cpu_bytes()
-        })
-    }
-    /// The active graph cache's GPU/key bound. Metadata and scalar preparation are inventoried separately.
-    pub fn active_cache_limit_bytes(&self) -> u64 {
-        Cache::LIMIT
-    }
-    pub fn historical_bytes(&self) -> u64 {
-        unique_buffer_bytes(
-            self.entries
-                .iter()
-                .flat_map(|entry| entry.session.buffers()),
-        ) + Self::account_cpu_for(
-            self.entries.iter(),
-            &mut crate::recipe::RetainedBytes::default(),
-        )
-    }
-    pub fn retained_gpu_bytes(&self) -> u64 {
-        unique_buffer_bytes(self.all().flat_map(|entry| entry.session.buffers()))
-    }
-    pub fn retained_cpu_bytes(&self) -> u64 {
-        Self::account_cpu_for(self.all(), &mut crate::recipe::RetainedBytes::default())
-    }
-    fn account_cpu_for<'a>(
-        entries: impl Iterator<Item = &'a Entry>,
-        retained: &mut crate::recipe::RetainedBytes,
-    ) -> u64 {
-        let mut metadata = Vec::new();
-        let containers: u64 = entries
-            .map(|entry| {
-                let session = &entry.session;
-                let mut bytes = session.owned_cpu_bytes() + session.account_keys(retained) as u64;
-                if metadata
-                    .iter()
-                    .any(|old| Arc::ptr_eq(old, session.metadata()))
-                {
-                    bytes -= session.metadata_bytes;
-                } else {
-                    metadata.push(session.metadata().clone());
-                }
-                bytes
-            })
-            .sum();
-        containers + retained.bytes() as u64
-    }
-    pub(super) fn account_memory(&self, retained: &mut crate::recipe::RetainedBytes) -> u64 {
-        self.all()
-            .map(|entry| {
-                let session = &entry.session;
-                retained.owner(session.metadata.clone(), session.metadata_bytes as usize);
-                session.owned_cpu_bytes() - session.metadata_bytes
-                    + session.account_keys(retained) as u64
-            })
-            .sum()
-    }
-    pub(super) fn memory_buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
-        self.all().flat_map(|entry| entry.session.buffers())
-    }
-    pub(super) fn active_metadata(&self) -> Option<&Arc<Metadata>> {
-        self.active.as_ref().map(|entry| entry.session.metadata())
-    }
-    pub(super) fn active_origin(&self) -> Option<&SourceOrigin> {
-        self.active.as_ref().map(|entry| &entry.session.origin)
-    }
-    pub(super) fn trim_optional(&mut self, obsolete_only: bool) -> bool {
-        self.entries.iter_mut().any(|entry| {
-            let trimmed = entry.session.cache.trim_optional(obsolete_only);
-            if trimmed {
-                entry.session.cache.park();
-            }
-            trimmed
-        }) || self
-            .active
-            .as_mut()
-            .is_some_and(|entry| entry.session.cache.trim_active_optional(obsolete_only))
-    }
-    pub(super) fn evict_oldest(&mut self) -> Option<u64> {
-        (!self.entries.is_empty()).then(|| {
-            let entry = self.entries.remove(0);
-            crate::diagnostics::event(
-                crate::diagnostics::Category::Cache,
-                "cache.processing.entry_released",
-                |fields| {
-                    fields.u64("session", entry.id);
-                    fields.u64("gpu_bytes", entry.session.cached_bytes());
-                },
-            );
-            entry.id
-        })
-    }
-    /// Deduplicated total of active, history and Engine preparation. Delivered images and scratch are separate.
-    pub fn retained_bytes(&self, engine: &Engine) -> u64 {
-        let mut retained = crate::recipe::RetainedBytes::default();
-        engine.account_preparation(&mut retained);
-        self.retained_gpu_bytes() + Self::account_cpu_for(self.all(), &mut retained)
-    }
-    /// Native/Smart callers park the reduced owner before taking over the active slot.
-    pub fn park_active(&mut self) -> Vec<u64> {
-        if let Some(mut entry) = self.active.take() {
-            entry.session.cache.park();
-            self.entries.retain(|old| old.id != entry.id);
-            self.entries.push(entry);
-        }
-        self.enforce()
-    }
-    fn activate(&mut self, id: u64) -> bool {
-        if self.active.as_ref().is_some_and(|entry| entry.id == id) {
-            return true;
-        }
-        let Some(index) = self.entries.iter().position(|entry| entry.id == id) else {
-            return false;
-        };
-        let entry = self.entries.remove(index);
-        self.park_active();
-        self.active = Some(entry);
-        true
-    }
-    pub fn insert(
-        &mut self,
-        id: u64,
-        session: Box<ReducedSession>,
-        engine: &Engine,
-    ) -> Result<Vec<u64>> {
-        if !Arc::ptr_eq(&session.owner, &engine.owner) {
-            return Err("reduced inputs belong to another engine".into());
-        }
-        self.remove(id);
-        let evicted = self.park_active();
-        self.active = Some(Entry { id, session });
-        Ok(evicted)
-    }
-    /// Speculative loads enter colder than photographs that have actually been
-    /// edited. They never replace or promote the active photograph.
-    pub fn prefetch(
-        &mut self,
-        id: u64,
-        session: Box<ReducedSession>,
-        engine: &Engine,
-    ) -> Result<Vec<u64>> {
-        if !Arc::ptr_eq(&session.owner, &engine.owner) {
-            return Err("reduced inputs belong to another engine".into());
-        }
-        if self.contains(id) {
-            return Ok(Vec::new());
-        }
-        self.entries.insert(0, Entry { id, session });
-        Ok(self.enforce())
-    }
-    /// Refresh only a verified original. Validation precedes active/history ownership changes.
-    pub fn refresh(
-        &mut self,
-        engine: &Engine,
-        id: u64,
-        source: &Source,
-        settings: &Settings,
-        cancel: impl Fn() -> bool,
-        profile: &mut Profile,
-    ) -> Result<Option<()>> {
-        let Some(entry) = self.all().find(|entry| entry.id == id) else {
-            return Ok(None);
-        };
-        if entry.session.origin != *source.origin() {
-            return Err("refreshed source is not the same verified original".into());
-        }
-        if !Arc::ptr_eq(&entry.session.owner, &engine.owner) {
-            return Err("camera dependencies belong to another engine".into());
-        }
-        self.activate(id);
-        let result = engine.refresh_reduced_session(
-            &mut self.active.as_mut().unwrap().session,
-            source,
-            settings,
-            cancel,
-            profile,
-        );
-        self.enforce();
-        result
-    }
-    pub fn remove(&mut self, id: u64) -> bool {
-        let before = self.len();
-        if self.active.as_ref().is_some_and(|entry| entry.id == id) {
-            self.active = None;
-        }
-        self.entries.retain(|entry| entry.id != id);
-        self.len() != before
-    }
-    pub fn render(
-        &mut self,
-        engine: &Engine,
-        id: u64,
-        settings: &Settings,
-        cancel: impl Fn() -> bool,
-        profile: &mut Profile,
-    ) -> Result<Option<ReducedRender>> {
-        self.render_observed(engine, id, settings, cancel, profile, None)
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub fn render_with_progress(
-        &mut self,
-        engine: &Engine,
-        id: u64,
-        settings: &Settings,
-        cancel: impl Fn() -> bool,
-        profile: &mut Profile,
-        progress: impl Fn(super::RenderProgress),
-    ) -> Result<Option<ReducedRender>> {
-        self.render_observed(engine, id, settings, cancel, profile, Some(&progress))
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn render_observed(
-        &mut self,
-        engine: &Engine,
-        id: u64,
-        settings: &Settings,
-        cancel: impl Fn() -> bool,
-        profile: &mut Profile,
-        progress: Option<&dyn Fn(super::RenderProgress)>,
-    ) -> Result<Option<ReducedRender>> {
-        if !self.activate(id) {
-            return Ok(None);
-        }
-        let result = engine.render_reduced_session_observed(
-            &mut self.active.as_mut().unwrap().session,
-            settings,
-            &["final"],
-            cancel,
-            profile,
-            progress,
-        );
-        self.enforce();
-        result.map(Some)
-    }
-    fn enforce(&mut self) -> Vec<u64> {
-        let mut evicted = Vec::new();
-        // Preserve photos before optional cached versions. Pass one removes old
-        // alternatives everywhere; pass two can shed less useful current
-        // frontiers, still keeping each photo's committed immutable inputs.
-        for obsolete_only in [true, false] {
-            while self.historical_bytes() > self.limit {
-                let trimmed = self.entries.iter_mut().any(|entry| {
-                    let trimmed = entry.session.cache.trim_optional(obsolete_only);
-                    if trimmed {
-                        entry.session.cache.park();
-                    }
-                    trimmed
-                });
-                if !trimmed {
-                    break;
-                }
-            }
-        }
-        while !self.entries.is_empty() && self.historical_bytes() > self.limit {
-            let id = self.evict_oldest().expect("nonempty reduced history");
-            crate::diagnostics::event(
-                crate::diagnostics::Category::Cache,
-                "cache.processing.evicted",
-                |fields| {
-                    fields.u64("session", id);
-                    fields.str("reason", "historical_memory_budget");
-                    fields.u64("budget_bytes", self.limit);
-                },
-            );
-            evicted.push(id);
-        }
-        evicted
     }
 }
 

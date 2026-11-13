@@ -23,10 +23,11 @@ The [public renderer](../render.rs) owns the engine and display/export entry poi
 - **[execute.rs](./execute.rs)** Executes typed graph operations with selective outputs and guarded GPU storage.
 - **[memory.rs](./memory.rs)** Inventories shared processing owners and trims optional history under one caller-set budget.
 - **[preparation.rs](./preparation.rs)** Reuses bounded immutable metadata preparation independently of decoded sensor ownership.
-- **[reduced.rs](./reduced.rs)** Owns source-free camera dependency cuts and bounds multi-photo editing resources.
+- **[reduced.rs](./reduced.rs)** Prepares source-free camera dependency cuts and renders reduced sessions.
 - **[scale.rs](./scale.rs)** Describes power-of-two sensor sampling and the covered, padded working grid.
 - **[settings.rs](./settings.rs)** Defines shared photographic settings and validates their values.
 - **[source_preparation.rs](./source_preparation.rs)** Retains the two source-derived calibration statistics without owning sensor samples.
 - **[speckle_controls.rs](./speckle_controls.rs)** Defines Merrill speckle detection thresholds and compact-neighborhood support.
+- **[working_set.rs](./working_set.rs)** Retains native and reduced processing sessions in one foreground-aware history.
 
 <!-- INDEX:END -->

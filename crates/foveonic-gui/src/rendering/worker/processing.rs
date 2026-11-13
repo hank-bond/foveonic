@@ -1,12 +1,12 @@
-//! Reuses bounded reduced-photo inputs while native requests keep the existing worker session.
+//! Owns verified per-photo native and reduced sessions under the shared processing budget.
 
 use foveonic::{
     decode_cache::Cache,
     inspection::Artifact,
     profile::Profile,
     render::{
-        Engine, ReducedPreparation, ReducedRender, ReducedWorkingSet, RenderProgress,
-        RenderSession, Settings,
+        Engine, ProcessingWorkingSet, ReducedPreparation, ReducedRender, RenderProgress,
+        RenderSession, SessionKey, SessionKind, SessionUse, Settings,
     },
     source::{Metadata, Result, Source, SourceOrigin},
 };
@@ -14,8 +14,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-
-const BUDGET: u64 = 128 * 1024 * 1024;
 
 type AcquireSource<'a> = dyn FnMut(&Path, u64) -> Result<Option<Arc<Source>>> + 'a;
 
@@ -51,48 +49,164 @@ impl Loaded {
     }
 }
 pub(super) struct Photos {
-    working: ReducedWorkingSet,
+    working: ProcessingWorkingSet,
     photos: Vec<Photo>,
     next_id: u64,
 }
 impl Default for Photos {
     fn default() -> Self {
         Self {
-            working: ReducedWorkingSet::new(BUDGET),
+            working: ProcessingWorkingSet::new(),
             photos: Vec::new(),
             next_id: 0,
         }
     }
 }
+fn key(photo: u64, kind: SessionKind) -> SessionKey {
+    SessionKey { photo, kind }
+}
 impl Photos {
+    fn id(&self, path: &Path) -> Option<u64> {
+        self.photos
+            .iter()
+            .find(|photo| photo.path == path)
+            .map(|photo| photo.id)
+    }
+    fn prune(&mut self) {
+        self.photos.retain(|photo| {
+            self.working.contains(key(photo.id, SessionKind::Native))
+                || self.working.contains(key(photo.id, SessionKind::Reduced))
+        });
+    }
+    fn invalidate(&mut self, path: &Path, engine: &Engine) {
+        let Some(index) = self.photos.iter().position(|photo| photo.path == path) else {
+            return;
+        };
+        let photo = self.photos.remove(index);
+        if let Some(native) = self.working.native(photo.id) {
+            engine.release_native_preparation(native.metadata());
+        }
+        self.working.remove_photo(photo.id);
+        foveonic::diagnostics::event(
+            foveonic::diagnostics::Category::Cache,
+            "cache.processing.invalidated",
+            |fields| {
+                fields
+                    .str("source", &path.to_string_lossy())
+                    .u64("session", photo.id)
+                    .str("reason", "source_identity_changed");
+            },
+        );
+    }
+    fn verified_id(&mut self, path: &Path, cache: &Cache, engine: &Engine) -> Option<u64> {
+        self.prune();
+        if self.photos.iter().any(|photo| {
+            photo.path == path
+                && source_identity(cache.source_origin(path), Some(photo.identity.clone())).as_ref()
+                    != Some(&photo.identity)
+        }) {
+            self.invalidate(path, engine);
+        }
+        self.id(path)
+    }
+    fn register(&mut self, path: &Path, identity: SourceOrigin, engine: &Engine) -> u64 {
+        if let Some(photo) = self.photos.iter().find(|photo| photo.path == path) {
+            if photo.identity == identity {
+                return photo.id;
+            }
+            self.invalidate(path, engine);
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        self.photos.push(Photo {
+            path: path.to_owned(),
+            identity,
+            id,
+        });
+        id
+    }
+    pub fn native(&self, path: &Path) -> Option<&RenderSession> {
+        self.working.native(self.id(path)?)
+    }
+    pub fn native_mut(&mut self, path: &Path) -> Option<&mut RenderSession> {
+        let id = self.id(path)?;
+        self.working.native_mut(id)
+    }
+    pub fn native_sources(&self) -> impl Iterator<Item = (&Path, &RenderSession)> {
+        self.photos.iter().filter_map(|photo| {
+            self.working
+                .native(photo.id)
+                .map(|session| (photo.path.as_path(), session))
+        })
+    }
+    pub fn shared_source(&self, path: &Path, origin: &SourceOrigin) -> Option<Arc<Source>> {
+        self.native(path)
+            .filter(|session| session.source().origin() == origin)
+            .map(RenderSession::shared_source)
+    }
+    pub fn load_native(
+        &mut self,
+        path: &Path,
+        revision: u64,
+        cache: &Cache,
+        engine: &Engine,
+        usage: SessionUse,
+        acquire: &mut AcquireSource<'_>,
+    ) -> Result<bool> {
+        let id = self.verified_id(path, cache, engine);
+        if let Some(id) = id.filter(|id| self.working.native(*id).is_some()) {
+            self.native_event(path, "hit", "same_source");
+            self.working.activate(key(id, SessionKind::Native), usage);
+            return Ok(true);
+        }
+        let Some(source) = open_source(acquire, path, revision)? else {
+            self.native_event(path, "pending", "not_retained");
+            return Ok(false);
+        };
+        let id = self.register(path, source.origin().clone(), engine);
+        self.working
+            .insert_native(id, RenderSession::new(source), engine, usage);
+        self.native_event(path, "loaded", "not_retained");
+        Ok(true)
+    }
+    fn native_event(&self, path: &Path, decision: &str, reason: &str) {
+        foveonic::diagnostics::event(
+            foveonic::diagnostics::Category::Cache,
+            "cache.native_source",
+            |fields| {
+                fields
+                    .str("decision", decision)
+                    .str("reason", reason)
+                    .u64("requested_photo", foveonic::diagnostics::photo_id(path));
+                if let Some(id) = self.id(path) {
+                    fields.u64("session", id);
+                }
+            },
+        );
+    }
     pub fn has_prefetch_capacity(
         &self,
         engine: &Engine,
-        native: Option<&RenderSession>,
         reservation: &foveonic::render::MemoryReservation,
         limit: u64,
     ) -> bool {
-        engine
-            .memory_resources(native, &self.working, reservation)
-            .total_bytes
-            < limit
-            && self.working.historical_bytes() < self.working.limit_bytes()
+        self.memory_resources(engine, reservation).total_bytes < limit
     }
-    pub fn source_snapshot(&self) -> Vec<(PathBuf, SourceOrigin)> {
+    pub fn reduced_sources(&self) -> Vec<(PathBuf, SourceOrigin)> {
         self.photos
             .iter()
-            .filter(|photo| self.working.contains(photo.id))
+            .filter(|photo| self.working.reduced(photo.id).is_some())
             .map(|photo| (photo.path.clone(), photo.identity.clone()))
             .collect()
     }
-    pub fn contains_source(&self, path: &Path, origin: &SourceOrigin) -> bool {
+    pub fn contains_reduced(&self, path: &Path, origin: &SourceOrigin) -> bool {
         self.photos.iter().any(|photo| {
-            photo.path == path && &photo.identity == origin && self.working.contains(photo.id)
+            photo.path == path
+                && &photo.identity == origin
+                && self.working.reduced(photo.id).is_some()
         })
     }
-
-    /// Prepare cold history without taking over the native or reduced active photo.
-    /// Admission uses spare budget only, so optional work cannot evict used photos.
+    /// Admit only the speculative candidate; pressure must not evict useful existing sessions.
     #[allow(clippy::too_many_arguments)]
     pub fn prefetch(
         &mut self,
@@ -100,16 +214,15 @@ impl Photos {
         source: Arc<Source>,
         path: &Path,
         settings: &Settings,
-        native: Option<&RenderSession>,
         reservation: &foveonic::render::MemoryReservation,
         limit: u64,
         cancel: &dyn Fn() -> bool,
         profile: &mut Profile,
     ) -> Result<bool> {
         let origin = source.origin().clone();
-        if self.contains_source(path, &origin)
+        if self.contains_reduced(path, &origin)
             || cancel()
-            || !self.has_prefetch_capacity(engine, native, reservation, limit)
+            || !self.has_prefetch_capacity(engine, reservation, limit)
         {
             return Ok(false);
         }
@@ -125,68 +238,42 @@ impl Photos {
         {
             return Ok(false);
         }
-        let bytes = session
-            .cached_bytes()
-            .saturating_add(session.retained_cpu_bytes());
-        let used = engine
-            .memory_resources(native, &self.working, reservation)
-            .total_bytes;
+        let id = self.register(path, origin, engine);
+        self.working
+            .insert_reduced(id, session, engine, SessionUse::Preparation)?;
+        let used = self.memory_resources(engine, reservation).total_bytes;
+        let admitted = used <= limit;
         foveonic::diagnostics::event(
             foveonic::diagnostics::Category::Cache,
             "cache.processing.prefetch_admission",
             |fields| {
                 fields
                     .str("source", &path.to_string_lossy())
-                    .u64("session_bytes", bytes)
                     .u64("used_bytes", used)
                     .u64("budget_bytes", limit)
-                    .u64("historical_bytes", self.working.historical_bytes())
-                    .u64("historical_budget_bytes", self.working.limit_bytes());
+                    .bool("admitted", admitted);
             },
         );
-        if bytes > limit.saturating_sub(used)
-            || bytes
-                > self
-                    .working
-                    .limit_bytes()
-                    .saturating_sub(self.working.historical_bytes())
-        {
-            return Ok(false);
+        if !admitted {
+            self.working.remove(key(id, SessionKind::Reduced));
         }
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
-        self.working.prefetch(id, session, engine)?;
-        self.photos.retain(|photo| photo.path != path);
-        self.photos.push(Photo {
-            path: path.to_owned(),
-            identity: origin,
-            id,
-        });
         self.prune();
-        Ok(self.working.contains(id))
+        Ok(admitted)
     }
-
-    pub(super) fn memory_resources(
+    pub fn memory_resources(
         &self,
         engine: &Engine,
-        native: Option<&RenderSession>,
         reservation: &foveonic::render::MemoryReservation,
     ) -> foveonic::render::MemoryResources {
-        engine.memory_resources(native, &self.working, reservation)
-    }
-    pub fn configure_memory(&mut self, limit: u64) {
-        self.working.set_limit(limit);
-        self.prune();
+        engine.memory_resources(&self.working, reservation)
     }
     pub fn trim_memory(
         &mut self,
         engine: &Engine,
-        native: Option<&mut RenderSession>,
         limit: u64,
         reservation: &foveonic::render::MemoryReservation,
     ) -> foveonic::render::MemoryTrim {
-        self.configure_memory(limit);
-        let result = engine.trim_memory(native, &mut self.working, limit, reservation);
+        let result = engine.trim_memory(&mut self.working, limit, reservation);
         self.prune();
         result
     }
@@ -194,37 +281,15 @@ impl Photos {
         *self = Self::default();
         engine.clear_preparation();
     }
-    pub fn park_active(&mut self, engine: &Engine, revision: u64) {
+    pub fn park_active(&mut self) {
         self.working.park_active();
-        self.report_retention(engine, revision, "park");
-        self.prune();
     }
-    fn prune(&mut self) {
-        self.photos.retain(|photo| self.working.contains(photo.id));
-    }
-    fn report_retention(&self, engine: &Engine, revision: u64, stage: &str) {
-        if crate::timing::enabled() {
-            let evicted: Vec<_> = self
-                .photos
-                .iter()
-                .filter(|photo| !self.working.contains(photo.id))
-                .map(|photo| photo.id)
-                .collect();
-            crate::timing::emit("working_set", || {
-                serde_json::json!({"revision": revision, "stage": stage,
-                "historical_budget_bytes": self.working.limit_bytes(), "historical_bytes": self.working.historical_bytes(),
-                "active_bytes": self.working.active_bytes(), "active_cache_limit_bytes": self.working.active_cache_limit_bytes(),
-                "retained_bytes": self.working.retained_bytes(engine),
-                "resident_photos": self.working.len(), "evicted": evicted})
-            });
-        }
-    }
-    pub fn load(
+    pub fn load_reduced(
         &mut self,
         path: &Path,
         revision: u64,
         cache: &Cache,
-        native: &Option<(PathBuf, RenderSession)>,
+        engine: &Engine,
         acquire: &mut AcquireSource<'_>,
     ) -> Result<Option<Loaded>> {
         let _scope = foveonic::diagnostics::scope_with(
@@ -234,144 +299,106 @@ impl Photos {
                 fields.str("source", &path.to_string_lossy());
             },
         );
-        self.prune();
-        let native_origin = native
-            .as_ref()
-            .filter(|(loaded, _)| loaded == path)
-            .map(|(_, session)| session.source().origin().clone());
-        let loaded_origin = self
-            .photos
-            .iter()
-            .find(|photo| photo.path == path)
-            .and_then(|photo| self.working.origin(photo.id))
-            .cloned();
-        let identity = source_identity(cache.source_origin(path).or(native_origin), loaded_origin);
-        if let Some(photo) = self
-            .photos
-            .iter()
-            .find(|photo| photo.path == path && Some(&photo.identity) == identity.as_ref())
-        {
-            if let Some(metadata) = self.working.metadata(photo.id) {
+        if let Some(id) = self.verified_id(path, cache, engine) {
+            if let Some(session) = self.working.reduced(id) {
                 foveonic::diagnostics::event(
                     foveonic::diagnostics::Category::Cache,
                     "cache.processing.hit",
                     |fields| {
-                        fields.str("source", &path.to_string_lossy());
-                        fields.u64("session", photo.id);
+                        fields
+                            .str("source", &path.to_string_lossy())
+                            .u64("session", id);
                     },
                 );
                 return Ok(Some(Loaded {
-                    metadata: metadata.clone(),
+                    metadata: session.metadata().clone(),
                     path: path.to_owned(),
-                    identity: photo.identity.clone(),
-                    id: photo.id,
+                    identity: self
+                        .photos
+                        .iter()
+                        .find(|p| p.id == id)
+                        .unwrap()
+                        .identity
+                        .clone(),
+                    id,
                     source: None,
                     revision,
                 }));
             }
         }
-        if let Some(old) = self.photos.iter().find(|photo| photo.path == path) {
-            foveonic::diagnostics::event(
-                foveonic::diagnostics::Category::Cache,
-                "cache.processing.invalidated",
-                |fields| {
-                    fields.str("source", &path.to_string_lossy());
-                    fields.u64("session", old.id);
-                    fields.str("reason", "source_identity_changed");
-                },
-            );
-            self.working.remove(old.id);
-        }
         foveonic::diagnostics::event(
             foveonic::diagnostics::Category::Cache,
             "cache.processing.miss",
             |fields| {
-                fields.str("source", &path.to_string_lossy());
-                fields.str("reason", "not_retained");
+                fields
+                    .str("source", &path.to_string_lossy())
+                    .str("reason", "not_retained");
             },
         );
-        self.prune();
-        let (metadata, source, identity) = if let Some((_, session)) =
-            native.as_ref().filter(|(native_path, session)| {
-                native_path == path && Some(session.source().origin()) == identity.as_ref()
-            }) {
-            (
-                session.metadata().clone(),
-                None,
-                session.source().origin().clone(),
-            )
+        let source = if let Some(session) = self.native(path) {
+            session.shared_source()
         } else {
             let Some(source) = open_source(acquire, path, revision)? else {
                 return Ok(None);
             };
-            let identity = source.origin().clone();
-            (source.metadata.clone(), Some(source), identity)
+            source
         };
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+        let identity = source.origin().clone();
+        let id = self.register(path, identity.clone(), engine);
         Ok(Some(Loaded {
-            metadata,
+            metadata: source.metadata.clone(),
             path: path.to_owned(),
             identity,
             id,
-            source,
+            source: Some(source),
             revision,
         }))
     }
-    pub fn changed_parameters(
+    pub fn reduced_changes(
         &self,
         loaded: &Loaded,
         settings: &Settings,
     ) -> Option<Vec<&'static str>> {
         self.working
-            .last_settings(loaded.id)
+            .reduced_settings(loaded.id)
             .map(|previous| previous.changed_parameters(settings))
     }
-    pub fn cached_bytes(&self, loaded: &Loaded) -> u64 {
+    pub fn reduced_bytes(&self, loaded: &Loaded) -> u64 {
         self.working
-            .session_bytes(loaded.id)
+            .reduced_bytes(loaded.id)
             .map_or(0, |bytes| bytes.0)
     }
-    pub fn cached_bytes_for_path(&self, path: &Path) -> u64 {
-        self.photos
-            .iter()
-            .find(|photo| photo.path == path)
-            .and_then(|photo| self.working.session_bytes(photo.id))
+    pub fn reduced_bytes_for_path(&self, path: &Path) -> u64 {
+        self.id(path)
+            .and_then(|id| self.working.reduced_bytes(id))
             .map_or(0, |bytes| bytes.0)
     }
     #[allow(clippy::too_many_arguments)]
-    pub fn render(
+    pub fn render_reduced(
         &mut self,
         engine: &Engine,
-        native: &Option<(PathBuf, RenderSession)>,
         mut loaded: Loaded,
         settings: &Settings,
+        usage: SessionUse,
         cancel: &dyn Fn() -> bool,
         profile: &mut Profile,
         acquire: &mut AcquireSource<'_>,
         render_progress: &dyn Fn(RenderProgress),
     ) -> Result<RenderOutcome> {
-        // Borrow matching native samples when available. The worker owns the
-        // native session's lifetime independently of reduced rendering.
         if loaded.source.is_none() {
-            loaded.source = native
-                .as_ref()
-                .filter(|(path, session)| {
-                    path == &loaded.path && session.source().origin() == &loaded.identity
-                })
-                .map(|(_, session)| session.shared_source());
+            loaded.source = self.shared_source(&loaded.path, &loaded.identity);
         }
-        if let Some(outcome) = self.working.render_with_progress(
+        if let Some(outcome) = self.working.render_reduced_with_progress(
             engine,
             loaded.id,
             settings,
+            usage,
             cancel,
             profile,
             render_progress,
         )? {
             match outcome {
                 ReducedRender::Rendered(artifacts) => {
-                    self.report_retention(engine, loaded.revision, "render");
                     self.prune();
                     return Ok(RenderOutcome::Rendered(artifacts));
                 }
@@ -397,23 +424,25 @@ impl Photos {
             };
             source
         };
-        if self.working.contains(loaded.id) {
+        if self.working.contains(key(loaded.id, SessionKind::Reduced)) {
             if self
                 .working
-                .refresh(engine, loaded.id, &original, settings, cancel, profile)?
+                .refresh_reduced(
+                    engine, loaded.id, &original, settings, usage, cancel, profile,
+                )?
                 .is_none()
             {
                 return Ok(RenderOutcome::Superseded);
             }
-            if let Some(outcome) = self.working.render_with_progress(
+            if let Some(outcome) = self.working.render_reduced_with_progress(
                 engine,
                 loaded.id,
                 settings,
+                usage,
                 cancel,
                 profile,
                 render_progress,
             )? {
-                self.report_retention(engine, loaded.revision, "refresh");
                 self.prune();
                 return match outcome {
                     ReducedRender::Rendered(artifacts) => Ok(RenderOutcome::Rendered(artifacts)),
@@ -437,7 +466,8 @@ impl Photos {
             profile,
             render_progress,
         )?;
-        self.working.insert(loaded.id, session, engine)?;
+        self.working
+            .insert_reduced(loaded.id, session, engine, usage)?;
         foveonic::diagnostics::event(
             foveonic::diagnostics::Category::Cache,
             "cache.processing.inserted",
@@ -447,13 +477,6 @@ impl Photos {
                 fields.u64("scale", settings.working_scale.divisor() as u64);
             },
         );
-        self.photos.retain(|photo| photo.path != loaded.path);
-        self.photos.push(Photo {
-            path: loaded.path,
-            identity: loaded.identity,
-            id: loaded.id,
-        });
-        self.report_retention(engine, loaded.revision, "insert");
         self.prune();
         match outcome {
             ReducedRender::Rendered(artifacts) => Ok(RenderOutcome::Rendered(artifacts)),
@@ -535,22 +558,20 @@ mod tests {
         let engine = Engine::new().unwrap();
         let cache = Cache::new();
         let mut photos = Photos::default();
-        photos.configure_memory(512 * 1024 * 1024);
-        let native = None;
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.working_scale = Scale::new(8).unwrap();
         let loaded = photos
-            .load(&paths[0], 0, &cache, &native, &mut |path, _| {
+            .load_reduced(&paths[0], 0, &cache, &engine, &mut |path, _| {
                 cache.open(path, |_| {}).map(Some)
             })
             .unwrap()
             .expect("ready source");
         photos
-            .render(
+            .render_reduced(
                 &engine,
-                &native,
                 loaded,
                 &settings,
+                SessionUse::Foreground,
                 &|| false,
                 &mut Profile::default(),
                 &mut |path, _| cache.open(path, |_| {}).map(Some),
@@ -569,7 +590,6 @@ mod tests {
                 source,
                 &paths[1],
                 &settings,
-                None,
                 &Default::default(),
                 1024 * 1024 * 1024,
                 cancel,
@@ -579,20 +599,20 @@ mod tests {
             .unwrap());
         assert!(weak.upgrade().is_none());
         assert_eq!(photos.working.active_bytes(), active_bytes);
-        assert!(photos.contains_source(&paths[1], &origin));
+        assert!(photos.contains_reduced(&paths[1], &origin));
         let before = engine.gpu_activity();
         let loaded = photos
-            .load(&paths[1], 1, &cache, &native, &mut |_, _| {
+            .load_reduced(&paths[1], 1, &cache, &engine, &mut |_, _| {
                 panic!("prefetched input must not reopen source")
             })
             .unwrap()
             .expect("ready source");
         let mut artifacts = photos
-            .render(
+            .render_reduced(
                 &engine,
-                &native,
                 loaded,
                 &settings,
+                SessionUse::Foreground,
                 &|| false,
                 &mut Profile::default(),
                 &mut |_, _| panic!("no source load"),
@@ -633,7 +653,7 @@ mod tests {
             .find(|photo| photo.path == paths[0])
             .unwrap()
             .id;
-        photos.working.remove(first_id);
+        photos.working.remove(key(first_id, SessionKind::Reduced));
         let used = photos.working.len();
         let before = engine.gpu_activity();
         assert!(!photos
@@ -642,7 +662,6 @@ mod tests {
                 Arc::new(Source::open(&paths[0]).unwrap()),
                 &paths[0],
                 &settings,
-                None,
                 &Default::default(),
                 0,
                 &|| false,
@@ -672,7 +691,6 @@ mod tests {
             ..Default::default()
         });
         let mut photos = Photos::default();
-        let mut native = None;
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.working_scale = Scale::new(8).unwrap();
         settings.reconstruction = Some(Default::default());
@@ -685,18 +703,18 @@ mod tests {
                 settings.reconstruction.as_mut().unwrap().chroma = 4;
             }
             let loaded = photos
-                .load(path, 0, &cache, &native, &mut |path, _| {
+                .load_reduced(path, 0, &cache, &engine, &mut |path, _| {
                     cache.open(path, |_| {}).map(Some)
                 })
                 .unwrap()
                 .expect("ready source");
             let weak = loaded.source.as_ref().map(Arc::downgrade);
             let Some(mut artifacts) = photos
-                .render(
+                .render_reduced(
                     &engine,
-                    &native,
                     loaded,
                     &settings,
+                    SessionUse::Foreground,
                     &|| false,
                     &mut Profile::default(),
                     &mut |path, _| cache.open(path, |_| {}).map(Some),
@@ -707,11 +725,11 @@ mod tests {
             else {
                 panic!("expected reduced photo {round}");
             };
-            assert!(native.is_none());
             if let Some(weak) = weak {
                 assert!(weak.upgrade().is_none());
             }
-            assert!(photos.working.historical_bytes() <= BUDGET);
+            let trim = photos.trim_memory(&engine, 4 * 1024 * 1024 * 1024, &Default::default());
+            assert_eq!(trim.over_budget_bytes, 0);
             let artifact = artifacts.pop().unwrap();
             let Content::Image(image) = artifact.content else {
                 panic!("expected image");
@@ -738,16 +756,22 @@ mod tests {
             );
         }
         assert_eq!(photos.working.len(), 2);
-        photos.park_active(&engine, 0);
-        native = Some((
-            paths[0].clone(),
-            RenderSession::new(cache.open(&paths[0], |_| {}).unwrap()),
-        ));
+        photos.park_active();
+        assert!(photos
+            .load_native(
+                &paths[0],
+                0,
+                &cache,
+                &engine,
+                SessionUse::Foreground,
+                &mut |path, _| cache.open(path, |_| {}).map(Some)
+            )
+            .unwrap());
         let mut full = settings.clone();
         full.working_scale = Scale::NATIVE;
         engine
             .render_session(
-                &mut native.as_mut().unwrap().1,
+                photos.native_mut(&paths[0]).unwrap(),
                 &full,
                 &["final"],
                 || false,
@@ -758,17 +782,17 @@ mod tests {
         let mut active_haze = settings.clone();
         active_haze.dehaze.amount = 10.;
         let loaded = photos
-            .load(&paths[0], 0, &cache, &native, &mut |path, _| {
+            .load_reduced(&paths[0], 0, &cache, &engine, &mut |path, _| {
                 cache.open(path, |_| {}).map(Some)
             })
             .unwrap()
             .expect("ready source");
         assert!(photos
-            .render(
+            .render_reduced(
                 &engine,
-                &native,
                 loaded,
                 &active_haze,
+                SessionUse::Foreground,
                 &|| false,
                 &mut Profile::default(),
                 &mut |path, _| cache.open(path, |_| {}).map(Some),
@@ -777,19 +801,19 @@ mod tests {
             .unwrap()
             .artifacts()
             .is_some());
-        assert!(native.is_some());
+        assert!(photos.native(&paths[0]).is_some());
         let loaded = photos
-            .load(&paths[0], 0, &cache, &native, &mut |path, _| {
+            .load_reduced(&paths[0], 0, &cache, &engine, &mut |path, _| {
                 cache.open(path, |_| {}).map(Some)
             })
             .unwrap()
             .expect("ready source");
         assert!(photos
-            .render(
+            .render_reduced(
                 &engine,
-                &native,
                 loaded,
                 &settings,
+                SessionUse::Foreground,
                 &|| false,
                 &mut Profile::default(),
                 &mut |path, _| cache.open(path, |_| {}).map(Some),
@@ -798,10 +822,186 @@ mod tests {
             .unwrap()
             .artifacts()
             .is_some());
-        assert!(native.is_some());
-        assert!(photos.working.historical_bytes() <= BUDGET);
+        assert!(photos.native(&paths[0]).is_some());
+        let trim = photos.trim_memory(&engine, 4 * 1024 * 1024 * 1024, &Default::default());
+        assert_eq!(trim.over_budget_bytes, 0);
         photos.clear(&engine);
         assert!(photos.working.is_empty());
         assert_eq!(engine.cached_preparation_bytes(), 0);
+    }
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn native_photo_return_reuses_source_and_replacement_invalidates_both_grids() {
+        let root = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let directory = tempfile::tempdir().unwrap();
+        let a = directory.path().join("a.x3f");
+        let b = directory.path().join("b.x3f");
+        std::fs::copy(root.join("blue-parking-sign.x3f"), &a).unwrap();
+        std::fs::copy(root.join("merrill-hazy-coast.x3f"), &b).unwrap();
+        let engine = Engine::new().unwrap();
+        let cache = Cache::new();
+        let mut photos = Photos::default();
+        let settings = Settings::new("Sunlight", "Standard");
+        let mut acquired = 0;
+        let mut saved = Vec::new();
+        for path in [&a, &b] {
+            assert!(photos
+                .load_native(
+                    path,
+                    0,
+                    &cache,
+                    &engine,
+                    SessionUse::Foreground,
+                    &mut |path, _| {
+                        acquired += 1;
+                        cache.open(path, |_| {}).map(Some)
+                    }
+                )
+                .unwrap());
+            let artifacts = engine
+                .render_session(
+                    photos.native_mut(path).unwrap(),
+                    &settings,
+                    &["final"],
+                    || false,
+                    &mut Profile::default(),
+                )
+                .unwrap()
+                .unwrap();
+            let Content::Image(image) = artifacts.into_iter().next().unwrap().content else {
+                panic!("image")
+            };
+            saved.push(image);
+        }
+        assert_eq!(acquired, 2);
+        let a_id = photos.id(&a).unwrap();
+        let b_id = photos.id(&b).unwrap();
+        assert!(photos.working.contains(key(a_id, SessionKind::Native)));
+        assert!(photos.working.contains(key(b_id, SessionKind::Native)));
+        let reservation = Default::default();
+        let trim = photos.trim_memory(&engine, 4 * 1024 * 1024 * 1024, &reservation);
+        assert_eq!(trim.over_budget_bytes, 0);
+        for (index, path) in [&a, &b, &a].into_iter().enumerate() {
+            assert!(photos
+                .load_native(
+                    path,
+                    1,
+                    &cache,
+                    &engine,
+                    SessionUse::Foreground,
+                    &mut |_, _| panic!("retained native source must not be acquired again")
+                )
+                .unwrap());
+            let artifacts = engine
+                .render_session(
+                    photos.native_mut(path).unwrap(),
+                    &settings,
+                    &["final"],
+                    || false,
+                    &mut Profile::default(),
+                )
+                .unwrap()
+                .unwrap();
+            let Content::Image(image) = artifacts.into_iter().next().unwrap().content else {
+                panic!("image")
+            };
+            assert_eq!(
+                engine.readback_image(&image).unwrap(),
+                engine.readback_image(&saved[index % 2]).unwrap()
+            );
+        }
+        let verifier = engine.executor();
+        let fresh = verifier
+            .render_artifacts(
+                &Source::open(&a).unwrap(),
+                &settings,
+                &["final"],
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .pop()
+            .unwrap();
+        let Content::Image(fresh) = fresh.content else {
+            panic!("image")
+        };
+        assert_eq!(
+            engine.readback_image(&saved[0]).unwrap(),
+            verifier.readback_image(&fresh).unwrap()
+        );
+        let a_origin = photos.native(&a).unwrap().source().origin().clone();
+        let native_source = photos.shared_source(&a, &a_origin).unwrap();
+        let loaded = photos
+            .load_reduced(&a, 2, &cache, &engine, &mut |_, _| {
+                panic!("reduced preparation should share the native source")
+            })
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(loaded.source.as_ref().unwrap(), &native_source));
+        drop(native_source);
+        let mut reduced = settings.clone();
+        reduced.working_scale = Scale::new(8).unwrap();
+        assert!(photos
+            .render_reduced(
+                &engine,
+                loaded,
+                &reduced,
+                SessionUse::Foreground,
+                &|| false,
+                &mut Profile::default(),
+                &mut |_, _| panic!("shared source"),
+                &|_| {}
+            )
+            .unwrap()
+            .artifacts()
+            .is_some());
+        assert!(photos.working.contains(key(a_id, SessionKind::Reduced)));
+        let preserved = engine.readback_image(&saved[0]).unwrap();
+        // Publish a fresh verified identity through the same cache boundary used
+        // by the worker, then request the replaced photograph through its owner.
+        std::fs::copy(root.join("merrill-hazy-coast.x3f"), &a).unwrap();
+        let replacement = Source::open(&a).unwrap();
+        let replacement_origin = replacement.origin().clone();
+        drop(replacement);
+        assert_ne!(replacement_origin, a_origin);
+        let verified = Cache::new();
+        verified.configure(foveonic::decode_cache::Settings::default());
+        verified.prefetch_window(vec![a.clone()], Some(a.clone()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while verified.source_origin(&a).as_ref() != Some(&replacement_origin) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "replacement identity was not verified"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let mut replacement_acquisitions = 0;
+        assert!(photos
+            .load_native(
+                &a,
+                3,
+                &verified,
+                &engine,
+                SessionUse::Foreground,
+                &mut |path, _| {
+                    replacement_acquisitions += 1;
+                    verified.open(path, |_| {}).map(Some)
+                }
+            )
+            .unwrap());
+        assert_eq!(replacement_acquisitions, 1);
+        let new_id = photos.id(&a).unwrap();
+        assert_ne!(new_id, a_id);
+        assert_eq!(
+            photos.native(&a).unwrap().source().origin(),
+            &replacement_origin
+        );
+        assert!(!photos.working.contains(key(a_id, SessionKind::Native)));
+        assert!(!photos.working.contains(key(a_id, SessionKind::Reduced)));
+        assert!(photos.working.contains(key(b_id, SessionKind::Native)));
+        assert_eq!(engine.readback_image(&saved[0]).unwrap(), preserved);
+        photos.clear(&engine);
+        assert!(photos.working.is_empty());
+        assert!(photos.native(&b).is_none());
+        assert_eq!(engine.readback_image(&saved[0]).unwrap(), preserved);
     }
 }

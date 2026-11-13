@@ -25,13 +25,15 @@ mod reduced;
 mod scale;
 mod settings;
 mod source_preparation;
+mod working_set;
 pub use memory::{MemoryReservation, MemoryResources, MemoryTrim};
 pub use reduced::{
     NeedsOriginal, ParameterResources, ReducedPreparation, ReducedRender, ReducedSession,
-    ReducedWorkingSet, SessionResources,
+    SessionResources,
 };
 pub use scale::Scale;
 pub(crate) use scale::WorkingGrid;
+pub use working_set::{ProcessingWorkingSet, SessionKey, SessionKind, SessionUse};
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
 pub fn native_extent(metadata: &crate::source::Metadata) -> crate::source::Result<[u32; 2]> {
     recipes::native_extent(metadata)

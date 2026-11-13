@@ -392,132 +392,184 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
 
 #[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
-fn working_set_protects_active_edits_and_bounds_parked_history() {
+fn shared_working_set_orders_native_reduced_and_speculative_owners() {
+    use crate::render::{ProcessingWorkingSet, RenderSession, SessionKey, SessionKind, SessionUse};
     let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
+    let source = Arc::new(Source::open(&path).unwrap());
     let engine = Engine::new().unwrap();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(8).unwrap();
-    settings.reconstruction = Some(Default::default());
-    let prepare = || {
-        let ReducedPreparation::Prepared(session) = engine
-            .prepare_reduced_session(
-                Source::open(&path).unwrap(),
+    let ReducedPreparation::Prepared(session) = engine
+        .prepare_reduced_session(source.clone(), &settings, || false, &mut Profile::default())
+        .unwrap()
+    else {
+        panic!("preparation")
+    };
+    let mut working = ProcessingWorkingSet::new();
+    let reduced = SessionKey {
+        photo: 1,
+        kind: SessionKind::Reduced,
+    };
+    let active = SessionKey {
+        photo: 2,
+        kind: SessionKind::Native,
+    };
+    let speculative = SessionKey {
+        photo: 3,
+        kind: SessionKind::Native,
+    };
+    working
+        .insert_reduced(1, session, &engine, SessionUse::Foreground)
+        .unwrap();
+    working.insert_native(
+        2,
+        RenderSession::new(source.clone()),
+        &engine,
+        SessionUse::Foreground,
+    );
+    working.insert_native(
+        3,
+        RenderSession::new(source.clone()),
+        &engine,
+        SessionUse::Preparation,
+    );
+    let first_native = engine
+        .render_session(
+            working.native_mut(2).unwrap(),
+            &settings,
+            &["final"],
+            || false,
+            &mut Profile::default(),
+        )
+        .unwrap()
+        .unwrap()
+        .remove(0);
+    let crate::inspection::Content::Image(first_native) = first_native.content else {
+        panic!("image")
+    };
+    assert!(working.activate(reduced, SessionUse::Foreground));
+    assert!(working.activate(active, SessionUse::Foreground));
+    assert!(working.activate(reduced, SessionUse::Preparation));
+    let image = rendered(
+        working
+            .render_reduced(
+                &engine,
+                1,
                 &settings,
+                SessionUse::Preparation,
                 || false,
                 &mut Profile::default(),
             )
             .unwrap()
-        else {
-            panic!("preparation");
-        };
-        session
+            .unwrap(),
+    );
+    assert_eq!(
+        working.active_key(),
+        Some(active),
+        "preparation must not promote or replace foreground"
+    );
+    assert_eq!(working.evict_oldest(), Some(speculative));
+    assert_eq!(working.evict_oldest(), Some(reduced));
+    assert!(working.contains(active));
+    let replay = engine
+        .render_session(
+            working.native_mut(2).unwrap(),
+            &settings,
+            &["final"],
+            || false,
+            &mut Profile::default(),
+        )
+        .unwrap()
+        .unwrap()
+        .remove(0);
+    let crate::inspection::Content::Image(replay) = replay.content else {
+        panic!("image")
     };
-    let first = prepare();
-    let resources = first.resources();
+    assert_eq!(
+        engine.readback_image(&first_native).unwrap(),
+        engine.readback_image(&replay).unwrap()
+    );
+    assert!(
+        !engine.readback_image(&image).unwrap().is_empty(),
+        "eviction preserves delivered pixels"
+    );
+    working.park_active();
+    assert_eq!(working.evict_oldest(), Some(active));
+    assert!(working.is_empty());
+}
+
+#[test]
+#[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
+fn reduced_active_cut_survives_shared_budget_pressure() {
+    use crate::render::{
+        MemoryReservation, ProcessingWorkingSet, SessionKey, SessionKind, SessionUse,
+    };
+    let source = Arc::new(Source::open(std::env::var_os("SMALL_PREVIEW_X3F").unwrap()).unwrap());
+    let weak = Arc::downgrade(&source);
+    let engine = Engine::new().unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.working_scale = Scale::new(2).unwrap();
+    let ReducedPreparation::Prepared(session) = engine
+        .prepare_reduced_session(source, &settings, || false, &mut Profile::default())
+        .unwrap()
+    else {
+        panic!("preparation")
+    };
+    assert!(
+        weak.upgrade().is_none(),
+        "source-free preparation must release decoded input"
+    );
+    let resources = session.resources();
     assert_eq!(
         resources.metadata_bytes
             + resources.owner_bytes
             + resources.cache_structure_bytes
             + resources.parameter_payload_bytes
             + resources.preparation_bytes,
-        first.retained_cpu_bytes()
+        session.retained_cpu_bytes()
     );
-    let limit = first.cached_bytes() + first.retained_cpu_bytes() + 1024;
-    let mut working = ReducedWorkingSet::new(limit);
-    assert!(working.insert(1, first, &engine).unwrap().is_empty());
-    assert_eq!(working.historical_bytes(), 0);
-    assert!(working.insert(2, prepare(), &engine).unwrap().is_empty());
-    assert!(working.contains(1) && working.contains(2));
-    let image = rendered(
-        working
-            .render(&engine, 2, &settings, || false, &mut Profile::default())
-            .unwrap()
-            .unwrap(),
-    );
-    assert!(
-        working.contains(2),
-        "active growth cannot evict its own restart inputs"
-    );
-    assert!(working.historical_bytes() <= limit);
-    assert!(working.active_bytes() > 0);
-    let evicted = working.park_active();
-    assert!(
-        evicted.contains(&1),
-        "older photo leaves only after optional versions are trimmed"
-    );
-    assert!(working.historical_bytes() <= limit);
-    assert!(
-        !engine.readback_image(&image).unwrap().is_empty(),
-        "eviction preserves delivered images"
-    );
-    let mut roomy = ReducedWorkingSet::new(u64::MAX);
-    for id in [1, 2, 3] {
-        roomy.insert(id, prepare(), &engine).unwrap();
-    }
-    roomy
-        .render(&engine, 1, &settings, || false, &mut Profile::default())
-        .unwrap()
-        .unwrap();
-    assert!(roomy.prefetch(4, prepare(), &engine).unwrap().is_empty());
-    assert_eq!(
-        roomy.active.as_ref().unwrap().id,
-        1,
-        "prefetch cannot replace the actual active photo"
-    );
-    let limit = roomy.historical_bytes() - 1;
-    assert_eq!(
-        roomy.set_limit(limit),
-        vec![4],
-        "speculative photo is colder than genuinely used history"
-    );
-    let limit = roomy.historical_bytes() - 1;
-    assert_eq!(roomy.set_limit(limit), vec![2]);
-    assert!(roomy.contains(1) && roomy.contains(3));
-    roomy.limit = 0;
-    roomy.park_active();
-    assert!(roomy.is_empty());
-    engine.clear_preparation();
-    assert_eq!(roomy.retained_bytes(&engine), 0);
-
-    let mut fast = settings;
-    fast.working_scale = Scale::new(2).unwrap();
-    let source = Arc::new(Source::open(&path).unwrap());
-    let weak = Arc::downgrade(&source);
-    let ReducedPreparation::Prepared(session) = engine
-        .prepare_reduced_session(source, &fast, || false, &mut Profile::default())
-        .unwrap()
-    else {
-        panic!("Fast preparation");
-    };
-    assert!(weak.upgrade().is_none());
     let cuts: Vec<_> = session.cache.sealed_buffers().cloned().collect();
-    let mut tiny_history = ReducedWorkingSet::new(1);
-    tiny_history.insert(7, session, &engine).unwrap();
+    let mut working = ProcessingWorkingSet::new();
+    working
+        .insert_reduced(7, session, &engine, SessionUse::Foreground)
+        .unwrap();
+    let key = SessionKey {
+        photo: 7,
+        kind: SessionKind::Reduced,
+    };
     for exposure in [0., 0.2, 0.4] {
-        fast.exposure = exposure;
+        settings.exposure = exposure;
         let image = rendered(
-            tiny_history
-                .render(&engine, 7, &fast, || false, &mut Profile::default())
+            working
+                .render_reduced(
+                    &engine,
+                    7,
+                    &settings,
+                    SessionUse::Foreground,
+                    || false,
+                    &mut Profile::default(),
+                )
                 .unwrap()
                 .unwrap(),
         );
-        assert_eq!(image.settings.working_scale, fast.working_scale);
-        assert!(tiny_history.contains(7));
-        assert!(tiny_history.active_bytes() > 1);
-        assert_eq!(tiny_history.historical_bytes(), 0);
+        assert_eq!(image.settings.working_scale, settings.working_scale);
+        let trim = engine.trim_memory(&mut working, 1, &MemoryReservation::default());
+        assert!(trim.over_budget_bytes > 0);
+        assert!(working.contains(key));
         assert!(
-            cuts.iter().all(|old| tiny_history
-                .active
-                .as_ref()
+            cuts.iter().all(|old| working
+                .reduced(7)
                 .unwrap()
-                .session
-                .buffers()
+                .cache
+                .sealed_buffers()
                 .any(|new| old.shares_storage(new))),
-            "Fast edits preserve active sensor cuts"
+            "active edits preserve required sensor cuts under pressure"
         );
     }
-    assert_eq!(tiny_history.park_active(), vec![7]);
-    assert!(tiny_history.is_empty());
+    working.park_active();
+    let trim = engine.trim_memory(&mut working, 0, &MemoryReservation::default());
+    assert!(trim.evicted_sessions.contains(&key));
+    assert!(working.is_empty());
 }
 
 #[test]

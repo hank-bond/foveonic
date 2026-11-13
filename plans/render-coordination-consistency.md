@@ -172,7 +172,7 @@ Sources: [main](../crates/foveonic-gui/src/main.rs), [multi-edit runtime](../cra
 
 ## B. Request meaning and identity
 
-Sources: [worker request/resolution](../crates/foveonic-gui/src/rendering/worker/mod.rs), [presentation compatibility](../crates/foveonic-gui/src/rendering/worker/presentation.rs), [reduced eligibility](../crates/foveonic-gui/src/rendering/worker/reduced.rs), [Smart comparisons](../crates/foveonic-gui/src/rendering/smart.rs), [target identity](../crates/foveonic-gui/src/rendering/coordinator.rs).
+Sources: [worker request/resolution](../crates/foveonic-gui/src/rendering/worker/mod.rs), [presentation compatibility](../crates/foveonic-gui/src/rendering/worker/presentation.rs), [processing eligibility](../crates/foveonic-gui/src/rendering/worker/processing.rs), [Smart comparisons](../crates/foveonic-gui/src/rendering/smart.rs), [target identity](../crates/foveonic-gui/src/rendering/coordinator.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -208,7 +208,7 @@ Sources: [reply handling](../crates/foveonic-gui/src/main.rs), [delivery classif
 
 ## E. Cache reuse and preparation
 
-Sources: [decoded cache API](../crates/foveonic/src/decode_cache/mod.rs), [disk retention](../crates/foveonic/src/decode_cache/lru.rs), [preview identity](../crates/foveonic/src/decode_cache/previews.rs), [source identity snapshot](../crates/foveonic/src/decode_cache/original.rs), [reduced adapter](../crates/foveonic-gui/src/rendering/worker/reduced.rs), [idle preparation](../crates/foveonic-gui/src/rendering/worker/preparation.rs), [graph cache](../crates/foveonic/src/interactive.rs), [shared analysis](../crates/foveonic/src/render/recipes/linear_edits.rs).
+Sources: [decoded cache API](../crates/foveonic/src/decode_cache/mod.rs), [disk retention](../crates/foveonic/src/decode_cache/lru.rs), [preview identity](../crates/foveonic/src/decode_cache/previews.rs), [source identity snapshot](../crates/foveonic/src/decode_cache/original.rs), [processing adapter](../crates/foveonic-gui/src/rendering/worker/processing.rs), [idle preparation](../crates/foveonic-gui/src/rendering/worker/preparation.rs), [graph cache](../crates/foveonic/src/interactive.rs), [shared analysis](../crates/foveonic/src/render/recipes/linear_edits.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -235,7 +235,7 @@ Sources: [decoded cache API](../crates/foveonic/src/decode_cache/mod.rs), [disk 
 
 ## F. Memory, retention and invalidation
 
-Sources: [frontend inventory](../crates/foveonic-gui/src/memory.rs), [shared trimming](../crates/foveonic/src/render/memory.rs), [working-set ownership](../crates/foveonic/src/render/reduced.rs), [preparation cache](../crates/foveonic/src/render/preparation.rs), [source-statistic ownership](../crates/foveonic/src/render/source_preparation.rs), [idle admission](../crates/foveonic-gui/src/rendering/worker/reduced.rs).
+Sources: [frontend inventory](../crates/foveonic-gui/src/memory.rs), [shared trimming](../crates/foveonic/src/render/memory.rs), [working-set ownership](../crates/foveonic/src/render/working_set.rs), [preparation cache](../crates/foveonic/src/render/preparation.rs), [source-statistic ownership](../crates/foveonic/src/render/source_preparation.rs), [idle admission](../crates/foveonic-gui/src/rendering/worker/processing.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |

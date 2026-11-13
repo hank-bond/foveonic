@@ -10,8 +10,8 @@ use foveonic::{
     inspection::Content,
     profile::{report, Mode, Profile},
     render::{
-        ControlCapabilities, Engine, ReducedPreparation, ReducedRender, ReducedWorkingSet,
-        RenderSession, Scale, Settings,
+        ControlCapabilities, Engine, ProcessingWorkingSet, ReducedPreparation, ReducedRender,
+        RenderSession, Scale, SessionKey, SessionKind, SessionUse, Settings,
     },
     source::{Result, Source},
 };
@@ -169,33 +169,34 @@ enum Session {
     Native(Box<RenderSession>),
     Reduced {
         id: u64,
-        working: Arc<Mutex<ReducedWorkingSet>>,
+        working: Arc<Mutex<ProcessingWorkingSet>>,
+        budget: u64,
     },
 }
 impl Session {
     fn resources(&self) -> Option<foveonic::render::SessionResources> {
         match self {
             Self::Native(session) => Some(session.resources()),
-            Self::Reduced { id, working } => working.lock().unwrap().session_resources(*id),
+            Self::Reduced { id, working, .. } => working.lock().unwrap().reduced_resources(*id),
         }
     }
     fn cached_bytes(&self) -> u64 {
         match self {
             Self::Native(s) => s.cached_bytes(),
-            Self::Reduced { id, working } => working
+            Self::Reduced { id, working, .. } => working
                 .lock()
                 .unwrap()
-                .session_bytes(*id)
+                .reduced_bytes(*id)
                 .map_or(0, |s| s.0),
         }
     }
     fn cached_preparation_bytes(&self) -> usize {
         match self {
             Self::Native(s) => s.cached_preparation_bytes(),
-            Self::Reduced { id, working } => working
+            Self::Reduced { id, working, .. } => working
                 .lock()
                 .unwrap()
-                .session_bytes(*id)
+                .reduced_bytes(*id)
                 .map_or(0, |s| s.1 as usize),
         }
     }
@@ -275,20 +276,35 @@ fn render(
             .engine
             .render_session(session, settings, &["final"], || false, &mut profile)?
             .ok_or("render superseded")?,
-        Session::Reduced { id, working } => {
+        Session::Reduced {
+            id,
+            working,
+            budget,
+        } => {
             let mut working = working.lock().map_err(|_| "reduced working set poisoned")?;
-            let outcome = working.render(&photo.engine, *id, settings, || false, &mut profile)?;
+            let outcome = working.render_reduced(
+                &photo.engine,
+                *id,
+                settings,
+                SessionUse::Foreground,
+                || false,
+                &mut profile,
+            )?;
             let outcome = match outcome {
                 None | Some(ReducedRender::NeedsOriginal(_)) => {
                     reduced_reloaded = true;
                     let original = Source::open(&photo.source)?;
-                    if working.contains(*id) {
+                    if working.contains(SessionKey {
+                        photo: *id,
+                        kind: SessionKind::Reduced,
+                    }) {
                         working
-                            .refresh(
+                            .refresh_reduced(
                                 &photo.engine,
                                 *id,
                                 &original,
                                 settings,
+                                SessionUse::Foreground,
                                 || false,
                                 &mut profile,
                             )?
@@ -300,14 +316,43 @@ fn render(
                         else {
                             return Err("preparation superseded".into());
                         };
-                        working.insert(*id, session, &photo.engine)?;
+                        working.insert_reduced(
+                            *id,
+                            session,
+                            &photo.engine,
+                            SessionUse::Foreground,
+                        )?;
                     }
                     working
-                        .render(&photo.engine, *id, settings, || false, &mut profile)?
+                        .render_reduced(
+                            &photo.engine,
+                            *id,
+                            settings,
+                            SessionUse::Foreground,
+                            || false,
+                            &mut profile,
+                        )?
                         .ok_or("session does not fit working-set budget")?
                 }
                 Some(outcome) => outcome,
             };
+            let mut reservation = foveonic::render::MemoryReservation::default();
+            if let Some(image) = &photo.image {
+                reservation.add_image(image);
+            }
+            if let Some(texture) = &photo.texture {
+                reservation.exclusive_bytes += texture.description().byte_len();
+            }
+            if let ReducedRender::Rendered(artifacts) = &outcome {
+                for artifact in artifacts {
+                    if let Content::Image(image) = &artifact.content {
+                        reservation.add_image(image);
+                    }
+                }
+            }
+            photo
+                .engine
+                .trim_memory(&mut working, *budget, &reservation);
             match outcome {
                 ReducedRender::Rendered(artifacts) => artifacts,
                 ReducedRender::NeedsOriginal(reason) => {
@@ -397,7 +442,7 @@ fn main() -> Result<()> {
         if recorder.is_some() {
             capture_adapter = Some(engine.adapter_name().to_owned());
         }
-        let reduced_working = Arc::new(Mutex::new(ReducedWorkingSet::new(run.cache_budget)));
+        let reduced_working = Arc::new(Mutex::new(ProcessingWorkingSet::new()));
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(run.workers)
             .thread_name(|index| format!("editing-worker-{index}"))
@@ -480,13 +525,23 @@ fn main() -> Result<()> {
                 )? {
                     ReducedPreparation::Prepared(session) => {
                         let id = photos.len() as u64;
-                        reduced_working
-                            .lock()
-                            .unwrap()
-                            .insert(id, session, &photo_engine)?;
+                        let mut working = reduced_working.lock().unwrap();
+                        working.insert_reduced(
+                            id,
+                            session,
+                            &photo_engine,
+                            SessionUse::Foreground,
+                        )?;
+                        photo_engine.trim_memory(
+                            &mut working,
+                            run.cache_budget,
+                            &Default::default(),
+                        );
+                        drop(working);
                         Session::Reduced {
                             id,
                             working: reduced_working.clone(),
+                            budget: run.cache_budget,
                         }
                     }
                     ReducedPreparation::Superseded => return Err("preparation superseded".into()),

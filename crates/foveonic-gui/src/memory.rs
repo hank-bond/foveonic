@@ -39,6 +39,9 @@ impl Inventory {
     pub fn metadata(&mut self, metadata: &Arc<foveonic::source::Metadata>) {
         self.reservation.add_metadata(metadata);
     }
+    pub fn source(&mut self, source: &Arc<foveonic::source::Source>) {
+        self.reservation.add_source(source);
+    }
     pub fn image(&mut self, image: &foveonic::image::RenderedImage) {
         self.reservation.add_image(image);
     }

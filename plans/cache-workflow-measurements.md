@@ -36,9 +36,9 @@ Record logical retained and observed in-flight bytes alongside whole-process foo
 
 For each cell report foreground delivery, complete foreground group, background settlement, source reads, GPU work, cache hits/misses, eviction/rebuild counts, steady retained bytes and observed peak footprint. Use repeated uncontended Off runs for latency and separate traces for attribution. Lower-budget runs must pass the same behavioral and numerical checks. Keep source-loading and native-session capacity limitations explicit.
 
-## Current owner findings
+## Initial owner findings
 
-The serial worker retains one native decoded source and `RenderSession`; switching to another native source replaces that session regardless of the byte budget. The [reduced working set](../crates/foveonic/src/render/reduced.rs) separately holds one active source-free session and inactive, actual-use LRU history. Speculative preparation enters history as the coldest item and uses spare capacity. Each active graph cache has a 1 GiB local bound. Shared-budget trimming sheds optional checkpoints, cold preparation and then inactive reduced sessions; protected active inputs and essential live resources can exceed the budget. Additional bytes alone cannot overcome the native-session slot or photo-count limits.
+At the initial measurement checkpoint, the serial worker retained one native decoded source and `RenderSession`; switching native photos replaced that session regardless of the byte budget. The reduced owner separately held one active source-free session and inactive, actual-use LRU history. Speculative preparation entered history as the coldest item and used spare capacity. Each active graph cache had a 1 GiB local bound. Shared-budget trimming shed optional checkpoints, cold preparation and then inactive reduced sessions; protected active inputs and essential live resources could exceed the budget. Additional bytes alone could not overcome the native-session slot or photo-count limits. The shared-retention slice below replaces this split ownership.
 
 The owner agreed that native and reduced processing should use the same retention process under the shared budget. Full/Full, Thumb/Thumb, mixed quality and native detail from zoom or loupe must differ in resource demand rather than single/multi ownership policy. A photo may retain several resolution or region working sets with shared allocations counted once. Regional work should reuse available decoded/native preparation; Whole continuation remains lower-priority preparation. Replace the one-native slot in a separate measured slice, and test whether continuation displaces the regional state needed by the next edit.
 
@@ -86,13 +86,32 @@ The first slice passed largest-model design/code review, 518 ordinary GUI tests,
 
 - [x] Extend the same workflow to two native viewports, with independent count/coverage/settlement checks.
 - [x] Capture an unchanged one-slot baseline before changing processing retention.
-- [ ] Replace split native/reduced retention with one processing working set and common actual-use recency.
-- [ ] Include pending decoded-source references in the deduplicated inventory.
-- [ ] Validate ample-budget native reuse, mixed-resolution edits, low-budget eviction and speculative recency.
-- [ ] Compare exact final images and matched app latency against the one-slot baseline.
+- [x] Replace split native/reduced retention with one processing working set and common actual-use recency.
+- [x] Include pending decoded-source references in the deduplicated inventory.
+- [x] Validate ample-budget native reuse, mixed-resolution edits, low-budget eviction and speculative recency.
+- [x] Compare exact final images and matched app latency against the one-slot baseline.
 
 The two-native baseline uses the same two recipes and four shared edits with primed decoded disk and a 4 GB memory budget. Three uncontended Off trials passed independent behavior and six final-image comparisons. Visible-group completion ranged from 938 to 1080 ms; background Whole settlement ranged from 1463 to 1649 ms. Preserve this workload unchanged for the retention comparison.
 
 The selected design uses one `ProcessingWorkingSet` for native and reduced sessions, with photo/source mapping owned by the GUI worker's processing module. The coordinator and source loader retain their responsibilities. Native and reduced variants delegate numerical cache operations while sharing recency, required-session protection and global budget trimming. Speculative work must not promote or replace the foreground's required session. One native and one reduced variant per verified photo suffice for this slice; region/Whole versions remain in each existing numerical cache.
 
 Keep the numerical cache's local 1 GiB limit, restart-frontier behavior and bounded engine preparation helpers unchanged. A Whole continuation can still replace a regional restart frontier or cause local eviction even when the photo session survives. Report that separately rather than promising that session retention preserves every regional checkpoint. Shared source reservations must deduplicate actual `Arc<Source>` allocations, not merely equal origins.
+
+Idle Thumb preparation still requires spare capacity and rejects only its candidate if the exact shared inventory would exceed the budget. Whole continuation keeps the existing ordinary-trim behavior: a newly loaded cold native session may cause optional checkpoints in used sessions to be trimmed before that cold session is evicted. Foreground recency/protection remains intact, but stronger Whole admission and restart preservation are separate measured follow-ups.
+
+### Retention results
+
+Matched primed-disk Off runs used three trials per budget before and after the change, each with four shared edits. Both budgets passed behavior and exact final-image verification. The comparison tool accepted all twenty-one workload/milestone groups without relaxing workload matching. These medians describe the declared color/Natural and monochrome/Natural Merrill pair, not universal camera costs.
+
+| Budget | Visible group before | Visible group after | Whole observation before | Whole observation after |
+| --- | --- | --- | --- | --- |
+| 2 GB | 1001 ms | 652 ms | 1565 ms | 1567 ms |
+| 4 GB | 980 ms | 83 ms | 1506 ms | 220 ms |
+
+Complete, loss-free disk-disabled Wall controls show why: at 4 GB, both native sessions remain retained, repeated edits perform zero source payload reads, and boundary inventory reaches about 3916 MiB. At 2 GB, shared-budget eviction removes native sessions; later edits reacquire source data and rebuild checkpoints. Before-trim snapshots reach about 2853 MiB. These logical boundary counts do not establish process footprint or transient GPU peak. The 2 GB default is unchanged.
+
+All forty frozen rendering comparisons stayed bit-exact across three Classic, three Merrill, three Quattro and one Tiger input at Full/Fast/Draft/Thumb. Focused GPU checks covered native return without source acquisition, native/reduced source sharing, verified replacement, immutable delivered-image survival, mixed edits, required-input pressure and speculative yielding. A largest-model integrated review found no remaining code/design blocker.
+
+The completed gates include the release workspace suite (538 processing-library and 519 GUI tests, plus tooling/CLI tests), 135 portable profiling-tool tests, twelve worker integration GPU checks, three processing-owner GPU checks, three shared-memory GPU checks and two cross-kind/required-cut checks. Strict workspace Clippy, formatting and documentation checks passed. Unchanged numerical assertions were retained; stale worker expectations were corrected to require Adaptive regional output, accept an admitted coalesced identical request, and reject reconstruction projection's unsupported operation-input comparison.
+
+One primed-disk Wall run was rejected by the strict trace validator: an idle Thumb cache read began before recording, so its cancellation lacked the enclosing recorded context. The trace is diagnostic failure evidence, not a valid latency/behavior baseline. Disk-disabled Wall controls remove this startup race while retaining warm-edit attribution; no parser rule was relaxed. A later harness slice should add a small asynchronous diagnostic acknowledgment for setup quiescence, then apply identical setup to baseline and candidate. `worker.busy()`, disk readiness and foreground priority alone are not such an acknowledgment. Do not repurpose an image readback/file write as a barrier.

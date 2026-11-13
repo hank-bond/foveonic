@@ -8,7 +8,7 @@ The owner approved evaluating incomplete visible-region support, adding scenario
 
 ## Scope and findings
 
-Smart currently requests a native region followed by an unconditional Whole continuation. Some recipes instead fall back to Whole before starting. Existing traces distinguish this extra work from checkpoint eviction and the worker's single native-session capacity. The owner clarified that Whole continuation remains useful background preparation for panning. It must run after all user-requested visible renders and yield to new foreground work without being falsely settled or lost.
+At the start of this slice, Smart requested a native region followed by an unconditional Whole continuation. Some recipes instead fell back to Whole before starting. Baseline traces distinguish this extra work from checkpoint eviction and the then-single native-session capacity. The owner clarified that Whole continuation remains useful background preparation for panning. It must run after all user-requested visible renders and yield to new foreground work without being falsely settled or lost.
 
 Adaptive Tone already estimates from a whole-photo reduced branch (Thumb for Natural, the next finer grid for Strong, capped by available input). Regional application needs its own aligned spatial support, including brightness-guide construction, structure probes and gain interpolation. Whole analysis must remain independent of the visible rectangle and reusable across panning.
 
@@ -74,4 +74,4 @@ The following table summarizes traced foreground completion over the three edits
 | 2 GB | 128–147 | 621–669 | 782–1715 | 106–568 |
 | 4 GB diagnostic control | 136–152 | 137–149 | 523–932 | 40–538 |
 
-At 2 GB the one-native-view edits caused 21–30 checkpoint evictions; the 4 GB control reduced this to 4–5. Two native views still took 523–932 ms at 4 GB with no checkpoint evictions. The single native session and local graph cache cap remain independent constraints. These findings support the separate [cache workflow investigation](./cache-workflow-measurements.md), rather than raising the default or claiming regional support alone resolves zoomed latency. No memory policy or slot count changed in this slice.
+At 2 GB the one-native-view edits caused 21–30 checkpoint evictions; the 4 GB control reduced this to 4–5. Two native views still took 523–932 ms at 4 GB with no checkpoint evictions. The single native session and local graph cache cap were independent constraints in that baseline. These findings support the separate [cache workflow investigation](./cache-workflow-measurements.md), rather than raising the default or claiming regional support alone resolves zoomed latency. No memory policy or slot count changed in this slice.

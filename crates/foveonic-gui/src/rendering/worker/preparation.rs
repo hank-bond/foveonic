@@ -1,6 +1,6 @@
 //! Prepares ready decoded neighbors during idle time using the render worker's existing owners.
 
-use super::reduced::Photos;
+use super::processing::Photos;
 use crate::{
     export::resolve_camera_settings, preferences::PreviewMode,
     rendering::request::camera_preview_scale, sidecars::CachedRecipes,
@@ -10,7 +10,7 @@ use foveonic::{
     diagnostics::{self as trace, Category},
     noise_calibration::Calibration,
     profile::Profile,
-    render::{Engine, MemoryReservation, RenderSession},
+    render::{Engine, MemoryReservation},
     source::SourceOrigin,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -46,8 +46,7 @@ impl Preparation {
         config: &Arc<Config>,
         cache: &Cache,
         engine: &mut Engine,
-        reduced: &mut Photos,
-        native: Option<&RenderSession>,
+        photos: &mut Photos,
         reservation: &MemoryReservation,
         limit: u64,
         pending: &dyn Fn() -> bool,
@@ -70,7 +69,7 @@ impl Preparation {
             .filter_map(|path| cache.source_origin(&path).map(|origin| (path, origin)))
             .find(|(path, origin)| {
                 !self.attempted.contains(&(path.clone(), origin.clone()))
-                    && !reduced.contains_source(path, origin)
+                    && !photos.contains_reduced(path, origin)
             })
         else {
             return false;
@@ -95,7 +94,7 @@ impl Preparation {
                 if cancel() {
                     return Ok(false);
                 }
-                if !reduced.has_prefetch_capacity(engine, native, reservation, limit) {
+                if !photos.has_prefetch_capacity(engine, reservation, limit) {
                     trace::event(
                         Category::Cache,
                         "cache.processing.prefetch_skipped",
@@ -114,9 +113,8 @@ impl Preparation {
                     config.recipes.resolve(&path, selection)?,
                     &config.overrides,
                 );
-                let Some(source) = native
-                    .filter(|session| session.source().origin() == &origin)
-                    .map(RenderSession::shared_source)
+                let Some(source) = photos
+                    .shared_source(&path, &origin)
                     .or_else(|| cache.open_cached(&path, |_| {}))
                 else {
                     return Ok(false);
@@ -133,12 +131,11 @@ impl Preparation {
                 settings.color_range_preview = None;
                 settings.dehaze_estimate = settings.dehaze_auto();
                 engine.set_noise_calibration(config.calibration.clone());
-                reduced.prefetch(
+                photos.prefetch(
                     engine,
                     source,
                     &path,
                     &settings,
-                    native,
                     reservation,
                     limit,
                     &cancel,
